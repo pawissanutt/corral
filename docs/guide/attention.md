@@ -119,7 +119,56 @@ The ledger retains 31 ordinary condition records plus one reserved
 until a slot frees; no record is evicted. Resolution follows canonical changes,
 not display precedence, handling, or notifications.
 
-Parking and attention-specific statistics belong to later plan children.
+## Parking work
+
+```sh
+corral attention park T-128 --reason "Wait for prerequisites" --resume-when landed:T-371 --resume-when status:T-372=done --resume-action "Review the retained findings" --review-by 24h
+corral attention unpark T-128 --expected-revision 1
+```
+
+Use the revision returned by `park` or the task's JSON, not the example revision.
+The PM and owner may park Ready, Review and Needs me tasks. Workers, reviewers
+and callers inside a run worktree cannot park or unpark. A PM cannot remove or
+replace an owner's park. `--expected-revision` refuses an obsolete unpark request.
+Parking never changes `dispatch_hold`, and unparking never lifts that hold.
+
+`--reason` accepts 1 through 2048 bytes, `--resume-action` at most 1024 bytes,
+and at most eight `--resume-when` checks are retained. `--review-by` defaults to
+24 hours and accepts 1 hour through 7 days. Supported checks are:
+
+- `status:T-372=done`: the task has that canonical status.
+- `landed:T-371`: the task is Done with a recorded completed autopilot landing.
+  Done alone, including an owner move or a kept branch, is not proof of landing.
+- `answered:T-128/R1/Q1@1`: that exact question revision has a recorded answer.
+- `decision:decision-id`: that run decision has an answered receipt.
+- `hold-lifted:T-372` or `hold-lifted:project`: the task's dispatch hold is
+  absent, or project admission and workspace dispatch are no longer paused.
+
+Unknown and Manual check kinds are refused. Missing canonical evidence is
+reported as unknown, never satisfied. Checks are data, not executable commands.
+An empty check list has no automatic readiness edge; the review deadline still
+applies.
+
+Parking blocks new automatic execution, queue admission and explicit owner
+start commands. Already-running gates and reviewers still record their results.
+Prepared work and its original authorization remain retained. Unparking allows
+normal eligibility checks to reconsider that work; it does not create authority.
+Leaving Ready, Review and Needs me clears the park in the same normalized task
+save and logs `unparked` with `by: system` and `reason: status`.
+
+Each owning sync rechecks the conditions, including when the terminal host or
+inventory is unavailable. The first pass where every check holds writes
+`ready_at` once and opens `park_resume_ready`, keyed by the park revision.
+The condition stays open with the same age and key even if a prerequisite
+reopens; its displayed checks show the current truth. `park_review_due` opens
+when the review deadline passes. Neither condition automatically unparks work.
+
+A park replaces an otherwise stalled task's primary display but retains its
+`unexpected_stall` record and pauses only that condition's ladder. Questions,
+decisions, delivery conditions and infrastructure waits keep their independent
+keys, ages, handling and notification claims.
+
+Attention-specific statistics belong to a later plan child.
 
 See [attention record contracts](../records/attention-records.md) for the stored
 shapes and bounded owner-inbox projection.

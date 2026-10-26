@@ -33,6 +33,7 @@ pub(crate) fn dispatch(
     opts: &DispatchOpts,
     admission: &Admission,
 ) -> Result<DispatchOutcome> {
+    corral_core::Park::require_unparked(&ctx.store.get(&task.id)?)?;
     crate::tracker::check_action(task, "dispatch tracker to the plan pipeline")?;
     let project = task
         .project
@@ -461,6 +462,7 @@ pub(crate) fn revise(
     let owner = origin == crate::operating::Origin::Owner;
     crate::tracker::check_action(task, "revise tracker in the plan pipeline")?;
     let current = ctx.store.get(&task.id)?;
+    corral_core::Park::require_unparked(&current)?;
     if current.dispatch_hold
         || current
             .plan_runs
@@ -516,6 +518,7 @@ pub(crate) fn revise(
     };
     crate::operating::authorize(ctx, claim.identity(&task.id), origin)?;
     let (claimed, started) = ctx.store.dispatch_update(&task.id, |store, current| {
+        corral_core::Park::require_unparked(current)?;
         // Cancellation is terminal even for a pilot holding an older snapshot.
         if current.dispatch_hold
             || current
@@ -578,7 +581,9 @@ pub(crate) fn revise(
 
 /// Resume a definitely unsubmitted claim with its original owner or automatic consent.
 pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
-    if task.dispatch_hold
+    let task = &ctx.store.get(&task.id)?;
+    if task.park.is_some()
+        || task.dispatch_hold
         || task
             .plan_runs
             .last()
@@ -625,6 +630,7 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         )?;
     }
     let (admitted, ()) = ctx.store.dispatch_update(&task.id, |store, task| {
+        corral_core::Park::require_unparked(task)?;
         claim.check(task)?;
         if automatic {
             crate::operating::require(store, task, OperatingActionKind::Plan)?;

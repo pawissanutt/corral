@@ -118,6 +118,9 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
 
 fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
     let task = &ctx.store.get(&task.id)?;
+    if task.park.is_some() {
+        return Ok(());
+    }
     let config = crate::plan::config(ctx)?;
     // Prepared actions retain their exact round and owner/automatic provenance. A
     // failed authorization is not a planner exit, nor a reason to claim a round.

@@ -8,6 +8,63 @@ use jiff::Timestamp;
 
 use super::{Neighborhood, aggregate, plan, ready, row};
 
+pub(super) fn parked(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
+    let Some(park) = &task.park else { return };
+    if a.progress.as_ref().is_some_and(|progress| {
+        matches!(
+            progress.executor.as_str(),
+            "autopilot" | "dispatcher" | "plan_pilot" | "launcher"
+        )
+    }) {
+        a.progress = None;
+    }
+    let checks = crate::park::checks(park, n);
+    for (kind, since, keyed) in [
+        ("parked", Some(park.at), false),
+        ("park_resume_ready", park.ready_at, true),
+        (
+            "park_review_due",
+            (now >= park.review_by).then_some(park.review_by),
+            true,
+        ),
+    ] {
+        let Some(since) = since else { continue };
+        let mut condition = row(
+            task,
+            now,
+            kind,
+            if keyed {
+                WaitClass::PmAction
+            } else {
+                WaitClass::Parked
+            },
+            park.by,
+            (keyed.then(|| park.revision.to_string()), Some(since)),
+            format!(
+                "{} (parked by {}, revision {})",
+                park.reason,
+                park.by.label(),
+                park.revision
+            ),
+        );
+        condition.resume = checks.clone();
+        condition.next_action = NextAction {
+            command: Some(format!(
+                "corral attention unpark {} --expected-revision {}",
+                task.id, park.revision
+            )),
+            description: if park.resume_action.is_empty() {
+                "Review the resume checks before explicitly unparking".into()
+            } else {
+                park.resume_action.clone()
+            },
+            requires_owner: park.by == Responsible::Owner,
+            recipient: None,
+        };
+        a.conditions.push(condition);
+    }
+}
+
 pub(super) fn conditions(
     task: &Task,
     n: &Neighborhood<'_>,

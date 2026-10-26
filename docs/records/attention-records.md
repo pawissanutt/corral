@@ -1,7 +1,7 @@
 # Attention record contracts
 
-This inventory covers assessment, lifecycle reconciliation, handling and owner
-notification claims. Parking and attention statistics are separate plan children.
+This inventory covers assessment, lifecycle reconciliation, handling, parking and owner
+notification claims. Attention statistics are a separate plan child.
 All additions default within existing records; no attention state file is added.
 
 ## Task and assessment shapes
@@ -10,6 +10,7 @@ All additions default within existing records; no attention state file is added.
 | --- | --- |
 | `Task.status_since` | Optional canonical status timestamp. Store normalization sets it on creation and a status change; writes that retain the status preserve it, including a missing legacy value. |
 | `Task.infra_wait` / `InfraWait` | Optional versioned wait: `version`, `class` (`contention` or `operation`), `marker`, `path`, `first_seen`, optional `first_mtime`, optional `held_at`. `held_at` is a durable claim, not evidence that notification succeeded. Normalization clears the wait outside Review. |
+| `Task.park` / `Park` | Optional version 1 record: `revision`, `by` (`pm` or `owner`), `reason` (1..2048 bytes), `at`, `resume_when` (at most eight machine-checkable `ResumeCheck` values), `resume_action` (at most 1024 bytes), `review_by` (1h..7d after `at`), optional `ready_at`. Normalization clears it outside Ready, Review and Needs me, followed by a system-unpark event after persistence. |
 | `Task.attention` / `AttentionLedger` | Version 1: `records`, optional `entry_notice`, lifecycle `outbox`, `notice_outbox`, keyed `source_notices`, and optional `overflow_count`. Legacy records default empty. There are at most 32 records, including the reserved overflow slot, and at most 32 total notice claims/source references. Duplicate retained producer/source pairs are refused. |
 | `AttentionRecord` | `kind`, `responsible`, `since`, `since_source`, `first_recorded`, `opened_at`, nullable `pm_live_at_open`, `levels`, optional `handling`, `first_handled_at`, and `resolved_at`. Reconciliation records discovery and transitions; reads do not. |
 | `AttentionLevels` | Optional `announced_at`, `rewoke_at`, `owner_claimed_at`, and `owner_claim` (the exact batch ID, or attributed legacy unknown marker). |
@@ -59,6 +60,28 @@ count changes and restarts keep that key, while resolution/reopening receives
 a new identity even if the injected clock repeats. Existing active legacy keys
 remain unchanged until resolution. The reserved slot is never reused before
 its prior resolution and pending facts have been published and pruned.
+
+## Parking reconciliation
+
+Parking has no separate state area. `Task.park` defaults to absent, and only
+the task constructors in `store/batch.rs` and the history test fixture require
+a new literal field. The parser accepts status, landed, exact answered-question
+revision, answered decision and hold-lifted checks; Manual and unknown kinds
+are refused.
+
+The existing owning attention pass evaluates checks from its fresh Neighborhood,
+then persists `ready_at` at most once for the matching park revision before
+deriving its ready condition. Read-only board projections never latch. A changed
+prerequisite cannot reset a latch, condition key or canonical `since`.
+`park_resume_ready` uses `ready_at`, and `park_review_due` uses `review_by`;
+both use the park revision as their identity anchor. The plain `parked` row
+has no ladder key. An `unexpected_stall` still derives while parked, retaining
+its record and pending facts, but its announcement and later levels pause.
+Other condition ladders and owner claims are unchanged.
+
+Ports must preserve park clearing, revision/actor fences, the latched edge, and
+all three execution fences: effective policy, locked final submission for every
+origin, and queue admission. Porting only the display record is insufficient.
 
 ## Owner-notice accounting
 

@@ -76,6 +76,17 @@ impl<'a> Neighborhood<'a> {
 
     pub fn allows(&self, task: &Task, action: corral_core::OperatingActionKind) -> bool {
         self.policy.allows(&task.id, action)
+            || task.park.as_ref().is_some_and(|park| {
+                self.policy
+                    .tasks
+                    .get(&task.id)
+                    .and_then(|policy| policy.refusals.get(&action))
+                    .is_some_and(|reasons| {
+                        reasons
+                            .iter()
+                            .all(|reason| *reason == park.refusal(&task.id))
+                    })
+            })
     }
 }
 
@@ -137,6 +148,7 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
             ),
         ));
     }
+    classify::parked(task, neighborhood, now, &mut assessment);
     refresh_overflow(task, &mut assessment, now);
     assessment
 }
@@ -196,20 +208,37 @@ fn refresh_overflow(task: &Task, assessment: &mut Assessment, now: Timestamp) {
         ))
     });
     assessment.primary = assessment.conditions.first().cloned();
+    if task.park.is_some() {
+        assessment.primary = assessment
+            .conditions
+            .iter()
+            .find(|condition| condition.key.is_some() && condition.kind != "unexpected_stall")
+            .or_else(|| {
+                assessment
+                    .conditions
+                    .iter()
+                    .find(|condition| condition.kind == "parked")
+            })
+            .cloned();
+    }
 }
 
 /// One fresh task listing. Receipt reads are bounded by the existing owner header.
 pub fn board(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
-    Ok(board_snapshot(ctx, now)?.1)
+    Ok(board_snapshot(ctx, now, false)?.1)
 }
 
 pub(super) fn board_snapshot(
     ctx: &Ctx,
     now: Timestamp,
+    reconcile: bool,
 ) -> Result<(std::sync::Arc<Vec<Task>>, AttentionBoard)> {
     let frozen = ctx.store.read_only_snapshot()?;
     let tasks = frozen.list_shared()?;
     let policy = frozen.effective_operating_policy()?;
+    if reconcile && crate::park::latch(ctx, &tasks, &policy, now)? {
+        return board_snapshot(ctx, now, false);
+    }
     let mut neighborhood = Neighborhood::new(&tasks, &ctx.store.config, &policy);
     neighborhood.resource_wait = crate::resources::read_admission(ctx)?;
     for task in tasks

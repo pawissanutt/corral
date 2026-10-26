@@ -109,6 +109,7 @@ mod tests {
     fn task(id: &str, status: Status, updated: i64) -> Task {
         let ts = Timestamp::from_second(updated).unwrap();
         Task {
+            park: None,
             infra_wait: None,
             attention: Default::default(),
             dashboard: None,

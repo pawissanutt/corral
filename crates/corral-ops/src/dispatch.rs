@@ -97,7 +97,9 @@ fn dispatch_with(
     opts: &DispatchOpts,
     admission: Admission,
 ) -> Result<DispatchOutcome> {
-    crate::tracker::check_action(&ctx.store.get(id)?, "dispatch tracker")?;
+    let requested = ctx.store.get(id)?;
+    corral_core::Park::require_unparked(&requested)?;
+    crate::tracker::check_action(&requested, "dispatch tracker")?;
     let queued_only = matches!(admission, Admission::Queued { .. });
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
@@ -120,6 +122,7 @@ fn dispatch_with(
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress for this task")?;
     let task = ctx.store.get(&task.id)?;
+    corral_core::Park::require_unparked(&task)?;
     crate::tracker::check_action(&task, "dispatch tracker")?;
     if queued_only && !crate::queue::authorized_ready(&ctx.store, &task) && task.launch.is_none() {
         bail!("{} is no longer authorized for queued dispatch", task.id);
@@ -626,6 +629,7 @@ fn retry_with(
         .try_lock(&format!("launch-{id}"))?
         .context("dispatch is already in progress for this task")?;
     let task = ctx.store.get(&id)?;
+    corral_core::Park::require_unparked(&task)?;
     if let Some(expected) = expected {
         expected.check(&task)?;
         crate::operating::require(&ctx.store, &task, corral_core::OperatingActionKind::Repair)?;
@@ -693,6 +697,7 @@ fn retry_with(
     }
     // Back to Ready so the retried task can be dispatched and does not count against its own slot.
     let (task, ()) = ctx.store.dispatch_update(&task.id, |store, t| {
+        corral_core::Park::require_unparked(t)?;
         if let Some(expected) = expected {
             expected.check(t)?;
             crate::operating::require(store, t, corral_core::OperatingActionKind::Repair)?;

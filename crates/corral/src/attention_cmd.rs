@@ -31,9 +31,73 @@ pub enum AttentionCmd {
         #[arg(long)]
         request: Option<String>,
     },
+    /// Stop new execution while retaining explicit, checkable resume conditions
+    Park {
+        id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long, value_parser = corral_core::parse_park_check)]
+        resume_when: Vec<corral_core::ResumeCheck>,
+        #[arg(long, default_value = "")]
+        resume_action: String,
+        #[arg(long, default_value = "24h", value_parser = review_by)]
+        review_by: u64,
+    },
+    /// Remove exactly the current park; never lifts a dispatch hold
+    Unpark {
+        id: String,
+        #[arg(long)]
+        expected_revision: u64,
+    },
 }
 
 pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
+    match &args.cmd {
+        Some(AttentionCmd::Park {
+            id,
+            reason,
+            resume_when,
+            resume_action,
+            review_by,
+        }) => {
+            let park = corral_ops::park::park(
+                ctx,
+                id,
+                reason,
+                resume_when,
+                resume_action,
+                *review_by,
+                jiff::Timestamp::now(),
+            )?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&park)?);
+            } else {
+                println!(
+                    "{id}: parked by {} at revision {}, review by {}",
+                    park.by.label(),
+                    park.revision,
+                    park.review_by
+                );
+            }
+            return Ok(());
+        }
+        Some(AttentionCmd::Unpark {
+            id,
+            expected_revision,
+        }) => {
+            corral_ops::park::unpark(ctx, id, *expected_revision)?;
+            if args.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"task": id, "unparked": expected_revision})
+                );
+            } else {
+                println!("{id}: unparked revision {expected_revision}");
+            }
+            return Ok(());
+        }
+        Some(AttentionCmd::List | AttentionCmd::Attend { .. }) | None => {}
+    }
     if let Some(AttentionCmd::Attend {
         key,
         note,
@@ -100,22 +164,37 @@ pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
     Ok(())
 }
 
-fn next_check(value: &str) -> Result<u64, String> {
+fn duration(
+    value: &str,
+    key: &str,
+    range: std::ops::RangeInclusive<u64>,
+    interval: &str,
+) -> Result<u64, String> {
     let (number, multiplier) = if let Some(number) = value.strip_suffix('m') {
         (number, 60_u64)
     } else if let Some(number) = value.strip_suffix('h') {
         (number, 3600)
     } else if let Some(number) = value.strip_suffix('s') {
         (number, 1)
+    } else if let Some(number) = value.strip_suffix('d') {
+        (number, 86400)
     } else {
-        return Err("next-check requires s, m or h".into());
+        return Err(format!("{key} requires s, m, h or d"));
     };
     number
         .parse::<u64>()
         .ok()
         .and_then(|value| value.checked_mul(multiplier))
-        .filter(|seconds| (60..=86400).contains(seconds))
-        .ok_or_else(|| "next-check must be 1m..24h".into())
+        .filter(|seconds| range.contains(seconds))
+        .ok_or_else(|| format!("{key} must be {interval}"))
+}
+
+fn next_check(value: &str) -> Result<u64, String> {
+    duration(value, "next-check", 60..=86400, "1m..24h")
+}
+
+fn review_by(value: &str) -> Result<u64, String> {
+    duration(value, "review-by", 3600..=604800, "1h..7d")
 }
 
 fn one_line(value: &str) -> String {
@@ -126,6 +205,153 @@ fn one_line(value: &str) -> String {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn park_cli_parses_checks_and_refuses_out_of_range_review_deadlines() {
+        // Given the public park syntax and adopted review interval.
+        for (deadline, expected) in [
+            ("59m", None),
+            ("1h", Some(3600)),
+            ("7d", Some(604800)),
+            ("8d", None),
+        ] {
+            let parsed = crate::Cli::try_parse_from([
+                "corral",
+                "attention",
+                "park",
+                "T-128",
+                "--reason",
+                "Wait",
+                "--resume-when",
+                "landed:T-371",
+                "--resume-when",
+                "status:T-372=done",
+                "--resume-action",
+                "Review findings",
+                "--review-by",
+                deadline,
+            ]);
+            // When Clap parses the request, then machine fields match or parsing refuses.
+            match expected {
+                Some(seconds) => match parsed.unwrap().cmd {
+                    Some(crate::Cmd::Attention(AttentionArgs {
+                        cmd:
+                            Some(AttentionCmd::Park {
+                                resume_when,
+                                review_by,
+                                ..
+                            }),
+                        ..
+                    })) => {
+                        assert_eq!(review_by, seconds);
+                        assert_eq!(resume_when.len(), 2);
+                        assert_eq!(resume_when[0].kind, "landed");
+                        assert_eq!(resume_when[1].expected.as_deref(), Some("done"));
+                    }
+                    _ => panic!("expected park"),
+                },
+                None => assert!(parsed.is_err()),
+            }
+        }
+    }
+
+    #[test]
+    fn park_command_executes_and_worker_contexts_refuse_without_writes() {
+        // Given a fresh task and a subprocess-isolated caller context.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let task = store.create("Park CLI", None, Status::Ready, "").unwrap();
+        for role in ["worker", "reviewer", "pm", "unpark"] {
+            let before = store.get(&task.id).unwrap();
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "attention_cmd::tests::park_command_subprocess",
+                    "--nocapture",
+                ])
+                .env("PARK_CLI_ROOT", tmp.path())
+                .env("PARK_CLI_TASK", &task.id)
+                .env("PARK_CLI_ROLE", role)
+                .current_dir(tmp.path());
+            for key in [
+                "AI_AGENT",
+                "PI_CODING_AGENT",
+                "CORRAL_AGENT",
+                "CORRAL_REVIEWER",
+                "CORRAL_AGENT_TASK",
+                "CORRAL_PM",
+            ] {
+                command.env_remove(key);
+            }
+            match role {
+                "worker" => {
+                    command.env("AI_AGENT", "1");
+                }
+                "reviewer" => {
+                    command.env("CORRAL_REVIEWER", "1");
+                }
+                "pm" | "unpark" => {
+                    command.env("CORRAL_PM", "1").env("AI_AGENT", "1");
+                }
+                _ => unreachable!(),
+            }
+            // When the actual parsed subcommand executes in that process.
+            let output = command.stdin(std::process::Stdio::null()).output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // Then only the authorized PM command can change the task.
+            let after = store.get(&task.id).unwrap();
+            match role {
+                "worker" | "reviewer" => assert_eq!(after, before),
+                "pm" => assert_eq!(after.park.unwrap().by, corral_core::Responsible::Pm),
+                "unpark" => assert!(after.park.is_none()),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn park_command_subprocess() {
+        let Ok(root) = std::env::var("PARK_CLI_ROOT") else {
+            return;
+        };
+        let id = std::env::var("PARK_CLI_TASK").unwrap();
+        let role = std::env::var("PARK_CLI_ROLE").unwrap();
+        let ctx = Ctx::from_store(corral_core::Store::open(std::path::Path::new(&root)).unwrap());
+        let mut args = vec!["corral".to_owned(), "attention".into()];
+        if role == "unpark" {
+            let revision = ctx.store.get(&id).unwrap().park.unwrap().revision;
+            args.extend([
+                "unpark".into(),
+                id,
+                "--expected-revision".into(),
+                revision.to_string(),
+            ]);
+        } else {
+            args.extend([
+                "park".into(),
+                id,
+                "--reason".into(),
+                "Wait".into(),
+                "--review-by".into(),
+                "24h".into(),
+            ]);
+        }
+        let Some(crate::Cmd::Attention(args)) = crate::Cli::try_parse_from(args).unwrap().cmd
+        else {
+            panic!("expected attention")
+        };
+        let result = run(&ctx, args);
+        if matches!(role.as_str(), "worker" | "reviewer") {
+            assert!(result.unwrap_err().to_string().contains("worker_context"));
+        } else {
+            result.unwrap();
+        }
+    }
 
     #[test]
     fn attend_parses_duration_and_refuses_values_outside_the_adopted_interval() {

@@ -35,7 +35,7 @@ fn reconcile_inner(
     let Some(_lock) = ctx.store.try_lock("attention-reconcile")? else {
         return Ok(None);
     };
-    let (tasks, mut board) = super::board_snapshot(ctx, now)?;
+    let (tasks, mut board) = super::board_snapshot(ctx, now, true)?;
     owner_notice::drain_snapshot(ctx, &tasks)?;
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();
@@ -212,6 +212,7 @@ fn transition(
     let mut uncovered = Vec::new();
     for (key, condition) in &current {
         let opening = !ledger.records.contains_key(key);
+        let parked_stall = task.park.is_some() && condition.kind == "unexpected_stall";
         if !ledger.records.contains_key(key) {
             if ledger
                 .records
@@ -231,7 +232,8 @@ fn transition(
                 opened_at: now,
                 pm_live_at_open: pm_live,
                 levels: corral_core::attention::AttentionLevels {
-                    announced_at: (condition.responsible == Responsible::Pm).then_some(now),
+                    announced_at: (condition.responsible == Responsible::Pm && !parked_stall)
+                        .then_some(now),
                     ..Default::default()
                 },
                 handling: None,
@@ -249,7 +251,7 @@ fn transition(
                     "responsible": condition.responsible, "since": condition.since.unwrap_or(now),
                     "since_source": condition.since_source, "opened_at": now,
                     "pm_live": pm_live, "reason": condition.reason,
-                    "wake": condition.responsible == Responsible::Pm,
+                    "wake": condition.responsible == Responsible::Pm && !parked_stall,
                 }),
             )?;
         }
@@ -272,9 +274,26 @@ fn transition(
             .handling
             .as_ref()
             .is_some_and(|handling| now < handling.next_check);
-        if paused {
+        if paused || parked_stall {
             continue;
         }
+        if !opening && record.responsible == Responsible::Pm && record.levels.announced_at.is_none()
+        {
+            record.levels.announced_at = Some(now);
+            outbox::enqueue(
+                ledger,
+                key,
+                "attention_overdue",
+                "/announce",
+                json!({"key": key, "kind": condition.kind, "class": condition.class,
+                    "responsible": condition.responsible, "level": "announce",
+                    "pm_live": pm_live, "wake": true, "reason": condition.reason, "at": now}),
+            )?;
+        }
+        let record = ledger
+            .records
+            .get_mut(key)
+            .context("attention record missing")?;
         let age = now.duration_since(record.since).as_secs().max(0);
         let mut facts = Vec::new();
         if !opening
@@ -559,6 +578,8 @@ pub(super) fn attend_authorized(
         .iter()
         .map(|fact| fact.fact_id.clone())
         .collect();
+    let announce = condition.responsible == Responsible::Pm
+        && !(task.park.is_some() && condition.kind == "unexpected_stall");
     let mut accepted = None;
     ctx.store.update_attention(id, |ledger| {
         if !ledger.records.contains_key(&key) {
@@ -577,7 +598,7 @@ pub(super) fn attend_authorized(
                     opened_at: now,
                     pm_live_at_open: None,
                     levels: corral_core::attention::AttentionLevels {
-                        announced_at: (condition.responsible == Responsible::Pm).then_some(now),
+                        announced_at: announce.then_some(now),
                         ..Default::default()
                     },
                     handling: None,
@@ -595,7 +616,7 @@ pub(super) fn attend_authorized(
                     "since": condition.since.unwrap_or(now), "since_source": condition.since_source,
                     "opened_at": now, "pm_live": null,
                     "class": condition.class, "reason": condition.reason,
-                    "wake": condition.responsible == Responsible::Pm,
+                    "wake": announce,
                 }),
             )?;
         }
