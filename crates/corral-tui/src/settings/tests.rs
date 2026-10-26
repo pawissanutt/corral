@@ -469,7 +469,8 @@ fn pm_push_settings_save_machine_values_and_keep_concurrent_agent_edit() {
             "lessons_due",
             "run_resumed",
             "wait_transition",
-            "pm_decision_resolved"
+            "pm_decision_resolved",
+            "attention_due"
         ]
     );
     fx.ctx
