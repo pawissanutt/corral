@@ -624,7 +624,8 @@ impl Pilot<'_> {
     }
 
     /// Sends the run back to its agent with `summary` (one line) and `details`, or escalates when the rounds are
-    /// used up. Escalation or a missing agent pane starts a fresh retry whose prompt carries the request.
+    /// used up. Reuse resumes a missing worker's recorded session; explicit fresh mode or an incompatible
+    /// profile escalation starts a retry whose prompt carries the request.
     fn send_request(
         &self,
         summary: &str,
