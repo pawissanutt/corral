@@ -388,10 +388,15 @@ fn a_pi_worker_done_in_review_keeps_its_messages_until_it_ends() {
     let fresh = post(&inbox);
     // When sync runs, then the open worker's adapter is consulted and the message stays queued.
     crate::sync_at(&fx.ctx, at("2026-10-15T00:01:00Z")).unwrap();
-    assert!(inbox.dir().join("blocked").exists());
+    assert!(
+        inbox
+            .record::<String>("control", "blocked")
+            .unwrap()
+            .is_some()
+    );
     assert!(inbox.terminal(fresh).unwrap().is_none());
     // Given a second message whose delivery was attempted with an uncertain outcome:
-    std::fs::remove_file(inbox.dir().join("blocked")).unwrap();
+    inbox.delete_record("control", "blocked").unwrap();
     let attempted = post(&inbox);
     {
         let _deliver = inbox.delivery_lock().unwrap();
@@ -417,15 +422,12 @@ fn a_pi_worker_done_in_review_keeps_its_messages_until_it_ends() {
     for seq in [fresh, attempted] {
         assert!(inbox.terminal(seq).unwrap().is_none(), "message {seq}");
     }
-    let alerts = inbox.dir().join("alerts");
     let orphaned = || {
-        std::fs::read_dir(&alerts).is_ok_and(|entries| {
-            entries.flatten().any(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("delivery_orphaned")
-            })
-        })
+        inbox
+            .records("alerts")
+            .unwrap()
+            .iter()
+            .any(|row| row.key.starts_with("delivery_orphaned"))
     };
     assert!(!orphaned());
     // When the task genuinely ends (it lands), then both messages settle and are never sent.
