@@ -681,6 +681,62 @@ impl Store {
         self.dir.join("state")
     }
 
+    /// Intent/effect journals must be durable before a callback performs the effect.
+    /// Ordinary records use `save_record` and join the callback's unit of work.
+    pub(crate) fn commit_record_intent(
+        &self,
+        area: &str,
+        key: &str,
+        value: &impl serde::Serialize,
+    ) -> Result<()> {
+        anyhow::ensure!(!self.is_snapshot(), "a snapshot cannot commit an intent");
+        self.check_runtime()?;
+        let before = self.record_row(area, key)?;
+        let doc = serde_json::to_value(value).context("encoding record intent")?;
+        if before.as_ref().is_some_and(|row| row.doc == doc) {
+            return Ok(());
+        }
+        self.db
+            .backend
+            .apply(crate::backend::Operation::PutRecords(
+                crate::backend::PutRecords {
+                    writes: vec![crate::backend::RecordWrite {
+                        area: area.to_owned(),
+                        key: key.to_owned(),
+                        expected: before.map(|row| row.version),
+                        doc: Some(doc),
+                        updated: jiff::Timestamp::now(),
+                    }],
+                    events: Vec::new(),
+                    reservations: Vec::new(),
+                },
+            ))
+            .map_err(write::apply_error)
+            .context("committing record intent")?;
+        Ok(())
+    }
+
+    /// Validated root for rebuildable application caches (not created).
+    pub fn cache_root(&self) -> Result<PathBuf> {
+        let layout = crate::StorageLayout::resolve(
+            &self.root,
+            &self.config.storage,
+            &self.config.projects,
+            &crate::StorageEnv::from_process(),
+        )
+        .map_err(|errors| {
+            anyhow::anyhow!(
+                "{}",
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })?;
+        Ok(layout.cache_root().to_path_buf())
+    }
+
     /// Absolute path of a project's repo: config path joined to root (absolute paths kept).
     pub fn project_path(&self, project: &str) -> Result<PathBuf> {
         let p = self
