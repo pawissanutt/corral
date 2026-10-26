@@ -1,6 +1,6 @@
 # Pi-native worker comparison: incomplete cohort
 
-T-313 / T-252@P5, 2026-10-26. **Two pairs are independently reviewed; the six-pair comparison is incomplete.**
+T-313 / T-252@P5, 2026-10-26. **Three pairs are independently reviewed; the six-pair comparison is incomplete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -19,6 +19,15 @@ arms independently, land one candidate, and discard the other after review.
 
 The owner amendment of 2026-10-26 permits T-313 to start before T-297 closes;
 it does not waive any of these controls or change T-297.
+
+The owner subsequently answered "allow Independent, allow" to the escalated
+T-245 method question, then "okay do it" to the recommendation to release the
+source freeze and finish within twelve runs with an honest qualified report.
+The remaining four runs can yield five completed pairs plus the retained first
+pair's startup failure. No thirteenth attempt is authorized. This is bounded
+closeout approval, not a claim that the original six-complete-pair criterion or
+default-switch pass bar was met. Remaining implementations must be independent;
+accepted prerequisite imports are allowed, counterpart task solutions are not.
 
 ## Offline deliverable
 
@@ -277,6 +286,41 @@ Bundles, inventory and raw readbacks are attached with retention tier `keep`.
 No healthy resource was stopped or moved. Cleanup remains after authorized
 terminal outcomes and complete evidence retention, before the parent `done`
 scan can collect bulky disposable clones, targets or runtime binaries.
+
+## Third reviewed pair and timing correction
+
+Native T-010/R1 was approved on review 1 at
+2026-10-26T15:18:08.46019135Z, on candidate
+`b11c0e3f9333f4685166ef2c889f289633c62cc1`. The owner answer was observed by
+the same healthy generation 1; no replacement worker was dispatched.
+
+| T-245 metric | OmO | Pi-native |
+|---|---:|---:|
+| Worker + review tokens | 35,323,010 | 17,612,214 |
+| API-equivalent USD | 5.6687832 | 2.7795176 |
+| Review rounds | 1 | 1 |
+| Rescues | 1 | 0 |
+| Needs me / seconds | 0 / 0 | 1 / 17,275.993 |
+| PM / owner answers | 0 / 0 | 0 / 1 |
+| Recorded silent endings | 2 | 0 |
+| Quick gates passed / total | 1 / 2 | 1 / 1 |
+| Wall seconds to approval | 7,328.436 | 20,179.628 |
+
+The native wait ends at its matching canonical owner answer, not at `done`.
+The previous parser overstated this interval as 19,580.344 seconds; the
+corrected parser also preserves overlapping native-question and legacy-decision
+holds. The regression failed before the fix, all 31 tests and strict typecheck
+passed afterward, and actual raw replay produced 17,275.993 seconds. Production
+file diagnostics were clean; test-file LSP freshness timed out, while `tsc`
+passed. The frozen experimental executable and configuration were not changed.
+
+The real three-pair CLI report exits 2 with `complete: false`, `valid: false`,
+`outcome: not_evaluated`, no per-pair invalidations and no token-budget stop.
+Diagnostic aggregates are USD 10.1871964 / 5.201242 and 60,227,415 / 29,688,997
+tokens for OmO / native. Native now has one Needs me against OmO's zero, so
+that threshold is false. Other diagnostic thresholds are true; they do not
+override incompleteness, prior counterpart reuse, solution exposure or the
+different operational question/silent-ending detection surfaces.
 
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
