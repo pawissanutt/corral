@@ -120,10 +120,21 @@ The credential guard rejected a direct auth-directory symlink, which was
 removed without touching the original credentials. Process metadata then
 confirmed that only the exited host's shell remained. Its launch environment
 was corrected to use the original corral-owned data root; the plugin-free
-server's environment was not changed. Fenced same-run recovery is next, without
-another login, credential copying or model input through a pane.
+server's environment was not changed. The frozen binary refused fenced recovery
+with `op_unavailable: corral agent resume lands with T-252 child recovery`.
+The failed private card was closed with its branch and raw failure retained;
+no bootstrap was replayed and no extra dispatch was silently substituted.
+Completing that pair now needs an owner-approved replacement allowance.
 This setup failure, Needs me event and recovery must remain in the evidence;
 they cannot be silently removed or attributed to worker implementation quality.
+
+A new private-shell startup setting resolves the original corral-owned data
+root while leaving herdr's server environment isolated. A disposable fresh pane
+verified every doctor boolean, including credential presence, against its actual
+environment; it was then closed. Dispatch 3/12, the Pi-first T-249 card
+T-002/R1, now has a healthy generation-1 binding and a canonical first turn.
+The other five pairs continue within the original budget while the first pair
+remains explicitly incomplete.
 
 Remaining acceptance work is the six controlled pairs and their independent
 reviews, raw show/event/identity captures, before/after plan measurements,
