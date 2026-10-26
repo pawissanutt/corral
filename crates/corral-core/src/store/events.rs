@@ -21,6 +21,7 @@ struct Unit {
     events: RefCell<Vec<NewEvent>>,
     records: RefCell<Vec<RecordWrite>>,
     reads: RefCell<BTreeMap<(String, String), Option<StoredRecord>>>,
+    view: RefCell<Option<super::head::PinnedView>>,
     authorization: RefCell<Option<Authorization>>,
 }
 
@@ -103,6 +104,7 @@ impl Store {
             events: RefCell::default(),
             records: RefCell::default(),
             reads: RefCell::default(),
+            view: RefCell::default(),
             authorization: RefCell::default(),
         });
         UNITS.with(|units| units.borrow_mut().push(Rc::clone(&unit)));
@@ -122,6 +124,22 @@ impl Store {
 
     pub(crate) fn has_record_unit(&self) -> bool {
         self.current_unit().is_some()
+    }
+
+    pub(crate) fn record_view(&self) -> Result<Box<dyn crate::backend::ReadView + Send>> {
+        let Some(unit) = self.current_unit() else {
+            return self.view();
+        };
+        let mut held = unit.view.borrow_mut();
+        let view = match held.as_ref() {
+            Some(view) => Arc::clone(view),
+            None => {
+                let view = Arc::new(std::sync::Mutex::new(self.view()?));
+                *held = Some(Arc::clone(&view));
+                view
+            }
+        };
+        Ok(Box::new(super::snapshot::SharedView(view)))
     }
 
     pub(crate) fn held_record(&self, area: &str, key: &str) -> Option<Option<StoredRecord>> {

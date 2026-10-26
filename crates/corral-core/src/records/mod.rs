@@ -10,6 +10,8 @@ use crate::backend::{PageReq, RecordQuery, RecordWrite, StoredRecord};
 
 impl Store {
     pub fn record_row(&self, area: &str, key: &str) -> Result<Option<StoredRecord>> {
+        let view = self.record_view()?;
+        view.ensure_fresh()?;
         if let Some(staged) = self.staged_record(area, key) {
             if let Some(row) = &staged {
                 count(row);
@@ -22,8 +24,7 @@ impl Store {
             }
             return Ok(held);
         }
-        let row = self
-            .view()?
+        let row = view
             .records(
                 &RecordQuery {
                     area: Some(area.to_owned()),
@@ -51,7 +52,7 @@ impl Store {
 
     /// Output-sized reads of one area. Hot readers use a key or an unfinished index area.
     pub fn record_rows(&self, area: &str) -> Result<Vec<StoredRecord>> {
-        let view = self.view()?;
+        let view = self.record_view()?;
         let mut page = PageReq::first(256);
         let mut rows = std::collections::BTreeMap::new();
         loop {
