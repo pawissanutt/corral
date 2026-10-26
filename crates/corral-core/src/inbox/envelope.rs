@@ -228,18 +228,17 @@ impl Inbox<'_> {
             .map(|number| self.record::<Envelope>("envelopes", &format!("{number:020}")))
             .transpose()?
             .flatten()
+            && !self.settled(&envelope)?
         {
-            if !self.settled(&envelope)? {
-                self.update_state(|s| {
-                    s.open_envelope = Some(envelope.number);
-                    s.replacement_envelope = None;
-                    if s.binding.as_ref() != Some(&envelope.binding) {
-                        s.observe_cursor = ObserveCursor::default();
-                    }
-                    s.binding = Some(envelope.binding.clone());
-                    Ok(())
-                })?;
-            }
+            self.update_state(|s| {
+                s.open_envelope = Some(envelope.number);
+                s.replacement_envelope = None;
+                if s.binding.as_ref() != Some(&envelope.binding) {
+                    s.observe_cursor = ObserveCursor::default();
+                }
+                s.binding = Some(envelope.binding.clone());
+                Ok(())
+            })?;
         }
         Ok(())
     }
