@@ -326,10 +326,11 @@ fn route_explains_reviewer_rule_and_fallback() {
     let ws = routing_ws("");
     let mut store = corral_core::Store::open(&ws.root).unwrap();
     store.config.review.reviewer = Some("task".into());
-    store.config.routing.reviewer_rules = vec![
-        serde_json::from_str(r#"{"name": "small", "size": ["xs", "s"], "profile": "rule"}"#)
-            .unwrap(),
-    ];
+    store.config.routing.reviewer_rules =
+        vec![
+            serde_json::from_str(r#"{"name": "small", "size": ["xs", "s"], "profile": "rule"}"#)
+                .unwrap(),
+        ];
     store.save_config().unwrap();
     ok(&ws.root, &["new", "Small", "-p", "app", "--size", "xs"]);
     ok(&ws.root, &["new", "Large", "-p", "app", "--size", "l"]);
@@ -464,10 +465,16 @@ fn dispatch_records_matched_route_and_launches_resolved_preset() {
         serde_json::json!({"source":"rule","index":1,"name":"backend"})
     );
     let launch = std::fs::read_to_string(ws.root.join("launch")).expect("launch");
+    let session = run["session"]["id"]
+        .as_str()
+        .expect("allocated session UUID");
+    let expected = format!("fixture --model rule-model --effort high --session-id '{session}'\"");
     assert_eq!(
         launch.trim().split(" corral-launch \"").nth(1),
-        Some("fixture --model rule-model --effort high\"")
+        Some(expected.as_str())
     );
+    assert_eq!(run["session"]["policy"], "reuse");
+    assert_eq!(run["session"]["action"], "new");
     let events = store.events().expect("events");
     let event = events
         .iter()
@@ -573,13 +580,20 @@ fn dispatch_accepts_an_exact_provider_qualified_model() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    let task: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["show", "1", "--json"])).expect("json");
+    let directory = task["runs"][0]["session"]["directory"]
+        .as_str()
+        .expect("role session directory");
+    let expected =
+        format!("fixture --model openai-codex/gpt-6.1-sol-fast --session-dir '{directory}'\"");
     assert_eq!(
         std::fs::read_to_string(ws.root.join("launch"))
             .expect("launch")
             .trim()
             .split(" corral-launch \"")
             .nth(1),
-        Some("fixture --model openai-codex/gpt-6.1-sol-fast\"")
+        Some(expected.as_str())
     );
 }
 
