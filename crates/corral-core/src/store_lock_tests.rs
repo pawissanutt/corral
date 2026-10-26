@@ -73,15 +73,19 @@ fn shared_inventory_leases_exclude_claims_until_the_last_consumer_finishes() {
 
     // Then an exclusive admission excludes readers until its claim is saved.
     let claim = store.try_lock("session-ownership").unwrap().unwrap();
-    assert!(store
-        .try_lock_shared("session-ownership")
-        .unwrap()
-        .is_none());
+    assert!(
+        store
+            .try_lock_shared("session-ownership")
+            .unwrap()
+            .is_none()
+    );
     drop(claim);
-    assert!(store
-        .try_lock_shared("session-ownership")
-        .unwrap()
-        .is_some());
+    assert!(
+        store
+            .try_lock_shared("session-ownership")
+            .unwrap()
+            .is_some()
+    );
 }
 
 fn prepared_operating_action() -> (tempfile::TempDir, Store, crate::ActionAuthorization) {
@@ -461,24 +465,30 @@ mod operating_submission {
         assert!(matches!(result, SubmissionOutcome::Submitted(7)));
         let mut next = action.clone();
         next.attempt = "launch-2".into();
-        assert!(fixture
-            .store
-            .submit_operating_action(&authorization, &next, |_, _| Ok(()), || Ok(()))
-            .is_err());
-        assert!(fixture
-            .store
-            .submit_operating_action(&authorization, &action, |_, _| Ok(()), || Ok(()))
-            .is_err());
-        assert!(fixture
-            .store
-            .authorize_operating_action(
-                next,
-                OperatingOrigin::Automatic {
-                    authorization: "invented".into(),
-                    revision: 0,
-                }
-            )
-            .is_err());
+        assert!(
+            fixture
+                .store
+                .submit_operating_action(&authorization, &next, |_, _| Ok(()), || Ok(()))
+                .is_err()
+        );
+        assert!(
+            fixture
+                .store
+                .submit_operating_action(&authorization, &action, |_, _| Ok(()), || Ok(()))
+                .is_err()
+        );
+        assert!(
+            fixture
+                .store
+                .authorize_operating_action(
+                    next,
+                    OperatingOrigin::Automatic {
+                        authorization: "invented".into(),
+                        revision: 0,
+                    }
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -488,15 +498,17 @@ mod operating_submission {
         fixture.grant();
         let authorization = fixture.automatic();
         // When IPC returns an error after entering the submission boundary.
-        assert!(fixture
-            .store
-            .submit_operating_action(
-                &authorization,
-                &fixture.action(),
-                |_, _| Ok(()),
-                || -> anyhow::Result<()> { anyhow::bail!("transport disconnected") }
-            )
-            .is_err());
+        assert!(
+            fixture
+                .store
+                .submit_operating_action(
+                    &authorization,
+                    &fixture.action(),
+                    |_, _| Ok(()),
+                    || -> anyhow::Result<()> { anyhow::bail!("transport disconnected") }
+                )
+                .is_err()
+        );
         // Then uncertainty survives reopening and cannot be replayed.
         let reopened = Store::open(fixture.root.path()).unwrap();
         assert!(matches!(
@@ -506,14 +518,16 @@ mod operating_submission {
                 .disposition,
             SubmissionDisposition::Uncertain { .. }
         ));
-        assert!(reopened
-            .submit_operating_action(
-                &authorization,
-                &fixture.action(),
-                |_, _| Ok(()),
-                || -> anyhow::Result<()> { panic!("uncertain action replayed") }
-            )
-            .is_err());
+        assert!(
+            reopened
+                .submit_operating_action(
+                    &authorization,
+                    &fixture.action(),
+                    |_, _| Ok(()),
+                    || -> anyhow::Result<()> { panic!("uncertain action replayed") }
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -530,15 +544,17 @@ mod operating_submission {
             confirmed_at: clock(),
         };
         // Then no IPC can be submitted from forged or missing provenance.
-        assert!(fixture
-            .store
-            .submit_operating_action(
-                &forged,
-                &fixture.action(),
-                |_, _| Ok(()),
-                || -> anyhow::Result<()> { panic!("forged authority submitted") }
-            )
-            .is_err());
+        assert!(
+            fixture
+                .store
+                .submit_operating_action(
+                    &forged,
+                    &fixture.action(),
+                    |_, _| Ok(()),
+                    || -> anyhow::Result<()> { panic!("forged authority submitted") }
+                )
+                .is_err()
+        );
         // Replace only the backing store with an equivalent task but no authorization row.
         let backend = crate::backend::fake::FakeBackend::new(
             Default::default(),
@@ -547,15 +563,17 @@ mod operating_submission {
         );
         fixture.store = fixture.store.with_backend(Box::new(backend));
         fixture.store.fixture_put_task(&fixture.task).unwrap();
-        assert!(fixture
-            .store
-            .submit_operating_action(
-                &authorization,
-                &fixture.action(),
-                |_, _| Ok(()),
-                || -> anyhow::Result<()> { panic!("missing authority submitted") }
-            )
-            .is_err());
+        assert!(
+            fixture
+                .store
+                .submit_operating_action(
+                    &authorization,
+                    &fixture.action(),
+                    |_, _| Ok(()),
+                    || -> anyhow::Result<()> { panic!("missing authority submitted") }
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -640,9 +658,11 @@ mod operating_submission {
         let (failing, _fault) =
             super::state_record_support::fail_records(&fixture.store, "automation", "current");
         // When configuration publication succeeds but receipt publication fails.
-        assert!(failing
-            .confirm_operating_policy(&preview, "owner", clock())
-            .is_err());
+        assert!(
+            failing
+                .confirm_operating_policy(&preview, "owner", clock())
+                .is_err()
+        );
         // Then the on-disk requested mode remains inspectable and inactive.
         let reopened = Store::open(fixture.root.path()).unwrap();
         assert_eq!(reopened.config.automation.mode, OperatingMode::Autopilot);
@@ -680,15 +700,17 @@ mod operating_submission {
             .unwrap();
         // Then its original preparation submits exactly once.
         assert!(matches!(result, SubmissionOutcome::Submitted(())));
-        assert!(fixture
-            .store
-            .submit_operating_action(
-                &authorization,
-                &fixture.action(),
-                |_, _| Ok(()),
-                || -> anyhow::Result<()> { panic!("attempt replayed") }
-            )
-            .is_err());
+        assert!(
+            fixture
+                .store
+                .submit_operating_action(
+                    &authorization,
+                    &fixture.action(),
+                    |_, _| Ok(()),
+                    || -> anyhow::Result<()> { panic!("attempt replayed") }
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -698,17 +720,19 @@ mod operating_submission {
         fixture.grant();
         let authorization = fixture.automatic();
         // When a caller attempts to turn that identity into an owner action.
-        assert!(fixture
-            .store
-            .authorize_operating_action(
-                fixture.action(),
-                OperatingOrigin::ExplicitOwner {
-                    approval: "owner-approval".into(),
-                    confirmed_by: "owner".into(),
-                    confirmed_at: clock()
-                }
-            )
-            .is_err());
+        assert!(
+            fixture
+                .store
+                .authorize_operating_action(
+                    fixture.action(),
+                    OperatingOrigin::ExplicitOwner {
+                        approval: "owner-approval".into(),
+                        confirmed_by: "owner".into(),
+                        confirmed_at: clock()
+                    }
+                )
+                .is_err()
+        );
         // Then the original provenance remains durable; another origin is not another IPC slot.
         assert_eq!(
             fixture

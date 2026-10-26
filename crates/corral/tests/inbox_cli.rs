@@ -1,17 +1,17 @@
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-use corral_core::inbox::{
-    Inbox, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient, SendOutcome,
-    SessionBinding, TerminalState, Urgency, MAX_PAYLOAD,
-};
 use corral_core::Store;
-use corral_ops::delivery::{
-    deliver, BindOutcome, Capabilities, DeliveryAdapter, DeliveryStatus, Observation, Readiness,
-    RecipientRef,
+use corral_core::inbox::{
+    Inbox, MAX_PAYLOAD, Message, MessageBinding, Post, Receipt, ReceiptLevel, Recipient,
+    SendOutcome, SessionBinding, TerminalState, Urgency,
 };
 use corral_ops::Ctx;
-use serde_json::{json, Value};
+use corral_ops::delivery::{
+    BindOutcome, Capabilities, DeliveryAdapter, DeliveryStatus, Observation, Readiness,
+    RecipientRef, deliver,
+};
+use serde_json::{Value, json};
 
 #[cfg(target_os = "linux")]
 #[path = "inbox_cli/cancellation.rs"]
