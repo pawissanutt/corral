@@ -224,6 +224,23 @@ Done-without-outcome states; budget enforcement and measurement definitions
 remain unchanged. These setup and telemetry limitations also preclude attributing
 later arm differences solely to the host.
 
+T-004/R1 was independently approved on its first review at
+2026-10-26T09:37:52.084238522Z. The captured OmO-only totals are 35,323,010
+worker-plus-review tokens, USD 5.6687832 API-equivalent cost, one controller
+rescue, two recorded `idle_no_report` events, and one passing quick gate from
+two attempts. Thus the final timeline does contain warning events; their
+absence at the earlier hold inspection was not a valid zero-count conclusion.
+The explicit prerequisite-context audit is now counted, with a reproduced
+regression, 28 passing tests, strict typechecking and clean diagnostics.
+
+Dispatch 8/12 is matched native T-010/R1, healthy generation 1. It registered
+blocking technical-choice question `T-010/R1/Q1`, escalated to owner at revision
+2: reuse the reviewed T-004 solution or independently implement the task while
+importing only its prerequisite. This method decision is pending; no answer
+has been fabricated and no additional worker has started. It is separate from
+the PM-owned pending first-pair budget decision. No third paired measurement
+or aggregate verdict is claimed.
+
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
 rate is no lower. No default switch follows automatically from any outcome.
