@@ -176,8 +176,24 @@ before landing or discard:
 
 Both have zero recorded rescues, Needs me events and silent endings. The combined
 14,189,381 tokens are below the preregistered 121,745,880-token stop threshold.
-The first candidate's branch was retained after discard; Corral owns the second
-candidate's private p03 full landing gate. Six of twelve worker runs are used.
+The first candidate's branch was retained after discard. Corral's full gate
+`4056667-1792999032029078569` passed and landed
+`c899c5fb9388051dc380c8b480479ea73dee5c4c` only on p03 main. The coordinator's
+five-minute observer expired while that gate continued; reattaching consumed
+the same passing receipt and authorized tier promotion, without a duplicate
+gate or worker restart. This post-approval recovery is outside the primary
+measurement window. Dispatch 7/12 is now OmO-first T-245, private T-004/R1.
+
+**Arm-order confound:** the native worker's canonical checkpoint and completion
+summary explicitly record porting the already reviewed T-003 implementation
+after a fresh red reproduction. Both independent reviews record the same
+resulting tree, `46afb1fef02e64754c8c3e6cb100265221d1687f`. These are real costs
+of first implementation versus reuse, not a clean host-only comparison. The
+shared board and retained branches exposed earlier-arm work; structural
+spec/base/hash checks do not establish equal available implementation knowledge.
+The report retains this pair and its raw evidence, but its lower native cost
+must not be attributed solely to the host. The preregistered protocol is not
+silently changed after observing this result.
 
 The native admission helper failed only after successful dispatch and raw capture:
 the canonical unbound host omits an empty `turns` array. The healthy worker was
