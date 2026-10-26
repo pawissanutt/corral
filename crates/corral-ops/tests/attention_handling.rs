@@ -10,6 +10,8 @@ mod action_identity;
 mod operating_fixture;
 #[path = "attention_handling/overflow.rs"]
 mod overflow;
+#[path = "attention_handling/overflow_reclaim.rs"]
+mod overflow_reclaim;
 #[path = "attention_handling/recovery.rs"]
 mod recovery;
 #[path = "attention_handling/same_pass.rs"]
