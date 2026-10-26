@@ -363,7 +363,7 @@ fn submission_paths_real_entries_commit_before_exact_effect_and_refuse_replay() 
                 assert_authorization_commit(&store, point, &cursor);
                 let records = authorizations(&ctx, &task_id, kind);
                 let expected = match point {
-                    "prepare_returned" => SubmissionDisposition::Prepared,
+                    "inbox_reserved" | "prepare_returned" => SubmissionDisposition::Prepared,
                     "authorization_committed"
                     | "send_returned"
                     | "effect_entered"
@@ -375,14 +375,18 @@ fn submission_paths_real_entries_commit_before_exact_effect_and_refuse_replay() 
                     records.iter().any(|record| record.disposition == expected),
                     "{path:?} {point}: {records:?}"
                 );
-                if point == "prepare_returned" {
+                if point == "inbox_reserved" {
+                    assert!(matches!(path, Path::RepairInbox));
+                }
+                if matches!(point, "inbox_reserved" | "prepare_returned") {
                     let held = acquired.lock().unwrap();
                     // The last dispatch/task pair is the submission, not earlier preparation.
                     assert_lock_order(&held, &task_id, matches!(path, Path::RepairInbox));
                 }
                 if matches!(
                     point,
-                    "authorization_committed"
+                    "inbox_reserved"
+                        | "authorization_committed"
                         | "send_returned"
                         | "effect_entered"
                         | "effect_returned"
@@ -423,14 +427,18 @@ fn submission_paths_real_entries_commit_before_exact_effect_and_refuse_replay() 
             }));
             path.enter(&fx.ctx, &id, automatic)
                 .unwrap_or_else(|e| panic!("{path:?} automatic={automatic}: {e:#}"));
+            let mut expected_stages = vec![
+                "prepare_returned",
+                "authorization_committed",
+                "send_returned",
+                "submitted_committed",
+            ];
+            if matches!(path, Path::RepairInbox) {
+                expected_stages.insert(0, "inbox_reserved");
+            }
             assert_eq!(
                 *stages.lock().unwrap(),
-                [
-                    "prepare_returned",
-                    "authorization_committed",
-                    "send_returned",
-                    "submitted_committed"
-                ],
+                expected_stages,
                 "{path:?} automatic={automatic}"
             );
             let after = counts(&fx);
