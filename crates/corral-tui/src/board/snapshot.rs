@@ -31,7 +31,9 @@ impl BoardSnapshot {
             .filter_map(|task| crate::plan::tracker::load(ctx, task).map(|p| (task.id.clone(), p)))
             .collect();
         let finishes = corral_ops::finishes(&ctx.store, &tasks)?;
-        let (resources, waits) = crate::resources::ResourceDisplay::sample_board(ctx, &tasks);
+        let resource_ctx = crate::attention::refresh_context(ctx);
+        let (resources, waits) =
+            crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
         let pins = shelf::load(ctx, &tasks);
         let pinned = pins
             .iter()
@@ -69,7 +71,7 @@ impl BoardSnapshot {
             })
             .collect();
         Ok(Self {
-            attention: crate::attention::load(ctx, now),
+            attention: crate::attention::load(&resource_ctx, now),
             ctx: ctx.clone(),
             tasks,
             resources,
