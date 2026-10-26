@@ -116,8 +116,12 @@ Pi's T-007/R1 admission at 2026-10-26T04:37:34.516146999Z exited before
 binding a session or starting a model turn. Its canonical launch log reports
 `credentials_unavailable`: the native launcher used the private server's
 XDG data directory, unlike the preflight client's configured environment.
-The private runtime is being linked to the existing corral-owned auth directory
-in place; this does not copy credential bytes or require another login.
+The credential guard rejected a direct auth-directory symlink, which was
+removed without touching the original credentials. Process metadata then
+confirmed that only the exited host's shell remained. Its launch environment
+was corrected to use the original corral-owned data root; the plugin-free
+server's environment was not changed. Fenced same-run recovery is next, without
+another login, credential copying or model input through a pane.
 This setup failure, Needs me event and recovery must remain in the evidence;
 they cannot be silently removed or attributed to worker implementation quality.
 
