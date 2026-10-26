@@ -163,6 +163,42 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
 
 #[test]
 fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board() {
+    fn capture(
+        app: &mut App,
+        width: u16,
+        height: u16,
+    ) -> (String, std::collections::BTreeMap<String, Vec<String>>) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let cards = app
+            .hits
+            .regions()
+            .iter()
+            .filter_map(|(rect, hit)| {
+                let crate::Hit::Card(id) = hit else {
+                    return None;
+                };
+                let mut card = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(
+                    0,
+                    0,
+                    rect.width,
+                    rect.height,
+                ));
+                for y in 0..rect.height {
+                    for x in 0..rect.width {
+                        card[(x, y)] = buffer[(rect.x + x, rect.y + y)].clone();
+                    }
+                }
+                Some((
+                    id.clone(),
+                    buffer_text(&card).lines().map(str::to_owned).collect(),
+                ))
+            })
+            .collect();
+        (buffer_text(buffer), cards)
+    }
+
     // Given a board and two task files that become malformed while it owns the terminal.
     let fx = seeded();
     // Avoid an unrelated missing-worktree diagnostic from the synthetic review.
@@ -176,7 +212,7 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
     let mut app = fx.app(Mode::Board);
     let baseline: Vec<_> = [(160, 45), (80, 24)]
         .into_iter()
-        .map(|(width, height)| draw(&mut app, width, height))
+        .map(|(width, height)| capture(&mut app, width, height))
         .collect();
     let _capture = capture_messages(app.message_tx.clone());
     let broken = fx.ctx.store.dir().join("tasks/broken-a.md");
@@ -197,6 +233,9 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
     for (width, height) in [(160, 45), (80, 24)] {
         let text = draw(&mut app, width, height);
         assert!(!text.contains("corral: skipping"), "{text}");
+        assert!(text.contains("attention unavailable:"), "{text}");
+        assert!(!text.contains("overdue 0"), "{text}");
+        assert!(!text.contains("No waits."), "{text}");
     }
     app.toasts.clear();
     app.reload();
@@ -205,12 +244,35 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
         app.toasts.is_empty(),
         "unchanged files do not re-toast after dismissal"
     );
-    for ((width, height), before) in [(160, 45), (80, 24)].into_iter().zip(baseline) {
+    for ((width, height), (before, mut expected_cards)) in
+        [(160, 45), (80, 24)].into_iter().zip(baseline)
+    {
+        let (after, cards) = capture(&mut app, width, height);
+        // A failed projection deliberately replaces these two owner attention rows
+        // with the unavailable header. Every other cell in every card must survive.
+        for id in ["T-005", "T-006"] {
+            let row = expected_cards.get_mut(id).unwrap().pop().unwrap();
+            assert!(
+                row.contains("Owner"),
+                "expected attention row for {id}: {row}"
+            );
+        }
+        assert_eq!(cards, expected_cards, "unaffected cards remain intact");
+        let before: Vec<_> = before.lines().collect();
+        let after: Vec<_> = after.lines().collect();
+        assert_eq!(&after[..4], &before[..4], "app header remains intact");
         assert_eq!(
-            draw(&mut app, width, height),
-            before,
-            "board buffer remains intact"
+            &after[after.len() - 2..],
+            &before[before.len() - 2..],
+            "footer remains intact"
         );
+        for border in ['╭', '╰'] {
+            assert_eq!(
+                after.iter().find(|line| line.starts_with(border)),
+                before.iter().find(|line| line.starts_with(border)),
+                "column border remains intact"
+            );
+        }
     }
     // A different error for one file is a new message, not a permanent suppression.
     std::fs::write(&broken, "---\nid: [\n---\n").unwrap();
