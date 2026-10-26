@@ -1,6 +1,6 @@
 # Pi-native worker comparison: not yet measured
 
-T-313 / T-252@P5, 2026-10-26. **Live comparison is in progress; no pair is complete.**
+T-313 / T-252@P5, 2026-10-26. **One pair is independently reviewed; the six-pair comparison is incomplete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -146,6 +146,25 @@ Its candidate branch and complete raw captures are retained. The matched OmO
 T-008/R1 arm started at 2026-10-26T05:46:11.474693667Z from the same unchanged
 p02 main, binary/configuration, specification, model and medium effort.
 This is dispatch 4/12; the single-arm measurements are not an aggregate verdict.
+
+The matched OmO T-249 arm was independently approved on its first review at
+2026-10-26T06:10:51.743073754Z. Its captured totals are 13,060,675 tokens,
+USD 2.3644284 API-equivalent cost, zero recorded rescues/Needs me/silent endings,
+and one passing gate out of two attempts. The real comparison pipeline accepts
+both arms' control/input checks with no pair-invalid reasons and no budget stop.
+It still exits 2 with `not_evaluated`, because only one of six pairs is complete.
+Corral ran the private p02 full landing gate for the reviewed second candidate,
+carried its approval through the authorized tier promotion, and landed
+`48f66776658f4add2630e7c5554b13ce6d0b48eb` only on p02 main. No full gate was
+launched manually. The preregistered OmO-first T-244 arm is now T-003/R1:
+dispatch 5/12, with frozen-control preflight and immediate admission capture.
+
+The task's explicit alternative affected implementation breadth: both reviewers
+accepted audited cleanup plus no active scope without a grant. Native additionally
+filters terminal members of a live grant, while the OmO candidate retains them
+until cleanup. The unchanged specification and fixed reviewer profile allowed
+those variants; the measurements do not establish identical feature breadth or
+attribute that difference solely to the host.
 
 Remaining acceptance work is the six controlled pairs and their independent
 reviews, raw show/event/identity captures, before/after plan measurements,
