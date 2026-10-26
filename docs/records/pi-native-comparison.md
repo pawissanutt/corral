@@ -1,6 +1,6 @@
 # Pi-native worker comparison: not yet measured
 
-T-313 / T-252@P5, 2026-10-26. **The first pair is running; no pair is complete.**
+T-313 / T-252@P5, 2026-10-26. **Live comparison is in progress; no pair is complete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -135,6 +135,17 @@ environment; it was then closed. Dispatch 3/12, the Pi-first T-249 card
 T-002/R1, now has a healthy generation-1 binding and a canonical first turn.
 The other five pairs continue within the original budget while the first pair
 remains explicitly incomplete.
+
+The native T-249 arm was independently approved after two review rounds at
+2026-10-26T05:39:18.182810382Z. Its captured worker-plus-review totals are
+9,731,132 tokens and USD 1.8148016 API-equivalent cost, with zero recorded
+rescues, Needs me events or silent endings. Two of three quick gates passed.
+The canonical waiting-external turns resumed through gate wakes, and the
+review correction arrived through the native inbox in the same generation.
+Its candidate branch and complete raw captures are retained. The matched OmO
+T-008/R1 arm started at 2026-10-26T05:46:11.474693667Z from the same unchanged
+p02 main, binary/configuration, specification, model and medium effort.
+This is dispatch 4/12; the single-arm measurements are not an aggregate verdict.
 
 Remaining acceptance work is the six controlled pairs and their independent
 reviews, raw show/event/identity captures, before/after plan measurements,
