@@ -267,6 +267,17 @@ original events-file source; the installed CLI rejects `export events`, and
 its `log --all --json` is task-scoped. No post-cutover export equivalence or
 final post-comparison measurement is claimed.
 
+Preparation during the hold retained exact canonical readbacks for all twelve
+private cards and a derived inventory: eight actual runs, four unstarted
+cards, and two complete measured pairs. Four incremental Git bundles preserve
+the six existing candidate heads across p01-p04; each passed `git bundle
+verify` and requires frozen base `d4f1cd444cc9697b9bc9d239dcc1f6f07790f1e4`.
+Base-only failed or unimplemented arms are not invented as candidates.
+Bundles, inventory and raw readbacks are attached with retention tier `keep`.
+No healthy resource was stopped or moved. Cleanup remains after authorized
+terminal outcomes and complete evidence retention, before the parent `done`
+scan can collect bulky disposable clones, targets or runtime binaries.
+
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
 rate is no lower. No default switch follows automatically from any outcome.
