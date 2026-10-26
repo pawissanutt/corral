@@ -527,6 +527,9 @@ pub struct LaunchReservation {
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
+    /// Harness session selected for this worker or reviewer; absent on legacy runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<crate::RoleSession>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::ExecutionSnapshot>,
     /// Fixed at launch; runs predating inbox adapters retain legacy delivery.

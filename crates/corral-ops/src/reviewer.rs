@@ -69,11 +69,17 @@ fn launch_profile(
 ) -> Result<String> {
     let title = format!("{} review", task.id);
     let herdr = open_run_pane(ctx, task, run, "review")?;
+    let saved = ctx.store.get(&task.id)?;
+    let child = saved
+        .current_run()
+        .and_then(|r| r.review_runs.last())
+        .context("review session disappeared before launch")?;
+    let resolved = crate::role_session::command(ctx, child, resolved)?;
     let command =
-        match crate::agent::hooks::review::command(ctx, task, run, resolved, &herdr.pane_id) {
+        match crate::agent::hooks::review::command(ctx, task, run, &resolved, &herdr.pane_id) {
             Some(command) => command?,
             None => render_template(
-                resolved,
+                &resolved,
                 &[
                     ("prompt_file", prompt_file.display().to_string()),
                     ("name", title.clone()),
@@ -419,7 +425,7 @@ fn review_run_origin(
         if let Some(previous) = r.review_runs.last_mut() {
             previous.pending_reply = None;
         }
-        r.review_runs.push(Run {
+        let mut child = Run {
             execution: None,
             delivery: crate::delivery::owner::review_launch_mode(&resolved.harness),
             inbox: Default::default(),
@@ -474,7 +480,17 @@ fn review_run_origin(
             gate_rules: corral_core::GateRules::Legacy,
             promotion_origin: None,
             agent_host: None,
-        });
+            session: None,
+        };
+        if reviewer != Reviewer::Pm {
+            child.session = Some(crate::role_session::reviewer(ctx, &task, &run, &child)?);
+        }
+        if let Some(previous) = r.review_runs.last_mut()
+            && let Ok(session) = crate::role_session::capture(ctx, &task, previous, true)
+        {
+            previous.session = Some(session);
+        }
+        r.review_runs.push(child);
         r.review = Some(record.clone());
         Ok(())
     })?;
@@ -534,6 +550,10 @@ fn review_run_origin(
         Ok(())
     })?;
     let pane = launched?;
+    if let Some(child) = saved.current_run().and_then(|r| r.review_runs.last()) {
+        crate::role_session::observe(ctx, &saved, child, true);
+        crate::role_session::log(ctx, &saved, child)?;
+    }
     let record = saved
         .current_run()
         .and_then(|r| r.review.clone())

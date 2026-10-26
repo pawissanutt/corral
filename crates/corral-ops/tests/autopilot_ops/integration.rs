@@ -363,9 +363,16 @@ fn dispatch_history_retains_integrated_commits_but_missing_only_tracks_new_main(
 }
 
 #[test]
-fn gone_worker_retry_carries_the_original_packet_path() {
+fn fresh_mode_gone_worker_retry_carries_the_original_packet_path() {
     // Given a conflict and a worker pane that no longer exists.
-    let fx = configured();
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.reviewer = Some("rev".into());
+        r.accept = Some(Accept::Auto);
+        r.max_rounds = Some(3);
+        r.remove_worktree = Some(false);
+        r.worker_session = Some(corral_core::SessionPolicy::Fresh);
+    });
     fx.change("README.md", "candidate\n");
     fx.done();
     let original = fx.run();

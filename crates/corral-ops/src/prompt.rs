@@ -420,6 +420,7 @@ pub fn render_command(
         Some(snapshot) => snapshot.resolved.clone(),
         None => ctx.store.config.resolve_profile(&choice, None, None)?,
     };
+    let resolved = crate::role_session::command(ctx, run, &resolved)?;
     let name = format!("{} {}", task.id, task.title);
     render_template(
         &resolved,

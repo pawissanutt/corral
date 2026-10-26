@@ -3,6 +3,7 @@ mod pane;
 #[cfg(test)]
 mod pending_plan_tests;
 mod planner_reply;
+mod worker_session;
 
 pub(crate) use admission::Admission;
 pub use pane::{jump, live_tail};
@@ -296,6 +297,7 @@ fn dispatch_with(
         gate_rules,
         promotion_origin: None,
         agent_host: None,
+        session: None,
     };
     run.completion.required_checks = Some(crate::gate_tier::required_checks(ctx, &task, &run)?);
 

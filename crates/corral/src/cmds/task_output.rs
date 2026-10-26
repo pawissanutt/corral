@@ -5,6 +5,7 @@ use corral_ops::Ctx;
 use super::{autopilot_line, gate_line, parse_status, review_line, route};
 
 pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
+    corral_ops::refresh_role_sessions(ctx, id)?;
     corral_ops::refresh_usage(&ctx.store, id)?;
     let t = ctx.store.get(id)?;
     if json {
@@ -15,6 +16,10 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         let gate = corral_ops::gate_readback(ctx, &t)?;
         value["gate_contract"] = serde_json::to_value(&gate.gate_contract)?;
         value["gate_ref"] = serde_json::to_value(&gate.gate_ref)?;
+        let policy = ctx.store.config.task_review_policy(&t);
+        value["session_policy"] = serde_json::json!({
+            "worker": policy.worker_session, "reviewer": policy.reviewer_session
+        });
         if let Some(error) = gate.gate_contract_error {
             value["gate_contract_error"] = error.into();
         }
@@ -27,6 +32,11 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         println!("automation blocked: {reason}");
     }
     println!("project:  {}", t.project.as_deref().unwrap_or("-"));
+    let policy = ctx.store.config.task_review_policy(&t);
+    println!(
+        "sessions: worker={:?}, reviewer={:?}",
+        policy.worker_session, policy.reviewer_session
+    );
     println!("priority: {}", t.priority);
     if let Some(kind) = &t.kind {
         println!("kind:     {kind}");
@@ -121,6 +131,10 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
                 .unwrap_or_default()
         );
         crate::stats::show_run_usage(r, "    ");
+        show_session(r, "worker");
+        for child in &r.review_runs {
+            show_session(child, "reviewer");
+        }
         for line in r.obligations.lines() {
             println!("    {line}");
         }
@@ -164,6 +178,21 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn show_session(run: &corral_core::Run, role: &str) {
+    if let Some(session) = &run.session {
+        println!(
+            "    {role} session ({}): {:?} {:?} {}",
+            run.id,
+            session.policy,
+            session.action,
+            session.id.as_deref().unwrap_or("not yet observed")
+        );
+        if let Some(reason) = &session.diagnostic {
+            println!("      {reason}");
+        }
+    }
 }
 
 pub(super) fn list(

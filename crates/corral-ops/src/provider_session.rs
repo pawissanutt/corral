@@ -50,7 +50,7 @@ fn header(path: &Path) -> Option<Header> {
 }
 
 fn session_dirs(ctx: &Ctx, run: &Run, kind: Kind) -> Vec<PathBuf> {
-    match kind {
+    let mut dirs = match kind {
         Kind::Omo => {
             let agent = omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
             vec![agent.join("sessions").join(omo::encode_cwd(&run.worktree))]
@@ -81,7 +81,11 @@ fn session_dirs(ctx: &Ctx, run: &Run, kind: Kind) -> Vec<PathBuf> {
             .flatten()
             .collect()
         }
+    };
+    if let Some(session) = &run.session {
+        dirs.insert(0, session.directory.clone());
     }
+    dirs
 }
 
 /// Which sessions a run may own: ones created inside its window, or (a reused PM pane) ones already
@@ -127,6 +131,12 @@ pub(crate) fn boundary(ctx: &Ctx, task: &str, run: &Run) -> Timestamp {
 /// The newest session this run owns in `scope`, if its harness has a session-log adapter.
 pub(crate) fn discover(ctx: &Ctx, run: &Run, boundary: Timestamp, scope: Scope) -> Option<PathBuf> {
     let kind = kind(run)?;
+    if let Some(session) = &run.session
+        && let Some(path) = &session.transcript
+        && header(path)?.cwd.as_deref() == Some(run.worktree.as_path())
+    {
+        return Some(path.clone());
+    }
     session_dirs(ctx, run, kind)
         .into_iter()
         .filter_map(|dir| std::fs::read_dir(dir).ok())

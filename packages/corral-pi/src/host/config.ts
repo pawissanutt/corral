@@ -24,6 +24,8 @@ export interface HostConfig {
   readonly assets: string;
   readonly runtimeDir: string;
   readonly sessionDir: string;
+  readonly resumeSession?: string;
+  readonly freshSession?: boolean;
   readonly model: string;
   readonly effort?: string;
   readonly promptFile?: string;
@@ -84,6 +86,9 @@ export function parseLaunchMessage(text: string): HostConfig {
     bindNonce: field(secretFields, "bind_nonce", SECRET),
   };
   if (parsed.hostCap === parsed.ctlCap) throw new LaunchMessageInvalid("host_cap and ctl_cap must differ");
+  if (message.fresh_session !== undefined && typeof message.fresh_session !== "boolean") {
+    throw new LaunchMessageInvalid("fresh_session must be a boolean");
+  }
   return {
     identity: {
       store: field(message, "store", TOKEN, 64),
@@ -103,6 +108,8 @@ export function parseLaunchMessage(text: string): HostConfig {
     assets: path(message, "assets"),
     runtimeDir: path(message, "runtime_dir"),
     sessionDir: path(message, "session_dir"),
+    resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
+    freshSession: message.fresh_session === true,
     model: field(message, "model", TOKEN, 128),
     effort: optional(message, "effort", TOKEN),
     promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),

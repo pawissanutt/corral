@@ -14,6 +14,8 @@ use serde_json::json;
 const SPEC: &str =
     "## Goal\nMake the widget spin.\n\n## Acceptance\n- The widget spins clockwise.\n";
 
+#[path = "reviewer/sessions.rs"]
+mod sessions;
 #[path = "reviewer/transcript.rs"]
 mod transcript;
 #[path = "reviewer/watch.rs"]

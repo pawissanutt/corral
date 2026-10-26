@@ -166,6 +166,14 @@ fn dispatch_writes_a_one_shot_0600_bootstrap_in_the_0700_runtime_directory() {
         (Some(fx.task.as_str()), Some("R1"))
     );
     assert_eq!(bootstrap.generation, 1);
+    assert_eq!(bootstrap.resume_session, None);
+    let mut encoded = serde_json::to_value(&bootstrap).unwrap();
+    assert!(encoded.get("resume_session").is_none());
+    encoded.as_object_mut().unwrap().remove("fresh_session");
+    assert_eq!(
+        serde_json::from_value::<Bootstrap>(encoded).unwrap(),
+        bootstrap
+    );
     assert_eq!(bootstrap.store, paths::store_id(&fx.ctx.store));
     assert_eq!(bootstrap.asset_sha256, asset_digest(&fx.assets).unwrap());
     let container = ContainerRef::Worker {
@@ -215,6 +223,160 @@ fn the_worker_launch_seam_prepares_the_current_run_with_its_model_and_prompt() {
         )
     );
     assert_eq!(bootstrap.cwd, task.runs[0].worktree);
+}
+
+#[test]
+fn a_new_review_child_uses_its_selected_exact_transcript_even_in_generation_one() {
+    for action in ["reused", "resumed", "new"] {
+        let fx = fixture(&ALL_MODULES, true);
+        let directory = fx._tmp.path().join("previous-review-sessions");
+        let transcript = directory.join("exact.jsonl");
+        fx.ctx
+            .store
+            .update(&fx.task, |task| {
+                // The parent's session must never be mistaken for this review child's.
+                task.runs[0].session = Some(serde_json::from_value(json!({
+                    "policy": "reuse", "directory": "/parent/session", "harness": "pi-native",
+                    "transcript": "/parent/session/wrong.jsonl", "action": "reused",
+                }))?);
+                let mut child = run("R1-review2", "p2");
+                child.session = Some(serde_json::from_value(json!({
+                    "policy": "reuse", "directory": directory, "harness": "pi-native",
+                    "transcript": transcript, "action": action,
+                }))?);
+                task.runs[0].review_runs.push(child);
+                Ok(())
+            })
+            .unwrap();
+        let target = BindTarget::Reviewer {
+            task: fx.task.clone(),
+            run: "R1".into(),
+            review: "R1-review2".into(),
+            callback: "g1:c2".into(),
+        };
+        prepare(&fx.ctx, &target, "p2", &fx.spec()).unwrap();
+        let recipient = Recipient::ReviewRun {
+            task: fx.task.clone(),
+            run: "R1".into(),
+            review: "R1-review2".into(),
+        };
+        let dir = generation_dir(&fx.ctx.store, &recipient, 1).unwrap();
+        let bootstrap = consume_bootstrap(&dir.join(BOOTSTRAP_FILE)).unwrap();
+        assert_eq!(bootstrap.generation, 1);
+        assert_eq!(bootstrap.session_dir, directory);
+        let expected = (action != "new").then_some(transcript);
+        assert_eq!(bootstrap.resume_session, expected);
+        assert_eq!(bootstrap.fresh_session, action == "new");
+        let ready = Ready {
+            assets: fx.assets.clone(),
+            bun: PathBuf::from("/unused/bun"),
+            bun_version: "1.4.2".into(),
+            generation_dir: dir,
+        };
+        let message: Value = serde_json::from_slice(
+            &launch_message(&bootstrap, &ready, &Secrets::generate().unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(message["resume_session"], json!(expected));
+        assert_eq!(message["session_dir"], json!(directory));
+        std::fs::remove_dir_all(runtime_dir(&fx.ctx.store, &recipient).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn host_recovery_carries_the_latest_bound_exact_file_without_a_role_session() {
+    let fx = fixture(&ALL_MODULES, true);
+    fx.dispatch();
+    let directory = fx._tmp.path().join("bound-sessions");
+    let transcript = directory.join("bound-exact.jsonl");
+    fx.ctx
+        .store
+        .update(&fx.task, |task| {
+            assert!(task.runs[0].session.is_none());
+            task.runs[0].agent_host.as_mut().unwrap().generations[0].bound =
+                Some(serde_json::from_value(json!({
+                    "host_cap_sha256": "host", "ctl_cap_sha256": "ctl",
+                    "session_id": "exact", "session_file": transcript, "pid": 42,
+                    "start_time": "1", "request_id": "ev-1-0", "at": "2026-10-26T00:00:00Z",
+                }))?);
+            Ok(())
+        })
+        .unwrap();
+    let target = BindTarget::Worker {
+        task: fx.task.clone(),
+        run: "R1".into(),
+    };
+    // A failed unbound recovery must not hide the last successfully bound file either.
+    for generation in [2, 3] {
+        prepare(&fx.ctx, &target, "p1", &fx.spec()).unwrap();
+        let dir = generation_dir(&fx.ctx.store, &fx.recipient(), generation).unwrap();
+        let bootstrap = consume_bootstrap(&dir.join(BOOTSTRAP_FILE)).unwrap();
+        assert_eq!(bootstrap.generation, generation);
+        assert_eq!(bootstrap.resume_session, Some(transcript.clone()));
+        assert_eq!(bootstrap.session_dir, directory);
+    }
+    // Accounting generations remain, but an explicit fresh selection wins over their files.
+    for (generation, policy, action) in [(4, "reuse", "new"), (5, "fresh", "resumed")] {
+        let fresh_directory = fx._tmp.path().join(format!("fresh-{generation}"));
+        fx.ctx
+            .store
+            .update(&fx.task, |task| {
+                task.runs[0].session = Some(serde_json::from_value(json!({
+                    "policy": policy, "directory": fresh_directory, "harness": "pi-native",
+                    "transcript": transcript, "action": action,
+                }))?);
+                Ok(())
+            })
+            .unwrap();
+        prepare(&fx.ctx, &target, "p1", &fx.spec()).unwrap();
+        let dir = generation_dir(&fx.ctx.store, &fx.recipient(), generation).unwrap();
+        let bootstrap = consume_bootstrap(&dir.join(BOOTSTRAP_FILE)).unwrap();
+        assert_eq!(bootstrap.generation, generation);
+        assert!(bootstrap.fresh_session);
+        assert_eq!(bootstrap.resume_session, None);
+        assert_eq!(bootstrap.session_dir, fresh_directory);
+    }
+}
+
+#[test]
+fn host_recovery_keeps_a_new_rounds_conversation_after_it_has_bound() {
+    for policy in ["reuse", "fresh"] {
+        // Given a selected new conversation that has since completed hello.
+        let fx = fixture(&ALL_MODULES, true);
+        fx.dispatch();
+        let directory = fx._tmp.path().join("selected-session");
+        let transcript = directory.join("exact.jsonl");
+        fx.ctx.store.update(&fx.task, |task| {
+            task.runs[0].session = Some(serde_json::from_value(json!({
+                "policy":policy, "directory":directory, "harness":"pi-native", "action":"new"
+            }))?);
+            task.runs[0].agent_host.as_mut().unwrap().generations[0].bound =
+                Some(serde_json::from_value(json!({
+                    "host_cap_sha256":"host", "ctl_cap_sha256":"ctl", "session_id":"exact",
+                    "session_file":transcript, "pid":42, "start_time":"1", "request_id":"ev-1-0",
+                    "at":"2026-10-26T00:00:00Z"
+                }))?);
+            Ok(())
+        }).unwrap();
+
+        // When its process exits and the same round opens another generation.
+        prepare(
+            &fx.ctx,
+            &BindTarget::Worker {
+                task: fx.task.clone(),
+                run: "R1".into(),
+            },
+            "p1",
+            &fx.spec(),
+        )
+        .unwrap();
+        let dir = generation_dir(&fx.ctx.store, &fx.recipient(), 2).unwrap();
+        let bootstrap = consume_bootstrap(&dir.join(BOOTSTRAP_FILE)).unwrap();
+
+        // Then even fresh-between-rounds policy resumes this round's exact conversation.
+        assert!(!bootstrap.fresh_session);
+        assert_eq!(bootstrap.resume_session, Some(transcript));
+    }
 }
 
 #[test]

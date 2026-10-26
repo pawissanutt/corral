@@ -38,6 +38,8 @@ mod rework;
 mod routing;
 #[path = "autopilot_ops/send_back.rs"]
 mod send_back;
+#[path = "autopilot_ops/sessions.rs"]
+mod sessions;
 #[path = "autopilot_ops/tier_refusals.rs"]
 mod tier_refusals;
 #[path = "autopilot_ops/tiers.rs"]
@@ -751,10 +753,11 @@ fn reviewer_changes_loop_back_and_an_escalation_goes_to_needs_me() {
 }
 
 #[test]
-fn a_gone_agent_pane_gets_a_retry_run_carrying_the_request() {
+fn fresh_mode_gives_a_gone_agent_a_retry_run_carrying_the_request() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["test -f fixed.txt"]);
         r.accept = Some(Accept::Auto);
+        r.worker_session = Some(corral_core::SessionPolicy::Fresh);
     });
     fx.change("widget.txt", "w\n");
     fx.done();

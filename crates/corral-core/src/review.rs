@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config_validation::SemanticInputs;
-use crate::{Config, Task};
+use crate::{Config, SessionPolicy, Task};
 
 /// The existing planning contract identity, kept independent from execution progress.
 pub fn plan_contract_revision(task: &Task) -> Result<String> {
@@ -95,6 +95,10 @@ impl Reviewer {
 #[serde(deny_unknown_fields)]
 pub struct ReviewOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_session: Option<SessionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_session: Option<SessionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_accept: Option<Accept>,
@@ -162,6 +166,12 @@ impl ReviewOverride {
     }
 
     fn apply(&self, p: &mut ReviewPolicy) {
+        if let Some(v) = self.worker_session {
+            p.worker_session = v;
+        }
+        if let Some(v) = self.reviewer_session {
+            p.reviewer_session = v;
+        }
         if let Some(v) = self.plan_required {
             p.plan_required = v;
         }
@@ -213,6 +223,11 @@ impl ReviewOverride {
 /// The effective review policy for one task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewPolicy {
+    /// Omitted at the legacy default so existing policy identities remain stable.
+    #[serde(skip_serializing_if = "SessionPolicy::is_reuse")]
+    pub worker_session: SessionPolicy,
+    #[serde(skip_serializing_if = "SessionPolicy::is_reuse")]
+    pub reviewer_session: SessionPolicy,
     pub plan_required: bool,
     pub plan_accept: Accept,
     pub gate: Vec<String>,
@@ -239,6 +254,8 @@ impl Default for ReviewPolicy {
     /// Today's manual flow: no gate, no reviewer, the owner accepts.
     fn default() -> Self {
         ReviewPolicy {
+            worker_session: SessionPolicy::Reuse,
+            reviewer_session: SessionPolicy::Reuse,
             plan_required: false,
             plan_accept: Accept::Owner,
             gate: Vec::new(),
@@ -318,6 +335,8 @@ impl PolicySource {
 /// Where each field of an effective [`ReviewPolicy`] came from (see [`Config::review_policy_sources`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicySources {
+    pub worker_session: PolicySource,
+    pub reviewer_session: PolicySource,
     pub plan_required: PolicySource,
     pub plan_accept: PolicySource,
     pub gate: PolicySource,
@@ -566,6 +585,8 @@ impl Config {
             }
         };
         PolicySources {
+            worker_session: src(|r| r.worker_session.is_some()),
+            reviewer_session: src(|r| r.reviewer_session.is_some()),
             plan_required: src(|r| r.plan_required.is_some()),
             plan_accept: src(|r| r.plan_accept.is_some()),
             gate: src(|r| r.gate.is_some()),

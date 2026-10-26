@@ -1,6 +1,6 @@
 // Which Pi session a host generation opens, and what of a resume reaches it (T-252 recovery).
-// Generation 1 starts a fresh session in its container's session directory. A resumed
-// generation continues the most recent session there, the one the lost generation wrote, so the
+// An explicit resume opens the recorded session, even for generation 1 of a new review child.
+// Recovery without an exact recorded path is refused, so the
 // conversation survives and tool-call request IDs (derived from the session ID) stay stable
 // across generations. Pi gives the calls the lost host left open synthetic results only in what
 // it sends the model; the file is never rewritten, and corral's recovery_notice says what became
@@ -9,18 +9,57 @@
 // That notice (and a later recovery_update) is never written into Pi's session file either: the
 // recovery context below keeps only a placeholder line in the prompt Pi records, and puts the
 // member's text back in place of it in every model request this host makes.
+import { openSync, closeSync, fstatSync, readSync } from "node:fs";
+
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ContextEvent, ExtensionAPI, SessionManager } from "@earendil-works/pi-coding-agent";
 
 import type { RoleContext, RoleModule } from "../roles/types.ts";
 import type { LoadedModules } from "./modules.ts";
 
-export type SessionSdk = Pick<typeof Sdk, "SessionManager">;
+export type SessionSdk = Pick<typeof Sdk, "SessionManager" | "CURRENT_SESSION_VERSION">;
 
-export function openSession(sdk: SessionSdk, cwd: string, sessionDir: string, generation: number): SessionManager {
-  return generation > 1
-    ? sdk.SessionManager.continueRecent(cwd, sessionDir)
-    : sdk.SessionManager.create(cwd, sessionDir);
+export class SessionResumeRefused extends Error {
+  constructor(path: string, cause: unknown) {
+    super(`session_resume_refused: ${path}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
+}
+
+export function openSession(
+  sdk: SessionSdk, cwd: string, sessionDir: string, generation: number, resumeSession?: string, freshSession = false,
+): SessionManager {
+  if (freshSession) return sdk.SessionManager.create(cwd, sessionDir);
+  if (resumeSession !== undefined) {
+    try {
+      // Pi initializes a missing or empty explicit file as a new session. Refuse those
+      // cases before opening, and reject incompatible headers before Pi can migrate them.
+      const fd = openSync(resumeSession, "r");
+      let sessionId: string;
+      try {
+        if (!fstatSync(fd).isFile()) throw new Error("not a regular session file");
+        const bytes = Buffer.alloc(64 * 1024);
+        const length = readSync(fd, bytes, 0, bytes.length, 0);
+        const first = bytes.subarray(0, length).toString("utf8").split("\n")[0] ?? "";
+        const header: unknown = JSON.parse(first);
+        if (typeof header !== "object" || header === null || !("type" in header) || header.type !== "session"
+          || !("id" in header) || typeof header.id !== "string" || header.id.length === 0
+          || !("version" in header) || typeof header.version !== "number"
+          || !Number.isSafeInteger(header.version) || header.version < 1 || header.version > sdk.CURRENT_SESSION_VERSION) {
+          throw new Error("incompatible Pi session header");
+        }
+        sessionId = header.id;
+      } finally {
+        closeSync(fd);
+      }
+      const session = sdk.SessionManager.open(resumeSession, sessionDir, cwd);
+      if (session.getSessionId() !== sessionId) throw new Error("the recorded Pi session was not opened");
+      return session;
+    } catch (error) {
+      throw new SessionResumeRefused(resumeSession, error);
+    }
+  }
+  if (generation > 1) throw new SessionResumeRefused(sessionDir, "no exact recorded session path");
+  return sdk.SessionManager.create(cwd, sessionDir);
 }
 
 /** Inbox message kinds whose text reaches the model as context only. */

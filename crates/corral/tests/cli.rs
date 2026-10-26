@@ -15,6 +15,8 @@ mod rework;
 mod routing;
 #[path = "cli/routing_override.rs"]
 mod routing_override;
+#[path = "cli/sessions.rs"]
+mod sessions;
 #[path = "cli/skill.rs"]
 mod skill;
 #[path = "cli/sync_gate.rs"]
@@ -236,6 +238,7 @@ fn show_displays_gate_result() {
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
                 agent_host: None,
+                session: None,
             });
             Ok(())
         })
@@ -347,6 +350,7 @@ fn review_task(
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
                 agent_host: None,
+                session: None,
             });
             t.status = Status::Review;
             Ok(())

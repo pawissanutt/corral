@@ -76,6 +76,7 @@ fn send_back_with_a_queued_fresh_retry_leaves_review_for_ready() {
         r.gate = gate(&["true"]);
         r.reviewer = Some("rev".into());
         r.accept = Some(Accept::Auto);
+        r.worker_session = Some(corral_core::SessionPolicy::Fresh);
     });
     fx.change("widget.txt", "candidate\n");
     fx.done();

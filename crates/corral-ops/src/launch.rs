@@ -155,6 +155,20 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
     let claim = task.launch.as_ref().context("launch missing")?;
     let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
     crate::dispatch::check_plan(ctx, &task, &plan.route, claim.approved_plan.as_ref())?;
+    if task.current_run().is_some_and(|run| run.session.is_none()) {
+        let session = crate::role_session::fresh(
+            ctx,
+            &task,
+            task.current_run().context("launch run missing")?,
+            false,
+        )?;
+        task = ctx.store.update(&task.id, |task| {
+            task.current_run_mut()
+                .context("launch run missing")?
+                .session = Some(session);
+            Ok(())
+        })?;
+    }
     let run = task.current_run().context("launch has no run")?.clone();
     crate::plan_target::validate_run(&ctx.store, &task, &run)?;
     crate::tracker::check_dispatch_base(&ctx.store, &task, &run.base, &run.base_sha)?;
@@ -329,6 +343,10 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
     )?;
     task = ctx.store.get(&task.id)?;
     crate::provider_session::record_launch(ctx, &task.id, &run_id, launched_at);
+    if let Some(run) = task.current_run() {
+        crate::role_session::observe(ctx, &task, run, false);
+        crate::role_session::log(ctx, &task, run)?;
+    }
     finish(ctx, &task, false)
 }
 

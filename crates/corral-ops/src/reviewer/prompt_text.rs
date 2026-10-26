@@ -86,6 +86,20 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     }
     prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
     prompt.push_str(&crate::comments::owner_comments(task));
+    if run.review_runs.len() > 1 {
+        let previous = run
+            .review_runs
+            .iter()
+            .rev()
+            .nth(1)
+            .and_then(|r| r.review.as_ref());
+        prompt.push_str(&format!(
+            "\n## Continued review\n\nThis is a new assessment of the current candidate and callback attempt above. \
+             Check the new delta and every unresolved finding against the current tree and gate evidence. \
+             Earlier verdicts authorize no changed candidate. Previous findings:\n\n{}\n",
+            previous.and_then(|r| r.notes.as_deref()).unwrap_or("(no prior findings recorded)")
+        ));
+    }
     if task.completion.is_some() {
         prompt.push_str(&format!(
             "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",

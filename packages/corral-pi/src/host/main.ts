@@ -48,7 +48,7 @@ async function main(): Promise<void> {
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     modules, client, events, network,
-    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation),
+    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
   });
   const session = host;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
