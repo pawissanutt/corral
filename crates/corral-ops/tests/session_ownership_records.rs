@@ -145,6 +145,11 @@ fn summary_matches_full_walk_for_every_reference_family() {
             // Then both agree with the full walk, including unknown legacy gate ownership.
             assert_eq!(inventory, expected, "{kind}/{owner}");
             assert_eq!(consumed, expected, "{kind}/{owner}");
+            assert_eq!(
+                session_scope::check_launch(&ctx).is_ok(),
+                expected,
+                "{kind}/{owner}"
+            );
         }
     }
 }
