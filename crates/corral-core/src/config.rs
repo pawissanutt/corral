@@ -365,7 +365,6 @@ pub struct PmCfg {
 /// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts
 /// (plus `config_invalid`).
 pub const PM_ACTIONABLE_KINDS: [&str; 18] = [
-    "attention_due",
     "done",
     "needs_me",
     "stuck",
@@ -383,11 +382,11 @@ pub const PM_ACTIONABLE_KINDS: [&str; 18] = [
     "question_escalated",
     "question_unattended",
     "turn_ended_without_report",
+    "attention_due",
 ];
 
 fn default_push_kinds() -> Vec<String> {
     [
-        "attention_due",
         "done",
         "needs_me",
         "stuck",
@@ -398,6 +397,7 @@ fn default_push_kinds() -> Vec<String> {
         "run_resumed",
         "wait_transition",
         "pm_decision_resolved",
+        "attention_due",
     ]
     .into_iter()
     .map(str::to_string)
