@@ -20,6 +20,7 @@ pub struct BoardSnapshot {
 }
 
 impl BoardSnapshot {
+    #[cfg(test)]
     pub(crate) fn load(ctx: &Ctx) -> Result<Self> {
         Self::load_at(ctx, Timestamp::now())
     }
