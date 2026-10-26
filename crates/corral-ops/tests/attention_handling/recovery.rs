@@ -286,13 +286,20 @@ fn overflow_opening_joins_one_digest_and_never_announces_again() {
     // Given thirty-three canonical conditions needing the reserved overflow slot.
     let fx = Fx::new();
     let task = fx.questions(33);
-    let key = ConditionKey(format!("{}/ledger_overflow/v1", task.id));
     // When opening and unchanged sync passes run across restart.
     corral_ops::sync_at(&fx.ctx, at(0)).unwrap();
     corral_ops::sync_at(&fx.reopen(), at(1)).unwrap();
     corral_ops::sync_at(&fx.reopen(), at(2)).unwrap();
     // Then overflow and the 31 retained normal rows share one complete opening digest.
     let after = fx.ctx.store.get(&task.id).unwrap();
+    let key = after
+        .attention
+        .records
+        .iter()
+        .find(|(_, record)| record.kind == "ledger_overflow")
+        .unwrap()
+        .0
+        .clone();
     assert_eq!(
         after.attention.records[&key].levels.announced_at,
         Some(at(0))

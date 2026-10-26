@@ -12,6 +12,8 @@ use serde_json::json;
 pub(crate) mod fixture;
 use fixture::{Fx, at};
 
+#[path = "../../tests/attention_handling/overflow_crashes.rs"]
+mod overflow_crashes;
 #[path = "../../tests/attention_handling/recovery_crashes.rs"]
 mod recovery_crashes;
 

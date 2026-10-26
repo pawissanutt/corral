@@ -45,6 +45,15 @@ Ordinary, attend-created and reserved-overflow records all commit PM
 announcement state with a wake-bearing opening fact. Handling pauses later
 levels on its own condition, not its initial announcement.
 
+Overflow derives from current canonical conditions and occupied record capacity,
+not the preceding pass's `overflow_count`. When no longer needed, it resolves
+through the ordinary self-contained resolution path before any ladder level.
+Its persisted key retains the opening timestamp and a fresh episode nonce;
+count changes and restarts keep that key, while resolution/reopening receives
+a new identity even if the injected clock repeats. Existing active legacy keys
+remain unchanged until resolution. The reserved slot is never reused before
+its prior resolution and pending facts have been published and pruned.
+
 ## Owner-notice accounting
 
 `NoticeClaim` stores `version`, `batch_id`, `producer`, stable episode `source`,

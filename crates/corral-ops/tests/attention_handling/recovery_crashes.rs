@@ -123,18 +123,25 @@ fn all_creation_paths_replay_their_announcement_after_publication_crashes() {
             } else {
                 fx.stalled(None)
             };
-            let key = if path == "overflow" {
-                ConditionKey(format!("{}/ledger_overflow/v1", task.id))
-            } else {
-                ConditionKey(key(&fx.ctx, &task))
-            };
+            let key = (path == "attend").then(|| ConditionKey(key(&fx.ctx, &task)));
             CRASH.with(|crash| crash.set(Some(point)));
-            let stopped = if path == "attend" {
-                attend(&fx.ctx, &key.0, "Looking", 1800, "first", at(0)).map(|_| ())
-            } else {
-                reconcile(&fx.ctx, at(0), Some(true))
+            let stopped = match &key {
+                Some(key) => attend(&fx.ctx, &key.0, "Looking", 1800, "first", at(0)).map(|_| ()),
+                None => reconcile(&fx.ctx, at(0), Some(true)),
             };
             assert!(stopped.is_err(), "{path} {point:?}");
+            let key = key.unwrap_or_else(|| {
+                fx.ctx
+                    .store
+                    .get(&task.id)
+                    .unwrap()
+                    .attention
+                    .records
+                    .into_iter()
+                    .find(|(_, record)| record.kind == "ledger_overflow")
+                    .unwrap()
+                    .0
+            });
             assert!(fx.logical("attention_due").is_empty());
             // When a new context recovers and runs an unchanged pass.
             reconcile(&fx.reopen(), at(1), Some(true)).unwrap();
