@@ -150,6 +150,23 @@ fn owner_authority_history(case: &str, action: Action) {
         assert_eq!(projected.reason, before.reason, "{case}");
         assert_eq!(projected.since, before.since, "{case}");
         corral_ops::sync_at(&fx.fresh(), at).unwrap();
+        let (_, retained) = corral_ops::sync_with_attention(&fx.fresh()).unwrap();
+        let retained = retained
+            .unwrap()
+            .tasks
+            .into_iter()
+            .find(|row| row.task == task.id)
+            .unwrap()
+            .assessment
+            .conditions
+            .into_iter()
+            .find(|condition| condition.kind == "authority_blocked")
+            .unwrap();
+        assert_eq!(retained.key, before.key, "{case}: retained projection");
+        assert_eq!(
+            retained.reason, before.reason,
+            "{case}: retained projection"
+        );
         let after = fx.ctx.store.get(&task.id).unwrap();
         assert_eq!(after.attention.records.get(&key), Some(&history), "{case}");
         assert_eq!(fx.records("submissions.jsonl").len(), submissions, "{case}");
