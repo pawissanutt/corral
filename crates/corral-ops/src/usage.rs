@@ -316,6 +316,22 @@ pub(crate) fn collect(run: &mut Run, store: &Store) {
 }
 
 fn session_root(run: &Run, store: &Store) -> Result<(PathBuf, bool)> {
+    if let Some(session) = &run.session
+        && (session.transcript.is_some()
+            || std::fs::read_dir(&session.directory).is_ok_and(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+            }))
+    {
+        let harness = store
+            .config
+            .harnesses
+            .get(&session.harness)
+            .and_then(|h| h.flags.as_deref())
+            .unwrap_or(&session.harness);
+        return Ok((session.directory.clone(), harness == "claude"));
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
@@ -335,6 +351,13 @@ fn session_root(run: &Run, store: &Store) -> Result<(PathBuf, bool)> {
 /// Only scan regular JSONL files at the session root and one project-directory level.
 /// Artifacts, subagent directories, and symlinks are not transcript candidates.
 fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
+    if let Some(path) = run
+        .session
+        .as_ref()
+        .and_then(|session| session.transcript.as_ref())
+    {
+        return Ok(vec![path.clone()]);
+    }
     let mut paths = Vec::new();
     let cwd_slug: String = run
         .worktree

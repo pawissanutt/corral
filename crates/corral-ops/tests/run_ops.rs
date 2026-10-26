@@ -107,6 +107,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
         agent_host: None,
+        session: None,
     }
 }
 

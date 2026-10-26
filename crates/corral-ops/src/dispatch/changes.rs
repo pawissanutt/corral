@@ -91,18 +91,16 @@ fn send_changes(
         );
     }
     let previous = task.current_run().context("task has no run")?;
+    let continuation = super::worker_session::Continuation::prepare(ctx, &task, previous)?;
     let pane = previous
         .herdr
         .as_ref()
-        .context("task has no run attached to herdr")?
-        .pane_id
-        .clone();
-    if ctx.herdr.pane_get(&pane)?.is_none() {
-        bail!("{}: agent pane {pane} is gone; use retry instead", task.id);
-    }
+        .map(|h| h.pane_id.clone())
+        .unwrap_or_default();
     if let Some(expected) = expected {
         expected.check(&ctx.store.get(&task.id)?)?;
     }
+    let restarted = continuation.prepare_legacy(ctx, &task, text)?;
     // Reopening Review reserves shared capacity before contacting the composer.
     // Pending text and Running status survive a launcher crash without freeing its slot.
     let prepare = |store: &corral_core::Store, current: &mut Task| {
@@ -129,6 +127,10 @@ fn send_changes(
             );
         }
         run.pending_reply = Some(text.to_string());
+        run.session = Some(continuation.session.clone());
+        if let Some(restarted) = &restarted {
+            run.herdr = Some(restarted.herdr.clone());
+        }
         run.outcome = None;
         run.ended = None;
         run.summary = None;
@@ -191,7 +193,11 @@ fn send_changes(
                 .map(|()| posted = reserved.into_inner())
             }
             None => crate::operating::submit(ctx, &authorization, prepare, || {
-                deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+                if let Some(restarted) = &restarted {
+                    restarted.submit(ctx)
+                } else {
+                    deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+                }
             }),
         }
     } else if let Some(recipient) = &recipient {
@@ -200,8 +206,12 @@ fn send_changes(
         })
         .map(|message| posted = Some(message))
     } else {
-        ctx.store.dispatch_update(&task.id, prepare)?;
-        deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+        ctx.store
+            .dispatch_update(&task.id, prepare)
+            .and_then(|_| match &restarted {
+                Some(restarted) => restarted.submit(ctx),
+                None => deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)),
+            })
     };
     if let Err(error) = delivery {
         if crate::operating::refused(&error) {
@@ -224,6 +234,12 @@ fn send_changes(
         })?;
         return Err(error);
     }
+    if restarted.is_some() {
+        let saved = ctx.store.get(&task.id)?;
+        if let Some(run) = saved.current_run() {
+            crate::role_session::observe(ctx, &saved, run, false);
+        }
+    }
     crate::watch::capture_review(ctx, &task, previous);
     if let (Some(recipient), Some(message)) = (&recipient, posted) {
         let task = ctx.store.update(&task.id, |current| {
@@ -237,6 +253,10 @@ fn send_changes(
             Ok(())
         })?;
         cleanup(ctx, &task, Cleanup::Round);
+        continuation.start(ctx, &task.id)?;
+        if let Some(run) = task.current_run() {
+            crate::role_session::log(ctx, &task, run)?;
+        }
         let status = crate::delivery::owner::kick(ctx, recipient);
         let observed = crate::delivery::owner::is_observed(ctx, recipient, message.seq)?;
         ctx.store.log_event(
@@ -267,7 +287,10 @@ fn send_changes(
         Ok(())
     })?;
     cleanup(ctx, &task, Cleanup::Round);
-    Ok(task)
+    if let Some(run) = task.current_run() {
+        crate::role_session::log(ctx, &task, run)?;
+    }
+    ctx.store.get(&task.id)
 }
 
 fn post_changes(

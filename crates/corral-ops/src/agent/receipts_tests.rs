@@ -6,6 +6,71 @@ use super::test_support::*;
 use super::*;
 
 #[test]
+fn continued_reviewer_hello_keeps_the_session_but_not_old_callback_authority() {
+    // Given a new reviewer container bound to one exact prior role transcript.
+    let fx = fx();
+    let (id, target) = reviewer_task(&fx);
+    let mut host = bind(&fx, &target, "p2", "continued-session");
+    let selected = fx.ctx.store.state_dir().join("prior-review-session");
+    host.sessions = selected.clone();
+    fx.ctx.store.update(&id, |task| {
+        task.runs[0].review_runs[0].session = Some(serde_json::from_value(json!({
+            "policy":"reuse", "directory":selected, "harness":"pi-native",
+            "id":"continued-session", "transcript":selected.join("session.jsonl"), "action":"resumed"
+        }))?);
+        Ok(())
+    }).unwrap();
+
+    // When the new generation proves its nonce and the selected conversation.
+    committed(&hello(&fx, &host));
+
+    // Then its own binding retains the current callback, never an older attempt's authority.
+    let saved = state(&fx, &target.container());
+    assert_eq!(
+        saved
+            .current_generation()
+            .unwrap()
+            .bound
+            .as_ref()
+            .unwrap()
+            .session_id,
+        "continued-session"
+    );
+    let mut stale = host;
+    stale.identity.callback = Some("old-callback".into());
+    let refused = send(&fx, &event_input(&stale, 1, "turn_started", 1), "event");
+    assert_eq!(code(&refused), Some("auth_failed"));
+}
+
+#[test]
+fn continued_reviewer_hello_refuses_a_different_session_id() {
+    // Given a new review child whose launcher selected an exact prior conversation.
+    let fx = fx();
+    let (id, target) = reviewer_task(&fx);
+    let host = bind(&fx, &target, "p2", "empty-replacement");
+    fx.ctx.store.update(&id, |task| {
+        task.runs[0].review_runs[0].session = Some(serde_json::from_value(json!({
+            "policy":"reuse", "directory":host.sessions, "harness":"pi-native",
+            "id":"recorded-session", "transcript":host.sessions.join("session.jsonl"), "action":"resumed"
+        }))?);
+        Ok(())
+    }).unwrap();
+
+    // When a replacement process tries to claim reuse with another conversation.
+    let refused = hello(&fx, &host);
+
+    // Then the new generation remains unbound and cannot act as reviewer.
+    assert_eq!(code(&refused), Some("bad_request"));
+    assert!(
+        state(&fx, &target.container())
+            .current_generation()
+            .unwrap()
+            .bound
+            .is_none()
+    );
+}
+
+#[test]
 fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
     // Given one bound host per role: a worker run, a review child and the AgentPm area.
     let fx = fx();

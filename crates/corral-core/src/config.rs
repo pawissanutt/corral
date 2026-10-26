@@ -675,13 +675,45 @@ impl Config {
         );
         table.insert("board".into(), board);
         table.insert("routing".into(), routing);
-        table
+        let review = table
             .entry("review")
             .or_insert_with(|| toml::Value::Table(Default::default()))
             .as_table_mut()
-            .context("review is not a table")?
+            .context("review is not a table")?;
+        review
             .entry("require_cross_family")
             .or_insert(toml::Value::Boolean(false));
+        let policy = self.review_policy(None, None);
+        for (key, session) in [
+            ("worker_session", policy.worker_session),
+            ("reviewer_session", policy.reviewer_session),
+        ] {
+            review.insert(
+                key.into(),
+                toml::Value::try_from(session).context("encoding session policy")?,
+            );
+        }
+        if let Some(projects) = table.get_mut("projects").and_then(toml::Value::as_table_mut) {
+            for (name, project) in projects {
+                let policy = self.review_policy(Some(name), None);
+                let review = project
+                    .as_table_mut()
+                    .context("project is not a table")?
+                    .entry("review")
+                    .or_insert_with(|| toml::Value::Table(Default::default()))
+                    .as_table_mut()
+                    .context("project review is not a table")?;
+                for (key, session) in [
+                    ("worker_session", policy.worker_session),
+                    ("reviewer_session", policy.reviewer_session),
+                ] {
+                    review.insert(
+                        key.into(),
+                        toml::Value::try_from(session).context("encoding project session policy")?,
+                    );
+                }
+            }
+        }
         Ok(value)
     }
 

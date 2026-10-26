@@ -3,7 +3,7 @@
 use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::agent::{GenerationBound, HostHealth, ReceiptEffect, paths};
+use corral_core::agent::{self, GenerationBound, HostHealth, ReceiptEffect, paths};
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
@@ -51,21 +51,39 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         ));
     }
     let container = admission::container_of(&envelope.identity);
-    let sessions = paths::container_sessions_dir(&ctx.store, &container);
+    let admitted = match admission::admit(ctx, envelope, Mode::Hello)? {
+        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
+        Admission::New(admitted) => admitted,
+    };
+    let selected = match &admitted.resolved {
+        admission::Resolved::Task(task) => {
+            agent::container_run(task, &container).and_then(|r| r.session.as_ref())
+        }
+        admission::Resolved::Pm(_) => None,
+    };
+    let sessions = selected
+        .map(|s| s.directory.clone())
+        .unwrap_or_else(|| paths::container_sessions_dir(&ctx.store, &container));
     let session = &payload.session_file;
     if session.as_os_str().len() > 4096
         || !session.is_absolute()
         || session.components().any(|c| c == Component::ParentDir)
-        || !session.starts_with(&sessions)
+        || session.parent() != Some(sessions.as_path())
     {
         return Err(bad(
             "session_file must be an absolute path under the container's sessions directory",
         ));
     }
-    let admitted = match admission::admit(ctx, envelope, Mode::Hello)? {
-        Admission::Replay(stored) => return receipts::respond(ctx, &container, *stored, true),
-        Admission::New(admitted) => admitted,
-    };
+    if let Some(selected) = selected
+        && matches!(
+            selected.action,
+            corral_core::SessionAction::Reused | corral_core::SessionAction::Resumed
+        )
+        && (selected.transcript.as_ref() != Some(session)
+            || selected.id.as_deref() != Some(envelope.identity.session_id.as_str()))
+    {
+        return Err(bad("hello did not resume the exact recorded role session"));
+    }
     let n = envelope.identity.generation;
     let launched = admitted
         .resolved

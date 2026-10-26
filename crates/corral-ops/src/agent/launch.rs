@@ -12,9 +12,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::Store;
-use corral_core::agent::{AgentRole, ContainerRef, paths};
+use corral_core::agent::{self, AgentRole, AgentRunState, ContainerRef, paths, pm_state};
 use corral_core::inbox::Recipient;
+use corral_core::{SessionAction, SessionPolicy, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -63,6 +63,10 @@ pub struct Bootstrap {
     pub asset_sha256: String,
     pub corral: PathBuf,
     pub session_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_session: Option<PathBuf>,
+    #[serde(default)]
+    pub fresh_session: bool,
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
@@ -197,18 +201,63 @@ pub fn prepare(ctx: &Ctx, target: &BindTarget, pane: &str, spec: &HostSpec) -> R
         std::path::absolute(&assets).with_context(|| format!("resolving {}", assets.display()))?;
     let asset_sha256 = asset_digest(&assets)?;
     let container = target.container();
-    let project = match &target {
-        BindTarget::Pm { project } => project.clone(),
-        _ => ctx
-            .store
-            .get(
+    let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
+    let mut resume_session = None;
+    let mut fresh_session = false;
+    let latest_bound = |state: &AgentRunState| {
+        state
+            .generations
+            .iter()
+            .filter_map(|generation| generation.bound.as_ref().map(|bound| (generation.n, bound)))
+            .max_by_key(|(n, _)| *n)
+            .map(|(_, bound)| bound.session_file.clone())
+    };
+    let (project, recovery) = match target {
+        BindTarget::Pm { project } => (
+            project.clone(),
+            pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state)),
+        ),
+        BindTarget::Worker { .. } | BindTarget::Reviewer { .. } => {
+            let task = ctx.store.get(
                 container
                     .task()
                     .context("a worker or reviewer names a task")?,
-            )?
-            .project
-            .context("a Pi-native container needs a task project")?,
+            )?;
+            let run = agent::container_run(&task, &container)
+                .with_context(|| format!("{} does not exist", container.key()))?;
+            if let Some(session) = &run.session {
+                session_dir = session.directory.clone();
+                fresh_session =
+                    session.policy == SessionPolicy::Fresh || session.action == SessionAction::New;
+                if !fresh_session
+                    && matches!(
+                        session.action,
+                        SessionAction::Reused | SessionAction::Resumed
+                    )
+                {
+                    resume_session = session.transcript.clone();
+                }
+            }
+            (
+                task.project
+                    .clone()
+                    .context("a Pi-native container needs a task project")?,
+                run.agent_host.as_deref().and_then(latest_bound),
+            )
+        }
     };
+    // A host recovery resumes its latest hello-bound file, not the session selected before
+    // this container's first generation (which may belong to a previous review child).
+    if let Some(file) =
+        recovery.filter(|file| !fresh_session || file.parent() == Some(session_dir.as_path()))
+    {
+        fresh_session = false;
+        session_dir = file
+            .parent()
+            .context("the bound Pi session file has no directory")?
+            .to_path_buf();
+        resume_session = Some(file);
+    }
     let grant = open_generation(&ctx.store, target, pane)?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
@@ -241,7 +290,9 @@ pub fn prepare(ctx: &Ctx, target: &BindTarget, pane: &str, spec: &HostSpec) -> R
         assets: assets.clone(),
         asset_sha256,
         corral: crate::prompt::corral_bin()?,
-        session_dir: paths::container_sessions_dir(&ctx.store, &container),
+        session_dir,
+        resume_session,
+        fresh_session,
         model: spec.model.clone(),
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
@@ -608,6 +659,8 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "pane": bootstrap.pane, "cwd": bootstrap.cwd, "root": bootstrap.root,
         "corral": bootstrap.corral, "assets": ready.assets,
         "runtime_dir": ready.generation_dir, "session_dir": bootstrap.session_dir,
+        "resume_session": bootstrap.resume_session,
+        "fresh_session": bootstrap.fresh_session,
         "model": bootstrap.model, "effort": bootstrap.effort, "prompt_file": bootstrap.prompt_file,
     });
     let bytes = serde_json::to_vec(&message)?;

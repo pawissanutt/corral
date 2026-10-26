@@ -680,7 +680,14 @@ impl Pilot<'_> {
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
         let task = self.ctx.store.get(id)?;
         let switch = crate::escalation::escalation(self.config, &task, false)?;
-        let sent: Result<(Status, String)> = if switch.is_none() && self.pane_alive(pane)? {
+        let reuse = self.config.task_review_policy(&task).worker_session
+            == corral_core::SessionPolicy::Reuse;
+        let alive = if switch.is_none() {
+            self.pane_alive(pane)?
+        } else {
+            false
+        };
+        let sent: Result<(Status, String)> = if switch.is_none() && (reuse || alive) {
             auto_request_changes(self.ctx, id, &message, round, state, key).map(|_| {
                 (
                     Status::Running,
@@ -707,6 +714,9 @@ impl Pilot<'_> {
         // stays claimed, so a later sync retries the same request instead of handing it to the owner.
         let (to, note) = match sent {
             Err(error) if crate::operating::transient_refusal(&error) => return Ok(Step::Wait),
+            Err(error) if error.is::<crate::role_session::SessionUnavailable>() => {
+                return self.escalate(&error.to_string());
+            }
             sent => sent?,
         };
         if let Some(packet) = packet {

@@ -666,6 +666,8 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. Under a grant that delegates acceptance, the built-in default yields to the grant, but an explicitly set `"owner"` (workspace, project or task) stays owner-only. `"auto"` alone grants nothing: landing also needs a confirmed `[automation]` grant with `--accept`. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
+| `worker_session` | `"reuse"` | Reuse the task worker's conversation for fixes. `"fresh"` starts a new worker conversation for a change round. |
+| `reviewer_session` | `"reuse"` | Resume the separate task reviewer's conversation in later review attempts. `"fresh"` starts an empty reviewer conversation each time. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |
 | `remove_worktree` | `true` | Remove the worktree after landing. |
 | `max_diff_lines` | removed | Deprecated and ignored: diffs of any size go through normal review. Existing configs still load; corral warns once. Delete the key. |
@@ -688,6 +690,27 @@ even when the boolean is off. Named reviewers are validated, not silently replac
 Turning diversity off does not turn off reviewers, gates, plan approval or owner acceptance.
 `corral route <id>` and `--json` show the effective requirement and its policy source;
 `corral config get review.require_cross_family --source` shows the configured boolean.
+
+Worker and reviewer session settings inherit independently from global and project review tables.
+Omitting both preserves the worker conversation and a distinct reviewer conversation by default.
+`corral show <id>` prints the effective policy, selected session identity and new/reused/resumed
+action; `--json` includes `session_policy` and each run's `session` record. A session ID is
+`not yet observed` until the harness has written its transcript. Readback refreshes those identities.
+
+OmO and OMP use role-specific transcript directories; Claude uses separately allocated exact session
+UUIDs. A resumed process is given the recorded file or UUID, never the newest session in the worktree.
+Pi-native hosts likewise receive the exact recorded transcript, including generation 1 of a new
+review accounting child. Its callback capability is new, so the old review attempt cannot authorize
+the new candidate. Each review receives the current candidate, gate packet, callback and prior
+findings and must check the delta and unresolved findings again.
+
+An exited worker resumes its recorded conversation in the same task run. A missing or incompatible
+worker transcript refuses recovery with a diagnostic; restore the file or explicitly select
+`worker_session = "fresh"`. A changed reviewer harness/model/vendor/worktree, or an unavailable
+reviewer transcript, gets one explicitly diagnosed fresh replacement attempt under the existing
+review limits. Unrecognized harnesses can keep a live worker pane, but cannot promise durable
+process resumption. Their configured commands need a supported harness flag map to opt into an
+adapter. Session reuse changes neither ownership, holds, gates nor independent-review requirements.
 
 `env` and `size_limits` merge individual keys: built-in defaults, then global, then project.
 An empty map preserves inherited keys. Environment names must use portable shell identifiers
