@@ -777,10 +777,12 @@ fn hot_board_reads_ignore_event_git_and_settled_history_growth() {
     };
     grow_history(100..101, 100..200);
     let baseline_reads = count(Work::InboxRecordRead);
-    let baseline_visits = count(Work::BoardVisit);
+    let baseline_ui_visits = count(Work::BoardVisit);
+    let baseline_visits = count(Work::AttentionVisit);
     let first = board(&ctx, at()).unwrap();
     let baseline_reads = count(Work::InboxRecordRead) - baseline_reads;
-    let baseline_visits = count(Work::BoardVisit) - baseline_visits;
+    let baseline_visits = count(Work::AttentionVisit) - baseline_visits;
+    let baseline_ui_visits = count(Work::BoardVisit) - baseline_ui_visits;
     let active = first
         .tasks
         .iter()
@@ -799,7 +801,8 @@ fn hot_board_reads_ignore_event_git_and_settled_history_growth() {
     let bodies = count(Work::InboxMessageRead);
     let envelopes = count(Work::InboxEnvelopeRead);
     let lists = count(Work::InboxList);
-    let visits = count(Work::BoardVisit);
+    let visits = count(Work::AttentionVisit);
+    let ui_visits = count(Work::BoardVisit);
     // When a warm board is built with an unreadable event log and invalid Git checkout.
     let after = board(&ctx, at()).unwrap();
     // Then unfinished assessments stay byte-equal and hot work is bounded by one current identity.
@@ -813,7 +816,9 @@ fn hot_board_reads_ignore_event_git_and_settled_history_growth() {
     assert_eq!(count(Work::InboxEnvelopeRead) - envelopes, 0);
     assert_eq!(count(Work::InboxList) - lists, 0);
     assert_eq!(count(Work::InboxRecordRead) - reads, baseline_reads);
-    assert_eq!(count(Work::BoardVisit) - visits, baseline_visits);
+    assert_eq!(count(Work::AttentionVisit) - visits, baseline_visits);
     assert_eq!(baseline_visits, 1);
+    assert_eq!(baseline_ui_visits, 0);
+    assert_eq!(count(Work::BoardVisit) - ui_visits, 0);
     assert!(count(Work::InboxRecordRead) - reads <= 6);
 }
