@@ -388,7 +388,7 @@ fn crash_journal_closes_uncertain_process_before_reusing_capacity() {
 
     // Then recovery closes the uncertain pane and clears the journal.
     assert!(!fx.tmp.path().join(pane).exists());
-    assert!(!journal(&fx.ctx).exists());
+    assert!(load_pending(&fx.ctx).unwrap().is_none());
     let task = fx.ctx.store.get(&first).unwrap();
     let gate = task.current_run().unwrap().gate.as_ref().unwrap();
     assert_eq!(gate.result, GateResult::Running);
@@ -409,7 +409,7 @@ fn failed_cleanup_keeps_journal_and_blocks_new_processes() {
     assert!(crate::reviewer::review_run(&fx.ctx, &second, Some("rev")).is_err());
 
     // Then the uncertain process still owns its slot and no second pane exists.
-    assert!(journal(&fx.ctx).exists());
+    assert!(load_pending(&fx.ctx).unwrap().is_some());
     assert_eq!(fx.created(), 1);
 }
 
@@ -510,7 +510,7 @@ fn shared_pm_crash_recovery_retains_capacity_without_closing_pm() {
     // Then PM remains alive and budgeted until the verdict releases its slot.
     assert!(error.to_string().contains("1/1"), "{error:#}");
     assert!(fx.tmp.path().join("w1:pm").exists());
-    assert!(!journal(&fx.ctx).exists());
+    assert!(load_pending(&fx.ctx).unwrap().is_none());
     crate::reviewer::verdict(&fx.ctx, &first, Verdict::Approve, "Reviewed.").unwrap();
     crate::gate::gate_start(&fx.ctx, &second).unwrap();
 }
@@ -810,7 +810,12 @@ fn auxiliary_reservation_binds_ownership_before_pane_creation() {
     fx.ctx.herdr.set_session(Some("owner".into()));
     let id = fx.task();
     let launch = ReviewLaunch::reserve(&fx.ctx, &id, Kind::Gate).unwrap();
-    let pending = std::fs::read(journal(&fx.ctx)).unwrap();
+    let pending = fx
+        .ctx
+        .store
+        .record_row("review-launch", "current")
+        .unwrap()
+        .unwrap();
     let before = serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap();
     let mut foreign = fx.ctx.clone();
     foreign.herdr.set_session(Some("foreign".into()));
@@ -826,7 +831,10 @@ fn auxiliary_reservation_binds_ownership_before_pane_creation() {
     );
 
     // Then the journal and task still belong to the owner, with no pane yet.
-    assert_eq!(std::fs::read(journal(&fx.ctx)).unwrap(), pending);
+    assert_eq!(
+        fx.ctx.store.record_row("review-launch", "current").unwrap(),
+        Some(pending)
+    );
     assert_eq!(
         serde_json::to_value(fx.ctx.store.list().unwrap()).unwrap(),
         before
@@ -904,7 +912,7 @@ fn sampled_inventory_excludes_ownership_changes_until_consumption_finishes() {
         before
     );
     assert_eq!(fx.ctx.store.events().unwrap(), events);
-    assert!(!journal(&fx.ctx).exists());
+    assert!(load_pending(&fx.ctx).unwrap().is_none());
     assert!(fx.ctx.store.herdr_session_binding().unwrap().is_none());
     drop(inventory);
     crate::gate::gate_start(&fx.ctx, &id).unwrap();
