@@ -5,12 +5,21 @@ use corral_core::{AuthorizedSubmission, SubmissionDisposition};
 // Production transitions never roll Submitted back or rewrite an attempted identity.
 fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
     use corral_core::backend::{
-        Authorization, Disposition, Operation, PageReq, StorageQuery, StorageRow, StoreBackend,
+        Authorization, Disposition, Operation, PageReq, PutRecords, RecordQuery, RecordWrite,
+        StorageQuery, StorageRow, StoreBackend,
     };
     use corral_core::sqlite::{SqliteBackend, SqliteOptions};
 
     let tasks = ctx.store.list().unwrap();
     assert_eq!(tasks.len(), 1, "this fixture owns exactly one task");
+    let state = ctx
+        .store
+        .view()
+        .unwrap()
+        .records(&RecordQuery::default(), PageReq::first(128))
+        .unwrap();
+    assert!(state.next.is_none(), "fixture record page was truncated");
+    let state_records = state.items;
     let events = ctx
         .store
         .events()
@@ -58,7 +67,34 @@ fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
     let corral = root.join(".corral");
     std::fs::rename(corral.join("db"), old.path().join("db")).unwrap();
     let backend = SqliteBackend::open(&corral, SqliteOptions::default()).unwrap();
+    // Reconstruct only the interrupted receipt, not a different workspace grant.
+    // Replay record versions before opening the store so config observation sees
+    // the exact original state, including its confirmation and revocation records.
+    for record in &state_records {
+        for version in 0..record.version {
+            backend
+                .apply(Operation::PutRecords(PutRecords {
+                    writes: vec![RecordWrite {
+                        area: record.area.clone(),
+                        key: record.key.clone(),
+                        expected: (version > 0).then_some(version),
+                        doc: Some(record.doc.clone()),
+                        updated: record.updated,
+                    }],
+                    events: vec![],
+                    reservations: vec![],
+                }))
+                .unwrap();
+        }
+    }
     let store = Store::open(&root).unwrap();
+    let restored = store
+        .view()
+        .unwrap()
+        .records(&RecordQuery::default(), PageReq::first(128))
+        .unwrap();
+    assert!(restored.next.is_none());
+    assert_eq!(restored.items, state_records);
     for task in tasks {
         store.fixture_put_task(&task).unwrap();
     }
