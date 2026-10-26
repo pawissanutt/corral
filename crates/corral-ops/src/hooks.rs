@@ -1,6 +1,5 @@
 //! Durable post-land operations. Callers hold the repository landing lock throughout execution.
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -12,6 +11,9 @@ use sha2::{Digest, Sha256};
 
 use crate::Ctx;
 use crate::hook_command;
+use corral_core::records::RecordArea;
+
+const OPERATIONS: RecordArea<PostLandOperation> = RecordArea::new("post-land");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -97,11 +99,7 @@ impl PostLandOperation {
 }
 
 fn directory(ctx: &Ctx) -> PathBuf {
-    ctx.store.state_dir().join("post-land")
-}
-
-fn path(ctx: &Ctx, op: &PostLandOperation) -> PathBuf {
-    directory(ctx).join(format!("{}.json", op.key))
+    ctx.store.state_dir().join("tmp").join("post-land")
 }
 
 pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
@@ -109,42 +107,13 @@ pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
 }
 
 pub(crate) fn save(ctx: &Ctx, op: &PostLandOperation) -> Result<()> {
-    let dir = directory(ctx);
-    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = path(ctx, op);
-    let tmp = path.with_extension("json.tmp");
-    let mut file = File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-    file.write_all(&serde_json::to_vec_pretty(op)?)
-        .context("writing post-land receipt")?;
-    file.sync_all().context("syncing post-land receipt")?;
-    fs::rename(&tmp, &path).context("committing post-land receipt")?;
-    #[cfg(unix)]
-    File::open(&dir)?
-        .sync_all()
-        .context("syncing receipt directory")?;
-    // Windows cannot FlushFileBuffers on a directory handle. The receipt file
-    // above is flushed before its same-volume atomic replacement.
-    Ok(())
+    OPERATIONS.save(&ctx.store, &op.key, op)
 }
 
 /// Inspect without executing commands or changing receipts.
 pub fn post_land_operations(ctx: &Ctx, project: Option<&str>) -> Result<Vec<PostLandOperation>> {
-    let dir = directory(ctx);
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
-    };
     let mut operations = Vec::new();
-    for entry in entries {
-        let file = entry.context("reading receipt directory entry")?.path();
-        if file.extension().is_none_or(|e| e != "json") {
-            continue;
-        }
-        let op: PostLandOperation = serde_json::from_slice(
-            &fs::read(&file).with_context(|| format!("reading {}", file.display()))?,
-        )
-        .with_context(|| format!("parsing {}", file.display()))?;
+    for (_, op) in OPERATIONS.list(&ctx.store)? {
         if project.is_none_or(|p| op.project == p) {
             operations.push(op);
         }
@@ -203,9 +172,7 @@ pub(crate) fn prepare(
             .collect(),
     };
     // A repeated request must never overwrite successful or uncertain receipts.
-    if path(ctx, &op).exists() {
-        let previous = serde_json::from_slice(&fs::read(path(ctx, &op))?)
-            .context("reading existing operation")?;
+    if let Some(previous) = OPERATIONS.load(&ctx.store, &op.key)? {
         return Ok(Some(previous));
     }
     save(ctx, &op)?;
@@ -378,6 +345,7 @@ fn publish(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
     }
     let bytes = serde_json::to_vec_pretty(op)?;
     let receipt_digest = digest(op)?;
+    fs::create_dir_all(directory(ctx)).context("creating operations evidence directory")?;
     let file = directory(ctx).join(format!("{}-operations.md", op.key));
     let report = format!(
         "# Post-land operations: {}\n\nLanded: {}\nLanded SHA: `{}`\nOperational readiness: {}\nPolicy digest: `{}`\nReceipt digest: `{}`\nCoalescing: none\n\n```json\n{}\n```\n",
