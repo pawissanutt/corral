@@ -84,6 +84,58 @@ fn records_from_another_handle_join_task_commit_and_rollback_on_both_backends() 
 }
 
 #[test]
+fn record_unit_reads_one_committed_view_across_handles_and_keys() {
+    for fake in [false, true] {
+        // Given an atomic pair and independent handles to its backend.
+        let (dir, store) = fixture(fake);
+        store
+            .records_transaction(|| {
+                store.save_record("unit-view", "first", &0)?;
+                store.save_record("unit-view", "second", &0)
+            })
+            .unwrap();
+        let other = if fake {
+            store.clone()
+        } else {
+            Store::open_unobserved(dir.path()).unwrap()
+        };
+
+        // When another thread atomically changes both keys between this unit's reads.
+        store
+            .records_transaction(|| {
+                let first = store.record::<u64>("unit-view", "first")?;
+                let (finished, completion) = std::sync::mpsc::channel();
+                let writer = std::thread::spawn(move || {
+                    let before = other.view().unwrap().seq();
+                    let result = other.records_transaction(|| {
+                        other.save_record("unit-view", "first", &1)?;
+                        other.save_record("unit-view", "second", &1)
+                    });
+                    let after = other.view().unwrap().seq();
+                    finished.send((result, before, after)).unwrap();
+                });
+                let (result, before, after) = completion
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+                writer.join().unwrap();
+                result?;
+                assert_eq!(after.0, before.0 + 1, "writer must publish one operation");
+
+                // Then both keyed and area reads still describe the original committed pair.
+                assert_eq!(first, Some(0));
+                assert_eq!(store.record::<u64>("unit-view", "second")?, Some(0));
+                let rows = store.record_rows("unit-view")?;
+                assert_eq!(rows.len(), 2);
+                assert!(rows.iter().all(|row| row.doc == json!(0)));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(store.record::<u64>("unit-view", "first").unwrap(), Some(1));
+        assert_eq!(store.record::<u64>("unit-view", "second").unwrap(), Some(1));
+    }
+}
+
+#[test]
 fn record_snapshots_keep_their_committed_view_on_both_backends() {
     for fake in [true, false] {
         // Given a snapshot of the current record and an absent record.
