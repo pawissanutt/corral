@@ -137,6 +137,16 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
             ),
         ));
     }
+    refresh_overflow(task, &mut assessment, now);
+    assessment
+}
+
+// Publication changes only ledger capacity, not the canonical inputs of ordinary rows.
+// Reuse this projection after reclaim without another board listing or receipt reads.
+fn refresh_overflow(task: &Task, assessment: &mut Assessment, now: Timestamp) {
+    assessment
+        .conditions
+        .retain(|condition| condition.kind != "ledger_overflow");
     let retained = task
         .attention
         .records
@@ -186,7 +196,6 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
         ))
     });
     assessment.primary = assessment.conditions.first().cloned();
-    assessment
 }
 
 /// One fresh task listing. Receipt reads are bounded by the existing owner header.

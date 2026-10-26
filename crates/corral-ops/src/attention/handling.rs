@@ -21,7 +21,7 @@ pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()>
     owner_notice::drain_snapshot(ctx, &tasks)?;
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();
-    for (snapshot, assessment) in tasks.iter().zip(board.tasks) {
+    for (snapshot, mut assessment) in tasks.iter().zip(board.tasks) {
         if assessment.assessment.conditions.is_empty() && snapshot.attention.is_empty() {
             continue;
         }
@@ -39,6 +39,7 @@ pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()>
         if !task.attention.outbox.is_empty() {
             outbox::publish(ctx, &task.id, &mut wakes)?;
             task = ctx.store.get(&task.id)?;
+            super::refresh_overflow(&task, &mut assessment.assessment, now);
         }
         let mut ledger = task.attention.clone();
         let old_ids: Vec<_> = ledger
@@ -421,9 +422,9 @@ pub(super) fn attend_authorized(
         anyhow::bail!("attention_busy");
     };
     let board = super::board(ctx, now)?;
-    let assessment = board
+    let mut assessment = board
         .tasks
-        .iter()
+        .into_iter()
         .find(|task| task.task == id)
         .context("attention task not found")?;
     ensure!(
@@ -440,12 +441,6 @@ pub(super) fn attend_authorized(
             .filter_map(|c| c.key.as_ref())
             .collect::<Vec<_>>()
     );
-    let condition = assessment
-        .assessment
-        .conditions
-        .iter()
-        .find(|condition| condition.key.as_ref() == Some(&key))
-        .context("current attention condition disappeared")?;
     // Older revisions live in the retained lifecycle facts, not an ever-growing request
     // vector on every task. This explicit command may read history; sync never does.
     let task = ctx.store.get(id)?;
@@ -497,9 +492,25 @@ pub(super) fn attend_authorized(
     }
     let mut wakes = Wakes::new();
     outbox::publish(ctx, id, &mut wakes)?;
-    let old_ids: Vec<_> = ctx
-        .store
-        .get(id)?
+    let task = ctx.store.get(id)?;
+    super::refresh_overflow(&task, &mut assessment.assessment, now);
+    let condition = assessment
+        .assessment
+        .conditions
+        .iter()
+        .find(|condition| condition.key.as_ref() == Some(&key))
+        .with_context(|| {
+            format!(
+                "stale_item: {id} current keys: {:?}",
+                assessment
+                    .assessment
+                    .conditions
+                    .iter()
+                    .filter_map(|condition| condition.key.as_ref())
+                    .collect::<Vec<_>>()
+            )
+        })?;
+    let old_ids: Vec<_> = task
         .attention
         .outbox
         .iter()

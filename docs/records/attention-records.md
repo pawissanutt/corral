@@ -48,6 +48,12 @@ levels on its own condition, not its initial announcement.
 Overflow derives from current canonical conditions and occupied record capacity,
 not the preceding pass's `overflow_count`. When no longer needed, it resolves
 through the ordinary self-contained resolution path before any ladder level.
+Retained-resolution publication can free ordinary slots, so reconciliation
+refreshes the overflow projection from the reclaimed ledger before transitions.
+New handling rechecks the same projection after publication, refusing a key made
+stale by that reclaim; accepted-request replay still returns before publication.
+This refresh reuses the already derived ordinary rows without another board
+listing or receipt read, and never discards retained wake carriers.
 Its persisted key retains the opening timestamp and a fresh episode nonce;
 count changes and restarts keep that key, while resolution/reopening receives
 a new identity even if the injected clock repeats. Existing active legacy keys

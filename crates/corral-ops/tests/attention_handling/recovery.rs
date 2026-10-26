@@ -54,7 +54,7 @@ fn pending(fx: &Fx, key: &ConditionKey, count: u32) {
         .unwrap();
 }
 
-fn public_attend(
+pub(super) fn public_attend(
     fx: &Fx,
     key: &ConditionKey,
     value: &AttentionHandling,
