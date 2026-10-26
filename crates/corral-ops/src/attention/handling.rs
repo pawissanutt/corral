@@ -135,14 +135,17 @@ fn transition(
     now: Timestamp,
     pm_live: Option<bool>,
 ) -> Result<Option<corral_core::NoticeClaim>> {
-    let overflow = ConditionKey(format!("{}/ledger_overflow/v1", task.id));
+    let overflow = ledger
+        .records
+        .iter()
+        .find(|(_, record)| record.kind == "ledger_overflow")
+        .map(|(key, _)| key.clone());
     let current: BTreeMap<_, _> = conditions
         .iter()
         .filter_map(|c| c.key.as_ref().map(|key| (key.clone(), c)))
         .collect();
     for key in ledger.records.keys().cloned().collect::<Vec<_>>() {
-        if key == overflow
-            || current.contains_key(&key)
+        if current.contains_key(&key)
             || ledger
                 .records
                 .get(&key)
@@ -169,7 +172,7 @@ fn transition(
             if ledger
                 .records
                 .keys()
-                .filter(|key| **key != overflow)
+                .filter(|key| Some(*key) != overflow.as_ref())
                 .count()
                 >= 31
             {
@@ -264,51 +267,51 @@ fn transition(
     }
     let missing = current
         .keys()
-        .filter(|key| **key != overflow && !ledger.records.contains_key(*key))
+        .filter(|key| Some(*key) != overflow.as_ref() && !ledger.records.contains_key(*key))
         .count();
-    if missing > 0 {
-        ledger.overflow_count = Some(missing);
-        if !ledger.records.contains_key(&overflow) {
-            ledger.records.insert(
-                overflow.clone(),
-                AttentionRecord {
-                    kind: "ledger_overflow".into(),
-                    responsible: Responsible::Pm,
-                    since: now,
-                    since_source: SinceSource::Discovered,
-                    first_recorded: now,
-                    opened_at: now,
-                    pm_live_at_open: pm_live,
-                    levels: corral_core::attention::AttentionLevels {
-                        announced_at: Some(now),
-                        ..Default::default()
-                    },
-                    handling: None,
-                    first_handled_at: None,
-                    resolved_at: None,
+    ledger.overflow_count = (missing > 0).then_some(missing);
+    if missing > 0 && overflow.is_none() {
+        // The persisted key is the episode identity, including when the clock repeats.
+        let mut nonce = [0_u8; 16];
+        getrandom::fill(&mut nonce)
+            .map_err(|error| anyhow::anyhow!("generating overflow episode identity: {error}"))?;
+        let overflow = ConditionKey(format!(
+            "{}/ledger_overflow/{now}-{}",
+            task.id,
+            crate::verification::digest(&nonce)
+        ));
+        ledger.records.insert(
+            overflow.clone(),
+            AttentionRecord {
+                kind: "ledger_overflow".into(),
+                responsible: Responsible::Pm,
+                since: now,
+                since_source: SinceSource::Discovered,
+                first_recorded: now,
+                opened_at: now,
+                pm_live_at_open: pm_live,
+                levels: corral_core::attention::AttentionLevels {
+                    announced_at: Some(now),
+                    ..Default::default()
                 },
-            );
-            outbox::enqueue(
-                ledger,
-                &overflow,
-                "attention_opened",
-                "",
-                json!({
-                    "key": overflow, "kind": "ledger_overflow", "responsible": "pm",
-                    "since": now, "since_source": "discovered", "pm_live": pm_live, "count": missing,
-                    "opened_at": now, "class": corral_core::attention::WaitClass::PmAction,
-                    "reason": format!("{missing} conditions are listed without ladder records; resolve retained conditions to free capacity"),
-                    "wake": true,
-                }),
-            )?;
-        }
-    } else if let Some(record) = ledger.records.get_mut(&overflow)
-        && record.resolved_at.is_none()
-    {
-        ledger.overflow_count = None;
-        record.resolved_at = Some(now);
-        let detail = json!({"key": overflow, "record": record, "resolved_at": now});
-        outbox::enqueue(ledger, &overflow, "attention_resolved", "", detail)?;
+                handling: None,
+                first_handled_at: None,
+                resolved_at: None,
+            },
+        );
+        outbox::enqueue(
+            ledger,
+            &overflow,
+            "attention_opened",
+            "",
+            json!({
+                "key": overflow, "kind": "ledger_overflow", "responsible": "pm",
+                "since": now, "since_source": "discovered", "pm_live": pm_live, "count": missing,
+                "opened_at": now, "class": corral_core::attention::WaitClass::PmAction,
+                "reason": format!("{missing} conditions are listed without ladder records; resolve retained conditions to free capacity"),
+                "wake": true,
+            }),
+        )?;
     }
     if uncovered.is_empty() {
         return Ok(None);

@@ -1,5 +1,5 @@
 //! Read-only attention projection. Canonical records, not notifications, define outstanding work.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use classify::{authority, check, keyed_status, progress, wait};
@@ -104,21 +104,6 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
     let mut assessment = Assessment::default();
     classify::conditions(task, neighborhood, now, &mut assessment);
     delivery::conditions(task, neighborhood, now, &mut assessment.conditions);
-    if let Some(count) = task.attention.overflow_count {
-        let mut overflow = row(
-            task,
-            now,
-            "ledger_overflow",
-            WaitClass::PmAction,
-            Responsible::Pm,
-            (Some("v1".into()), None),
-            format!(
-                "{count} conditions are listed without ladder records; resolve retained conditions to free capacity"
-            ),
-        );
-        overflow.next_action.command = Some("corral attention --json --all".into());
-        assessment.conditions.push(overflow);
-    }
     if assessment.progress.is_none() && assessment.conditions.is_empty() {
         let run = task.current_run();
         let stage = run.and_then(|run| run.autopilot.as_ref());
@@ -151,6 +136,45 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
                 stage.map_or("none", |stage| stage.stage.as_str()),
             ),
         ));
+    }
+    let retained = task
+        .attention
+        .records
+        .values()
+        .filter(|record| record.kind != "ledger_overflow")
+        .count();
+    let available = 31_usize.saturating_sub(retained);
+    let missing = assessment
+        .conditions
+        .iter()
+        .filter_map(|condition| condition.key.as_ref())
+        .filter(|key| !task.attention.records.contains_key(*key))
+        .collect::<BTreeSet<_>>()
+        .len()
+        .saturating_sub(available);
+    if missing > 0
+        && let Some((key, _)) =
+            task.attention.records.iter().find(|(_, record)| {
+                record.kind == "ledger_overflow" && record.resolved_at.is_none()
+            })
+    {
+        let anchor = key
+            .0
+            .trim_start_matches(&format!("{}/ledger_overflow/", task.id))
+            .to_owned();
+        let mut overflow = row(
+            task,
+            now,
+            "ledger_overflow",
+            WaitClass::PmAction,
+            Responsible::Pm,
+            (Some(anchor), None),
+            format!(
+                "{missing} conditions are listed without ladder records; resolve retained conditions to free capacity"
+            ),
+        );
+        overflow.next_action.command = Some("corral attention --json --all".into());
+        assessment.conditions.push(overflow);
     }
     assessment.conditions.sort_by(|a, b| {
         (a.key.is_none(), a.class, a.since, &a.kind, &a.key).cmp(&(
