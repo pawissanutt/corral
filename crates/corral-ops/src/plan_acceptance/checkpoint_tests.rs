@@ -568,14 +568,20 @@ fn red_card_survives_a_running_or_lost_retry_until_a_later_pass() {
         plan_checkpoint(&f.ctx, &f.plan).unwrap().gate.result,
         GateResult::Fail
     );
-    let path = super::journal_path(&f.ctx.store, &f.plan);
-    let mut journal: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut journal: serde_json::Value = f
+        .ctx
+        .store
+        .record(super::JOURNAL_AREA, &f.plan)
+        .unwrap()
+        .unwrap();
     let mut lost = journal["attempts"][2].clone();
     lost["id"] = "C4".into();
     lost["gate"]["result"] = "running".into();
     journal["attempts"].as_array_mut().unwrap().push(lost);
-    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    f.ctx
+        .store
+        .save_record(super::JOURNAL_AREA, &f.plan, &journal)
+        .unwrap();
     // Then C3's card stays while C4 looks running, and while C5 runs after marking C4 lost.
     let cards = checkpoint_cards(&f);
     assert!(
@@ -591,4 +597,102 @@ fn red_card_survives_a_running_or_lost_retry_until_a_later_pass() {
     );
     assert_eq!((c5.id.as_str(), c5.gate.result), ("C5", GateResult::Pass));
     assert!(checkpoint_cards(&f).is_empty());
+}
+
+/// The checkpoint attempt's gate row and scratch registration.
+fn checkpoint_row(f: &Fixture, attempt: &str) -> corral_core::backend::GateAttempt {
+    f.ctx
+        .store
+        .gate_attempt(&f.plan, "checkpoint", attempt)
+        .unwrap()
+        .unwrap()
+}
+
+fn checkpoint_scratch(f: &Fixture, attempt: &str) -> corral_core::backend::ScratchState {
+    let id = format!("gate-plan-{}-{attempt}", f.plan);
+    f.ctx.store.scratch_row(&id).unwrap().unwrap().state
+}
+
+#[test]
+fn checkpoint_that_changes_its_checkout_ends_its_row_as_the_failure_it_records() {
+    // Given a checkpoint gate whose commands pass only by repairing a checkout file.
+    let f = Fixture::new(
+        Delivery::Integration,
+        &["echo repaired > first.txt", "grep -q repaired first.txt"],
+    );
+    // When the checkpoint runs.
+    let attempt = plan_checkpoint(&f.ctx, &f.plan).unwrap();
+    // Then the journal records the changed checkout, and the row ends with that same outcome.
+    assert_eq!(attempt.gate.result, GateResult::Fail);
+    let failed = attempt.gate.failed_cmd.clone().unwrap();
+    assert!(
+        failed.starts_with("verification_checkout_changed"),
+        "{failed}"
+    );
+    let row = checkpoint_row(&f, &attempt.id);
+    assert_eq!(
+        (row.result.as_deref(), row.failed_cmd.as_deref()),
+        (Some("fail"), Some(failed.as_str()))
+    );
+    assert_eq!(
+        checkpoint_scratch(&f, &attempt.id),
+        corral_core::backend::ScratchState::Closed
+    );
+}
+
+#[test]
+fn lost_checkpoint_ends_its_journal_entry_row_and_scratch_together() {
+    // Given a checkpoint process that ended after its attempt started, before its gate ran.
+    let f = Fixture::new(Delivery::Integration, &["true"]);
+    crate::gate::evidence::FAILPOINT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|point: &str| {
+            assert_ne!(point, "plan_checkpoint_running", "process ended");
+        }));
+    });
+    let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        plan_checkpoint(&f.ctx, &f.plan)
+    }));
+    crate::gate::evidence::FAILPOINT.with(|hook| *hook.borrow_mut() = None);
+    assert!(ended.is_err());
+    let journal: serde_json::Value = f
+        .ctx
+        .store
+        .record(super::JOURNAL_AREA, &f.plan)
+        .unwrap()
+        .unwrap();
+    assert_eq!(journal["attempts"][0]["gate"]["result"], "running");
+    assert!(checkpoint_row(&f, "C1").ended.is_none());
+    assert_eq!(
+        checkpoint_scratch(&f, "C1"),
+        corral_core::backend::ScratchState::Open
+    );
+    // When the next checkpoint runs under the lock.
+    let next = plan_checkpoint(&f.ctx, &f.plan).unwrap();
+    assert_eq!(
+        (next.id.as_str(), next.gate.result),
+        ("C2", GateResult::Pass)
+    );
+    // Then C1 is lost in its journal entry and its row alike, and its directory was closed and
+    // then reclaimed when C2 started.
+    let journal: serde_json::Value = f
+        .ctx
+        .store
+        .record(super::JOURNAL_AREA, &f.plan)
+        .unwrap()
+        .unwrap();
+    let lost = &journal["attempts"][0]["gate"];
+    assert_eq!(
+        (lost["result"].clone(), lost["process_lost"].clone()),
+        (serde_json::json!("fail"), serde_json::json!(true))
+    );
+    let row = checkpoint_row(&f, "C1");
+    assert_eq!(row.result.as_deref(), Some("fail"));
+    assert_eq!(row.failed_cmd.as_deref(), lost["failed_cmd"].as_str());
+    assert!(row.ended.is_some());
+    assert_eq!(
+        checkpoint_scratch(&f, "C1"),
+        corral_core::backend::ScratchState::Reclaimed
+    );
+    let row = checkpoint_row(&f, "C2");
+    assert_eq!(row.result.as_deref(), Some("pass"));
 }

@@ -25,6 +25,22 @@ fn observe_with(f: &Fixture, attempt: &str, key: &str, artifacts: &[&Artifact]) 
     plan_evidence(&f.ctx, &f.plan, &observation).map(|_| ())
 }
 
+/// The attempt's gate row ended with exactly the outcome its saved receipt records.
+fn assert_row_matches(f: &Fixture, attempt: &AggregateAttempt) {
+    let gate = attempt.gate.as_ref().unwrap();
+    let row = f
+        .ctx
+        .store
+        .gate_attempt(&f.plan, super::super::gate::AGGREGATE_SCOPE, &attempt.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.result.as_deref(), row.failed_cmd.as_deref()),
+        (Some(gate.result.as_str()), gate.failed_cmd.as_deref())
+    );
+    assert!(row.ended.is_some() && row.log.is_some());
+}
+
 fn edit_reviewer(f: &Fixture, command: &str) {
     let mut store = f.ctx.store.reopen().unwrap();
     store.config.agents.get_mut("rev").unwrap().command = command.into();
@@ -50,6 +66,7 @@ fn gate_that_changes_checkout_files_cannot_prove_the_candidate() {
             .is_some_and(|reason| reason.contains("verification_checkout_changed")),
         "{gate:?}"
     );
+    assert_row_matches(&f, &attempt);
     for criterion in ["C1", "C2"] {
         f.observe(&attempt.id, criterion, ObservationStatus::Pass)
             .unwrap();
@@ -84,6 +101,7 @@ fn gate_that_moves_checkout_head_cannot_prove_the_candidate() {
             .is_some_and(|reason| reason.contains("HEAD is")),
         "{gate:?}"
     );
+    assert_row_matches(&f, &attempt);
     f.assert_not_completed(&main);
 }
 

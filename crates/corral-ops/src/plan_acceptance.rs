@@ -201,6 +201,18 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         reviews: Vec::new(),
         acceptance: None,
     };
+    let contract = crate::gate_tier::aggregate(&ctx.store.config, &tracker, &policy);
+    let prepared = attempt
+        .code
+        .then(|| {
+            let run = gate::PlanGate {
+                attempt: &attempt.id,
+                scope: gate::AGGREGATE_SCOPE,
+                previous: tracker.aggregate_attempts.last().map(|a| a.id.as_str()),
+            };
+            gate::prepare(ctx, &attempt.identity, run, &verify, &contract)
+        })
+        .transpose()?;
     ctx.store.update(id, |task| {
         ensure!(
             task.aggregate_attempts.len() == tracker.aggregate_attempts.len()
@@ -213,22 +225,25 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             "plan_verification_started",
             json!({"attempt": attempt.id, "identity": attempt.identity, "members": attempt.members}),
         )?;
-        Ok(())
+        // The Running attempt commits with its started gate row.
+        prepared.as_ref().map_or(Ok(()), |gate| gate.stage_start(&ctx.store))
     })?;
-    if !attempt.code {
+    let Some(prepared) = prepared else {
         return Ok(attempt);
-    }
-    let contract = crate::gate_tier::aggregate(&ctx.store.config, &tracker, &policy);
-    let run = gate::PlanGate {
-        attempt: &attempt.id,
-        scope: gate::AGGREGATE_SCOPE,
-        previous: tracker.aggregate_attempts.last().map(|a| a.id.as_str()),
-        event: (
-            "plan_gate_started",
-            json!({"attempt": attempt.id, "scope": gate::AGGREGATE_SCOPE, "head": attempt.identity.head}),
-        ),
     };
-    let mut record = gate::run(ctx, &attempt.identity, run, &verify, &contract)?;
+    let (mut record, failure) = match prepared.execute(&attempt.identity, &contract.commands) {
+        Ok(record) => (record, None),
+        Err(error) => {
+            let running = attempt.gate.clone().context("code attempt has no gate")?;
+            let record = GateRecord {
+                result: GateResult::Fail,
+                failed_cmd: Some(format!("gate_error: {error:#}")),
+                at: corral_core::clock::now(),
+                ..running
+            };
+            (record, Some(error))
+        }
+    };
     if record.result == GateResult::Pass
         && let Some(reason) = gate::checkout_changed(&verify, &attempt.identity.head)?
     {
@@ -245,6 +260,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             record.failed_cmd = Some(format!("stale_result: {error:#}"));
         }
     }
+    let staged = prepared.put_result(ctx)?;
     let saved = ctx.store.update(id, |task| {
         let stored = task
             .aggregate_attempts
@@ -257,20 +273,26 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
             "plan_gate",
             json!({"attempt": attempt.id, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "identity": attempt.identity}),
         )?;
-        Ok(())
+        // The row ends with exactly this validated outcome.
+        staged.as_ref().map_or(Ok(()), |staged| {
+            staged.stage(&ctx.store, (record.result, record.failed_cmd.as_deref()))
+        })
     })?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
     attempt = saved
         .aggregate_attempts
         .iter()
         .find(|stored| stored.id == attempt.id)
         .cloned()
         .context("aggregate attempt missing after gate")?;
-    let log = gate::paths(ctx, id, &attempt.id).log;
+    let log = &prepared.paths.log;
     if log.is_file() {
         crate::artifacts::add_artifact(
             ctx,
             id,
-            &log,
+            log,
             Some(corral_core::ArtifactKind::Log),
             Some(&format!(
                 "Plan gate {}: {}",

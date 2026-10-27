@@ -69,28 +69,17 @@ struct Journal {
     attempts: Vec<PlanCheckpoint>,
 }
 
-fn journal_path(store: &Store, plan: &str) -> PathBuf {
-    store
-        .state_dir()
-        .join("plan-checkpoints")
-        .join(format!("{plan}.json"))
-}
+/// The record area of the per-Plan checkpoint journals, keyed by Plan id.
+pub(super) const JOURNAL_AREA: &str = "plan-checkpoints";
 
 impl Journal {
     fn load(store: &Store, plan: &str) -> Result<Self> {
-        let path = journal_path(store, plan);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self {
-                    version: JOURNAL_VERSION,
-                    attempts: Vec::new(),
-                });
-            }
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        let Some(journal) = store.record::<Self>(JOURNAL_AREA, plan)? else {
+            return Ok(Self {
+                version: JOURNAL_VERSION,
+                attempts: Vec::new(),
+            });
         };
-        let journal: Self = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing {}", path.display()))?;
         ensure!(
             journal.version == JOURNAL_VERSION,
             "unsupported Plan checkpoint journal version {}",
@@ -99,17 +88,10 @@ impl Journal {
         Ok(journal)
     }
 
-    /// Callers hold the Plan's verification lock, the only writer of this file.
+    /// Callers hold the Plan's verification lock, the only writer of this record. Inside a
+    /// task update the write joins it, so it commits with the attempt's gate row.
     fn save(&self, store: &Store, plan: &str) -> Result<()> {
-        let path = journal_path(store, plan);
-        let dir = path
-            .parent()
-            .context("checkpoint journal has no directory")?;
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let temporary = path.with_extension("json.tmp");
-        std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)
-            .with_context(|| format!("writing {}", temporary.display()))?;
-        std::fs::rename(&temporary, &path).with_context(|| format!("replacing {}", path.display()))
+        store.save_record(JOURNAL_AREA, plan, self)
     }
 }
 
@@ -216,16 +198,25 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         return Ok(None);
     }
     let mut journal = Journal::load(&store, id)?;
-    // Holding the lock proves no checkpoint process still owns a running attempt.
-    for lost in journal
-        .attempts
-        .iter_mut()
-        .filter(|attempt| attempt.gate.result == GateResult::Running)
-    {
-        lost.gate.result = GateResult::Fail;
-        lost.gate.process_lost = true;
-        lost.gate.failed_cmd =
+    // Holding the lock proves no checkpoint process still owns a running attempt. Each lost
+    // attempt's journal entry, gate row and scratch closure commit together.
+    let lost: Vec<usize> = (0..journal.attempts.len())
+        .filter(|&index| journal.attempts[index].gate.result == GateResult::Running)
+        .collect();
+    for index in lost {
+        let staged = gate::put_lost_checkpoint(ctx, id, &journal.attempts[index].id)?;
+        let gate = &mut journal.attempts[index].gate;
+        gate.result = GateResult::Fail;
+        gate.process_lost = true;
+        gate.failed_cmd =
             Some("process_lost: the checkpoint ended before its gate finished".into());
+        let outcome = (gate.result, gate.failed_cmd.clone());
+        store.update(id, |_| {
+            journal.save(&store, id)?;
+            staged.as_ref().map_or(Ok(()), |staged| {
+                staged.stage(&store, (outcome.0, outcome.1.as_deref()))
+            })
+        })?;
     }
     let policy = crate::verification::policy(ctx, &tracker)?;
     crate::verification::require_gate(&policy, &tracker)?;
@@ -278,20 +269,26 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         fix_command: None,
     };
     let previous = journal.attempts.last().map(|previous| previous.id.clone());
-    journal.attempts.push(attempt.clone());
-    journal.save(&store, id)?;
     let run = gate::PlanGate {
         attempt: &attempt.id,
         scope: gate::CHECKPOINT_SCOPE,
         previous: previous.as_deref(),
-        event: (
+    };
+    let contract = crate::gate_tier::aggregate(&store.config, &tracker, &policy);
+    let prepared = gate::prepare(ctx, &attempt.identity, run, &verify, &contract)?;
+    journal.attempts.push(attempt.clone());
+    store.update(id, |_| {
+        journal.save(&store, id)?;
+        store.log_event(
+            Some(id),
             "plan_checkpoint_started",
             json!({"attempt": attempt.id, "target": attempt.target, "head": attempt.head,
                    "landings": attempt.landings, "automatic": automatic, "advisory": true}),
-        ),
-    };
-    let contract = crate::gate_tier::aggregate(&store.config, &tracker, &policy);
-    let mut record = match gate::run(ctx, &attempt.identity, run, &verify, &contract) {
+        )?;
+        prepared.stage_start(&store)
+    })?;
+    crate::gate::evidence::failpoint("plan_checkpoint_running");
+    let mut record = match prepared.execute(&attempt.identity, &contract.commands) {
         Ok(record) => record,
         Err(error) => GateRecord {
             result: GateResult::Fail,
@@ -306,7 +303,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         record.result = GateResult::Fail;
         record.failed_cmd = Some(format!("verification_checkout_changed: {reason}"));
     }
-    let log = gate::paths(ctx, id, &attempt.id).log;
+    let log = prepared.paths.log.clone();
     if log.is_file() {
         crate::artifacts::add_artifact(
             ctx,
@@ -331,17 +328,25 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         .last_mut()
         .context("checkpoint attempt missing")?;
     *stored = attempt.clone();
-    journal.save(&store, id)?;
-    store.log_event(
-        Some(id),
-        "plan_checkpoint",
-        json!({"attempt": attempt.id, "result": attempt.gate.result.as_str(),
+    let staged = prepared.put_result(ctx)?;
+    store.update(id, |_| {
+        journal.save(&store, id)?;
+        store.log_event(
+            Some(id),
+            "plan_checkpoint",
+            json!({"attempt": attempt.id, "result": attempt.gate.result.as_str(),
                "failed_cmd": attempt.gate.failed_cmd, "failed_step": attempt.failed_step,
                "log": attempt.log, "target": attempt.target, "head": attempt.head,
                "landings": attempt.landings, "automatic": automatic, "advisory": true,
                "tier": attempt.gate.tier.as_ref().map(|tier| &tier.tier),
                "fix_command": attempt.fix_command, "identity": attempt.identity}),
-    )?;
+        )?;
+        // The row ends with exactly the outcome this journal entry records.
+        let outcome = (attempt.gate.result, attempt.gate.failed_cmd.as_deref());
+        staged
+            .as_ref()
+            .map_or(Ok(()), |staged| staged.stage(&store, outcome))
+    })?;
     Ok(Some(attempt))
 }
 
@@ -425,6 +430,8 @@ fn prepare_fix(store: &Store, tracker: &Task, attempt: &PlanCheckpoint) -> Resul
         .state_dir()
         .join("plan-checkpoints")
         .join(format!("{}-{}-fix.md", tracker.id, attempt.id));
+    let dir = path.parent().context("fix spec has no directory")?;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     let title = format!("Fix {} checkpoint {}: {step}", attempt.target, attempt.id);
     let project = tracker.project.as_deref().context("Plan has no project")?;

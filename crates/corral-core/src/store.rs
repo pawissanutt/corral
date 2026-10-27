@@ -34,7 +34,7 @@ mod submission;
 mod write;
 pub use codec::{spec_revision, task_panes};
 pub use db::{store_holders, try_exclusive_store_gate};
-pub use gate_rows::ScratchReclaim;
+pub use gate_rows::{GateOutcome, ScratchReclaim};
 pub use head::{CheckpointMetas, TaskHead};
 pub use head_api::Board;
 pub use head_mut::TaskHeadMut;

@@ -25,27 +25,51 @@ pub(super) fn paths(ctx: &Ctx, plan: &str, attempt: &str) -> GatePaths {
     crate::gate::dir_paths(&evidence::gates_root(ctx).join(&stem), &stem)
 }
 
-/// One Plan gate run: the attempt it belongs to, its `gate_attempts` scope, the previous
-/// attempt of that scope whose scratch directory is reclaimed first, and its start event.
+/// Puts the evidence a lost checkpoint attempt left for ending its row; `None` when it has no
+/// open row.
+pub(super) fn put_lost_checkpoint(
+    ctx: &Ctx,
+    plan: &str,
+    attempt: &str,
+) -> Result<Option<evidence::StagedResult>> {
+    let stem = stem(plan, attempt);
+    let paths = paths(ctx, plan, attempt);
+    evidence::put_result(ctx, plan, CHECKPOINT_SCOPE, attempt, &stem, &paths)
+}
+
+/// One Plan gate run: the attempt it belongs to, its `gate_attempts` scope, and the previous
+/// attempt of that scope whose scratch directory is reclaimed first.
 pub(super) struct PlanGate<'a> {
     pub(super) attempt: &'a str,
     pub(super) scope: &'a str,
     pub(super) previous: Option<&'a str>,
-    pub(super) event: (&'a str, serde_json::Value),
 }
 
-/// Run the full tier's commands in the verification checkout and validate its receipts. In a
-/// tiered project the tier command also sees the contract's empty expected-failure set.
-/// The result file and command log, not the runner's exit status, are the authority.
-/// The attempt's control files sit in its registered scratch directory; its row records the
-/// identity, commands and context at start and the log and result when the runner exits.
-pub(super) fn run(
+/// A prepared Plan gate attempt: its control files in a registered scratch directory and its
+/// started row's blobs, which the caller stages into the update that records the Running
+/// attempt. The caller later stages [`Prepared::put_result`] into the update that saves the
+/// attempt's final, validated outcome, so each marker commits with its row.
+pub(super) struct Prepared {
+    plan: String,
+    scope: String,
+    attempt: String,
+    stem: String,
+    pub(super) paths: GatePaths,
+    owner: std::path::PathBuf,
+    context: Option<crate::gate_tier::GateContext>,
+    start: Option<evidence::StagedStart>,
+}
+
+/// Prepares the full tier's run in the verification checkout: reclaims the previous
+/// attempt's directory, registers this attempt's, writes its owner token, context and script,
+/// and puts its started row's blobs.
+pub(super) fn prepare(
     ctx: &Ctx,
     identity: &CandidateIdentity,
     gate: PlanGate<'_>,
     checkout: &Path,
     contract: &GateContract,
-) -> Result<GateRecord> {
+) -> Result<Prepared> {
     let plan = identity.task.as_str();
     if let Some(previous) = gate.previous
         && let Err(error) = evidence::reclaim(ctx, &stem(plan, previous))
@@ -90,22 +114,55 @@ pub(super) fn run(
         commands,
         context: context.as_ref().map(|context| context.path.as_path()),
     };
-    evidence::record_start(ctx, &start, gate.event)?;
-    let collected = execute(identity, commands, &paths, &owner, context);
-    let outcome = match &collected {
-        Ok(record) => (record.result, record.failed_cmd.clone()),
-        Err(error) => (GateResult::Fail, Some(format!("gate_error: {error:#}"))),
-    };
-    evidence::record_result(
-        ctx,
-        plan,
-        gate.scope,
-        gate.attempt,
-        &stem,
-        (outcome.0, outcome.1.as_deref()),
-        &paths,
-    )?;
-    collected
+    let start = evidence::put_start(ctx, &start)?;
+    Ok(Prepared {
+        plan: plan.to_owned(),
+        scope: gate.scope.to_owned(),
+        attempt: gate.attempt.to_owned(),
+        stem,
+        paths,
+        owner,
+        context,
+        start,
+    })
+}
+
+impl Prepared {
+    /// Stages the started row into the open update that records the Running attempt.
+    pub(super) fn stage_start(&self, store: &corral_core::Store) -> Result<()> {
+        self.start
+            .as_ref()
+            .map_or(Ok(()), |start| start.stage(store))
+    }
+
+    /// Runs the commands and validates the receipts. The result file and command log, not
+    /// the runner's exit status, are the authority.
+    pub(super) fn execute(
+        &self,
+        identity: &CandidateIdentity,
+        commands: &[String],
+    ) -> Result<GateRecord> {
+        execute(
+            identity,
+            commands,
+            &self.paths,
+            &self.owner,
+            self.context.clone(),
+        )
+    }
+
+    /// Puts the log and result blobs for the update that saves the attempt's final outcome;
+    /// `None` when the attempt has no open row.
+    pub(super) fn put_result(&self, ctx: &Ctx) -> Result<Option<evidence::StagedResult>> {
+        evidence::put_result(
+            ctx,
+            &self.plan,
+            &self.scope,
+            &self.attempt,
+            &self.stem,
+            &self.paths,
+        )
+    }
 }
 
 fn execute(

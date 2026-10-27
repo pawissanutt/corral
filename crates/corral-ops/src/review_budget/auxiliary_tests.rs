@@ -420,9 +420,14 @@ fn owner_wrapper_persists_explicit_provenance_and_running_receipt_survives_revoc
     assert_eq!(collected.identity, gate.identity);
 }
 
-/// The recovered `gate_started` event and the commands its attempt row records.
-fn resumed_gate_started(tier: Option<&str>) -> (serde_json::Value, serde_json::Value) {
-    // Given a prepared gate whose retained record is (or is not) tiered.
+/// The recovered `gate_started` event, the commands its attempt row records and the
+/// `stats --gates` behind-at-start totals.
+fn resumed_gate_started(
+    tier: Option<&str>,
+    behind: bool,
+) -> (serde_json::Value, serde_json::Value, serde_json::Value) {
+    // Given a prepared gate whose retained record is (or is not) tiered, on a candidate that
+    // contains its integration base or is behind a base branch with one more commit.
     let mut fx = Fixture::new(1);
     fx.ctx.store.config.review.gate_tiers = Some(
         [("quick".to_string(), vec!["quick-cmd".to_string()])]
@@ -431,6 +436,21 @@ fn resumed_gate_started(tier: Option<&str>) -> (serde_json::Value, serde_json::V
     );
     fx.ctx.store.save_config().unwrap();
     let id = fx.task();
+    if behind {
+        let app = fx.tmp.path().join("app");
+        git(&app, &["checkout", "-q", "-b", "ahead"]);
+        std::fs::write(app.join("ahead"), "ahead\n").unwrap();
+        git(&app, &["add", "ahead"]);
+        git(&app, &["commit", "-qm", "ahead"]);
+        git(&app, &["checkout", "-q", "main"]);
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                task.current_run_mut().unwrap().base = "ahead".into();
+                Ok(())
+            })
+            .unwrap();
+    }
     grant(&mut fx, std::slice::from_ref(&id));
     let mut launch = prepared(&fx, &id, Kind::Gate);
     let mut record = fx
@@ -472,15 +492,18 @@ fn resumed_gate_started(tier: Option<&str>) -> (serde_json::Value, serde_json::V
         .unwrap()
         .unwrap();
     let commands = fx.ctx.store.blob_bytes(&row.commands).unwrap().unwrap();
+    let stats = crate::analytics::gate_metrics::gate_stats(&fx.ctx.store, None, None).unwrap();
+    let behind = serde_json::to_value(stats).unwrap()["totals"]["behind"].clone();
     (
         serde_json::to_value(event).unwrap(),
         serde_json::from_slice(&commands).unwrap(),
+        behind,
     )
 }
 
 #[test]
 fn resumed_tiered_gate_logs_the_tier_and_commands_of_a_normal_start() {
-    let (event, commands) = resumed_gate_started(Some("quick"));
+    let (event, commands, _) = resumed_gate_started(Some("quick"), false);
     assert_eq!(event["detail"]["recovered"], true);
     assert_eq!(event["detail"]["tier"], "quick");
     assert!(event["detail"].get("commands").is_none());
@@ -489,7 +512,31 @@ fn resumed_tiered_gate_logs_the_tier_and_commands_of_a_normal_start() {
 
 #[test]
 fn resumed_legacy_gate_keeps_its_event_payload() {
-    let (event, _) = resumed_gate_started(None);
+    let (event, _, _) = resumed_gate_started(None, false);
     assert!(event["detail"].get("tier").is_none());
     assert!(event["detail"].get("commands").is_none());
+}
+
+#[test]
+fn resumed_gates_record_behind_at_start_like_a_normal_start() {
+    for tier in [Some("quick"), None] {
+        for behind in [false, true] {
+            // When a tiered or untiered prepared gate on a contained or behind candidate resumes.
+            let (event, _, totals) = resumed_gate_started(tier, behind);
+            // Then its start event records the fact, and stats classifies the gate by it.
+            assert_eq!(
+                event["detail"]["behind_at_start"],
+                json!(behind),
+                "{tier:?}"
+            );
+            let (counted, other) = if behind {
+                ("behind_at_start", "contained_base")
+            } else {
+                ("contained_base", "behind_at_start")
+            };
+            assert_eq!(totals[counted]["gates"], 1, "{tier:?} {behind}: {totals}");
+            assert_eq!(totals[other]["gates"], 0, "{tier:?} {behind}: {totals}");
+            assert_eq!(totals["unknown"]["gates"], 0, "{tier:?} {behind}: {totals}");
+        }
+    }
 }

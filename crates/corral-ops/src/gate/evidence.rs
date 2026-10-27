@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::backend::{
-    GateAttempt, GateLaunched, GateResult as GateResultOp, GateStart, Operation, ScratchKind,
-    ScratchState,
+    GateAttempt, GateLaunched, GateStart, Operation, ReservationUse, ScratchKind, ScratchState,
 };
-use corral_core::{CandidateIdentity, GateResult, ScratchReclaim};
+use corral_core::blob_ref::BlobRef;
+use corral_core::{CandidateIdentity, GateOutcome, GateResult, ScratchReclaim, Store};
 use jiff::Timestamp;
 use serde_json::Value;
 
@@ -18,6 +18,30 @@ use crate::Ctx;
 
 /// The `gate_attempts.scope` of a task run's gate.
 pub(crate) const RUN_SCOPE: &str = "run";
+
+#[cfg(test)]
+type FailpointHook = Option<Box<dyn FnMut(&str)>>;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FAILPOINT: std::cell::RefCell<FailpointHook> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only interruption points of gate commits; a no-op in shipped builds.
+pub(crate) fn failpoint(name: &str) {
+    #[cfg(test)]
+    FAILPOINT.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
+            hook(name);
+        }
+    });
+    #[cfg(not(test))]
+    let _ = name;
+}
+
+#[cfg(all(test, unix))]
+mod tests;
 
 /// `<scratch_root>/gates`; under `.corral/state/gates` only when the configured roots are
 /// invalid, where every registration is refused before anything is written.
@@ -62,7 +86,7 @@ pub(crate) fn open_dir(ctx: &Ctx, task: &str, attempt: &str, stem: &str) -> Resu
         .register_scratch(ScratchKind::Gate, &id, task, attempt, &rel)
 }
 
-/// What [`record_start`] commits for one attempt.
+/// What [`put_start`] stores for one attempt.
 pub(crate) struct Start<'a> {
     pub(crate) task: &'a str,
     pub(crate) run: &'a str,
@@ -75,15 +99,43 @@ pub(crate) struct Start<'a> {
     pub(crate) context: Option<&'a Path>,
 }
 
-/// Commits the attempt row with its identity, commands and context documents and `event`
-/// (`GateStart`). Already recorded: nothing changes and `event` is not appended again.
-pub(crate) fn record_start(ctx: &Ctx, start: &Start<'_>, event: (&str, Value)) -> Result<()> {
+/// A started attempt's row with its put identity, commands and context blobs, ready to commit.
+pub(crate) struct StagedStart {
+    task: String,
+    row: GateAttempt,
+    reservations: Vec<ReservationUse>,
+}
+
+impl StagedStart {
+    /// Joins the open task update, so the row commits with the update's gate marker. It may
+    /// be staged again when the update retries its callback.
+    pub(crate) fn stage(&self, store: &Store) -> Result<()> {
+        store.stage_gate_start(&self.row, self.reservations.clone())
+    }
+
+    /// Commits the row with `event` as its own `GateStart`, for a start whose marker the
+    /// task already holds (a recovered launch).
+    pub(crate) fn commit(self, ctx: &Ctx, event: (&str, Value)) -> Result<()> {
+        let row = self.row;
+        ctx.store
+            .apply_gate(&self.task, vec![event], self.reservations, |change| {
+                Operation::GateStart(GateStart {
+                    change,
+                    attempt: row.clone(),
+                })
+            })
+    }
+}
+
+/// Puts the attempt's identity, commands and context documents as exact-byte blobs and
+/// builds its row; `None` when the attempt already has a row.
+pub(crate) fn put_start(ctx: &Ctx, start: &Start<'_>) -> Result<Option<StagedStart>> {
     if ctx
         .store
         .gate_attempt(start.task, start.run, start.attempt)?
         .is_some()
     {
-        return Ok(());
+        return Ok(None);
     }
     let identity = ctx
         .store
@@ -118,13 +170,11 @@ pub(crate) fn record_start(ctx: &Ctx, start: &Start<'_>, event: (&str, Value)) -
         ended: None,
     };
     reservations.extend(context.map(|put| put.reservation));
-    ctx.store
-        .apply_gate(start.task, vec![event], reservations, |change| {
-            Operation::GateStart(GateStart {
-                change,
-                attempt: row.clone(),
-            })
-        })
+    Ok(Some(StagedStart {
+        task: start.task.to_owned(),
+        row,
+        reservations,
+    }))
 }
 
 /// Records the attempt's pane once (`GateLaunched`); a row-less (legacy) attempt is left alone.
@@ -151,26 +201,55 @@ pub(crate) fn record_launched(
     }
 }
 
-/// Ends the attempt row once (`GateResult`): the log and result files' exact bytes become its
-/// blobs and its scratch directory `stem` is closed in the same operation. A row-less
-/// (legacy) or already ended attempt is left alone.
-pub(crate) fn record_result(
+/// An attempt's put log and result blobs and its open scratch registration, ready to end its
+/// row in the task update that records the gate's final outcome.
+pub(crate) struct StagedResult {
+    run: String,
+    attempt: String,
+    log: Option<BlobRef>,
+    result_doc: Option<BlobRef>,
+    close_scratch: Vec<String>,
+    reservations: Vec<ReservationUse>,
+}
+
+impl StagedResult {
+    /// Joins the open task update with `outcome`, so the update commits as one `GateResult`:
+    /// its marker and events, the ended row and the scratch closure. It may be staged again
+    /// when the update retries its callback.
+    pub(crate) fn stage(&self, store: &Store, outcome: (GateResult, Option<&str>)) -> Result<()> {
+        store.stage_gate_result(
+            GateOutcome {
+                run: self.run.clone(),
+                attempt: self.attempt.clone(),
+                result: outcome.0.as_str().to_owned(),
+                failed_cmd: outcome.1.map(str::to_owned),
+                log: self.log.clone(),
+                result_doc: self.result_doc.clone(),
+                close_scratch: self.close_scratch.clone(),
+            },
+            self.reservations.clone(),
+        )
+    }
+}
+
+/// Puts the log and result files' exact bytes as blobs for ending the attempt's row; `None`
+/// for a row-less (legacy) or already ended attempt.
+pub(crate) fn put_result(
     ctx: &Ctx,
     task: &str,
     run: &str,
     attempt: &str,
     stem: &str,
-    outcome: (GateResult, Option<&str>),
     paths: &super::GatePaths,
-) -> Result<()> {
+) -> Result<Option<StagedResult>> {
     let Some(row) = ctx.store.gate_attempt(task, run, attempt)? else {
-        return Ok(());
+        return Ok(None);
     };
     if row.ended.is_some() {
-        return Ok(());
+        return Ok(None);
     }
     let mut reservations = Vec::new();
-    let mut put = |path: &Path| -> Result<Option<corral_core::blob_ref::BlobRef>> {
+    let mut put = |path: &Path| -> Result<Option<BlobRef>> {
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -183,26 +262,21 @@ pub(crate) fn record_result(
     let log = put(&paths.log)?;
     let result_doc = put(&paths.result)?;
     let id = scratch_id(stem);
-    let close = ctx
+    let close_scratch = ctx
         .store
         .scratch_row(&id)?
         .filter(|row| row.state == ScratchState::Open)
-        .map(|_| id);
-    ctx.store
-        .apply_gate(task, Vec::new(), reservations, |change| {
-            Operation::GateResult(GateResultOp {
-                change,
-                run: run.to_owned(),
-                attempt: attempt.to_owned(),
-                result: outcome.0.as_str().to_owned(),
-                failed_cmd: outcome.1.map(str::to_owned),
-                log: log.clone(),
-                result_doc: result_doc.clone(),
-                context: None,
-                ended: Timestamp::now(),
-                close_scratch: close.iter().cloned().collect(),
-            })
-        })
+        .map(|_| id)
+        .into_iter()
+        .collect();
+    Ok(Some(StagedResult {
+        run: run.to_owned(),
+        attempt: attempt.to_owned(),
+        log,
+        result_doc,
+        close_scratch,
+        reservations,
+    }))
 }
 
 /// The exact bytes of the attempt's recorded log; `None` without a row, log or live blob, and
