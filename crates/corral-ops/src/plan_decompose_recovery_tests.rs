@@ -1,7 +1,6 @@
 use super::*;
-use std::path::PathBuf;
 
-fn interrupted_replacement(initial_scopes: usize) -> (tempfile::TempDir, Ctx, String, PathBuf) {
+fn interrupted_replacement(initial_scopes: usize) -> (tempfile::TempDir, Ctx, String) {
     let scopes = if initial_scopes == 0 {
         Vec::new()
     } else {
@@ -49,11 +48,7 @@ fn interrupted_replacement(initial_scopes: usize) -> (tempfile::TempDir, Ctx, St
             .is_some()
     );
     ctx.store.fixture_block_task(blocked, false).unwrap();
-    let path = ctx
-        .store
-        .state_dir()
-        .join(format!("plan-decompose-{id}.json"));
-    (dir, ctx, id, path)
+    (dir, ctx, id)
 }
 
 fn private_herdr_available() -> bool {
@@ -97,8 +92,8 @@ fn publication_sync_remaps_replacement_collisions_for_both_self_plans() {
 }
 
 fn assert_sync_recovery(initial_scopes: usize, collision: bool) {
-    let (_dir, ctx, id, path) = interrupted_replacement(initial_scopes);
-    let original: Journal = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let (_dir, mut ctx, id) = interrupted_replacement(initial_scopes);
+    let original = PUBLICATIONS.load(&ctx.store, &id).unwrap().unwrap();
     let other = collision.then(|| {
         ctx.store
             .create("Independent", None, Status::Backlog, "Do not overwrite")
@@ -106,6 +101,7 @@ fn assert_sync_recovery(initial_scopes: usize, collision: bool) {
     });
     let other_bytes = other.as_ref().map(|task| ctx.store.get(&task.id).unwrap());
     let config = std::fs::read(ctx.store.config_path()).unwrap();
+    ctx.store = Store::open(ctx.store.root()).unwrap();
 
     // Only ordinary sync resumes the durable owner acceptance, with no re-acceptance.
     crate::sync(&ctx).unwrap();
@@ -121,7 +117,7 @@ fn assert_sync_recovery(initial_scopes: usize, collision: bool) {
         if collision { 5 } else { 4 }
     );
     assert_eq!(std::fs::read(ctx.store.config_path()).unwrap(), config);
-    let journal: Journal = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let journal = PUBLICATIONS.load(&ctx.store, &id).unwrap().unwrap();
     assert_eq!(journal.backlink, original.backlink);
     assert_eq!(journal.document, original.document);
     assert_eq!(journal.artifact_sha256, original.artifact_sha256);
@@ -182,9 +178,9 @@ fn publication_recovery_rejects_foreign_changed_and_different_replacements() {
             "staged",
             "different",
         ] {
-            let (_dir, ctx, id, path) = interrupted_replacement(initial_scopes);
-            let mut journal: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let (_dir, ctx, id) = interrupted_replacement(initial_scopes);
+            let area = RecordArea::<serde_json::Value>::new("plan-decompose");
+            let mut journal = area.load(&ctx.store, &id).unwrap().unwrap();
             match change {
                 "foreign" => journal["backlink"] = "T-999@P2".into(),
                 "attachment" => {
@@ -228,8 +224,8 @@ fn publication_recovery_rejects_foreign_changed_and_different_replacements() {
                 }
                 _ => unreachable!(),
             }
-            std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
-            let bytes = std::fs::read(&path).unwrap();
+            area.save(&ctx.store, &id, &journal).unwrap();
+            let before = ctx.store.record_row("plan-decompose", &id).unwrap();
             let parent = ctx.store.get(&id).unwrap();
             let parent_bytes = ctx.store.get(&parent.id).unwrap();
             let child_bytes = ctx.store.get("T-002").unwrap();
@@ -238,7 +234,11 @@ fn publication_recovery_rejects_foreign_changed_and_different_replacements() {
                 apply(&ctx, &id, &plan).is_err(),
                 "{initial_scopes}: {change}"
             );
-            assert_eq!(std::fs::read(&path).unwrap(), bytes, "{change}");
+            assert_eq!(
+                ctx.store.record_row("plan-decompose", &id).unwrap(),
+                before,
+                "{change}"
+            );
             assert_eq!(ctx.store.get(&parent.id).unwrap(), parent_bytes, "{change}");
             assert_eq!(ctx.store.get("T-002").unwrap(), child_bytes, "{change}");
             assert!(ctx.store.get("T-003").is_err());

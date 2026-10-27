@@ -201,12 +201,17 @@ finally:
     corral_ops::sync_at(&ctx, now).unwrap();
     corral_ops::sync_at(&ctx, now + SignedDuration::from_secs(2)).unwrap();
     assert!(corral_ops::resources::admission(&ctx).unwrap().is_some());
-    let queue_path = ctx
-        .store
-        .state_dir()
-        .join(format!("main-movement-{}.json", task.id));
-    let queue = std::fs::read_to_string(&queue_path).unwrap();
-    let receipt: serde_json::Value = serde_json::from_str(&queue).unwrap();
+    let receipt = corral_core::records::RecordArea::<serde_json::Value>::new("main-movement")
+        .load(&ctx.store, &task.id)
+        .unwrap()
+        .unwrap();
+    let queue = serde_json::to_string(&receipt).unwrap();
+    assert!(
+        !ctx.store
+            .state_dir()
+            .join(format!("main-movement-{}.json", task.id))
+            .exists()
+    );
     assert_eq!(
         receipt["notices"][0]["state"],
         "delivered",

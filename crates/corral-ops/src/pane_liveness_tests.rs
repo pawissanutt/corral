@@ -9,7 +9,10 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let store = corral_core::Store::init(temp.path()).unwrap();
+        let mut store = corral_core::Store::init(temp.path()).unwrap();
+        store.config.storage.cache_root = Some(temp.path().join("cache"));
+        store.save_config().unwrap();
+        std::fs::create_dir_all(store.cache_root().unwrap()).unwrap();
         let mut ctx = crate::resources::FixedResourceProbe::ctx(store);
         ctx.herdr = corral_herdr::Herdr::with_bin(
             temp.path().join("never-executed"),
@@ -66,7 +69,14 @@ impl Fixture {
     }
 
     fn bytes(&self) -> Vec<u8> {
-        std::fs::read(self.ctx.store.state_dir().join("pane-liveness.json")).unwrap()
+        std::fs::read(
+            self.ctx
+                .store
+                .cache_root()
+                .unwrap()
+                .join("pane-liveness.json"),
+        )
+        .unwrap()
     }
 }
 
@@ -104,7 +114,7 @@ fn reinitialized_state_rejects_surviving_tickets_from_the_old_incarnation() {
     let fixture = Fixture::new();
     let old = fixture.ticket();
     assert!(!fixture.observe(old, true, 1));
-    std::fs::remove_file(fixture.ctx.store.state_dir().join("pane-liveness.json")).unwrap();
+    std::fs::remove_dir_all(fixture.ctx.store.cache_root().unwrap()).unwrap();
     let fresh = fixture.ticket();
     let rebuilt = fixture.bytes();
 
@@ -128,7 +138,12 @@ fn legacy_observations_keep_sightings_but_not_unordered_missing_evidence() {
         serde_json::json!({"seen": true, "misses": 1, "at": at}),
     )]);
     std::fs::write(
-        fixture.ctx.store.state_dir().join("pane-liveness.json"),
+        fixture
+            .ctx
+            .store
+            .cache_root()
+            .unwrap()
+            .join("pane-liveness.json"),
         serde_json::to_vec(&legacy).unwrap(),
     )
     .unwrap();

@@ -3,6 +3,16 @@ use anyhow::{Context, Result};
 use corral_core::{Origin, Status, Store, TaskKind, TaskSize};
 use corral_ops::Ctx;
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EditDraft {
+    task_revision: u64,
+    spec_revision: String,
+    text: String,
+}
+
+const EDIT_DRAFTS: corral_core::records::RecordArea<EditDraft> =
+    corral_core::records::RecordArea::new("edit-drafts");
+
 #[derive(clap::Args)]
 pub struct IdeaArgs {
     pub id: String,
@@ -116,12 +126,13 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
     let revision = ctx.store.head(id)?.rev;
     let before = ctx.store.get(id)?;
     let spec = corral_core::spec_revision(&before)?;
-    let path = ctx.store.state_dir().join(format!("edit-{}.md", before.id));
+    let dir = ctx.store.state_dir().join("tmp");
+    let path = dir.join(format!("edit-{}.md", before.id));
     let _lock = ctx
         .store
         .try_lock(&format!("edit-{}", before.id))?
         .context("another editor is open for this task")?;
-    std::fs::create_dir_all(ctx.store.state_dir()).context("creating editor scratch directory")?;
+    std::fs::create_dir_all(&dir).context("creating editor scratch directory")?;
     let rendered = corral_core::Store::render_task_markdown(&before);
     let text = rendered.replacen(
         "---\n",
@@ -131,7 +142,15 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
         ),
         1,
     );
-    std::fs::write(&path, text).context("writing editor scratch copy")?;
+    let mut draft = EDIT_DRAFTS
+        .load(&ctx.store, &before.id)?
+        .unwrap_or(EditDraft {
+            task_revision: revision,
+            spec_revision: spec.clone(),
+            text,
+        });
+    EDIT_DRAFTS.save(&ctx.store, &before.id, &draft)?;
+    std::fs::write(&path, &draft.text).context("writing editor scratch copy")?;
     let editor = std::env::var("EDITOR")
         .ok()
         .filter(|e| !e.trim().is_empty())
@@ -143,18 +162,26 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
         .arg(&path)
         .status()
         .with_context(|| format!("running {editor}"))?;
+    draft.text = std::fs::read_to_string(&path).context("reading edited task")?;
+    EDIT_DRAFTS.save(&ctx.store, &before.id, &draft)?;
     if !status.success() {
         bail!(
             "{editor} exited with {status}; scratch copy: {}",
             path.display()
         );
     }
-    let text = std::fs::read_to_string(&path).context("reading edited task")?;
-    let mut edited = corral_core::Store::parse_task_markdown(&text)?;
+    let mut edited = corral_core::Store::parse_task_markdown(&draft.text)?;
     if edited.id != before.id {
         bail!("editing a task cannot change its id");
     }
     before.check_scope_unchanged(&edited)?;
+    if revision != draft.task_revision || spec != draft.spec_revision {
+        bail!(
+            "task changed since draft revision {}; the edited text is kept in {}",
+            draft.task_revision,
+            path.display()
+        );
+    }
     if owner_ok {
         ctx.store
             .owner_decision(id, "narrow", "Owner approved edited specification", "flag")?;
@@ -168,7 +195,7 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
         }
         edited.updated = fresh.updated;
         *fresh = edited;
-        Ok(())
+        EDIT_DRAFTS.delete(&ctx.store, &before.id)
     })?;
     std::fs::remove_file(&path).context("removing editor scratch copy")?;
     Ok(())

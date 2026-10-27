@@ -58,7 +58,7 @@ impl fmt::Display for ScopeGateError {
 
 impl std::error::Error for ScopeGateError {}
 
-/// Only the fields this resolver reads from `state/plan-decompose-<design>.json`.
+/// Only the fields this resolver reads from the canonical publication document.
 #[derive(Deserialize)]
 struct Publication {
     backlink: String,
@@ -177,16 +177,11 @@ fn published_binding(
     backlink: &str,
     member: &str,
 ) -> Result<Option<(String, String)>> {
-    let path = store
-        .state_dir()
-        .join(format!("plan-decompose-{design}.json"));
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    let Some(journal) = corral_core::records::RecordArea::<Publication>::new("plan-decompose")
+        .load(store, design)?
+    else {
+        return Ok(None);
     };
-    let journal: Publication = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing publication journal {}", path.display()))?;
     if journal.backlink != backlink {
         return Ok(None);
     }

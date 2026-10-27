@@ -244,11 +244,9 @@ fn review_run_with_pm_prompts_the_pm_pane() {
     reviewer_profile(&mut ctx, "true".into());
     ctx.store.config.pm.agent = "rev".into();
     ctx.store.save_config().unwrap();
-    std::fs::write(
-        ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"w9:p9"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(&ctx.store, "state", &serde_json::json!({"pane_id":"w9:p9"}))
+        .unwrap();
     let record = corral_ops::review_run(&ctx, &id, Some("pm")).unwrap();
     assert_eq!(record.reviewer, "pm");
     assert_eq!(record.pane.as_deref(), Some("w9:p9"));
@@ -272,11 +270,9 @@ fn review_run_with_pm_prompts_the_pm_pane() {
 
 fn failed_pm_review(ctx: &mut Ctx, id: &str) {
     ctx.store.config.pm.agent = "rev".into();
-    std::fs::write(
-        ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"w9:p9"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(&ctx.store, "state", &serde_json::json!({"pane_id":"w9:p9"}))
+        .unwrap();
     std::fs::write(ctx.store.root().join("not-ready"), "").unwrap();
     std::fs::write(ctx.store.root().join("reject-enter"), "").unwrap();
     let error = corral_ops::review_run(ctx, id, Some("pm")).unwrap_err();

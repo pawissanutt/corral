@@ -1,7 +1,5 @@
 //! Shared setup operations. No operation here launches agents or changes operating authority.
 use std::collections::BTreeMap;
-use std::fs;
-use std::io::{Read, Write};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{
@@ -289,63 +287,36 @@ fn next_revision(record: &ProfileSetupRecord) -> Result<u64> {
         .context("setup revision exhausted")
 }
 
-fn input_path(store: &Store, proposal: &ProfileSetupProposal) -> Result<std::path::PathBuf> {
-    Ok(store
-        .state_dir()
-        .join("profile-proposals")
-        .join(format!("{}.json", proposal.digest()?)))
-}
+const INPUTS: corral_core::records::RecordArea<SetupProposalInput> =
+    corral_core::records::RecordArea::new("profile-proposals");
 
 fn save_input(store: &Store, input: &SetupProposalInput) -> Result<()> {
-    let path = input_path(store, &input.proposal)?;
-    fs::create_dir_all(path.parent().context("proposal path has no parent")?)
-        .context("creating setup proposal directory")?;
-    let mut file =
-        tempfile::NamedTempFile::new_in(path.parent().context("missing proposal parent")?)
-            .context("creating setup proposal temporary file")?;
-    serde_json::to_writer(&mut file, input).context("encoding setup proposal input")?;
-    file.flush().context("flushing setup proposal input")?;
-    file.as_file()
-        .sync_all()
-        .context("syncing setup proposal input")?;
-    match file.persist_noclobber(&path) {
-        Ok(_) => Ok(()),
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+    let key = input.proposal.digest()?;
+    store.records_transaction(|| {
+        if let Some(previous) = INPUTS.load(store, &key)? {
             ensure!(
-                load_input(store, &input.proposal)? == *input,
+                previous == *input,
                 "proposal support facts are immutable; prepare a new proposal"
             );
-            Ok(())
+            return Ok(());
         }
-        Err(error) => Err(error.error).context("persisting setup proposal support facts"),
-    }
+        let bytes = serde_json::to_vec(input).context("encoding setup proposal input")?;
+        ensure!(
+            u64::try_from(bytes.len())? <= store.config.artifacts.max_bytes,
+            "proposal support facts exceed size limit"
+        );
+        INPUTS.save(store, &key, input)
+    })
 }
 
 fn load_input(store: &Store, proposal: &ProfileSetupProposal) -> Result<SetupProposalInput> {
-    let path = input_path(store, proposal)?;
+    let input = INPUTS
+        .load(store, &proposal.digest()?)?
+        .context("missing setup proposal support facts")?;
     ensure!(
-        fs::symlink_metadata(&path)
-            .context("inspecting setup proposal support facts")?
-            .is_file(),
-        "proposal input must be a regular file, not a symlink or special file"
-    );
-    let mut file = fs::File::open(&path).context("opening setup proposal support facts")?;
-    ensure!(
-        file.metadata()?.is_file(),
-        "proposal input is not a regular file"
-    );
-    let max = store.config.artifacts.max_bytes;
-    let mut text = String::new();
-    Read::by_ref(&mut file)
-        .take(max.saturating_add(1))
-        .read_to_string(&mut text)
-        .context("reading setup proposal support facts")?;
-    ensure!(
-        u64::try_from(text.len())? <= max,
+        u64::try_from(serde_json::to_vec(&input)?.len())? <= store.config.artifacts.max_bytes,
         "proposal support facts exceed size limit"
     );
-    let input: SetupProposalInput =
-        serde_json::from_str(&text).context("parsing setup proposal support facts")?;
     ensure!(
         &input.proposal == proposal,
         "persisted proposal digest mismatch"

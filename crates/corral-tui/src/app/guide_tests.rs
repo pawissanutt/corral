@@ -85,11 +85,18 @@ fn tour_shows_on_first_open_only_and_reopens_from_help() {
     let text = render(&mut app);
     assert!(text.contains("welcome to corral · 1/7"), "{text}");
     assert!(text.contains("This is your board"), "{text}");
-    // When it is skipped, it closes and is remembered in .corral/state.
+    // When it is skipped, it closes and is remembered in the canonical record.
     app.handle_key(code(KeyCode::Esc));
     assert_eq!(app.stack.len(), 1);
     assert!(tour_seen(&fx.ctx));
-    assert!(fx.ctx.store.state_dir().join("tour-seen").is_file());
+    assert!(
+        fx.ctx
+            .store
+            .record_row("tour-seen", "workspace")
+            .unwrap()
+            .is_some()
+    );
+    assert!(!fx.ctx.store.state_dir().join("tour-seen").exists());
     // Then the next board open does not show it again.
     let mut again = fx.app(Mode::Board);
     again.start_tour_if_new();

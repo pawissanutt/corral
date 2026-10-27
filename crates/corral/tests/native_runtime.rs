@@ -59,7 +59,7 @@ fn native_plugin_manifest_advertises_current_version_and_supported_platforms() {
     assert!(output.status.success(), "{output:?}");
     let text = std::fs::read_to_string(
         root.path()
-            .join(".corral/state/herdr-plugin/herdr-plugin.toml"),
+            .join(".corral/state/tmp/herdr-plugin/herdr-plugin.toml"),
     )
     .unwrap();
     let manifest: toml::Value = toml::from_str(&text).unwrap();

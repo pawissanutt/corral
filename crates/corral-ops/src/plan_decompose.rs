@@ -1,9 +1,8 @@
 //! Recoverable approval-to-task projection. The parent is the dispatch barrier.
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
-use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use corral_core::records::RecordArea;
 use corral_core::{
     OperatingActionKind, PlanAcceptance, PlanDocument, ScopedTask, Status, Store, Task,
     operating_contract_revision,
@@ -41,6 +40,8 @@ struct Journal {
     #[serde(default)]
     scopes: BTreeMap<String, ChildScope>,
 }
+
+const PUBLICATIONS: RecordArea<Journal> = RecordArea::new("plan-decompose");
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -120,14 +121,7 @@ pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Res
         task.children.is_empty(),
         "cannot replace a plan after child publication has started"
     );
-    let journal = store
-        .state_dir()
-        .join(format!("plan-decompose-{}.json", task.id));
-    if journal.exists() {
-        let publication: Journal = serde_json::from_slice(
-            &std::fs::read(&journal).context("reading previous plan publication")?,
-        )
-        .context("parsing previous plan publication")?;
+    if let Some(publication) = PUBLICATIONS.load(store, &task.id)? {
         if publication.backlink == backlink {
             // Publication writes the replacement journal before its children,
             // but keeps the original parent attachment until all writes finish.
@@ -273,15 +267,8 @@ fn apply_with_origin(
         }
         if document.dependencies.len() <= 1 {
             ensure!(parent.children.is_empty(), "task already has children");
-            let journal_path = store
-                .state_dir()
-                .join(format!("plan-decompose-{}.json", parent.id));
             let current_contract = operating_contract_revision(parent)?;
-            let source_contract = if journal_path.exists() {
-                let previous: Journal = serde_json::from_slice(
-                    &std::fs::read(&journal_path).context("reading self-projection journal")?,
-                )
-                .context("parsing self-projection journal")?;
+            let source_contract = if let Some(previous) = PUBLICATIONS.load(store, &parent.id)? {
                 if previous.backlink == backlink {
                     ensure!(
                         previous.document == document
@@ -338,7 +325,7 @@ fn apply_with_origin(
                 artifact_sha256: plan.artifact.sha256.clone(),
                 scopes,
             };
-            write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
+            PUBLICATIONS.save(store, &parent.id, &journal)?;
             *parent = projected;
             return Ok(());
         }
@@ -370,14 +357,7 @@ fn apply_with_origin(
         // Existing prerequisites are inherited by every child. Validate their
         // entire reachable graph, not just names directly listed by the parent.
         let _waiting = crate::queue::dependency_check(store, parent)?;
-        let journal_path = store
-            .state_dir()
-            .join(format!("plan-decompose-{}.json", parent.id));
-        let previous = if journal_path.exists() {
-            let bytes = std::fs::read(&journal_path)
-                .with_context(|| format!("reading {}", journal_path.display()))?;
-            let journal: Journal =
-                serde_json::from_slice(&bytes).context("reading decomposition journal")?;
+        let previous = if let Some(journal) = PUBLICATIONS.load(store, &parent.id)? {
             if journal.backlink != backlink && parent.plan.as_ref() == Some(&journal.backlink) {
                 // check_attachment already verified replacement legality. The
                 // old backlink proves that this self-projection completed.
@@ -463,7 +443,7 @@ fn apply_with_origin(
         projected.dispatch_plan = None;
         projected.dispatch_hold = false;
         journal.projected_contract = operating_contract_revision(&projected)?;
-        write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
+        PUBLICATIONS.save_intent(store, &parent.id, &journal)?;
         // Publish the tracker and every child in one operation: either all of them exist
         // or none does, so normal allocation never steals a reserved ID.
         let mut staged = Vec::with_capacity(journal.children.len() + 1);
@@ -788,16 +768,5 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
         journal.tracker = tasks.pop().as_ref().map(Store::render_task_markdown);
     }
     journal.children = tasks.iter().map(Store::render_task_markdown).collect();
-    Ok(())
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let directory = path.parent().context("decomposition path has no parent")?;
-    let mut file = tempfile::NamedTempFile::new_in(directory)
-        .with_context(|| format!("staging {}", path.display()))?;
-    file.write_all(bytes)
-        .with_context(|| format!("writing {}", path.display()))?;
-    file.persist(path)
-        .with_context(|| format!("publishing {}", path.display()))?;
     Ok(())
 }

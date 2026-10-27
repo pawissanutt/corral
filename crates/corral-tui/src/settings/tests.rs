@@ -109,9 +109,10 @@ fn write_harness_cache(store: &Store) {
             info("omp", "omp", false, &[], ModelSource::FreeText),
         ],
     };
-    std::fs::create_dir_all(store.state_dir()).unwrap();
+    let cache = store.cache_root().unwrap();
+    std::fs::create_dir_all(&cache).unwrap();
     std::fs::write(
-        store.state_dir().join(HARNESS_CACHE_FILE),
+        cache.join(HARNESS_CACHE_FILE),
         serde_json::to_string(&report).unwrap(),
     )
     .unwrap();

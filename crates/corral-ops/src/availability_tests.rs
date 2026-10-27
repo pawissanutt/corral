@@ -114,3 +114,73 @@ fn pm_sessions_open_on_the_next_approved_candidate_when_the_preferred_is_unavail
     assert_eq!(switched.len(), 1);
     assert_eq!(switched[0].detail["candidate"], "pm-opus");
 }
+
+#[test]
+fn availability_record_survives_restart_and_keeps_semantic_validation() {
+    // Given a durable episode with a pending candidate selection.
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
+    let mut episode = AvailabilityEpisode {
+        version: 1,
+        id: "T-001-R1-implementation".into(),
+        task: "T-001".into(),
+        role: ProfileRole::Implementation,
+        profile: "general".into(),
+        revision: "r1".into(),
+        started: Timestamp::UNIX_EPOCH,
+        attempts: Vec::new(),
+        exhausted: None,
+    };
+    episode
+        .seed(
+            &candidate("sol", "openai"),
+            Some("R1"),
+            "preferred",
+            Timestamp::UNIX_EPOCH,
+        )
+        .unwrap();
+    episode
+        .record_failure(
+            "R1",
+            AttemptFailure {
+                class: AvailabilityClass::Unavailable,
+                message: "model_not_found".into(),
+                retries: 0,
+                at: Timestamp::UNIX_EPOCH,
+                recovered_at: None,
+            },
+        )
+        .unwrap();
+    episode
+        .advance(
+            &candidate("opus", "anthropic"),
+            "selected",
+            Timestamp::UNIX_EPOCH,
+        )
+        .unwrap();
+    save(&ctx, &episode).unwrap();
+
+    // When the store reopens, then the same pending selection is authoritative.
+    let restarted = crate::resources::FixedResourceProbe::ctx(Store::open(tmp.path()).unwrap());
+    assert_eq!(
+        load(&restarted, &episode.id).unwrap(),
+        Some(episode.clone())
+    );
+    assert_eq!(
+        restarted
+            .store
+            .record_row("availability", &episode.id)
+            .unwrap()
+            .unwrap()
+            .doc["doc_version"],
+        1
+    );
+    assert!(!restarted.store.state_dir().join("availability").exists());
+
+    // A decodable record that revisits a candidate must still fail semantic validation.
+    episode.attempts.push(episode.attempts[0].clone());
+    EPISODES
+        .save(&restarted.store, &episode.id, &episode)
+        .unwrap();
+    assert!(load(&restarted, &episode.id).is_err());
+}

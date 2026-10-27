@@ -42,11 +42,9 @@ fn plan_reviewer_preview_matches_actual_review_for_every_policy_mode() {
         ctx.store.config.pm.agent = "gpt-review".into();
         if policy == "pm" {
             std::fs::write(tmp.path().join("engine/planner-live"), "").unwrap();
-            std::fs::write(
-                ctx.store.state_dir().join("pm.json"),
-                r#"{"pane_id":"w1:p1"}"#,
-            )
-            .unwrap();
+            corral_core::records::RecordArea::new("pm")
+                .save(&ctx.store, "state", &serde_json::json!({"pane_id":"w1:p1"}))
+                .unwrap();
         }
         if policy == "cross-vendor" {
             ctx.store

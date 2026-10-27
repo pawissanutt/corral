@@ -86,7 +86,7 @@ enum Stored {
 }
 
 fn read(ctx: &Ctx) -> Result<Option<Stored>> {
-    let path = ctx.store.state_dir().join("pane-liveness.json");
+    let path = ctx.store.cache_root()?.join("pane-liveness.json");
     let stored: Stored = match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes).context("parsing pane observations")?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -102,9 +102,9 @@ fn read(ctx: &Ctx) -> Result<Option<Stored>> {
 }
 
 fn save(ctx: &Ctx, state: &State) -> Result<()> {
-    std::fs::create_dir_all(ctx.store.state_dir())
-        .context("creating pane observation directory")?;
-    let path = ctx.store.state_dir().join("pane-liveness.json");
+    let root = ctx.store.cache_root()?;
+    std::fs::create_dir_all(&root).context("creating pane observation directory")?;
+    let path = root.join("pane-liveness.json");
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec(state)?).context("writing pane observations")?;
     std::fs::rename(&tmp, &path).context("saving pane observations")

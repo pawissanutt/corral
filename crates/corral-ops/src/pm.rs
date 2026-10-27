@@ -1,10 +1,13 @@
 use anyhow::{Context, Result, ensure};
+use corral_core::records::RecordArea;
 use corral_core::{Config, ProfileChoice, ResolvedProfile};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::Ctx;
 use crate::prompt::{corral_bin, render_template};
+
+const STATE: RecordArea<PmState> = RecordArea::new("pm");
 
 #[derive(Serialize, Deserialize)]
 struct PmState {
@@ -78,14 +81,14 @@ pub fn open_setup_pm(ctx: &Ctx, connection: &SetupConnection) -> Result<String> 
 }
 
 /// Ensures the workspace PM pane exists and focuses it; returns its pane id.
-/// - The PM's pane id is remembered in `state/pm.json` ({"pane_id": "..."}); reuse it when `pane_get` finds it.
+/// - The PM's pane id is remembered in the canonical `pm/state` record; reuse it when `pane_get` finds it.
 /// - Otherwise write `prompts/pm.md` (role: workspace PM for corral; lists the projects from config and the
 ///   exact corral CLI verbs with the absolute binary path: list --json, show, new -p <project> [--idea] [--body],
 ///   move, dispatch, artifact list; rules: plan and file tasks, never edit project code itself,
 ///   obey current effective policy),
 ///   create a herdr workspace "corral PM" at the workspace root, run the configured pm agent with that prompt
 ///   (render the agent template with {prompt_file}=prompts/pm.md, {name}="corral PM", {task}="PM",
-///   {worktree}=root), report metadata title "corral PM", save state/pm.json, focus it.
+///   {worktree}=root), report metadata title "corral PM", save the PM record, focus it.
 pub fn open_pm(ctx: &Ctx) -> Result<String> {
     open_pm_with(ctx, None)
 }
@@ -113,8 +116,6 @@ fn open_pm_with(
     }
     let prompt_file = save_prompt(ctx, &policy)?;
     drop(_board);
-    let state_dir = ctx.store.state_dir();
-    let state_file = state_dir.join("pm.json");
 
     let root = ctx.store.root().to_path_buf();
     let config = ctx.store.config_layers()?.config()?;
@@ -172,7 +173,7 @@ fn open_pm_with(
         }),
     };
     crate::pm_policy::begin_startup(ctx, &created.pane_id, &policy)?;
-    crate::pm_policy::write_atomic(&state_file, &serde_json::to_vec(&state)?)?;
+    STATE.save(&ctx.store, "state", &state)?;
     let command = crate::launch_exit::arm(&command, &pm_receipt(ctx, &created.pane_id))?;
     ctx.herdr
         .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
@@ -192,11 +193,9 @@ fn open_pm_with(
     Ok(created.pane_id)
 }
 
-/// The live PM session and what it actually runs, from `state/pm.json`.
+/// The live PM session and what it actually runs, from the canonical PM record.
 pub(crate) fn pm_session(ctx: &Ctx) -> Result<PmSession> {
-    let state_file = ctx.store.state_dir().join("pm.json");
-    if let Ok(text) = std::fs::read_to_string(&state_file)
-        && let Ok(state) = serde_json::from_str::<PmState>(&text)
+    if let Some(state) = STATE.load(&ctx.store, "state")?
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
         && !exited(ctx, &state.pane_id)?
     {
@@ -218,20 +217,17 @@ fn exited(ctx: &Ctx, pane: &str) -> Result<bool> {
     }
     let reason = crate::launch_exit::reason(ctx, "The PM agent", Some(pane));
     ctx.herdr.pane_close(pane)?;
-    for path in [ctx.store.state_dir().join("pm.json"), receipt] {
-        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
-    }
+    STATE.delete(&ctx.store, "state")?;
+    std::fs::remove_file(&receipt).with_context(|| format!("removing {}", receipt.display()))?;
     crate::messages::report(None, "pm", reason.clone());
     ctx.store
         .log_event(None, "pm_exited", json!({ "pane": pane, "reason": reason }))?;
     Ok(true)
 }
 
-/// The PM pane remembered in `state/pm.json`, when herdr still has it.
+/// The PM pane remembered in the canonical PM record, when herdr still has it.
 pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
-    let state_file = ctx.store.state_dir().join("pm.json");
-    if let Ok(text) = std::fs::read_to_string(&state_file)
-        && let Ok(state) = serde_json::from_str::<PmState>(&text)
+    if let Some(state) = STATE.load(&ctx.store, "state")?
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
         && !exited(ctx, &state.pane_id)?
     {

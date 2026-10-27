@@ -124,10 +124,7 @@ fn zero_or_one_scope_attaches_plan_without_children() {
         if let Some(scope) = scopes.first() {
             assert_eq!(task.write_scope, scope.write_scope);
         }
-        let journal: Journal = serde_json::from_slice(
-            &std::fs::read(ctx.store.state_dir().join("plan-decompose-T-001.json")).unwrap(),
-        )
-        .unwrap();
+        let journal = PUBLICATIONS.load(&ctx.store, &id).unwrap().unwrap();
         assert!(journal.children.is_empty());
         assert_eq!(
             journal.source_contract,
@@ -271,15 +268,7 @@ fn reviewed_multi_scope_replacement_publishes_after_accepted_self_projection() {
         for child in &parent.children {
             assert_eq!(ctx.store.get(child).unwrap().plan, parent.plan);
         }
-        let journal: Journal = serde_json::from_slice(
-            &std::fs::read(
-                ctx.store
-                    .state_dir()
-                    .join(format!("plan-decompose-{id}.json")),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let journal = PUBLICATIONS.load(&ctx.store, &id).unwrap().unwrap();
         assert_eq!(journal.backlink, parent.plan.unwrap());
         assert_eq!(journal.document, parent.plans.last().unwrap().document);
         assert_eq!(journal.children.len(), 2);
@@ -304,15 +293,10 @@ fn replacement_preserves_unfinished_or_published_journals() {
             } else {
                 apply(&ctx, &id, "P1").unwrap();
             }
-            let journal_path = ctx
-                .store
-                .state_dir()
-                .join(format!("plan-decompose-{id}.json"));
             if barrier == "foreign" {
-                let mut journal: Journal =
-                    serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+                let mut journal = PUBLICATIONS.load(&ctx.store, &id).unwrap().unwrap();
                 journal.backlink = "T-999@P1".into();
-                std::fs::write(&journal_path, serde_json::to_vec(&journal).unwrap()).unwrap();
+                PUBLICATIONS.save(&ctx.store, &id, &journal).unwrap();
             }
             ctx.store
                 .update(&id, |task| {
@@ -327,14 +311,17 @@ fn replacement_preserves_unfinished_or_published_journals() {
                 })
                 .unwrap();
             let parent = ctx.store.fixture_task_text(&id).unwrap();
-            let journal = std::fs::read(&journal_path).unwrap();
+            let journal = ctx.store.record_row("plan-decompose", &id).unwrap();
             let count = ctx.store.list().unwrap().len();
 
             // When replacement tries to discard that publication state.
             assert!(apply(&ctx, &id, "P2").is_err(), "{barrier}");
 
             // Then neither the journal nor task files are replaced.
-            assert_eq!(std::fs::read(&journal_path).unwrap(), journal);
+            assert_eq!(
+                ctx.store.record_row("plan-decompose", &id).unwrap(),
+                journal
+            );
             assert_eq!(ctx.store.fixture_task_text(&id).unwrap(), parent);
             assert_eq!(ctx.store.list().unwrap().len(), count);
         }
@@ -348,25 +335,21 @@ fn recovery_rejects_changed_publication_identity() {
         let (_dir, ctx, id) = fixture(vec![scope("a", &[]), scope("b", &["a"])]);
         ctx.store.fixture_block_task("T-003", true).unwrap();
         assert!(apply(&ctx, &id, "P1").is_err());
-        let path = ctx
-            .store
-            .state_dir()
-            .join(format!("plan-decompose-{id}.json"));
-        let mut journal: Journal = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let mut journal = PUBLICATIONS.load(&ctx.store, &id).unwrap().unwrap();
         if change_backlink {
             journal.backlink = format!("{id}@P0");
         } else {
             journal.document.dependencies[0].write_scope = vec!["changed/**".into()];
         }
-        let bytes = serde_json::to_vec(&journal).unwrap();
-        std::fs::write(&path, &bytes).unwrap();
+        PUBLICATIONS.save(&ctx.store, &id, &journal).unwrap();
+        let before = ctx.store.record_row("plan-decompose", &id).unwrap();
         let child = ctx.store.fixture_task_text("T-002").unwrap();
 
         // When recovery runs for the original accepted plan.
         assert!(apply(&ctx, &id, "P1").is_err());
 
         // Then it preserves the journal and the already-published child.
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(ctx.store.record_row("plan-decompose", &id).unwrap(), before);
         assert_eq!(ctx.store.fixture_task_text("T-002").unwrap(), child);
     }
 }
@@ -482,10 +465,10 @@ fn invalid_graphs_have_no_task_or_journal_side_effects() {
         assert_eq!(ctx.store.list().unwrap().len(), 1);
         assert_eq!(ctx.store.fixture_task_text(&id).unwrap(), before);
         assert!(
-            !ctx.store
-                .state_dir()
-                .join("plan-decompose-T-001.json")
-                .exists()
+            ctx.store
+                .record_row("plan-decompose", &id)
+                .unwrap()
+                .is_none()
         );
     }
 }
@@ -528,10 +511,10 @@ fn rejects_invalid_inherited_dependency_graph_before_creating_children() {
         assert!(apply(&ctx, &id, "P1").is_err());
         assert_eq!(ctx.store.list().unwrap().len(), 2);
         assert!(
-            !ctx.store
-                .state_dir()
-                .join("plan-decompose-T-001.json")
-                .exists()
+            ctx.store
+                .record_row("plan-decompose", &id)
+                .unwrap()
+                .is_none()
         );
     }
 }

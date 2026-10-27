@@ -89,11 +89,9 @@ impl Fx {
     }
 
     fn pm(&self) {
-        std::fs::write(
-            self.ctx.store.state_dir().join("pm.json"),
-            r#"{"pane_id":"pm:p1"}"#,
-        )
-        .unwrap();
+        corral_core::records::RecordArea::new("pm")
+            .save(&self.ctx.store, "state", &json!({"pane_id":"pm:p1"}))
+            .unwrap();
     }
 
     fn flag(&self, name: &str) {
@@ -231,6 +229,19 @@ fn restarted_sync_resumes_after_the_last_successful_push() {
     fx.pm();
     fx.done("T-001");
     fx.sync();
+    let saved = fx
+        .ctx
+        .store
+        .record_row("pm-events", "state")
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.doc["doc_version"], 1);
+    assert!(!fx.ctx.store.state_dir().join("pm-events.json").exists());
+    std::fs::write(
+        fx.ctx.store.state_dir().join("pm-events.json"),
+        "invalid legacy cursor",
+    )
+    .unwrap();
     fx.done("T-002");
     let restarted = Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
@@ -364,7 +375,13 @@ fn unsubmitted_fallback_retains_cursor_and_retry_does_not_duplicate_composer() {
     assert_eq!(failed.detail["submitted"], false);
     assert_eq!(failed.detail["via"], "send_text");
     assert_eq!(failed.detail["attempts"], 1);
-    assert!(!fx.ctx.store.state_dir().join("pm-events.json").exists());
+    assert!(
+        fx.ctx
+            .store
+            .record_row("pm-events", "state")
+            .unwrap()
+            .is_none()
+    );
     std::fs::remove_file(fx.ctx.store.root().join("reject-enter")).unwrap();
 
     // When the next sync resumes after Enter is restored.

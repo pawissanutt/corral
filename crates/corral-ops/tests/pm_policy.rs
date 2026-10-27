@@ -88,11 +88,9 @@ impl Fx {
     }
 
     fn remember(&self, pane: &str) {
-        std::fs::write(
-            self.ctx.store.state_dir().join("pm.json"),
-            serde_json::to_vec(&json!({"pane_id":pane})).unwrap(),
-        )
-        .unwrap();
+        corral_core::records::RecordArea::new("pm")
+            .save(&self.ctx.store, "state", &json!({"pane_id":pane}))
+            .unwrap();
     }
 
     fn flag(&self, name: &str) {
@@ -186,7 +184,13 @@ fn live_reuse_saves_and_submits_current_scoped_policy_without_events() {
     );
     assert_eq!(fx.receipt("pm:p1")["current"], true);
     assert!(fx.calls(&["pane", "run"]).is_empty());
-    assert!(!fx.ctx.store.state_dir().join("pm-events.json").exists());
+    assert!(
+        fx.ctx
+            .store
+            .record_row("pm-events", "state")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -257,14 +261,14 @@ fn legacy_snapshot_fingerprint_does_not_trigger_an_upgrade_wake() {
     let fx = Fx::new();
     fx.remember("pm:p1");
     open_pm(&fx.ctx).unwrap();
-    let path = fx.ctx.store.state_dir().join("pm-policy.json");
-    let mut journal: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let area = corral_core::records::RecordArea::<Value>::new("pm-policy");
+    let mut journal = area.load(&fx.ctx.store, "state").unwrap().unwrap();
     let policy = &journal["panes"]["pm:p1"]["snapshot"];
     journal["panes"]["pm:p1"]["fingerprint"] = json!(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(policy).unwrap())
     ));
-    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    area.save(&fx.ctx.store, "state", &journal).unwrap();
     // When a fresh process reconciles the unchanged policy.
     reconcile_pm_policy(&fx.fresh(), true).unwrap();
     // Then compatibility uses the saved snapshot, not the obsolete digest.
@@ -278,14 +282,14 @@ fn legacy_collapsed_not_submitted_receipt_blocks_repeated_syncs() {
     let fx = Fx::new();
     fx.remember("pm:p1");
     open_pm(&fx.ctx).unwrap();
-    let path = fx.ctx.store.state_dir().join("pm-policy.json");
-    let mut journal: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let area = corral_core::records::RecordArea::<Value>::new("pm-policy");
+    let mut journal = area.load(&fx.ctx.store, "state").unwrap().unwrap();
     journal["panes"]["pm:p1"]["disposition"] = json!("not_submitted");
     journal["panes"]["pm:p1"]["delivery"] = json!({
         "via":"send_text", "submitted":false, "attempts":0,
         "error":"cannot verify collapsed paste in pane input; refusing another paste"
     });
-    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    area.save(&fx.ctx.store, "state", &journal).unwrap();
     // When the composer has cleared and several processes sync, even a newer policy.
     fx.ctx.store.pause_operating_policy(true).unwrap();
     for _ in 0..3 {
@@ -385,11 +389,11 @@ fn crash_submission_marker_survives_reopen_without_replay() {
     let fx = Fx::new();
     fx.remember("pm:p1");
     open_pm(&fx.ctx).unwrap();
-    let path = fx.ctx.store.state_dir().join("pm-policy.json");
-    let mut journal: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let area = corral_core::records::RecordArea::<Value>::new("pm-policy");
+    let mut journal = area.load(&fx.ctx.store, "state").unwrap().unwrap();
     journal["panes"]["pm:p1"]["disposition"] = json!("submitting");
     journal["panes"]["pm:p1"]["delivery"] = Value::Null;
-    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    area.save(&fx.ctx.store, "state", &journal).unwrap();
     // When another process reopens and runs the owning hook.
     reconcile_pm_policy(&fx.fresh(), true).unwrap();
     // Then the crash is uncertain, not evidence that a second submission is safe.
@@ -447,15 +451,26 @@ fn delivery_health_is_read_only_and_transport_free() {
     let fx = Fx::new();
     fx.remember("pm:p1");
     open_pm(&fx.ctx).unwrap();
-    let path = fx.ctx.store.state_dir().join("pm-policy.json");
-    let before = std::fs::read(&path).unwrap();
+    let before = fx
+        .ctx
+        .store
+        .record_row("pm-policy", "state")
+        .unwrap()
+        .unwrap();
     let calls = fx.lines("calls.jsonl");
     // When brief reads health repeatedly.
     let first = pm_policy_health(&fx.ctx).unwrap();
     let second = pm_policy_health(&fx.ctx).unwrap();
     // Then neither state nor transport was touched.
     assert_eq!(first, second);
-    assert_eq!(std::fs::read(path).unwrap(), before);
+    let after = fx
+        .ctx
+        .store
+        .record_row("pm-policy", "state")
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.doc, before.doc);
+    assert_eq!(after.version, before.version);
     assert_eq!(fx.lines("calls.jsonl"), calls);
 }
 
@@ -472,4 +487,80 @@ fn malformed_current_policy_never_sends_cached_authority() {
     // Then no cached grant is sent through either transport.
     assert!(fx.calls(&["agent", "prompt"]).is_empty());
     assert!(fx.calls(&["pane", "run"]).is_empty());
+}
+
+#[test]
+fn restart_uses_canonical_pm_and_policy_despite_conflicting_legacy_files() {
+    // Given a launched PM with confirmed policy and conflicting obsolete files.
+    let fx = Fx::new();
+    open_pm(&fx.ctx).unwrap();
+    let pm = fx.ctx.store.record_row("pm", "state").unwrap().unwrap();
+    let policy = fx
+        .ctx
+        .store
+        .record_row("pm-policy", "state")
+        .unwrap()
+        .unwrap();
+    assert_eq!(pm.doc["doc_version"], 1);
+    assert_eq!(policy.doc["doc_version"], 1);
+    assert!(!fx.ctx.store.state_dir().join("pm.json").exists());
+    assert!(!fx.ctx.store.state_dir().join("pm-policy.json").exists());
+    std::fs::write(
+        fx.ctx.store.state_dir().join("pm.json"),
+        r#"{"pane_id":"legacy:p9"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        fx.ctx.store.state_dir().join("pm-policy.json"),
+        r#"{"panes":{}}"#,
+    )
+    .unwrap();
+    // When a fresh process opens and reconciles.
+    let restarted = fx.fresh();
+    assert_eq!(open_pm(&restarted).unwrap(), "pm:p1");
+    reconcile_pm_policy(&restarted, true).unwrap();
+    // Then canonical state is unchanged, with no new launch or policy submission.
+    assert_eq!(fx.calls(&["pane", "run"]).len(), 1);
+    assert!(fx.calls(&["agent", "prompt"]).is_empty());
+    assert_eq!(
+        restarted
+            .store
+            .record_row("pm", "state")
+            .unwrap()
+            .unwrap()
+            .doc,
+        pm.doc
+    );
+    assert_eq!(
+        restarted
+            .store
+            .record_row("pm-policy", "state")
+            .unwrap()
+            .unwrap()
+            .doc,
+        policy.doc
+    );
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
+}
+
+#[test]
+fn legacy_pm_and_policy_files_do_not_supply_missing_records() {
+    // Given legacy-only state claiming an existing PM.
+    let fx = Fx::new();
+    std::fs::write(
+        fx.ctx.store.state_dir().join("pm.json"),
+        r#"{"pane_id":"legacy:p9"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        fx.ctx.store.state_dir().join("pm-policy.json"),
+        "invalid legacy policy",
+    )
+    .unwrap();
+    // When opening the PM from a fresh process.
+    assert_eq!(open_pm(&fx.fresh()).unwrap(), "pm:p1");
+    // Then missing canonical state starts a new PM instead of trusting legacy authority.
+    assert_eq!(fx.calls(&["pane", "run"]).len(), 1);
+    assert!(fx.calls(&["agent", "prompt"]).is_empty());
+    assert_eq!(fx.receipt("pm:p1")["current"], true);
 }

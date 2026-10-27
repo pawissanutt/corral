@@ -1,13 +1,13 @@
 //! Opt-in event delivery to the workspace's remembered PM, shared by every sync caller.
 
-use std::io::ErrorKind;
-use std::path::Path;
-
 use anyhow::{Context, Result, bail};
+use corral_core::records::RecordArea;
 use corral_core::{EventCursor, actionable_kind, format_event_line};
 use serde_json::json;
 
 use crate::Ctx;
+
+const STATE: RecordArea<EventCursor> = RecordArea::new("pm-events");
 
 /// Serialize delivery across board workers, hooks, and `sync --watch`.
 ///
@@ -18,27 +18,21 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("pm-events")? else {
         return Ok(());
     };
-    let state = ctx.store.state_dir().join("pm-events.json");
     let pane = if ctx.store.config.pm.push_events && herdr_available {
         crate::pm::live_pm_pane(ctx)?
     } else {
         None
     };
     let Some(pane) = pane else {
-        return save_cursor(&state, ctx.store.events_since(None)?.cursor());
+        return save_cursor(ctx, ctx.store.events_since(None)?.cursor());
     };
-    let cursor = match std::fs::read(&state) {
-        Ok(bytes) => serde_json::from_slice::<EventCursor>(&bytes)
-            .with_context(|| format!("parsing {}", state.display()))?,
-        Err(err) if err.kind() == ErrorKind::NotFound => EventCursor::default(),
-        Err(err) => return Err(err).with_context(|| format!("reading {}", state.display())),
-    };
+    let cursor = STATE.load(&ctx.store, "state")?.unwrap_or_default();
     let mut reader = ctx.store.events_since(Some(cursor))?;
     // Bound one sync's work even when producers are continuously appending.
     for _ in 0..256 {
         let before = reader.read_position();
         let Some((event, cursor)) = reader.next_event()? else {
-            save_cursor(&state, reader.cursor())?;
+            save_cursor(ctx, reader.cursor())?;
             if reader.read_position() == before {
                 break;
             }
@@ -72,14 +66,11 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
                 );
             }
         }
-        save_cursor(&state, &cursor)?;
+        save_cursor(ctx, &cursor)?;
     }
     Ok(())
 }
 
-fn save_cursor(path: &Path, cursor: &EventCursor) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec(cursor).context("serializing PM event cursor")?;
-    std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("saving {}", path.display()))
+fn save_cursor(ctx: &Ctx, cursor: &EventCursor) -> Result<()> {
+    STATE.save(&ctx.store, "state", cursor)
 }

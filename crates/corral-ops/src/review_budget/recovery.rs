@@ -221,10 +221,5 @@ impl ReviewLaunch<'_> {
 }
 
 pub(super) fn clear_retained(ctx: &Ctx, pending: &Pending) -> Result<()> {
-    let path = submission::retained_path(ctx, &pending.task, &pending.run, pending.kind);
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).context("clearing submitted auxiliary preparation"),
-    }
+    submission::clear_retained(ctx, &pending.task, &pending.run, pending.kind)
 }

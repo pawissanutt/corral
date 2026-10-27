@@ -172,12 +172,7 @@ fn interrupted(
     // publication not started. This is deterministic persisted-state injection.
     record.disposition = disposition;
     let ctx = replace_proof(ctx, &record);
-    std::fs::remove_file(
-        ctx.store
-            .state_dir()
-            .join(format!("plan-decompose-{id}.json")),
-    )
-    .unwrap();
+    ctx.store.delete_record("plan-decompose", &id).unwrap();
     ctx.store
         .update(&id, |task| {
             task.plan = None;

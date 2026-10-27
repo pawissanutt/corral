@@ -307,7 +307,7 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     };
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
-    let dir = ctx.store.state_dir();
+    let dir = ctx.store.cache_root()?;
     fs::create_dir_all(&dir).context("creating search state directory")?;
     let lock = fs::OpenOptions::new()
         .create(true)

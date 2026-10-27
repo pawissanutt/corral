@@ -324,15 +324,13 @@ fn markdown_images_keep_their_alt_text_as_an_attribute() {
 fn the_server_stops_when_idle_and_removes_its_state() {
     // Given a server with a short idle timeout and no clients.
     let s = start(Duration::from_millis(100));
-    assert!(state_path(&s.ctx).is_file());
-
     // When nothing connects, then it exits on its own and its state file is gone.
     s.done.recv_timeout(WAIT).unwrap().unwrap();
-    assert!(!state_path(&s.ctx).exists());
+    assert_eq!(read_state(&s.ctx).unwrap(), None);
 }
 
 #[test]
-fn the_running_server_is_found_reused_and_stopped_through_its_state_file() {
+fn the_running_server_is_found_reused_and_stopped_through_its_record() {
     // Given a running server.
     let s = start(DEFAULT_IDLE);
 
@@ -345,6 +343,170 @@ fn the_running_server_is_found_reused_and_stopped_through_its_state_file() {
     s.done.recv_timeout(WAIT).unwrap().unwrap();
     assert_eq!(running_server(&s.ctx), None);
     assert!(!stop_server(&s.ctx).unwrap());
+}
+
+#[test]
+fn registration_survives_reopen_without_legacy_control_files() {
+    let s = start(DEFAULT_IDLE);
+    let mut reopened = s.ctx.clone();
+    reopened.store = Store::open(s._root.path()).unwrap();
+    let row = reopened
+        .store
+        .record_row("artifact-server", LIVE_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.doc["doc_version"], 1);
+    assert_eq!(row.doc["value"], serde_json::to_value(&s.info).unwrap());
+    assert_eq!(running_server(&reopened), Some(s.info.clone()));
+    assert!(
+        !s.ctx
+            .store
+            .state_dir()
+            .join("artifact-server.json")
+            .exists()
+    );
+    assert!(
+        !s.ctx
+            .store
+            .state_dir()
+            .join("artifact-server.lock")
+            .exists()
+    );
+    assert!(
+        s.ctx
+            .store
+            .dir()
+            .join("lock/artifact-server-live.lock")
+            .is_file()
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(s.ctx.store.dir().join("db"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(
+            mode & 0o777,
+            0o700,
+            "token and SQLite sidecars stay private"
+        );
+    }
+    assert!(stop_server(&reopened).unwrap());
+    s.done.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!(read_state(&reopened).unwrap(), None);
+}
+
+#[test]
+fn a_second_daemon_is_refused_without_replacing_the_registration() {
+    let s = start(DEFAULT_IDLE);
+    let error = run_server(s.ctx.clone(), DEFAULT_IDLE, |_| {
+        panic!("a second daemon must not become ready");
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("workspace lease"), "{error:#}");
+    assert_eq!(read_state(&s.ctx).unwrap(), Some(s.info.clone()));
+    assert!(stop_server(&s.ctx).unwrap());
+    s.done.recv_timeout(WAIT).unwrap().unwrap();
+    assert!(
+        s.ctx
+            .store
+            .try_lock("artifact-server-live")
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn stale_registration_is_replaced_and_failed_ready_cleans_up() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(root.path()).unwrap());
+    let stale = ServerInfo {
+        port: 0,
+        token: "stale".into(),
+        pid: 0,
+    };
+    write_state(&ctx, &stale).unwrap();
+    let mut reopened = ctx.clone();
+    reopened.store = Store::open(root.path()).unwrap();
+    let error = run_server(reopened.clone(), DEFAULT_IDLE, |info| {
+        assert_ne!(info, &stale);
+        assert_eq!(read_state(&reopened).unwrap().as_ref(), Some(info));
+        bail!("ready consumer disconnected")
+    })
+    .unwrap_err();
+    assert!(error.to_string().contains("ready consumer disconnected"));
+    assert_eq!(read_state(&ctx).unwrap(), None);
+    assert!(
+        ctx.store
+            .try_lock("artifact-server-live")
+            .unwrap()
+            .is_some()
+    );
+    // A failed ready callback does not strand either registration or lease.
+    run_server(ctx.clone(), DEFAULT_IDLE, |_| bail!("second ready")).unwrap_err();
+    assert_eq!(read_state(&ctx).unwrap(), None);
+}
+
+#[test]
+fn invalid_registration_is_refused_and_legacy_state_is_not_a_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(root.path()).unwrap());
+    std::fs::write(ctx.store.state_dir().join("artifact-server.json"), "{}").unwrap();
+    assert_eq!(read_state(&ctx).unwrap(), None);
+    for doc in [
+        serde_json::json!({"doc_version": 2, "value": {"port": 0, "token": "secret", "pid": 0}}),
+        serde_json::json!({"doc_version": 1, "value": {}}),
+    ] {
+        ctx.store
+            .save_record("artifact-server", LIVE_KEY, &doc)
+            .unwrap();
+        assert!(ensure_server(&ctx).is_err());
+        assert!(run_server(ctx.clone(), DEFAULT_IDLE, |_| panic!("invalid state")).is_err());
+        assert_eq!(
+            ctx.store
+                .record_row("artifact-server", LIVE_KEY)
+                .unwrap()
+                .unwrap()
+                .doc,
+            doc
+        );
+    }
+}
+
+#[test]
+fn registration_intent_survives_callback_refusal_and_cleanup_preserves_successor() {
+    let root = tempfile::tempdir().unwrap();
+    let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(root.path()).unwrap());
+    let task = ctx
+        .store
+        .create("Refusal", None, Status::Ready, "")
+        .unwrap();
+    let info = ServerInfo {
+        port: 0,
+        token: "intent".into(),
+        pid: 0,
+    };
+    assert!(
+        ctx.store
+            .try_update(&task.id, |_| {
+                write_state(&ctx, &info)?;
+                Ok(false)
+            })
+            .unwrap()
+            .is_none()
+    );
+    let mut reopened = ctx.clone();
+    reopened.store = Store::open(root.path()).unwrap();
+    assert_eq!(read_state(&reopened).unwrap(), Some(info.clone()));
+    let successor = ServerInfo {
+        token: "successor".into(),
+        ..info.clone()
+    };
+    write_state(&reopened, &successor).unwrap();
+    clear_state(&reopened, &info).unwrap();
+    assert_eq!(read_state(&reopened).unwrap(), Some(successor));
+    STATE.delete(&reopened.store, LIVE_KEY).unwrap();
 }
 
 #[test]

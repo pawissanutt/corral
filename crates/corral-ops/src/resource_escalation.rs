@@ -2,6 +2,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use corral_core::records::RecordArea;
 use corral_core::{Status, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,8 @@ struct Alert {
     message: String,
 }
 
+const ALERTS: RecordArea<Alert> = RecordArea::new("resource-alert");
+
 #[derive(Debug, Serialize)]
 struct TaskSize {
     task: String,
@@ -33,14 +36,7 @@ struct TaskSize {
 }
 
 fn read(ctx: &Ctx) -> Result<Option<Alert>> {
-    let path = ctx.store.state_dir().join("resource-alert.json");
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
+    ALERTS.load(&ctx.store, "state")
 }
 
 /// Keep the attention card visible even if herdr still reports its agent as working.
@@ -58,7 +54,6 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
     let Some(_lock) = ctx.store.try_lock("resource-alert")? else {
         return Ok(Vec::new());
     };
-    let path = ctx.store.state_dir().join("resource-alert.json");
     let previous = read(ctx)?;
     if !state.severe {
         let Some(previous) = previous else {
@@ -91,7 +86,7 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
                 });
             }
         }
-        std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        ALERTS.delete(&ctx.store, "state")?;
         ctx.store
             .log_event(None, "resources_cleared", json!({"at": now}))?;
         return Ok(changes);
@@ -194,10 +189,7 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         .into_iter()
         .collect();
     let alert = Alert { attention, message };
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(&alert)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))?;
+    ALERTS.save(&ctx.store, "state", &alert)?;
     ctx.store.log_event(
         alert.attention.as_ref().map(|a| a.task.as_str()),
         "escalated",

@@ -68,7 +68,12 @@ impl Fixture {
     }
 
     fn cached(&self, token: &str) -> bool {
-        let path = self.ctx.store.state_dir().join("content-search.json");
+        let path = self
+            .ctx
+            .store
+            .cache_root()
+            .unwrap()
+            .join("content-search.json");
         let cache: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         cache["documents"]
             .as_object()
@@ -89,10 +94,21 @@ fn unchanged_refresh_skips_snapshot_and_preserves_index_files() {
     // Given a successful refresh, including its persisted fingerprint.
     let f = Fixture::new();
     f.refresh();
-    let index = f.ctx.store.state_dir().join("content-search.json");
+    let index = f
+        .ctx
+        .store
+        .cache_root()
+        .unwrap()
+        .join("content-search.json");
     let stamp = file_stamp(&index).unwrap();
-    let fingerprint =
-        file_stamp(&f.ctx.store.state_dir().join("content-search.fingerprint")).unwrap();
+    let fingerprint = file_stamp(
+        &f.ctx
+            .store
+            .cache_root()
+            .unwrap()
+            .join("content-search.fingerprint"),
+    )
+    .unwrap();
     let before = SNAPSHOTS.get();
 
     // When refreshing with the same task listing and a reopened context.
@@ -102,7 +118,14 @@ fn unchanged_refresh_skips_snapshot_and_preserves_index_files() {
     assert_eq!(SNAPSHOTS.get(), before);
     assert_eq!(file_stamp(&index).unwrap(), stamp);
     assert_eq!(
-        file_stamp(&f.ctx.store.state_dir().join("content-search.fingerprint")).unwrap(),
+        file_stamp(
+            &f.ctx
+                .store
+                .cache_root()
+                .unwrap()
+                .join("content-search.fingerprint")
+        )
+        .unwrap(),
         fingerprint
     );
 }

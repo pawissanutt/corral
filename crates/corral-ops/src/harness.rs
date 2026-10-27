@@ -2,7 +2,7 @@
 //! `--version`), which models each can use, and which effort levels its flag map accepts.
 //!
 //! Probes run as argv subprocesses (never a shell) with a timeout. Results are cached in
-//! `.corral/state/harnesses.json`; `harness_report(ctx, true)` re-detects. Model listing:
+//! `<cache_root>/harnesses.json`; `harness_report(ctx, true)` re-detects. Model listing:
 //! omo `--list-models` (table), omp `models --json`, claude a built-in alias list. A failed or
 //! unparseable listing degrades to free-text model entry with a note, never an error.
 
@@ -25,7 +25,7 @@ pub(crate) use availability::preferred_omo_models;
 #[cfg(test)]
 mod tests;
 
-/// Cache file name under `.corral/state/`.
+/// Cache file name under the validated cache root.
 pub const HARNESS_CACHE_FILE: &str = "harnesses.json";
 /// Model aliases the claude CLI accepts for `--model`.
 pub const CLAUDE_MODEL_ALIASES: [&str; 3] = ["opus", "sonnet", "haiku"];
@@ -96,7 +96,7 @@ pub fn harness_report(ctx: &Ctx, refresh: bool) -> Result<HarnessReport> {
     if !refresh && let Some(report) = cached_harness_report(ctx) {
         return Ok(report);
     }
-    let path = ctx.store.state_dir().join(HARNESS_CACHE_FILE);
+    let path = ctx.store.cache_root()?.join(HARNESS_CACHE_FILE);
     let report = HarnessReport {
         detected_at: Timestamp::now(),
         harnesses: detect_harnesses(config),
@@ -109,7 +109,10 @@ pub fn harness_report(ctx: &Ctx, refresh: bool) -> Result<HarnessReport> {
 /// levels from the current config; `None` when detection has to run.
 pub fn cached_harness_report(ctx: &Ctx) -> Option<HarnessReport> {
     let config = &ctx.store.config;
-    let mut report = read_cache(&ctx.store.state_dir().join(HARNESS_CACHE_FILE), config)?;
+    let mut report = read_cache(
+        &ctx.store.cache_root().ok()?.join(HARNESS_CACHE_FILE),
+        config,
+    )?;
     for h in &mut report.harnesses {
         apply_efforts(h, config);
     }

@@ -409,6 +409,16 @@ fn assert_refused(fx: &Fx, o: &RequestOrigin, attempt_id: &str, (code, binding):
     assert_eq!(fx.calls("pane run"), 0);
 }
 
+fn assert_retained_request(fx: &Fx, o: &RequestOrigin) {
+    let fresh = corral_core::Store::open(fx.root()).unwrap();
+    let journal = fresh
+        .record::<Value>("review-prepared", &format!("{}-R1-gate", fx.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(journal["doc_version"], 1);
+    assert_eq!(journal["value"]["refused_request"], o.request_id);
+}
+
 #[test]
 fn a_fence_released_into_the_submission_boundary_refuses_on_all_three_paths() {
     let cases = [
@@ -440,6 +450,7 @@ fn a_fence_released_into_the_submission_boundary_refuses_on_all_three_paths() {
         exec.release();
         assert_eq!(exec.finish()["state"], "rejected", "{way:?} {ending:?}");
         assert_refused(&fx, &o, &own, expected);
+        assert_retained_request(&fx, &o);
     }
 }
 
@@ -458,6 +469,9 @@ fn an_executor_killed_after_the_durable_refusal_is_settled_by_reconciliation() {
             assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Reserved);
             reconcile(&fx);
             assert_refused(&fx, &o, &own, expected);
+            if point == "gate_refused_before_receipt" {
+                assert_retained_request(&fx, &o);
+            }
         }
     }
     for (point, attributed) in [

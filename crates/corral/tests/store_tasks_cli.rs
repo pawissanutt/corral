@@ -134,7 +134,7 @@ fn edit_refuses_a_task_changed_meanwhile_and_keeps_the_edited_text() {
         stderr.contains("task changed while editor was open"),
         "{stderr}"
     );
-    let kept = dir.path().join(".corral/state/edit-T-001.md");
+    let kept = dir.path().join(".corral/state/tmp/edit-T-001.md");
     assert!(stderr.contains(&kept.display().to_string()), "{stderr}");
     assert!(
         std::fs::read_to_string(&kept)
@@ -144,6 +144,50 @@ fn edit_refuses_a_task_changed_meanwhile_and_keeps_the_edited_text() {
     let stored = store.get(&task.id).unwrap();
     assert_eq!(stored.title, "Original");
     assert_eq!(stored.comments.last().unwrap().text, "meanwhile");
+    let reopened = Store::open_unobserved(dir.path()).unwrap();
+    let draft = reopened
+        .record::<Value>("edit-drafts", &task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(draft["doc_version"], 1);
+    assert_eq!(
+        Store::parse_task_markdown(draft["value"]["text"].as_str().unwrap())
+            .unwrap()
+            .title,
+        "Edited"
+    );
+}
+
+#[test]
+fn edit_resumes_failed_editor_draft_after_restart_without_scratch() {
+    // Given an editor which changes the draft but exits without applying it.
+    let (dir, store) = workspace();
+    let task = store
+        .create("Original", None, Status::Backlog, "Body\n")
+        .unwrap();
+    let script = editor(
+        dir.path(),
+        "sed -i 's/^  title: .*/  title: Recovered/' \"$1\"\nexit 1",
+    );
+    let out = command(dir.path(), &["edit", &task.id])
+        .env("EDITOR", script)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    std::fs::remove_file(dir.path().join(".corral/state/tmp/edit-T-001.md")).unwrap();
+    let script = editor(dir.path(), "exit 0");
+
+    // When another CLI process resumes the edit with no scratch copy.
+    let out = command(dir.path(), &["edit", &task.id])
+        .env("EDITOR", script)
+        .output()
+        .unwrap();
+
+    // Then the canonical draft is recovered and removed after successful application.
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(store.get(&task.id).unwrap().title, "Recovered");
+    assert!(store.record_row("edit-drafts", &task.id).unwrap().is_none());
+    assert!(!dir.path().join(".corral/state/edit-T-001.md").exists());
 }
 
 #[test]

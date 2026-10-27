@@ -164,15 +164,10 @@ fn a_session_created_during_launch_is_owned_by_the_dispatched_run() {
     let created: Timestamp = header["timestamp"].as_str().unwrap().parse().unwrap();
     assert_eq!(created, prepared_at);
     assert!(created < run.started, "{created} !< {}", run.started);
-    let boundary: Timestamp = std::fs::read_to_string(
-        ctx.store
-            .state_dir()
-            .join("provider-stall")
-            .join(format!("{}-{}.launch", task.id, run.id)),
-    )
-    .unwrap()
-    .parse()
-    .unwrap();
+    let boundary = corral_core::records::RecordArea::<Timestamp>::new("provider-session")
+        .load(&ctx.store, &format!("{}-{}", task.id, run.id))
+        .unwrap()
+        .unwrap();
     assert_eq!(created, boundary);
 
     let fixture = format!(

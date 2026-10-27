@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::OperatingPresentation;
+use corral_core::records::RecordArea;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -12,9 +13,10 @@ use crate::pm_workset::PmDecision;
 
 #[derive(Default, Serialize, Deserialize)]
 struct Decisions {
-    version: u32,
     records: BTreeMap<String, Record>,
 }
+
+const STATE: RecordArea<Decisions> = RecordArea::new("pm-decisions");
 
 #[derive(Serialize, Deserialize)]
 struct Record {
@@ -23,25 +25,11 @@ struct Record {
 }
 
 fn read(ctx: &Ctx) -> Result<Decisions> {
-    let path = ctx.store.state_dir().join("pm-decisions.json");
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            let records: Decisions =
-                serde_json::from_slice(&bytes).context("parsing workspace PM decisions")?;
-            ensure!(records.version == 1, "unsupported PM decision state");
-            Ok(records)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Decisions {
-            version: 1,
-            ..Default::default()
-        }),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
+    Ok(STATE.load(&ctx.store, "state")?.unwrap_or_default())
 }
 
 fn save(ctx: &Ctx, records: &Decisions) -> Result<()> {
-    let path = ctx.store.state_dir().join("pm-decisions.json");
-    crate::pm_policy::write_atomic(&path, &serde_json::to_vec(records)?)
+    STATE.save(&ctx.store, "state", records)
 }
 
 pub(crate) fn workspace_decision(ctx: &Ctx, action: PmAction) -> Result<Option<PmDecision>> {

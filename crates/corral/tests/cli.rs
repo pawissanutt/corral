@@ -644,7 +644,9 @@ fn plugin_install_print_writes_manifest() {
         out.contains("prefix+k") && out.contains("corral.board"),
         "{out}"
     );
-    let manifest = ws.root.join(".corral/state/herdr-plugin/herdr-plugin.toml");
+    let manifest = ws
+        .root
+        .join(".corral/state/tmp/herdr-plugin/herdr-plugin.toml");
     let text = std::fs::read_to_string(&manifest).expect("manifest exists");
     let v: toml::Value = toml::from_str(&text).expect("valid toml");
     assert_eq!(v["id"].as_str(), Some("corral"));
@@ -656,6 +658,18 @@ fn plugin_install_print_writes_manifest() {
     let exe = v["events"][0]["command"][0].as_str().expect("exe");
     assert!(Path::new(exe).is_absolute(), "{exe}");
     assert_eq!(v["events"][0]["command"][3].as_str(), Some("hook"));
+    let store = corral_core::Store::open_unobserved(&ws.root).unwrap();
+    let record = store
+        .record::<serde_json::Value>("herdr-plugin", "manifest")
+        .unwrap()
+        .unwrap();
+    assert_eq!(record["doc_version"], 1);
+    assert_eq!(record["value"]["text"].as_str(), Some(text.as_str()));
+    // Materialized files can be lost and recreated from a fresh command.
+    std::fs::remove_file(&manifest).unwrap();
+    ok(&ws.root, &["plugin", "install", "--print"]);
+    assert_eq!(std::fs::read_to_string(manifest).unwrap(), text);
+    assert!(!ws.root.join(".corral/state/herdr-plugin").exists());
 }
 
 #[test]

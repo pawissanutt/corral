@@ -8,6 +8,9 @@ use sha2::{Digest, Sha256};
 
 use crate::gate_tier::GatePhase;
 use crate::{Ctx, verification};
+use corral_core::records::RecordArea;
+
+const PACKETS: RecordArea<IntegrationPacket> = RecordArea::new("integration");
 
 mod size_limits;
 pub(crate) use size_limits::effective_size_limits;
@@ -276,9 +279,11 @@ impl IntegrationPacket {
 
     pub fn attach(&self, ctx: &Ctx) -> Result<Artifact> {
         let digest = self.key.digest()?;
+        PACKETS.save(&ctx.store, &digest, self)?;
         let file = ctx
             .store
             .state_dir()
+            .join("tmp")
             .join("integration")
             .join(format!("{digest}.json"));
         std::fs::create_dir_all(

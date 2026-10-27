@@ -1,16 +1,18 @@
 //! Machine observations and persisted admission hysteresis; no escalation side effects.
 use std::fmt::Debug;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use corral_core::Store;
+use corral_core::records::RecordArea;
 pub use corral_core::{DiskSpace, ResourceSnapshot, ResourceState};
 use jiff::Timestamp;
 
 use crate::Ctx;
+
+const OBSERVATIONS: RecordArea<ResourceState> = RecordArea::new("resources");
 
 mod system;
 pub use system::SystemResourceProbe;
@@ -68,25 +70,14 @@ pub fn observe(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
         .with_context(|| format!("opening {}", lock_path.display()))?;
     lock.lock().context("locking resource observations")?;
     let state = evaluate(ctx, now)?;
-    let path = ctx.store.state_dir().join("resources.json");
-    fs::create_dir_all(ctx.store.state_dir()).context("creating resource state directory")?;
-    let mut tmp = tempfile::NamedTempFile::new_in(ctx.store.state_dir())
-        .context("creating temporary resource state")?;
-    serde_json::to_writer(&mut tmp, &state).context("serializing resource state")?;
-    tmp.flush().context("flushing resource state")?;
-    tmp.persist(&path).context("persisting resource state")?;
+    OBSERVATIONS.save(&ctx.store, "state", &state)?;
     // Closing this non-inherited descriptor releases its advisory lock.
     drop(lock);
     Ok(state)
 }
 
 fn evaluate(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
-    let path = ctx.store.state_dir().join("resources.json");
-    let previous: Option<ResourceState> = match fs::read(&path) {
-        Ok(bytes) => Some(serde_json::from_slice(&bytes).context("parsing resource state")?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("reading resource state"),
-    };
+    let previous = OBSERVATIONS.load(&ctx.store, "state")?;
     let snapshot = ctx.resource_probe.sample(&ctx.store)?;
     let cfg = &ctx.store.config.resources;
     let min_mem = cfg.min_mem_bytes()?;

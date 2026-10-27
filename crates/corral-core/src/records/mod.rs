@@ -3,10 +3,10 @@
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
-use crate::backend::{PageReq, RecordQuery, RecordWrite, StoredRecord};
 use crate::Store;
+use crate::backend::{PageReq, RecordQuery, RecordWrite, StoredRecord};
 
 mod area;
 pub use area::RecordArea;

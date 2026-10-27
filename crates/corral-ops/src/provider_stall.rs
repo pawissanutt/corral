@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+use corral_core::records::RecordArea;
 use corral_core::{AvailabilityClass, Run, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
@@ -245,25 +246,14 @@ pub(crate) fn advance_state(
     Step::Escalate
 }
 
-fn state_path(ctx: &Ctx, key: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("provider-stall")
-        .join(format!("{key}.json"))
-}
+const STALLS: RecordArea<State> = RecordArea::new("provider-stall");
 
 fn load(ctx: &Ctx, key: &str) -> Option<State> {
-    serde_json::from_slice(&std::fs::read(state_path(ctx, key)).ok()?).ok()
+    STALLS.load(&ctx.store, key).ok().flatten()
 }
 
 fn save(ctx: &Ctx, key: &str, state: &State) -> Result<()> {
-    let path = state_path(ctx, key);
-    let dir = path.parent().context("state path has no parent")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(state)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
+    STALLS.save(&ctx.store, key, state)
 }
 
 /// Stalled and still inside its retry budget, or continuing on an approved fallback:
@@ -413,7 +403,7 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
     let deferred = governed && step == Step::Escalate;
     match (&before, &state) {
         (Some(_), None) => {
-            let _ = std::fs::remove_file(state_path(ctx, target.key));
+            STALLS.delete(&ctx.store, target.key)?;
             if let Some(episode) = episode {
                 crate::availability::recovered(ctx, episode, now)?;
             }

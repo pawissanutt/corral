@@ -145,7 +145,13 @@ fn availability_prefers_configured_settings_and_authenticated_providers() {
 
     // Then settings win over discovery, with unique, sorted authenticated selectors.
     assert_eq!(models, Some(vec!["api/model".into(), "oauth/model".into()]));
-    assert!(!ctx.store.state_dir().join(HARNESS_CACHE_FILE).exists());
+    assert!(
+        !ctx.store
+            .cache_root()
+            .unwrap()
+            .join(HARNESS_CACHE_FILE)
+            .exists()
+    );
 }
 
 #[test]
@@ -296,6 +302,7 @@ fn detects_fake_harnesses_degrades_and_caches() {
     let root = tmp.path().join("ws");
     std::fs::create_dir_all(&root).expect("ws dir");
     let mut store = Store::init(&root).expect("init store");
+    store.config.storage.cache_root = Some(root.join("cache"));
     let harnesses = &mut store.config.harnesses;
     harnesses.clear();
     harnesses.insert(
@@ -356,7 +363,7 @@ fn detects_fake_harnesses_degrades_and_caches() {
     assert_eq!(generic.model_source, ModelSource::None);
     assert!(!generic.takes_effort);
 
-    let cache = ctx.store.state_dir().join(HARNESS_CACHE_FILE);
+    let cache = ctx.store.cache_root().unwrap().join(HARNESS_CACHE_FILE);
     let mut cached: HarnessReport =
         serde_json::from_str(&std::fs::read_to_string(&cache).expect("cache")).expect("json");
     assert_eq!(cached, report);
@@ -373,6 +380,12 @@ fn detects_fake_harnesses_degrades_and_caches() {
         fresh.get("omo").and_then(|h| h.version.as_deref()),
         Some("5.1.33")
     );
+    // Deleting disposable discovery data changes only detection time, not its report.
+    std::fs::remove_dir_all(ctx.store.cache_root().unwrap()).expect("remove cache root");
+    assert!(cached_harness_report(&ctx).is_none());
+    let rebuilt = harness_report(&ctx, false).expect("rebuild");
+    assert_eq!(rebuilt.harnesses, fresh.harnesses);
+    assert!(!ctx.store.state_dir().join(HARNESS_CACHE_FILE).exists());
 
     let mut moved = ctx.clone();
     moved.store.config.harnesses.insert(

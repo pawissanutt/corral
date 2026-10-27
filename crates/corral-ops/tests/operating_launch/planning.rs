@@ -115,13 +115,12 @@ fn concrete_planning_paths_refuse_every_revocation_and_collect_running_receipts(
                     }
                     Path::Reviewer => {
                         assert!(retained.plans[0].reviews.is_empty());
-                        let journal = fx
-                            .ctx
-                            .store
-                            .state_dir()
-                            .join(format!("plan-review-{}-P1.json", task.id));
-                        let pending: serde_json::Value =
-                            serde_json::from_slice(&std::fs::read(journal).unwrap()).unwrap();
+                        let pending = corral_core::records::RecordArea::<serde_json::Value>::new(
+                            "plan-review-prepared",
+                        )
+                        .load(&fx.fresh().store, &format!("{}-P1", task.id))
+                        .unwrap()
+                        .unwrap();
                         assert_eq!(pending["review"]["id"], "PR1");
                         assert!(pending["review"]["pending_reply"].is_string());
                         assert!(pending["review"]["herdr"].is_object());

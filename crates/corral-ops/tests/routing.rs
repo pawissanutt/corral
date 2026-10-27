@@ -73,7 +73,8 @@ fn routing_uses_enabled_authenticated_models_without_probing_harnesses() {
     assert_eq!(decision.review.reviewer.selection, "none");
     assert!(
         !ctx.store
-            .state_dir()
+            .cache_root()
+            .unwrap()
             .join(corral_ops::HARNESS_CACHE_FILE)
             .exists()
     );

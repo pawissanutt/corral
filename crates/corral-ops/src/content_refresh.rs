@@ -167,9 +167,10 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
 /// are read on an unchanged refresh. Missing indexes are always rebuilt.
 pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> {
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
-    let path = ctx.store.state_dir().join("content-search.fingerprint");
+    let root = ctx.store.cache_root()?;
+    let path = root.join("content-search.fingerprint");
     let inputs = fingerprint(ctx, tasks)?;
-    let index = ctx.store.state_dir().join("content-search.json");
+    let index = root.join("content-search.json");
     // Another snapshot writer (including explicit reindex) invalidates our observation.
     let current = format!("{inputs}\n{}", file_stamp(&index)?);
     let previous = match fs::read_to_string(&path) {
@@ -186,8 +187,9 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> 
 
 /// Successful refreshes and reindexes publish while holding the index lock.
 pub(crate) fn record_build(ctx: &Ctx, inputs: &str) -> Result<()> {
-    let path = ctx.store.state_dir().join("content-search.fingerprint");
-    let index = ctx.store.state_dir().join("content-search.json");
+    let root = ctx.store.cache_root()?;
+    let path = root.join("content-search.fingerprint");
+    let index = root.join("content-search.json");
     let built = format!("{inputs}\n{}", file_stamp(&index)?);
     crate::artifact_storage::replace(&path, built.as_bytes())
 }

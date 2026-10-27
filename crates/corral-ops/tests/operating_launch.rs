@@ -460,17 +460,11 @@ fn concrete_gate_and_profile_reviewer_refuse_all_revocations_and_reuse_preparati
                 } else {
                     "review"
                 };
-                let retained: serde_json::Value = serde_json::from_slice(
-                    &std::fs::read(
-                        fx.ctx
-                            .store
-                            .state_dir()
-                            .join("review-prepared")
-                            .join(format!("{}-R1-{key}.json", task.id)),
-                    )
-                    .unwrap(),
-                )
-                .unwrap();
+                let retained =
+                    corral_core::records::RecordArea::<serde_json::Value>::new("review-prepared")
+                        .load(&fx.fresh().store, &format!("{}-R1-{key}", task.id))
+                        .unwrap()
+                        .unwrap();
                 assert_eq!(retained["submitted"], false);
                 assert_eq!(retained["authorization"]["id"], original.authorization.id);
                 assert_eq!(retained["pane"], record_pane.unwrap());

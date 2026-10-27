@@ -31,7 +31,7 @@ if [ "$1" = "--session" ]; then shift 2; fi
 case "$1 $2" in
   "plugin list")
     if [ -e "$dir/linked" ]; then
-      printf '{"result":{"plugins":[{"plugin_id":"corral","enabled":true,"manifest_path":"%s/.corral/state/herdr-plugin/herdr-plugin.toml"}]}}\n' "$FAKE_ROOT"
+      printf '{"result":{"plugins":[{"plugin_id":"corral","enabled":true,"manifest_path":"%s/.corral/state/tmp/herdr-plugin/herdr-plugin.toml"}]}}\n' "$FAKE_ROOT"
     else printf '%s\n' '{"result":{"plugins":[]}}'; fi ;;
   "plugin link")
     if [ "${FAKE_PLUGIN_FAIL:-}" = 1 ]; then

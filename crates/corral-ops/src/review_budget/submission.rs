@@ -1,9 +1,12 @@
 //! The auxiliary journal distinguishes prepared attachments from command submissions.
 use anyhow::{Context, Result, ensure};
+use corral_core::records::RecordArea;
 use corral_core::{CandidateIdentity, OperatingActionKind, Store, SubmissionDisposition, Task};
 
 use super::{Kind, Pending, ReviewLaunch, clear, save};
 use crate::{Ctx, operating};
+
+const PREPARED: RecordArea<Pending> = RecordArea::new("review-prepared");
 
 pub(super) fn action_kind(kind: Kind) -> OperatingActionKind {
     match kind {
@@ -12,15 +15,16 @@ pub(super) fn action_kind(kind: Kind) -> OperatingActionKind {
     }
 }
 
-pub(super) fn retained_path(ctx: &Ctx, task: &str, run: &str, kind: Kind) -> std::path::PathBuf {
-    let key = match kind {
+pub(super) fn clear_retained(ctx: &Ctx, task: &str, run: &str, kind: Kind) -> Result<()> {
+    PREPARED.delete(&ctx.store, &retained_key(task, run, kind))
+}
+
+fn retained_key(task: &str, run: &str, kind: Kind) -> String {
+    let kind = match kind {
         Kind::Gate => "gate",
         Kind::Reviewer => "review",
     };
-    ctx.store
-        .state_dir()
-        .join("review-prepared")
-        .join(format!("{task}-{run}-{key}.json"))
+    format!("{task}-{run}-{kind}")
 }
 
 pub(super) fn load_retained(
@@ -29,14 +33,7 @@ pub(super) fn load_retained(
     run: &str,
     kind: Kind,
 ) -> Result<Option<Pending>> {
-    let path = retained_path(ctx, task, run, kind);
-    match std::fs::read(&path) {
-        Ok(bytes) => Ok(Some(
-            serde_json::from_slice(&bytes).context("parsing retained auxiliary claim")?,
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).context("reading retained auxiliary claim"),
-    }
+    PREPARED.load(&ctx.store, &retained_key(task, run, kind))
 }
 
 /// Archive before releasing capacity. Repeating recovery is safe after any interrupted write.
@@ -50,23 +47,16 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
     {
         retained.refused = Some(reason);
     }
-    let path = retained_path(ctx, &pending.task, &pending.run, pending.kind);
-    if path.exists() {
-        let previous: Pending = serde_json::from_slice(
-            &std::fs::read(&path).context("reading retained review preparation")?,
-        )
-        .context("parsing retained review preparation")?;
-        ensure!(
-            previous.authorization.as_ref().map(|a| (&a.id, &a.action))
-                == pending.authorization.as_ref().map(|a| (&a.id, &a.action)),
-            "retained auxiliary attempt changed"
-        );
-        retained.prepared_gate = previous.prepared_gate;
-        retained.prepared_review = previous.prepared_review;
-    }
-    std::fs::create_dir_all(path.parent().context("prepared review has no directory")?)
-        .context("creating prepared review directory")?;
     ctx.store.update(&pending.task, |task| {
+        if let Some(previous) = load_retained(ctx, &pending.task, &pending.run, pending.kind)? {
+            ensure!(
+                previous.authorization.as_ref().map(|a| (&a.id, &a.action))
+                    == pending.authorization.as_ref().map(|a| (&a.id, &a.action)),
+                "retained auxiliary attempt changed"
+            );
+            retained.prepared_gate = previous.prepared_gate;
+            retained.prepared_review = previous.prepared_review;
+        }
         if let Some(run) = task.runs.iter_mut().find(|run| run.id == pending.run) {
             let candidate = pending
                 .authorization
@@ -93,11 +83,6 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
                     }
                 }
             }
-            // Save all preparation before removing its active-process capacity marker.
-            let tmp = path.with_extension("tmp");
-            std::fs::write(&tmp, serde_json::to_vec(&retained)?)
-                .context("writing retained review preparation")?;
-            std::fs::rename(&tmp, &path).context("publishing retained review preparation")?;
             match pending.kind {
                 Kind::Gate
                     if run.gate.as_ref() == retained.prepared_gate.as_ref()
@@ -121,10 +106,16 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
                 Kind::Gate | Kind::Reviewer => {}
             }
         }
+        // Preparation, capacity release and active-journal cleanup commit in one UOW.
+        PREPARED.save(
+            &ctx.store,
+            &retained_key(&pending.task, &pending.run, pending.kind),
+            &retained,
+        )?;
         task.review_reservation = None;
-        Ok(())
+        clear(ctx)
     })?;
-    clear(ctx)
+    Ok(())
 }
 
 impl ReviewLaunch<'_> {

@@ -319,9 +319,9 @@ fn desktop_fixture_child() {
             assert!(
                 fx.ctx
                     .store
-                    .state_dir()
-                    .join("desktop-notifications.json")
-                    .exists()
+                    .record_row("desktop-notifications", "state")
+                    .unwrap()
+                    .is_some()
             );
         }
         "lock" => {

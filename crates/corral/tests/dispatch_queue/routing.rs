@@ -25,6 +25,7 @@ fn fixture() -> Fixture {
     f.ctx.store.config.defaults.profile = Some("gpt".into());
     f.ctx.store.config.routing =
         toml::from_str("[[rules]]\nname = 'UI'\nkind = 'ui'\nprofile = 'opus'\n").unwrap();
+    f.ctx.store.config.storage.cache_root = Some(f.ctx.store.root().join("cache"));
     f.ctx.store.save_config().unwrap();
     catalog(&f, &["opus-exact", "gpt-exact"]);
     f
@@ -54,8 +55,10 @@ fn catalog(f: &Fixture, models: &[&str]) {
         detected_at: jiff::Timestamp::now(),
         harnesses,
     };
+    let root = f.ctx.store.cache_root().unwrap();
+    std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
-        f.ctx.store.state_dir().join(corral_ops::HARNESS_CACHE_FILE),
+        root.join(corral_ops::HARNESS_CACHE_FILE),
         serde_json::to_vec(&report).unwrap(),
     )
     .unwrap();

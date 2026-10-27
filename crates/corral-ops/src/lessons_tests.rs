@@ -57,16 +57,11 @@ fn history(ctx: &Ctx) -> Task {
 }
 
 fn proposal(ctx: &Ctx, task: &Task) -> LessonProposal {
-    let request: LessonRequest = serde_json::from_str(
-        &std::fs::read_to_string(
-            ctx.store
-                .state_dir()
-                .join("lessons")
-                .join(format!("{}.json", task.id)),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let reopened = corral_core::Store::open(ctx.store.root()).unwrap();
+    let request = corral_core::records::RecordArea::<LessonRequest>::new("lessons-distill")
+        .load(&reopened, &task.id)
+        .unwrap()
+        .unwrap();
     let evidence = request.signals[0].evidence[0].clone();
     let mut rule = lesson("L-startup");
     rule.last_seen = evidence.ts;

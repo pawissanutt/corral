@@ -165,6 +165,7 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
     let receipt = ctx
         .store
         .state_dir()
+        .join("tmp")
         .join("launch-exits")
         .join(format!("{id}-R1.exited"));
     let sent = std::fs::read_to_string(engine.join("command")).unwrap();

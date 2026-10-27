@@ -1,10 +1,12 @@
 #![cfg(unix)] // The fake engine is an executable POSIX shell script.
 
+use super::state_record as state_path;
 use super::*;
 use corral_core::{Status, Store};
 use corral_herdr::Herdr;
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 
@@ -171,7 +173,9 @@ impl Fx {
     }
 
     fn state(&self) -> State {
-        serde_json::from_slice(&std::fs::read(state_path(&self.ctx, &self.task.id)).unwrap())
+        RECORDS
+            .load(&self.ctx.store, &self.task.id)
+            .unwrap()
             .unwrap()
     }
 
@@ -410,5 +414,150 @@ fn integrated_approval_and_keep_branch_approval_do_not_notify() {
     fx.tick(0);
     fx.tick(2);
     // Then neither represents missing integration work.
+    assert!(fx.sent().is_empty());
+}
+
+#[test]
+fn canonical_send_intent_survives_callback_refusal_and_restart_without_replay() {
+    for sent_before_crash in [false, true] {
+        // Given a canonical queue and an interrupted send callback.
+        let fx = Fx::new();
+        fx.worker_change("file.rs");
+        let landing = fx.land("file.rs", "fn landed() {}\n");
+        let mut state = fx.queued(landing);
+        state.notices[0].shell_pid = Some(1234);
+        let receipt = state_record(&fx.ctx, &fx.task.id);
+        save(&receipt, &state).unwrap();
+        let result = fx.ctx.store.update(&fx.task.id, |_| {
+            delivery::record(
+                &fx.ctx,
+                &receipt,
+                &mut state,
+                0,
+                DeliveryState::Sending,
+                "submitting informational notice",
+            )?;
+            if sent_before_crash {
+                fx.ctx.herdr.agent_prompt("w1:p1", "fixture")?;
+            }
+            anyhow::bail!("interrupted send callback");
+        });
+        assert!(result.is_err());
+        let restarted = Ctx {
+            resource_probe: crate::resources::FixedResourceProbe::arc(),
+            store: Store::open(fx.ctx.store.root()).unwrap(),
+            herdr: fx.ctx.herdr.clone(),
+        };
+        let mut retained = RECORDS
+            .load(&restarted.store, &fx.task.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retained.notices[0].state, DeliveryState::Sending);
+        assert_eq!(retained.notices[0].shell_pid, Some(1234));
+
+        // When restart reconciles the canonical intent repeatedly.
+        let receipt = state_record(&restarted, &fx.task.id);
+        delivery::deliver(&restarted, &receipt, &mut retained, 0, true).unwrap();
+        delivery::deliver(&restarted, &receipt, &mut retained, 0, true).unwrap();
+
+        // Then neither a pre-send nor a post-send interruption can replay the effect.
+        assert_eq!(fx.sent().len(), usize::from(sent_before_crash));
+        assert_eq!(
+            RECORDS
+                .load(&restarted.store, &fx.task.id)
+                .unwrap()
+                .unwrap()
+                .notices[0]
+                .state,
+            DeliveryState::Uncertain
+        );
+        let row = restarted
+            .store
+            .record_row("main-movement", &fx.task.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.doc["doc_version"], 1);
+        assert!(
+            !restarted
+                .store
+                .state_dir()
+                .join(format!("main-movement-{}.json", fx.task.id))
+                .exists()
+        );
+        assert_eq!(
+            fx.receipts().last().unwrap().detail["receipt"],
+            format!("main-movement/{}", fx.task.id)
+        );
+    }
+}
+
+#[test]
+fn ordinary_movement_save_rolls_back_with_callback_refusal() {
+    // Given an existing canonical queue.
+    let fx = Fx::new();
+    save(&state_record(&fx.ctx, &fx.task.id), &State::default()).unwrap();
+
+    // When an ordinary queue update belongs to a refused task mutation.
+    let result = fx.ctx.store.update(&fx.task.id, |_| {
+        let mut state = fx.state();
+        state.seen.insert("not committed".into());
+        save(&state_record(&fx.ctx, &fx.task.id), &state)?;
+        anyhow::bail!("refused mutation");
+    });
+
+    // Then restart sees only the original committed queue.
+    assert!(result.is_err());
+    let restarted = Store::open(fx.ctx.store.root()).unwrap();
+    assert!(
+        RECORDS
+            .load(&restarted, &fx.task.id)
+            .unwrap()
+            .unwrap()
+            .seen
+            .is_empty()
+    );
+}
+
+#[test]
+fn canonical_failed_delivery_preserves_shell_identity_across_restart() {
+    // Given a failed submission durably pinned to the original pane shell.
+    let fx = Fx::new();
+    fx.worker_change("file.rs");
+    let landing = fx.land("file.rs", "fn landed() {}\n");
+    let mut state = fx.queued(landing);
+    std::fs::write(fx.bin.join("fail"), "").unwrap();
+    delivery::deliver(
+        &fx.ctx,
+        &state_record(&fx.ctx, &fx.task.id),
+        &mut state,
+        0,
+        true,
+    )
+    .unwrap();
+    assert_eq!(state.notices[0].state, DeliveryState::Failed);
+    std::fs::remove_file(fx.bin.join("fail")).unwrap();
+    std::fs::write(fx.bin.join("pid"), "5678").unwrap();
+    let restarted = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
+        store: Store::open(fx.ctx.store.root()).unwrap(),
+        herdr: fx.ctx.herdr.clone(),
+    };
+    let mut retained = RECORDS
+        .load(&restarted.store, &fx.task.id)
+        .unwrap()
+        .unwrap();
+
+    // When restart retries against a replacement shell.
+    delivery::deliver(
+        &restarted,
+        &state_record(&restarted, &fx.task.id),
+        &mut retained,
+        0,
+        true,
+    )
+    .unwrap();
+
+    // Then the persisted identity cancels delivery rather than redirecting it.
+    assert_eq!(retained.notices[0].state, DeliveryState::Cancelled);
     assert!(fx.sent().is_empty());
 }
