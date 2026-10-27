@@ -163,19 +163,9 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
 
 #[test]
 fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_board() {
-    // Given a board and two dropped tasks whose stored documents become undecodable while it
-    // owns the terminal.
+    // Given a board and two open tasks whose stored documents become undecodable while it
+    // owns the terminal (terminal tasks outside the Done page are never read by a frame).
     let fx = seeded();
-    let broken: Vec<String> = ["broken-a", "broken-b"]
-        .into_iter()
-        .map(|title| {
-            fx.ctx
-                .store
-                .create(title, None, corral_core::Status::Dropped, "")
-                .unwrap()
-                .id
-        })
-        .collect();
     // Avoid an unrelated missing-worktree diagnostic from the synthetic review.
     fx.ctx
         .store
@@ -184,11 +174,23 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
             Ok(())
         })
         .unwrap();
+    // The intact board is the one without the tasks that are about to break.
     let mut app = fx.app(Mode::Board);
     let baseline: Vec<_> = [(160, 45), (80, 24)]
         .into_iter()
         .map(|(width, height)| draw(&mut app, width, height))
         .collect();
+    let broken: Vec<String> = ["broken-a", "broken-b"]
+        .into_iter()
+        .map(|title| {
+            fx.ctx
+                .store
+                .create(title, None, corral_core::Status::Backlog, "")
+                .unwrap()
+                .id
+        })
+        .collect();
+    app.reload();
     let _capture = capture_messages(app.message_tx.clone());
     for id in &broken {
         fx.ctx
@@ -217,10 +219,20 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
         app.toasts.is_empty(),
         "unchanged tasks do not re-toast after dismissal"
     );
+    // Column counts are the maintained status counts, which still include the stored tasks
+    // whose documents do not decode; only those digits may differ from the intact board.
+    let digitless = |line: &str| -> String {
+        if line.contains("Backlog") {
+            line.chars().filter(|c| !c.is_ascii_digit()).collect()
+        } else {
+            line.to_owned()
+        }
+    };
     for ((width, height), before) in [(160, 45), (80, 24)].into_iter().zip(baseline) {
+        let after = draw(&mut app, width, height);
         assert_eq!(
-            draw(&mut app, width, height),
-            before,
+            after.lines().map(digitless).collect::<Vec<_>>(),
+            before.lines().map(digitless).collect::<Vec<_>>(),
             "board buffer remains intact"
         );
     }
