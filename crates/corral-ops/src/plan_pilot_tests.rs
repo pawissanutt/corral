@@ -24,12 +24,18 @@ mod ownership;
 
 #[path = "plan_lifecycle_tests.rs"]
 mod lifecycle;
+#[path = "plan_reaccept_pilot_tests.rs"]
+mod reaccept;
 #[path = "plan_revision_tests.rs"]
 mod revision;
 #[path = "plan_routing_tests.rs"]
 mod routing;
 
 fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
+    fixture_with(PLAN)
+}
+
+fn fixture_with(plan: &str) -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir(tmp.path().join("app")).unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
@@ -83,7 +89,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
     let output = store.state_dir().join("plan-output");
     std::fs::create_dir_all(&output).unwrap();
     let path = output.join("plan.md");
-    std::fs::write(&path, PLAN).unwrap();
+    std::fs::write(&path, plan).unwrap();
     store
         .update(&task.id, |t| {
             t.plan_required = Some(true);

@@ -311,7 +311,10 @@ fn review_with_origin(
             && let Some(run) = t.plan_runs.iter_mut().find(|r| Some(&r.id) == run_id.as_ref()) {
             run.state = PlanRunState::Reviewing;
         }
-        if !cancelled && (run_id.is_some() || t.current_run().is_none_or(|r| r.outcome.is_some())) {
+        if !cancelled
+            && !published_design(t)
+            && (run_id.is_some() || t.current_run().is_none_or(|r| r.outcome.is_some()))
+        {
             t.status = corral_core::Status::Review;
         }
         ctx.store.log_event(Some(&t.id), "plan_review_requested",
