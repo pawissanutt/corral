@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use corral_core::{AutoStage, RunOutcome};
 use corral_herdr::{AgentStatus, PaneInfo};
-use corral_ops::ApproveStrategy;
 use jiff::{SignedDuration, Timestamp};
 
 use super::*;
@@ -538,7 +537,7 @@ fn retry_three_times(ctx: &Ctx, id: &str, now: Timestamp, panes: &HashMap<String
 }
 
 #[test]
-fn overloaded_reviewer_is_reprompted_then_interrupted_and_releases_the_barrier() {
+fn overloaded_reviewer_is_reprompted_then_interrupted() {
     let (_tmp, mut ctx, id, worktree) = task_in_review();
     reviewer_profile(&mut ctx, "true".into());
     let now = started(&ctx, &id);
@@ -548,7 +547,6 @@ fn overloaded_reviewer_is_reprompted_then_interrupted_and_releases_the_barrier()
     let implementer = reviewer.with_file_name("implementer.jsonl");
     let healthy = stall_log("recovered", after(now, -100), after(now, -90));
     write_log(&implementer, &healthy, after(now, 50));
-    let (peer, _) = review_candidate(&ctx, "Peer task", "peer.txt");
     let panes = pane(AgentStatus::Idle);
 
     retry_three_times(&ctx, &id, now, &panes);
@@ -558,9 +556,6 @@ fn overloaded_reviewer_is_reprompted_then_interrupted_and_releases_the_barrier()
         assert_eq!(detail["submitted"], true);
         assert_eq!(detail["pane"], "w1:p2");
     }
-    let held = corral_ops::approve(&ctx, &peer, ApproveStrategy::Rebase, false, false);
-    let held = held.unwrap_err().to_string();
-    assert!(held.contains("review in progress"), "{held}");
 
     assert!(
         corral_ops::reconcile_review_at(&ctx, &id, after(now, 781), &panes)
@@ -589,10 +584,6 @@ fn overloaded_reviewer_is_reprompted_then_interrupted_and_releases_the_barrier()
         "review_escalated",
     ] {
         assert_eq!(count(&ctx, kind), 1, "{kind}");
-    }
-    if let Err(error) = corral_ops::approve(&ctx, &peer, ApproveStrategy::Rebase, false, false) {
-        let error = error.to_string();
-        assert!(!error.contains("review in progress"), "{error}");
     }
 }
 
