@@ -207,12 +207,11 @@ fn send_changes(
         })
         .map(|message| posted = Some(message))
     } else {
-        ctx.store
-            .dispatch_update(&task.id, prepare)
-            .and_then(|_| match &restarted {
-                Some(restarted) => restarted.submit(ctx),
-                None => deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)),
-            })
+        ctx.store.dispatch_update(&task.id, prepare)?;
+        match &restarted {
+            Some(restarted) => restarted.submit(ctx),
+            None => deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)),
+        }
     };
     if let Err(error) = delivery {
         if crate::operating::refused(&error) {
@@ -220,7 +219,7 @@ fn send_changes(
         }
         // Keep T-051's failed-delivery contract: preserve the pending request in Review.
         // Do not overwrite a worker that reported completion in the meantime.
-        ctx.store.update(&task.id, |current| {
+        ctx.store.try_update(&task.id, |current| {
             if current.status == Status::Running
                 && let Some(run) = current
                     .current_run_mut()
@@ -230,8 +229,9 @@ fn send_changes(
                 run.ended = previous.ended;
                 run.summary = previous.summary.clone();
                 current.status = task.status;
+                return Ok(true);
             }
-            Ok(())
+            Ok(false)
         })?;
         return Err(error);
     }
