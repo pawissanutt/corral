@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use corral_core::backend::{ScratchKind, ScratchRow, ScratchState};
+use corral_core::inbox::{
+    DeliveryMode, Inbox, MAX_PAYLOAD, MessageBinding, Post, Recipient, Urgency,
+};
 use corral_core::records::RecordArea;
 use corral_core::scratch::AttemptScratch;
 use corral_core::{PlanRunState, Status};
@@ -188,6 +191,8 @@ pub(crate) fn prompt_section(ctx: &Ctx, dir: &Path) -> String {
 struct State {
     ended: bool,
     pane: Option<String>,
+    /// The attempt's keyed inbox, when it was launched with inbox delivery.
+    inbox: Option<Recipient>,
 }
 
 fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> Result<State> {
@@ -196,6 +201,7 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
     let unrecorded = || State {
         ended: now.duration_since(row.created) > UNRECORDED,
         pane: None,
+        inbox: None,
     };
     let pane = |herdr: Option<corral_core::HerdrRef>| herdr.map(|h| h.pane_id);
     let mut found = match attempt {
@@ -208,6 +214,7 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
                 None => State {
                     ended: true,
                     pane: None,
+                    inbox: None,
                 },
                 Some(current) => {
                     // `child` keys the directory: the callback attempt of the review using it.
@@ -230,6 +237,13 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
                         State {
                             ended: false,
                             pane: latest.and_then(|l| l.herdr.clone()).map(|h| h.pane_id),
+                            inbox: latest
+                                .filter(|l| l.delivery == DeliveryMode::Inbox)
+                                .map(|l| Recipient::ReviewRun {
+                                    task: task.to_owned(),
+                                    run: run.to_owned(),
+                                    review: l.id.clone(),
+                                }),
                         }
                     } else if head.review_child(run, child)?.is_none()
                         && current.review.as_ref().is_none_or(|r| r.verdict.is_none())
@@ -239,19 +253,26 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
                         State {
                             ended: true,
                             pane: latest.and_then(|l| l.herdr.clone()).map(|h| h.pane_id),
+                            inbox: None,
                         }
                     }
                 }
             }
         }
         Attempt::PlanReview { plan, review, .. } => match head.plan_review(plan, review)? {
-            Some(review) => State {
-                ended: review.verdict.is_some(),
-                pane: pane(review.herdr),
+            Some(found) => State {
+                ended: found.verdict.is_some(),
+                inbox: (found.delivery == DeliveryMode::Inbox).then(|| Recipient::PlanReview {
+                    task: task.to_owned(),
+                    plan: plan.to_owned(),
+                    review: review.to_owned(),
+                }),
+                pane: pane(found.herdr),
             },
             None if crate::plan_review::retains(ctx, task, plan, review)? => State {
                 ended: false,
                 pane: None,
+                inbox: None,
             },
             None => unrecorded(),
         },
@@ -261,6 +282,7 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
             Some(review) => State {
                 ended: review.verdict.is_some() || review.abandoned.is_some(),
                 pane: pane(review.herdr),
+                inbox: None,
             },
             None => unrecorded(),
         },
@@ -273,10 +295,15 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
                     PlanRunState::Approved | PlanRunState::Cancelled
                 ) || (current.state == PlanRunState::Failed && current.submitted.is_some()),
                 pane: pane(current.herdr.clone()),
+                inbox: (current.delivery == DeliveryMode::Inbox).then(|| Recipient::PlanRun {
+                    task: task.to_owned(),
+                    plan_run: run.to_owned(),
+                }),
             },
             Some(current) if ordinal(&current.id) > ordinal(run) => State {
                 ended: true,
                 pane: None,
+                inbox: None,
             },
             _ => unrecorded(),
         },
@@ -385,19 +412,31 @@ pub fn reclaim_scratch_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
     Ok(())
 }
 
-/// The steering message owed to an attempt that crossed `review_scratch_warn`. It is recorded
-/// before the once-only warning event and kept until a send to the attempt's pane succeeds, so a
-/// missing pane, a refused send or a restart never loses it.
+/// Where the steering message owed to an attempt that crossed `review_scratch_warn` stands. It
+/// is recorded before the once-only warning event, so a missing pane or a definite refusal only
+/// delays it. Keyed inbox delivery owns it once posted. On the plain prompt transport a send is
+/// marked `Submitting` first: an interrupted send cannot tell accepted from unsent, so it becomes
+/// `Uncertain` with one alert and is never resent (owner decision 2026-10-27: at most once).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "snake_case")]
+enum Stage {
+    Owed,
+    Submitting,
+    Delivered,
+    Posted,
+    Uncertain,
+}
+
 #[derive(Serialize, Deserialize)]
 struct OwedWarning {
     message: String,
-    delivered: bool,
+    stage: Stage,
 }
 
 const WARNINGS: RecordArea<OwedWarning> = RecordArea::new("scratch-warnings");
 
 /// Closes an ended attempt's directory; for an active one, warns once when it outgrew its budget
-/// and delivers the owed steering message once its pane accepts it.
+/// and hands the owed steering message to its transport.
 fn review_open(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> Result<()> {
     let state = state(ctx, row, attempt, now)?;
     if state.ended {
@@ -418,7 +457,7 @@ fn review_open(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp
                         dir.display(),
                         ctx.store.config.storage.review_scratch_warn,
                     ),
-                    delivered: false,
+                    stage: Stage::Owed,
                 };
                 WARNINGS.save(&ctx.store, &row.id, &warning)?;
                 owed = Some(warning);
@@ -426,23 +465,78 @@ fn review_open(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp
             ctx.store.warn_scratch(&row.id, bytes)?;
         }
     }
-    let (Some(warning), Some(pane)) = (owed.filter(|w| !w.delivered), state.pane) else {
+    let Some(warning) = owed else {
         return Ok(());
     };
-    let delivery = ctx.herdr.agent_prompt(&pane, &warning.message)?;
+    match warning.stage {
+        Stage::Owed => deliver(ctx, row, &state, warning),
+        Stage::Submitting => {
+            let uncertain = OwedWarning {
+                stage: Stage::Uncertain,
+                ..warning
+            };
+            WARNINGS.save(&ctx.store, &row.id, &uncertain)?;
+            ctx.store.log_event(
+                row.task.as_deref(),
+                "storage_scratch_warning_uncertain",
+                serde_json::json!({"scratch": row.id, "pane": state.pane}),
+            )
+        }
+        Stage::Delivered | Stage::Posted | Stage::Uncertain => Ok(()),
+    }
+}
+
+/// Sends an owed warning: posted once to the attempt's keyed inbox, or prompted to its pane at
+/// most once.
+fn deliver(ctx: &Ctx, row: &ScratchRow, state: &State, warning: OwedWarning) -> Result<()> {
+    if let Some(recipient) = &state.inbox {
+        let inbox = Inbox::new(&ctx.store, recipient.clone())?;
+        let post = Post {
+            kind: "scratch_warning",
+            urgency: Urgency::Wake,
+            author: "corral",
+            body: &warning.message,
+            binding: MessageBinding::default(),
+            subject: Some(serde_json::json!({"scratch": row.id})),
+            max_payload: MAX_PAYLOAD,
+        };
+        let posted = OwedWarning {
+            stage: Stage::Posted,
+            message: warning.message.clone(),
+        };
+        // The record joins the post's own update: the message is posted exactly once.
+        inbox.post_with(post, |_, _| WARNINGS.save(&ctx.store, &row.id, &posted))?;
+        return Ok(());
+    }
+    let Some(pane) = state.pane.as_deref() else {
+        return Ok(());
+    };
+    let submitting = OwedWarning {
+        stage: Stage::Submitting,
+        message: warning.message,
+    };
+    WARNINGS.save(&ctx.store, &row.id, &submitting)?;
+    let delivery = ctx.herdr.agent_prompt(pane, &submitting.message)?;
+    // A definite refusal submitted nothing, so the message stays owed for the next pass.
+    let stage = if delivery.submitted {
+        Stage::Delivered
+    } else {
+        Stage::Owed
+    };
+    WARNINGS.save(
+        &ctx.store,
+        &row.id,
+        &OwedWarning {
+            stage,
+            ..submitting
+        },
+    )?;
     anyhow::ensure!(
         delivery.submitted,
         "steering message to pane {pane} was not submitted; retrying next pass: {}",
         delivery.error.as_deref().unwrap_or("unconfirmed")
     );
-    WARNINGS.save(
-        &ctx.store,
-        &row.id,
-        &OwedWarning {
-            delivered: true,
-            ..warning
-        },
-    )
+    Ok(())
 }
 
 /// The pane of the attempt owning registration `row`, if it recorded one.

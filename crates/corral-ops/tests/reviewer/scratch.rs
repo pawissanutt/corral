@@ -532,7 +532,7 @@ fn a_refused_warning_is_retried_after_a_restart_and_delivered_once() {
         ctx.store
             .record_row("scratch-warnings", &scratch)
             .unwrap()
-            .map(|row| row.doc["value"]["delivered"].clone())
+            .map(|row| row.doc["value"]["stage"].clone())
     };
     let pastes = || {
         std::fs::read_to_string(tmp.path().join("pastes"))
@@ -546,7 +546,7 @@ fn a_refused_warning_is_retried_after_a_restart_and_delivered_once() {
     }
     corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
     assert_eq!(events(&ctx, "storage_scratch_warning").len(), 1);
-    assert_eq!(owed(&ctx), Some(serde_json::json!(false)), "still owed");
+    assert_eq!(owed(&ctx), Some(serde_json::json!("owed")), "still owed");
     assert!(
         tmp.path().join("composer").is_file(),
         "pasted, never submitted"
@@ -562,9 +562,52 @@ fn a_refused_warning_is_retried_after_a_restart_and_delivered_once() {
 
     // The retained input was submitted once, without a second paste or another prompt.
     assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
-    assert_eq!(owed(&restarted), Some(serde_json::json!(true)));
+    assert_eq!(owed(&restarted), Some(serde_json::json!("delivered")));
     assert!(!tmp.path().join("composer").exists(), "submitted");
     assert_eq!(pastes(), 1);
     assert_eq!(delivered(tmp.path()), 0);
     assert!(dir.join("big.log").is_file());
+}
+
+#[test]
+fn a_send_accepted_before_a_crash_is_never_resubmitted() {
+    // Given a warning the engine accepted, by a sender that stopped before recording the
+    // result: the event is committed and the journal still says `submitting`.
+    let (tmp, ctx, id, _dir) = oversized_review();
+    let scratch = format!("review-{id}-R1-review1");
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    assert_eq!(delivered(tmp.path()), 1);
+    let mut journal = ctx
+        .store
+        .record_row("scratch-warnings", &scratch)
+        .unwrap()
+        .unwrap()
+        .doc;
+    journal["value"]["stage"] = serde_json::json!("submitting");
+    ctx.store
+        .save_record("scratch-warnings", &scratch, &journal)
+        .unwrap();
+
+    // When a restarted process runs the pass again.
+    let mut restarted = ctx.clone();
+    restarted.store = Store::open(tmp.path()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+
+    // Then the engine accepted exactly one steering message, with one warning event and one
+    // uncertainty alert, and the journal never sends it again.
+    assert_eq!(delivered(tmp.path()), 1);
+    assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
+    assert_eq!(
+        events(&restarted, "storage_scratch_warning_uncertain").len(),
+        1
+    );
+    let stage = restarted
+        .store
+        .record_row("scratch-warnings", &scratch)
+        .unwrap()
+        .unwrap()
+        .doc["value"]["stage"]
+        .clone();
+    assert_eq!(stage, serde_json::json!("uncertain"));
 }
