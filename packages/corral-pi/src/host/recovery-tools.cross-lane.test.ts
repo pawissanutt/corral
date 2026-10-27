@@ -253,6 +253,6 @@ test("a host killed inside an upstream edit, then inside a command whose child k
   expect(host.generations.map((g: any) => g.bound.session_file)).toEqual([session, session, session]);
   const bindings = readFileSync(session, "utf8").trim().split("\n").map((line) => JSON.parse(line))
     .filter((entry) => entry.type === "custom" && entry.customType === "corral_host_bound");
-  expect(bindings.map((entry) => [entry.data.generation, entry.data.session_id]))
-    .toEqual(host.generations.map((g: any) => [g.n, g.bound.session_id]));
+  expect(bindings.map((entry) => [entry.data.generation, entry.data.session_id, entry.data.bind_nonce_sha256]))
+    .toEqual(host.generations.map((g: any) => [g.n, g.bound.session_id, g.bind_nonce_sha256]));
 }, 600_000);

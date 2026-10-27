@@ -526,8 +526,12 @@ fn classify_lost(
             running: Vec::new(),
         });
     };
-    let dangling =
-        interrupted::dangling_calls(&bound.session_file, generation.n, &bound.session_id)?;
+    let dangling = interrupted::dangling_calls(
+        &bound.session_file,
+        generation.n,
+        &bound.session_id,
+        &generation.bind_nonce_sha256,
+    )?;
     let all = receipts(ctx, container)?;
     let needs_snapshot = dangling
         .calls

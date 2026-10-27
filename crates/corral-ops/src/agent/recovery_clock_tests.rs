@@ -15,11 +15,13 @@ fn backward_clock(tool: &str) {
         Some(f::CAP),
         f::healthy,
     );
-    let created = state(&fx, &fx.worker()).generation(1).unwrap().created;
+    let binding = state(&fx, &fx.worker()).generation(1).unwrap().clone();
+    let created = binding.created;
     let earlier = created - jiff::SignedDuration::from_secs(60);
-    let marker = |generation| {
+    let marker = |generation, nonce: &str| {
         json!({"type":"custom", "customType":"corral_host_bound",
-        "timestamp": earlier, "data":{"generation":generation,"session_id":SESSION}})
+        "timestamp": earlier, "data":{"generation":generation,"session_id":SESSION,
+            "bind_nonce_sha256":nonce}})
     };
     let call = |id, tool| {
         json!({"type":"message", "timestamp":earlier,
@@ -27,9 +29,11 @@ fn backward_clock(tool: &str) {
             "name":tool, "arguments":{}}]}})
     };
     let session = [
-        marker(0),
+        marker(1, "previous-child-g1"),
         call("old-edit", "edit"),
-        marker(1),
+        marker(2, "previous-child-g2"),
+        call("old-bash", "bash"),
+        marker(1, &binding.bind_nonce_sha256),
         call("interrupted", tool),
         call("completed", tool),
         json!({"type":"message", "timestamp":earlier,
