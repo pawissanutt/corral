@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { appendFileSync, linkSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, linkSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { EventFollower } from "./workspace.ts";
+import { EventFollower, ok } from "./workspace.ts";
 
 test("a follower observes writes to its inode through a path outside the watched directory", async () => {
   const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
@@ -60,6 +60,79 @@ test("a follower resolves filtered events appended by another process", async ()
     expect(await exited).toBe(0);
     // Then the event resolves through the file notification without another next call:
     expect(await ended).toEqual(event);
+  } finally {
+    follower.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a follower observes a child commit while the parent waits synchronously", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
+  const path = join(root, "events.jsonl");
+  writeFileSync(path, "");
+  const follower = new EventFollower(path);
+  try {
+    const event = { kind: "agent_bound", detail: { generation: 2 } };
+    const bound = follower.next((entry) =>
+      entry.kind === "agent_bound" && entry.detail?.generation === 2, 1000);
+    const committed = ok([process.execPath, "-e",
+      'require("node:fs").appendFileSync(process.argv[1], process.argv[2]); process.stdout.write("COMMITTED\\n")',
+      path, `${JSON.stringify(event)}\n`]);
+    expect(committed).toBe("COMMITTED\n");
+    expect(await bound).toEqual(event);
+    expect(follower.malformed).toBe(0);
+  } finally {
+    follower.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a follower drains short reads without requiring another file write", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
+  const path = join(root, "events.jsonl");
+  writeFileSync(path, "");
+  let reads = 0;
+  const follower = new EventFollower(path, (fd, buffer, offset, length, position) => {
+    reads++;
+    return readSync(fd, buffer, offset, Math.min(length, 7), position);
+  });
+  try {
+    const event = { kind: "agent_bound", detail: { generation: 2 } };
+    const bound = follower.next((entry) =>
+      entry.kind === "agent_bound" && entry.detail?.generation === 2, 1000);
+    appendFileSync(path, `${JSON.stringify(event)}\n`);
+    expect(await bound).toEqual(event);
+    expect(reads).toBeGreaterThan(1);
+    expect(follower.malformed).toBe(0);
+  } finally {
+    follower.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a follower retains unread bytes when the file truncates between stat and read", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
+  const path = join(root, "events.jsonl");
+  writeFileSync(path, "");
+  let truncated = false;
+  const follower = new EventFollower(path, (fd, buffer, offset, length, position) => {
+    if (!truncated) {
+      truncated = true;
+      truncateSync(path, 0);
+    }
+    return readSync(fd, buffer, offset, length, position);
+  });
+  try {
+    appendFileSync(path, '{"kind":"other"}\n');
+    const event = { kind: "agent_bound", detail: { generation: 2 } };
+    // The synchronous drain sees the old stat size, but its actual read reaches EOF.
+    const bound = follower.next((entry) =>
+      entry.kind === "agent_bound" && entry.detail?.generation === 2, 1000);
+    // Regrow before yielding: no intermediate notification can repair a skipped prefix.
+    appendFileSync(path, `${JSON.stringify(event)}\n`);
+    expect(await bound).toEqual(event);
+    expect(truncated).toBeTrue();
+    expect(follower.malformed).toBe(0);
   } finally {
     follower.close();
     rmSync(root, { recursive: true, force: true });
