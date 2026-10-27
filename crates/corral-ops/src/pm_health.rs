@@ -1,21 +1,35 @@
 //! Read-only stall signals; retained version-skew events are historical, not liveness probes.
 use anyhow::Result;
-use corral_core::Status;
+use corral_core::backend::{HeadQuery, RowQuery, TaskPart};
 use serde_json::{Value, json};
 
 use crate::Ctx;
 
 pub fn pm_health(ctx: &Ctx) -> Result<Value> {
     let mut unfinished = Vec::new();
-    for task in ctx.store.list()? {
-        if task.status != Status::Done {
-            continue;
-        }
-        let mut pending: Vec<_> = task.runs.iter().collect();
-        while let Some(run) = pending.pop() {
-            pending.extend(&run.review_runs);
-            if run.ended.is_none() || run.outcome.is_none() {
-                unfinished.push(json!({"task":task.id,"run":run.id}));
+    // This historical owner readback intentionally includes Done tasks (FU-2).
+    // Keep its historical diagnostics, without hydrating unrelated task families.
+    let mut heads = ctx.store.heads(&HeadQuery::RecentByStatus {
+        status: "done".into(),
+    })?;
+    heads.sort_by_key(|head| head.num);
+    for head in heads {
+        let runs =
+            crate::pm_next::heads::rows(ctx, &head, &RowQuery::part(TaskPart::Run).newest_first())?;
+        let children = crate::pm_next::heads::rows(
+            ctx,
+            &head,
+            &RowQuery::part(TaskPart::ReviewRun).newest_first(),
+        )?;
+        for run in runs {
+            for row in std::iter::once(&run).chain(
+                children
+                    .iter()
+                    .filter(|child| child.key.starts_with(&format!("{}/", run.key))),
+            ) {
+                if row.doc["ended"].is_null() || row.doc["outcome"].is_null() {
+                    unfinished.push(json!({"task":head.id,"run":row.doc["id"]}));
+                }
             }
         }
     }

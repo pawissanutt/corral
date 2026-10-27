@@ -138,6 +138,56 @@ pub(crate) fn stage(t: &Task, config: Option<&Config>) -> Option<PlanStage> {
     })
 }
 
+/// The stage from current projections; review ordinals come from facts, not the shell's
+/// single current review.
+pub(crate) fn stage_head(t: &corral_core::TaskHead, config: Option<&Config>) -> Option<PlanStage> {
+    if t.tracker {
+        return None;
+    }
+    let has_plan = t.last_plan_run.is_some() || t.last_plan.is_some() || !t.children.is_empty();
+    let required = config.map_or(t.plan_required == Some(true), |c| {
+        c.plan_required(t.project.as_deref(), t.plan_required)
+    });
+    if !has_plan
+        && !((t.design || required)
+            && t.plan.is_none()
+            && t.current_run.is_none()
+            && !matches!(t.status, Status::Done | Status::Dropped))
+    {
+        return None;
+    }
+    if !t.children.is_empty() {
+        return Some(PlanStage::Decomposed(t.children.len()));
+    }
+    let run = t.last_plan_run.as_ref();
+    let plan = t.last_plan.as_ref();
+    let round = run.map_or(0, |r| r.rounds);
+    Some(match run.map(|r| r.state) {
+        Some(PlanRunState::Planning | PlanRunState::Changes) => PlanStage::Planning { round },
+        _ if plan.is_some_and(|p| p.approval.is_some()) => PlanStage::Approved,
+        Some(PlanRunState::Submitted | PlanRunState::Reviewing) => {
+            PlanStage::Review { round: round + 1 }
+        }
+        Some(PlanRunState::AwaitingOwner) => PlanStage::AwaitingOwner,
+        Some(PlanRunState::Approved) => PlanStage::Approved,
+        Some(PlanRunState::Escalated) => PlanStage::Escalated,
+        Some(PlanRunState::Failed | PlanRunState::Cancelled) => PlanStage::Failed,
+        None => match plan {
+            None => PlanStage::Needed,
+            Some(p) => {
+                let n = u32::try_from(p.facts.children).unwrap_or(u32::MAX);
+                match p.current_review.as_ref().map(|r| r.verdict) {
+                    None => PlanStage::Review { round: 1 },
+                    Some(None) => PlanStage::Review { round: n },
+                    Some(Some(Verdict::Approve)) => PlanStage::AwaitingOwner,
+                    Some(Some(Verdict::Changes)) => PlanStage::Planning { round: n },
+                    Some(Some(Verdict::Escalate)) => PlanStage::Escalated,
+                }
+            }
+        },
+    })
+}
+
 /// The planning flow owns the task: Enter, the card menu and the review route open its Plan tab.
 pub(crate) fn owns(t: &Task) -> bool {
     t.tracker || t.current_run().is_none() && stage(t, None).is_some_and(PlanStage::active)

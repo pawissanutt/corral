@@ -42,8 +42,8 @@ impl Store {
             if grants.iter().any(|grant| &grant.task == id) {
                 continue;
             }
-            if let Ok(task) = self.get(id)
-                && let Some(plan) = task.plans.last()
+            if let Ok(task) = self.head(id)
+                && let Some(plan) = &task.last_plan
                 && plan.document.dependencies.is_empty()
                 && plan.approval.is_some()
             {
@@ -62,7 +62,8 @@ impl Store {
                 else {
                     return Ok(BTreeMap::new());
                 };
-                let parent = self.get(&grant.task)?;
+                let parent_head = self.head(&grant.task)?;
+                let parent = self.operating_approval_task(&parent_head)?;
                 let original = config
                     .automation
                     .scope
@@ -88,10 +89,10 @@ impl Store {
                         && crate::plan_contract_revision(&parent)? == plan.spec_revision
                         && (original.contract_revision == journal.source_contract
                             || original.contract_revision == journal.projected_contract)
-                        && journal.projected_contract == operating_contract_revision(&parent)?,
+                        && journal.projected_contract == parent_head.operating_contract_revision(),
                     "published parent identity changed"
                 );
-                let projected = self.operating_member(config, &parent)?;
+                let projected = self.operating_member_head(config, &parent_head)?;
                 crate::plan_policy::validate_approval(self, config, &parent, plan)?;
                 ensure!(
                     projected.project == original.project
@@ -117,8 +118,8 @@ impl Store {
                     .map(Store::parse_task_markdown)
                     .transpose()?;
                 if let Some(staged) = &tracker {
-                    let current = self.get(&staged.id)?;
-                    self.check_operating_plan(&current)?;
+                    let current = self.head(&staged.id)?;
+                    self.check_operating_plan(&current.to_shell_task()?)?;
                     ensure!(
                         staged.parent.as_ref() == Some(&parent.id)
                             && staged.children == parent.children
@@ -135,10 +136,13 @@ impl Store {
                                             .unwrap_or_default()
                             })
                             && operating_contract_revision(staged)?
-                                == operating_contract_revision(&current)?,
+                                == current.operating_contract_revision(),
                         "published tracker identity changed"
                     );
-                    published.insert(current.id.clone(), self.operating_member(config, &current)?);
+                    published.insert(
+                        current.id.clone(),
+                        self.operating_member_head(config, &current)?,
+                    );
                 }
                 if plan.document.dependencies.len() > 1 {
                     ensure!(
@@ -174,12 +178,11 @@ impl Store {
                         "unconfirmed published scope"
                     );
                     let child_member = (|| {
-                        let child = self.get(&binding.task)?;
+                        let child = self.head(&binding.task)?;
                         ensure!(
                             child.plan.as_deref() == Some(journal.backlink.as_str())
                                 && child.project == parent.project
-                                && operating_contract_revision(&child)?
-                                    == binding.contract_revision,
+                                && child.operating_contract_revision() == binding.contract_revision,
                             "published child contract changed"
                         );
                         ensure!(
@@ -191,12 +194,12 @@ impl Store {
                                     })),
                             "unknown published child"
                         );
-                        let member = self.operating_member(config, &child)?;
+                        let member = self.operating_member_head(config, &child)?;
                         ensure!(
                             member.repository_identity == original.repository_identity,
                             "published child repository changed"
                         );
-                        Ok::<_, anyhow::Error>((child.id, member))
+                        Ok::<_, anyhow::Error>((child.id.clone(), member))
                     })();
                     match child_member {
                         Ok((id, member)) if id != parent.id => {

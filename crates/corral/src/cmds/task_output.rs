@@ -4,6 +4,10 @@ use corral_ops::Ctx;
 
 use super::{autopilot_line, gate_line, parse_status, review_line, route};
 
+#[cfg(test)]
+#[path = "task_output_tests.rs"]
+mod hot_read_tests;
+
 pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     corral_ops::refresh_usage(&ctx.store, id)?;
     let t = ctx.store.get(id)?;
@@ -176,6 +180,57 @@ pub(super) fn list(
     query: Option<&str>,
 ) -> Result<()> {
     let want = status.map(parse_status).transpose()?;
+    if query.is_none() {
+        let open = !all && !matches!(want, Some(Status::Done | Status::Dropped));
+        let _hot = open.then(corral_core::work::HotScope::enter);
+        let ctx = &Ctx {
+            store: ctx.store.read_only_snapshot()?,
+            ..ctx.clone()
+        };
+        let mut heads = if open {
+            ctx.store.heads(&corral_core::backend::HeadQuery::Open {
+                project: project.map(str::to_owned),
+            })?
+        } else {
+            let statuses: Vec<_> = match want {
+                Some(status) => vec![status],
+                None => vec![
+                    Status::Idea,
+                    Status::Backlog,
+                    Status::Ready,
+                    Status::Running,
+                    Status::NeedsMe,
+                    Status::Review,
+                    Status::Done,
+                    Status::Dropped,
+                ],
+            };
+            let mut heads = Vec::new();
+            for status in statuses {
+                // `heads` follows the backend's pages for explicit history-sized output.
+                heads.extend(ctx.store.heads(
+                    &corral_core::backend::HeadQuery::RecentByStatus {
+                        status: status.as_str().into(),
+                    },
+                )?);
+            }
+            heads.sort_by_key(|head| head.num);
+            heads
+        };
+        heads.retain(|t| {
+            want.is_none_or(|status| t.status == status)
+                && project.is_none_or(|p| t.project.as_deref() == Some(p))
+        });
+        if json {
+            let values = heads
+                .iter()
+                .map(task_head_json)
+                .collect::<Result<Vec<_>>>()?;
+            println!("{}", serde_json::to_string_pretty(&values)?);
+            return Ok(());
+        }
+        return crate::list_cols::print_heads(ctx, &heads, columns);
+    }
     let tasks = match query {
         Some(input) => corral_ops::search_tasks(&ctx.store, input)?,
         None => ctx.store.list()?,
@@ -194,6 +249,14 @@ pub(super) fn list(
         return Ok(());
     }
     crate::list_cols::print(ctx, &tasks, columns)
+}
+
+pub(crate) fn task_head_json(head: &corral_core::TaskHead) -> Result<serde_json::Value> {
+    let mut value = task_json(&head.to_shell_task()?, false);
+    if let Some(object) = value.as_object_mut() {
+        object.remove("path");
+    }
+    Ok(value)
 }
 
 /// History vectors a summary leaves out; `show --json` keeps them.

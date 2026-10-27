@@ -4,6 +4,7 @@
 mod acceptance;
 pub mod agent;
 pub mod analytics;
+pub mod approvals;
 mod artifact_gc;
 mod artifact_search;
 mod artifact_server;
@@ -45,6 +46,7 @@ mod integration;
 mod launch;
 mod launch_exit;
 mod lesson_distill;
+pub mod lesson_rows;
 mod lesson_signals;
 mod lessons;
 mod movement;
@@ -146,7 +148,7 @@ pub use artifacts::{
     scan_artifacts,
 };
 pub use automation_controls::{automation_confirm, automation_preview, require_automation_owner};
-pub use automation_status::{automation_blocker, automation_summary};
+pub use automation_status::{automation_blocker, automation_blocker_head, automation_summary};
 pub use comments::comment;
 pub use completion::{
     completion_check, completion_check_task, completion_spec_digest, evidence_failures,
@@ -177,7 +179,7 @@ pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
     cached_harness_report, detect_harnesses, harness_report,
 };
-pub use history::{Finish, Landed, finished_tasks, finishes};
+pub use history::{Finish, Landed, finished_tasks, finishes, finishes_for};
 pub use hooks::{
     HookAttempt, HookReceipt, HookState, PostLandOperation, operational_blocker,
     post_land_operations, reconcile_post_land, retry_post_land,

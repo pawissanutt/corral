@@ -9,10 +9,15 @@ use unicode_width::UnicodeWidthStr;
 use crate::overlays::truncate;
 use crate::theme;
 
-fn field_style(field: CardField, t: &Task, cfg: &CardCfg) -> Style {
+fn field_style(
+    field: CardField,
+    t: &Task,
+    cfg: &CardCfg,
+    head: Option<&corral_core::TaskHead>,
+) -> Style {
     match field {
         CardField::Cost => {
-            let cost = TaskCost::of(t);
+            let cost = head.map_or_else(|| TaskCost::of(t), TaskCost::of_head);
             match cfg.cost_warn {
                 Some(warn) if cost.total() >= warn => Style::new().fg(theme::YELLOW),
                 _ if cost.reported.is_some() && cost.estimated.is_none() => {
@@ -39,25 +44,30 @@ fn line_width(parts: &[(CardField, String)]) -> usize {
 /// The fields `cfg` selects for `t`'s column that have a value, in priority order, dropping the lowest-priority
 /// (last) ones until the line fits `width`. A leading cost that still does not fit switches to its short form
 /// (`~$2.25`) before anything is cut off. `None` when nothing is left.
-pub(crate) fn field_spans(
+pub(crate) fn field_spans_head(
     t: &Task,
     done: &dyn Fn(&str) -> bool,
     cfg: &CardCfg,
     width: usize,
     now: Timestamp,
     pinned: bool,
-    route: Option<&str>,
+    source: (Option<&str>, Option<&corral_core::TaskHead>),
 ) -> Option<Vec<Span<'static>>> {
+    let (route, head) = source;
+    let text = |field: CardField| {
+        head.map_or_else(
+            || field.text_with(t, done, now, pinned),
+            |head| field.text_head_with(head, &t.artifacts, done, now, pinned),
+        )
+    };
     let mut parts: Vec<(CardField, String)> = cfg
         .fields_for(t.status)
         .into_iter()
         .filter_map(|f| {
             let text = if f == CardField::Profile {
-                route
-                    .map(str::to_string)
-                    .or_else(|| f.text_with(t, done, now, pinned))
+                route.map(str::to_string).or_else(|| text(f))
             } else {
-                f.text_with(t, done, now, pinned)
+                text(f)
             };
             text.map(|text| (f, text))
         })
@@ -66,7 +76,9 @@ pub(crate) fn field_spans(
     if line_width(&parts) > width
         && let Some((CardField::Cost, text)) = parts.first_mut()
     {
-        *text = TaskCost::of(t).short();
+        *text = head
+            .map_or_else(|| TaskCost::of(t), TaskCost::of_head)
+            .short();
     }
     let mut spans = Vec::new();
     for (i, (field, text)) in parts.into_iter().enumerate() {
@@ -76,7 +88,7 @@ pub(crate) fn field_spans(
         let room = width.saturating_sub(spans.iter().map(|s| s.width()).sum());
         spans.push(Span::styled(
             truncate(&text, room),
-            field_style(field, t, cfg),
+            field_style(field, t, cfg, head),
         ));
     }
     (!spans.is_empty()).then_some(spans)

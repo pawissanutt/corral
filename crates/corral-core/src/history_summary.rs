@@ -50,6 +50,8 @@ pub struct HistorySummary {
     #[serde(with = "crate::container_facts::fixed")]
     pub artifacts: u64,
     #[serde(with = "crate::container_facts::fixed")]
+    pub kept_artifacts: u64,
+    #[serde(with = "crate::container_facts::fixed")]
     pub scope_revisions: u64,
     #[serde(with = "crate::container_facts::fixed")]
     pub pm_receipts: u64,
@@ -63,6 +65,15 @@ pub struct HistorySummary {
     pub last_ended_run: Option<EndedRun>,
     pub last_ended_plan_run: Option<EndedRun>,
     pub tokens: TokenTotals,
+    /// Earlier runs with usage, including a present but zero-token usage record.
+    #[serde(with = "crate::container_facts::fixed")]
+    pub usage_runs: u64,
+    #[serde(with = "crate::container_facts::fixed")]
+    pub held_gates: u64,
+    #[serde(with = "crate::container_facts::fixed")]
+    pub held_reviews: u64,
+    #[serde(with = "crate::container_facts::fixed")]
+    pub pending_plan_reviews: u64,
     /// Per-run cost subtotals, summed run by run.
     pub cost: CostTotals,
     /// Pane references of history containers per socket.
@@ -100,6 +111,11 @@ impl HistorySummary {
             operating_contract_revision: crate::operating::operating_contract_revision(task)?,
             comments: n(task.comments.len()),
             artifacts: n(task.artifacts.len()),
+            kept_artifacts: n(task
+                .artifacts
+                .iter()
+                .filter(|a| a.tier() == crate::ArtifactTier::Keep && a.purged_at.is_none())
+                .count()),
             scope_revisions: n(task.approved_scope_history.len()),
             pm_receipts: n(task.agent_pm_receipts.len()),
             member_gate_revisions: task.member_gates.values().map(|g| n(g.history.len())).sum(),
@@ -151,12 +167,19 @@ impl HistorySummary {
             });
         }
         if let Some(usage) = run.total_usage() {
+            self.usage_runs += 1;
             self.tokens.input += usage.input;
             self.tokens.output += usage.output;
             self.tokens.cache_read += usage.cache_read;
             self.tokens.cache_write += usage.cache_write;
         }
         self.cost.add(&CostTotals::of_run(run));
+        self.held_gates += u64::from(run.gate.as_ref().is_some_and(crate::GateRecord::holds_slot));
+        self.held_reviews += u64::from(
+            run.review
+                .as_ref()
+                .is_some_and(crate::ReviewRecord::holds_slot),
+        );
         let owner = format!("{seq:06}/000000");
         self.add_panes(run_panes(&format!("run:{owner}"), run));
         for (c, child) in run.review_runs.iter().enumerate() {
@@ -188,6 +211,7 @@ impl HistorySummary {
 
     pub fn fold_plan(&mut self, seq: usize, plan: &PlanRecord) {
         self.plans += 1;
+        self.pending_plan_reviews += n(plan.reviews.iter().filter(|r| r.verdict.is_none()).count());
         self.plan_review_changes += n(plan
             .reviews
             .iter()
@@ -225,12 +249,19 @@ impl HistorySummary {
             });
         }
         if let Some(usage) = &run.facts.usage_total {
+            self.usage_runs += 1;
             self.tokens.input += usage.input;
             self.tokens.output += usage.output;
             self.tokens.cache_read += usage.cache_read;
             self.tokens.cache_write += usage.cache_write;
         }
         self.cost.add(&run.facts.cost);
+        self.held_gates += u64::from(run.gate.as_ref().is_some_and(crate::GateRecord::holds_slot));
+        self.held_reviews += u64::from(
+            run.review
+                .as_ref()
+                .is_some_and(crate::ReviewRecord::holds_slot),
+        );
         self.add_sockets(&run.facts.pane_refs);
         self.review_changes_unsuperseded += run.facts.changes_unsuperseded;
     }
@@ -254,6 +285,7 @@ impl HistorySummary {
 
     pub fn fold_plan_head(&mut self, plan: &crate::PlanHead) {
         self.plans += 1;
+        self.pending_plan_reviews += plan.facts.pending_children;
         self.plan_review_changes += plan.facts.changes;
         self.add_sockets(&plan.facts.pane_refs);
     }

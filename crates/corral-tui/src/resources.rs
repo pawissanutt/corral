@@ -189,6 +189,42 @@ pub(crate) fn waiting_review(task: &Task) -> bool {
     }
 }
 
+pub(crate) fn waiting_review_head(task: &corral_core::TaskHead) -> bool {
+    if task.status != Status::Review {
+        return false;
+    }
+    let run = task.current_run.as_ref();
+    if run.is_some_and(|r| {
+        r.gate
+            .as_ref()
+            .is_some_and(|g| g.result == GateResult::Running)
+            || r.review.as_ref().is_some_and(|r| r.holds_slot())
+            || r.facts.open_children > 0
+    }) {
+        return false;
+    }
+    if task.review_wait.is_some() {
+        return true;
+    }
+    match run.and_then(|r| r.autopilot.as_ref()).map(|a| a.stage) {
+        None => true,
+        Some(AutoStage::Gating) => !run
+            .and_then(|r| r.gate.as_ref())
+            .is_some_and(|g| g.result == GateResult::Running),
+        Some(AutoStage::Reviewing) => !run.is_some_and(|r| {
+            r.review.as_ref().is_some_and(|r| r.holds_slot()) || r.facts.open_children > 0
+        }),
+        Some(
+            AutoStage::Landing
+            | AutoStage::Reviewed
+            | AutoStage::Changes
+            | AutoStage::Blocked
+            | AutoStage::Escalated
+            | AutoStage::Done,
+        ) => false,
+    }
+}
+
 /// Resource hold text shared by the board and textual autopilot status. Ready work is admitted for every
 /// configured project unless `[dispatch] ready_projects` names a restriction.
 pub fn hold(task: &Task, config: &Config, reason: &str) -> Option<String> {
@@ -201,17 +237,28 @@ pub fn hold(task: &Task, config: &Config, reason: &str) -> Option<String> {
         .then(|| format!("waiting: machine busy ({reason})"))
 }
 
-pub(crate) fn append_hold(
+pub(crate) fn append_hold_head(
     lines: &mut Vec<Line<'static>>,
     task: &Task,
     config: &Config,
     reason: Option<&str>,
     width: usize,
+    head: Option<&corral_core::TaskHead>,
 ) {
-    if reason
-        .and_then(|reason| hold(task, config, reason))
-        .is_none()
-    {
+    let held = match head {
+        None => reason
+            .and_then(|reason| hold(task, config, reason))
+            .is_some(),
+        Some(head) => {
+            reason.is_some()
+                && (head.status == Status::Ready
+                    && (head.queued
+                        || !head.dispatch_hold
+                            && config.ready_project_allowed(head.project.as_deref()))
+                    || waiting_review_head(head))
+        }
+    };
+    if !held {
         return;
     }
     let room = width;

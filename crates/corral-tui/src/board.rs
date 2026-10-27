@@ -41,6 +41,8 @@ mod mouse;
 mod overlay;
 mod view;
 pub(crate) use overlay::Overlay;
+#[cfg(test)]
+mod hot_read_tests;
 mod pins;
 #[cfg(test)]
 mod pins_tests;
@@ -48,6 +50,7 @@ mod slots;
 mod snapshot;
 #[cfg(test)]
 mod snapshot_tests;
+mod sources;
 pub use snapshot::BoardSnapshot;
 #[cfg(test)]
 mod slots_tests;
@@ -67,6 +70,10 @@ pub struct BoardView {
     resources: crate::resources::ResourceDisplay,
     now: Box<dyn Fn() -> Timestamp>,
     tasks: Vec<Task>,
+    heads: HashMap<String, corral_core::TaskHead>,
+    obligations: HashMap<String, corral_core::RunObligations>,
+    status_counts: Vec<corral_core::backend::StatusCount>,
+    slot_usage: SlotUsage,
     /// Column order and Done history derived from `tasks`, `finishes` and `pinned`.
     index: index::BoardIndex,
     /// Finish records of the Done and Dropped tasks (Done column order, window and card fields).
@@ -129,6 +136,10 @@ impl BoardView {
             now,
             finishes: HashMap::new(),
             tasks: Vec::new(),
+            heads: HashMap::new(),
+            obligations: HashMap::new(),
+            status_counts: Vec::new(),
+            slot_usage: SlotUsage::default(),
             index: index::BoardIndex::default(),
             pinned: HashSet::new(),
             unreviewed: HashMap::new(),
@@ -200,7 +211,15 @@ impl BoardView {
         let cutoff = (self.now)()
             .checked_sub(self.done_window)
             .unwrap_or(Timestamp::MIN);
-        self.index.done_cards(&self.tasks, cutoff, self.done_max)
+        let (shown, _) = self.index.done_cards(&self.tasks, cutoff, self.done_max);
+        let total = self
+            .status_counts
+            .iter()
+            .filter(|c| c.status == "done")
+            .map(|c| usize::try_from(c.n).unwrap_or(usize::MAX))
+            .sum::<usize>();
+        let older = total.saturating_sub(shown.len());
+        (shown, older)
     }
 
     fn columns(&self) -> Vec<Status> {

@@ -50,6 +50,14 @@ pub(crate) use update::change_toast;
 mod guide_tests;
 mod header;
 #[cfg(all(test, unix))]
+mod hot_budget;
+#[cfg(all(test, unix))]
+mod hot_budget_checks;
+#[cfg(all(test, unix))]
+mod hot_budget_fixture;
+#[cfg(all(test, unix))]
+mod hot_budget_rows;
+#[cfg(all(test, unix))]
 mod input_parity_tests;
 #[cfg(test)]
 mod latency_tests;

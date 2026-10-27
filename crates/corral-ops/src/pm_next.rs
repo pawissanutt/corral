@@ -1,4 +1,5 @@
 //! Read-only, deterministic PM policy. Observations contain facts, never model recommendations.
+pub(crate) mod heads;
 pub(crate) mod observe;
 mod plan;
 mod questions;
@@ -619,7 +620,7 @@ pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Re
         };
     }
     if let Some(id) = &action.task {
-        let task = ctx.store.get(id)?;
+        let task = heads::shell(&ctx.store.head(id)?)?;
         let lessons = match task.current_run() {
             Some(run) => match crate::applied_lessons(ctx, &task, run)? {
                 Some(lessons) => lessons,
@@ -645,7 +646,7 @@ pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Re
                 run.review.as_ref().map(|r| (&r.sha, r.verdict))
             ));
         }
-        for event in ctx.store.events_for(id)?.iter().rev().take(3) {
+        for event in heads::events(ctx, Some(id), &[], None, 3)? {
             action.evidence.push(format!(
                 "event {} {}: {}",
                 event.ts, event.kind, event.detail

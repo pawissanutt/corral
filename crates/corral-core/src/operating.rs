@@ -12,11 +12,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan_contract_revision;
 use crate::{
-    ActionAuthorization, AuthorizedSubmission, Config, OperatingActionKind, OperatingOrigin,
-    PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
+    Config, OperatingActionKind, PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
 };
 
+mod heads;
 mod membership;
+#[cfg(test)]
+#[path = "operating/policy_heads_tests.rs"]
+mod policy_heads_tests;
 mod projects;
 mod publication;
 mod records;
@@ -333,10 +336,10 @@ impl Store {
         let plan = if task.tracker {
             None
         } else {
-            self.execution_plan(task)?
+            self.execution_plan_fields(task)?
         };
         let contract_revision = match plan {
-            Some(plan) => digest(&(contract, operating_contract_revision(&plan)?))?,
+            Some(plan) => digest(&(contract, plan.operating_contract_revision()))?,
             None => contract,
         };
         Ok(ScopedTask {
@@ -519,7 +522,7 @@ impl Store {
     }
 
     pub(crate) fn resolve_operating_policy(&self, config: &Config) -> Result<EffectivePolicy> {
-        // Membership checks look up every task per member; read the board once, now.
+        // All membership and keyed plan reads observe one committed state.
         if !self.is_snapshot() {
             return self.read_only_snapshot()?.resolve_operating_policy(config);
         }
@@ -567,7 +570,7 @@ impl Store {
         let plan_refusals = self.operating_plan_refusals(config, &members);
         effective.reasons.extend(publication_reasons);
         for (id, member) in &members {
-            let task = self.get(id);
+            let task = self.head(id);
             let mut common = Vec::new();
             if !valid {
                 common.extend(effective.reasons.clone());
@@ -581,7 +584,7 @@ impl Store {
             if let Some(reasons) = plan_refusals.get(id) {
                 common.extend(reasons.clone());
             }
-            let task = match task {
+            let head = match task {
                 Ok(task) => task,
                 Err(error) => {
                     common.push(format!("task unavailable: {error:#}"));
@@ -591,10 +594,11 @@ impl Store {
                     continue;
                 }
             };
+            let task = self.operating_task(&head)?;
             if task.dispatch_hold {
                 common.push("task dispatch hold".into());
             }
-            match self.operating_member(config, &task) {
+            match self.operating_member_head(config, &head) {
                 Ok(current) if &current == member => {}
                 Ok(_) => common.push("task contract or project identity changed".into()),
                 Err(error) => common.push(format!("scope identity unavailable: {error:#}")),
@@ -641,8 +645,8 @@ impl Store {
                     .as_ref()
                     .is_some_and(|manifest| !manifest.owner_decisions.is_empty()),
             };
-            let unresolved = has_owner_decisions
-                && crate::plan_policy::validate_owner_resolution(self, config, &task).is_err();
+            let unresolved =
+                has_owner_decisions && self.operating_owner_resolution(config, &head).is_err();
             // Owner changes notes resolving every decision admit only the revision they request.
             let revision = unresolved && crate::plan_policy::revision_resolved(&task);
             if task
@@ -783,71 +787,5 @@ fn deny_all(policy: &mut EffectiveTaskPolicy, reasons: &[String]) {
         for action in ACTIONS {
             policy.refusals.insert(action, reasons.to_vec());
         }
-    }
-}
-
-impl Store {
-    pub fn authorized_submission(&self, id: &str) -> Result<AuthorizedSubmission> {
-        self.submission_record(id)?
-            .with_context(|| format!("authorization {id} not found"))
-    }
-
-    pub(crate) fn save_authorized_submission(&self, record: &AuthorizedSubmission) -> Result<()> {
-        self.save_submission_record(record)
-    }
-
-    pub(crate) fn validate_operating_action(
-        &self,
-        config: &Config,
-        task: &Task,
-        authorization: &ActionAuthorization,
-    ) -> Result<()> {
-        ensure!(
-            authorization.workspace == self.root() && authorization.action.task == task.id,
-            "action workspace/task identity changed"
-        );
-        ensure!(
-            authorization.member == self.operating_member(config, task)?,
-            "action task contract or project identity changed"
-        );
-        ensure!(
-            authorization.policy_revision == self.policy_revision(config)?,
-            "action policy revision changed"
-        );
-        match &authorization.origin {
-            OperatingOrigin::Automatic {
-                authorization: grant,
-                revision,
-            } => {
-                let effective = self.resolve_operating_policy(config)?;
-                ensure!(
-                    effective.authorization.as_ref() == Some(grant)
-                        && *revision == config.automation.revision,
-                    "automatic grant was revoked"
-                );
-                ensure!(
-                    effective.allows(&task.id, authorization.action.kind),
-                    "automatic action is not authorized: {:?}",
-                    effective.tasks.get(&task.id).map(|task| &task.refusals)
-                );
-            }
-            OperatingOrigin::ExplicitOwner {
-                approval,
-                confirmed_by,
-                ..
-            } => {
-                ensure!(
-                    !approval.trim().is_empty() && !confirmed_by.trim().is_empty(),
-                    "explicit owner approval is missing"
-                );
-            }
-        }
-        if let Some(candidate) = &authorization.action.candidate {
-            ensure!(
-                candidate.task == task.id && candidate.run == authorization.action.run,
-                "candidate does not match action task/run"
-            );
-        }
-        Ok(())
     }
 }

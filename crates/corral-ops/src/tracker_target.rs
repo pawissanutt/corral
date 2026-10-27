@@ -37,9 +37,10 @@ pub(super) fn prerequisites(
     task.depends_on
         .iter()
         .map(|id| {
-            let dependency = store
-                .get(id)
+            let dependency_head = store
+                .head(id)
                 .with_context(|| format!("{}: missing dependency {id}", task.id))?;
+            let mut dependency = dependency_head.to_shell_task()?;
             let mut result = PlanPrerequisite {
                 task: dependency.id.clone(),
                 status: dependency.status,
@@ -73,6 +74,10 @@ pub(super) fn prerequisites(
                             && dependency.children.contains(&task.id)
                     })
             }) {
+                // The approval validator uses the final two reviews, the referenced
+                // planner and pending decisions. Supply those keyed rows explicitly;
+                // a shell's empty history is not evidence of an accepted design.
+                approval_inputs(store, &dependency_head, &mut dependency)?;
                 let design = dependency.plans.last().context("design receipt missing")?;
                 corral_core::plan_policy::validate_approval(
                     store,
@@ -95,12 +100,7 @@ pub(super) fn prerequisites(
                 result.reason = Some(format!("{id}: accepted but no completed run receipt"));
                 return Ok(result);
             };
-            let events = store.events_shared()?;
-            let receipt = events.iter().rev().find(|event| {
-                event.kind == "approved"
-                    && event.task.as_deref() == Some(id.as_str())
-                    && event.detail["run"].as_str() == Some(run.id.as_str())
-            });
+            let receipt = approval(store, id, &run.id)?;
             let Some(receipt) = receipt else {
                 result.reason = Some(format!("{id}: accepted but no current acceptance receipt"));
                 return Ok(result);
@@ -232,20 +232,11 @@ pub(crate) fn check_dispatch_base(store: &Store, task: &Task, base: &str, sha: &
         // with a coding run must prove that its accepted commit is in this exact base,
         // even when the consumer is not itself a Plan member.
         for id in &task.depends_on {
-            let dependency = store.get(id)?;
+            let dependency = store.head(id)?.to_shell_task()?;
             let Some(run) = dependency.current_run() else {
                 continue;
             };
-            let receipt = store
-                .events_shared()?
-                .iter()
-                .rev()
-                .find(|event| {
-                    event.kind == "approved"
-                        && event.task.as_deref() == Some(id.as_str())
-                        && event.detail["run"].as_str() == Some(run.id.as_str())
-                })
-                .cloned()
+            let receipt = approval(store, id, &run.id)?
                 .with_context(|| format!("{id}: no current integration receipt"))?;
             anyhow::ensure!(
                 dependency.status == Status::Done
@@ -272,4 +263,176 @@ pub(crate) fn check_dispatch_base(store: &Store, task: &Task, base: &str, sha: &
         }
     }
     Ok(())
+}
+
+fn approval(store: &Store, task: &str, run: &str) -> Result<Option<corral_core::Event>> {
+    use corral_core::backend::{EventQuery, PageReq};
+    store
+        .view()?
+        .events(
+            &EventQuery {
+                task: Some(task.to_owned()),
+                kinds: vec!["approved".into()],
+                run: Some(run.to_owned()),
+                newest_first: true,
+                valid_only: true,
+                ..EventQuery::default()
+            },
+            PageReq::first(1),
+        )?
+        .items
+        .into_iter()
+        .next()
+        .map(crate::approvals::event)
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn approval_inputs(store: &Store, head: &corral_core::TaskHead, task: &mut Task) -> Result<()> {
+    use corral_core::backend::{PageReq, TaskPart};
+    let plan = head.last_plan.as_ref().context("design receipt missing")?;
+    let count = usize::try_from(plan.facts.children).context("plan review count overflow")?;
+    let mut reviews = Vec::new();
+    for ordinal in count.saturating_sub(1).max(1)..=count {
+        if let Some(review) = head.plan_review_at(&plan.id, ordinal)? {
+            reviews.push(serde_json::from_value(serde_json::to_value(review)?)?);
+        }
+    }
+    task.plans
+        .last_mut()
+        .context("design receipt missing")?
+        .reviews = reviews;
+    if let Some(id) = &plan.run {
+        let mut page = PageReq::first(1);
+        let rows = store.task_rows(
+            &task.id,
+            TaskPart::PlanRun,
+            Some(format!("id:{id}")),
+            None,
+            &mut page,
+        )?;
+        task.plan_runs = rows
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<std::result::Result<_, _>>()?;
+    }
+    if let Some(run) = task.runs.last_mut() {
+        run.obligations = head.open_obligations(&run.id)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod derived_rows_tests {
+    use super::*;
+    use corral_core::work::{self, Counter, HotScope};
+    use serde_json::json;
+
+    #[test]
+    fn derived_dependency_receipts_use_the_newest_event_of_the_exact_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let dependency = store
+            .create("Dependency", Some("app"), Status::Done, "")
+            .unwrap();
+        for (run, sha) in [("R1", "old"), ("R2", "accepted"), ("R1", "newer-other-run")] {
+            store
+                .log_event(
+                    Some(&dependency.id),
+                    "approved",
+                    json!({"run":run,"sha":sha}),
+                )
+                .unwrap();
+        }
+        let expected = store
+            .events_of(Some(&dependency.id), &["approved"])
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|event| event.detail["run"] == "R2")
+            .unwrap();
+        let measure = || {
+            let _scope = HotScope::enter();
+            let before = work::snapshot();
+            let output = approval(&store, &dependency.id, "R2").unwrap().unwrap();
+            let counts = work::snapshot().since(&before);
+            counts.check_identity().unwrap();
+            assert_eq!(counts.unattributed_hydrations(), 0);
+            (output, counts)
+        };
+        let (before, base) = measure();
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        for i in 0..10 {
+            let task = store
+                .create("Other", Some("app"), Status::Done, "")
+                .unwrap();
+            store
+                .log_event(
+                    Some(&task.id),
+                    "approved",
+                    json!({"run":"R2","sha":"other"}),
+                )
+                .unwrap();
+            store
+                .log_event(
+                    Some(&dependency.id),
+                    "approved",
+                    json!({"run":"R1","sha":i}),
+                )
+                .unwrap();
+        }
+        let (after, grown) = measure();
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
+        );
+        for counter in Counter::ALL {
+            assert_eq!(base.get(counter), grown.get(counter), "{counter:?}");
+        }
+        assert_eq!(base.get(Counter::EventDecodes), 1);
+    }
+
+    #[test]
+    fn derived_legacy_plan_prerequisites_read_dependency_heads_without_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let mut plan = store
+            .create("Plan", Some("app"), Status::Running, "")
+            .unwrap();
+        let dependency = store
+            .create("Done dependency", Some("app"), Status::Done, "")
+            .unwrap();
+        let mut task = store
+            .create("Consumer", Some("app"), Status::Ready, "")
+            .unwrap();
+        task.depends_on.push(dependency.id.clone());
+        plan.children.push(dependency.id.clone());
+        let measure = || {
+            let _scope = HotScope::enter();
+            let before = work::snapshot();
+            let output = prerequisites(&store, &plan, &task).unwrap();
+            let counts = work::snapshot().since(&before);
+            counts.check_identity().unwrap();
+            assert_eq!(counts.unattributed_hydrations(), 0);
+            (serde_json::to_value(output).unwrap(), counts)
+        };
+        let (before, base) = measure();
+        assert_eq!(before[0]["task"], dependency.id);
+        assert_eq!(before[0]["satisfied"], true);
+        assert_eq!(before[0]["external"], false);
+        for i in 0..10 {
+            store
+                .create("Unrelated", Some("other"), Status::Dropped, "")
+                .unwrap();
+            store.log_event(None, "unrelated", json!({"i":i})).unwrap();
+        }
+        let (after, grown) = measure();
+        assert_eq!(before, after);
+        for counter in Counter::ALL {
+            assert_eq!(base.get(counter), grown.get(counter), "{counter:?}");
+        }
+    }
 }

@@ -22,14 +22,42 @@ pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bo
     let cwd = cwd
         .canonicalize()
         .context("resolving automation control directory")?;
-    for task in store.list()? {
-        for run in &task.runs {
-            if let Ok(worktree) = run.worktree.canonicalize() {
-                ensure!(
-                    !cwd.starts_with(worktree),
-                    "automation confirmation is unavailable from an agent run worktree"
+    // Confirmation is an owner history command: past worktrees remain agent entry points.
+    let view = store.view()?;
+    let mut page = corral_core::backend::PageReq::first(500);
+    loop {
+        let tasks = view.tasks(
+            &corral_core::backend::TaskQuery {
+                statuses: vec![],
+                project: None,
+                order: corral_core::backend::TaskOrder::IdAsc,
+            },
+            page.clone(),
+        )?;
+        for header in tasks.items {
+            let rows = view.rows(
+                header.num,
+                &corral_core::backend::RowQuery::part(corral_core::backend::TaskPart::Run),
+                corral_core::backend::PageReq::first(u32::MAX),
+            )?;
+            for row in rows.items {
+                corral_core::work::decoded(
+                    corral_core::work::Counter::HistoryRowDecodes,
+                    u64::try_from(serde_json::to_vec(&row.doc)?.len())?,
+                    corral_core::work::Subject::Plain,
                 );
+                let path: std::path::PathBuf = serde_json::from_value(row.doc["worktree"].clone())?;
+                if let Ok(worktree) = path.canonicalize() {
+                    ensure!(
+                        !cwd.starts_with(worktree),
+                        "automation confirmation is unavailable from an agent run worktree"
+                    );
+                }
             }
+        }
+        match tasks.next {
+            Some(next) => page.after = Some(next),
+            None => break,
         }
     }
     Ok(())

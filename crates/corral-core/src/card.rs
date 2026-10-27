@@ -11,7 +11,20 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use unicode_width::UnicodeWidthStr;
 
-use crate::{ArtifactKind, AutoStage, Config, Status, Task};
+use crate::{Artifact, ArtifactKind, AutoStage, Config, Status, Task, TaskHead};
+
+/// The baseline card predicate, also used to maintain the card-obligation row index.
+pub(crate) fn card_obligation_visible(kind: &str, doc: &serde_json::Value) -> bool {
+    let state = doc["observation"]["state"].as_str();
+    match kind {
+        "wait" => {
+            state != Some("cancelled")
+                && !(state == Some("ready") && doc["receipt"]["delivery"] == "acknowledged")
+        }
+        "decision" => doc["receipt"].is_null() || state == Some("delivery_unknown"),
+        _ => false,
+    }
+}
 
 /// Whether `id` names a Done task in `all` (the predicate card fields use for open dependencies).
 pub fn done_in(all: &[Task]) -> impl Fn(&str) -> bool + '_ {
@@ -40,6 +53,104 @@ pub enum CardField {
 }
 
 impl CardField {
+    /// The head-form card catalog. `artifacts` contains only the current run's artifacts;
+    /// callers obtain it on the same view as the head.
+    pub fn text_head_with(
+        self,
+        t: &TaskHead,
+        artifacts: &[Artifact],
+        done: &dyn Fn(&str) -> bool,
+        now: Timestamp,
+        pinned: bool,
+    ) -> Option<String> {
+        let run = t.current_run.as_ref();
+        match self {
+            Self::Cost => Some(TaskCost::of_head(t).text()),
+            Self::Tokens => {
+                let old = &t.summary.tokens;
+                let current = run.and_then(|r| r.facts.usage_total.as_ref());
+                let tokens = [old.input, old.output, old.cache_read, old.cache_write]
+                    .into_iter()
+                    .chain(
+                        current
+                            .into_iter()
+                            .flat_map(|u| [u.input, u.output, u.cache_read, u.cache_write]),
+                    )
+                    .fold(0_u64, u64::saturating_add);
+                (t.summary.usage_runs > 0 || current.is_some())
+                    .then(|| format!("{} tok", short_count(tokens)))
+            }
+            Self::Profile => run.map(|r| r.profile.clone().unwrap_or_else(|| r.agent.clone())),
+            Self::Model => run.and_then(|r| r.model.clone()),
+            Self::Effort => run.and_then(|r| r.effort.clone()),
+            Self::Harness => run.and_then(|r| r.harness.clone()),
+            Self::Stage => run
+                .and_then(|r| r.autopilot.as_ref())
+                .map(|a| match a.stage {
+                    AutoStage::Gating => "gating".to_string(),
+                    AutoStage::Reviewing => "reviewing".to_string(),
+                    AutoStage::Landing => "landing".to_string(),
+                    AutoStage::Done => "landed".to_string(),
+                    AutoStage::Reviewed => "reviewed".to_string(),
+                    AutoStage::Changes => format!("changes r{}", t.rounds),
+                    AutoStage::Blocked => "blocked".to_string(),
+                    AutoStage::Escalated => "escalated".to_string(),
+                }),
+            Self::Progress => run.and_then(|r| r.progress.as_ref()).map(|p| p.summary()),
+            Self::Rounds => (t.rounds > 0).then(|| format!("r{}", t.rounds)),
+            Self::Age => {
+                let since = match (t.status, run) {
+                    (Status::Running, Some(r)) => r.started,
+                    _ => t.updated,
+                };
+                Some(age_text((now.as_second() - since.as_second()).max(0)))
+            }
+            Self::DependsOn => {
+                let open: Vec<_> = t
+                    .depends_on
+                    .iter()
+                    .filter(|d| !done(d))
+                    .map(String::as_str)
+                    .collect();
+                (!open.is_empty()).then(|| format!("dep {}", open.join(",")))
+            }
+            Self::Priority => Some(t.priority.clone()),
+            Self::Artifacts => {
+                run.map(|r| format!("◆ {}", artifacts.iter().filter(|a| a.run == r.id).count()))
+            }
+            Self::Pinned => pinned.then(|| "★".to_string()),
+            Self::Lines => {
+                let run = run?;
+                let artifact = artifacts
+                    .iter()
+                    .rev()
+                    .find(|a| a.run == run.id && a.kind == ArtifactKind::Diff)?;
+                let mut words = artifact
+                    .title
+                    .split_whitespace()
+                    .filter(|w| w.starts_with('+') || w.starts_with('−') || w.starts_with('-'));
+                Some(format!("{} {}", words.next()?, words.next()?))
+            }
+            Self::NeedsMe => {
+                if t.status != Status::NeedsMe {
+                    return None;
+                }
+                let r = run?;
+                r.facts
+                    .pending_decision
+                    .as_ref()
+                    .map(|d| d.request.question.clone())
+                    .or_else(|| r.autopilot.as_ref().and_then(|a| a.reason.clone()))
+                    .and_then(|s| {
+                        s.lines()
+                            .map(str::trim)
+                            .find(|l| !l.is_empty())
+                            .map(str::to_owned)
+                    })
+            }
+        }
+    }
+
     pub const ALL: [CardField; 16] = [
         CardField::Cost,
         CardField::Tokens,
@@ -260,6 +371,20 @@ pub struct TaskCost {
 }
 
 impl TaskCost {
+    /// Spend folded from earlier runs and the current run's own and review usage facts.
+    pub fn of_head(t: &TaskHead) -> TaskCost {
+        let mut totals = t.summary.cost.clone();
+        if let Some(run) = &t.current_run {
+            totals.add(&run.facts.cost);
+        }
+        TaskCost {
+            reported: totals.reported,
+            estimated: totals.estimated,
+            unpriced_tokens: totals.unpriced_tokens,
+            ran: t.summary.runs > 0 || t.current_run.is_some(),
+        }
+    }
+
     pub fn of(t: &Task) -> TaskCost {
         let mut cost = TaskCost {
             ran: !t.runs.is_empty(),
@@ -326,8 +451,16 @@ pub fn cost_text(t: &Task) -> String {
 
 /// Known spend of `tasks` for a column header: `~` when any of it is an estimate, `+` when any is partial.
 pub fn cost_sum_label<'a>(tasks: impl IntoIterator<Item = &'a Task>) -> String {
+    cost_sum(tasks.into_iter().map(TaskCost::of))
+}
+
+pub fn cost_sum_heads<'a>(tasks: impl IntoIterator<Item = &'a TaskHead>) -> String {
+    cost_sum(tasks.into_iter().map(TaskCost::of_head))
+}
+
+fn cost_sum(costs: impl IntoIterator<Item = TaskCost>) -> String {
     let (mut total, mut estimated, mut partial) = (0.0, false, false);
-    for cost in tasks.into_iter().map(TaskCost::of) {
+    for cost in costs {
         total += cost.total();
         estimated |= cost.estimated.is_some();
         partial |= cost.partial();

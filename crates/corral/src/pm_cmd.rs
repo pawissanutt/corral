@@ -58,6 +58,7 @@ pub(crate) fn evaluate<T>(
     ctx: &corral_ops::Ctx,
     pass: impl FnOnce(&corral_ops::Ctx) -> Result<T>,
 ) -> Result<T> {
+    let _hot = corral_core::work::HotScope::enter();
     let snapshot = corral_ops::Ctx {
         store: ctx.store.read_only_snapshot()?,
         ..ctx.clone()

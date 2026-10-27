@@ -38,6 +38,192 @@ pub(crate) fn shell_task(fields: &TaskHeadFields) -> Result<Task> {
     Ok(task)
 }
 
+pub(crate) fn artifact_indexes(artifact: &crate::Artifact) -> Vec<String> {
+    let file = crate::snapshot_name(artifact);
+    let original = match file.split_once('-') {
+        Some((sha, rest)) if sha.len() == 8 && sha.chars().all(|c| c.is_ascii_hexdigit()) => rest,
+        _ => file,
+    };
+    vec![
+        format!("run:{}", artifact.run),
+        format!("path:{}", artifact.path),
+        format!("file:{}:{file}", artifact.run),
+        format!("original:{}:{original}", artifact.run),
+        format!("title:{}", artifact.title),
+        format!("source:{}", artifact.source),
+    ]
+}
+
+impl TaskHead {
+    /// Exactly the obligations that can produce a board card line, including uncertain
+    /// deliveries with receipts. This does not change the `open_obligations` page's contract.
+    pub fn card_obligations(&self, run: &str) -> Result<crate::RunObligations> {
+        let Some(seq) = self.run_seq(run)? else {
+            return Ok(crate::RunObligations::default());
+        };
+        let rows = |kind| {
+            self.query(
+                &crate::backend::RowQuery::under(
+                    crate::backend::TaskPart::RunObligation,
+                    format!("{seq:06}/000000/{kind}/"),
+                )
+                .with_index("card"),
+                u32::MAX,
+                Counter::NestedRowDecodes,
+            )
+        };
+        let decode = |rows: Vec<crate::backend::HistoryRow>| {
+            rows.into_iter().map(|row| row.doc).collect::<Vec<_>>()
+        };
+        Ok(crate::RunObligations {
+            waits: decode(rows("wait")?)
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<_, _>>()?,
+            decisions: decode(rows("decision")?)
+                .into_iter()
+                .map(serde_json::from_value)
+                .collect::<std::result::Result<_, _>>()?,
+        })
+    }
+
+    /// One plan revision, projected without its review history.
+    pub fn plan_by_id(&self, id: &str) -> Result<Option<super::PlanHead>> {
+        if let Some(plan) = self.last_plan.as_ref().filter(|p| p.id == id) {
+            return Ok(Some(plan.clone()));
+        }
+        self.query(
+            &crate::backend::RowQuery::part(crate::backend::TaskPart::Plan)
+                .with_index(format!("id:{id}")),
+            1,
+            Counter::HistoryRowDecodes,
+        )?
+        .into_iter()
+        .next()
+        .map(|row| {
+            let (mut plan, facts): (super::PlanHead, _) = super::head::projection(&row.doc)?;
+            plan.facts = facts;
+            Ok(plan)
+        })
+        .transpose()
+    }
+
+    /// Artifacts of one run, on the head's pinned view.
+    pub fn artifacts_of(&self, run: &str) -> Result<Vec<crate::Artifact>> {
+        self.query(
+            &crate::backend::RowQuery::part(crate::backend::TaskPart::Artifact)
+                .with_index(format!("run:{run}")),
+            u32::MAX,
+            Counter::HistoryRowDecodes,
+        )?
+        .into_iter()
+        .map(|row| Ok(serde_json::from_value(row.doc)?))
+        .collect()
+    }
+
+    /// One artifact by its stored path, without decoding other artifacts.
+    pub fn artifact_by_path(&self, path: &str) -> Result<Option<crate::Artifact>> {
+        self.artifact_index(&format!("path:{path}"), false)
+    }
+
+    /// All records of a stored path, including repeated registrations of the same snapshot.
+    pub fn artifacts_by_path(&self, path: &str) -> Result<Vec<crate::Artifact>> {
+        self.query(
+            &crate::backend::RowQuery::part(crate::backend::TaskPart::Artifact)
+                .with_index(format!("path:{path}")),
+            u32::MAX,
+            Counter::HistoryRowDecodes,
+        )?
+        .into_iter()
+        .map(|row| Ok(serde_json::from_value(row.doc)?))
+        .collect()
+    }
+
+    /// First exact snapshot filename in a run, or the last original filename match.
+    pub fn artifact_by_file(&self, run: &str, file: &str) -> Result<Option<crate::Artifact>> {
+        if let Some(artifact) = self.artifact_index(&format!("file:{run}:{file}"), false)? {
+            return Ok(Some(artifact));
+        }
+        self.artifact_index(&format!("original:{run}:{file}"), true)
+    }
+
+    /// Most recently appended artifact with the anchor's title or source.
+    pub fn latest_artifact(&self, anchor: &crate::Artifact) -> Result<crate::Artifact> {
+        // Row order, not wall time, defines follow-latest.
+        let rows = |token: String| {
+            self.query(
+                &crate::backend::RowQuery::part(crate::backend::TaskPart::Artifact)
+                    .with_index(token)
+                    .newest_first(),
+                1,
+                Counter::HistoryRowDecodes,
+            )
+        };
+        let title = rows(format!("title:{}", anchor.title))?.into_iter().next();
+        let source = rows(format!("source:{}", anchor.source))?
+            .into_iter()
+            .next();
+        let latest = [title, source]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| a.key.cmp(&b.key));
+        latest
+            .map(|row| Ok(serde_json::from_value(row.doc)?))
+            .unwrap_or_else(|| Ok(anchor.clone()))
+    }
+
+    fn artifact_index(&self, token: &str, newest: bool) -> Result<Option<crate::Artifact>> {
+        let mut query =
+            crate::backend::RowQuery::part(crate::backend::TaskPart::Artifact).with_index(token);
+        query.newest_first = newest;
+        self.query(&query, 1, Counter::HistoryRowDecodes)?
+            .into_iter()
+            .next()
+            .map(|row| Ok(serde_json::from_value(row.doc)?))
+            .transpose()
+    }
+
+    /// A compatibility value containing the head fields and each current container as its
+    /// vector's only element. Nested history is empty except the current child/review.
+    ///
+    /// This does not hydrate history. Counts, usage, costs and open-child state must be read
+    /// from this head's facts/summary, not inferred from the shell's vectors.
+    pub fn to_shell_task(&self) -> Result<Task> {
+        fn run(head: &super::RunHead) -> Result<crate::Run> {
+            let mut value: crate::Run = serde_json::from_value(serde_json::to_value(head)?)?;
+            if let Some(child) = head.current_child.as_deref() {
+                value.review_runs.push(run(child)?);
+            }
+            Ok(value)
+        }
+        let mut task = shell_task(&self.task)?;
+        if let Some(head) = &self.current_run {
+            task.runs.push(run(head)?);
+        }
+        if let Some(head) = &self.last_plan_run {
+            task.plan_runs
+                .push(serde_json::from_value(serde_json::to_value(head)?)?);
+        }
+        if let Some(head) = &self.last_plan {
+            let mut plan: crate::PlanRecord = serde_json::from_value(serde_json::to_value(head)?)?;
+            if let Some(review) = &head.current_review {
+                plan.reviews
+                    .push(serde_json::from_value(serde_json::to_value(review)?)?);
+            }
+            task.plans.push(plan);
+        }
+        if let Some(head) = &self.last_aggregate_attempt {
+            let mut attempt: crate::AggregateAttempt =
+                serde_json::from_value(serde_json::to_value(head)?)?;
+            if let Some(review) = &head.current_review {
+                attempt.reviews.push(review.clone());
+            }
+            task.aggregate_attempts.push(attempt);
+        }
+        Ok(task)
+    }
+}
+
 fn head_doc_of(fields: &TaskHeadFields) -> Result<Value> {
     super::codec::head_doc(&shell_task(fields)?)
 }

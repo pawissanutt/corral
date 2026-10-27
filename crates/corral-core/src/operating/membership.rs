@@ -1,6 +1,7 @@
 //! Tracker selection freezes direct task contracts in the ordinary finite scope.
 use super::ScopedTask;
-use crate::{Config, Status, Store, Task};
+use crate::backend::HeadQuery;
+use crate::{Config, Status, Store, Task, TaskHead};
 use anyhow::{Context, Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,13 +17,33 @@ impl Store {
             self.check_operating_plan(task)?;
             return Ok(Some(task.clone()));
         }
-        let listing = self.list_shared()?;
-        let owners = listing
-            .iter()
-            .filter(|plan| plan.tracker && plan.children.contains(&task.id))
-            .cloned()
+        self.execution_plan_fields(task)?
+            .map(|plan| self.get(&plan.id))
+            .transpose()
+    }
+
+    /// Head-only form of [`Store::execution_plan`], on the caller's read snapshot.
+    ///
+    /// # Errors
+    /// Returns the same membership and lookup errors as the full form.
+    pub fn execution_plan_head(&self, task: &TaskHead) -> Result<Option<TaskHead>> {
+        if task.tracker && task.approved_scope.is_some() {
+            self.check_operating_plan(&task.to_shell_task()?)?;
+            return Ok(Some(task.clone()));
+        }
+        self.execution_plan_fields(&task.to_shell_task()?)
+    }
+
+    pub(super) fn execution_plan_fields(&self, task: &Task) -> Result<Option<TaskHead>> {
+        let owners = self
+            .heads(&HeadQuery::EdgeTo {
+                kind: "child".into(),
+                other: task.id.clone(),
+            })?
+            .into_iter()
+            .filter(|plan| plan.tracker)
             .collect::<Vec<_>>();
-        let parent = task.parent.as_deref().map(|id| self.get(id)).transpose()?;
+        let parent = task.parent.as_deref().map(|id| self.head(id)).transpose()?;
         let Some(plan) = parent.filter(|plan| plan.tracker) else {
             ensure!(owners.is_empty(), "task has a nonreciprocal Plan owner");
             return Ok(None);
@@ -35,7 +56,7 @@ impl Store {
         if plan.approved_scope.is_none() {
             return Ok(None);
         }
-        self.check_operating_plan(&plan)?;
+        self.check_operating_plan(&plan.to_shell_task()?)?;
         Ok(Some(plan))
     }
 
@@ -69,10 +90,30 @@ impl Store {
     }
 
     pub(super) fn check_operating_plan(&self, plan: &Task) -> Result<()> {
+        let key = format!(
+            "operating_plan\0{}",
+            super::digest(&(
+                &plan.id,
+                &plan.project,
+                &plan.parent,
+                &plan.children,
+                plan.tracker,
+                plan.approved_scope.is_some(),
+            ))?
+        );
+        let checked = self.pass_derived(&key, || {
+            Ok(self
+                .check_operating_plan_uncached(plan)
+                .map_err(|error| format!("{error:#}")))
+        })?;
+        checked.as_ref().clone().map_err(anyhow::Error::msg)
+    }
+
+    fn check_operating_plan_uncached(&self, plan: &Task) -> Result<()> {
         ensure!(plan.tracker, "Plan is no longer a tracker");
         ensure!(plan.approved_scope.is_some(), "Plan has no approved scope");
         ensure!(!plan.children.is_empty(), "Plan has no children");
-        let parent = plan.parent.as_deref().map(|id| self.get(id)).transpose()?;
+        let parent = plan.parent.as_deref().map(|id| self.head(id)).transpose()?;
         if let Some(parent) = &parent {
             ensure!(
                 parent.id != plan.id && parent.project == plan.project,
@@ -92,14 +133,29 @@ impl Store {
         );
         for id in children {
             let child = self
-                .get(id)
+                .head(id)
                 .with_context(|| format!("Plan child {id} missing"))?;
             ensure!(
                 child.parent.as_ref() == Some(&plan.id) && child.project == plan.project,
                 "Plan child {id} parent or project differs"
             );
         }
-        for task in self.list_shared()?.iter() {
+        // Retain the old board order for the first failing reciprocal check.
+        let mut related = BTreeMap::new();
+        for task in self.heads(&HeadQuery::Children {
+            parent: plan.id.clone(),
+        })? {
+            related.insert(task.num, task);
+        }
+        for id in std::iter::once(&plan.id).chain(&plan.children) {
+            for task in self.heads(&HeadQuery::EdgeTo {
+                kind: "child".into(),
+                other: id.clone(),
+            })? {
+                related.insert(task.num, task);
+            }
+        }
+        for task in related.values() {
             if task.parent.as_ref() == Some(&plan.id) {
                 ensure!(
                     plan.children.contains(&task.id),
@@ -131,18 +187,23 @@ impl Store {
         let mut refusals = BTreeMap::<String, Vec<String>>::new();
         // Parent links also retain the refusal when a frozen tracker disappears.
         let mut plans = BTreeSet::new();
+        let mut by_parent = BTreeMap::<String, BTreeSet<String>>::new();
         for id in members.keys() {
-            if let Ok(task) = self.get(id) {
+            if let Ok(task) = self.head(id) {
                 if task.tracker {
                     plans.insert(id.clone());
                 }
-                if let Some(parent) = task.parent {
-                    plans.insert(parent);
+                if let Some(parent) = &task.parent {
+                    plans.insert(parent.clone());
+                    by_parent
+                        .entry(parent.clone())
+                        .or_default()
+                        .insert(id.clone());
                 }
             }
         }
         for id in plans {
-            let plan = self.get(&id);
+            let plan = self.head(&id);
             if plan
                 .as_ref()
                 .is_ok_and(|task| !task.tracker || task.approved_scope.is_none())
@@ -151,7 +212,7 @@ impl Store {
                 // A changed frozen contract is still checked for each member below.
                 if !members.contains_key(&id)
                     || plan.as_ref().is_ok_and(|task| {
-                        self.operating_member(config, task)
+                        self.operating_member_head(config, task)
                             .is_ok_and(|current| members.get(&id) == Some(&current))
                     })
                 {
@@ -162,7 +223,7 @@ impl Store {
                 let plan = plan
                     .as_ref()
                     .map_err(|error| anyhow::anyhow!("{error:#}"))?;
-                self.check_operating_plan(plan)?;
+                self.check_operating_plan(&plan.to_shell_task()?)?;
                 ensure!(
                     !config.automation.scope.exclusions.contains(&id),
                     "Plan is explicitly excluded"
@@ -175,7 +236,7 @@ impl Store {
                 );
                 if let Some(expected) = members.get(&id) {
                     ensure!(
-                        &self.operating_member(config, plan)? == expected,
+                        &self.operating_member_head(config, plan)? == expected,
                         "Plan scope, target or membership changed"
                     );
                     for child in &plan.children {
@@ -184,7 +245,8 @@ impl Store {
                         }
                         if let Some(expected) = members.get(child) {
                             ensure!(
-                                &self.operating_member(config, &self.get(child)?)? == expected,
+                                &self.operating_member_head(config, &self.head(child)?)?
+                                    == expected,
                                 "Plan child {child} contract changed"
                             );
                         }
@@ -194,19 +256,14 @@ impl Store {
             })();
             if let Err(error) = result {
                 let reason = format!("Plan {id}: {error:#}");
-                for member in members.keys() {
-                    let related = member == &id
-                        || self
-                            .get(member)
-                            .is_ok_and(|task| task.parent.as_ref() == Some(&id))
-                        || plan
-                            .as_ref()
-                            .is_ok_and(|plan| plan.children.contains(member));
-                    if related {
-                        refusals
-                            .entry(member.clone())
-                            .or_default()
-                            .push(reason.clone());
+                let mut related = by_parent.get(&id).cloned().unwrap_or_default();
+                related.insert(id.clone());
+                if let Ok(plan) = &plan {
+                    related.extend(plan.children.iter().cloned());
+                }
+                for member in related {
+                    if members.contains_key(&member) {
+                        refusals.entry(member).or_default().push(reason.clone());
                     }
                 }
             }

@@ -18,7 +18,9 @@ pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
         return Ok(());
     };
     let previous = OBSERVATIONS.load(&ctx.store, "state")?;
-    let tasks = ctx.store.list_shared()?;
+    let tasks = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
     let current: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.clone(), t.status)).collect();
     if previous.as_ref() == Some(&current) {
         return Ok(());

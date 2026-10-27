@@ -146,7 +146,11 @@ pub(crate) fn authorize(
             confirmed_at: Timestamp::now(),
         },
         Origin::Automatic => {
-            require(&ctx.store, &ctx.store.get(&action.task)?, action.kind)?;
+            require(
+                &ctx.store,
+                &ctx.store.head(&action.task)?.to_shell_task()?,
+                action.kind,
+            )?;
             let config = Store::open_unobserved(ctx.store.root())?.config;
             let effective = ctx.store.effective_operating_policy()?;
             OperatingOrigin::Automatic {

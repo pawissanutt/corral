@@ -13,7 +13,9 @@ use super::{
     OperatingApproval, OperatingScope, OperatingSelection, OperatingTaskConstraints, ScopedTask,
     digest, file_identity, task_constraints,
 };
-use crate::{Config, Status, Store, Task};
+use crate::backend::{HeadQuery, PageReq, TaskHeader};
+use crate::work::{self, Counter, Subject};
+use crate::{Config, Status, Store, Task, TaskHead};
 
 pub const DEFAULT_GRANT_DAYS: u32 = 7;
 
@@ -161,7 +163,7 @@ impl Store {
                 return members;
             }
         };
-        let mut tasks = match self.list() {
+        let mut tasks = match self.project_member_heads(scope, since) {
             Ok(tasks) => tasks,
             Err(error) => {
                 reasons.push(format!("project grant tasks unavailable: {error:#}"));
@@ -170,7 +172,6 @@ impl Store {
         };
         // Oldest first, so a cap covers the earliest new work and never reshuffles.
         tasks.sort_by(|a, b| (a.created, &a.id).cmp(&(b.created, &b.id)));
-        let mut new_tasks = 0u32;
         let mut moved = BTreeSet::new();
         for task in tasks {
             let Some(granted) = task
@@ -183,16 +184,7 @@ impl Store {
             if scope.tasks.contains_key(&task.id) || scope.exclusions.contains(&task.id) {
                 continue;
             }
-            if since.is_some_and(|since| task.created > since) {
-                if scope.max_new_tasks.is_some_and(|max| new_tasks >= max) {
-                    continue;
-                }
-                new_tasks += 1;
-            }
-            if !covered_now(scope, &task) {
-                continue;
-            }
-            match self.operating_member(config, &task) {
+            match self.operating_member_head(config, &task) {
                 Ok(member)
                     if member.repository == granted.repository
                         && member.repository_identity == granted.repository_identity =>
@@ -211,5 +203,100 @@ impl Store {
             ));
         }
         members
+    }
+
+    fn project_member_heads(
+        &self,
+        scope: &OperatingScope,
+        since: Option<Timestamp>,
+    ) -> Result<Vec<TaskHead>> {
+        let admitted = match (scope.max_new_tasks, since) {
+            (Some(cap), Some(since)) => Some(self.capped_project_tasks(scope, since, cap)?),
+            _ => None,
+        };
+        let mut tasks = Vec::new();
+        for project in scope.projects.keys() {
+            tasks.extend(
+                self.heads(&HeadQuery::Open {
+                    project: Some(project.clone()),
+                })?
+                .into_iter()
+                .filter(|task| {
+                    !scope.tasks.contains_key(&task.id)
+                        && !scope.exclusions.contains(&task.id)
+                        && admitted.as_ref().is_none_or(|ids| {
+                            since.is_none_or(|since| task.created <= since)
+                                || ids.contains(&task.id)
+                        })
+                }),
+            );
+        }
+        Ok(tasks)
+    }
+
+    /// Merge one lookahead per granted project. Terminal rows consume the same global budget
+    /// as open rows; explicit members and exclusions consume none. Never refill after the cap.
+    fn capped_project_tasks(
+        &self,
+        scope: &OperatingScope,
+        since: Timestamp,
+        cap: u32,
+    ) -> Result<BTreeSet<String>> {
+        let mut admitted = BTreeSet::new();
+        if cap == 0 {
+            return Ok(admitted);
+        }
+        let view = self.view()?;
+        let mut streams = scope
+            .projects
+            .keys()
+            .map(|project| {
+                (
+                    HeadQuery::ProjectCreatedAfter {
+                        project: project.clone(),
+                        after: since,
+                    },
+                    PageReq::first(1),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut pending = BTreeMap::new();
+        let read = |query: &HeadQuery, page: &mut PageReq| -> Result<Option<TaskHeader>> {
+            let found = view.heads(query, page.clone())?;
+            page.after = found.next;
+            let Some(doc) = found.items.into_iter().next() else {
+                return Ok(None);
+            };
+            work::decoded(
+                Counter::TaskHeadDecodes,
+                u64::try_from(
+                    serde_json::to_vec(&doc.doc)?.len() + serde_json::to_vec(&doc.summary)?.len(),
+                )?,
+                Subject::Plain,
+            );
+            Ok(Some(doc.header))
+        };
+        for (index, (query, page)) in streams.iter_mut().enumerate() {
+            if let Some(task) = read(query, page)? {
+                pending.insert((task.created, task.id), index);
+            }
+        }
+        let mut charged = 0u32;
+        while let Some(((_, id), index)) = pending.pop_first() {
+            if !scope.tasks.contains_key(&id) && !scope.exclusions.contains(&id) {
+                admitted.insert(id);
+                charged += 1;
+                if charged == cap {
+                    break;
+                }
+            }
+            let (query, page) = &mut streams[index];
+            if page.after.is_some()
+                && let Some(task) = read(query, page)?
+            {
+                pending.insert((task.created, task.id), index);
+            }
+        }
+        Ok(admitted)
     }
 }

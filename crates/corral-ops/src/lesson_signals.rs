@@ -21,8 +21,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
+#[cfg(test)]
 const TASK_LIMIT: usize = 256;
+#[cfg(test)]
 const EVENT_BYTES: u64 = 4 * 1024 * 1024;
+#[cfg(test)]
+use crate::lesson_rows::landed_files;
 const ARTIFACT_BYTES: usize = 64 * 1024;
 const CONTEXT_BYTES: usize = 1024 * 1024;
 const SIGNAL_LIMIT: usize = 256;
@@ -436,43 +440,6 @@ fn artifact_text(
     Ok(Some(String::from_utf8_lossy(&decoded).into_owned()))
 }
 
-fn is_sha(value: &str) -> bool {
-    matches!(value.len(), 40 | 64) && value.bytes().all(|c| c.is_ascii_hexdigit())
-}
-
-/// Historical commit range, never a moving branch/worktree or arbitrary revspec.
-fn landed_files(ctx: &Ctx, project: &str, event: &Event) -> Result<Vec<String>> {
-    if event.kind != "approved" || event.detail["strategy"].as_str() == Some("keep_branch") {
-        return Ok(Vec::new());
-    }
-    let Some((previous, sha)) = event.detail["previous_sha"]
-        .as_str()
-        .zip(event.detail["sha"].as_str())
-        .filter(|(previous, sha)| is_sha(previous) && is_sha(sha))
-    else {
-        return Ok(Vec::new());
-    };
-    let Some(_) = ctx.store.config.projects.get(project) else {
-        return Ok(Vec::new());
-    };
-    let repo = ctx.store.project_path(project)?;
-    let memo = crate::integration::git_memo(ctx);
-    let Ok(names) = memo.landed_paths(&repo, previous, sha) else {
-        return Ok(Vec::new());
-    };
-    if names.iter().map(|name| name.len() + 1).sum::<usize>() > ARTIFACT_BYTES {
-        return Ok(Vec::new());
-    }
-    let mut files: Vec<_> = names
-        .iter()
-        .filter_map(|name| std::str::from_utf8(name).ok())
-        .filter(|name| !name.is_empty())
-        .map(clipped)
-        .collect();
-    sorted_values(&mut files);
-    Ok(files)
-}
-
 fn event_category(event: &Event) -> Option<&str> {
     match event.kind.as_str() {
         "approved" | "done" => Some("success"),
@@ -488,7 +455,13 @@ fn event_category(event: &Event) -> Option<&str> {
     }
 }
 
-fn run_signals(collector: &mut Collector, task: &Task, run: &Run, files: &[String]) {
+fn run_signals(
+    collector: &mut Collector,
+    task: &Task,
+    run: &Run,
+    files: &[String],
+    usage: Option<&corral_core::UsageTotals>,
+) {
     let source = evidence(
         task,
         run.ended.unwrap_or(run.started),
@@ -498,15 +471,14 @@ fn run_signals(collector: &mut Collector, task: &Task, run: &Run, files: &[Strin
         .ended
         .filter(|end| *end >= run.started)
         .map(|end| end.duration_since(run.started).as_secs_f64());
-    let usage = run.total_usage();
     let text = format!(
         "run={} outcome={:?} rounds={} failures={} wall_seconds={wall:?} reported_usd={:?} estimated_usd={:?}",
         run.id,
         run.outcome,
         task.rounds,
         run.failures,
-        usage.as_ref().and_then(|u| u.reported_usd.or(u.cost_usd)),
-        usage.as_ref().and_then(|u| u.estimated_usd),
+        usage.and_then(|u| u.reported_usd.or(u.cost_usd)),
+        usage.and_then(|u| u.estimated_usd),
     );
     collector.add(
         task,
@@ -571,18 +543,19 @@ fn run_signals(collector: &mut Collector, task: &Task, run: &Run, files: &[Strin
 /// Returns store, regular-file I/O, gzip decoding or subprocess setup failures.
 pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
     corral_core::work::record(corral_core::work::Work::LessonSignalScan, 1);
-    let mut tasks: Vec<_> = ctx
-        .store
-        .list_shared()?
-        .iter()
-        .filter(|task| task.project.as_deref() == Some(project))
-        .cloned()
-        .collect();
-    tasks.sort_by(|a, b| (b.updated, &b.id).cmp(&(a.updated, &a.id)));
-    tasks.truncate(TASK_LIMIT);
-    let events: Vec<Event> = ctx.store.recent_events(EVENT_BYTES)?;
+    crate::lesson_rows::signals(ctx, project)
+}
+
+pub(crate) fn collect(
+    ctx: &Ctx,
+    project: &str,
+    tasks: &[crate::lesson_rows::Source],
+    events: &[Event],
+    landed: &BTreeMap<u64, Vec<String>>,
+) -> Result<Vec<LessonSignal>> {
     let mut collector = Collector::default();
-    for task in tasks {
+    for input in tasks {
+        let task = &input.task;
         let mut related: Vec<_> = events
             .iter()
             .filter(|event| event.task.as_deref() == Some(&task.id))
@@ -599,10 +572,10 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
         related.truncate(128);
         let mut files = Vec::new();
         for event in related.iter().filter(|e| e.kind == "approved").take(1) {
-            let paths = landed_files(ctx, project, event)?;
+            let paths = landed.get(&event.seq).cloned().unwrap_or_default();
             if !paths.is_empty() {
                 let source = evidence(
-                    &task,
+                    task,
                     event.ts,
                     format!(
                         "event:approved:{}",
@@ -610,7 +583,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                     ),
                 );
                 collector.add(
-                    &task,
+                    task,
                     &source,
                     "landed_files",
                     &task.id,
@@ -641,7 +614,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
             let Some(text) = artifact_text(ctx, artifact, cap)? else {
                 continue;
             };
-            let source = evidence(&task, artifact.added, artifact.path.clone());
+            let source = evidence(task, artifact.added, artifact.path.clone());
             if artifact.kind == ArtifactKind::Diff {
                 let mut in_hunk = false;
                 let mut paths: Vec<_> = text
@@ -678,7 +651,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                 sorted_values(&mut paths);
                 if !paths.is_empty() {
                     collector.add(
-                        &task,
+                        task,
                         &source,
                         "touched_files",
                         &task.id,
@@ -689,7 +662,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                 }
             }
             collector.lines(
-                &task,
+                task,
                 &source,
                 &text,
                 artifact.title.starts_with("Review ("),
@@ -706,14 +679,14 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
             sorted_values(&mut signal.files);
         }
         if matches!(task.status, Status::Done | Status::Dropped) {
-            let source = evidence(&task, task.updated, format!("task:{}:status", task.id));
+            let source = evidence(task, task.updated, format!("task:{}:status", task.id));
             let category = if task.status == Status::Done {
                 "success"
             } else {
                 "discarded"
             };
             collector.add(
-                &task,
+                task,
                 &source,
                 category,
                 task.status.as_str(),
@@ -725,7 +698,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
             let Some(category) = event_category(event) else {
                 continue;
             };
-            let source = evidence(&task, event.ts, format!("event:{}", event.kind));
+            let source = evidence(task, event.ts, format!("event:{}", event.kind));
             let mut text = event.kind.clone();
             for field in [
                 "result",
@@ -756,7 +729,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                         "reason" | "note" | "notes" | "text" | "summary" | "failed_cmd"
                     ) {
                         collector.lines(
-                            &task,
+                            task,
                             &source,
                             value,
                             event.kind == "verdict" || event.kind == "changes_requested",
@@ -774,10 +747,16 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                     event.kind, event.detail["result"], event.detail["to"]
                 ),
             };
-            collector.add(&task, &source, category, &identity, &text, &files);
+            collector.add(task, &source, category, &identity, &text, &files);
         }
         for run in task.runs.iter().rev().take(32) {
-            run_signals(&mut collector, &task, run, &files);
+            run_signals(
+                &mut collector,
+                task,
+                run,
+                &files,
+                input.usage.get(&run.id).and_then(Option::as_ref),
+            );
             let cap = ARTIFACT_BYTES.min(CONTEXT_BYTES.saturating_sub(collector.consumed));
             if let Some(gate) = &run.gate
                 && let Some(identity) = &gate.identity
@@ -786,12 +765,12 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
                     crate::gate::evidence::attempt_log(ctx, &task.id, &run.id, &identity.attempt)?
             {
                 let source = evidence(
-                    &task,
+                    task,
                     gate.at,
                     format!("gate_attempts/{}/{}/log", run.id, identity.attempt),
                 );
                 collector.lines(
-                    &task,
+                    task,
                     &source,
                     &String::from_utf8_lossy(recent_lines(&log, cap)),
                     false,

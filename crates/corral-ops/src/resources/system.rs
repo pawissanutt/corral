@@ -2,14 +2,58 @@ use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::Store;
+use corral_core::work::{self, Counter};
 
 use super::{DiskSpace, ResourceProbe, ResourceSnapshot, existing_parent};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SystemResourceProbe;
+
+/// Samples the real machine and volume walk, then pins only admission's numeric inputs.
+#[derive(Debug)]
+pub struct PinnedReadingsProbe {
+    load_one: f64,
+    mem_available: u64,
+    free_bytes: u64,
+    samples: AtomicU64,
+}
+
+impl PinnedReadingsProbe {
+    pub fn new(load_one: f64, mem_available: u64, free_bytes: u64) -> Self {
+        Self {
+            load_one,
+            mem_available,
+            free_bytes,
+            samples: AtomicU64::new(0),
+        }
+    }
+
+    pub fn admitting() -> Self {
+        Self::new(0.0, u64::MAX, u64::MAX)
+    }
+
+    pub fn samples(&self) -> u64 {
+        self.samples.load(Ordering::Relaxed)
+    }
+}
+
+impl ResourceProbe for PinnedReadingsProbe {
+    fn sample(&self, store: &Store) -> Result<ResourceSnapshot> {
+        self.samples.fetch_add(1, Ordering::Relaxed);
+        let mut snapshot = SystemResourceProbe.sample(store)?;
+        snapshot.load_one = self.load_one;
+        snapshot.load_per_core = self.load_one / f64::from(snapshot.cores);
+        snapshot.mem_available = self.mem_available;
+        for disk in &mut snapshot.disks {
+            disk.free_bytes = self.free_bytes;
+        }
+        Ok(snapshot)
+    }
+}
 
 impl ResourceProbe for SystemResourceProbe {
     fn sample(&self, store: &Store) -> Result<ResourceSnapshot> {
@@ -33,14 +77,6 @@ impl ResourceProbe for SystemResourceProbe {
             paths.insert(project.join(".worktrees"));
             paths.insert(project.join("target"));
         }
-        for task in store.list_shared()?.iter() {
-            for run in &task.runs {
-                if run.worktree.exists() {
-                    paths.insert(run.worktree.join("target"));
-                    paths.insert(run.worktree.clone());
-                }
-            }
-        }
         if let Some(target) = std::env::var_os("CARGO_TARGET_DIR").filter(|v| !v.is_empty()) {
             let target = PathBuf::from(target);
             paths.insert(if target.is_absolute() {
@@ -51,15 +87,28 @@ impl ResourceProbe for SystemResourceProbe {
                     .join(target)
             });
         }
-        let disks = paths
-            .into_iter()
-            .map(|path| {
-                let existing = existing_parent(&path)?;
-                let free_bytes = fs2::available_space(&existing)
-                    .with_context(|| format!("reading free space for {}", path.display()))?;
-                Ok(DiskSpace { path, free_bytes })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut walk_paths = BTreeSet::new();
+        let mut disks = {
+            let _followup = work::followup("FU-3", "sample");
+            for task in store.list_shared()?.iter() {
+                for run in &task.runs {
+                    work::counted(Counter::FileStats, 1);
+                    if run.worktree.exists() {
+                        walk_paths.insert(run.worktree.join("target"));
+                        walk_paths.insert(run.worktree.clone());
+                    }
+                }
+            }
+            walk_paths
+                .difference(&paths)
+                .cloned()
+                .map(disk_space)
+                .collect::<Result<Vec<_>>>()?
+        };
+        for path in paths {
+            disks.push(disk_space(path)?);
+        }
+        disks.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(ResourceSnapshot {
             load_per_core: load_one / f64::from(cores),
             load_one,
@@ -70,6 +119,14 @@ impl ResourceProbe for SystemResourceProbe {
             disks,
         })
     }
+}
+
+fn disk_space(path: PathBuf) -> Result<DiskSpace> {
+    let existing = existing_parent(&path)?;
+    work::counted(Counter::FileStats, 1);
+    let free_bytes = fs2::available_space(&existing)
+        .with_context(|| format!("reading free space for {}", path.display()))?;
+    Ok(DiskSpace { path, free_bytes })
 }
 
 #[cfg(any(target_os = "linux", test))]

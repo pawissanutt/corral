@@ -271,7 +271,7 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
     for (i, (artifact, doc)) in task.artifacts.iter().zip(vector("artifacts")).enumerate() {
         rows.put_indexed(
             row(TaskPart::Artifact, ordinal_key(i + 1), false, false, doc),
-            vec![format!("run:{}", artifact.run)],
+            super::head_api::artifact_indexes(artifact),
         );
     }
     for (i, doc) in vector("approved_scope_history").into_iter().enumerate() {
@@ -633,6 +633,9 @@ fn split_nested(
         for (i, (wait, doc)) in run.obligations.waits.iter().zip(waits).enumerate() {
             let mut index = vec![format!("id:{}", wait.request.id)];
             index.extend(wait.receipt.iter().map(|r| format!("receipt:{}", r.id)));
+            if crate::card::card_obligation_visible("wait", &doc) {
+                index.push("card".into());
+            }
             rows.put_indexed(
                 row(
                     TaskPart::RunObligation,
@@ -648,6 +651,9 @@ fn split_nested(
         for (i, (decision, doc)) in run.obligations.decisions.iter().zip(decisions).enumerate() {
             let mut index = vec![format!("id:{}", decision.request.id)];
             index.extend(decision.receipt.iter().map(|r| format!("receipt:{}", r.id)));
+            if crate::card::card_obligation_visible("decision", &doc) {
+                index.push("card".into());
+            }
             rows.put_indexed(
                 row(
                     TaskPart::RunObligation,

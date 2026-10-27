@@ -76,8 +76,8 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
         .store
         .try_lock("dispatch")?
         .context("board is being updated; retry Plan progress")?;
-    let store = Store::open_unobserved(ctx.store.root())?;
-    let tracker = store.get(id)?;
+    let store = Store::open_unobserved(ctx.store.root())?.read_only_snapshot()?;
+    let tracker = store.head(id)?.to_shell_task()?;
     ensure!(tracker.tracker, "{} is not a tracker Plan", tracker.id);
     let fresh = Ctx {
         store: store.clone(),
@@ -98,7 +98,8 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
     for id in &tracker.children {
         ensure!(seen.insert(id), "duplicate Plan member {id}");
         let child = store
-            .get(id)
+            .head(id)
+            .and_then(|head| head.to_shell_task())
             .with_context(|| format!("{}: missing Plan member {id}", tracker.id))?;
         if tracker.approved_scope.is_some() {
             ensure!(
@@ -203,11 +204,9 @@ fn maps_acceptance(
     let (id, revision) = link
         .split_once('@')
         .context("invalid approved design link")?;
-    let design = store.get(id)?;
+    let design = store.head(id)?;
     let plan = design
-        .plans
-        .iter()
-        .find(|plan| plan.id == revision)
+        .plan_by_id(revision)?
         .context("approved design revision is missing")?;
     let Some(scope) = plan
         .document

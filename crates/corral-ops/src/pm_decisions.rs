@@ -51,19 +51,21 @@ pub(crate) fn workspace_decision(ctx: &Ctx, action: PmAction) -> Result<Option<P
 
 fn externally_resolved(ctx: &Ctx, decision: &PmDecision) -> Result<bool> {
     if let Some(id) = decision.source.strip_prefix("portable:") {
-        let task = ctx.store.get(&decision.task)?;
-        return Ok(task.runs.iter().any(|run| {
-            Some(&run.id) == decision.run.as_ref()
-                && run.obligations.decisions.iter().any(|record| {
-                    record.request.id == id
-                        && record.receipt.as_ref().is_some_and(|receipt| {
-                            receipt.outcome == corral_core::ReceiptOutcome::Answered
-                                && receipt
-                                    .answer
-                                    .as_deref()
-                                    .is_some_and(|answer| !answer.trim().is_empty())
-                        })
-                })
+        let task = ctx.store.head(&decision.task)?;
+        let record = decision
+            .run
+            .as_deref()
+            .map(|run| task.decision(run, id))
+            .transpose()?
+            .flatten();
+        return Ok(record.is_some_and(|record| {
+            record.receipt.as_ref().is_some_and(|receipt| {
+                receipt.outcome == corral_core::ReceiptOutcome::Answered
+                    && receipt
+                        .answer
+                        .as_deref()
+                        .is_some_and(|answer| !answer.trim().is_empty())
+            })
         }));
     }
     if decision.source.contains(" request ") {
