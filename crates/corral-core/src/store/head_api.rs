@@ -326,6 +326,7 @@ impl Store {
             && doc == base_doc
             && summary == base_summary
         {
+            self.flush_conditions()?;
             return Ok(new);
         }
         let committed = self
@@ -352,6 +353,7 @@ impl Store {
             )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", new.task.id))?;
+        self.flush_conditions()?;
         self.clear_left_ready(&after.id, before.status, after.status)?;
         if let Outcome::Task { rev, .. } = committed.outcome {
             new.rev = rev;

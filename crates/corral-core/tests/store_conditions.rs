@@ -23,7 +23,7 @@ fn observe(store: &Store, kind: &str, detail: Value) {
 }
 
 fn clear(store: &Store, kind: &str) -> ConditionOutcome {
-    store.clear_condition(Some(TASK), kind).unwrap()
+    store.clear_condition(Some(TASK), kind).unwrap().unwrap()
 }
 
 fn condition_events(store: &Store, kind: &str) -> Vec<Event> {
@@ -192,39 +192,89 @@ fn oscillating_details_record_every_observation_as_a_run_of_one() {
     }
 }
 
+/// One update through the full (`update`) or head (`update_head`) facade whose callback logs
+/// `kind` with `detail`, then refuses when `refuse` is set.
+fn update_logging(
+    store: &Store,
+    id: &str,
+    head: bool,
+    kind: &str,
+    detail: Value,
+    refuse: bool,
+) -> anyhow::Result<()> {
+    let log = |rounds: &mut u32| {
+        *rounds += 1;
+        store.log_event(Some(id), kind, detail.clone())?;
+        anyhow::ensure!(!refuse, "refused");
+        Ok(())
+    };
+    if head {
+        store.update_head(id, |t| log(&mut t.rounds)).map(drop)
+    } else {
+        store.update(id, |t| log(&mut t.rounds)).map(drop)
+    }
+}
+
 #[test]
-fn a_condition_inside_a_task_update_commits_or_refuses_with_that_update() {
-    // Given a task.
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::init(dir.path()).unwrap();
-    let task = store.create("Queued", None, Status::Ready, "").unwrap();
-    let tail = store.event_tail().unwrap();
-    // When a refused callback observes a condition kind inside the update.
-    let error = store
-        .update(&task.id, |t| {
-            t.rounds += 1;
-            store.log_event(Some(&t.id), "queued", json!({"reason": "slots full"}))?;
-            anyhow::bail!("refused")
-        })
-        .unwrap_err();
-    // Then neither the task nor any event or run changed.
-    assert!(format!("{error:#}").contains("refused"), "{error:#}");
-    assert_eq!(store.get(&task.id).unwrap().rounds, task.rounds);
-    assert_eq!(store.event_tail().unwrap(), tail);
-    // When a successful callback observes it.
-    store
-        .update(&task.id, |t| {
-            t.rounds += 1;
-            store.log_event(Some(&t.id), "queued", json!({"reason": "slots full"}))
-        })
-        .unwrap();
-    // Then the event commits with the task write, as an event of that update.
-    assert_eq!(store.get(&task.id).unwrap().rounds, task.rounds + 1);
-    assert_eq!(
-        store.events_of(Some(&task.id), &["queued"]).unwrap().len(),
-        1
-    );
-    assert!(store.condition_runs(None).unwrap().is_empty());
+fn conditions_inside_task_updates_count_on_one_run_and_vanish_with_a_refusal() {
+    for head in [false, true] {
+        // Given a task.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let task = store.create("Queued", None, Status::Ready, "").unwrap();
+        let queued = |store: &Store| store.events_of(Some(&task.id), &["queued"]).unwrap();
+        // When a refused callback observes a condition.
+        let tail = store.event_tail().unwrap();
+        assert!(update_logging(&store, &task.id, head, "queued", a(), true).is_err());
+        // Then neither the task nor any event or run changed.
+        assert_eq!(store.get(&task.id).unwrap().rounds, task.rounds);
+        assert_eq!(store.event_tail().unwrap(), tail);
+        assert!(store.condition_runs(None).unwrap().is_empty());
+
+        // When three successful updates observe the identical detail.
+        for _ in 0..3 {
+            update_logging(&store, &task.id, head, "queued", a(), false).unwrap();
+        }
+        // Then one event opened one run that counts all three, and each task write committed.
+        assert_eq!(store.get(&task.id).unwrap().rounds, task.rounds + 3);
+        let events = queued(&store);
+        assert_eq!(events.len(), 1, "head={head}");
+        let runs = store.condition_runs(Some(&task.id)).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!((runs[0].opened_seq.0, runs[0].count), (events[0].seq, 3));
+
+        // When a refused callback repeats it, then a successful one changes the detail.
+        assert!(update_logging(&store, &task.id, head, "queued", a(), true).is_err());
+        update_logging(&store, &task.id, head, "queued", b(), false).unwrap();
+        // Then the refusal counted nothing and the change closed the first run.
+        let runs = store.condition_runs(Some(&task.id)).unwrap();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].count, 3);
+        assert_eq!(runs[0].close_reason, Some(CloseReason::Changed));
+        assert_eq!(queued(&store).len(), 2);
+
+        // When a callback clears the condition inside an update that refuses, then one that commits.
+        let clear = |refuse: bool| {
+            store.update(&task.id, |_| {
+                assert_eq!(store.clear_condition(Some(&task.id), "queued")?, None);
+                anyhow::ensure!(!refuse, "refused");
+                Ok(())
+            })
+        };
+        assert!(clear(true).is_err());
+        assert!(
+            store.condition_runs(Some(&task.id)).unwrap()[1]
+                .closed_seq
+                .is_none()
+        );
+        clear(false).unwrap();
+        // Then only the committed update cleared it.
+        let cleared = store
+            .events_of(Some(&task.id), &["queued_cleared"])
+            .unwrap();
+        assert_eq!(cleared.len(), 1);
+        assert_eq!(cleared[0].detail["count"], 1);
+    }
 }
 
 #[test]
