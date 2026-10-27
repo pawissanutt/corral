@@ -600,7 +600,7 @@ fn live_worker_without_a_durable_transcript_still_gets_the_new_round_notice() {
     assert!(delivered.contains("superseded"), "{delivered}");
 }
 
-fn silent_worker_round_is_flagged_in_the_first_eligible_sync(restart: bool) {
+fn silent_worker_round_is_flagged_in_the_first_eligible_sync(restart: bool, worked_first: bool) {
     use super::watchdog::after;
     // Given a reused worker that answers the new round with its old "complete" state and idles.
     let (_tmp, ctx, id, _) = session_candidate();
@@ -635,9 +635,22 @@ fn silent_worker_round_is_flagged_in_the_first_eligible_sync(restart: bool) {
     };
     let startup = i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap();
 
-    // When sync samples the idle pane while it may still be starting, then once startup is over.
+    // When sync samples the pane while it may still be starting (working first, or idle), then
+    // once startup is over.
+    if worked_first {
+        std::fs::write(_tmp.path().join("status"), "working").unwrap();
+    }
     corral_ops::sync_at(&ctx, after(round.at, 0)).unwrap();
+    let seen = ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .seen_working;
+    assert_eq!(seen, worked_first);
     assert!(!flagged(&ctx));
+    std::fs::write(_tmp.path().join("status"), "idle").unwrap();
     let now = after(round.at, startup);
     corral_ops::sync_at(&ctx, now).unwrap();
 
@@ -667,10 +680,21 @@ fn silent_worker_round_is_flagged_in_the_first_eligible_sync(restart: bool) {
 
 #[test]
 fn live_reused_worker_that_answers_without_reporting_is_flagged_in_the_first_eligible_sync() {
-    silent_worker_round_is_flagged_in_the_first_eligible_sync(false);
+    silent_worker_round_is_flagged_in_the_first_eligible_sync(false, false);
+}
+
+#[test]
+fn live_reused_worker_seen_working_then_idle_without_reporting_is_flagged_in_the_first_idle_sync() {
+    silent_worker_round_is_flagged_in_the_first_eligible_sync(false, true);
 }
 
 #[test]
 fn restarted_reused_worker_that_answers_without_reporting_is_flagged_in_the_first_eligible_sync() {
-    silent_worker_round_is_flagged_in_the_first_eligible_sync(true);
+    silent_worker_round_is_flagged_in_the_first_eligible_sync(true, false);
+}
+
+#[test]
+fn restarted_reused_worker_seen_working_then_idle_without_reporting_is_flagged_in_the_first_idle_sync()
+ {
+    silent_worker_round_is_flagged_in_the_first_eligible_sync(true, true);
 }
