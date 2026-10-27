@@ -20,10 +20,12 @@ pub fn review_contract_version(kind: ReviewContractKind) -> u32 {
         ReviewContractKind::Plan => 2,
         // v2: judge against the declared gate tier and module scope; expected and out-of-scope
         // failures are non-blocking.
+        // v3: presentation-only objections are non-blocking; blocking findings name criterion,
+        // failure and prior-finding link.
         ReviewContractKind::Implementation
         | ReviewContractKind::ComplexImplementation
         | ReviewContractKind::VisualImplementation
-        | ReviewContractKind::TestOnly => 2,
+        | ReviewContractKind::TestOnly => 3,
         ReviewContractKind::Design | ReviewContractKind::Prose => 1,
     }
 }
