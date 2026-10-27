@@ -77,7 +77,7 @@ fn owner_ready_sync_does_not_hold_approval_guard_while_indexing() {
     git(&peer_worktree, &["commit", "-q", "-m", "peer widget"]);
     awaiting_verdict(root, &store, &mut panes, &peer);
 
-    // When a real concurrent approval, peer verdict and blocked sync are ordered by syscalls.
+    // When concurrent approval, dirty-checkout refusal and blocked sync are ordered by syscalls.
     let output = Command::new("python3")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),

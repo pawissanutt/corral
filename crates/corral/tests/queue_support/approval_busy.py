@@ -75,15 +75,21 @@ def main() -> None:
             concurrent = cli(*approve)
             assert concurrent.returncode == 1
             assert b"approval already in progress" in concurrent.stderr
+            # Fail on a real landing precondition, not an unrelated peer's review.
+            # Change only the disposable main checkout, leaving candidate receipts fresh.
+            tracked = root / "app" / "initial.txt"
+            clean = tracked.read_bytes()
+            tracked.write_bytes(clean + b"approval fixture dirty checkout\n")
             fcntl.flock(held, fcntl.LOCK_UN)
             stdout, stderr = approval.communicate(timeout=15)
-            print("PEER_REFUSAL\n" + stdout.decode() + stderr.decode(), flush=True)
+            print("DIRTY_CHECKOUT_REFUSAL\n" + stdout.decode() + stderr.decode(), flush=True)
             assert approval.returncode == 1
-            assert peer.encode() in stderr
-            # A completed refusal releases the guard; the real peer still blocks landing.
+            assert b"has uncommitted changes" in stderr
+            # A completed refusal releases the guard; the real dirty checkout still blocks landing.
             pending = cli(*approve)
             assert pending.returncode == 1
-            assert peer.encode() in pending.stderr
+            assert b"has uncommitted changes" in pending.stderr
+            tracked.write_bytes(clean)
         finally:
             fcntl.flock(held, fcntl.LOCK_UN)
             if approval.poll() is None:
