@@ -525,7 +525,7 @@ fn legacy_run_keeps_todays_review_gate_text_and_is_never_refused() {
 }
 
 #[test]
-fn implementation_family_contracts_are_v2_and_carry_no_full_gate_directive() {
+fn implementation_family_contracts_are_v3_and_carry_no_full_gate_directive() {
     use ReviewContractKind as K;
     for kind in [
         K::Implementation,
@@ -533,7 +533,7 @@ fn implementation_family_contracts_are_v2_and_carry_no_full_gate_directive() {
         K::VisualImplementation,
         K::TestOnly,
     ] {
-        assert_eq!(corral_core::review_contract_version(kind), 2, "{kind:?}");
+        assert_eq!(corral_core::review_contract_version(kind), 3, "{kind:?}");
         let text = crate::review_contracts::contract_text(kind);
         assert_eq!(
             scan_gate_instructions(text, &["full-gate".to_owned()]),

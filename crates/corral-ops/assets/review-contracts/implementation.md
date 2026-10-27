@@ -1,4 +1,4 @@
-### Implementation review (v2)
+### Implementation review (v3)
 
 Evidence-led review of a concrete candidate against its approved spec or plan.
 
@@ -18,6 +18,17 @@ Evidence-led review of a concrete candidate against its approved spec or plan.
   failures, as non-blocking notes or follow-up proposals. A failure inside the declared scope
   that is not an expected failure stays blocking. Without that section the receipted gate is
   the full gate.
+- Presentation-only objections are non-blocking notes. Wording, formatting, duplicated or
+  restated docs, naming, and bookkeeping where the applicable proof already exists and is valid
+  for this candidate cannot by themselves yield `changes` when the applicable acceptance
+  criteria are demonstrated. Record them as notes; do not send the run back for them.
+- Missing proof still blocks: an untested required scenario, stale or wrong-candidate evidence,
+  a test that cannot fail, or an instruction or config file that machines or agents consume
+  (a duplicated instruction there can add a requirement, so it is not presentation-only).
+- Every blocking finding names (a) the acceptance criterion or invariant it affects, (b) the
+  concrete failure or the specific missing observation, and (c) whether it is new or continues
+  a prior finding, citing the prior finding id. A finding that cannot name all three is a
+  non-blocking note.
 - New behavior is covered by tests that can fail; nothing is skipped, suppressed or weakened.
 - The change is minimal and in scope, and the project's conventions hold.
 - `behavior_unchanged` (refactor): confirm observable behavior and public contracts are
