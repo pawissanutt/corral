@@ -500,7 +500,15 @@ fn send_back_releases_review_tools_but_keeps_agent_and_workspace() {
     for pane in &panes[1..] {
         assert!(!fx.pane_exists(pane), "send-back leaked review tool {pane}");
     }
-    assert!(fx.called(&["agent", "prompt", &h.pane_id, "Fix the edge case."]));
+    let calls = fx.state()["calls"].as_array().unwrap().clone();
+    assert!(calls.iter().any(|call| {
+        call[0] == "agent"
+            && call[1] == "prompt"
+            && call[2] == h.pane_id.as_str()
+            && call[3].as_str().is_some_and(|text| {
+                text.starts_with("NEW CHANGES ROUND 1:") && text.ends_with(" Fix the edge case.")
+            })
+    }));
 }
 
 fn terminal_history(status: Status) {
