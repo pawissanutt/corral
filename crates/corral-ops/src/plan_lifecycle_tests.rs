@@ -24,6 +24,18 @@ fn sync_fails_a_shell_only_planner_without_autopilot() {
     let (tmp, mut ctx, id, _) = fixture();
     ctx.store.config.review.autopilot = Some(false);
     ctx.store.save_config().unwrap();
+    let dir = crate::scratch_reclaim::Attempt::Planner {
+        task: &id,
+        run: "D1",
+    }
+    .open(&ctx)
+    .unwrap();
+    ctx.store
+        .update(&id, |t| {
+            t.plan_runs.last_mut().unwrap().output_dir = dir.clone();
+            Ok(())
+        })
+        .unwrap();
     let task = active(&ctx, &id);
     std::fs::write(tmp.path().join("engine/planner-live"), "").unwrap();
     std::fs::write(tmp.path().join("engine/shell-only"), "").unwrap();
@@ -60,6 +72,32 @@ fn sync_fails_a_shell_only_planner_without_autopilot() {
             .iter()
             .any(|event| { event.kind == "needs_me" && event.detail["target"] == "plan" })
     );
+    // And the failed planner's scratch directory is closed once its evidence is in, then
+    // reclaimed by a later pass after its pane has gone.
+    let id_of = format!("planner-{id}-D1");
+    let state = |ctx: &Ctx| {
+        use corral_core::backend::ScratchState::*;
+        ctx.store
+            .scratch_rows_in(&[Open, Closed, Deferred, Reclaiming, Reclaimed])
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == id_of)
+            .map(|row| row.state)
+    };
+    assert!(matches!(
+        state(&ctx),
+        Some(
+            corral_core::backend::ScratchState::Closed
+                | corral_core::backend::ScratchState::Reclaimed
+        )
+    ));
+    std::fs::remove_file(tmp.path().join("engine/planner-live")).unwrap();
+    crate::reclaim_scratch_pass(&ctx, jiff::Timestamp::now()).unwrap();
+    assert_eq!(
+        state(&ctx),
+        Some(corral_core::backend::ScratchState::Reclaimed)
+    );
+    assert!(!dir.exists());
 }
 
 #[test]

@@ -334,19 +334,124 @@ fn a_held_cargo_lock_under_the_attempt_defers_until_released() {
 
 #[test]
 fn an_open_attempt_over_the_warning_size_warns_once_across_restarts() {
-    let (tmp, mut ctx, id, _worktree) = task_in_review();
-    ctx.store.config.storage.review_scratch_warn = "1KiB".into();
-    ctx.store.save_config().unwrap();
-    let log = tmp.path().join("prompts.log");
-    let wrapper = tmp.path().join("herdr-logged");
+    let (tmp, ctx, _id, dir) = oversized_review();
+
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    let mut restarted = ctx.clone();
+    restarted.store = Store::open(tmp.path()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+
+    assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
+    assert_eq!(delivered(tmp.path()), 1);
+    assert!(dir.join("big.log").is_file(), "a warning deletes nothing");
+}
+
+/// What keeps a directory in use while a crashed reclaim waits to resume.
+enum Holder {
+    Process(Child),
+    CargoLock(std::fs::File),
+}
+
+/// A closed attempt whose reclaim a previous pass began and never recorded: `BeginReclaim`
+/// committed by another handle on the same database, as a crashed process leaves it.
+fn crashed_reclaim(ctx: &Ctx, id: &str) {
+    use corral_core::backend::{Operation, ScratchOp, StoreBackend};
+    let backend = corral_core::sqlite::SqliteBackend::open(
+        ctx.store.dir(),
+        corral_core::sqlite::SqliteOptions::default(),
+    )
+    .unwrap();
+    backend
+        .apply(Operation::Scratch(ScratchOp::BeginReclaim {
+            id: id.into(),
+            from: ScratchState::Closed,
+            owner: "scratch-reclaim".into(),
+            at: Timestamp::now(),
+        }))
+        .unwrap();
+    assert_eq!(row(ctx, id).state, ScratchState::Reclaiming);
+}
+
+fn assert_recovery_waits_for(hold: impl FnOnce(&Path) -> Holder) {
+    let (_tmp, ctx, task) = bare();
+    let (id, dir) = closed_attempt(&ctx, &task, "R1-review1");
+    let holder = hold(&dir);
+    crashed_reclaim(&ctx, &id);
+    // The restarted pass re-checks liveness before resuming the begun delete.
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    assert_eq!(row(&ctx, &id).state, ScratchState::Reclaiming);
+    assert!(dir.join("notes.md").is_file(), "never deleted while in use");
+    assert_eq!(reclaimed_events(&ctx, &id), 0);
+    match holder {
+        Holder::Process(child) => stop(child),
+        Holder::CargoLock(lock) => drop(lock),
+    }
+    assert_reclaimed_once(&ctx, &id, &dir);
+}
+
+#[test]
+fn a_crashed_reclaim_waits_for_a_process_cwd_then_completes_once() {
+    assert_recovery_waits_for(|dir| {
+        Holder::Process(
+            Command::new("sleep")
+                .arg("600")
+                .current_dir(dir)
+                .spawn()
+                .unwrap(),
+        )
+    });
+}
+
+#[test]
+fn a_crashed_reclaim_waits_for_an_open_file_then_completes_once() {
+    assert_recovery_waits_for(|dir| {
+        let file = dir.join("notes.md");
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exec 3<\"$1\"; exec sleep 600")
+            .arg("sh")
+            .arg(&file)
+            .current_dir("/")
+            .spawn()
+            .unwrap();
+        let fd = PathBuf::from(format!("/proc/{}/fd/3", child.id()));
+        let target = file.canonicalize().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_link(&fd).ok() != Some(target.clone()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the child never opened the file"
+            );
+            std::thread::yield_now();
+        }
+        Holder::Process(child)
+    });
+}
+
+#[test]
+fn a_crashed_reclaim_waits_for_a_held_cargo_lock_then_completes_once() {
+    assert_recovery_waits_for(|dir| {
+        std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        let lock = std::fs::File::create(dir.join("target/debug/.cargo-lock")).unwrap();
+        lock.lock().unwrap();
+        Holder::CargoLock(lock)
+    });
+}
+
+/// A herdr wrapper that logs each `agent prompt` the fake engine accepts.
+fn logging_herdr(tmp: &Path) -> PathBuf {
+    let log = tmp.join("prompts.log");
+    let wrapper = tmp.join("herdr-logged");
     std::fs::write(
         &wrapper,
         format!(
-            "#!/usr/bin/env bash\nif [ \"$1\" = --session ]; then a=(\"$3\" \"$4\" \"$5\"); else a=(\"$1\" \"$2\" \"$3\"); fi\n\
-             if [ \"${{a[0]}} ${{a[1]}}\" = 'agent prompt' ]; then printf '%s\\n' \"$*\" >> '{}'; fi\n\
-             exec '{}' \"$@\"\n",
-            log.display(),
-            tmp.path().join("herdr").display()
+            "#!/usr/bin/env bash\nif [ \"$1\" = --session ]; then a=(\"$3\" \"$4\"); else a=(\"$1\" \"$2\"); fi\n\
+             if [ \"${{a[0]}} ${{a[1]}}\" = 'agent prompt' ] && [ ! -e '{refuse}' ]; then\n\
+               printf '%s\\n' \"$*\" >> '{log}'\nfi\n\
+             exec '{herdr}' \"$@\"\n",
+            refuse = tmp.join("not-ready").display(),
+            log = log.display(),
+            herdr = tmp.join("herdr").display(),
         ),
     )
     .unwrap();
@@ -355,7 +460,23 @@ fn an_open_attempt_over_the_warning_size_warns_once_across_restarts() {
         std::os::unix::fs::PermissionsExt::from_mode(0o755),
     )
     .unwrap();
-    ctx.herdr = Herdr::with_bin(wrapper, None);
+    wrapper
+}
+
+fn delivered(tmp: &Path) -> usize {
+    std::fs::read_to_string(tmp.join("prompts.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("review_scratch_warn"))
+        .count()
+}
+
+/// An implementation review over a 1KiB warning size, launched through the logging wrapper.
+fn oversized_review() -> (tempfile::TempDir, Ctx, String, PathBuf) {
+    let (tmp, mut ctx, id, _worktree) = task_in_review();
+    ctx.store.config.storage.review_scratch_warn = "1KiB".into();
+    ctx.store.save_config().unwrap();
+    ctx.herdr = Herdr::with_bin(logging_herdr(tmp.path()), None);
     corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
     let dir = corral_ops::review_notes_path(&ctx, &id, "R1")
         .unwrap()
@@ -363,21 +484,87 @@ fn an_open_attempt_over_the_warning_size_warns_once_across_restarts() {
         .unwrap()
         .to_path_buf();
     std::fs::write(dir.join("big.log"), vec![b'x'; 4096]).unwrap();
+    (tmp, ctx, id, dir)
+}
 
+#[test]
+fn a_warning_crossed_before_the_pane_attaches_is_delivered_once_it_does() {
+    let (tmp, ctx, id, dir) = oversized_review();
+    let set_pane = |pane: Option<corral_core::HerdrRef>| {
+        ctx.store
+            .update(&id, |task| {
+                let run = task.current_run_mut().unwrap();
+                run.review_runs.last_mut().unwrap().herdr = pane.clone();
+                Ok(())
+            })
+            .unwrap();
+    };
+    let attached = ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .review_runs[0]
+        .herdr
+        .clone();
+    set_pane(None);
     corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    assert_eq!(events(&ctx, "storage_scratch_warning").len(), 1);
+    assert_eq!(delivered(tmp.path()), 0, "no pane yet");
+
+    set_pane(attached);
     let mut restarted = ctx.clone();
     restarted.store = Store::open(tmp.path()).unwrap();
     corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
 
     assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
-    let steering = std::fs::read_to_string(&log).unwrap_or_default();
-    assert_eq!(
-        steering
-            .lines()
-            .filter(|line| line.contains("review_scratch_warn"))
-            .count(),
-        1,
-        "{steering}"
-    );
+    assert_eq!(delivered(tmp.path()), 1);
     assert!(dir.join("big.log").is_file(), "a warning deletes nothing");
+}
+
+#[test]
+fn a_refused_warning_is_retried_after_a_restart_and_delivered_once() {
+    let (tmp, ctx, id, dir) = oversized_review();
+    let scratch = format!("review-{id}-R1-review1");
+    let owed = |ctx: &Ctx| {
+        ctx.store
+            .record_row("scratch-warnings", &scratch)
+            .unwrap()
+            .map(|row| row.doc["value"]["delivered"].clone())
+    };
+    let pastes = || {
+        std::fs::read_to_string(tmp.path().join("pastes"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    // The engine refuses the agent prompt and the Enter of its send-text fallback.
+    for switch in ["not-ready", "reject-enter"] {
+        std::fs::write(tmp.path().join(switch), "").unwrap();
+    }
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    assert_eq!(events(&ctx, "storage_scratch_warning").len(), 1);
+    assert_eq!(owed(&ctx), Some(serde_json::json!(false)), "still owed");
+    assert!(
+        tmp.path().join("composer").is_file(),
+        "pasted, never submitted"
+    );
+
+    for switch in ["not-ready", "reject-enter"] {
+        std::fs::remove_file(tmp.path().join(switch)).unwrap();
+    }
+    let mut restarted = ctx.clone();
+    restarted.store = Store::open(tmp.path()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+
+    // The retained input was submitted once, without a second paste or another prompt.
+    assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
+    assert_eq!(owed(&restarted), Some(serde_json::json!(true)));
+    assert!(!tmp.path().join("composer").exists(), "submitted");
+    assert_eq!(pastes(), 1);
+    assert_eq!(delivered(tmp.path()), 0);
+    assert!(dir.join("big.log").is_file());
 }

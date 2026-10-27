@@ -123,6 +123,16 @@ fn planner_crash_during_launch_captures_exit_and_releases_slot() {
     let log = corral_ops::artifact_read(&ctx, artifact).unwrap();
     assert!(String::from_utf8_lossy(&log).contains("abort()"));
     assert!(!tmp.path().join("engine/planner-live").exists());
+    // And the failed planner's scratch directory is closed, ready for reclaim.
+    let closed = ctx
+        .store
+        .scratch_rows_in(&[corral_core::backend::ScratchState::Closed])
+        .unwrap();
+    assert!(
+        closed
+            .iter()
+            .any(|row| row.id == format!("planner-{id}-D1"))
+    );
 }
 
 #[test]

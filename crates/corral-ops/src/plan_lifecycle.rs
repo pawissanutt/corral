@@ -207,6 +207,14 @@ pub(crate) fn fail(ctx: &Ctx, task: &Task, reason: &str, now: Timestamp) -> Resu
         "plan_failed",
         json!({"target":"plan","run":run.id,"reason":reason,"artifact":artifact.path}),
     )?;
+    // The failure evidence is committed: nothing writes the planner's directory any more.
+    let attempt = crate::scratch_reclaim::Attempt::Planner {
+        task: &task.id,
+        run: &run.id,
+    };
+    if let Err(error) = attempt.close(ctx) {
+        crate::messages::report(Some(&task.id), "scratch", format!("{error:#}"));
+    }
     Ok(true)
 }
 
