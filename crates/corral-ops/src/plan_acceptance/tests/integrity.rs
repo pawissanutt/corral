@@ -209,3 +209,61 @@ fn no_code_plan_refuses_changed_accepted_artifact_versions() {
     );
     f.assert_not_completed(&main);
 }
+
+#[test]
+fn interrupted_aggregate_attempt_ends_lost_with_its_partial_log_before_the_next() {
+    // Given a verification that committed its Running attempt and gate row, then ended before
+    // its runner finished, leaving part of a log.
+    let f = Fixture::new(Delivery::Main, &GATE);
+    let main = f.main();
+    crate::gate::evidence::FAILPOINT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|point: &str| {
+            assert_ne!(point, "plan_verify_running", "verification ended");
+        }));
+    });
+    let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        plan_verify(&f.ctx, &f.plan)
+    }))
+    .is_err();
+    crate::gate::evidence::FAILPOINT.with(|hook| *hook.borrow_mut() = None);
+    assert!(ended);
+    let scratch = |attempt: &str| {
+        let id = format!("gate-plan-{}-{attempt}", f.plan);
+        f.ctx.store.scratch_row(&id).unwrap().unwrap().state
+    };
+    assert_eq!(scratch("A1"), corral_core::backend::ScratchState::Open);
+    let log = super::super::gate::paths(&f.ctx, &f.plan, "A1").log;
+    let partial = b"\n$ test -f first.txt\n".to_vec();
+    std::fs::write(&log, &partial).unwrap();
+
+    // When verification runs again.
+    let next = plan_verify(&f.ctx, &f.plan).unwrap();
+
+    // Then A1 ended lost in its marker and row alike, with the log it left and never a pass,
+    // its directory was closed and then reclaimed, and A2 verified normally.
+    assert_eq!(next.id, "A2");
+    assert_eq!(next.gate.as_ref().unwrap().result, GateResult::Pass);
+    let tracker = f.ctx.store.get(&f.plan).unwrap();
+    let lost = tracker.aggregate_attempts[0].gate.clone().unwrap();
+    assert_eq!(lost.result, GateResult::Fail);
+    assert!(lost.process_lost);
+    let row = f
+        .ctx
+        .store
+        .gate_attempt(&f.plan, super::super::gate::AGGREGATE_SCOPE, "A1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.result.as_deref(), row.failed_cmd.as_deref()),
+        (Some("fail"), lost.failed_cmd.as_deref())
+    );
+    let stored = f
+        .ctx
+        .store
+        .blob_bytes(row.log.as_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, partial);
+    assert_eq!(scratch("A1"), corral_core::backend::ScratchState::Reclaimed);
+    f.assert_not_completed(&main);
+}

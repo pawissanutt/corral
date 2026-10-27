@@ -694,6 +694,7 @@ fn gate_attempt_keys_stay_text() -> Result<()> {
         }
         fx.backend
             .apply(Operation::GateStart(GateStart {
+                form: corral_core::backend::UpdateForm::Head,
                 change: start,
                 attempt: gate,
             }))

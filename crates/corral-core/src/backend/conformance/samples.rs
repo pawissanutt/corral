@@ -276,7 +276,14 @@ fn gate_started(fx: &Fixture, num: TaskNum) -> Result<()> {
     )];
     change.reservations = vec![a, b];
     let attempt = gate_attempt(fx, &identity, &commands);
-    apply(fx, Operation::GateStart(GateStart { change, attempt }))?;
+    apply(
+        fx,
+        Operation::GateStart(GateStart {
+            form: crate::backend::UpdateForm::Head,
+            change,
+            attempt,
+        }),
+    )?;
     Ok(())
 }
 
@@ -469,6 +476,7 @@ pub(super) fn sample(kind: OpKind, fx: &Fixture) -> Result<Operation> {
             )];
             change.reservations = vec![a, b];
             Operation::GateStart(GateStart {
+                form: crate::backend::UpdateForm::Head,
                 change,
                 attempt: gate_attempt(fx, &identity, &commands),
             })
@@ -493,6 +501,7 @@ pub(super) fn sample(kind: OpKind, fx: &Fixture) -> Result<Operation> {
             change.events = vec![event(fx, Some("T-001"), "gate", json!({"result": "pass"}))];
             change.reservations = vec![used];
             Operation::GateResult(GateResult {
+                form: crate::backend::UpdateForm::Head,
                 change,
                 run: "R1".to_owned(),
                 attempt: "ag-1".to_owned(),

@@ -177,6 +177,27 @@ impl ReviewLaunch<'_> {
             }
             _ => None,
         };
+        // A preparation without a row yet (its start never committed) gets one now, staged
+        // with its start event into the authorized commit that restores its marker; one whose
+        // row exists already committed its start event with it.
+        let fresh_start = match &gate {
+            Some((gate, identity, commands, context)) => {
+                let start = crate::gate::evidence::Start {
+                    task: &task.id,
+                    run: &run.id,
+                    attempt: &identity.attempt,
+                    scope: crate::gate::evidence::RUN_SCOPE,
+                    sha: &gate.sha,
+                    tier: gate.tier.as_ref().map(|tier| tier.tier.as_str()),
+                    identity,
+                    commands,
+                    context: context.as_deref(),
+                };
+                crate::gate::evidence::put_start(ctx, &start)?
+            }
+            None => None,
+        };
+        let task_id = task.id.clone();
         let gate_started = started.clone();
         self.submit(
             |store, task| {
@@ -198,6 +219,11 @@ impl ReviewLaunch<'_> {
                 if reviewer && run.review.is_some() {
                     crate::reviewer::current_assessment(ctx, store, task, run)?;
                 }
+                if let Some(staged) = &fresh_start {
+                    staged.stage(store)?;
+                    store.log_event(Some(&task_id), "gate_started", gate_started)?;
+                    crate::gate::evidence::failpoint("gate_resume_commit");
+                }
                 Ok(())
             },
             || {
@@ -209,28 +235,6 @@ impl ReviewLaunch<'_> {
                     ensure!(delivery.submitted, "prepared PM delivery is unconfirmed");
                     Ok(())
                 } else {
-                    if let Some((gate, identity, commands, context)) = &gate {
-                        let start = crate::gate::evidence::Start {
-                            task: &task.id,
-                            run: &run.id,
-                            attempt: &identity.attempt,
-                            scope: crate::gate::evidence::RUN_SCOPE,
-                            sha: &gate.sha,
-                            tier: gate.tier.as_ref().map(|tier| tier.tier.as_str()),
-                            identity,
-                            commands,
-                            context: context.as_deref(),
-                        };
-                        // A start refused after its row committed keeps that row; its
-                        // resumed launch still records the start event.
-                        match crate::gate::evidence::put_start(ctx, &start)? {
-                            Some(staged) => staged.commit(ctx, ("gate_started", gate_started))?,
-                            None => {
-                                ctx.store
-                                    .log_event(Some(&task.id), "gate_started", gate_started)?
-                            }
-                        }
-                    }
                     ctx.herdr.pane_run(&pane, &command)
                 }
             },

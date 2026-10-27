@@ -14,7 +14,7 @@ use super::Store;
 use crate::backend::{
     ApplyError, GateAttempt, GateResult as GateResultOp, HistoryRow, Operation, PageReq,
     ReservationUse, RowWrite, ScratchOp, ScratchState, SystemClock, TaskChange, TaskNum, TaskPart,
-    gate_key,
+    UpdateForm, gate_key,
 };
 use crate::blob::{PutBlob, Putter};
 use crate::blob_ref::BlobRef;
@@ -35,10 +35,23 @@ pub struct GateOutcome {
     pub close_scratch: Vec<String>,
 }
 
+/// The current, open row of a started attempt, as a task change writes it.
+pub(super) fn start_row(attempt: &GateAttempt) -> Result<RowWrite> {
+    Ok(RowWrite::Put(HistoryRow {
+        part: TaskPart::GateAttempt,
+        key: attempt.key(),
+        current: true,
+        open: attempt.ended.is_none(),
+        doc: serde_json::to_value(attempt).context("encoding gate attempt row")?,
+        index: Vec::new(),
+    }))
+}
+
 impl GateOutcome {
-    pub(super) fn operation(self, change: TaskChange) -> GateResultOp {
+    pub(super) fn operation(self, change: TaskChange, form: UpdateForm) -> GateResultOp {
         GateResultOp {
             change,
+            form,
             run: self.run,
             attempt: self.attempt,
             result: self.result,
@@ -130,25 +143,25 @@ impl Store {
         bail!("recording gate of {id}: the task kept changing")
     }
 
-    /// Stages a new attempt row into the open task update, which then commits the row, its
-    /// blob references (consuming `reservations`) and the update's own marker together. Call
-    /// it from inside `update`; the attempt must not have a row yet.
+    /// Stages a new attempt row into the open task update, which then commits as one
+    /// `GateStart`: the update's marker and its start event (required), the row and its blob
+    /// references (consuming `reservations`). Within an authorized update the row joins the
+    /// authorized change instead. Call it from inside `update`; the attempt must not have a
+    /// row yet.
     pub fn stage_gate_start(
         &self,
         attempt: &GateAttempt,
         reservations: Vec<ReservationUse>,
     ) -> Result<()> {
-        let row = RowWrite::Put(HistoryRow {
-            part: TaskPart::GateAttempt,
-            key: attempt.key(),
-            current: true,
-            open: attempt.ended.is_none(),
-            doc: serde_json::to_value(attempt).context("encoding gate attempt row")?,
-            index: Vec::new(),
-        });
+        let attempt = attempt.clone();
         self.stage_gate(|staged| {
-            staged.rows.push(row);
+            anyhow::ensure!(
+                staged.start.is_none(),
+                "a task update commits at most one gate start"
+            );
+            staged.start = Some(attempt);
             staged.reservations.extend(reservations);
+            Ok(())
         })
     }
 
@@ -162,8 +175,13 @@ impl Store {
         reservations: Vec<ReservationUse>,
     ) -> Result<()> {
         self.stage_gate(|staged| {
+            anyhow::ensure!(
+                staged.result.is_none(),
+                "a task update commits at most one gate result"
+            );
             staged.result = Some(outcome);
             staged.reservations.extend(reservations);
+            Ok(())
         })
     }
 

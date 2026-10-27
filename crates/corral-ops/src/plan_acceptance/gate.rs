@@ -25,16 +25,17 @@ pub(super) fn paths(ctx: &Ctx, plan: &str, attempt: &str) -> GatePaths {
     crate::gate::dir_paths(&evidence::gates_root(ctx).join(&stem), &stem)
 }
 
-/// Puts the evidence a lost checkpoint attempt left for ending its row; `None` when it has no
-/// open row.
-pub(super) fn put_lost_checkpoint(
+/// Puts the evidence a lost attempt of `scope` left (a partial log, if any) for ending its row;
+/// `None` when it has no open row.
+pub(super) fn put_lost(
     ctx: &Ctx,
     plan: &str,
+    scope: &str,
     attempt: &str,
 ) -> Result<Option<evidence::StagedResult>> {
     let stem = stem(plan, attempt);
     let paths = paths(ctx, plan, attempt);
-    evidence::put_result(ctx, plan, CHECKPOINT_SCOPE, attempt, &stem, &paths)
+    evidence::put_result(ctx, plan, scope, attempt, &stem, &paths)
 }
 
 /// One Plan gate run: the attempt it belongs to, its `gate_attempts` scope, and the previous

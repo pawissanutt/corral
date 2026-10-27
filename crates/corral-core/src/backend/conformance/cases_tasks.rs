@@ -174,6 +174,7 @@ fn task_operations(make: MakeFixture<'_>) -> Result<()> {
     refused(
         &fx,
         Operation::GateStart(GateStart {
+            form: crate::backend::UpdateForm::Head,
             change: no_token,
             attempt: gate.clone(),
         }),
@@ -184,6 +185,7 @@ fn task_operations(make: MakeFixture<'_>) -> Result<()> {
     apply(
         &fx,
         Operation::GateStart(GateStart {
+            form: crate::backend::UpdateForm::Head,
             change: start.clone(),
             attempt: gate.clone(),
         }),
@@ -193,6 +195,7 @@ fn task_operations(make: MakeFixture<'_>) -> Result<()> {
     refused(
         &fx,
         Operation::GateStart(GateStart {
+            form: crate::backend::UpdateForm::Head,
             change: start,
             attempt: gate,
         }),
@@ -216,6 +219,7 @@ fn task_operations(make: MakeFixture<'_>) -> Result<()> {
     )?;
     let result = |c: TaskChange| {
         Operation::GateResult(GateResult {
+            form: crate::backend::UpdateForm::Head,
             change: c,
             run: "R1".to_owned(),
             attempt: "ag-1".to_owned(),

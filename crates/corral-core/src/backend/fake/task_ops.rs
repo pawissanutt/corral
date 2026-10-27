@@ -226,7 +226,7 @@ impl Tx<'_> {
             "a gate start requires an event".to_owned()
         })?;
         let row = Self::gate_put(&op.attempt)?;
-        self.write_task(&op.change, UpdateForm::Head, vec![row])
+        self.write_task(&op.change, op.form, vec![row])
     }
 
     pub(super) fn gate_launched(&mut self, op: GateLaunched) -> Applied<Outcome> {
@@ -251,7 +251,7 @@ impl Tx<'_> {
         gate.context = op.context.or(gate.context);
         gate.ended = Some(op.ended);
         let row = Self::gate_put(&gate)?;
-        let outcome = self.write_task(&op.change, UpdateForm::Head, vec![row])?;
+        let outcome = self.write_task(&op.change, op.form, vec![row])?;
         self.close_scratch(&op.close_scratch)?;
         Ok(outcome)
     }
