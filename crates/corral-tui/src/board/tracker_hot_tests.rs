@@ -285,3 +285,168 @@ fn frame_tracker_reuses_projection_after_resource_observation() {
     assert_eq!(report.unattributed_hydrations(), 0);
     report.check_identity().unwrap();
 }
+
+#[derive(Debug)]
+struct AcceptedProbe {
+    pinned: corral_ops::resources::PinnedReadingsProbe,
+    volumes: std::collections::BTreeSet<std::path::PathBuf>,
+}
+
+impl corral_ops::resources::ResourceProbe for AcceptedProbe {
+    fn sample(&self, store: &Store) -> anyhow::Result<corral_ops::resources::ResourceSnapshot> {
+        let snapshot = corral_ops::resources::ResourceProbe::sample(&self.pinned, store)?;
+        assert_eq!(
+            snapshot
+                .disks
+                .iter()
+                .map(|disk| disk.path.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            self.volumes
+        );
+        Ok(snapshot)
+    }
+}
+
+fn accepted_frame_budget(code: bool) {
+    let mut reports = Vec::new();
+    let worktrees = tempfile::tempdir().unwrap();
+    for factor in [1, 10] {
+        // Given a Done accepted member, not the Running early-return branch.
+        let mut fx = fixture(factor, true);
+        // A shared /tmp/wt appearing in another test must not change this pass's volume set.
+        for mut task in fx.ctx.store.list().unwrap() {
+            for run in &mut task.runs {
+                run.worktree = worktrees.path().join(&task.id).join(&run.id);
+            }
+            fx.ctx.store.fixture_put_task(&task).unwrap();
+        }
+        let mut member = fx.ctx.store.get(MEMBER).unwrap();
+        member.status = Status::Done;
+        let run = member.runs.last_mut().unwrap();
+        run.started = at(0);
+        run.ended = Some(at(1));
+        run.outcome = Some(corral_core::RunOutcome::Done);
+        let sha = if code {
+            "1".repeat(40)
+        } else {
+            run.base_sha.clone()
+        };
+        fx.ctx.store.fixture_put_task(&member).unwrap();
+        fx.ctx
+            .store
+            .log_event(
+                Some(MEMBER),
+                "approved",
+                json!({
+                    "run":"R1", "sha":sha, "strategy":"rebase", "base":"main"
+                }),
+            )
+            .unwrap();
+        let source = fx.ctx.store.root().join("accepted.txt");
+        for n in 0..4 * factor {
+            std::fs::write(&source, format!("accepted artifact {n:04}\n")).unwrap();
+            corral_ops::add_artifact(
+                &fx.ctx,
+                MEMBER,
+                &source,
+                Some(corral_core::ArtifactKind::Evidence),
+                None,
+            )
+            .unwrap();
+        }
+        let mut member = fx.ctx.store.get(MEMBER).unwrap();
+        member.updated = at(1);
+        for artifact in &mut member.artifacts {
+            artifact.added = at(0);
+        }
+        fx.ctx.store.fixture_put_task(&member).unwrap();
+        assert_eq!(
+            serde_json::to_value(&fx.ctx.store.config.resources).unwrap(),
+            serde_json::to_value(corral_core::ResourcesCfg::default()).unwrap()
+        );
+        let mut volumes = std::collections::BTreeSet::from([fx.ctx.store.dir().to_path_buf()]);
+        for name in fx.ctx.store.config.projects.keys() {
+            let repo = fx.ctx.store.project_path(name).unwrap();
+            volumes.extend([repo.join(".worktrees"), repo.join("target")]);
+        }
+        for task in fx.ctx.store.list().unwrap() {
+            for run in task.runs {
+                if run.worktree.exists() {
+                    volumes.extend([run.worktree.join("target"), run.worktree]);
+                }
+            }
+        }
+        if let Some(target) = std::env::var_os("CARGO_TARGET_DIR").filter(|s| !s.is_empty()) {
+            let target = std::path::PathBuf::from(target);
+            volumes.insert(if target.is_absolute() {
+                target
+            } else {
+                std::env::current_dir().unwrap().join(target)
+            });
+        }
+        let probe = std::sync::Arc::new(AcceptedProbe {
+            pinned: corral_ops::resources::PinnedReadingsProbe::admitting(),
+            volumes,
+        });
+        fx.ctx.resource_probe = probe.clone();
+        let tracker = fx.ctx.store.get(PLAN).unwrap();
+        let acceptance = tracker.approved_scope.as_ref().unwrap().acceptance.clone();
+        let error = corral_git::rev_sha(fx.ctx.store.root(), "refs/heads/main").unwrap_err();
+        // The full-task oracle reaches the same Git error after checking valid snapshots.
+        let expected = json!({
+            "task":tracker.id, "status":tracker.status, "approved_scope":tracker.approved_scope,
+            "scope_revision":tracker.approved_scope_revision,
+            "counts":{"accepted":1, "running":0, "review":0, "waiting":0, "missing":0},
+            "work":[{
+                "task":member.id, "title":member.title, "status":member.status, "state":"accepted",
+                "run":member.current_run().map(|r| &r.id), "reason":null, "prerequisites":[]
+            }],
+            "coverage":acceptance.iter().map(|criterion| json!({
+                "acceptance":criterion, "tasks":[]
+            })).collect::<Vec<_>>(),
+            "unmapped_criteria":acceptance,
+            "aggregate":{
+                "ready":false, "blockers":[format!("{error:#}")], "attempt":null,
+                "accepted":false, "acceptance":null
+            }
+        });
+        BoardSnapshot::load(&fx.ctx).unwrap();
+        let before = work::snapshot();
+        let samples = probe.pinned.samples();
+
+        // When the production frame refreshes its warmed accepted-member path.
+        let frame = BoardSnapshot::load(&fx.ctx).unwrap();
+        let report = work::snapshot().since(&before);
+
+        // Then its complete projection and hot budget agree at 1x and 10x history.
+        assert_eq!(probe.pinned.samples() - samples, 1);
+        assert_eq!(report.followup_calls("FU-3", "sample"), 1);
+        assert!(frame.resources.reason.is_none());
+        let mut board = fx.board();
+        board.apply_snapshot(frame);
+        assert_eq!(
+            serde_json::to_value(board.plan_progress[PLAN].as_ref().unwrap()).unwrap(),
+            expected
+        );
+        assert_eq!(report.unattributed_hydrations(), 0);
+        report.check_identity().unwrap();
+        reports.push(report);
+    }
+    for counter in Counter::ALL {
+        assert_eq!(
+            reports[0].get(counter),
+            reports[1].get(counter),
+            "{counter:?}"
+        );
+    }
+}
+
+#[test]
+fn accepted_code_member_frame_keeps_same_run_artifact_work_constant() {
+    accepted_frame_budget(true);
+}
+
+#[test]
+fn accepted_no_code_member_frame_keeps_same_run_artifact_work_constant() {
+    accepted_frame_budget(false);
+}

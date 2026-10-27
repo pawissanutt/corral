@@ -47,6 +47,29 @@ pub(super) fn capture(
     attempt: &str,
     environment: Option<&[(String, Option<String>)]>,
 ) -> Result<Candidate> {
+    capture_with(ctx, store, tracker, attempt, environment, Proof::Integrity)
+}
+
+/// Read-only readiness uses maintained artifact facts, never an artifact history scan.
+/// Full byte/SHA validation remains mandatory for every real attempt and acceptance.
+pub(super) fn readiness(ctx: &Ctx, store: &Store, tracker: &Task) -> Result<()> {
+    capture_with(ctx, store, tracker, "readiness", None, Proof::Readiness).map(|_| ())
+}
+
+#[derive(Clone, Copy)]
+enum Proof {
+    Integrity,
+    Readiness,
+}
+
+fn capture_with(
+    ctx: &Ctx,
+    store: &Store,
+    tracker: &Task,
+    attempt: &str,
+    environment: Option<&[(String, Option<String>)]>,
+    proof: Proof,
+) -> Result<Candidate> {
     ensure!(
         tracker.plan_acceptance_required(),
         "{} is not a tracker Plan with approved acceptance criteria",
@@ -63,7 +86,7 @@ pub(super) fn capture(
     }
     let mut members = Vec::new();
     for id in &tracker.children {
-        match member(ctx, store, tracker, id) {
+        match member(ctx, store, tracker, id, proof) {
             Ok(Ok(member)) => members.push(member),
             Ok(Err(reason)) => blockers.push(reason),
             Err(error) => blockers.push(format!("{id}: {error:#}")),
@@ -198,6 +221,7 @@ fn member(
     store: &Store,
     tracker: &Task,
     id: &str,
+    proof: Proof,
 ) -> Result<std::result::Result<AggregateMember, String>> {
     let child_head = store
         .head(id)
@@ -282,32 +306,30 @@ fn member(
         }
     }
     let code = sha != run.base_sha;
-    let artifacts = child_head.artifacts_of(&run.id)?;
-    let accepted = artifacts.iter().filter(|artifact| artifact.run == run.id);
-    if !code {
-        // No commit carries this member's delivery: its accepted snapshot bytes are the proof.
-        for artifact in accepted.clone() {
-            if artifact.purged_at.is_some() {
-                return Ok(Err(format!(
-                    "{id}: accepted artifact {} was purged",
-                    artifact.path
-                )));
+    let artifacts = match proof {
+        Proof::Readiness => {
+            if !code && let Some(failure) = super::proof::readiness(store, &child_head, &run.id)? {
+                return Ok(Err(failure.blocker(id)));
             }
-            let intact =
-                crate::artifact_storage::artifact_read_confined(ctx, artifact).is_ok_and(|bytes| {
-                    u64::try_from(bytes.len()).ok() == Some(artifact.bytes)
-                        && digest(&bytes) == artifact.sha256
-                });
-            if !intact {
-                return Ok(Err(format!(
-                    "{id}: accepted artifact {} is missing or changed",
-                    artifact.path
-                )));
-            }
+            Vec::new()
         }
-    }
-    let mut artifacts: Vec<_> = accepted.map(|artifact| artifact.sha256.clone()).collect();
-    artifacts.sort();
+        Proof::Integrity => {
+            let artifacts = child_head.artifacts_of(&run.id)?;
+            if !code
+                && let Some(failure) =
+                    super::proof::check(ctx, store, &child_head, &run.id, &artifacts)?
+            {
+                return Ok(Err(failure.blocker(id)));
+            }
+            let mut hashes: Vec<_> = artifacts
+                .iter()
+                .filter(|artifact| artifact.run == run.id)
+                .map(|artifact| artifact.sha256.clone())
+                .collect();
+            hashes.sort();
+            hashes
+        }
+    };
     Ok(Ok(AggregateMember {
         task: child.id.clone(),
         run: run.id.clone(),

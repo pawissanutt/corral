@@ -22,11 +22,13 @@ pub struct ArtifactFacts {
     #[serde(with = "fixed")]
     pub count: u64,
     pub latest_diff: Option<String>,
+    pub accepted_proof: crate::accepted_proof::AcceptedProof,
 }
 
 impl ArtifactFacts {
     pub fn fold(&mut self, artifact: &crate::Artifact) {
         self.count += 1;
+        self.accepted_proof.fold(artifact);
         if artifact.kind == crate::ArtifactKind::Diff {
             self.latest_diff = Some(artifact.title.clone());
         }

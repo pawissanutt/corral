@@ -252,6 +252,7 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        self.invalidate_accepted_proof(num, row.part, &row.key, Some(&row))?;
         if row.part == TaskPart::Artifact {
             let old = self
                 .row(num, row.part, &row.key)
@@ -299,6 +300,7 @@ impl Tx<'_> {
     }
 
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        self.invalidate_accepted_proof(num, part, key, None)?;
         if part == TaskPart::Artifact
             && let Some(row) = self.row(num, part, key)
             && let Some(path) = super::super::query::artifact_reviews::kept_path(&row.doc)
