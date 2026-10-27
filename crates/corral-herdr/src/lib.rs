@@ -357,6 +357,12 @@ impl Herdr {
 
     /// Submits a prompt to the agent in the pane (`agent prompt`). When herdr refuses because no agent is
     /// detected there, falls back to `pane_send_text(pane, text, true)`.
+    /// Whether `text` is still waiting, unsubmitted, in `pane_id`'s input.
+    pub fn input_pending(&self, pane_id: &str, text: &str) -> Result<bool> {
+        let screen = self.pane_read(pane_id, delivery::READ_LINES)?;
+        Ok(delivery::input_contains(&screen, text))
+    }
+
     pub fn agent_prompt(&self, pane_id: &str, text: &str) -> Result<Delivery> {
         let mut wait = self.poll_wait;
         Ok(self.agent_prompt_with_wait(pane_id, text, &mut wait))
