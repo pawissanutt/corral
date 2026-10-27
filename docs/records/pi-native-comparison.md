@@ -362,6 +362,13 @@ and 240-task/24,000-event fixtures. The failure is retained, not overridden
 or attributed to a pre-existing issue without baseline evidence. The controller
 returned it to the same R1 for diagnosis and repair; independent review 2 will
 be required for a changed candidate. No new worker admission was allocated.
+The supported changes message and its resend remained undelivered with
+`session_unbound`, although the original OmO terminal session remained open.
+The controller delivered the exact stored instruction once to that session,
+verified its diagnosis acknowledgement and Working state, then marked the exact
+inbox message observed. A canonical `comparison_rescue: pane_input` comment
+records this effective intervention. It is not a replacement run or a silent
+zero-rescue success.
 
 The full landing gate is separate from the initial approval-window metrics
 above. Those metrics are now a historical checkpoint, not a final measurement
