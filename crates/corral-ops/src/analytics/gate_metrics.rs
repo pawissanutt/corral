@@ -28,6 +28,10 @@
 //! Events without a `tier` (all gates before tiers existed) count as tier `full`. Full-gate
 //! step seconds come from the `<== <step> <seconds>s` markers in each attempt's gate log, and
 //! from the gate's timed command receipts when the log has none.
+//!
+//! Slim gate events (storage v2) carry `attempt` and `behind_at_start` instead of the
+//! identity and command receipts; those live in the attempt's `gate_attempts` row, whose log
+//! and result documents [`GateSources`] reads.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
@@ -212,6 +216,16 @@ pub trait GateSources {
     /// The `<== <step> <seconds>s` markers of one gate attempt's log, in order; `None` when
     /// the log is gone or has no markers, so the gate's command receipts stand in.
     fn steps(&mut self, task: &str, run: &str, attempt: &str) -> Option<Vec<(String, f64)>>;
+    /// The timed command receipts of one gate attempt's recorded result, for slim `gate`
+    /// events that no longer carry them; `None` when unrecorded.
+    fn receipt_steps(
+        &mut self,
+        _task: &str,
+        _run: &str,
+        _attempt: &str,
+    ) -> Option<Vec<(String, f64)>> {
+        None
+    }
 }
 
 /// The step markers `scripts/gate.sh` writes after each finished step, failed ones included.
@@ -246,13 +260,35 @@ impl GateSources for StoreSources<'_> {
     }
 
     fn steps(&mut self, task: &str, run: &str, attempt: &str) -> Option<Vec<(String, f64)>> {
-        let path = self
-            .store
-            .state_dir()
-            .join("gates")
-            .join(format!("{task}-{run}-{attempt}.log"));
-        let steps = parse_step_markers(&std::fs::read(path).ok()?);
+        let log = self.store.gate_attempt(task, run, attempt).ok()??.log?;
+        let steps = parse_step_markers(&self.store.blob_bytes(&log).ok()??);
         (!steps.is_empty()).then_some(steps)
+    }
+
+    fn receipt_steps(
+        &mut self,
+        task: &str,
+        run: &str,
+        attempt: &str,
+    ) -> Option<Vec<(String, f64)>> {
+        let result = self
+            .store
+            .gate_attempt(task, run, attempt)
+            .ok()??
+            .result_doc?;
+        let doc: Value = serde_json::from_slice(&self.store.blob_bytes(&result).ok()??).ok()?;
+        let receipts: Vec<corral_core::CommandReceipt> =
+            serde_json::from_value(doc["commands"].clone()).ok()?;
+        Some(
+            receipts
+                .into_iter()
+                .filter_map(|receipt| {
+                    let (start, end) = receipt.started.zip(receipt.ended)?;
+                    let seconds = end.duration_since(start).as_secs_f64();
+                    (seconds >= 0.0).then_some((receipt.command, seconds))
+                })
+                .collect(),
+        )
     }
 }
 
@@ -335,22 +371,17 @@ pub fn collect_gate_metrics(
         match event.kind.as_str() {
             "gate_started" => {
                 let identity = &detail["identity"];
-                let behind = match (
-                    task,
-                    identity["integration_base"].as_str(),
-                    identity["head"].as_str(),
-                ) {
-                    (_, None, _) | (_, _, None) => Behind::NoIdentity,
-                    (None, _, _) => Behind::Unknown,
-                    (Some(task), Some(base), Some(head)) => {
-                        match sources.contains(task, base, head) {
-                            Some(true) => Behind::Contained,
-                            Some(false) => Behind::Behind,
-                            None => Behind::Unknown,
-                        }
-                    }
+                let slim = identity.is_null() && detail["attempt"].is_string();
+                let behind = match (slim, detail["behind_at_start"].as_bool()) {
+                    (true, Some(true)) => Behind::Behind,
+                    (true, Some(false)) => Behind::Contained,
+                    (true, None) => Behind::Unknown,
+                    (false, _) => legacy_behind(sources, task, identity),
                 };
-                let attempt = identity["attempt"].as_str().map(str::to_owned);
+                let attempt = identity["attempt"]
+                    .as_str()
+                    .or_else(|| detail["attempt"].as_str())
+                    .map(str::to_owned);
                 let index = rows.len();
                 rows.push(GateRow {
                     task: task_id.to_owned(),
@@ -380,6 +411,7 @@ pub fn collect_gate_metrics(
             "gate" => {
                 let by_attempt = detail["identity"]["attempt"]
                     .as_str()
+                    .or_else(|| detail["attempt"].as_str())
                     .and_then(|a| open_by_attempt.remove(a));
                 let index = by_attempt.or_else(|| {
                     open_by_run
@@ -404,7 +436,14 @@ pub fn collect_gate_metrics(
                         .run
                         .as_deref()
                         .zip(row.attempt.as_deref())
-                        .and_then(|(run, attempt)| sources.steps(&row.task, run, attempt))
+                        .and_then(|(run, attempt)| {
+                            sources.steps(&row.task, run, attempt).or_else(|| {
+                                detail["commands"]
+                                    .is_null()
+                                    .then(|| sources.receipt_steps(&row.task, run, attempt))
+                                    .flatten()
+                            })
+                        })
                         .unwrap_or_else(|| receipt_steps(event));
                 }
                 timeline.entry(key).or_default().push(("gate", None));
@@ -533,6 +572,23 @@ pub fn collect_gate_metrics(
                 },
             )
             .collect(),
+    }
+}
+
+/// Behind-at-start of a legacy `gate_started`, from its identity and the task's repository.
+fn legacy_behind(sources: &mut dyn GateSources, task: Option<&Task>, identity: &Value) -> Behind {
+    match (
+        task,
+        identity["integration_base"].as_str(),
+        identity["head"].as_str(),
+    ) {
+        (_, None, _) | (_, _, None) => Behind::NoIdentity,
+        (None, _, _) => Behind::Unknown,
+        (Some(task), Some(base), Some(head)) => match sources.contains(task, base, head) {
+            Some(true) => Behind::Contained,
+            Some(false) => Behind::Behind,
+            None => Behind::Unknown,
+        },
     }
 }
 

@@ -6,36 +6,59 @@ use anyhow::{Context, Result, bail};
 use corral_core::{AggregateAttempt, CandidateIdentity, GateRecord, GateResult, GateTierReceipt};
 
 use crate::Ctx;
+use crate::gate::evidence::{self, Start};
 use crate::gate::{GatePaths, ResultFile, command_log_valid, prepare_owner};
 use crate::gate_tier::GateContract;
 use crate::verification::digest;
 
+/// The `gate_attempts` run and scope of an aggregate attempt's gate.
+pub(super) const AGGREGATE_SCOPE: &str = "aggregate";
+/// The `gate_attempts` run and scope of an advisory checkpoint's gate.
+pub(super) const CHECKPOINT_SCOPE: &str = "checkpoint";
+
+fn stem(plan: &str, attempt: &str) -> String {
+    format!("plan-{plan}-{attempt}")
+}
+
 pub(super) fn paths(ctx: &Ctx, plan: &str, attempt: &str) -> GatePaths {
-    let dir = ctx.store.state_dir().join("plan-gates");
-    let file = |ext: &str| dir.join(format!("{plan}-{attempt}.{ext}"));
-    GatePaths {
-        script: file("sh"),
-        result: file("json"),
-        failed: file("failed"),
-        log: file("log"),
-    }
+    let stem = stem(plan, attempt);
+    crate::gate::dir_paths(&evidence::gates_root(ctx).join(&stem), &stem)
+}
+
+/// One Plan gate run: the attempt it belongs to, its `gate_attempts` scope, the previous
+/// attempt of that scope whose scratch directory is reclaimed first, and its start event.
+pub(super) struct PlanGate<'a> {
+    pub(super) attempt: &'a str,
+    pub(super) scope: &'a str,
+    pub(super) previous: Option<&'a str>,
+    pub(super) event: (&'a str, serde_json::Value),
 }
 
 /// Run the full tier's commands in the verification checkout and validate its receipts. In a
 /// tiered project the tier command also sees the contract's empty expected-failure set.
 /// The result file and command log, not the runner's exit status, are the authority.
-/// `attempt` names the aggregate attempt or advisory checkpoint the log belongs to.
+/// The attempt's control files sit in its registered scratch directory; its row records the
+/// identity, commands and context at start and the log and result when the runner exits.
 pub(super) fn run(
     ctx: &Ctx,
     identity: &CandidateIdentity,
-    attempt: &str,
+    gate: PlanGate<'_>,
     checkout: &Path,
     contract: &GateContract,
 ) -> Result<GateRecord> {
-    let commands = &contract.commands;
-    let paths = paths(ctx, &identity.task, attempt);
-    let dir = paths.log.parent().context("plan gate has no directory")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let plan = identity.task.as_str();
+    if let Some(previous) = gate.previous
+        && let Err(error) = evidence::reclaim(ctx, &stem(plan, previous))
+    {
+        crate::messages::report(
+            Some(plan),
+            "gate",
+            format!("reclaiming Plan gate scratch {previous} failed: {error:#}"),
+        );
+    }
+    let stem = stem(plan, gate.attempt);
+    let dir = evidence::open_dir(ctx, plan, gate.attempt, &stem)?;
+    let paths = crate::gate::dir_paths(&dir, &stem);
     let context_path = crate::gate_tier::context_path(&paths.log);
     for path in [&paths.result, &paths.failed, &paths.log, &context_path] {
         match std::fs::remove_file(path) {
@@ -51,10 +74,47 @@ pub(super) fn run(
     let context = (!contract.rules.is_legacy())
         .then(|| crate::gate_tier::write_context(&context_path, contract, identity, checkout))
         .transpose()?;
+    let commands = &contract.commands;
     let script =
         crate::gate_script::render(identity, checkout, commands, &paths, context.as_ref())?;
     std::fs::write(&paths.script, script)
         .with_context(|| format!("writing {}", paths.script.display()))?;
+    let start = Start {
+        task: plan,
+        run: gate.scope,
+        attempt: gate.attempt,
+        scope: gate.scope,
+        sha: &identity.head,
+        tier: context.as_ref().map(|context| context.tier.as_str()),
+        identity,
+        commands,
+        context: context.as_ref().map(|context| context.path.as_path()),
+    };
+    evidence::record_start(ctx, &start, gate.event)?;
+    let collected = execute(identity, commands, &paths, &owner, context);
+    let outcome = match &collected {
+        Ok(record) => (record.result, record.failed_cmd.clone()),
+        Err(error) => (GateResult::Fail, Some(format!("gate_error: {error:#}"))),
+    };
+    evidence::record_result(
+        ctx,
+        plan,
+        gate.scope,
+        gate.attempt,
+        &stem,
+        (outcome.0, outcome.1.as_deref()),
+        &paths,
+    )?;
+    collected
+}
+
+fn execute(
+    identity: &CandidateIdentity,
+    commands: &[String],
+    paths: &GatePaths,
+    owner: &Path,
+    context: Option<crate::gate_tier::GateContext>,
+) -> Result<GateRecord> {
     Command::new("bash")
         .arg(&paths.script)
         .stdin(Stdio::null())
@@ -69,7 +129,7 @@ pub(super) fn run(
     if parsed.schema_version != 2 {
         bail!("unsupported gate result schema {}", parsed.schema_version);
     }
-    let token = std::fs::read_to_string(&owner).context("reading Plan gate ownership")?;
+    let token = std::fs::read_to_string(owner).context("reading Plan gate ownership")?;
     if token.is_empty() || parsed.owner_token != token {
         bail!("gate result ownership token does not match this attempt");
     }
@@ -129,12 +189,21 @@ mod tests {
     use crate::plan_acceptance::plan_verify;
     use crate::plan_acceptance::tests::{Delivery, Fixture};
 
-    const GATE: &str = r#"dir=$(dirname "$CORRAL_GATE_CONTEXT") && cp "$CORRAL_GATE_CONTEXT" "$dir/seen.json" && echo "$CORRAL_GATE_TIER" > "$dir/seen.tier" && test ! -e "$dir/declared-failure""#;
+    /// A gate command that copies its context and tier into `dir` and fails while
+    /// `dir/declared-failure` exists.
+    pub(in crate::plan_acceptance) fn observing_gate(dir: &std::path::Path) -> String {
+        let dir = crate::gate_script::qp(dir);
+        format!(
+            r#"cp "$CORRAL_GATE_CONTEXT" {dir}/seen.json && echo "$CORRAL_GATE_TIER" > {dir}/seen.tier && test ! -e {dir}/declared-failure"#
+        )
+    }
 
     #[test]
     fn plan_verify_runs_full_with_an_empty_expected_failure_set() {
         // Given a tiered project whose members declared an expected failure in their gates.
-        let f = Fixture::new(Delivery::Integration, &[GATE]);
+        let seen = tempfile::tempdir().unwrap();
+        let gate_command = observing_gate(seen.path());
+        let f = Fixture::new(Delivery::Integration, &[&gate_command]);
         let mut store = f.ctx.store.clone();
         store.config.review.gate_tiers = Some(BTreeMap::from([(
             "quick".to_owned(),
@@ -166,17 +235,16 @@ mod tests {
                 .amend_member_gate(&f.plan, &amendment, |_, _| Ok(()), |_, _| Ok(None))
                 .unwrap();
         }
-        let dir = f.ctx.store.state_dir().join("plan-gates");
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = seen.path();
         std::fs::write(dir.join("declared-failure"), "").unwrap();
         // When plan verify runs while the declared test still fails.
         let attempt = plan_verify(&f.ctx, &f.plan).unwrap();
         // Then the full commands ran with an empty set, and the attempt fails.
         let record = attempt.gate.unwrap();
         assert_eq!(record.result, GateResult::Fail);
-        assert_eq!(record.failed_cmd.as_deref(), Some(GATE));
+        assert_eq!(record.failed_cmd.as_deref(), Some(gate_command.as_str()));
         let commands: Vec<_> = record.commands.iter().map(|r| r.command.as_str()).collect();
-        assert_eq!(commands, [GATE]);
+        assert_eq!(commands, [gate_command.as_str()]);
         assert_eq!(
             std::fs::read_to_string(dir.join("seen.tier")).unwrap(),
             "full\n"
@@ -189,10 +257,27 @@ mod tests {
         let tier = record.tier.unwrap();
         assert_eq!(tier.tier, "full");
         assert_eq!(tier.context_sha256, crate::verification::digest(&bytes));
-        // Once a member fixes the test, the aggregate passes.
+        // And the attempt's row holds the exact context bytes, and the log the record hashes.
+        let row = f
+            .ctx
+            .store
+            .gate_attempt(&f.plan, super::AGGREGATE_SCOPE, &attempt.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (row.scope.as_str(), row.tier.as_deref()),
+            ("aggregate", Some("full"))
+        );
+        assert_eq!(row.result.as_deref(), Some("fail"));
+        let blob = |blob| f.ctx.store.blob_bytes(blob).unwrap().unwrap();
+        assert_eq!(blob(row.context.as_ref().unwrap()), bytes);
+        let log = blob(row.log.as_ref().unwrap());
+        assert_eq!(record.log_sha256, Some(crate::verification::digest(&log)));
+        // Once a member fixes the test, the aggregate passes, and no plan-gates area exists.
         std::fs::remove_file(dir.join("declared-failure")).unwrap();
         let attempt = plan_verify(&f.ctx, &f.plan).unwrap();
         assert_eq!(attempt.gate.unwrap().result, GateResult::Pass);
+        assert!(!f.ctx.store.dir().join("state/plan-gates").exists());
     }
 }
 
@@ -227,11 +312,9 @@ pub(super) fn passed(
     else {
         return Ok(false);
     };
-    let path = paths(ctx, &attempt.identity.task, &attempt.id).log;
-    let log = match std::fs::read(&path) {
-        Ok(log) => log,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    let plan = &attempt.identity.task;
+    let Some(log) = evidence::attempt_log(ctx, plan, AGGREGATE_SCOPE, &attempt.id)? else {
+        return Ok(false);
     };
     Ok(gate.identity.as_ref() == Some(&attempt.identity)
         && gate.log_sha256.as_deref() == Some(digest(&log).as_str())

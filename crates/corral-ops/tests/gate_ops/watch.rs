@@ -13,6 +13,9 @@ fn completed_attempts_retain_rounds_ranges_and_archived_logs() {
     corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
     let first = load(&ctx, &id).unwrap().gates.remove(0);
     let original = read_gate_log(&ctx, &first, 0, 4096).unwrap();
+    // Wall time can move backwards between rounds; causal history must not.
+    set_started(&first.log, "2026-10-17T01:00:00Z");
+    load(&ctx, &id).unwrap();
     ctx.store
         .update(&id, |task| {
             task.rounds = 1;
@@ -27,19 +30,10 @@ fn completed_attempts_retain_rounds_ranges_and_archived_logs() {
         .into_iter()
         .find(|gate| gate.round == 1)
         .unwrap();
-    // Wall time can move backwards between rounds; causal history must not.
-    for (attempt, started) in [
-        (&first, "2026-10-17T01:00:00Z"),
-        (&second, "2026-10-17T00:59:59Z"),
-    ] {
-        let path = attempt.log.with_extension("runner.json");
-        let mut runner: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        runner["started"] = serde_json::json!(started);
-        std::fs::write(path, serde_json::to_vec(&runner).unwrap()).unwrap();
-    }
-    // When the original live file disappears, the retained artifact is used.
-    std::fs::remove_file(&first.log).unwrap();
+    set_started(&second.log, "2026-10-17T00:59:59Z");
+    // When the second attempt's start reclaimed the first one's scratch directory, the
+    // retained artifact is used.
+    assert!(!first.log.exists());
     let history = load(&ctx, &id).unwrap();
     // Then both attempts retain identity, times, command ranges, and readable output.
     assert_eq!(history.gates.len(), 2);
@@ -66,6 +60,14 @@ fn completed_attempts_retain_rounds_ranges_and_archived_logs() {
     assert_eq!(read_gate_log(&ctx, old, 0, 4096).unwrap(), original);
     assert_eq!(read_gate_log(&ctx, old, 2, 3).unwrap(), original[2..5]);
     assert!(read_gate_log(&ctx, old, u64::MAX, 3).unwrap().is_empty());
+}
+
+fn set_started(log: &std::path::Path, started: &str) {
+    let path = log.with_extension("runner.json");
+    let mut runner: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    runner["started"] = serde_json::json!(started);
+    std::fs::write(path, serde_json::to_vec(&runner).unwrap()).unwrap();
 }
 
 #[test]

@@ -8,7 +8,14 @@ use super::{plan_checkpoint, plan_checkpoint_automatic, start_due_with};
 use crate::plan_acceptance::tests::{Delivery, Fixture, git};
 use crate::pm_next::{PmActionKind, PmObservation, observe::observations, pm_card};
 
-const SEEN: &str = r#"dir=$(dirname "$CORRAL_GATE_CONTEXT") && cp "$CORRAL_GATE_CONTEXT" "$dir/seen.json" && echo "$CORRAL_GATE_TIER" > "$dir/seen.tier""#;
+/// A gate command that copies its context and tier into `dir`, which outlives the attempt's
+/// reclaimed scratch directory.
+fn seen(dir: &std::path::Path) -> String {
+    let dir = crate::gate_script::qp(dir);
+    format!(
+        r#"cp "$CORRAL_GATE_CONTEXT" {dir}/seen.json && echo "$CORRAL_GATE_TIER" > {dir}/seen.tier"#
+    )
+}
 
 fn refs(f: &Fixture) -> String {
     git(
@@ -79,7 +86,8 @@ fn checkpoint_cards(f: &Fixture) -> Vec<String> {
 #[test]
 fn checkpoint_runs_full_on_the_target_head_and_records_an_advisory_attempt() {
     // Given a tiered integration Plan whose members declared an expected failure.
-    let f = Fixture::new(Delivery::Integration, &[SEEN]);
+    let seen_dir = tempfile::tempdir().unwrap();
+    let f = Fixture::new(Delivery::Integration, &[&seen(seen_dir.path())]);
     tiered(&f, None);
     let gate = ScopeGate {
         tier: "quick".into(),
@@ -114,7 +122,7 @@ fn checkpoint_runs_full_on_the_target_head_and_records_an_advisory_attempt() {
         (attempt.head.as_str(), attempt.landings),
         (head.as_str(), 2)
     );
-    let dir = f.ctx.store.state_dir().join("plan-gates");
+    let dir = seen_dir.path();
     assert_eq!(
         std::fs::read_to_string(dir.join("seen.tier")).unwrap(),
         "full\n"
@@ -124,6 +132,23 @@ fn checkpoint_runs_full_on_the_target_head_and_records_an_advisory_attempt() {
     assert_eq!(context["tier"], "full");
     assert_eq!(context["expected_failures"], serde_json::json!([]));
     assert_eq!(attempt.gate.tier.as_ref().unwrap().tier, "full");
+    // And the checkpoint's row records the full tier under the checkpoint scope.
+    let row = f
+        .ctx
+        .store
+        .gate_attempt(&f.plan, "checkpoint", "C1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            row.scope.as_str(),
+            row.tier.as_deref(),
+            row.result.as_deref()
+        ),
+        ("checkpoint", Some("full"), Some("pass"))
+    );
+    assert!(row.log.is_some() && row.result_doc.is_some() && row.ended.is_some());
+    assert!(!f.ctx.store.dir().join("state/plan-gates").exists());
     let verify = f.repo.join(".worktrees").join(format!("{}-verify", f.plan));
     assert_eq!(git(&verify, &["rev-parse", "HEAD"]), head);
     // And it moves no ref and never becomes an aggregate attempt or PASS.

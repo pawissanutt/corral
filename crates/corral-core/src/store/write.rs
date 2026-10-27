@@ -268,7 +268,10 @@ impl Store {
         record: &TaskRecord,
         exact: bool,
     ) -> Result<Option<u64>> {
-        let old = stored.rows();
+        let mut old = stored.rows();
+        // Gate attempt rows are written only by the gate operations; no `Task` field encodes
+        // them, so a task write neither rewrites nor deletes them.
+        old.retain(|(part, _), _| *part != crate::backend::TaskPart::GateAttempt);
         let Split {
             fields,
             doc,
