@@ -6,7 +6,7 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::*;
 
-fn pane(status: AgentStatus) -> HashMap<String, PaneInfo> {
+pub(super) fn pane(status: AgentStatus) -> HashMap<String, PaneInfo> {
     let info = PaneInfo {
         pane_id: "w1:p2".into(),
         workspace_id: "w1".into(),
@@ -31,7 +31,7 @@ fn inventory_without_reviewer() -> HashMap<String, PaneInfo> {
     HashMap::from([(other.pane_id.clone(), other)])
 }
 
-fn after(now: Timestamp, seconds: i64) -> Timestamp {
+pub(super) fn after(now: Timestamp, seconds: i64) -> Timestamp {
     now.checked_add(SignedDuration::from_secs(seconds)).unwrap()
 }
 

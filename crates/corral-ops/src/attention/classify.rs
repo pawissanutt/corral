@@ -85,14 +85,14 @@ pub(super) fn conditions(
     }
     if let Some(run) = task.current_run() {
         if run.outcome.is_none() {
-            run_conditions(task, run, now, out);
+            run_conditions(task, run, now, out, false);
         }
         for reviewer in run
             .review_runs
             .iter()
             .filter(|reviewer| reviewer.ended.is_none() && reviewer.outcome.is_none())
         {
-            run_conditions(task, reviewer, now, out);
+            run_conditions(task, reviewer, now, out, true);
         }
     }
     if let Some(infra) = &task.infra_wait {
@@ -388,7 +388,7 @@ fn question(task: &Task, question: &AgentQuestion, now: Timestamp) -> Condition 
     condition
 }
 
-fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Condition>) {
+fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Condition>, review: bool) {
     if let Some(host) = &run.agent_host {
         out.extend(
             host.questions
@@ -470,10 +470,21 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
     }
     if run.idle_no_report {
         let since = task.status_since.or(run.idle_since);
+        let (kind, reason) = if review {
+            (
+                "review_turn_without_verdict",
+                crate::round_notice::review_silent_reason(run),
+            )
+        } else {
+            (
+                "silent_turn",
+                format!("Run {} ended a turn without a report", run.id),
+            )
+        };
         let mut condition = row(
             task,
             now,
-            "silent_turn",
+            kind,
             WaitClass::PmAction,
             Responsible::Pm,
             (
@@ -484,7 +495,7 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
                 )),
                 since,
             ),
-            format!("Run {} ended a turn without a report", run.id),
+            reason,
         );
         condition
             .resume

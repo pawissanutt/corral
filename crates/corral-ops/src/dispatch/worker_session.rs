@@ -80,7 +80,13 @@ impl Continuation {
     }
 
     /// Allocate outside board/task locks; replace the old process only after final admission.
-    pub fn prepare_legacy(&self, ctx: &Ctx, task: &Task, text: &str) -> Result<Option<Prepared>> {
+    pub fn prepare_legacy(
+        &self,
+        ctx: &Ctx,
+        task: &Task,
+        text: &str,
+        notice: Option<&str>,
+    ) -> Result<Option<Prepared>> {
         let run = task.current_run().context("worker run disappeared")?;
         if !self.restart || run.delivery != corral_core::inbox::DeliveryMode::Legacy {
             return Ok(None);
@@ -103,17 +109,24 @@ impl Continuation {
             ),
         )
         .context("writing continued worker prompt")?;
-        let command = crate::render_command(ctx, &selected.agent, task, &selected, &prompt)
-            .map_err(|error| {
-                if self.session.policy == SessionPolicy::Reuse {
-                    crate::role_session::SessionUnavailable(format!(
-                        "worker context cannot be resumed: {error:#}"
-                    ))
-                    .into()
-                } else {
-                    error
-                }
-            })?;
+        let command = crate::prompt::render_command_noticed(
+            ctx,
+            &selected.agent,
+            task,
+            &selected,
+            &prompt,
+            notice,
+        )
+        .map_err(|error| {
+            if self.session.policy == SessionPolicy::Reuse {
+                crate::role_session::SessionUnavailable(format!(
+                    "worker context cannot be resumed: {error:#}"
+                ))
+                .into()
+            } else {
+                error
+            }
+        })?;
         let herdr = crate::gate::open_run_pane(ctx, task, run, "worker")?;
         Ok(Some(Prepared {
             herdr,

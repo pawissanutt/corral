@@ -421,7 +421,7 @@ fn conditions(tasks: &[Task], facts: &[Fact]) -> BTreeMap<String, ConditionRow> 
         let anchor = key.splitn(3, '/').nth(2).unwrap_or_default();
         row.run = if matches!(
             row.kind.as_str(),
-            "agent_lost" | "silent_turn" | "stuck_process"
+            "agent_lost" | "silent_turn" | "review_turn_without_verdict" | "stuck_process"
         ) {
             anchor.split(':').next().map(Into::into)
         } else {

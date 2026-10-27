@@ -35,7 +35,7 @@ fn deliver(
 /// redirecting the task resets the autopilot's rounds and its record on the run. A gone process resumes its
 /// recorded session, or refuses recovery explicitly when that conversation is unavailable.
 pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
-    send_changes(ctx, id, text, "owner", None, |t| {
+    send_changes(ctx, id, text, "owner", None, None, |t| {
         t.rounds = 0;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = None;
@@ -52,12 +52,20 @@ pub(crate) fn auto_request_changes(
     state: AutopilotState,
     expected: &RepairKey,
 ) -> Result<Task> {
-    send_changes(ctx, id, text, "autopilot", Some(expected), |t| {
-        t.rounds = round;
-        if let Some(run) = t.current_run_mut() {
-            run.autopilot = Some(state);
-        }
-    })
+    send_changes(
+        ctx,
+        id,
+        text,
+        "autopilot",
+        Some(expected),
+        Some(round),
+        |t| {
+            t.rounds = round;
+            if let Some(run) = t.current_run_mut() {
+                run.autopilot = Some(state);
+            }
+        },
+    )
 }
 
 fn send_changes(
@@ -66,6 +74,7 @@ fn send_changes(
     text: &str,
     by: &str,
     expected: Option<&RepairKey>,
+    round: Option<u32>,
     mark: impl FnOnce(&mut Task),
 ) -> Result<Task> {
     let mut fresh = ctx.clone();
@@ -101,7 +110,13 @@ fn send_changes(
     if let Some(expected) = expected {
         expected.check(&ctx.store.get(&task.id)?)?;
     }
-    let restarted = continuation.prepare_legacy(ctx, &task, text)?;
+    let notice = crate::round_notice::reused_session(&continuation.session)
+        .then(|| crate::round_notice::changes(&task, previous, round));
+    let text = &match &notice {
+        Some(notice) => format!("{notice}\n\n{text}"),
+        None => text.to_string(),
+    };
+    let restarted = continuation.prepare_legacy(ctx, &task, text, notice.as_deref())?;
     // Reopening Review reserves shared capacity before contacting the composer.
     // Pending text and Running status survive a launcher crash without freeing its slot.
     let prepare = |store: &corral_core::Store, current: &mut Task| {

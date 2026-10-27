@@ -246,7 +246,7 @@ fn completed_verdict_preserves_independent_conditions() {
         assert!(
             a.conditions
                 .iter()
-                .any(|condition| condition.kind == "silent_turn")
+                .any(|condition| condition.kind == "review_turn_without_verdict")
         );
         assert_eq!(a.progress.is_some(), refused.is_empty());
         assert_eq!(

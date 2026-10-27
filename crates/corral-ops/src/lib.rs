@@ -97,6 +97,7 @@ mod review;
 mod review_budget;
 mod reviewer;
 mod role_session;
+mod round_notice;
 pub use role_session::refresh_role_sessions;
 mod routing;
 mod search;
