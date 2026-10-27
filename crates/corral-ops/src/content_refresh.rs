@@ -260,9 +260,10 @@ pub(crate) fn record_build(ctx: &Ctx, inputs: &str) -> Result<()> {
     crate::artifact_storage::replace(&path, built.as_bytes())
 }
 
-/// Refreshes the rebuildable content index without changing tasks or artifacts.
+/// Refreshes the rebuildable content index without changing tasks or artifacts, by following
+/// the change feed; it lists tasks only for an explicit rebuild.
 pub fn refresh_search_index(ctx: &Ctx) -> Result<()> {
-    refresh_search_index_with_tasks(ctx, &ctx.store.list()?)
+    refresh_search_index_with_tasks(ctx, &[])
 }
 
 /// Observe before listing tasks, so sync can detect its own and concurrent writes.
@@ -270,10 +271,8 @@ pub(crate) fn task_stamp(ctx: &Ctx) -> Result<String> {
     ctx.store.tasks_stamp()
 }
 
-pub(crate) fn refresh_after_sync(ctx: &Ctx, tasks: &[Task], before: &str) -> Result<()> {
-    if task_stamp(ctx)? == before {
-        refresh_search_index_with_tasks(ctx, tasks)
-    } else {
-        refresh_search_index(ctx)
-    }
+/// Sync's refresh. Whether or not tasks changed after sync's sample, the feed carries every
+/// change since the index's cursor, so neither case lists the board.
+pub(crate) fn refresh_after_sync(ctx: &Ctx, tasks: &[Task], _before: &str) -> Result<()> {
+    refresh_search_index_with_tasks(ctx, tasks)
 }

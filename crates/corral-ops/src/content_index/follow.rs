@@ -7,7 +7,9 @@
 //! - an artifact row change arrives with its `artifact-keys` record, so only that row is read
 //!   (writers that bypass those records fall back to the task's artifact rows);
 //! - events are read after the index's own durable event position;
-//! - run and plan review documents are re-derived from the task when those rows change.
+//! - run and plan review documents are re-derived from the current run and its review
+//!   children, and the current plan's reviews, read as keyed child rows: ended runs and older
+//!   plans keep their text, and a scalar run change leaves its documents as they were.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -37,14 +39,6 @@ pub(crate) struct Delta {
     pub artifacts: BTreeSet<String>,
     pub events: bool,
 }
-
-const REVIEW_PARTS: [TaskPart; 5] = [
-    TaskPart::Run,
-    TaskPart::ReviewRun,
-    TaskPart::PlanRun,
-    TaskPart::Plan,
-    TaskPart::PlanReview,
-];
 
 /// Applies `delta` to the index, reading only through `ctx` (bound to the view whose position
 /// the caller publishes). Returns false, writing nothing, when there is no current index, the
@@ -184,19 +178,41 @@ fn task(
             records.push(Record::text_of(ident, None, "reviews", &key, comment.text));
         }
     }
-    if REVIEW_PARTS.iter().any(|part| changed.parts.contains(part)) {
-        let full = ctx.store.get(id)?;
-        documents.retain(|reference, doc| {
-            doc.task != id
-                || doc.scope != "reviews"
-                || reference.starts_with(&comment)
-                || reference.starts_with("events:")
-        });
-        let mut reviews = Vec::new();
-        super::task_records(ctx, &full, &mut reviews)?;
-        records.extend(reviews.into_iter().filter(|r| {
-            r.document.scope == "reviews" && !r.document.reference.starts_with(&comment)
-        }));
+    if [TaskPart::Run, TaskPart::ReviewRun]
+        .iter()
+        .any(|part| changed.parts.contains(part))
+        && let Some(run) = &head.current_run
+    {
+        // Only the current run and its review children can change; ended runs keep their text.
+        let prefix = format!("{id}:{}:", run.id);
+        documents.retain(|r, doc| doc.scope != "reviews" || !r.starts_with(&prefix));
+        let children = head.review_children(&run.id)?;
+        run_records(ident, run, &run.id, records);
+        for (i, child) in children.iter().enumerate() {
+            run_records(ident, child, &format!("{}:reviewer:{i}", run.id), records);
+        }
+    }
+    if [TaskPart::Plan, TaskPart::PlanReview]
+        .iter()
+        .any(|part| changed.parts.contains(part))
+        && let Some(plan) = &head.last_plan
+    {
+        // Only the current plan's reviews can change.
+        let prefix = format!("{id}:{}:", plan.id);
+        documents.retain(|r, doc| doc.scope != "reviews" || !r.starts_with(&prefix));
+        for review in head.plan_reviews(&plan.id)? {
+            records.push(Record::text_of(
+                ident,
+                None,
+                "reviews",
+                &format!("{}:{}", plan.id, review.id),
+                format!(
+                    "Verdict: {}\n{}",
+                    review.verdict.map_or("", |v| v.as_str()),
+                    review.notes.as_deref().unwrap_or("")
+                ),
+            ));
+        }
     }
     if changed.parts.contains(&TaskPart::Artifact) {
         let keyed: Vec<&String> = delta
@@ -235,4 +251,40 @@ fn artifact_record(
         records.push(Record::artifact(id, &artifact));
     }
     Ok(())
+}
+
+/// The summary and review documents of `run` under `key`, as `content_index::runs` derives
+/// them from a full run, without its nested children.
+fn run_records(
+    ident: (&str, &str, jiff::Timestamp),
+    run: &corral_core::RunHead,
+    key: &str,
+    records: &mut Vec<Record>,
+) {
+    if let Some(summary) = &run.summary {
+        let key = format!("{key}:summary");
+        records.push(Record::text_of(
+            ident,
+            Some(&run.id),
+            "reviews",
+            &key,
+            summary.clone(),
+        ));
+    }
+    if let Some(review) = &run.review {
+        let text = format!(
+            "Verdict: {}\n{}",
+            review.verdict.map_or("", |v| v.as_str()),
+            review.notes.as_deref().unwrap_or("")
+        );
+        let mut record = Record::text_of(
+            ident,
+            Some(&run.id),
+            "reviews",
+            &format!("{key}:review"),
+            text,
+        );
+        record.document.updated = review.at;
+        records.push(record);
+    }
 }

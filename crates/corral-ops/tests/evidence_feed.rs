@@ -308,3 +308,140 @@ fn a_change_committed_after_the_listing_is_indexed_or_stays_beyond_the_cursor() 
             .contains("afterreindextoken")
     );
 }
+
+/// Decoded bytes of reading `id`'s head now, to separate it from a measured step's own work.
+fn head_bytes(ctx: &Ctx, id: &str) -> u64 {
+    let (counters, _) = counted(|| {
+        ctx.store.head(id).unwrap();
+    });
+    counters
+        .iter()
+        .find(|(c, _)| *c == Counter::DecodedDocBytes)
+        .map_or(0, |(_, n)| *n)
+}
+
+/// Every counter of `counters`, with the changed task's head bytes taken out of the bytes.
+fn beyond_head(mut counters: Counted, head: u64) -> Counted {
+    for (c, n) in &mut counters {
+        if *c == Counter::DecodedDocBytes {
+            *n -= head;
+        }
+    }
+    counters
+}
+
+fn run(id: &str, started: &str, ended: bool, summary: Option<&str>) -> corral_core::Run {
+    let mut run = serde_json::json!({
+        "id": id, "agent": "fake", "worktree": "/nonexistent", "branch": "b", "base": "main",
+        "base_sha": "0".repeat(40), "started": started,
+    });
+    if ended {
+        run["ended"] = serde_json::json!(started);
+        run["outcome"] = serde_json::json!("superseded");
+    }
+    if let Some(summary) = summary {
+        run["summary"] = serde_json::json!(summary);
+    }
+    serde_json::from_value(run).unwrap()
+}
+
+/// Counters of the public refresh and of sync's changed-stamp route on a board of `grow`
+/// terminal tasks, and of a current-run scalar change and a current-run summary change on a
+/// task holding `grow` ended runs, comments and artifacts.
+fn feed_steps(grow: usize) -> (Vec<Counted>, bool) {
+    let tmp = tempfile::tempdir().unwrap();
+    Store::init(tmp.path()).unwrap();
+    let ctx = ctx(tmp.path());
+    let active = ctx
+        .store
+        .create("Active", None, Status::Running, "body")
+        .unwrap()
+        .id;
+    for i in 0..grow {
+        corral_ops::comment(
+            &ctx,
+            &active,
+            &format!("old {i:04}"),
+            corral_core::CommentAuthor::Owner,
+            false,
+        )
+        .unwrap();
+        add(
+            &ctx,
+            tmp.path(),
+            &active,
+            &format!("old{i:04}.md"),
+            format!("old {i:04}").as_bytes(),
+        );
+        let task = ctx
+            .store
+            .create("Done", None, Status::Done, "done")
+            .unwrap()
+            .id;
+        add(
+            &ctx,
+            tmp.path(),
+            &task,
+            "a.md",
+            format!("done {i:04}").as_bytes(),
+        );
+    }
+    ctx.store
+        .update(&active, |t| {
+            for i in 0..grow {
+                let id = format!("R{}", i + 1);
+                t.runs
+                    .push(run(&id, "2026-01-01T00:00:00Z", true, Some("old summary")));
+            }
+            let current = format!("R{}", grow + 1);
+            t.runs
+                .push(run(&current, "2026-01-02T00:00:00Z", false, None));
+            Ok(())
+        })
+        .unwrap();
+    refresh_search_index(&ctx).unwrap();
+    let mut steps = Vec::new();
+    // An unchanged feed through the public wrapper reads nothing.
+    steps.push(counted(|| refresh_search_index(&ctx).unwrap()).0);
+    // A current-run scalar change, then a current-run summary change.
+    for summary in [None, Some("currentsummaryprobe")] {
+        ctx.store
+            .update(&active, |t| {
+                let run = t.current_run_mut().unwrap();
+                run.agent_state = Some("working".into());
+                run.summary = summary.map(str::to_string);
+                Ok(())
+            })
+            .unwrap();
+        let (counters, lists) = counted(|| refresh_search_index(&ctx).unwrap());
+        assert_eq!(lists, 0);
+        steps.push(beyond_head(counters, head_bytes(&ctx, &active)));
+    }
+    let found = search_content(&ctx, "currentsummaryprobe", &ContentSearch::default())
+        .unwrap()
+        .len()
+        == 1;
+    (steps, found)
+}
+
+#[test]
+fn public_refresh_and_current_run_changes_do_work_independent_of_history() {
+    // Given a board and an active task with 1, then 10, terminal tasks and ended runs,
+    // comments and artifacts.
+    let (small, small_found) = feed_steps(1);
+    let (large, large_found) = feed_steps(10);
+    // Then the unchanged public refresh, a scalar current-run change and a current-run summary
+    // change do identical work at both sizes (bytes beyond the changed head included), never
+    // hydrate a task, and the new summary is searchable.
+    assert_eq!(small, large);
+    for step in &small {
+        let hydrations = step.iter().find(|(c, _)| *c == Counter::FullTaskHydrations);
+        assert_eq!(hydrations.map(|(_, n)| *n), Some(0));
+    }
+    assert!(
+        small[0]
+            .iter()
+            .all(|(c, n)| *n == 0 || *c == Counter::ViewsOpened)
+    );
+    assert!(small_found && large_found);
+}
