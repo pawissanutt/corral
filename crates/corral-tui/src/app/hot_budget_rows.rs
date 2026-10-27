@@ -266,13 +266,12 @@ pub(super) fn grow(task: &mut Task, history: usize, nested: usize, open: bool) {
             .unwrap()
         })
         .collect();
+    let current = format!("R{history:04}");
     task.artifacts = (0..history)
         .map(|a| {
-            serde_json::from_value(
-                json!({"run": "R0000", "kind": "log", "title": format!("log {a:04}"),
-                "path": format!("artifacts/{id}/R0000/{a:04}.log"), "source": "/nonexistent/x.log",
-                "sha256": "0".repeat(64), "bytes": 1, "added": at(a as i64)}),
-            )
+            serde_json::from_value(json!({"run": current, "kind": "log", "title": format!("log {a:04}"),
+                "path": format!("artifacts/{id}/{current}/{a:04}.log"), "source": "/nonexistent/x.log",
+                "sha256": "0".repeat(64), "bytes": 1, "added": at(a as i64)}))
             .unwrap()
         })
         .collect();

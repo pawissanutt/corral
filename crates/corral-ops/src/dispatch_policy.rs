@@ -119,6 +119,34 @@ fn day(now: Timestamp) -> String {
     now.to_zoned(jiff::tz::TimeZone::UTC).date().to_string()
 }
 
+/// Automatic dispatch-policy events of the current UTC day, newest first, read until the first
+/// event of an earlier day: the daily cap needs today's activity, never the whole history.
+fn dispatch_events_today(store: &Store, now: Timestamp) -> Result<Vec<Event>> {
+    let today = day(now);
+    let view = store.view()?;
+    let query = corral_core::backend::EventQuery {
+        kinds: vec!["dispatch_policy".into()],
+        newest_first: true,
+        valid_only: true,
+        ..Default::default()
+    };
+    let mut page = corral_core::backend::PageReq::first(64);
+    let mut today_events = Vec::new();
+    loop {
+        let found = view.events(&query, page.clone())?;
+        for row in found.items {
+            if day(row.event.ts) < today {
+                return Ok(today_events);
+            }
+            today_events.push(crate::pm_next::heads::event_of(row)?);
+        }
+        match found.next {
+            Some(next) => page.after = Some(next),
+            None => return Ok(today_events),
+        }
+    }
+}
+
 fn promotions_today(events: &[Event], now: Timestamp) -> usize {
     let today = day(now);
     events
@@ -226,7 +254,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         considered.insert(candidate.id.clone());
         let task = ctx.store.get(&candidate.id)?;
         let policy = ctx.store.config.dispatch_policy(task.project.as_deref());
-        if promotions_today(&ctx.store.events_of(None, &["dispatch_policy"])?, now)
+        if promotions_today(&dispatch_events_today(&ctx.store, now)?, now)
             >= policy.max_auto_promotions_per_day
         {
             continue;
@@ -250,7 +278,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             {
                 bail!("automatic promotion policy changed");
             }
-            if promotions_today(&store.events_of(None, &["dispatch_policy"])?, now)
+            if promotions_today(&dispatch_events_today(store, now)?, now)
                 >= store
                     .config
                     .dispatch_policy(current.project.as_deref())
@@ -398,16 +426,10 @@ pub struct AutomaticDispatchStatus {
 }
 
 pub fn automatic_dispatch_status(ctx: &Ctx) -> Result<AutomaticDispatchStatus> {
-    let events = ctx.store.events_of(None, &["dispatch_policy"])?;
+    let now = Timestamp::now();
     Ok(AutomaticDispatchStatus {
         free_slots: free_slots(ctx)?,
-        promotions_today: promotions_today(&events, Timestamp::now()),
-        recent: events
-            .iter()
-            .rev()
-            .filter(|e| e.kind == "dispatch_policy")
-            .take(20)
-            .cloned()
-            .collect(),
+        promotions_today: promotions_today(&dispatch_events_today(&ctx.store, now)?, now),
+        recent: crate::pm_next::heads::events(ctx, None, &["dispatch_policy"], None, 20)?,
     })
 }
