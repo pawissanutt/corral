@@ -66,7 +66,8 @@ fn host_entry(host: &ts::Host, key: &str, text: &str) {
 /// Modern hosts record their committed hello before any turn in this session.
 fn write_bound_session(host: &ts::Host, text: &str) {
     let marker = json!({"type":"custom", "customType":"corral_host_bound", "data":{
-        "generation":host.identity.generation, "session_id":SESSION}});
+        "generation":host.identity.generation, "session_id":SESSION,
+        "bind_nonce_sha256":corral_core::agent::paths::sha256_hex(host.nonce.as_bytes())}});
     f::write_session(host, &format!("{marker}\n{text}"));
 }
 

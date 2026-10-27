@@ -40,6 +40,7 @@ test("two native review children retain context, assess current candidates and d
     const fake = writeFakeCorral(directory);
     const sessionDir = join(directory, "sessions");
 
+    const nonce = (review: string, generation: number) => sha256Hex(`${review}/${generation}`);
     async function create(bound: HostIdentity, manager: SessionManager, promptFile: string) {
       const loaded = withRecoveryContext(await loadModules(assets.dir, "reviewer"));
       let sent = 0;
@@ -73,7 +74,7 @@ test("two native review children retain context, assess current candidates and d
         sdk, identity: bound, cwd, agentDir: join(directory, `${bound.review}-${bound.generation}`),
         model: "gpt-6.1-sol", promptFile, modules, client, events: log, network, sessionManager: manager,
       });
-      await current.hello("n".repeat(64), `pane-${bound.review}`, sha256Hex("c".repeat(64)));
+      await current.hello(nonce(bound.review!, bound.generation), `pane-${bound.review}`, sha256Hex("c".repeat(64)));
       return { host: current, events: log, kickoffs: () => sent };
     }
 
@@ -162,6 +163,11 @@ test("two native review children retain context, assess current candidates and d
       expect(recovered.kickoffs()).toBe(0);
       expect(fixtureTransport().requests).toBe(requests);
       expect(fake.calls().filter((call) => call.envelope.op === "verdict").length).toBe(2);
+      const markers = readFileSync(sessionFile, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+        .filter((entry) => entry.type === "custom" && entry.customType === "corral_host_bound");
+      expect(markers.map((entry) => [entry.data.generation, entry.data.session_id, entry.data.bind_nonce_sha256]))
+        .toEqual([["R2-review1", 1], ["R2-review2", 1], ["R2-review2", 2]]
+          .map(([review, generation]) => [generation, sessionId, sha256Hex(nonce(String(review), Number(generation)))]));
     } finally {
       await recovered.host.session.abort();
       await recovered.host.drained();

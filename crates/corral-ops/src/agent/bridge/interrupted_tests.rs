@@ -10,7 +10,7 @@ fn scan_uses_binding_identity_and_session_order_not_timestamps() {
     let path = dir.path().join("session.jsonl");
     let marker = |generation, session| {
         json!({"type":"custom", "customType":"corral_host_bound",
-        "data":{"generation":generation,"session_id":session}})
+        "data":{"generation":generation,"session_id":session,"bind_nonce_sha256":"bind"}})
     };
     let call = |id| {
         json!({"type":"message", "message":{"role":"assistant",
@@ -30,7 +30,7 @@ fn scan_uses_binding_identity_and_session_order_not_timestamps() {
     )
     .unwrap();
     for (generation, expected) in [(1, "g1"), (2, "g2")] {
-        let scan = interrupted::dangling_calls(&path, generation, "s").unwrap();
+        let scan = interrupted::dangling_calls(&path, generation, "s", "bind").unwrap();
         assert_eq!(
             scan.calls.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
             [expected]
@@ -38,11 +38,61 @@ fn scan_uses_binding_identity_and_session_order_not_timestamps() {
         assert!(scan.limits.is_empty());
     }
     assert!(
-        interrupted::dangling_calls(&path, 3, "s")
+        interrupted::dangling_calls(&path, 3, "s", "bind")
             .unwrap()
             .calls
             .is_empty()
     );
+}
+
+fn continued_review_child(target: u32) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("continued.jsonl");
+    let marker = |generation, binding| {
+        json!({"type":"custom", "customType":"corral_host_bound",
+        "data":{"generation":generation,"session_id":"continued-review",
+            "bind_nonce_sha256":binding}})
+    };
+    let call = |id| {
+        json!({"type":"message", "timestamp":"2020-01-01T00:00:00Z",
+        "message":{"role":"assistant", "content":[{"type":"toolCall","id":id,"name":"edit"}]}})
+    };
+    // Child A recovers and finishes; child B continues the same conversation, restarting at g1.
+    // Keep old unmatched calls too: recovery must neither lose B's calls nor report A's calls.
+    let entries = [
+        marker(1, "a1"),
+        call("old-a1"),
+        marker(2, "a2"),
+        call("old-a2"),
+        marker(1, "b1"),
+        call("current-b1"),
+        marker(2, "b2"),
+        call("current-b2"),
+    ];
+    std::fs::write(
+        &path,
+        entries.iter().map(|e| format!("{e}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let scan =
+        interrupted::dangling_calls(&path, target, "continued-review", &format!("b{target}"))
+            .unwrap();
+    let expected = format!("current-b{target}");
+    assert_eq!(
+        scan.calls.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        [expected.as_str()]
+    );
+    assert!(scan.limits.is_empty());
+}
+
+#[test]
+fn continued_review_initial_generation_does_not_alias_an_older_child() {
+    continued_review_child(1);
+}
+
+#[test]
+fn continued_review_resumed_generation_does_not_alias_an_older_child() {
+    continued_review_child(2);
 }
 
 #[test]
@@ -58,9 +108,16 @@ fn legacy_session_without_binding_markers_is_conservative_and_explicit() {
         ),
     )
     .unwrap();
-    let scan = interrupted::dangling_calls(&path, 2, "s").unwrap();
-    assert_eq!(scan.calls[0].id, "old");
-    assert_eq!(scan.limits, [interrupted::ScanLimit::GenerationBoundary]);
+    let legacy = std::fs::read_to_string(&path).unwrap();
+    // Pre-fix markers without a binding digest also cannot safely scope a reused session.
+    let weak_marker = json!({"type":"custom", "customType":"corral_host_bound",
+        "data":{"generation":1,"session_id":"s"}});
+    for prefix in [String::new(), format!("{weak_marker}\n")] {
+        std::fs::write(&path, format!("{prefix}{legacy}")).unwrap();
+        let scan = interrupted::dangling_calls(&path, 2, "s", "bind").unwrap();
+        assert_eq!(scan.calls[0].id, "old");
+        assert_eq!(scan.limits, [interrupted::ScanLimit::GenerationBoundary]);
+    }
 }
 
 #[test]

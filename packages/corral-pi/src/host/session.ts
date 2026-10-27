@@ -323,9 +323,11 @@ export class HostSession {
       throw new Error(`hello_refused: ${result?.code ?? receipt.state}: ${result?.reason ?? ""}`);
     }
     // Session order, unlike cross-process wall clocks, is a stable recovery boundary.
+    // The one-shot nonce distinguishes children that reuse this session and restart at g1.
     // No turn is admitted until this generation's committed hello has been recorded.
     this.session.sessionManager.appendCustomEntry("corral_host_bound", {
       generation: this.options.identity.generation, session_id: sessionId,
+      bind_nonce_sha256: sha256Hex(bindNonce),
     });
     this.boundSessionId = sessionId;
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });

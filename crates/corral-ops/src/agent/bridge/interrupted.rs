@@ -88,11 +88,18 @@ fn skip_line(reader: &mut impl BufRead) -> Result<()> {
     }
 }
 
-/// Unmatched calls after this generation's committed hello marker, in session order.
+/// Unmatched calls after this binding's committed hello marker, in session order.
+/// The one-shot bind nonce digest distinguishes review children sharing a conversation
+/// and restarting their generation numbers. Generation and session alone are not unique.
 /// Never compare cross-process wall clocks: they can step backwards. Legacy files with no
 /// marker are scanned conservatively in full and reported as having an attribution limit.
 /// The session file is streamed with byte bounds and never written.
-pub fn dangling_calls(path: &Path, generation: u32, session_id: &str) -> Result<DanglingScan> {
+pub fn dangling_calls(
+    path: &Path,
+    generation: u32,
+    session_id: &str,
+    bind_nonce_sha256: &str,
+) -> Result<DanglingScan> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -131,9 +138,13 @@ pub fn dangling_calls(path: &Path, generation: u32, session_id: &str) -> Result<
         let Ok(entry) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
-        if entry["type"] == "custom" && entry["customType"] == "corral_host_bound" {
+        if entry["type"] == "custom"
+            && entry["customType"] == "corral_host_bound"
+            && entry["data"]["bind_nonce_sha256"].as_str().is_some()
+        {
             let matches = entry["data"]["generation"].as_u64() == Some(u64::from(generation))
-                && entry["data"]["session_id"].as_str() == Some(session_id);
+                && entry["data"]["session_id"].as_str() == Some(session_id)
+                && entry["data"]["bind_nonce_sha256"].as_str() == Some(bind_nonce_sha256);
             if found_generation && !matches {
                 break;
             }
