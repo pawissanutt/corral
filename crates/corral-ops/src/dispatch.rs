@@ -285,6 +285,7 @@ fn dispatch_with(
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        changes_round: None,
         herdr_idle_since: None,
         stuck: None,
         pending_reply: None,

@@ -478,7 +478,8 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
         } else {
             (
                 "silent_turn",
-                format!("Run {} ended a turn without a report", run.id),
+                crate::round_notice::worker_silent_reason(run)
+                    .unwrap_or_else(|| format!("Run {} ended a turn without a report", run.id)),
             )
         };
         let mut condition = row(

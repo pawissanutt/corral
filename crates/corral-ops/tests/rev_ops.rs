@@ -119,6 +119,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 gate: None,
                 idle_since: None,
                 idle_no_report: false,
+                changes_round: None,
                 herdr_idle_since: None,
                 stuck: None,
                 pending_reply: None,

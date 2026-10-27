@@ -74,10 +74,9 @@ fn request_changes_reopens_the_run_and_posts_the_request() {
     let task = crate::request_changes(&world.ctx, &world.task.id, "split the module").unwrap();
     assert_eq!(task.status, Status::Running);
     assert_eq!(task.runs[0].outcome, None);
-    assert_eq!(
-        task.runs[0].pending_reply.as_deref(),
-        Some("split the module")
-    );
+    let pending = task.runs[0].pending_reply.as_deref().unwrap();
+    assert!(pending.starts_with("NEW CHANGES ROUND 1:"), "{pending}");
+    assert!(pending.ends_with(" split the module"), "{pending}");
     let posted = messages(&world);
     assert_eq!(posted[0].kind, "changes_requested");
     assert_eq!(

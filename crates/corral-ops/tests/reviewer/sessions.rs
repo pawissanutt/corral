@@ -470,56 +470,207 @@ fn first_round_idle_reviewer_is_not_flagged_as_a_silent_reused_turn() {
     assert!(!task.current_run().unwrap().review_runs[0].idle_no_report);
 }
 
-#[test]
-fn reused_worker_changes_round_message_names_the_round_and_retires_earlier_rounds() {
-    // Given a worker whose live conversation is reused for a changes round.
-    let (_tmp, ctx, id, _) = session_candidate();
+fn review_with_changes(ctx: &Ctx, id: &str) -> corral_core::ReviewRecord {
+    let record = corral_ops::review_run(ctx, id, Some("rev")).unwrap();
+    let callback = corral_ops::review_callback_token(&record).unwrap();
+    corral_ops::verdict_bound(ctx, id, Verdict::Changes, "repair", Some(&callback)).unwrap();
+    record
+}
 
-    // When the owner requests changes.
-    corral_ops::request_changes(&ctx, &id, "fix the widget").unwrap();
-
-    // Then the delivered request says earlier rounds are finished and names the run.
+fn last_changes_text(ctx: &Ctx) -> String {
     let events = ctx.store.events().unwrap();
-    let delivered = events
+    let event = events
         .iter()
         .rev()
         .find(|event| event.kind == "changes_requested")
-        .unwrap()
-        .detail["text"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(delivered.starts_with("NEW CHANGES ROUND:"), "{delivered}");
-    assert!(delivered.contains(&format!("{id} run R1")), "{delivered}");
-    assert!(
-        delivered.contains("Every earlier round is finished"),
-        "{delivered}"
-    );
-    assert!(delivered.ends_with("fix the widget"), "{delivered}");
+        .unwrap();
+    event.detail["text"].as_str().unwrap().to_string()
+}
+
+fn review_child_ids(ctx: &Ctx, id: &str) -> Vec<String> {
+    let task = ctx.store.get(id).unwrap();
+    let run = task.current_run().unwrap();
+    run.review_runs
+        .iter()
+        .map(|child| child.id.clone())
+        .collect()
 }
 
 #[test]
-fn restarted_worker_pointer_message_carries_the_changes_round_notice() {
-    // Given a finished worker whose process exited back to its pane shell.
+fn consecutive_owner_changes_rounds_carry_distinct_round_attempt_and_candidate_identities() {
+    // Given a reused worker returned twice from two different review attempts.
+    let (_tmp, ctx, id, worktree) = session_candidate();
+    let first = review_with_changes(&ctx, &id);
+    corral_ops::request_changes(&ctx, &id, "fix the widget").unwrap();
+    let one = last_changes_text(&ctx);
+    resubmit(&ctx, &id, &worktree);
+    let second = review_with_changes(&ctx, &id);
+    corral_ops::request_changes(&ctx, &id, "fix it again").unwrap();
+    let two = last_changes_text(&ctx);
+
+    // Then each delivered request names its own round, review attempt, callback and candidate.
+    let children = review_child_ids(&ctx, &id);
+    assert_ne!(first.sha, second.sha);
+    assert!(one.starts_with("NEW CHANGES ROUND 1:"), "{one}");
+    assert!(two.starts_with("NEW CHANGES ROUND 2:"), "{two}");
+    for (text, record, child) in [(&one, &first, &children[0]), (&two, &second, &children[1])] {
+        let callback = corral_ops::review_callback_token(record).unwrap();
+        assert!(text.contains(child.as_str()), "{text}");
+        assert!(text.contains(&callback), "{text}");
+        assert!(text.contains(&record.sha), "{text}");
+        assert!(text.contains("Every earlier round is finished"), "{text}");
+    }
+    assert!(!two.contains(&first.sha), "{two}");
+    let task = ctx.store.get(&id).unwrap();
+    assert_eq!(
+        task.current_run()
+            .unwrap()
+            .changes_round
+            .as_ref()
+            .unwrap()
+            .n,
+        2
+    );
+}
+
+#[test]
+fn restarted_worker_pointer_message_carries_the_changes_round_identity() {
+    // Given a finished worker whose process exited back to its pane shell after a review.
     let (_tmp, ctx, id, _) = session_candidate();
+    let record = review_with_changes(&ctx, &id);
     let receipt = ctx
         .store
         .state_dir()
         .join("launch-exits")
         .join(format!("{id}-R1.exited"));
     std::fs::write(receipt, "0\n").unwrap();
-    ctx.store.get(&id).unwrap();
 
     // When changes resume its recorded conversation.
     corral_ops::request_changes(&ctx, &id, "continue with the finding").unwrap();
 
-    // Then the message handed to the resumed process, not only its prompt file, is a new-round notice.
+    // Then the message handed to the resumed process, not only its prompt file, names the round.
     let task = ctx.store.get(&id).unwrap();
     let session = task.current_run().unwrap().session.clone().unwrap();
+    assert_eq!(session.action, corral_core::SessionAction::Resumed);
     let delivered = last_user_message(&session);
-    assert!(delivered.starts_with("NEW CHANGES ROUND:"), "{delivered}");
+    let callback = corral_ops::review_callback_token(&record).unwrap();
+    assert!(delivered.starts_with("NEW CHANGES ROUND 1:"), "{delivered}");
+    assert!(delivered.contains(&callback), "{delivered}");
+    assert!(delivered.contains(&record.sha), "{delivered}");
+    assert!(
+        delivered.contains(&review_child_ids(&ctx, &id)[0]),
+        "{delivered}"
+    );
     assert!(
         delivered.contains("Every earlier round is finished"),
         "{delivered}"
     );
+}
+
+#[test]
+fn live_worker_without_a_durable_transcript_still_gets_the_new_round_notice() {
+    // Given a live worker pane whose durable transcript cannot be captured.
+    let (_tmp, ctx, id, _) = session_candidate();
+    let record = review_with_changes(&ctx, &id);
+    let task = ctx.store.get(&id).unwrap();
+    let transcript = task
+        .current_run()
+        .unwrap()
+        .session
+        .as_ref()
+        .unwrap()
+        .transcript
+        .clone()
+        .unwrap();
+    std::fs::remove_file(transcript).unwrap();
+
+    // When changes continue that live conversation.
+    corral_ops::request_changes(&ctx, &id, "fix the widget").unwrap();
+
+    // Then the fallback still tells the retained conversation that earlier rounds are superseded.
+    let task = ctx.store.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    let diagnostic = run.session.as_ref().unwrap().diagnostic.as_deref().unwrap();
+    assert!(diagnostic.contains("Worker pane retained"), "{diagnostic}");
+    let delivered = last_changes_text(&ctx);
+    let callback = corral_ops::review_callback_token(&record).unwrap();
+    assert!(delivered.starts_with("NEW CHANGES ROUND 1:"), "{delivered}");
+    assert!(delivered.contains(&callback), "{delivered}");
+    assert!(delivered.contains(&record.sha), "{delivered}");
+    assert!(delivered.contains("superseded"), "{delivered}");
+}
+
+fn silent_worker_round_is_flagged_in_the_first_eligible_sync(restart: bool) {
+    use super::watchdog::after;
+    // Given a reused worker that answers the new round with its old "complete" state and idles.
+    let (_tmp, ctx, id, _) = session_candidate();
+    let record = review_with_changes(&ctx, &id);
+    if restart {
+        let receipt = ctx
+            .store
+            .state_dir()
+            .join("launch-exits")
+            .join(format!("{id}-R1.exited"));
+        std::fs::write(receipt, "0\n").unwrap();
+    } else {
+        // The fake inventory lists one idle pane; a live worker must be that pane to be sampled.
+        ctx.store
+            .update(&id, |task| {
+                let pane = task.current_run_mut().unwrap().herdr.as_mut().unwrap();
+                pane.pane_id = "w1:p2".into();
+                Ok(())
+            })
+            .unwrap();
+    }
+    corral_ops::request_changes(&ctx, &id, "fix the widget").unwrap();
+    let task = ctx.store.get(&id).unwrap();
+    let round = task.current_run().unwrap().changes_round.clone().unwrap();
+    let flagged = |ctx: &Ctx| {
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .idle_no_report
+    };
+    let startup = i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap();
+
+    // When sync samples the idle pane while it may still be starting, then once startup is over.
+    corral_ops::sync_at(&ctx, after(round.at, 0)).unwrap();
+    assert!(!flagged(&ctx));
+    let now = after(round.at, startup);
+    corral_ops::sync_at(&ctx, now).unwrap();
+
+    // Then the very next eligible sync raised a condition naming the round, attempt and candidate.
+    assert!(flagged(&ctx));
+    let board = corral_ops::attention::board(&ctx, after(now, 1)).unwrap();
+    let row = board.tasks.iter().find(|row| row.task == id).unwrap();
+    let condition = row
+        .assessment
+        .conditions
+        .iter()
+        .find(|condition| condition.kind == "silent_turn")
+        .unwrap();
+    let callback = corral_ops::review_callback_token(&record).unwrap();
+    assert!(
+        condition.reason.contains("changes round 1"),
+        "{}",
+        condition.reason
+    );
+    assert!(condition.reason.contains(&callback), "{}", condition.reason);
+    assert!(
+        condition.reason.contains(&record.sha),
+        "{}",
+        condition.reason
+    );
+}
+
+#[test]
+fn live_reused_worker_that_answers_without_reporting_is_flagged_in_the_first_eligible_sync() {
+    silent_worker_round_is_flagged_in_the_first_eligible_sync(false);
+}
+
+#[test]
+fn restarted_reused_worker_that_answers_without_reporting_is_flagged_in_the_first_eligible_sync() {
+    silent_worker_round_is_flagged_in_the_first_eligible_sync(true);
 }

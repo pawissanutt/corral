@@ -388,6 +388,22 @@ pub struct UsageEntry {
     pub unpriced_tokens: u64,
 }
 
+/// The newest changes round a worker run was reopened for: the durable identity a reused
+/// conversation is told about and the attention it raises when it answers without reporting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangesRound {
+    /// 1 for the first changes round of the run, then one more per request.
+    pub n: u32,
+    pub at: Timestamp,
+    /// Review attempt that returned the changes and its callback ID, when a review preceded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback: Option<String>,
+    /// The candidate the changes were requested against.
+    pub sha: String,
+}
+
 /// A foreign foreground process observed by the watchdog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StuckProcess {
@@ -627,6 +643,9 @@ pub struct Run {
     /// The run has looked idle for `[sync] idle_after_secs` without `corral done` (board warning badge).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idle_no_report: bool,
+    /// Set when a changes request reopened this run's conversation; None before the first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_round: Option<ChangesRound>,
     /// Latest review (`corral review-run` / `corral verdict`) of this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRecord>,
