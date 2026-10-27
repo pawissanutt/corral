@@ -1,8 +1,9 @@
 //! Informational, coalesced notices. This queue never owns the worker's pending reply.
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use corral_core::records::RecordArea;
 use corral_core::{ArtifactKind, Event, HerdrRef, Run, Task};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -113,17 +114,19 @@ struct State {
     notices: Vec<Notice>,
 }
 
-fn state_path(ctx: &Ctx, id: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join(format!("main-movement-{id}.json"))
+const RECORDS: RecordArea<State> = RecordArea::new("main-movement");
+
+struct StateRecord<'a> {
+    ctx: &'a Ctx,
+    key: &'a str,
 }
 
-fn save(path: &Path, state: &State) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(state)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("saving {}", path.display()))
+fn state_record<'a>(ctx: &'a Ctx, id: &'a str) -> StateRecord<'a> {
+    StateRecord { ctx, key: id }
+}
+
+fn save(record: &StateRecord<'_>, state: &State) -> Result<()> {
+    RECORDS.save(&record.ctx.store, record.key, state)
 }
 
 /// Run after landing advancement, even if herdr is down. The durable approval log is authority.
@@ -153,12 +156,8 @@ fn reconcile_one(
     let Some(_lock) = ctx.store.try_lock(&format!("main-movement-{}", task.id))? else {
         return Ok(());
     };
-    let path = state_path(ctx, &task.id);
-    let mut state: State = match std::fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).context("parsing main-movement state")?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
-        Err(e) => return Err(e).context("reading main-movement state"),
-    };
+    let record = state_record(ctx, &task.id);
+    let mut state = RECORDS.load(&ctx.store, &task.id)?.unwrap_or_default();
     // Re-read after obtaining the queue lock; snapshots from sync may already be obsolete.
     let task = ctx.store.get(&task.id)?;
     let active =
@@ -167,7 +166,7 @@ fn reconcile_one(
         if !state.notices[i].state.terminal() && !state.notices[i].target.matches(&task) {
             delivery::record(
                 ctx,
-                &path,
+                &record,
                 &mut state,
                 i,
                 DeliveryState::Cancelled,
@@ -179,7 +178,7 @@ fn reconcile_one(
         if state.target.is_some() {
             state.target = None;
             state.pending.clear();
-            save(&path, &state)?;
+            save(&record, &state)?;
         }
         return Ok(());
     }
@@ -193,7 +192,7 @@ fn reconcile_one(
         // A different pane/worktree on the same run is not permission to replay its backlog.
         // A real retry has a new run identity and starts its own observation window.
         state.pending.clear();
-        save(&path, &state)?;
+        save(&record, &state)?;
         return Ok(());
     }
     if state.target.as_ref() != Some(&target) {
@@ -239,7 +238,7 @@ fn reconcile_one(
             state.changed_at = Some(now);
         }
     }
-    save(&path, &state)?;
+    save(&record, &state)?;
     if !state.pending.is_empty()
         && state
             .changed_at
@@ -250,10 +249,10 @@ fn reconcile_one(
         }
         state.pending.clear();
         state.changed_at = None;
-        save(&path, &state)?;
+        save(&record, &state)?;
     }
     for i in 0..state.notices.len() {
-        delivery::deliver(ctx, &path, &mut state, i, available)?;
+        delivery::deliver(ctx, &record, &mut state, i, available)?;
     }
     Ok(())
 }
@@ -368,7 +367,13 @@ fn attach(ctx: &Ctx, notice: &Notice) -> Result<String> {
     let path = ctx
         .store
         .state_dir()
+        .join("tmp")
         .join(format!("main-movement-{}.json", notice.id));
+    std::fs::create_dir_all(
+        path.parent()
+            .context("movement materialization has no parent")?,
+    )
+    .context("creating movement materialization directory")?;
     std::fs::write(&path, serde_json::to_vec_pretty(notice)?)
         .with_context(|| format!("writing {}", path.display()))?;
     let artifact = crate::artifacts::add_artifact_for_run(

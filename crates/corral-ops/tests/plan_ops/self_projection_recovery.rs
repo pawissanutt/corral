@@ -45,7 +45,7 @@ fn interrupted(
     initial: Option<&str>,
     replacement: Option<&str>,
     automatic: bool,
-) -> (tempfile::TempDir, Ctx, Task, PathBuf) {
+) -> (tempfile::TempDir, Ctx, Task, String) {
     let (root, ctx, id, path) = fixture();
     let first = reviewed(&ctx, &id, &path, initial);
     owner_accept(&ctx, &id, &first);
@@ -87,12 +87,10 @@ fn interrupted(
         completed.plans[1].approval.as_ref().unwrap().by,
         if automatic { "reviewer" } else { "owner" }
     );
-    let journal_path = ctx
-        .store
-        .state_dir()
-        .join(format!("plan-decompose-{id}.json"));
-    let journal: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&journal_path).unwrap()).unwrap();
+    let journal = corral_core::records::RecordArea::<serde_json::Value>::new("plan-decompose")
+        .load(&ctx.store, &id)
+        .unwrap()
+        .unwrap();
     assert!(journal["children"].as_array().unwrap().is_empty());
     assert_eq!(
         journal["scopes"].as_object().unwrap().len(),
@@ -122,7 +120,7 @@ fn interrupted(
     assert_eq!(prefix.plans[1].approval, completed.plans[1].approval);
     let mut fresh = ctx.clone();
     fresh.store = Store::open(root.path()).unwrap();
-    (root, fresh, completed, journal_path)
+    (root, fresh, completed, id)
 }
 
 fn clock() -> jiff::Timestamp {
@@ -137,7 +135,7 @@ fn sync_twice(ctx: &Ctx) {
 fn assert_recovery(initial: Option<&str>, replacement: Option<&str>, automatic: bool) {
     // Given the exact durable interruption prefix from real accepted plans.
     let (_root, ctx, completed, journal) = interrupted(initial, replacement, automatic);
-    let journal_bytes = std::fs::read(&journal).unwrap();
+    let journal_bytes = ctx.store.record_row("plan-decompose", &journal).unwrap();
     let config = std::fs::read(ctx.store.config_path()).unwrap();
 
     // When a reopened store performs ordinary sync, then repeats it.
@@ -155,7 +153,10 @@ fn assert_recovery(initial: Option<&str>, replacement: Option<&str>, automatic: 
     assert!(after.children.is_empty() && after.runs.is_empty());
     assert!(!after.queued && after.dispatch_plan.is_none());
     assert_eq!(ctx.store.list().unwrap().len(), 1);
-    assert_eq!(std::fs::read(journal).unwrap(), journal_bytes);
+    assert_eq!(
+        ctx.store.record_row("plan-decompose", &journal).unwrap(),
+        journal_bytes
+    );
     assert_eq!(std::fs::read(ctx.store.config_path()).unwrap(), config);
 }
 
@@ -201,8 +202,9 @@ fn self_projection_restart_rejects_changed_publication_identities() {
                 // Given an interrupted accepted self-projection with one changed identity.
                 let (_root, ctx, completed, path) =
                     interrupted(initial, Some("replacement"), automatic);
-                let mut journal: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                let area =
+                    corral_core::records::RecordArea::<serde_json::Value>::new("plan-decompose");
+                let mut journal = area.load(&ctx.store, &path).unwrap().unwrap();
                 match change {
                     "attachment" => {
                         ctx.store
@@ -232,8 +234,8 @@ fn self_projection_restart_rejects_changed_publication_identities() {
                     }
                     _ => unreachable!(),
                 }
-                std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
-                let bytes = std::fs::read(&path).unwrap();
+                area.save(&ctx.store, &path, &journal).unwrap();
+                let bytes = ctx.store.record_row("plan-decompose", &path).unwrap();
                 let before = ctx.store.get(&completed.id).unwrap();
 
                 // When ordinary sync encounters the changed publication, then repeats.
@@ -246,7 +248,11 @@ fn self_projection_restart_rejects_changed_publication_identities() {
                 assert_eq!(after.plans[1].approval, completed.plans[1].approval);
                 assert!(after.children.is_empty() && after.runs.is_empty());
                 assert_eq!(ctx.store.list().unwrap().len(), 1);
-                assert_eq!(std::fs::read(path).unwrap(), bytes, "{change}");
+                assert_eq!(
+                    ctx.store.record_row("plan-decompose", &path).unwrap(),
+                    bytes,
+                    "{change}"
+                );
             }
         }
     }
@@ -295,7 +301,7 @@ fn automatic_self_projection_restart_rechecks_fresh_authority() {
                 _ => unreachable!(),
             }
             let before = ctx.store.get(&completed.id).unwrap();
-            let bytes = std::fs::read(&path).unwrap();
+            let bytes = ctx.store.record_row("plan-decompose", &path).unwrap();
 
             // When the previously opened context syncs with newly narrowed authority.
             sync_twice(&ctx);
@@ -306,7 +312,10 @@ fn automatic_self_projection_restart_rechecks_fresh_authority() {
             assert_eq!(after.write_scope, before.write_scope);
             assert_eq!(after.plans[1].approval, completed.plans[1].approval);
             assert!(after.children.is_empty() && after.runs.is_empty());
-            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                ctx.store.record_row("plan-decompose", &path).unwrap(),
+                bytes
+            );
 
             // Restoring the same paused/held grant needs no new acceptance.
             match change {

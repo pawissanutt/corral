@@ -4,41 +4,30 @@
 //! statuses instead of interpreting individual producers' event kinds. Sample before
 //! sync advances Review cards as well as after it reconciles agents.
 
-use std::collections::BTreeMap;
-use std::io::ErrorKind;
-
 use anyhow::{Context, Result};
 use corral_core::Status;
+use corral_core::records::RecordArea;
+use std::collections::BTreeMap;
 
 use crate::Ctx;
+
+const OBSERVATIONS: RecordArea<BTreeMap<String, Status>> = RecordArea::new("desktop-notifications");
 
 pub(crate) fn reconcile(ctx: &Ctx) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("desktop-notifications")? else {
         return Ok(());
     };
-    let path = ctx.store.state_dir().join("desktop-notifications.json");
-    let previous: BTreeMap<String, Status> = match std::fs::read(&path) {
-        Ok(bytes) => {
-            serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?
-        }
-        Err(err) if err.kind() == ErrorKind::NotFound => BTreeMap::new(),
-        Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
-    };
+    let previous = OBSERVATIONS.load(&ctx.store, "state")?;
     let tasks = ctx.store.list_shared()?;
     let current: BTreeMap<_, _> = tasks.iter().map(|t| (t.id.clone(), t.status)).collect();
-    if current == previous && path.exists() {
+    if previous.as_ref() == Some(&current) {
         return Ok(());
     }
     // Claim the observations before invoking an external process. Delivery is
     // best-effort, at most once per observed entry, including transport failure.
     // Disabled entries are checkpointed too, never queued for later enablement.
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec(&current).context("serializing desktop notification state")?,
-    )
-    .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("saving {}", path.display()))?;
+    OBSERVATIONS.save(&ctx.store, "state", &current)?;
+    let previous = previous.unwrap_or_default();
 
     for task in tasks.iter() {
         if previous.get(&task.id) == Some(&task.status) {

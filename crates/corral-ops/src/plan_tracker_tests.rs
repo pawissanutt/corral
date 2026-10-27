@@ -2,15 +2,7 @@ use super::*;
 use corral_core::{ApprovedScope, Origin, PlanDeliveryTarget};
 
 fn journal(ctx: &Ctx, id: &str) -> Journal {
-    serde_json::from_slice(
-        &std::fs::read(
-            ctx.store
-                .state_dir()
-                .join(format!("plan-decompose-{id}.json")),
-        )
-        .unwrap(),
-    )
-    .unwrap()
+    PUBLICATIONS.load(&ctx.store, id).unwrap().unwrap()
 }
 
 fn published_tracker(ctx: &Ctx, id: &str) -> Task {
@@ -253,13 +245,7 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
             binding.task = child.id.clone();
             binding.contract_revision = operating_contract_revision(&child).unwrap();
         }
-        write_atomic(
-            &ctx.store
-                .state_dir()
-                .join(format!("plan-decompose-{id}.json")),
-            &serde_json::to_vec(&receipt).unwrap(),
-        )
-        .unwrap();
+        PUBLICATIONS.save(&ctx.store, &id, &receipt).unwrap();
         assert_eq!(ctx.store.get("T-004").unwrap(), old_tracker);
         if changed {
             // Simulate a raw out-of-band edit, not the now-protected store API.
@@ -493,13 +479,7 @@ fn historical_unfinished_receipt_publishes_tracker_without_changing_child_ids() 
     }
     let value = serde_json::to_value(&receipt).unwrap();
     assert!(value.get("tracker").is_none() && value.get("previous_contracts").is_none());
-    write_atomic(
-        &ctx.store
-            .state_dir()
-            .join(format!("plan-decompose-{id}.json")),
-        &serde_json::to_vec(&receipt).unwrap(),
-    )
-    .unwrap();
+    PUBLICATIONS.save(&ctx.store, &id, &receipt).unwrap();
     ctx.store
         .fixture_put_task_text("T-002-plan", &receipt.children[0])
         .unwrap();
@@ -549,13 +529,7 @@ fn completed_historical_decomposition_is_not_reopened_or_backfilled() {
             .contract_revision = operating_contract_revision(&saved).unwrap();
         *text = Store::render_task_markdown(&saved);
     }
-    write_atomic(
-        &ctx.store
-            .state_dir()
-            .join(format!("plan-decompose-{id}.json")),
-        &serde_json::to_vec(&receipt).unwrap(),
-    )
-    .unwrap();
+    PUBLICATIONS.save(&ctx.store, &id, &receipt).unwrap();
     let parent = ctx.store.get(&id).unwrap();
     // When publication is requested again after its historical terminal barrier.
     apply(&ctx, &id, "P1").unwrap();

@@ -282,9 +282,13 @@ pub fn inspect(
         match plugin_error {
             Some(error) => Err(error),
             None => match &store {
-                Some(store) => {
-                    herdr.plugin_linked(&store.state_dir().join("herdr-plugin/herdr-plugin.toml"))
-                }
+                Some(store) => plugin::installed(store).and_then(|installed| {
+                    if installed {
+                        herdr.plugin_linked(&plugin::manifest_path(store))
+                    } else {
+                        Ok(false)
+                    }
+                }),
                 None => Ok(false),
             },
         },

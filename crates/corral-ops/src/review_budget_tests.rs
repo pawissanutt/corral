@@ -476,11 +476,13 @@ fn shared_pm_crash_recovery_retains_capacity_without_closing_pm() {
     let first = fx.task();
     let second = fx.task();
     fx.mark("w1:pm");
-    std::fs::write(
-        fx.ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"w1:pm"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(
+            &fx.ctx.store,
+            "state",
+            &serde_json::json!({"pane_id":"w1:pm"}),
+        )
+        .unwrap();
     crate::reviewer::review_run(&fx.ctx, &first, Some("pm")).unwrap();
     save(
         &fx.ctx,

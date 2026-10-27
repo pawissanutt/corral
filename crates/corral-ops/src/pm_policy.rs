@@ -1,9 +1,10 @@
 //! Policy replacement is mandatory coordination, not an optional board-event push.
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{ErrorKind, Write};
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
+use corral_core::records::RecordArea;
 use corral_core::{OperatingActionKind, OperatingAuthority, OperatingMode, OperatingScope};
 use corral_herdr::Delivery;
 use serde::{Deserialize, Serialize};
@@ -116,6 +117,8 @@ struct Records {
     panes: BTreeMap<String, Record>,
 }
 
+const STATE: RecordArea<Records> = RecordArea::new("pm-policy");
+
 fn fingerprint(policy: &PolicySnapshot) -> Result<String> {
     // Per-task permissions, refusals and diagnostic reasons are live observations,
     // not a replacement of the owner's material policy or finite delegation.
@@ -130,21 +133,12 @@ fn fingerprint(policy: &PolicySnapshot) -> Result<String> {
 }
 
 fn load(ctx: &Ctx) -> Result<Records> {
-    let path = ctx.store.state_dir().join("pm-policy.json");
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            let mut records: Records = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            // Older receipts hashed the whole snapshot. Re-key from the saved
-            // evidence without writing during health reads or waking a live PM.
-            for record in records.panes.values_mut() {
-                record.fingerprint = fingerprint(&record.snapshot)?;
-            }
-            Ok(records)
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(Records::default()),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
+    let mut records = STATE.load(&ctx.store, "state")?.unwrap_or_default();
+    // Re-key saved evidence without writing during health reads or waking a live PM.
+    for record in records.panes.values_mut() {
+        record.fingerprint = fingerprint(&record.snapshot)?;
     }
+    Ok(records)
 }
 
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -164,10 +158,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 fn save(ctx: &Ctx, records: &Records) -> Result<()> {
-    write_atomic(
-        &ctx.store.state_dir().join("pm-policy.json"),
-        &serde_json::to_vec(records)?,
-    )
+    STATE.save(&ctx.store, "state", records)
 }
 
 /// Begin before startup IPC; a crash must not turn a reused shell into a second launch.

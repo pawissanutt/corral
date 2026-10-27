@@ -1,7 +1,7 @@
 //! Guidance for people who do not know the terminal engine: the first-run welcome tour (remembered in
-//! `.corral/state/tour-seen`, replayed with `t` or from `?`) and the `q` popup that explains leaving.
+//! the tour-seen record, replayed with `t` or from `?`) and the `q` popup that explains leaving.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_ops::Ctx;
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
@@ -17,19 +17,62 @@ use crate::overlays::{centered, popup};
 use crate::theme;
 use crate::{Action, Toast, Tone, View};
 
-const SEEN_FILE: &str = "tour-seen";
+const SEEN: corral_core::records::RecordArea<jiff::Timestamp> =
+    corral_core::records::RecordArea::new("tour-seen");
 
 /// True once the tour was finished or skipped in this workspace.
 pub(crate) fn tour_seen(ctx: &Ctx) -> bool {
-    ctx.store.state_dir().join(SEEN_FILE).exists()
+    match SEEN.load(&ctx.store, "workspace") {
+        Ok(seen) => seen.is_some(),
+        Err(error) => {
+            eprintln!("reading tour completion: {error:#}");
+            false
+        }
+    }
 }
 
 fn mark_seen(ctx: &Ctx) -> Result<()> {
-    let dir = ctx.store.state_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let path = dir.join(SEEN_FILE);
-    std::fs::write(&path, format!("{}\n", jiff::Timestamp::now()))
-        .with_context(|| format!("writing {}", path.display()))
+    SEEN.save(&ctx.store, "workspace", &jiff::Timestamp::now())
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn tour_completion_roundtrips_after_restart_without_file_authority() {
+        // Given a fresh workspace with only a legacy tour marker.
+        let dir = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(dir.path()).unwrap();
+        std::fs::create_dir_all(store.state_dir()).unwrap();
+        let legacy = store.state_dir().join("tour-seen");
+        std::fs::write(&legacy, "legacy").unwrap();
+        let ctx = Ctx::from_store(store);
+        assert!(!tour_seen(&ctx));
+
+        // When completion is saved and the workspace is reopened without that marker.
+        mark_seen(&ctx).unwrap();
+        let saved = SEEN.load(&ctx.store, "workspace").unwrap().unwrap();
+        std::fs::remove_file(&legacy).unwrap();
+        let reopened = Ctx::from_store(corral_core::Store::open_unobserved(dir.path()).unwrap());
+
+        // Then the exact completion record survives, independent of the old file.
+        assert!(tour_seen(&reopened));
+        assert_eq!(
+            SEEN.load(&reopened.store, "workspace").unwrap().unwrap(),
+            saved
+        );
+        assert_eq!(
+            reopened
+                .store
+                .record_row("tour-seen", "workspace")
+                .unwrap()
+                .unwrap()
+                .doc["doc_version"],
+            1
+        );
+        assert!(!legacy.exists());
+    }
 }
 
 /// Greedy word wrap to `width` columns. The guide popups lay out their own lines so their height always matches

@@ -5,6 +5,7 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
 use super::{ScopedPlan, ScopedTask, digest};
+use crate::records::RecordArea;
 use crate::{Config, PlanDocument, Status, Store, Task, Verdict, operating_contract_revision};
 
 #[derive(Deserialize)]
@@ -55,17 +56,12 @@ impl Store {
             }
         }
         for grant in &grants {
-            let path = self
-                .state_dir()
-                .join(format!("plan-decompose-{}.json", grant.task));
-            if !path.exists() {
-                continue;
-            }
             let result = (|| {
-                let journal: Publication = serde_json::from_slice(
-                    &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
-                )
-                .context("parsing scoped publication")?;
+                let Some(journal) =
+                    RecordArea::<Publication>::new("plan-decompose").load(self, &grant.task)?
+                else {
+                    return Ok(BTreeMap::new());
+                };
                 let parent = self.get(&grant.task)?;
                 let original = config
                     .automation

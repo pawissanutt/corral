@@ -326,6 +326,50 @@ fn the_generic_display_is_the_only_unarmed_launch() {
 }
 
 #[test]
+fn restarted_sync_reconciles_exit_into_canonical_state_before_scratch_cleanup() {
+    let mut fx = fixture("exit 23", false);
+    fx.dispatch();
+    let scratch = fx.ctx.store.state_dir().join("tmp/launch-exits");
+    assert!(scratch.join(format!("{}-R1.exited", fx.id)).is_file());
+    fx.ctx.store = Store::open(fx.tmp.path()).unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
+    let task = fx.ctx.store.get(&fx.id).unwrap();
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(
+        task.current_run().unwrap().outcome,
+        Some(RunOutcome::Failed)
+    );
+    let failures = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .iter()
+        .filter(|e| e.kind == "run_failed")
+        .count();
+    assert_eq!(failures, 1);
+    std::fs::remove_dir_all(scratch).unwrap();
+    fx.ctx.store = Store::open(fx.tmp.path()).unwrap();
+    corral_ops::sync(&fx.ctx).unwrap();
+    let restored = fx.ctx.store.get(&fx.id).unwrap();
+    assert_eq!(restored.status, task.status);
+    assert_eq!(
+        restored.current_run().unwrap().outcome,
+        Some(RunOutcome::Failed)
+    );
+    assert_eq!(
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "run_failed")
+            .count(),
+        failures
+    );
+}
+
+#[test]
 fn plan_review_whose_reviewer_returns_to_its_shell_ends_the_attempt() {
     for agent in ["missing-agent", "agent"] {
         // Given a plan reviewer whose executable is missing, or exits without a verdict.

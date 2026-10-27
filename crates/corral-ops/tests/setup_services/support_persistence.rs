@@ -64,14 +64,13 @@ fn corrupted_support_facts_cannot_publish_an_approved_mapping() {
     let (_dir, store, input) = fixture();
     let record = approved(&store, &input);
     let before = fs::read(store.config_path()).unwrap();
-    let path = store
-        .state_dir()
-        .join("profile-proposals")
-        .join(format!("{}.json", input.proposal.digest().unwrap()));
+    let key = input.proposal.digest().unwrap();
     let mut changed = input;
     changed.discovery.candidates[0].settings.clear();
-    fs::write(path, serde_json::to_vec(&changed).unwrap()).unwrap();
-    // When applying after restart against the real corrupted support file.
+    corral_core::records::RecordArea::new("profile-proposals")
+        .save(&store, &key, &changed)
+        .unwrap();
+    // When applying after restart against the real corrupted support record.
     let reopened = Store::open_unobserved(store.root()).unwrap();
     let result = setup_apply(&reopened);
     // Then approval alone cannot replace missing support or claim an applied result.
@@ -79,4 +78,34 @@ fn corrupted_support_facts_cannot_publish_an_approved_mapping() {
     assert_eq!(store.profile_setup().unwrap(), record);
     assert_eq!(fs::read(store.config_path()).unwrap(), before);
     assert!(!store.state_dir().join("profile-setup-intent.json").exists());
+}
+
+#[test]
+fn proposal_support_roundtrips_after_restart_without_file_authority() {
+    // Given a proposal persisted through the setup service.
+    let (_dir, store, input) = fixture();
+    let record = proposed(&store, &input);
+    let key = input.proposal.digest().unwrap();
+    let area = corral_core::records::RecordArea::<SetupProposalInput>::new("profile-proposals");
+    // A conflicting legacy file must never participate in reconciliation.
+    let legacy = store.state_dir().join("profile-proposals");
+    fs::create_dir_all(&legacy).unwrap();
+    fs::write(legacy.join(format!("{key}.json")), "invalid legacy input").unwrap();
+
+    // When the store and service reopen.
+    let reopened = Store::open_unobserved(store.root()).unwrap();
+    let restored = area.load(&reopened, &key).unwrap().unwrap();
+    let approved = setup_approve(&reopened, &approval(&input), record.revision).unwrap();
+
+    // Then the exact canonical support facts still authorize the original proposal.
+    assert_eq!(restored, input);
+    assert!(approved.approval.is_some());
+    assert_eq!(
+        reopened
+            .record_row("profile-proposals", &key)
+            .unwrap()
+            .unwrap()
+            .doc["doc_version"],
+        1
+    );
 }

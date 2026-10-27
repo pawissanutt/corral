@@ -11,12 +11,20 @@ use serde_json::json;
 use crate::Ctx;
 
 /// The receipt the pane shell writes when the command of `attempt` returns.
+/// This is a nonauthoritative shell notification, not lifecycle storage. Sync
+/// reconciles it into the canonical task/run (or PM) records before ending the
+/// attempt. Failure excerpts remain evidence, handled separately by `record`.
 pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> PathBuf {
     ctx.store
         .state_dir()
+        .join("tmp")
         .join("launch-exits")
         .join(format!("{task}-{attempt}.exited"))
 }
+
+#[cfg(test)]
+#[path = "launch_exit_tests.rs"]
+mod tests;
 
 /// `command` run in a child `/bin/sh`, followed by a receipt holding its exit status, written
 /// whenever it returns (success included: an agent never returns before reporting).
@@ -88,7 +96,7 @@ pub(crate) fn reason(ctx: &Ctx, what: &str, pane: Option<&str>) -> String {
 
 /// Keep the reason as a run artifact so it survives the pane.
 pub(crate) fn record(ctx: &Ctx, task: &str, run: &str, title: &str, reason: &str) -> Result<()> {
-    let dir = ctx.store.state_dir().join("launch-exits");
+    let dir = ctx.store.state_dir().join("tmp").join("launch-exits");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = dir.join(format!(
         "{task}-{run}-{}.log",

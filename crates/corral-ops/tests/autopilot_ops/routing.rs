@@ -165,11 +165,13 @@ fn project_profile_supersedes_workspace_in_preview_and_autopilot() {
 fn pm_preview_matches_accounting_child_and_pm_review_record() {
     // Given a PM backed by a profile distinct from every other reviewer.
     let fx = configured("pm");
-    std::fs::write(
-        fx.ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"w1:p1"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(
+            &fx.ctx.store,
+            "state",
+            &serde_json::json!({"pane_id":"w1:p1"}),
+        )
+        .unwrap();
     let mapping = selected(&fx, "pm-profile", "pm", "workspace_review_config");
     assert_eq!(mapping.selection, "pm");
     // When autopilot requests PM review, then its child records the PM profile, not "pm".

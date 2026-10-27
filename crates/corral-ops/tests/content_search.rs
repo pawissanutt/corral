@@ -18,6 +18,46 @@ struct Fixture {
     task: String,
 }
 
+#[test]
+fn deleting_the_cache_root_preserves_search_output_after_restart() {
+    // Given indexed artifact content and its stable search output.
+    let fixture = Fixture::new();
+    fixture.add(
+        "cache-proof.txt",
+        "rebuildprobe",
+        ArtifactKind::Evidence,
+        "Cache proof",
+    );
+    let before = serde_json::to_value(fixture.search("rebuildprobe")).unwrap();
+    let cache = fixture.ctx.store.cache_root().unwrap();
+    assert!(cache.join("content-search.json").is_file());
+    let task = fixture.ctx.store.get(&fixture.task).unwrap();
+    // When the whole rebuildable cache disappears and a new store opens.
+    fs::remove_dir_all(&cache).unwrap();
+    let mut restarted = fixture.ctx.clone();
+    restarted.store = Store::open(fixture.ctx.store.root()).unwrap();
+    let after = search_content(
+        &restarted,
+        "rebuildprobe",
+        &ContentSearch {
+            scope: "artifacts".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Then canonical content and the rendered search result are unchanged.
+    assert_eq!(serde_json::to_value(after).unwrap(), before);
+    assert_eq!(restarted.store.get(&fixture.task).unwrap(), task);
+    assert!(cache.join("content-search.json").is_file());
+    assert!(
+        !restarted
+            .store
+            .state_dir()
+            .join("content-search.json")
+            .exists()
+    );
+}
+
 impl Fixture {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
@@ -52,7 +92,11 @@ impl Fixture {
     }
 
     fn index_path(&self) -> PathBuf {
-        self.ctx.store.state_dir().join("content-search.json")
+        self.ctx
+            .store
+            .cache_root()
+            .unwrap()
+            .join("content-search.json")
     }
 
     fn cache(&self) -> Value {

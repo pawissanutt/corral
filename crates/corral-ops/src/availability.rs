@@ -3,9 +3,8 @@
 //! `retry_with` creates linked continuations from run checkpoints, reviewers get a new review
 //! attempt, and blocked or exhausted lists become explicit Waiting or Needs-me states.
 
-use std::path::PathBuf;
-
-use anyhow::{Context, Result};
+use anyhow::Result;
+use corral_core::records::RecordArea;
 use corral_core::{
     AttemptFailure, AvailabilityClass, AvailabilityEpisode, CandidateBinding, Config,
     ExecutionCandidate, ProfileChoice, ProfileMetadata, ProfileRole, ResolvedProfile,
@@ -51,34 +50,18 @@ fn binding(run: &Run) -> Option<&CandidateBinding> {
         .filter(|binding| !binding.pinned)
 }
 
-fn path(ctx: &Ctx, id: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("availability")
-        .join(format!("{id}.json"))
-}
+const EPISODES: RecordArea<AvailabilityEpisode> = RecordArea::new("availability");
 
 pub(crate) fn load(ctx: &Ctx, id: &str) -> Result<Option<AvailabilityEpisode>> {
-    let path = path(ctx, id);
-    let bytes = match std::fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    let Some(episode) = EPISODES.load(&ctx.store, id)? else {
+        return Ok(None);
     };
-    let episode: AvailabilityEpisode = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing availability episode {}", path.display()))?;
     episode.validate()?;
     Ok(Some(episode))
 }
 
 fn save(ctx: &Ctx, episode: &AvailabilityEpisode) -> Result<()> {
-    let path = path(ctx, &episode.id);
-    let dir = path.parent().context("episode path has no parent")?;
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(episode)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))
+    EPISODES.save(&ctx.store, &episode.id, episode)
 }
 
 fn metadata<'a>(config: &'a Config, profile: &str) -> Option<&'a ProfileMetadata> {

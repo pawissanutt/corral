@@ -29,6 +29,7 @@ model = "missing-model"
     .expect("config");
     let mut store = corral_core::Store::open(&ws.root).expect("routing config");
     resource_support::configure(&mut store.config);
+    store.config.storage.cache_root = Some(ws.root.join("cache"));
     store.save_config().expect("resource fixture config");
     let cache = serde_json::json!({
         "detected_at": "2026-01-01T00:00:00Z",
@@ -43,8 +44,10 @@ model = "missing-model"
             "takes_effort": true
         }]
     });
+    let root = store.cache_root().expect("cache root");
+    std::fs::create_dir_all(&root).expect("cache directory");
     std::fs::write(
-        ws.root.join(".corral/state/harnesses.json"),
+        root.join(corral_ops::HARNESS_CACHE_FILE),
         serde_json::to_vec(&cache).expect("cache json"),
     )
     .expect("cache");
@@ -498,7 +501,10 @@ fn exact_model_ws(model: &str, discovered: bool) -> Ws {
         .expect("profile")
         .model = Some(model.into());
     store.save_config().expect("config");
-    let path = ws.root.join(".corral/state/harnesses.json");
+    let path = store
+        .cache_root()
+        .expect("cache root")
+        .join(corral_ops::HARNESS_CACHE_FILE);
     let mut cache: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("cache")).expect("json");
     cache["harnesses"][0]["models"] = if discovered {

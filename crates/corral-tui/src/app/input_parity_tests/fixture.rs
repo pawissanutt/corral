@@ -112,8 +112,10 @@ impl Fixture {
                 notes: Vec::new(),
             }],
         };
+        let cache = store.cache_root().unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(
-            store.state_dir().join(corral_ops::HARNESS_CACHE_FILE),
+            cache.join(corral_ops::HARNESS_CACHE_FILE),
             serde_json::to_vec(&report).unwrap(),
         )
         .unwrap();

@@ -4,7 +4,7 @@ use serde_json::json;
 
 pub(super) fn record(
     ctx: &Ctx,
-    path: &Path,
+    receipt: &StateRecord<'_>,
     state: &mut State,
     i: usize,
     outcome: DeliveryState,
@@ -16,7 +16,12 @@ pub(super) fn record(
     let notice = &mut state.notices[i];
     notice.state = outcome;
     notice.detail = Some(detail.to_string());
-    save(path, state)?;
+    if state.notices[i].state == DeliveryState::Sending {
+        // The transport can succeed even if the surrounding callback later refuses.
+        RECORDS.save_intent(&ctx.store, receipt.key, state)?;
+    } else {
+        save(receipt, state)?;
+    }
     let notice = &state.notices[i];
     ctx.store.log_event(
         Some(&notice.target.task),
@@ -25,7 +30,7 @@ pub(super) fn record(
             "id":notice.id, "run":notice.target.run, "pane":notice.target.herdr,
             "state":notice.state, "detail":notice.detail, "delivery":notice.delivery,
             "overlapping_paths":notice.overlapping_paths, "landings":notice.landings,
-            "context":notice.artifact, "receipt":path,
+            "context":notice.artifact, "receipt":format!("main-movement/{}", receipt.key),
         }),
     )?;
     if notice.state != DeliveryState::Delivered && notice.state != DeliveryState::Sending {
@@ -33,10 +38,8 @@ pub(super) fn record(
             Some(&notice.target.task),
             "main movement",
             format!(
-                "{} main-movement notice {:?}: {detail}; receipt {}",
-                notice.target.task,
-                notice.state,
-                path.display()
+                "{} main-movement notice {:?}: {detail}; receipt main-movement/{}",
+                notice.target.task, notice.state, receipt.key
             ),
         );
     }
@@ -45,7 +48,7 @@ pub(super) fn record(
 
 pub(super) fn deliver(
     ctx: &Ctx,
-    path: &Path,
+    receipt: &StateRecord<'_>,
     state: &mut State,
     i: usize,
     available: bool,
@@ -58,7 +61,7 @@ pub(super) fn deliver(
     if state.notices[i].state == DeliveryState::Sending {
         return record(
             ctx,
-            path,
+            receipt,
             state,
             i,
             DeliveryState::Uncertain,
@@ -69,7 +72,7 @@ pub(super) fn deliver(
     let Some(_delivery_lock) = ctx.store.try_lock(&format!("delivery-{}", target.task))? else {
         return record(
             ctx,
-            path,
+            receipt,
             state,
             i,
             DeliveryState::Deferred,
@@ -79,7 +82,7 @@ pub(super) fn deliver(
     if !target.matches(&ctx.store.get(&target.task)?) {
         return record(
             ctx,
-            path,
+            receipt,
             state,
             i,
             DeliveryState::Cancelled,
@@ -108,12 +111,12 @@ pub(super) fn deliver(
                 .join("; "),
             notice.artifact.as_deref().unwrap_or_default(),
         ));
-        save(path, state)?;
+        save(receipt, state)?;
     }
     if !available {
         return record(
             ctx,
-            path,
+            receipt,
             state,
             i,
             DeliveryState::Deferred,
@@ -126,7 +129,7 @@ pub(super) fn deliver(
         if !target.matches(task) {
             record(
                 ctx,
-                path,
+                receipt,
                 state,
                 i,
                 DeliveryState::Cancelled,
@@ -147,13 +150,13 @@ pub(super) fn deliver(
             None
         };
         if let Some(reason) = deferred {
-            record(ctx, path, state, i, DeliveryState::Deferred, reason)?;
+            record(ctx, receipt, state, i, DeliveryState::Deferred, reason)?;
             return Ok(());
         }
         let Some(reference) = &target.herdr else {
             record(
                 ctx,
-                path,
+                receipt,
                 state,
                 i,
                 DeliveryState::Deferred,
@@ -166,7 +169,7 @@ pub(super) fn deliver(
             Ok(None) => {
                 record(
                     ctx,
-                    path,
+                    receipt,
                     state,
                     i,
                     DeliveryState::Deferred,
@@ -177,7 +180,7 @@ pub(super) fn deliver(
             Err(error) => {
                 record(
                     ctx,
-                    path,
+                    receipt,
                     state,
                     i,
                     DeliveryState::Deferred,
@@ -193,7 +196,7 @@ pub(super) fn deliver(
         {
             record(
                 ctx,
-                path,
+                receipt,
                 state,
                 i,
                 DeliveryState::Cancelled,
@@ -204,7 +207,7 @@ pub(super) fn deliver(
         if pane.status == AgentStatus::Blocked || pane.agent.is_none() {
             record(
                 ctx,
-                path,
+                receipt,
                 state,
                 i,
                 DeliveryState::Deferred,
@@ -217,7 +220,7 @@ pub(super) fn deliver(
             Err(error) => {
                 record(
                     ctx,
-                    path,
+                    receipt,
                     state,
                     i,
                     DeliveryState::Deferred,
@@ -232,7 +235,7 @@ pub(super) fn deliver(
         {
             record(
                 ctx,
-                path,
+                receipt,
                 state,
                 i,
                 DeliveryState::Cancelled,
@@ -243,7 +246,7 @@ pub(super) fn deliver(
         state.notices[i].shell_pid = Some(process.shell_pid);
         record(
             ctx,
-            path,
+            receipt,
             state,
             i,
             DeliveryState::Sending,
@@ -264,19 +267,19 @@ pub(super) fn deliver(
                 if submitted {
                     record(
                         ctx,
-                        path,
+                        receipt,
                         state,
                         i,
                         DeliveryState::Delivered,
                         "submission confirmed",
                     )?;
                 } else {
-                    record(ctx, path, state, i, DeliveryState::Failed, &error)?;
+                    record(ctx, receipt, state, i, DeliveryState::Failed, &error)?;
                 }
             }
             Err(error) => record(
                 ctx,
-                path,
+                receipt,
                 state,
                 i,
                 DeliveryState::Uncertain,

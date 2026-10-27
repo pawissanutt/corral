@@ -41,6 +41,7 @@ fn actual_cli_searches_compressed_artifact_filters_snippets_and_source_slice() {
     // Given a real CLI-managed artifact and compression policy, without any external server.
     let tmp = tempfile::tempdir().unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
+    store.config.storage.cache_root = Some(tmp.path().join("search-cache"));
     store.config.artifacts.retention.action = RetentionAction::Compress;
     store.config.artifacts.retention.larger_than = Some("1B".into());
     store.save_config().unwrap();
@@ -136,7 +137,9 @@ fn actual_cli_searches_compressed_artifact_filters_snippets_and_source_slice() {
 fn actual_cli_caps_hits_and_unicode_snippets_and_rejects_invalid_options() {
     // Given several matching artifacts with long UTF-8 lines.
     let tmp = tempfile::tempdir().unwrap();
-    let store = Store::init(tmp.path()).unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.storage.cache_root = Some(tmp.path().join("search-cache"));
+    store.save_config().unwrap();
     let task = store.create("Budget", None, Status::Backlog, "").unwrap();
     for i in 0..3 {
         let source = tmp.path().join(format!("{i}.log"));
@@ -173,5 +176,11 @@ fn actual_cli_caps_hits_and_unicode_snippets_and_rejects_invalid_options() {
             .all(|h| h["snippet"].as_str().unwrap().chars().count() <= 1200)
     );
     assert!(errors.iter().all(|out| !out.status.success()));
-    assert!(store.state_dir().join("content-search.json").is_file());
+    assert!(
+        store
+            .cache_root()
+            .unwrap()
+            .join("content-search.json")
+            .is_file()
+    );
 }

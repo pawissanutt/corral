@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use corral_core::Run;
+use corral_core::records::RecordArea;
 use jiff::Timestamp;
 use serde_json::Value;
 
@@ -92,22 +93,12 @@ pub(crate) enum Scope {
     Active,
 }
 
-fn launch_path(ctx: &Ctx, task: &str, run_id: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("provider-stall")
-        .join(format!("{task}-{run_id}.launch"))
-}
+const LAUNCHES: RecordArea<Timestamp> = RecordArea::new("provider-session");
 
 /// Dispatch calls this with the run's pre-launch `started`: the harness may create its session while
 /// the pane is still being launched, before the post-launch `started` that restarts the startup grace.
 pub(crate) fn record_launch(ctx: &Ctx, task: &str, run_id: &str, at: Timestamp) {
-    let path = launch_path(ctx, task, run_id);
-    let written = path
-        .parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|()| std::fs::write(&path, at.to_string()));
-    if let Err(error) = written {
+    if let Err(error) = LAUNCHES.save(&ctx.store, &format!("{task}-{run_id}"), &at) {
         crate::messages::report(
             Some(task),
             "provider-stall",
@@ -118,9 +109,10 @@ pub(crate) fn record_launch(ctx: &Ctx, task: &str, run_id: &str, at: Timestamp) 
 
 /// Earliest instant a session or error can belong to this run.
 pub(crate) fn boundary(ctx: &Ctx, task: &str, run: &Run) -> Timestamp {
-    std::fs::read_to_string(launch_path(ctx, task, &run.id))
+    LAUNCHES
+        .load(&ctx.store, &format!("{task}-{}", run.id))
         .ok()
-        .and_then(|text| text.trim().parse::<Timestamp>().ok())
+        .flatten()
         .map_or(run.started, |launch| launch.min(run.started))
 }
 

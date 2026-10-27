@@ -3,7 +3,8 @@
 //!
 //! It binds 127.0.0.1 on a random port, puts a random token as the first path segment of every URL and
 //! answers only from recorded snapshots under `.corral/artifacts` (see `pages`). Its address lives in
-//! `.corral/state/artifact-server.json` (0600); [`ensure_server`] reuses a live server or starts one as a
+//! the versioned `artifact-server` record (in the owner-only database directory);
+//! [`ensure_server`] reuses a live server or starts one as a
 //! detached `corral artifact serve --daemon`. It exits after [`DEFAULT_IDLE`] without requests or open pages,
 //! on `/<token>/shutdown` ([`stop_server`]) and when the board that used it exits.
 
@@ -12,7 +13,6 @@ mod pages;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use corral_core::Artifact;
+use corral_core::records::RecordArea;
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
@@ -30,8 +31,8 @@ pub use pages::artifact_url_path;
 /// How long the server waits without requests or open pages before it exits.
 pub const DEFAULT_IDLE: Duration = Duration::from_secs(15 * 60);
 
-const STATE_FILE: &str = "artifact-server.json";
-const LOCK_FILE: &str = "artifact-server.lock";
+const STATE: RecordArea<ServerInfo> = RecordArea::new("artifact-server");
+const LIVE_KEY: &str = "live";
 const PROBE_TIMEOUT: Duration = Duration::from_millis(800);
 
 static USED: AtomicBool = AtomicBool::new(false);
@@ -96,10 +97,6 @@ impl Shared {
     }
 }
 
-fn state_path(ctx: &Ctx) -> PathBuf {
-    ctx.store.state_dir().join(STATE_FILE)
-}
-
 fn new_token() -> Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)
@@ -108,25 +105,37 @@ fn new_token() -> Result<String> {
 }
 
 fn write_state(ctx: &Ctx, info: &ServerInfo) -> Result<()> {
-    let dir = ctx.store.state_dir();
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let tmp = dir.join(format!("{STATE_FILE}.{}.tmp", info.pid));
-    let mut file = std::fs::OpenOptions::new();
-    file.write(true).create(true).truncate(true);
+    anyhow::ensure!(
+        !ctx.store.is_snapshot(),
+        "a snapshot cannot register a server"
+    );
+    // The token used to live in a 0600 file. Protect the database and its WAL/SHM
+    // together before persisting it; newly created SQLite sidecars inherit this boundary.
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut file, 0o600);
-    let mut file = file
-        .open(&tmp)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    file.write_all(serde_json::to_string(info)?.as_bytes())
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, state_path(ctx))
-        .with_context(|| format!("replacing {}", state_path(ctx).display()))
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = ctx.store.dir().join("db");
+        let metadata = std::fs::symlink_metadata(&dir)
+            .with_context(|| format!("reading {}", dir.display()))?;
+        anyhow::ensure!(
+            metadata.is_dir(),
+            "database directory must not be a symlink"
+        );
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("protecting {}", dir.display()))?;
+    }
+    STATE.save_intent(&ctx.store, LIVE_KEY, info)
 }
 
-fn read_state(ctx: &Ctx) -> Option<ServerInfo> {
-    let text = std::fs::read_to_string(state_path(ctx)).ok()?;
-    serde_json::from_str(&text).ok()
+fn read_state(ctx: &Ctx) -> Result<Option<ServerInfo>> {
+    STATE.load(&ctx.store, LIVE_KEY)
+}
+
+fn clear_state(ctx: &Ctx, info: &ServerInfo) -> Result<()> {
+    if read_state(ctx)?.as_ref() == Some(info) {
+        STATE.delete(&ctx.store, LIVE_KEY)?;
+    }
+    Ok(())
 }
 
 /// GET `/<token>/<path>` on a server; the response body when it answers 200.
@@ -154,9 +163,13 @@ fn request(info: &ServerInfo, path: &str) -> Result<String> {
     Ok(body.to_string())
 }
 
-/// The workspace's live server, if its state file names one that answers for this `.corral/`.
+/// The workspace's live server, if its canonical registration answers for this `.corral/`.
 pub fn running_server(ctx: &Ctx) -> Option<ServerInfo> {
-    let info = read_state(ctx)?;
+    let info = read_state(ctx).ok()??;
+    probe(ctx, info)
+}
+
+fn probe(ctx: &Ctx, info: ServerInfo) -> Option<ServerInfo> {
     let body = request(&info, "health").ok()?;
     let mut lines = body.lines();
     (lines.next() == Some("corral-artifact-server")
@@ -172,9 +185,10 @@ pub fn artifact_server_used() -> bool {
 /// Reuses the live server or starts `corral --root <root> artifact serve --daemon` detached and reads its
 /// address from the first line it prints. Only the corral binary can start one.
 pub fn ensure_server(ctx: &Ctx) -> Result<ServerInfo> {
-    let dir = ctx.store.state_dir();
+    anyhow::ensure!(!ctx.store.is_snapshot(), "a snapshot cannot start a server");
+    let dir = ctx.store.dir().join("lock");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let lock_path = dir.join(LOCK_FILE);
+    let lock_path = dir.join("artifact-server.lock");
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -183,7 +197,8 @@ pub fn ensure_server(ctx: &Ctx) -> Result<ServerInfo> {
         .with_context(|| format!("opening {}", lock_path.display()))?;
     lock.lock()
         .with_context(|| format!("locking {}", lock_path.display()))?;
-    if let Some(info) = running_server(ctx) {
+    // Corrupt or future-version registrations are not permission to start another daemon.
+    if let Some(info) = read_state(ctx)?.and_then(|info| probe(ctx, info)) {
         USED.store(true, Ordering::SeqCst);
         return Ok(info);
     }
@@ -231,12 +246,21 @@ pub fn stop_server(ctx: &Ctx) -> Result<bool> {
 }
 
 /// Runs a server in this process until it is idle for `idle`, shut down or the listener fails. `ready` gets
-/// the address once the listener is bound and the state file written.
+/// the address once the listener is bound and the canonical registration committed.
 pub fn run_server(
     ctx: Ctx,
     idle: Duration,
     ready: impl FnOnce(&ServerInfo) -> Result<()>,
 ) -> Result<()> {
+    anyhow::ensure!(!ctx.store.is_snapshot(), "a snapshot cannot run a server");
+    // Separate from the launcher lease: ensure_server holds that one while it
+    // waits for this process's ready line. This lease survives for the daemon's
+    // lifetime and is released by the OS after a crash.
+    let _live = ctx
+        .store
+        .try_lock("artifact-server-live")?
+        .context("an artifact server already holds the workspace lease")?;
+    read_state(&ctx)?;
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).context("binding 127.0.0.1")?;
     let port = listener
         .local_addr()
@@ -248,7 +272,10 @@ pub fn run_server(
         pid: std::process::id(),
     };
     write_state(&ctx, &info)?;
-    ready(&info)?;
+    if let Err(error) = ready(&info) {
+        clear_state(&ctx, &info)?;
+        return Err(error);
+    }
     let shared = Arc::new(Shared {
         ctx,
         info,
@@ -280,10 +307,7 @@ pub fn run_server(
             let _ = http::handle(&shared, stream);
         });
     }
-    if read_state(&shared.ctx).is_some_and(|s| s == shared.info) {
-        std::fs::remove_file(state_path(&shared.ctx))
-            .with_context(|| format!("removing {}", state_path(&shared.ctx).display()))?;
-    }
+    clear_state(&shared.ctx, &shared.info)?;
     Ok(())
 }
 

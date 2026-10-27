@@ -97,8 +97,10 @@ fn one_connection_bootstraps_without_completed_profile_catalog() {
     assert_eq!(state.record.state, ProfileSetupState::Gathering);
     assert!(!state.record.validation.access_checked);
     assert!(!state.record.validation.execution_tested);
-    let state: Value =
-        serde_json::from_slice(&fs::read(ctx.store.state_dir().join("pm.json")).unwrap()).unwrap();
+    let state = corral_core::records::RecordArea::<Value>::new("pm")
+        .load(&ctx.store, "state")
+        .unwrap()
+        .unwrap();
     assert_eq!(
         state["bootstrap"],
         serde_json::to_value(&connection).unwrap()

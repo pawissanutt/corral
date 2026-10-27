@@ -10,6 +10,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{Ctx, LessonSignal};
+use corral_core::records::RecordArea;
+
+const REQUESTS: RecordArea<LessonRequest> = RecordArea::new("lessons-distill");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LessonDue {
@@ -180,14 +183,6 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
     Ok(())
 }
 
-fn request_path(ctx: &Ctx, task: &str) -> Result<std::path::PathBuf> {
-    Ok(ctx
-        .store
-        .state_dir()
-        .join("lessons")
-        .join(format!("{}.json", corral_core::Store::normalize_id(task)?)))
-}
-
 /// File one spike on an explicit strong profile. This never launches an agent.
 pub fn lessons_distill(ctx: &Ctx, project: &str, profile: Option<&str>) -> Result<Task> {
     ctx.store.check_runtime()?;
@@ -252,7 +247,14 @@ pub fn lessons_distill(ctx: &Ctx, project: &str, profile: Option<&str>) -> Resul
         existing,
         signals,
     };
-    let path = request_path(ctx, &task.id)?;
+    REQUESTS.save(&ctx.store, &task.id, &request)?;
+    // A materialized copy is evidence input, never the request's authority.
+    let path = ctx
+        .store
+        .state_dir()
+        .join("tmp")
+        .join("lessons")
+        .join(format!("{}.json", task.id));
     std::fs::create_dir_all(path.parent().context("request has no directory")?)
         .context("creating lesson request directory")?;
     write_json(&path, &request)?;
@@ -299,11 +301,10 @@ pub fn lessons_apply(ctx: &Ctx, project: &str, proposal: &LessonProposal) -> Res
     if proposal.version != 1 || proposal.project != project || proposal.lessons.len() > 100 {
         bail!("invalid lesson proposal version, project or lesson count");
     }
-    let path = request_path(ctx, &proposal.task)?;
-    let request: LessonRequest = serde_json::from_str(
-        &std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?,
-    )
-    .context("parsing lesson distillation request")?;
+    let task = corral_core::Store::normalize_id(&proposal.task)?;
+    let request = REQUESTS
+        .load(&ctx.store, &task)?
+        .context("lesson distillation request not found")?;
     if request.version != 1
         || request.project != project
         || request.task != proposal.task

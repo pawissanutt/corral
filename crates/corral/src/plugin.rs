@@ -5,6 +5,24 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use corral_core::HerdrKeys;
 use corral_ops::Ctx;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize, Serialize, PartialEq)]
+struct PluginManifest {
+    text: String,
+}
+
+const MANIFEST: corral_core::records::RecordArea<PluginManifest> =
+    corral_core::records::RecordArea::new("herdr-plugin");
+
+/// Materialized input for herdr's file-only plugin interface, never a state reader.
+pub fn manifest_path(store: &corral_core::Store) -> PathBuf {
+    store.state_dir().join("tmp/herdr-plugin/herdr-plugin.toml")
+}
+
+pub fn installed(store: &corral_core::Store) -> Result<bool> {
+    Ok(MANIFEST.load(store, "manifest")?.is_some())
+}
 
 #[path = "plugin_config.rs"]
 mod config;
@@ -140,17 +158,23 @@ fn write_manifest(ctx: &Ctx) -> Result<(PathBuf, bool)> {
         .root()
         .canonicalize()
         .unwrap_or_else(|_| ctx.store.root().to_path_buf());
-    let dir: PathBuf = ctx.store.state_dir().join("herdr-plugin");
+    let file = manifest_path(&ctx.store);
+    let dir = file
+        .parent()
+        .context("plugin manifest has no parent")?
+        .to_path_buf();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let file = dir.join("herdr-plugin.toml");
     let text = manifest(
         &exe.to_string_lossy(),
         &root.to_string_lossy(),
         &find_herdr(),
     );
-    let changed = config::read_config(&file)?.as_deref() != Some(&text);
-    if changed {
-        std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
+    let record = PluginManifest { text };
+    let changed = MANIFEST.load(&ctx.store, "manifest")?.as_ref() != Some(&record);
+    MANIFEST.save(&ctx.store, "manifest", &record)?;
+    if config::read_config(&file)?.as_deref() != Some(&record.text) {
+        std::fs::write(&file, &record.text)
+            .with_context(|| format!("writing {}", file.display()))?;
     }
     Ok((dir, changed))
 }

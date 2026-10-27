@@ -160,11 +160,13 @@ fn retained_dedicated_review_is_not_resubmitted_after_its_route_changed() {
 fn retained_pm_review_stays_refused_after_its_assessment_inputs_changed() {
     let mut fx = fixture(|config| config.pm.agent = "impl".into());
     let id = candidate(&fx, "logic", &[], "src/widget.rs");
-    std::fs::write(
-        fx.ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"w9:p9"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(
+            &fx.ctx.store,
+            "state",
+            &serde_json::json!({"pane_id":"w9:p9"}),
+        )
+        .unwrap();
     install_hook(
         &fx,
         "on-pane-get",

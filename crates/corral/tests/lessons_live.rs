@@ -127,16 +127,10 @@ fn isolated_distillation_apply_dispatch_and_review_share_exact_lessons() {
         &mut log,
     ))
     .unwrap();
-    let request: LessonRequest = serde_json::from_str(
-        &std::fs::read_to_string(
-            store
-                .state_dir()
-                .join("lessons")
-                .join(format!("{}.json", spike["id"].as_str().unwrap())),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let request = corral_core::records::RecordArea::<LessonRequest>::new("lessons-distill")
+        .load(&store, spike["id"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
     let evidence = request.signals[0].evidence[0].clone();
     let proposal = LessonProposal {
         version: 1,

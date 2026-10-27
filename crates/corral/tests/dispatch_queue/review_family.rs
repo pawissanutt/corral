@@ -50,6 +50,7 @@ fn fixture() -> Fixture {
             },
         );
     }
+    f.ctx.store.config.storage.cache_root = Some(f.ctx.store.root().join("cache"));
     f.ctx.store.save_config().unwrap();
     // Exact model discovery is unrelated to family policy. Use the existing
     // harness-cache wire format, so routing never probes an installed agent.
@@ -61,8 +62,10 @@ fn fixture() -> Fixture {
             "model_source": "listed", "efforts": [], "takes_effort": false, "notes": []
         }]
     });
+    let root = f.ctx.store.cache_root().unwrap();
+    std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
-        f.ctx.store.state_dir().join(corral_ops::HARNESS_CACHE_FILE),
+        root.join(corral_ops::HARNESS_CACHE_FILE),
         serde_json::to_vec(&cache).unwrap(),
     )
     .unwrap();

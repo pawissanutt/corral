@@ -134,14 +134,10 @@ fn scope_source(design: &str, label: &str) -> String {
 }
 
 fn edit_journal(ctx: &Ctx, design: &str, edit: impl FnOnce(&mut serde_json::Value)) {
-    let path = ctx
-        .store
-        .state_dir()
-        .join(format!("plan-decompose-{design}.json"));
-    let mut journal: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let area = corral_core::records::RecordArea::<serde_json::Value>::new("plan-decompose");
+    let mut journal = area.load(&ctx.store, design).unwrap().unwrap();
     edit(&mut journal);
-    std::fs::write(&path, serde_json::to_vec(&journal).unwrap()).unwrap();
+    area.save(&ctx.store, design, &journal).unwrap();
 }
 
 /// The owner's first member-gate record for `member`, written through the amendment boundary.

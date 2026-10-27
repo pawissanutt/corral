@@ -154,11 +154,13 @@ impl Path {
                 .and_then(|r| r.herdr.as_ref())
                 .or_else(|| task.current_run().and_then(|r| r.herdr.as_ref()))
                 .unwrap();
-            std::fs::write(
-                fx.ctx.store.state_dir().join("pm.json"),
-                serde_json::to_vec(&serde_json::json!({"pane_id":herdr.pane_id})).unwrap(),
-            )
-            .unwrap();
+            corral_core::records::RecordArea::new("pm")
+                .save(
+                    &fx.ctx.store,
+                    "state",
+                    &serde_json::json!({"pane_id":herdr.pane_id}),
+                )
+                .unwrap();
         }
         (fx, task.id)
     }

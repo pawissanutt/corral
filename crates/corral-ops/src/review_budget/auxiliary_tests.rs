@@ -88,21 +88,86 @@ fn prepared<'a>(fx: &'a Fixture, id: &str, kind: Kind) -> ReviewLaunch<'a> {
 }
 
 fn retained(fx: &Fixture, id: &str, kind: Kind) -> Pending {
-    let kind = match kind {
-        Kind::Gate => "gate",
-        Kind::Reviewer => "review",
+    let fresh = Ctx {
+        store: Store::open(fx.ctx.store.root()).unwrap(),
+        ..fx.ctx.clone()
     };
-    serde_json::from_slice(
-        &std::fs::read(
-            fx.ctx
-                .store
-                .state_dir()
-                .join("review-prepared")
-                .join(format!("{id}-R1-{kind}.json")),
-        )
-        .unwrap(),
-    )
-    .unwrap()
+    submission::load_retained(&fresh, id, "R1", kind)
+        .unwrap()
+        .unwrap()
+}
+
+#[test]
+fn repeated_retention_preserves_preparation_and_refusal_after_restart() {
+    for kind in [Kind::Gate, Kind::Reviewer] {
+        // Given a never-submitted attempt attributed to one exact refused request.
+        let mut fx = Fixture::new(1);
+        let id = fx.task();
+        grant(&mut fx, std::slice::from_ref(&id));
+        let mut launch = prepared(&fx, &id, kind);
+        launch.pending.refused_request = Some("request-exact".into());
+        let pending = launch.pending.clone();
+        drop(launch);
+        let before = retained(&fx, &id, kind);
+        let fresh = Ctx {
+            store: Store::open(fx.ctx.store.root()).unwrap(),
+            ..fx.ctx.clone()
+        };
+
+        // When restart reconciliation repeats retention after the marker was removed.
+        submission::retain(&fresh, &pending).unwrap();
+
+        // Then the canonical journal keeps the exact preparation and request attribution.
+        let after = retained(&fx, &id, kind);
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+        assert_eq!(after.refused_request.as_deref(), Some("request-exact"));
+        assert_eq!(after.authorization, pending.authorization);
+        assert!(after.prepared_gate.is_some() || after.prepared_review.is_some());
+        assert!(load_pending(&fresh).unwrap().is_none());
+        let task = fresh.store.get(&id).unwrap();
+        assert!(task.review_reservation.is_none());
+        assert!(task.current_run().unwrap().gate.is_none());
+        assert!(task.current_run().unwrap().review.is_none());
+    }
+}
+
+#[test]
+fn retained_identity_conflict_preserves_active_preparation() {
+    // Given a different retained authorization occupying this task/run/kind key.
+    let mut fx = Fixture::new(1);
+    let id = fx.task();
+    grant(&mut fx, std::slice::from_ref(&id));
+    let mut launch = prepared(&fx, &id, Kind::Gate);
+    let mut conflicting = launch.pending.clone();
+    conflicting.authorization.as_mut().unwrap().id = "different".into();
+    corral_core::records::RecordArea::new("review-prepared")
+        .save(&fx.ctx.store, &format!("{id}-R1-gate"), &conflicting)
+        .unwrap();
+    let before = fx.ctx.store.get(&id).unwrap();
+    let journal = serde_json::to_value(load_pending(&fx.ctx).unwrap()).unwrap();
+
+    // When retaining would overwrite the different exact attempt.
+    let error = submission::retain(&fx.ctx, &launch.pending).unwrap_err();
+    launch.committed = true;
+
+    // Then refusal leaves the task, active journal, and conflicting record untouched.
+    assert!(
+        error
+            .to_string()
+            .contains("retained auxiliary attempt changed")
+    );
+    assert_eq!(fx.ctx.store.get(&id).unwrap(), before);
+    assert_eq!(
+        serde_json::to_value(load_pending(&fx.ctx).unwrap()).unwrap(),
+        journal
+    );
+    assert_eq!(
+        serde_json::to_value(retained(&fx, &id, Kind::Gate)).unwrap(),
+        serde_json::to_value(conflicting).unwrap()
+    );
 }
 
 #[test]

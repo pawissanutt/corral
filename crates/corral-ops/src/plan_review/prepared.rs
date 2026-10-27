@@ -1,8 +1,8 @@
 //! A refused review keeps its exact attempt without reserving a live process slot.
-use std::io::Write;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
+use corral_core::records::RecordArea;
 use corral_core::{ActionAuthorization, PlanRecord, PlanReview, SubmissionDisposition};
 use serde::{Deserialize, Serialize};
 
@@ -21,22 +21,11 @@ pub(super) struct Prepared {
     pub command: String,
 }
 
-fn path(ctx: &Ctx, task: &str, plan: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join(format!("plan-review-{task}-{plan}.json"))
-}
+const PREPARED: RecordArea<Prepared> = RecordArea::new("plan-review-prepared");
 
 impl Prepared {
     pub fn save(&self, ctx: &Ctx, task: &str) -> Result<()> {
-        let path = path(ctx, task, &self.plan);
-        let mut file = tempfile::NamedTempFile::new_in(ctx.store.state_dir())
-            .context("staging prepared plan review")?;
-        file.write_all(&serde_json::to_vec(self)?)
-            .context("writing prepared plan review")?;
-        file.persist(path)
-            .context("publishing prepared plan review")?;
-        Ok(())
+        PREPARED.save(&ctx.store, &format!("{task}-{}", self.plan), self)
     }
 
     pub fn check(&self, plan: &PlanRecord) -> Result<()> {
@@ -50,8 +39,8 @@ impl Prepared {
     }
 
     pub fn suspend(&self, ctx: &Ctx, task: &str) -> Result<()> {
-        self.save(ctx, task)?;
         ctx.store.update(task, |task| {
+            self.save(ctx, &task.id)?;
             let Some(plan) = task.plans.last_mut().filter(|p| p.id == self.plan) else {
                 return Ok(());
             };
@@ -75,13 +64,9 @@ pub(super) fn load(ctx: &Ctx, task: &str) -> Result<Option<Prepared>> {
     let Some(plan) = current.plans.last() else {
         return Ok(None);
     };
-    let bytes = match std::fs::read(path(ctx, task, &plan.id)) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("reading prepared plan review"),
+    let Some(prepared) = PREPARED.load(&ctx.store, &format!("{task}-{}", plan.id))? else {
+        return Ok(None);
     };
-    let prepared: Prepared =
-        serde_json::from_slice(&bytes).context("parsing prepared plan review")?;
     match ctx
         .store
         .authorized_submission(&prepared.authorization.id)?

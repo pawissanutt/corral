@@ -194,7 +194,8 @@ fn unsupported_replacement_is_rejected_before_owner_or_auto_acceptance() {
                         reserved: true, error: None,
                     }),
                     "foreign" => task.plan = Some("T-999@P1".into()),
-                    "journal" => std::fs::write(ctx.store.state_dir().join(format!("plan-decompose-{id}.json")), "{}").unwrap(),
+                    "journal" => corral_core::records::RecordArea::new("plan-decompose")
+                        .save(&ctx.store, &id, &serde_json::json!({})).unwrap(),
                     _ => unreachable!(),
                 }
                 Ok(())

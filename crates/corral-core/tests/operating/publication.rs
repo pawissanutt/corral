@@ -138,14 +138,9 @@ fn published(with_tracker: bool, partial: bool) -> (Fixture, Vec<Task>, Option<T
         "scopes": scopes,
         "tracker": tracker.as_ref().map(Store::render_task_markdown),
     });
-    fs::create_dir_all(store.state_dir()).unwrap();
-    fs::write(
-        store
-            .state_dir()
-            .join(format!("plan-decompose-{}.json", parent.id)),
-        serde_json::to_string(&journal).unwrap(),
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("plan-decompose")
+        .save(store, &parent.id, &journal)
+        .unwrap();
     (fixture, children, tracker)
 }
 

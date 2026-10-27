@@ -216,17 +216,27 @@ fn manual_resource_overrides_do_not_bypass_other_admission_limits() {
 fn memory_pressure_escalates_once_until_it_clears() {
     // Given a running task with measurable worktree and target files.
     let mut fx = Fx::new(|_| {});
+    fx.ctx.store.config.storage.cache_root = Some(fx.ctx.store.root().join("cache"));
+    fx.ctx.store.save_config().unwrap();
     let target = fx.run().worktree.join("target");
     std::fs::create_dir_all(&target).unwrap();
     std::fs::write(target.join("build"), [0_u8; 512]).unwrap();
     let probe = Probe::install(&mut fx);
     probe.0.write().unwrap().mem_available = 1_000_000_000;
-    // When successive syncs see the same pressure episode.
+    // When a restart and disposable cache deletion interrupt the same pressure episode.
     fx.sync();
+    std::fs::remove_dir_all(fx.ctx.store.cache_root().unwrap()).unwrap();
+    fx.ctx.store = Store::open(fx.ctx.store.root()).unwrap();
     let task = fx.sync();
     // Then attention and one escalation persist even while the agent is still present.
     assert_eq!(task.status, Status::NeedsMe);
     assert_eq!(fx.events("escalated"), 1);
+    for area in ["resources", "resource-alert"] {
+        assert_eq!(
+            fx.ctx.store.record_row(area, "state").unwrap().unwrap().doc["doc_version"],
+            1
+        );
+    }
     let events = fx.ctx.store.events().unwrap();
     let event = events
         .iter()

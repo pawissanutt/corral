@@ -452,13 +452,9 @@ fn restored_launch_is_refused_before_resume_and_its_preparation_is_retained() {
     std::fs::write(fx.prompt_file(), "prepared").unwrap();
     std::fs::write(fx.tmp.path().join("w1:prepared"), "").unwrap();
     drop(launch);
-    let retained = fx
-        .ctx
-        .store
-        .state_dir()
-        .join("review-prepared")
-        .join(format!("{}-R1-review.json", fx.id));
-    assert!(retained.is_file());
+    let retained = corral_core::records::RecordArea::<serde_json::Value>::new("review-prepared");
+    let key = format!("{}-R1-review", fx.id);
+    let before = retained.load(&fx.ctx.store, &key).unwrap().unwrap();
 
     // When the launch is resumed.
     let error = crate::reviewer::review_run(&fx.ctx, &fx.id, Some("rev")).unwrap_err();
@@ -474,7 +470,7 @@ fn restored_launch_is_refused_before_resume_and_its_preparation_is_retained() {
             "profiles.rev.metadata.instructions"
         )
     );
-    assert!(retained.is_file());
+    assert_eq!(retained.load(&fx.ctx.store, &key).unwrap(), Some(before));
     assert_eq!(
         std::fs::read_to_string(fx.prompt_file()).unwrap(),
         "prepared"

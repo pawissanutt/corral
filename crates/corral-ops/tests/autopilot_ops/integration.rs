@@ -224,7 +224,7 @@ fn conflict_packet_has_complete_landed_identities_paths_and_exact_sloc() {
 fn clean_packet_is_attached_before_gate_and_reviewer_launches() {
     // Given a gate that consumes the machine-readable packet from the artifact directory.
     let mut fx = configured();
-    let integration = fx.ctx.store.state_dir().join("integration");
+    let integration = fx.ctx.store.state_dir().join("tmp").join("integration");
     let command = format!(
         "test -n \"$(find '{}' -name '*.json' -print -quit)\"",
         integration.display()
@@ -253,6 +253,14 @@ fn clean_packet_is_attached_before_gate_and_reviewer_launches() {
     assert_eq!(p["gate_commands"], json!([command]));
     assert_eq!(p["git_details"], Value::Null);
     assert_eq!(p["reviewer_note"], Value::Null);
+    let reopened = corral_core::Store::open(fx.ctx.store.root()).unwrap();
+    assert!(
+        reopened
+            .record_rows("integration")
+            .unwrap()
+            .iter()
+            .any(|row| { row.doc["doc_version"] == 1 && row.doc["value"] == p })
+    );
     assert_eq!(fx.run().gate.unwrap().result, GateResult::Pass);
     assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
     assert_eq!(fx.events("gate_started"), 1);

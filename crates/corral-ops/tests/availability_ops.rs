@@ -301,6 +301,22 @@ impl Fx {
     }
 
     pub fn write_state(&self, directory: &str, key: &str, state: &Value) {
+        if directory.is_empty() && key == "pm" {
+            corral_core::records::RecordArea::<Value>::new("pm")
+                .save(&self.ctx.store, "state", state)
+                .unwrap();
+            return;
+        }
+        if matches!(directory, "availability" | "provider-stall") {
+            corral_core::records::RecordArea::<Value>::new(if directory == "availability" {
+                "availability"
+            } else {
+                "provider-stall"
+            })
+            .save(&self.ctx.store, key, state)
+            .unwrap();
+            return;
+        }
         let dir = self.ctx.store.state_dir().join(directory);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -382,13 +398,10 @@ impl Fx {
     }
 
     pub fn episode(&self, id: &str) -> Value {
-        let path = self
-            .ctx
-            .store
-            .state_dir()
-            .join("availability")
-            .join(format!("{id}.json"));
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+        corral_core::records::RecordArea::<Value>::new("availability")
+            .load(&self.ctx.store, id)
+            .unwrap()
+            .unwrap()
     }
 }
 

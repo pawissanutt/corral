@@ -691,11 +691,9 @@ fn pm_pane(status: AgentStatus) -> HashMap<String, PaneInfo> {
 fn pm_review(ctx: &mut Ctx, id: &str) -> Timestamp {
     reviewer_profile(ctx, "true".into());
     ctx.store.config.pm.agent = "rev".into();
-    std::fs::write(
-        ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"w9:p9"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(&ctx.store, "state", &serde_json::json!({"pane_id":"w9:p9"}))
+        .unwrap();
     corral_ops::review_run(ctx, id, Some("pm")).unwrap().at
 }
 

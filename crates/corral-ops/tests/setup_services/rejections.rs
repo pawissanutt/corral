@@ -74,9 +74,10 @@ fn future_prepared_at_is_rejected_at_propose_without_saving_anything() {
     assert!(message.contains(&clock.to_string()), "{message}");
     assert!(message.contains("correct prepared_at"), "{message}");
     assert_eq!(store.profile_setup().unwrap(), gathering);
-    let saved =
-        fs::read_dir(store.state_dir().join("profile-proposals")).map_or(0, Iterator::count);
-    assert_eq!(saved, 0);
+    let saved = corral_core::records::RecordArea::<SetupProposalInput>::new("profile-proposals")
+        .list(&store)
+        .unwrap();
+    assert!(saved.is_empty());
     // And the same proposal id can be proposed once prepared_at is corrected.
     input.proposal.prepared_at = clock;
     setup_propose_at(&store, &input, gathering.revision, clock).unwrap();

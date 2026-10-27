@@ -484,21 +484,41 @@ fn automatic_plan_reviewer_refusal_keeps_exact_suspended_attempt() {
     assert!(task.plans[0].reviews.is_empty());
     assert_eq!(task.plan_runs[0].state, PlanRunState::Reviewing);
     assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 0);
-    let prepared: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            ctx.store
-                .state_dir()
-                .join(format!("plan-review-{id}-P1.json")),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let fresh = corral_core::Store::open(ctx.store.root()).unwrap();
+    let prepared =
+        corral_core::records::RecordArea::<serde_json::Value>::new("plan-review-prepared")
+            .load(&fresh, &format!("{id}-P1"))
+            .unwrap()
+            .unwrap();
     assert_eq!(prepared["review"]["id"], "PR1");
     assert!(prepared["review"]["verdict"].is_null());
     assert!(prepared["review"]["herdr"].is_object());
     assert!(prepared["review"]["pending_reply"].is_string());
+    assert_eq!(
+        fresh
+            .record::<serde_json::Value>("plan-review-prepared", &format!("{id}-P1"))
+            .unwrap()
+            .unwrap()["doc_version"],
+        1
+    );
+    assert!(
+        !ctx.store
+            .state_dir()
+            .join(format!("plan-review-{id}-P1.json"))
+            .exists()
+    );
     assert!(!tmp.path().join("engine/launch-command").exists());
-    assert!(crate::plan_review(&ctx, &id, None).is_err());
+    let restarted = Ctx {
+        store: fresh,
+        ..ctx.clone()
+    };
+    assert!(crate::plan_review(&restarted, &id, None).is_err());
+    assert_eq!(
+        corral_core::records::RecordArea::<serde_json::Value>::new("plan-review-prepared")
+            .load(&restarted.store, &format!("{id}-P1"))
+            .unwrap(),
+        Some(prepared)
+    );
     assert!(!tmp.path().join("engine/launch-command").exists());
 }
 

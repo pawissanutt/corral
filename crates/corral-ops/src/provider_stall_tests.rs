@@ -184,3 +184,75 @@ fn a_working_final_retry_defers_escalation_unless_it_already_failed() {
         Step::Escalate
     );
 }
+
+#[test]
+fn launch_boundary_and_retry_budget_survive_restart_without_file_authority() {
+    // Given an earlier harness launch and one already-consumed retry.
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx =
+        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(tmp.path()).unwrap());
+    let launch = ts("2026-10-15T09:09:00Z");
+    let first = stall("2026-10-15T09:10:00Z");
+    let mut state = None;
+    advance_state(&mut state, Some(&first), true, ts("2026-10-15T09:11:00Z"));
+    save(&ctx, "T-001-R1", state.as_ref().unwrap()).unwrap();
+    provider_session::record_launch(&ctx, "T-001", "R1", launch);
+    let run: Run = serde_json::from_value(json!({
+        "id": "R1", "agent": "omo", "worktree": tmp.path(),
+        "branch": "main", "base": "main", "base_sha": "fixture",
+        "started": "2026-10-15T09:09:30Z"
+    }))
+    .unwrap();
+
+    // When a new handle resumes the same run, then its boundary and remaining budget survive.
+    let restarted =
+        crate::resources::FixedResourceProbe::ctx(corral_core::Store::open(tmp.path()).unwrap());
+    assert_eq!(
+        provider_session::boundary(&restarted, "T-001", &run),
+        launch
+    );
+    let mut resumed = load(&restarted, "T-001-R1");
+    assert_eq!(resumed, state);
+    assert_eq!(
+        advance_state(&mut resumed, Some(&first), true, ts("2026-10-15T09:13:00Z")),
+        Step::Retry(2)
+    );
+    for area in ["provider-session", "provider-stall"] {
+        assert_eq!(
+            restarted
+                .store
+                .record_row(area, "T-001-R1")
+                .unwrap()
+                .unwrap()
+                .doc["doc_version"],
+            1
+        );
+    }
+    assert!(!restarted.store.state_dir().join("provider-stall").exists());
+}
+
+#[test]
+fn malformed_canonical_provider_records_keep_the_previous_fail_soft_behavior() {
+    // Given malformed records in both provider areas.
+    let tmp = tempfile::tempdir().unwrap();
+    let ctx =
+        crate::resources::FixedResourceProbe::ctx(corral_core::Store::init(tmp.path()).unwrap());
+    for area in ["provider-session", "provider-stall"] {
+        ctx.store
+            .save_record(
+                area,
+                "T-001-R1",
+                &json!({"doc_version": 1, "value": "invalid"}),
+            )
+            .unwrap();
+    }
+    let run: Run = serde_json::from_value(json!({
+        "id": "R1", "agent": "omo", "worktree": tmp.path(),
+        "branch": "main", "base": "main", "base_sha": "fixture",
+        "started": "2026-10-15T09:09:30Z"
+    }))
+    .unwrap();
+    // When reading, then launch defaults to run start and malformed stall state is absent.
+    assert_eq!(provider_session::boundary(&ctx, "T-001", &run), run.started);
+    assert!(load(&ctx, "T-001-R1").is_none());
+}
