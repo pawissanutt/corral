@@ -35,46 +35,6 @@ fn mark_seen(ctx: &Ctx) -> Result<()> {
     SEEN.save(&ctx.store, "workspace", &jiff::Timestamp::now())
 }
 
-#[cfg(test)]
-mod persistence_tests {
-    use super::*;
-
-    #[test]
-    fn tour_completion_roundtrips_after_restart_without_file_authority() {
-        // Given a fresh workspace with only a legacy tour marker.
-        let dir = tempfile::tempdir().unwrap();
-        let store = corral_core::Store::init(dir.path()).unwrap();
-        std::fs::create_dir_all(store.state_dir()).unwrap();
-        let legacy = store.state_dir().join("tour-seen");
-        std::fs::write(&legacy, "legacy").unwrap();
-        let ctx = Ctx::from_store(store);
-        assert!(!tour_seen(&ctx));
-
-        // When completion is saved and the workspace is reopened without that marker.
-        mark_seen(&ctx).unwrap();
-        let saved = SEEN.load(&ctx.store, "workspace").unwrap().unwrap();
-        std::fs::remove_file(&legacy).unwrap();
-        let reopened = Ctx::from_store(corral_core::Store::open_unobserved(dir.path()).unwrap());
-
-        // Then the exact completion record survives, independent of the old file.
-        assert!(tour_seen(&reopened));
-        assert_eq!(
-            SEEN.load(&reopened.store, "workspace").unwrap().unwrap(),
-            saved
-        );
-        assert_eq!(
-            reopened
-                .store
-                .record_row("tour-seen", "workspace")
-                .unwrap()
-                .unwrap()
-                .doc["doc_version"],
-            1
-        );
-        assert!(!legacy.exists());
-    }
-}
-
 /// Greedy word wrap to `width` columns. The guide popups lay out their own lines so their height always matches
 /// the text they show (a word longer than the line keeps a line of its own).
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -342,5 +302,45 @@ impl View for LeaveView {
 
     fn is_overlay(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn tour_completion_roundtrips_after_restart_without_file_authority() {
+        // Given a fresh workspace with only a legacy tour marker.
+        let dir = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(dir.path()).unwrap();
+        std::fs::create_dir_all(store.state_dir()).unwrap();
+        let legacy = store.state_dir().join("tour-seen");
+        std::fs::write(&legacy, "legacy").unwrap();
+        let ctx = Ctx::from_store(store);
+        assert!(!tour_seen(&ctx));
+
+        // When completion is saved and the workspace is reopened without that marker.
+        mark_seen(&ctx).unwrap();
+        let saved = SEEN.load(&ctx.store, "workspace").unwrap().unwrap();
+        std::fs::remove_file(&legacy).unwrap();
+        let reopened = Ctx::from_store(corral_core::Store::open_unobserved(dir.path()).unwrap());
+
+        // Then the exact completion record survives, independent of the old file.
+        assert!(tour_seen(&reopened));
+        assert_eq!(
+            SEEN.load(&reopened.store, "workspace").unwrap().unwrap(),
+            saved
+        );
+        assert_eq!(
+            reopened
+                .store
+                .record_row("tour-seen", "workspace")
+                .unwrap()
+                .unwrap()
+                .doc["doc_version"],
+            1
+        );
+        assert!(!legacy.exists());
     }
 }

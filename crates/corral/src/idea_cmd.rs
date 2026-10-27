@@ -142,13 +142,24 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
         ),
         1,
     );
-    let mut draft = EDIT_DRAFTS
-        .load(&ctx.store, &before.id)?
-        .unwrap_or(EditDraft {
-            task_revision: revision,
-            spec_revision: spec.clone(),
-            text,
-        });
+    let retained = EDIT_DRAFTS.load(&ctx.store, &before.id)?;
+    let mut draft = match retained {
+        Some(draft) if draft.task_revision == revision && draft.spec_revision == spec => draft,
+        retained => {
+            if let Some(stale) = retained {
+                let key = format!("{}-r{}", before.id, stale.task_revision);
+                EDIT_DRAFTS.save(&ctx.store, &key, &stale)?;
+                eprintln!(
+                    "Previous draft kept in edit-drafts/{key}; starting from task revision {revision}"
+                );
+            }
+            EditDraft {
+                task_revision: revision,
+                spec_revision: spec.clone(),
+                text,
+            }
+        }
+    };
     EDIT_DRAFTS.save(&ctx.store, &before.id, &draft)?;
     std::fs::write(&path, &draft.text).context("writing editor scratch copy")?;
     let editor = std::env::var("EDITOR")

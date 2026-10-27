@@ -191,6 +191,66 @@ fn edit_resumes_failed_editor_draft_after_restart_without_scratch() {
 }
 
 #[test]
+fn edit_preserves_stale_draft_and_starts_fresh_after_the_task_changes() {
+    // Given a failed edit and a later comment, with the scratch copy removed.
+    let (dir, store) = workspace();
+    let task = store
+        .create("Original", None, Status::Backlog, "Body\n")
+        .unwrap();
+    let script = editor(
+        dir.path(),
+        "sed -i 's/^  title: .*/  title: Unapplied/' \"$1\"\nexit 1",
+    );
+    let out = command(dir.path(), &["edit", &task.id])
+        .env("EDITOR", script)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    let retained = store.record_row("edit-drafts", &task.id).unwrap().unwrap();
+    success(dir.path(), &["comment", &task.id, "meanwhile"]);
+    std::fs::remove_file(dir.path().join(".corral/state/tmp/edit-T-001.md")).unwrap();
+
+    // When a new process edits the current task rather than applying the stale copy.
+    let out = command(dir.path(), &["edit", &task.id])
+        .env("EDITOR", "/bin/true")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let reopened = Store::open_unobserved(dir.path()).unwrap();
+    let current = reopened.get(&task.id).unwrap();
+    assert_eq!(current.title, "Original");
+    assert_eq!(current.comments.last().unwrap().text, "meanwhile");
+    let revision = retained.doc["value"]["task_revision"].as_u64().unwrap();
+    let archived = reopened
+        .record_row("edit-drafts", &format!("{}-r{revision}", task.id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(archived.doc, retained.doc);
+    assert!(
+        reopened
+            .record_row("edit-drafts", &task.id)
+            .unwrap()
+            .is_none()
+    );
+
+    // Then later edits remain usable and the unapplied draft remains canonical.
+    let script = editor(dir.path(), "sed -i 's/^  title: .*/  title: Fresh/' \"$1\"");
+    let out = command(dir.path(), &["edit", &task.id])
+        .env("EDITOR", script)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(reopened.get(&task.id).unwrap().title, "Fresh");
+    assert_eq!(
+        reopened
+            .record_row("edit-drafts", &format!("{}-r{revision}", task.id))
+            .unwrap()
+            .unwrap(),
+        archived
+    );
+}
+
+#[test]
 fn list_returns_summaries_show_the_full_task_and_export_changes_nothing() {
     let (dir, store) = workspace();
     let open = store
