@@ -170,10 +170,6 @@ pub struct ConditionRow {
     /// The condition's run when its key or open record identifies one; otherwise unknown.
     pub run: Option<String>,
     #[serde(skip)]
-    opened_pos: Option<usize>,
-    #[serde(skip)]
-    resolved_pos: Option<usize>,
-    #[serde(skip)]
     wake_ids: Timed,
     #[serde(skip)]
     owner_ids: Timed,
@@ -237,30 +233,25 @@ pub fn stats(ctx: &Ctx, window: Window) -> Result<Stats> {
 
 /// One deduplicated fact: its first position in the log, or after the log when only pending.
 struct Fact {
-    pos: usize,
     kind: String,
     detail: Value,
 }
 
 fn facts(tasks: &[Task], events: &[Event], claims: &[NoticeClaim]) -> Vec<Fact> {
-    let appended = events.iter().enumerate().filter_map(|(pos, event)| {
-        let id = event.detail["fact_id"].as_str()?;
-        Some((pos, id.to_owned(), event.kind.clone(), event.detail.clone()))
-    });
-    // Retained, not yet appended facts are durable too; they sort after every appended event.
+    let appended = (events.iter())
+        .filter_map(|event| Some((event.detail["fact_id"].as_str()?.to_owned(), event)))
+        .map(|(id, event)| (id, event.kind.clone(), event.detail.clone()));
+    // Retained, not yet appended facts are durable too.
     let ledgers = tasks.iter().flat_map(|task| &task.attention.outbox);
     let ledgers = ledgers.map(|f| (f.fact_id.clone(), f.kind.clone(), f.detail.clone()));
     let notices = claims.iter().flat_map(|claim| &claim.pending);
     let notices = notices.map(|f| (f.fact_id.clone(), f.kind.clone(), f.detail.clone()));
-    let pending = (ledgers.chain(notices).enumerate())
-        .map(|(index, (id, kind, detail))| (events.len() + index, id, kind, detail));
     let mut seen = BTreeSet::new();
-    appended
-        .chain(pending)
-        .filter(|(_, id, ..)| seen.insert(id.clone()))
-        .map(|(pos, id, kind, mut detail)| {
+    (appended.chain(ledgers).chain(notices))
+        .filter(|(id, ..)| seen.insert(id.clone()))
+        .map(|(id, kind, mut detail)| {
             detail["fact_id"] = json!(id);
-            Fact { pos, kind, detail }
+            Fact { kind, detail }
         })
         .collect()
 }
@@ -276,6 +267,13 @@ fn within(at: Option<Timestamp>, window: Window) -> bool {
 /// An event's canonical detail time when it records one, otherwise its append time.
 fn when(event: &Event) -> Timestamp {
     time(&event.detail["at"]).unwrap_or(event.ts)
+}
+
+/// Whether a condition was open at a canonical instant: from its canonical `since` (or opening)
+/// through its resolution, both inclusive. Publication order never stands in for time.
+fn open_at(row: &ConditionRow, at: Timestamp) -> bool {
+    row.since.or(row.opened_at).is_some_and(|since| since <= at)
+        && row.resolved_at.is_none_or(|end| at <= end)
 }
 
 fn counted(ids: &Timed, window: Window) -> u64 {
@@ -373,7 +371,6 @@ fn conditions(tasks: &[Task], facts: &[Fact]) -> BTreeMap<String, ConditionRow> 
         match fact.kind.as_str() {
             "attention_opened" => {
                 fill(row, &fact.detail);
-                row.opened_pos = row.opened_pos.or(Some(fact.pos));
                 if let Some(live) = fact.detail.get("pm_live") {
                     row.pm_live_at_open = row.pm_live_at_open.or(live.as_bool());
                 }
@@ -398,7 +395,6 @@ fn conditions(tasks: &[Task], facts: &[Fact]) -> BTreeMap<String, ConditionRow> 
                 }
             }
             "attention_resolved" => {
-                row.resolved_pos = row.resolved_pos.or(Some(fact.pos));
                 merge(row, &fact.detail);
             }
             _ => {}
@@ -408,23 +404,31 @@ fn conditions(tasks: &[Task], facts: &[Fact]) -> BTreeMap<String, ConditionRow> 
         for (key, record) in &task.attention.records {
             let row = rows.entry(key.0.clone()).or_default();
             row.task.clone_from(&task.id);
-            if record.resolved_at.is_none() {
-                row.run = task.current_run().map(|run| run.id.clone());
-            }
             if let Ok(record) = serde_json::to_value(record) {
                 merge(row, &record);
             }
         }
     }
     for (key, row) in &mut rows {
-        // Run-scoped kinds embed their run as the first anchor field.
+        // Run-scoped kinds embed their run as the first anchor field. Other kinds take the
+        // retained run that had started by the condition's canonical time, never the current
+        // run, so resolution, pruning and newer runs leave the historical identity unchanged.
         let anchor = key.splitn(3, '/').nth(2).unwrap_or_default();
-        if matches!(
+        row.run = if matches!(
             row.kind.as_str(),
             "agent_lost" | "silent_turn" | "stuck_process"
         ) {
-            row.run = anchor.split(':').next().map(Into::into);
-        }
+            anchor.split(':').next().map(Into::into)
+        } else {
+            let since = row.since.or(row.opened_at);
+            (tasks.iter().find(|task| task.id == row.task))
+                .and_then(|task| {
+                    (task.runs.iter())
+                        .filter(|run| since.is_some_and(|since| run.started <= since))
+                        .max_by_key(|run| run.started)
+                })
+                .map(|run| run.id.clone())
+        };
         row.lifetime_wakes = row.wake_ids.len() as u64;
     }
     rows
@@ -614,18 +618,18 @@ fn wakes(
             .and_then(|offset| cursors.iter().position(|end| *end == offset))
             .and_then(|index| events.get(index))
             .filter(|source| source.kind == "question_opened");
-        let Some(question) = source.and_then(|source| {
-            Some(format!(
-                "/{}@{}",
-                source.detail["key"].as_str()?,
-                source.detail["revision"].as_u64()?
-            ))
+        let Some((question, asked)) = source.and_then(|source| {
+            let key = source.detail["key"].as_str()?;
+            let revision = source.detail["revision"].as_u64()?;
+            Some((format!("/{key}@{revision}"), when(source)))
         }) else {
             continue;
         };
-        let matches: Vec<_> = rows
-            .iter()
+        // The source event names one question revision at one instant; later escalation or
+        // unattended conditions for that revision were not what this push announced.
+        let matches: Vec<_> = (rows.iter())
             .filter(|(key, row)| row.kind.starts_with("question_") && key.ends_with(&question))
+            .filter(|(_, row)| open_at(row, asked))
             .map(|(key, _)| key)
             .collect();
         match matches.as_slice() {

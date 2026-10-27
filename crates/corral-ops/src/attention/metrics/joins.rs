@@ -2,9 +2,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_core::Event;
-use jiff::Timestamp;
 
-use super::{Actions, ConditionRow, Fact, Window, time, when, within};
+use super::{Actions, ConditionRow, Fact, Window, open_at, time, when, within};
 
 /// The join identity an action event offers, and the condition-kind family it may attach to.
 /// A missing identity field yields an identity that matches nothing.
@@ -108,57 +107,64 @@ pub(super) fn actions(
         }
     }
     let mut prior = BTreeMap::<(String, String), Option<String>>::new();
-    let open_at = |row: &ConditionRow, pos: usize, ts: Timestamp| {
-        let opened = row
-            .opened_pos
-            .map_or_else(|| row.since.is_some_and(|since| since <= ts), |at| at < pos);
-        opened && row.resolved_pos.is_none_or(|at| at > pos)
-    };
-    let retried: BTreeSet<_> = events
-        .iter()
-        .filter(|event| event.kind == "message_retried")
-        .filter_map(|event| event.detail["to"].as_str())
+    // One message effect can be logged twice: as its post and as the retry, reply or change
+    // request that names it. The naming event is the action; its post is not another one.
+    let named: BTreeSet<_> = (events.iter())
+        .filter_map(|event| match event.kind.as_str() {
+            "message_retried" => event.detail["to"].as_str(),
+            "replied" | "changes_requested" => event.detail["message"].as_str(),
+            _ => None,
+        })
         .collect();
+    // History before the window seeds prior effects; only in-window actions are charged.
     for (pos, event) in events.iter().enumerate() {
-        let retry_post = event.kind == "message_posted"
-            && event.detail["id"]
-                .as_str()
-                .is_some_and(|id| retried.contains(id));
-        if !within(Some(when(event)), window) || retry_post {
-            continue;
-        }
-        let Some((family, identity)) = join(event) else {
+        let named_post = event.kind == "message_posted"
+            && (event.detail["id"].as_str()).is_some_and(|id| named.contains(id));
+        let Some((family, identity)) = join(event).filter(|_| !named_post) else {
             continue;
         };
-        let matches: Vec<_> = rows
-            .iter()
+        let at = when(event);
+        let charged = within(Some(at), window);
+        // An action whose own effect is a condition's message created that condition; it
+        // cannot also be a response to it.
+        let own = effect(event).map(|id| format!("/{id}"));
+        let matches: Vec<_> = (rows.iter())
             .filter(|(key, row)| {
                 Some(row.task.as_str()) == event.task.as_deref()
-                    && open_at(row, pos, when(event))
+                    && open_at(row, at)
+                    && own.as_ref().is_none_or(|own| !key.ends_with(own.as_str()))
                     && candidate(key, row, family, &identity)
             })
             .collect();
         let [(key, row)] = matches.as_slice() else {
-            if matches.is_empty() {
+            if charged && matches.is_empty() {
                 out.unattributed += 1;
-            } else {
+            } else if charged {
                 out.ambiguous += 1;
             }
             continue;
         };
+        // A repeat through the same identity is a duplicate only while the earlier effect is
+        // still outstanding: neither observed nor terminal before this action.
+        let repeat = match prior.insert(((*key).clone(), identity), effect(event)) {
+            Some(Some(previous)) => match settled.get(&previous) {
+                Some((settled, terminal)) if *settled < pos => Some(*terminal),
+                _ => None,
+            },
+            Some(None) | None => Some(false),
+        };
+        if !charged {
+            continue;
+        }
         out.attributed += 1;
         *out.by_condition.entry((*key).clone()).or_default() += 1;
         let owner =
             matches!(event.actor, Some(corral_core::Actor::Owner)) || event.detail["by"] == "owner";
         out.owner_rescues += u64::from(owner && row.responsible.as_deref() == Some("pm"));
-        // A repeat through the same identity is a duplicate only while the earlier effect is
-        // still outstanding: neither observed nor terminal before this action.
-        if let Some(Some(previous)) = prior.insert(((*key).clone(), identity), effect(event)) {
-            match settled.get(&previous) {
-                Some((at, true)) if *at < pos => out.after_terminal += 1,
-                Some((at, false)) if *at < pos => {}
-                _ => out.duplicates += 1,
-            }
+        match repeat {
+            None => out.duplicates += 1,
+            Some(true) => out.after_terminal += 1,
+            Some(false) => {}
         }
     }
     for fact in facts.iter().filter(|fact| fact.kind == "attention_handled") {
