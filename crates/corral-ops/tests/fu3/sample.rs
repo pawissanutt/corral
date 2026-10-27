@@ -1,5 +1,5 @@
 use super::fixture::*;
-use corral_core::work::Counter;
+use corral_core::work::{Counter, WorkSnapshot};
 use corral_ops::resources::{self, PinnedReadingsProbe, ResourceProbe};
 use std::sync::Arc;
 
@@ -21,6 +21,7 @@ fn cargo_target_paths_remain_hot_in_fresh_processes() {
                 "fu3::sample::resource_walk_accounts_exactly_for_absent_and_existing_history",
                 "--nocapture",
             ])
+            .stdin(std::process::Stdio::null())
             .output()
             .unwrap();
         // Then its path-set and hot/FU-3 accounting assertions must all pass.
@@ -43,38 +44,40 @@ fn cargo_target_paths_remain_hot_in_fresh_processes() {
 fn resource_walk_accounts_exactly_for_absent_and_existing_history() {
     for existing in [false, true] {
         for bound in [false, true] {
-            let variants = [1, 10].map(|scale| {
-                // Given a fresh in-process store with valid defaults and pinned readings.
-                let mut fixture = Fixture::new(scale, false, existing);
-                if bound {
-                    // Observe writes its durable record; only read_admission may use a snapshot.
-                    let store = fixture.ctx.store.read_only_snapshot().unwrap();
-                    fixture.ctx.store = store;
-                }
-                // When the public sync-tick observation or PM admission evaluation runs.
-                let (state, cells) = if bound {
-                    measure(|| resources::read_status(&fixture.ctx).unwrap())
-                } else {
-                    measure(|| resources::observe(&fixture.ctx, NOW.parse().unwrap()).unwrap())
-                };
-                // Then preconditions must hold before accounting is inspected.
-                fixture.state_preconditions(&state);
-                assert_eq!(fixture.probe.samples(), 1);
-                assert_sample(&cells, &fixture, 1, bound);
-                assert_eq!(cells.unattributed_hydrations(), 0);
-                assert_eq!(
-                    cells.get(Counter::FileStats),
-                    fixture
-                        .fixed_paths
-                        .iter()
-                        .map(|path| path_stats(path))
-                        .sum::<u64>()
-                );
-                cells
-            });
+            let variants = [1, 10].map(|scale| resource_variant(scale, existing, bound));
             assert_growth(&variants[0], &variants[1]);
         }
     }
+}
+
+pub(super) fn resource_variant(scale: usize, existing: bool, bound: bool) -> WorkSnapshot {
+    // Given a fresh in-process store with valid defaults and pinned readings.
+    let mut fixture = Fixture::new(scale, false, existing);
+    if bound {
+        // Observe writes its durable record; only read_admission may use a snapshot.
+        let store = fixture.ctx.store.read_only_snapshot().unwrap();
+        fixture.ctx.store = store;
+    }
+    // When the public sync-tick observation or PM admission evaluation runs.
+    let (state, cells) = if bound {
+        measure(|| resources::read_status(&fixture.ctx).unwrap())
+    } else {
+        measure(|| resources::observe(&fixture.ctx, NOW.parse().unwrap()).unwrap())
+    };
+    // Then preconditions must hold before accounting is inspected.
+    fixture.state_preconditions(&state);
+    assert_eq!(fixture.probe.samples(), 1);
+    assert_sample(&cells, &fixture, 1, bound);
+    assert_eq!(cells.unattributed_hydrations(), 0);
+    assert_eq!(
+        cells.get(Counter::FileStats),
+        fixture
+            .fixed_paths
+            .iter()
+            .map(|path| path_stats(path))
+            .sum::<u64>()
+    );
+    cells
 }
 
 #[test]
@@ -190,75 +193,84 @@ fn walk_paths_already_contributed_by_fixed_inputs_stay_unattributed() {
 #[test]
 fn scoped_pm_next_reaches_workset_read_admission() {
     for existing in [false, true] {
-        for scale in [1, 10] {
-            // Given a scoped backlog task without dispatch authority.
-            let mut fixture = Fixture::new(scale, false, existing);
-            fixture
-                .ctx
-                .store
-                .update(&fixture.idea.id, |task| {
-                    task.status = corral_core::Status::Backlog;
-                    Ok(())
-                })
-                .unwrap();
-            let selection = corral_core::OperatingSelection {
-                tasks: [fixture.idea.id.clone()].into(),
-                ..Default::default()
-            };
-            let preview = fixture
-                .ctx
-                .store
-                .preview_operating_policy(&selection)
-                .unwrap();
-            fixture.ctx.store.config = fixture
-                .ctx
-                .store
-                .confirm_operating_policy(&preview, "fixture owner", NOW.parse().unwrap())
-                .unwrap();
-            // Disable the independent free_slots sample, not resource admission.
-            fixture.ctx.store.config.dispatch.paused = true;
-            fixture.ctx.store.save_config().unwrap();
-            fixture.tasks = fixture.ctx.store.list().unwrap();
-            // When the ordinary PM workset explains its scoped blocked task.
-            let ((state, workset), cells) = measure(|| {
-                let state = resources::observe(&fixture.ctx, NOW.parse().unwrap()).unwrap();
-                (state, corral_ops::pm_workset(&fixture.ctx).unwrap())
-            });
-            // Then the scoped-workset branch ran and did not take an action.
-            fixture.state_preconditions(&state);
-            assert!(workset.actions.is_empty());
-            assert!(
-                workset
-                    .waits
-                    .iter()
-                    .any(|a| a.task.as_deref() == Some(&fixture.idea.id))
-            );
-            assert_eq!(fixture.probe.samples(), 2);
-            assert_eq!(cells.followup_calls(FU, "sample"), 2);
-            let hydrated = fixture.hydration_work();
-            assert_eq!(
-                cells.followup_hydrations(FU, "sample"),
-                2 * hydrated.full_task_hydrations()
-            );
-            assert_eq!(
-                cells.followup_rows(FU, "sample"),
-                2 * Counter::DECODES
-                    .iter()
-                    .map(|c| hydrated.total(*c))
-                    .sum::<u64>()
-            );
-            assert_eq!(
-                cells.followup_doc_bytes(FU, "sample"),
-                2 * hydrated.decoded_doc_bytes()
-            );
-            assert_eq!(cells.followup_views(FU, "sample"), 1);
-            assert_eq!(
-                cells.followup_stats(FU, "sample"),
-                2 * fixture.sample_stats()
-            );
-            assert_eq!(cells.followup_processes(FU, "sample"), 0);
-        }
+        let variants = [1, 10].map(|scale| workset_variant(scale, existing));
+        assert_growth(&variants[0], &variants[1]);
     }
+}
+
+pub(super) fn workset_variant(scale: usize, existing: bool) -> WorkSnapshot {
+    // Given a scoped backlog task without dispatch authority.
+    let mut fixture = Fixture::new(scale, false, existing);
+    fixture
+        .ctx
+        .store
+        .update(&fixture.idea.id, |task| {
+            task.status = corral_core::Status::Backlog;
+            Ok(())
+        })
+        .unwrap();
+    let selection = corral_core::OperatingSelection {
+        tasks: [fixture.idea.id.clone()].into(),
+        ..Default::default()
+    };
+    let preview = fixture
+        .ctx
+        .store
+        .preview_operating_policy(&selection)
+        .unwrap();
+    fixture.ctx.store.config = fixture
+        .ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", NOW.parse().unwrap())
+        .unwrap();
+    // Disable the independent free_slots sample, not resource admission.
+    fixture.ctx.store.config.dispatch.paused = true;
+    fixture.ctx.store.save_config().unwrap();
+    pin_task_times(&fixture.ctx.store);
+    fixture.tasks = fixture.ctx.store.list().unwrap();
+    // When the ordinary PM workset explains its scoped blocked task.
+    let ((state, workset), cells) = measure_evaluation(|| {
+        // Admission sees an absent latch at both sizes, not observe's host-dependent
+        // PSI and growing volume inventory (as in the direct admission case above).
+        let workset = corral_ops::pm_workset(&fixture.ctx).unwrap();
+        let (state, _) =
+            measure(|| resources::observe(&fixture.ctx, NOW.parse().unwrap()).unwrap());
+        (state, workset)
+    });
+    // Then the scoped-workset branch ran and did not take an action.
+    fixture.state_preconditions(&state);
+    assert!(workset.actions.is_empty());
+    assert!(
+        workset
+            .waits
+            .iter()
+            .any(|a| a.task.as_deref() == Some(&fixture.idea.id))
+    );
+    assert_eq!(fixture.probe.samples(), 2);
+    assert_eq!(cells.followup_calls(FU, "sample"), 2);
+    let hydrated = fixture.hydration_work();
+    assert_eq!(
+        cells.followup_hydrations(FU, "sample"),
+        2 * hydrated.full_task_hydrations()
+    );
+    assert_eq!(
+        cells.followup_rows(FU, "sample"),
+        2 * Counter::DECODES
+            .iter()
+            .map(|c| hydrated.total(*c))
+            .sum::<u64>()
+    );
+    assert_eq!(
+        cells.followup_doc_bytes(FU, "sample"),
+        2 * hydrated.decoded_doc_bytes()
+    );
+    assert_eq!(cells.followup_views(FU, "sample"), 1);
+    assert_eq!(
+        cells.followup_stats(FU, "sample"),
+        2 * fixture.sample_stats()
+    );
+    assert_eq!(cells.followup_processes(FU, "sample"), 0);
+    cells
 }
 
 #[cfg(unix)]
