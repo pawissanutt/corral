@@ -132,6 +132,30 @@ impl Store {
                 }
             }
         };
+        Self::decode_heads(&view, docs)
+    }
+
+    /// The first `limit` heads matching `q` in the query's order, on one view; nothing past
+    /// them is read or decoded.
+    ///
+    /// # Errors
+    /// Returns read errors.
+    pub fn heads_page(&self, q: &HeadQuery, limit: u32) -> Result<Vec<TaskHead>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let view = self.pinned_view()?;
+        let docs = {
+            let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
+            guard.heads(q, PageReq::first(limit))?.items
+        };
+        Self::decode_heads(&view, docs)
+    }
+
+    fn decode_heads(
+        view: &PinnedView,
+        docs: Vec<crate::backend::TaskHeadDoc>,
+    ) -> Result<Vec<TaskHead>> {
         let mut heads = Vec::new();
         for doc in docs {
             if work::in_hot_scope() {
@@ -145,7 +169,7 @@ impl Store {
             let head = TaskHead::from_doc(guard.as_ref(), doc)?;
             drop(guard);
             if let Some(mut head) = head {
-                head.view = Some(Arc::clone(&view));
+                head.view = Some(Arc::clone(view));
                 heads.push(head);
             }
         }

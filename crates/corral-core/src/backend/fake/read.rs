@@ -173,6 +173,40 @@ impl ReadView for FakeView {
                     .cloned(),
                 &page,
             ),
+            HeadQuery::ProjectCreatedAfter { project, after } => {
+                let mut found: Vec<_> = heads
+                    .filter(|head| head.header.fields.project.as_ref() == Some(project))
+                    .filter(|head| head.header.created > *after)
+                    .cloned()
+                    .collect();
+                found.sort_by(|a, b| {
+                    (a.header.created, &a.header.id).cmp(&(b.header.created, &b.header.id))
+                });
+                self.page(found.into_iter(), &page)
+            }
+            HeadQuery::EdgeTo { kind, other } => self.page(
+                heads
+                    .filter(|head| {
+                        head.header
+                            .fields
+                            .edges
+                            .iter()
+                            .any(|edge| edge.kind == *kind && edge.other == *other)
+                    })
+                    .cloned(),
+                &page,
+            ),
+            HeadQuery::RecentByStatus { status } => {
+                let mut found: Vec<_> = heads
+                    .filter(|head| head.header.fields.status == *status)
+                    .cloned()
+                    .collect();
+                found.sort_by(|a, b| {
+                    (b.header.fields.updated, b.header.num)
+                        .cmp(&(a.header.fields.updated, a.header.num))
+                });
+                self.page(found.into_iter(), &page)
+            }
         }
     }
 

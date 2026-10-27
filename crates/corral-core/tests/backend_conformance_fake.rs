@@ -42,6 +42,7 @@ conformance!(
     task_change_commits_its_conditions,
     view_isolation,
     view_expiry,
+    head_queries,
     row_queries,
     head_form_rows,
     head_documents_and_columns,
