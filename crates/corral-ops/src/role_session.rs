@@ -4,12 +4,15 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+
 use anyhow::{bail, ensure};
 use corral_core::{ResolvedProfile, RoleSession, Run, SessionAction, SessionPolicy, Task};
 use serde_json::Value;
+
 use serde_json::json;
 
 use crate::Ctx;
+
 use crate::provider_session;
 
 mod claude;
@@ -46,7 +49,7 @@ pub(crate) fn fresh(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result
     let selected_adapter = run
         .execution
         .as_ref()
-        .and_then(|_| run.session.as_ref())
+        .and(run.session.as_ref())
         .and_then(|session| session.adapter.as_deref())
         .unwrap_or_else(|| adapter(ctx, harness));
     let mut session = RoleSession {
