@@ -51,29 +51,21 @@ pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
     Ok(())
 }
 
-/// Persist once across sync callers, not once per worker or process.
+/// A repeat of the open run's error counts on its condition run without a new event.
 pub(super) fn record_error(ctx: &Ctx, task: &Task, error: &str) -> Result<()> {
-    let Some(_lock) = ctx
-        .store
-        .try_lock(&format!("autopilot-error-{}", task.id))?
-    else {
-        return Ok(());
-    };
     let run = task.current_run().map(|r| r.id.as_str());
-    let events = ctx.store.events_of(Some(&task.id), &["autopilot_error"])?;
-    let previous = events.iter().rev().find(|event| {
-        event.task.as_deref() == Some(task.id.as_str())
-            && event.kind == "autopilot_error"
-            && event.detail["run"].as_str() == run
-    });
-    if previous.is_none_or(|event| event.detail["error"].as_str() != Some(error)) {
-        ctx.store.log_event(
-            Some(&task.id),
-            "autopilot_error",
-            json!({"run": run, "error": error}),
-        )?;
-    }
-    Ok(())
+    ctx.store.log_event(
+        Some(&task.id),
+        "autopilot_error",
+        json!({"run": run, "error": error}),
+    )
+}
+
+/// A clean autopilot pass over a task resolves its open `autopilot_error` run.
+pub(super) fn record_clean(ctx: &Ctx, task: &Task) -> Result<()> {
+    ctx.store
+        .clear_condition(Some(&task.id), "autopilot_error")
+        .map(drop)
 }
 
 pub(super) fn short(sha: &str) -> &str {

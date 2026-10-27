@@ -76,13 +76,14 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
         current.status = Status::Ready;
         current.queued = true;
         current.dispatch_hold = false;
-        ctx.store.log_event(
-            Some(&current.id),
-            "queued",
-            json!({"plan": plan, "reason": "enqueue only"}),
-        )?;
         Ok(())
     })?;
+    // A condition run is its own operation (plan T-253 section 9), never part of the update.
+    ctx.store.observe_condition(
+        Some(&task.id),
+        "queued",
+        json!({"plan": plan, "reason": "enqueue only"}),
+    )?;
     Ok(task)
 }
 

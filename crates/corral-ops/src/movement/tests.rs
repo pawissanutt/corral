@@ -230,6 +230,14 @@ fn overlap_sends_context_once_without_changing_worker_state_or_git() {
     assert_eq!(state.notices.len(), 1);
     let notice = &state.notices[0];
     assert_eq!(notice.state, DeliveryState::Delivered);
+    // And the resolved notice closes its condition run with one clear.
+    let store = &fx.ctx.store;
+    let cleared = store
+        .events_of(Some(&fx.task.id), &["main_movement_notice_cleared"])
+        .unwrap();
+    assert_eq!(cleared.len(), 1);
+    let runs = store.condition_runs(Some(&fx.task.id)).unwrap();
+    assert!(runs.iter().all(|run| run.closed_seq.is_some()), "{runs:?}");
     assert_eq!(notice.overlapping_paths, ["file.rs"]);
     assert_eq!(notice.landings, std::slice::from_ref(&landed));
     assert!(

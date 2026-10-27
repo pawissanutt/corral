@@ -336,13 +336,7 @@ fn dispatch_with(
         current.queued = true;
         current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
-        if let Some(reason) = &reason {
-            store.log_event(
-                Some(&current.id),
-                "queued",
-                json!({"reason": reason, "plan": plan}),
-            )?;
-        } else {
+        if reason.is_none() {
             admission.audit(ctx, store, current, &plan, &run_id)?;
             store.log_event(
                 Some(&current.id),
@@ -355,6 +349,12 @@ fn dispatch_with(
     drop(ownership);
     drop(target_lock);
     if let Some(reason) = reason {
+        // A condition run is its own operation (plan T-253 section 9), never part of the claim.
+        ctx.store.observe_condition(
+            Some(&claimed.id),
+            "queued",
+            json!({"reason": reason, "plan": plan}),
+        )?;
         return Ok(DispatchOutcome::Queued {
             task: claimed,
             reason,
