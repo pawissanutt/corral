@@ -63,6 +63,13 @@ fn host_entry(host: &ts::Host, key: &str, text: &str) {
     std::fs::write(path, text).unwrap();
 }
 
+/// Modern hosts record their committed hello before any turn in this session.
+fn write_bound_session(host: &ts::Host, text: &str) {
+    let marker = json!({"type":"custom", "customType":"corral_host_bound", "data":{
+        "generation":host.identity.generation, "session_id":SESSION}});
+    f::write_session(host, &format!("{marker}\n{text}"));
+}
+
 fn observed(inbox: &Inbox<'_>, seq: u64) -> Option<Receipt> {
     inbox.receipt(seq, ReceiptLevel::Observed).unwrap()
 }
@@ -80,7 +87,7 @@ fn an_oversized_session_line_reports_an_incomplete_scan_even_without_observed_ca
     entries[1]["message"]["content"][0]["arguments"] =
         json!({"text": "x".repeat(16 * 1024 * 1024)});
     let text = entries.iter().map(|e| format!("{e}\n")).collect::<String>();
-    f::write_session(&bound, &text);
+    write_bound_session(&bound, &text);
     host.kill();
 
     // When the run resumes:
@@ -110,7 +117,7 @@ fn excess_calls_report_an_incomplete_scan_after_observed_calls_receive_results()
     let ids: Vec<String> = (0..257).map(|i| format!("c-{i:03}")).collect();
     let calls: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "read")).collect();
     let results: Vec<&str> = ids[..256].iter().map(String::as_str).collect();
-    f::write_session(&bound, &f::session(&calls, &results));
+    write_bound_session(&bound, &f::session(&calls, &results));
     host.kill();
 
     // When the run resumes:
@@ -139,7 +146,7 @@ fn a_session_beyond_the_byte_bound_reports_all_encountered_scan_limits() {
     let fx = f::fixture(false, 5);
     let mut host = HostProc::spawn(true);
     let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
-    f::write_session(&bound, "");
+    write_bound_session(&bound, "");
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .open(f::session_file(&bound))
@@ -182,7 +189,7 @@ fn a_complete_scan_keeps_the_original_notice_and_subject() {
     let fx = f::fixture(false, 5);
     let mut host = HostProc::spawn(true);
     let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
-    f::write_session(&bound, &f::session(&[("c-read", "read")], &[]));
+    write_bound_session(&bound, &f::session(&[("c-read", "read")], &[]));
     host.kill();
 
     // When the run resumes:
@@ -232,7 +239,7 @@ fn a_notice_too_large_for_the_pi_input_keeps_every_class_in_evidence_and_strands
             .iter()
             .map(|id| (id.as_str(), "corral_progress"))
             .collect();
-        f::write_session(&bound, &f::session(&calls, &[]));
+        write_bound_session(&bound, &f::session(&calls, &[]));
         let note = "x".repeat(600);
         let stored: Vec<RequestReceipt> = ids
             .iter()
@@ -329,7 +336,7 @@ fn an_envelope_the_lost_host_never_confirmed_is_settled_without_a_resend_and_the
         let fx = f::fixture(false, 5);
         let mut host = HostProc::spawn(true);
         let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
-        f::write_session(&bound, &f::session(&[], &[]));
+        write_bound_session(&bound, &f::session(&[], &[]));
         let inbox = Inbox::new(&fx.ctx.store, run_recipient(&fx)).unwrap();
         let earlier = post(&inbox, "owner_reply", "Sent before the loss.");
         let wire = binding(&fx, &run_recipient(&fx), &bound);
@@ -400,7 +407,7 @@ fn answered_while_lost(fx: &Fx, target: &BindTarget, pane: &str) -> (ts::Host, u
     let container = target.container();
     let mut host = HostProc::spawn(true);
     let bound = fx.bind(target, pane, &host);
-    f::write_session(&bound, &f::session(&[], &[]));
+    write_bound_session(&bound, &f::session(&[], &[]));
     f::bridge(
         &fx.ctx.store,
         &recipient(&container),

@@ -251,4 +251,8 @@ test("a host killed inside an upstream edit, then inside a command whose child k
   const host = show("T-001").runs.at(-1).agent_host;
   expect([host.binding.generation, host.binding.health]).toEqual([3, "healthy"]);
   expect(host.generations.map((g: any) => g.bound.session_file)).toEqual([session, session, session]);
+  const bindings = readFileSync(session, "utf8").trim().split("\n").map((line) => JSON.parse(line))
+    .filter((entry) => entry.type === "custom" && entry.customType === "corral_host_bound");
+  expect(bindings.map((entry) => [entry.data.generation, entry.data.session_id]))
+    .toEqual(host.generations.map((g: any) => [g.n, g.bound.session_id]));
 }, 600_000);

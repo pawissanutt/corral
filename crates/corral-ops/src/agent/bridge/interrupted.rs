@@ -7,7 +7,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::agent::{ReceiptState, RequestReceipt, ResumeClass};
-use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -47,6 +46,7 @@ pub enum ScanLimit {
     LineBytes,
     SessionBytes,
     Calls,
+    GenerationBoundary,
 }
 
 impl ScanLimit {
@@ -55,6 +55,9 @@ impl ScanLimit {
             Self::LineBytes => "a line was skipped at the line byte limit",
             Self::SessionBytes => "the scan stopped at the session byte limit",
             Self::Calls => "calls were omitted at the call limit",
+            Self::GenerationBoundary => {
+                "legacy session has no generation boundary; unmatched calls may belong to older generations"
+            }
         }
     }
 }
@@ -85,9 +88,11 @@ fn skip_line(reader: &mut impl BufRead) -> Result<()> {
     }
 }
 
-/// Tool calls made at or after `since` that have no tool result, in session order. The session
-/// file is streamed with byte bounds and never written.
-pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<DanglingScan> {
+/// Unmatched calls after this generation's committed hello marker, in session order.
+/// Never compare cross-process wall clocks: they can step backwards. Legacy files with no
+/// marker are scanned conservatively in full and reported as having an attribution limit.
+/// The session file is streamed with byte bounds and never written.
+pub fn dangling_calls(path: &Path, generation: u32, session_id: &str) -> Result<DanglingScan> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -103,6 +108,9 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<DanglingScan> {
     let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES));
     let mut limits = Vec::new();
     let mut open: Vec<DanglingCall> = Vec::new();
+    let mut active = true; // Conservative legacy scan until the first binding marker.
+    let mut saw_marker = false;
+    let mut found_generation = false;
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -123,16 +131,24 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<DanglingScan> {
         let Ok(entry) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
-        if entry["type"] != "message" {
+        if entry["type"] == "custom" && entry["customType"] == "corral_host_bound" {
+            let matches = entry["data"]["generation"].as_u64() == Some(u64::from(generation))
+                && entry["data"]["session_id"].as_str() == Some(session_id);
+            if found_generation && !matches {
+                break;
+            }
+            saw_marker = true;
+            found_generation |= matches;
+            active = matches;
+            open.clear();
+            continue;
+        }
+        if !active || entry["type"] != "message" {
             continue;
         }
         let message = &entry["message"];
         match message["role"].as_str() {
             Some("assistant") => {
-                let at = entry["timestamp"].as_str().and_then(|t| t.parse().ok());
-                if at.is_none_or(|at: Timestamp| at < since) {
-                    continue;
-                }
                 let items = message["content"].as_array().into_iter().flatten();
                 for item in items.filter(|i| i["type"] == "toolCall") {
                     if let (Some(id), Some(name)) = (item["id"].as_str(), item["name"].as_str()) {
@@ -154,6 +170,9 @@ pub fn dangling_calls(path: &Path, since: Timestamp) -> Result<DanglingScan> {
             }
             _ => {}
         }
+    }
+    if !saw_marker {
+        limits.push(ScanLimit::GenerationBoundary);
     }
     if reader.get_ref().limit() == 0
         && reader

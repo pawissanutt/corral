@@ -322,6 +322,11 @@ export class HostSession {
       const result = receipt.result as { code?: string; reason?: string } | undefined;
       throw new Error(`hello_refused: ${result?.code ?? receipt.state}: ${result?.reason ?? ""}`);
     }
+    // Session order, unlike cross-process wall clocks, is a stable recovery boundary.
+    // No turn is admitted until this generation's committed hello has been recorded.
+    this.session.sessionManager.appendCustomEntry("corral_host_bound", {
+      generation: this.options.identity.generation, session_id: sessionId,
+    });
     this.boundSessionId = sessionId;
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     return receipt;
