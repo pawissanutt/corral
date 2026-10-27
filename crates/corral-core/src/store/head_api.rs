@@ -228,6 +228,24 @@ fn head_doc_of(fields: &TaskHeadFields) -> Result<Value> {
     super::codec::head_doc(&shell_task(fields)?)
 }
 
+/// A head of a listing, or `None` after reporting one whose stored documents do not decode, as
+/// the full listing does, so one damaged task cannot blank a board or a PM pass. Read-view
+/// failures still propagate.
+fn decode_or_skip(
+    view: &dyn ReadView,
+    doc: crate::backend::TaskHeadDoc,
+) -> Result<Option<TaskHead>> {
+    let id = doc.header.id.clone();
+    match TaskHead::from_doc(view, doc) {
+        Ok(head) => Ok(head),
+        Err(error) if error.downcast_ref::<crate::backend::ViewError>().is_some() => Err(error),
+        Err(error) => {
+            crate::messages::report(Some(&id), "store", format!("skipping {id}: {error:#}"));
+            Ok(None)
+        }
+    }
+}
+
 impl Store {
     fn pinned_view(&self) -> Result<PinnedView> {
         if let Some(frozen) = &self.frozen {
@@ -352,7 +370,7 @@ impl Store {
                 );
             }
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
-            let head = TaskHead::from_doc(guard.as_ref(), doc)?;
+            let head = decode_or_skip(guard.as_ref(), doc)?;
             drop(guard);
             if let Some(mut head) = head {
                 head.view = Some(Arc::clone(view));
@@ -380,7 +398,7 @@ impl Store {
                 work::Subject::Plain,
             );
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
-            let head = TaskHead::from_doc(guard.as_ref(), doc)?;
+            let head = decode_or_skip(guard.as_ref(), doc)?;
             drop(guard);
             if let Some(mut head) = head {
                 head.view = Some(Arc::clone(&view));
