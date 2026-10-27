@@ -20,6 +20,9 @@ export function restrictEnvironment(env: NodeJS.ProcessEnv): void {
     "PI_MANAGED_INSTALL_ROOT", "PI_CODING_AGENT_DIR"]) {
     delete env[key];
   }
+  // Ambient Anthropic auth (API key, auth/OAuth tokens, workload federation, base URL) would be
+  // paid or foreign-store access; pi-native uses only the corral-owned subscription login.
+  for (const key of Object.keys(env)) if (key.startsWith("ANTHROPIC_")) delete env[key];
 }
 
 export function restrictedSettings() {
