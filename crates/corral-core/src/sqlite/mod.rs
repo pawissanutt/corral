@@ -9,6 +9,7 @@
 //! pinned when it opens; a WAL reader blocks no writer, and dropping the view releases its
 //! snapshot so a checkpoint can complete.
 
+mod accepted_proof;
 mod artifact_reviews;
 mod check;
 mod codec;
@@ -207,6 +208,7 @@ impl SqliteBackend {
         let workspace_id = BlobHash::of(seed.as_bytes()).as_str()[..32].to_owned();
         schema::init(&mut writer, &workspace_id)?;
         artifact_reviews::init(&mut writer)?;
+        accepted_proof::init(&mut writer)?;
         Ok(Self {
             path: path.to_owned(),
             options,

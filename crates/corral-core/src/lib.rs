@@ -4,6 +4,7 @@
 #[cfg(test)]
 extern crate self as corral_core;
 
+pub mod accepted_proof;
 pub mod agent;
 mod aggregate;
 pub mod artifact;

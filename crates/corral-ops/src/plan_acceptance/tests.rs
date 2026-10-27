@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 mod integrity;
 mod landing;
 mod policy;
+mod readiness;
 mod review;
 
 pub(super) fn git(repo: &Path, args: &[&str]) -> String {

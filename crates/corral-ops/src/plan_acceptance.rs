@@ -16,6 +16,7 @@ mod accept;
 mod capture;
 pub(crate) mod checkpoint;
 mod gate;
+mod proof;
 mod review;
 
 pub use accept::plan_accept;
@@ -60,7 +61,7 @@ pub(crate) fn progress(ctx: &Ctx, tracker: &Task) -> Option<AggregateProgress> {
     let blockers = if accepted {
         Vec::new()
     } else {
-        match capture::capture(ctx, &ctx.store, tracker, "readiness", None) {
+        match capture::readiness(ctx, &ctx.store, tracker) {
             Ok(_) => Vec::new(),
             Err(error) => match error.downcast::<capture::Unmet>() {
                 Ok(unmet) => unmet.0,

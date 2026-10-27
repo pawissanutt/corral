@@ -5,6 +5,7 @@
 //! so a failed operation leaves nothing behind; a view is a clone of the `Arc`, which gives
 //! real snapshot semantics. Preconditions are validated exactly as the SQLite backend does.
 
+mod accepted_proof;
 mod apply;
 mod read;
 mod storage;
