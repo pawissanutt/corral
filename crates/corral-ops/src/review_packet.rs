@@ -106,10 +106,12 @@ pub struct TierReceipt {
 }
 
 /// The contract a tiered run's review is judged against; `None` for legacy and untiered runs.
+/// `moved` judges receipt freshness on the reviewed base when main has moved past it.
 pub(crate) fn gate_contract(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
+    moved: Option<&IdentityChange>,
 ) -> Result<Option<ReviewGateContract>> {
     if run.gate_rules.is_legacy() {
         return Ok(None);
@@ -126,9 +128,17 @@ pub(crate) fn gate_contract(
         run,
         &contract.tier,
         Some(&contract.requirement),
+        moved,
     )?];
     if contract.tier != corral_core::FULL_TIER {
-        receipts.push(receipt(ctx, task, run, corral_core::FULL_TIER, None)?);
+        receipts.push(receipt(
+            ctx,
+            task,
+            run,
+            corral_core::FULL_TIER,
+            None,
+            moved,
+        )?);
     }
     Ok(Some(ReviewGateContract {
         tier: contract.tier,
@@ -152,6 +162,7 @@ fn receipt(
     run: &Run,
     tier: &str,
     requirement: Option<&crate::gate_tier::GateRequirement>,
+    moved: Option<&IdentityChange>,
 ) -> Result<TierReceipt> {
     let dominates = requirement.is_some_and(|r| r.full_dominates);
     let gate = run.gate.as_ref().filter(|g| {
@@ -170,7 +181,8 @@ fn receipt(
                     .and_then(|i| i.gate_tier.as_deref().cloned()),
                 full_dominates: true,
             };
-            verification::gate_fresh_for(ctx, task, run, g, requirement.unwrap_or(&own))?
+            let requirement = requirement.unwrap_or(&own);
+            verification::gate_fresh_for_at(ctx, task, run, g, requirement, moved)?
         }
         None => false,
     };
@@ -285,7 +297,7 @@ pub(crate) fn evidence_gaps(
     let policy = ctx.store.config.task_review_policy(task);
     let prose = route.requirement.contract.kind == ReviewContractKind::Prose;
     // A tiered review needs a fresh receipt of its own tier only, never a full one.
-    let tiered = gate_contract(ctx, task, run)?;
+    let tiered = gate_contract(ctx, task, run, moved)?;
     let commands = tiered.as_ref().map_or(&policy.gate, |c| &c.commands);
     match &run.gate {
         None if !commands.is_empty() && !prose => {
@@ -407,6 +419,7 @@ pub(crate) fn build(
     attempt: &str,
     record: &ReviewRecord,
     route: &ReviewRoute,
+    moved: Option<&IdentityChange>,
 ) -> Result<(ReviewPacket, String)> {
     let base = crate::review_contracts::patch_base(run)?;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
@@ -418,7 +431,7 @@ pub(crate) fn build(
             authority: "corral_gate_receipt",
             result: g.result,
             sha: g.sha.clone(),
-            fresh: verification::gate_fresh_for_review(ctx, task, run, g)?,
+            fresh: verification::gate_fresh_for_review_at(ctx, task, run, g, moved)?,
             log_passed: crate::gate::gate_log_passed(ctx, task, run)?,
             log: crate::gate::gate_paths(ctx, &task.id, &run.id).log,
             failed_cmd: g.failed_cmd.clone(),
@@ -507,9 +520,9 @@ pub(crate) fn build(
                 .collect(),
             reusable,
         },
-        gaps: evidence_gaps(ctx, task, run, route, None)?,
+        gaps: evidence_gaps(ctx, task, run, route, moved)?,
         previous_findings: findings(task, attempt),
-        gate_contract: gate_contract(ctx, task, run)?,
+        gate_contract: gate_contract(ctx, task, run, moved)?,
     };
     let digest = verification::digest(&serde_json::to_vec(&bound)?);
     Ok((ReviewPacket { digest, bound }, diff))
@@ -523,7 +536,7 @@ pub(crate) fn write(
     record: &ReviewRecord,
     route: &ReviewRoute,
 ) -> Result<(String, String)> {
-    let (packet, diff) = build(ctx, task, run, attempt, record, route)?;
+    let (packet, diff) = build(ctx, task, run, attempt, record, route, None)?;
     let (packet_file, diff_file) = paths(ctx, task, run, attempt);
     std::fs::create_dir_all(ctx.store.prompts_dir()).context("creating prompt directory")?;
     std::fs::write(&diff_file, diff).with_context(|| format!("writing {}", diff_file.display()))?;
@@ -552,6 +565,20 @@ pub(crate) fn route_changes(
     record: &ReviewRecord,
     route: &ReviewRoute,
     packet: bool,
+) -> Result<Vec<IdentityChange>> {
+    route_changes_at(ctx, task, run, record, route, packet, None)
+}
+
+/// [`route_changes`], rebuilding the packet on the reviewed base `moved` when main has moved past
+/// it: only base-derived freshness is normalized; every other bound input is still compared.
+pub(crate) fn route_changes_at(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    record: &ReviewRecord,
+    route: &ReviewRoute,
+    packet: bool,
+    moved: Option<&IdentityChange>,
 ) -> Result<Vec<IdentityChange>> {
     let attempt = route
         .attempt
@@ -582,7 +609,8 @@ pub(crate) fn route_changes(
         subject.as_ref().filter(|_| packet),
     )?;
     if packet {
-        current.packet_digest = Some(build(ctx, task, run, &attempt, record, &current)?.0.digest);
+        let built = build(ctx, task, run, &attempt, record, &current, moved)?;
+        current.packet_digest = Some(built.0.digest);
     }
     if route.same_assessment(&current) && route.profile == current.profile {
         return Ok(Vec::new());
