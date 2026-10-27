@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use corral_core::Event;
 
-use super::{Actions, ConditionRow, Fact, Window, open_at, time, when, within};
+use super::{Actions, ConditionRow, Fact, Window, open_at, resolved_after, time, when, within};
 
 /// The join identity an action event offers, and the condition-kind family it may attach to.
 /// A missing identity field yields an identity that matches nothing.
@@ -128,10 +128,20 @@ pub(super) fn actions(
         // An action whose own effect is a condition's message created that condition; it
         // cannot also be a response to it.
         let own = effect(event).map(|id| format!("/{id}"));
+        // An action naming a condition's own source (its message or park revision) without a
+        // canonical time of its own is causally later than that source, whatever wall-clock
+        // steps its append time shows; only the resolution bound applies. Actions that carry a
+        // canonical `at` are always checked against both bounds.
+        let causal = event.detail["at"].is_null()
+            && matches!(identity.split_once(':'), Some(("message" | "park", _)));
         let matches: Vec<_> = (rows.iter())
             .filter(|(key, row)| {
                 Some(row.task.as_str()) == event.task.as_deref()
-                    && open_at(row, at)
+                    && (if causal {
+                        resolved_after(row, at)
+                    } else {
+                        open_at(row, at)
+                    })
                     && own.as_ref().is_none_or(|own| !key.ends_with(own.as_str()))
                     && candidate(key, row, family, &identity)
             })

@@ -729,6 +729,25 @@ fn membership_follows_canonical_times_not_publication_order() {
     early.push(answer(50));
     let early = compute(&[], &early, &[], window(0, 200)).actions;
     assert_eq!((early.attributed, early.unattributed), (0, 1));
+    // And a retry naming a message is causally after it, even if a wall-clock step stamps the
+    // retry before the condition's since; its resolution bound still applies.
+    let failed = "T-001/delivery_failed/T-001_R1#1";
+    let mut opening = opened(failed, "pm", 0, json!(true));
+    opening.detail["since"] = json!(t(100));
+    let retry = at(
+        event(
+            "message_retried",
+            Some("T-001"),
+            json!({"from": "T-001_R1#1", "to": "T-001_R1#2"}),
+        ),
+        98,
+    );
+    let stepped = compute(&[], &[opening.clone(), retry.clone()], &[], window(0, 200)).actions;
+    assert_eq!(stepped.by_condition.get(failed), Some(&1));
+    let late = at(retry, 150);
+    let resolved = resolved(failed, 120);
+    let late = compute(&[], &[opening, resolved, late], &[], window(0, 200)).actions;
+    assert_eq!((late.attributed, late.unattributed), (0, 1));
 }
 
 #[test]

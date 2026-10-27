@@ -221,7 +221,9 @@ message effect is one action: a post named by a retry, reply or change request i
 again, and an action never responds to the condition about its own message. A condition is
 open for an action when the action's canonical time (its detail `at`, else its append time)
 lies within the condition's `since` through `resolved_at`, both inclusive; publication order
-plays no part. An action whose identity is missing or unknown is `unattributed`, never attached
+plays no part. An action that names the condition's own message or park revision and has no
+canonical time of its own is causally later than that source, so only the resolution bound
+applies to it, whatever backward wall-clock step its append time shows. An action whose identity is missing or unknown is `unattributed`, never attached
 by task alone. An action matching several open conditions is `ambiguous`. A repeat through the
 same condition and identity is a `duplicate` while the earlier action's message is neither
 observed nor terminal, judged from history before the window too; after a terminal message

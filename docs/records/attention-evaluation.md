@@ -76,6 +76,10 @@ The ones the scenarios rely on:
   - An action never responds to the condition about its own effect message.
   - A condition is open at an action when the action's canonical time (detail
     `at`, else append time) lies within `since`..`resolved_at`, both inclusive.
+    An action naming the condition's own message or park revision without a
+    canonical time of its own is causally later than that source. Only the
+    resolution bound applies to it, because inbox and event stamps come from a
+    wall clock that can step backwards (about 1.9 s on WSL2).
     Publication order and delayed or pending facts play no part.
   - An action that matches more than one open condition is `ambiguous`.
   - **Duplicate:** another action on the same condition and identity, whatever
@@ -268,7 +272,9 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
   actions, 1 duplicate and 2 rescues.
 - **Canonical membership:** an answer canonically at 60 joins its question
   whether the opening (since 0) is published after it or is still pending in
-  the ledger; an answer at 50 before a since of 100 stays unattributed.
+  the ledger; an answer at 50 before a since of 100 stays unattributed. A
+  `message_retried` naming the condition's message joins even when stamped 2 s
+  before its since, but not after its resolution.
 - **Real event streams** (`eval_retire`): two real `corral reply` calls on a
   run with a definitive delivery failure log a post and a reply each. They give
   2 actions on that condition and 1 duplicate. A real `request_changes` on an
@@ -299,6 +305,10 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
 - **S12's** reopening runs inside a real delivery pass through the public
   `DeliveryAdapter::send` seam, not a cfg(test) hook. The unfenced control
   writes the cancellation that the pre-fence stale retire would have written.
+- **Wall-clock steps:** event and inbox stamps use the raw wall clock. Own-object
+  joins (`message`, `park`) are causal and immune to backward steps. Run-level
+  and recipient joins compare times strictly. S20 therefore assumes no backward
+  step within the few milliseconds between its own consecutive posts.
 - **Clock domains in fixtures:** production stamps actions with the process
   clock while scenario conditions use fixed fixture times. Attribution
   scenarios therefore use conditions whose canonical `since` precedes those
