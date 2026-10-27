@@ -370,6 +370,24 @@ inbox message observed. A canonical `comparison_rescue: pane_input` comment
 records this effective intervention. It is not a replacement run or a silent
 zero-rescue success.
 
+The same R1 completed repaired candidate
+`a6c0cc1996eb2d0a1a10f1bd38c878fc71f0d74b`. Its retained frozen-base
+measurement patch only adds equivalent document-work counters; the baseline
+log reproduces the task-edit and severe counts exactly. Thus the initial
+counter exposed retained full-source work rather than newly introducing that
+algorithmic cost. The repair removes the fallback instead of weakening the
+counter or budget. An intermediate full gate then caught a stale integration
+fixture that read only the base cache, not its persisted append journal; that
+failed receipt is retained too.
+
+Final full contract gate `2454544-1793063604693014138` passes on the repaired
+candidate: 3,574 nextest tests, separate doctests, unchanged work-budget check,
+format/size/Clippy, Darwin checks, Pi lane, candidate build and docs checks.
+This is a worker gate, not a landing claim. Independent review round 2 is
+running on that exact candidate; no replacement worker or fourth review was
+allocated. Initial four-pair metrics remain historical until its new approval
+and capture.
+
 The full landing gate is separate from the initial approval-window metrics
 above. Those metrics are now a historical checkpoint, not a final measurement
 of the reopened arm. The exact four-pair checkpoint report is protected as
