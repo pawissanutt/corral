@@ -35,6 +35,22 @@ pub enum HeadQuery {
     Children {
         parent: String,
     },
+    /// Tasks of any status in `project` created strictly after `after`, in `(created, id)`
+    /// order: the operating policy's capped new-task page (`tasks_project_created`).
+    ProjectCreatedAfter {
+        project: String,
+        after: jiff::Timestamp,
+    },
+    /// Tasks carrying an edge of `kind` to `other` (`task_edges_other`), by number.
+    EdgeTo {
+        kind: String,
+        other: String,
+    },
+    /// Tasks of one status, most recently updated first, ties by number descending
+    /// (`tasks_status_updated`): the Done column's page.
+    RecentByStatus {
+        status: String,
+    },
 }
 
 /// Rows of one family of one task, in key order (or reverse key order), matching every given

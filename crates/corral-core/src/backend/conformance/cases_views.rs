@@ -23,7 +23,106 @@ pub(super) fn cases() -> Vec<Case> {
             covers: &[],
             run: view_expiry,
         },
+        Case {
+            name: "head_queries",
+            covers: &[OpKind::CreateTask],
+            run: head_queries,
+        },
     ]
+}
+
+fn ids(heads: &[TaskHeadDoc]) -> Vec<String> {
+    heads.iter().map(|head| head.header.id.clone()).collect()
+}
+
+/// The indexed head pages of hot-reads (plan T-253 sections 4 and 5): the new-task page by
+/// `(created, id)` after a time and across statuses, tasks by edge to another task, and one
+/// status most recently updated first, each paged without reading past its page.
+fn head_queries(make: MakeFixture<'_>) -> Result<()> {
+    let fx = make();
+    let now = fx.clock.now();
+    let mut made = Vec::new();
+    // (created hours ago, project, status, updated hours ago, edges)
+    let specs: [(i64, &str, &str, i64, &[(&str, &str)]); 5] = [
+        (5, "corral", "done", 1, &[("child", "T-900")]),
+        (4, "corral", "backlog", 3, &[("depends_on", "T-900")]),
+        (4, "other", "done", 2, &[("child", "T-900")]),
+        (2, "corral", "done", 3, &[]),
+        (1, "corral", "dropped", 0, &[]),
+    ];
+    for (n, (created, project, status, updated, edges)) in specs.iter().enumerate() {
+        let mut op = create_op(&fx, &format!("q{n}"), Vec::new());
+        op.created = ago(now, *created)?;
+        op.fields.project = Some((*project).to_owned());
+        op.fields.status = (*status).to_owned();
+        op.fields.updated = ago(now, *updated)?;
+        op.fields.edges = edges
+            .iter()
+            .map(|(kind, other)| TaskEdge {
+                kind: (*kind).to_owned(),
+                other: (*other).to_owned(),
+            })
+            .collect();
+        let Outcome::Created { id, .. } = apply(&fx, Operation::CreateTask(op))?.outcome else {
+            bail!("create")
+        };
+        made.push(id);
+    }
+    let view = fx.backend.view()?;
+    let after = ago(now, 5)?;
+    let created = all_pages(|page| {
+        view.heads(
+            &HeadQuery::ProjectCreatedAfter {
+                project: "corral".to_owned(),
+                after,
+            },
+            page,
+        )
+    })?;
+    ensure!(
+        ids(&created) == [made[1].clone(), made[3].clone(), made[4].clone()],
+        "new-task page {:?}",
+        ids(&created)
+    );
+    let children = all_pages(|page| {
+        view.heads(
+            &HeadQuery::EdgeTo {
+                kind: "child".to_owned(),
+                other: "T-900".to_owned(),
+            },
+            page,
+        )
+    })?;
+    ensure!(
+        ids(&children) == [made[0].clone(), made[2].clone()],
+        "edge page {:?}",
+        ids(&children)
+    );
+    let done = view.heads(
+        &HeadQuery::RecentByStatus {
+            status: "done".to_owned(),
+        },
+        PageReq::first(2),
+    )?;
+    ensure!(
+        ids(&done.items) == [made[0].clone(), made[2].clone()] && done.next.is_some(),
+        "recent done page {:?}",
+        ids(&done.items)
+    );
+    let rest = all_pages(|page| {
+        view.heads(
+            &HeadQuery::RecentByStatus {
+                status: "done".to_owned(),
+            },
+            page,
+        )
+    })?;
+    ensure!(
+        ids(&rest) == [made[0].clone(), made[2].clone(), made[3].clone()],
+        "recent done order {:?}",
+        ids(&rest)
+    );
+    Ok(())
 }
 
 /// The acceptance scenario of plan section 5: a view opened before six commits by a second

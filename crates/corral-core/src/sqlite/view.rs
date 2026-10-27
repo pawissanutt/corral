@@ -292,6 +292,32 @@ impl ReadView for SqliteView {
                 vec![Sql::Text(parent.clone())],
                 head_query,
             ),
+            HeadQuery::ProjectCreatedAfter { project, after } => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks WHERE project = ? AND created > ? \
+                     ORDER BY created, id"
+                ),
+                vec![Sql::Text(project.clone()), Sql::Text(ts(*after))],
+                head_query,
+            ),
+            HeadQuery::EdgeTo { kind, other } => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks WHERE num IN \
+                     (SELECT task FROM task_edges WHERE other = ? AND kind = ?) ORDER BY num"
+                ),
+                vec![Sql::Text(other.clone()), Sql::Text(kind.clone())],
+                head_query,
+            ),
+            HeadQuery::RecentByStatus { status } => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks WHERE status = ? ORDER BY updated DESC, num DESC"
+                ),
+                vec![Sql::Text(status.clone())],
+                head_query,
+            ),
         }
     }
 
