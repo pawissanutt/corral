@@ -453,14 +453,16 @@ fn apply(ctx: &Ctx, entries: &[Entry], operation: Operation, now: Timestamp) -> 
     };
     let e = &entries[index];
     ctx.store.update(&e.task_id, |task| {
-        let a = task
+        let index = task
             .artifacts
-            .iter_mut()
-            .find(|a| a.path == e.artifact.path)
+            .iter()
+            .position(|a| a.path == e.artifact.path)
             .context("artifact disappeared during retention")?;
+        let a = &mut task.artifacts[index];
         a.compressed_bytes = compressed;
         a.purged_at = purged;
         let sha = a.sha256.clone();
+        crate::artifact_storage::record_keys(ctx, task, index, false)?;
         // The task's blob reference goes with its last live artifact of that content.
         if purged.is_some()
             && !task

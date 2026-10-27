@@ -17,6 +17,7 @@ fn overflow_artifacts_are_not_extracted_into_a_full_cache() {
             text: "newer context".into(),
         })
         .collect();
+    f.save();
     let before = ARTIFACT_EXTRACTIONS.get();
 
     // When refreshing a cache filled by those newer documents.

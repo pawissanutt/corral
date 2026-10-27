@@ -72,33 +72,87 @@ impl Store {
 
     /// The artifacts of `task` read as its artifact rows alone, never the full task: only those
     /// of `run` when given (by the rows' run index), in stored order. Each decoded row counts
-    /// as a history row decode.
+    /// as a history row decode; use [`Store::artifact_row`] for one artifact.
     pub fn artifact_rows(&self, task: &str, run: Option<&str>) -> Result<Vec<Artifact>> {
-        use crate::backend::{RowQuery, TaskNum, TaskPart};
+        self.artifact_query(
+            task,
+            run.map(|run| format!("run:{run}")),
+            None,
+            PageReq::first(256),
+        )
+    }
+
+    /// The artifact of `task` stored under row key `key` (its 1-based position as
+    /// `{n:010}`), read as that one row; `None` when there is none.
+    pub fn artifact_row(&self, task: &str, key: &str) -> Result<Option<Artifact>> {
+        Ok(self
+            .artifact_query(task, None, Some(key.to_owned()), PageReq::first(1))?
+            .pop())
+    }
+
+    /// The artifacts of `task` stored after row key `after`, in stored order.
+    pub fn artifact_rows_after(&self, task: &str, after: &str) -> Result<Vec<Artifact>> {
+        let page = PageReq {
+            after: Some(after.to_owned()),
+            limit: 256,
+        };
+        self.artifact_query(task, None, None, page)
+    }
+
+    fn artifact_query(
+        &self,
+        task: &str,
+        index: Option<String>,
+        key: Option<String>,
+        mut page: PageReq,
+    ) -> Result<Vec<Artifact>> {
+        let rows = self.task_rows(
+            task,
+            crate::backend::TaskPart::Artifact,
+            index,
+            key,
+            &mut page,
+        )?;
+        rows.into_iter()
+            .map(|doc| Ok(serde_json::from_value(doc)?))
+            .collect()
+    }
+
+    /// Documents of one row family of `task` matching `index`/`key` from `page` on, each
+    /// decoded row counted as a history row decode. A single-key read reads one page.
+    pub fn task_rows(
+        &self,
+        task: &str,
+        part: crate::backend::TaskPart,
+        index: Option<String>,
+        key: Option<String>,
+        page: &mut PageReq,
+    ) -> Result<Vec<serde_json::Value>> {
+        use crate::backend::{RowQuery, TaskNum};
         use crate::work::{Counter, Subject};
         let num = TaskNum(crate::store::id_number(&Self::normalize_id(task)?));
+        let single = key.is_some();
         let query = RowQuery {
-            part: TaskPart::Artifact,
-            key: None,
+            part,
+            key,
             prefix: None,
-            index: run.map(|run| format!("run:{run}")),
+            index,
             current_only: false,
             open_only: false,
             newest_first: false,
         };
         let view = self.view()?;
-        let mut page = PageReq::first(256);
-        let mut artifacts = Vec::new();
+        let mut docs = Vec::new();
         loop {
             let rows = view.rows(num, &query, page.clone())?;
             for row in rows.items {
                 let bytes = u64::try_from(serde_json::to_string(&row.doc)?.len())?;
                 crate::work::decoded(Counter::HistoryRowDecodes, bytes, Subject::Plain);
-                artifacts.push(serde_json::from_value(row.doc)?);
+                docs.push(row.doc);
             }
             match rows.next {
-                Some(after) => page.after = Some(after),
-                None => return Ok(artifacts),
+                Some(after) if !single => page.after = Some(after),
+                _ => return Ok(docs),
             }
         }
     }

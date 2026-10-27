@@ -180,8 +180,9 @@ fn removed_artifact_is_dropped_at_the_next_rebuild_not_by_a_file_scan() {
     f.refresh();
     assert_eq!(SNAPSHOTS.get(), before);
 
-    // Then the task's next change drops the text rather than reusing it by its original SHA.
-    f.tasks[0].body = "changed".into();
+    // Then the artifact's next row change drops the text rather than reusing it by its
+    // original SHA (a body change alone re-derives only the spec).
+    f.tasks[0].artifacts[0].tier_override = Some(corral_core::ArtifactTier::Keep);
     f.save();
     f.rebuilds();
     assert!(!f.cached("artifactprobe"));

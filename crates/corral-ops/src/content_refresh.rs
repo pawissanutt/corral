@@ -1,5 +1,4 @@
 //! Cheap observations of search inputs, without reading artifacts, events, or the index.
-use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -165,39 +164,35 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
 
 /// Refreshes the index by following the change feed from its persisted cursor.
 ///
-/// An unchanged feed reads no task, artifact, event or index contents. Otherwise only the
-/// tasks the new changes touch are re-derived (from the caller's current listing, else read
-/// by id) and newly committed events added; a missing or unreadable index, a pruned feed
-/// (gap) or a budget overflow rebuilds from the listing.
-pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> {
+/// The feed position, every changed task and every event read come from one read view, and
+/// the cursor published afterwards is that view's position, so a change is either indexed or
+/// stays beyond the cursor. An unchanged feed reads no task, artifact, event or index
+/// contents; otherwise only what the new changes touched is re-derived
+/// (`content_index::follow`). A missing or unreadable index, a pruned feed (gap) or a budget
+/// overflow rebuilds from that same view. The caller's listing is not read: a listing older
+/// than the view would let a refresh acknowledge changes it never indexed.
+pub fn refresh_search_index_with_tasks(ctx: &Ctx, _tasks: &[Task]) -> Result<()> {
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let root = ctx.store.cache_root()?;
     let index = root.join("content-search.json");
-    let view = ctx.store.view()?;
-    let seq = view.seq();
+    let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
     if let Some(at) = read_cursor(&root)?
         && index.is_file()
     {
         if at == seq {
             return Ok(());
         }
-        if let Some((ids, events)) = changes_after(view.as_ref(), at)? {
-            let changed = ids
-                .iter()
-                .map(|id| match tasks.iter().find(|t| &t.id == id) {
-                    Some(task) => Ok(task.clone()),
-                    None => ctx.store.get(id),
-                })
-                .collect::<Result<Vec<_>>>()?;
-            if (changed.is_empty() && !events)
-                || crate::content_index::follow(ctx, &changed, events)?
-            {
-                return write_cursor(&root, seq);
-            }
+        let view = view_ctx.store.view()?;
+        if let Some(delta) = changes_after(view.as_ref(), at)?
+            && ((delta.tasks.is_empty() && !delta.events)
+                || crate::content_index::follow(&view_ctx, &delta)?)
+        {
+            return write_cursor(&root, seq);
         }
     }
-    crate::content_index::refresh_snapshot(ctx, tasks)?;
-    write_cursor(&root, seq)
+    let tasks = view_ctx.store.list()?;
+    crate::content_index::refresh_snapshot(&view_ctx, &tasks, seq)?;
+    Ok(())
 }
 
 /// The feed position the index was last brought to.
@@ -215,10 +210,12 @@ pub(crate) fn write_cursor(root: &Path, seq: ChangeSeq) -> Result<()> {
 
 const CURSOR: &str = "content-search.cursor";
 
-/// Tasks and whether events changed after `at`, on `view`; `None` when the feed was pruned
-/// past `at`.
-fn changes_after(view: &dyn ReadView, at: ChangeSeq) -> Result<Option<(BTreeSet<String>, bool)>> {
-    let (mut after, mut ids, mut events) = (at, BTreeSet::new(), false);
+/// What changed after `at` on `view`; `None` when the feed was pruned past `at`.
+fn changes_after(
+    view: &dyn ReadView,
+    at: ChangeSeq,
+) -> Result<Option<crate::content_index::Delta>> {
+    let (mut after, mut delta) = (at, crate::content_index::Delta::default());
     loop {
         let page = match view.changes(after, 256) {
             Ok(page) => page,
@@ -229,19 +226,27 @@ fn changes_after(view: &dyn ReadView, at: ChangeSeq) -> Result<Option<(BTreeSet<
             after = entry.seq;
             for scope in &entry.scopes {
                 match scope {
-                    ChangeScope::Task { num, .. } => {
-                        ids.insert(corral_core::Store::normalize_id(&num.0.to_string())?);
+                    ChangeScope::Task { num, parts } => {
+                        let id = corral_core::Store::normalize_id(&num.0.to_string())?;
+                        let task = delta.tasks.entry(id).or_default();
+                        task.parts.extend(parts.iter().copied());
                     }
                     ChangeScope::Artifact { task } => {
-                        ids.insert(task.clone());
+                        let task = delta.tasks.entry(task.clone()).or_default();
+                        task.parts.insert(corral_core::backend::TaskPart::Artifact);
                     }
-                    ChangeScope::Events { .. } => events = true,
+                    ChangeScope::Record { area, key }
+                        if area == crate::artifact_storage::ARTIFACT_KEYS =>
+                    {
+                        delta.artifacts.insert(key.clone());
+                    }
+                    ChangeScope::Events { .. } => delta.events = true,
                     _ => {}
                 }
             }
         }
         if !page.more {
-            return Ok(Some((ids, events)));
+            return Ok(Some(delta));
         }
     }
 }
