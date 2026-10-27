@@ -696,9 +696,11 @@ pub(crate) fn approve_landed(
         && let Some(target) = &mut target
     {
         target.reconcile(ctx)?;
-        return target
+        let landed = target
             .landed(id, &run.id)
-            .context("Plan landing receipt was not published");
+            .context("Plan landing receipt was not published")?;
+        ctx.store.clear_condition(Some(id), "landing_stale")?;
+        return Ok(landed);
     }
     let operational_note = if let Some(op) = &mut operation {
         if let Err(error) = crate::hooks::complete_landing(ctx, op) {
