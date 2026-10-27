@@ -72,9 +72,13 @@ model route (`chatgpt-subscription/gpt-6.1-sol` versus
 order and Backlog selection. It cannot reconstruct historical binary/config
 changes or PM identity from a later show capture. The attestations and equal-load
 operational evidence must therefore be captured during the experiment, not
-filled in retrospectively. Run the two arms from the same base, review both
-independently, land only the selected candidate, and discard the other after
-review. This tool does not authorize those board or Git actions.
+filled in retrospectively. Use a separate destination clone for each arm,
+starting from the same frozen base. Independently review and privately land
+each candidate through its required landing gate, retaining both landing
+receipts. Approval or a preserved branch is not a landing; do not discard an
+approved arm before its own landing is recorded. Do not land comparison
+candidates on source main or treat them as source-board task completion.
+This tool does not authorize those board or Git actions.
 
 ## Metric definitions
 
@@ -89,9 +93,13 @@ review. This tool does not authorize those board or Git actions.
 - Request-backed event replays are deduplicated by task/kind/request ID.
   Question events use task/kind/key/revision/action timestamp; other byte-equivalent
   canonical events are deduplicated. Never count a duplicate raw log line twice.
-- Needs me counts deduplicated events; duration is the union of open intervals,
-  closing on the matching answered decisions or canonical resume/done/approval.
-  Failed replies and outstanding decisions do not falsely close an interval.
+- Needs me counts deduplicated events; duration is the union of open intervals.
+  Matching answered decisions, non-control delivery acknowledgements and
+  answered/expired/cancelled/withdrawn questions settle their own holds.
+  A delivery acknowledgement closes the interval only with resume semantics
+  and no remaining holds; control/failed deliveries do not answer decisions.
+  Canonical resume/done/approval also closes the interval. Unrelated events
+  and outstanding questions or decisions do not falsely close it.
 - Rescues count effective `replied`, `message_retried`, manual
   `inbox_recovered`, manual terminal message marks, `unstuck`, audited reply
   retries/marks, manual observed receipts, and PM comments whose text is a JSON
