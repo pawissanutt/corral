@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { type TestClient, connect } from "../../test/support/bridge-client.ts";
@@ -81,6 +82,38 @@ async function resume(n: number): Promise<any> {
 let editFifo = "";
 let bashFifo = "";
 let childPid = "";
+let providerFifo = "";
+let sessionTail: ChildProcess | undefined;
+
+/** Subscribe before releasing the provider; only complete assistant tool-call records count. */
+function recordedCalls(session: string): (id: string, tool: string) => Promise<void> {
+  let carry = "";
+  const seen = new Set<string>();
+  const waiters = new Map<string, () => void>();
+  sessionTail = spawn("tail", ["-n", "+1", "-F", session], { stdio: ["ignore", "pipe", "ignore"] });
+  sessionTail.stdout!.on("data", (chunk) => {
+    carry += chunk.toString();
+    for (let end = carry.indexOf("\n"); end !== -1; end = carry.indexOf("\n")) {
+      const entry = JSON.parse(carry.slice(0, end));
+      carry = carry.slice(end + 1);
+      if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+      for (const item of entry.message.content ?? []) {
+        if (item.type !== "toolCall") continue;
+        // The Responses adapter appends the provider's item id after a pipe.
+        const key = JSON.stringify([item.id.split("|")[0], item.name]);
+        seen.add(key);
+        waiters.get(key)?.();
+        waiters.delete(key);
+      }
+    }
+  });
+  return (id, tool) => {
+    const key = JSON.stringify([id, tool]);
+    if (seen.has(key)) return Promise.resolve();
+    return within(new Promise<void>((resolve) => waiters.set(key, resolve)), 90_000,
+      `the complete ${id} ${tool} call in the Pi session`);
+  };
+}
 
 beforeAll(() => {
   if (!isolated) {
@@ -100,7 +133,8 @@ beforeAll(() => {
   editFifo = join(workspace, "edit.fifo");
   bashFifo = join(workspace, "bash.fifo");
   childPid = join(workspace, "child.pid");
-  for (const fifo of [editFifo, bashFifo]) ok(["mkfifo", fifo]);
+  providerFifo = join(workspace, "provider.fifo");
+  for (const fifo of [editFifo, bashFifo, providerFifo]) ok(["mkfifo", fifo]);
   // Generation 1's kickoff edits through a FIFO; generation 2's notice turn runs the command.
   const steps = join(workspace, "steps.json");
   writeFileSync(steps, JSON.stringify([
@@ -116,7 +150,9 @@ beforeAll(() => {
   const auth = join(assets.dir, "src/auth");
   copyFileSync(join(auth, "index.ts"), join(auth, "fixture-auth.ts"));
   writeFileSync(join(auth, "index.ts"), `import { readFileSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import auth, { fixtureTransport } from "./fixture-auth.ts";
+const GATE = ${JSON.stringify(providerFifo)};
 const STEPS = ${JSON.stringify(steps)};
 function next() {
   const steps = JSON.parse(readFileSync(STEPS, "utf8"));
@@ -128,9 +164,12 @@ export default {
   ...auth,
   transport() {
     const transport = fixtureTransport();
-    return (input, init) => {
+    return async (input, init) => {
       const step = next();
-      if (step) transport.script([step]);
+      if (step) {
+        await readFile(GATE);
+        transport.script([step]);
+      }
       return transport.send(input, init);
     };
   },
@@ -153,6 +192,7 @@ assets_dir = ${JSON.stringify(assets.dir)}
 
 afterAll(() => {
   events?.close();
+  sessionTail?.kill();
   for (const pid of started) {
     try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
   }
@@ -173,9 +213,13 @@ test("a host killed inside an upstream edit, then inside a command whose child k
   cli("dispatch", "T-001", "--profile", "pi", "--force");
   workspaces.push(show("T-001").runs.at(-1).herdr.workspace_id);
   await first;
-  await edit.opened;
   const session = show("T-001").runs.at(-1).agent_host.generations[0].bound.session_file;
-  expect(readFileSync(session, "utf8")).toContain("call_edit");
+  const recorded = recordedCalls(session);
+  const editRecorded = recorded("call_edit", "edit");
+  // The provider cannot emit its call until the session follower and waiter are installed.
+  await within(writeFile(providerFifo, "go"), 90_000, "the edit provider rendezvous");
+  await edit.opened;
+  await editRecorded;
 
   // When its host is killed there and the owner resumes the run:
   await kill(1);
@@ -189,11 +233,13 @@ test("a host killed inside an upstream edit, then inside a command whose child k
 
   // When generation 2's notice turn runs a command that starts a child and blocks, and its host
   // is killed inside that command:
+  const bashRecorded = recorded("call_bash", "bash");
   cli("sync");
+  await within(writeFile(providerFifo, "go"), 90_000, "the bash provider rendezvous");
   await command.opened;
+  await bashRecorded;
   const child = Number(readFileSync(childPid, "utf8").trim());
   started.push(child);
-  expect(readFileSync(session, "utf8")).toContain("call_bash");
   await kill(2);
   const afterCommand = await resume(2);
   command.close();
