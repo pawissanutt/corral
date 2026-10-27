@@ -126,7 +126,19 @@ pub(crate) fn observed_task(ctx: &Ctx, head: &TaskHead) -> Result<Task> {
     if let Some(current) = &head.current_run
         && task.awaiting_owner()
     {
-        task.artifacts = artifacts(ctx, head, &current.id)?;
+        let paths: BTreeSet<_> = task
+            .current_run()
+            .into_iter()
+            .flat_map(|run| &run.completion.evidence)
+            .flat_map(|evidence| &evidence.observation.artifacts)
+            .collect();
+        task.artifacts = paths
+            .into_iter()
+            .map(|path| head.artifact_in_run(&current.id, path))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
     }
     if let Some(plan_run) = head.last_plan.as_ref().and_then(|plan| plan.run.as_deref())
         && head
@@ -206,31 +218,4 @@ pub(crate) fn rows(
         );
     }
     Ok(rows)
-}
-
-/// A run-scoped artifact page, rather than the task's entire artifact history.
-pub(crate) fn artifacts(
-    ctx: &Ctx,
-    head: &TaskHead,
-    run: &str,
-) -> Result<Vec<corral_core::Artifact>> {
-    let rows = ctx
-        .store
-        .view()?
-        .rows(
-            head.num,
-            &RowQuery::part(TaskPart::Artifact).with_index(format!("run:{run}")),
-            PageReq::first(u32::MAX),
-        )?
-        .items;
-    rows.into_iter()
-        .map(|row| {
-            work::decoded(
-                Counter::HistoryRowDecodes,
-                u64::try_from(serde_json::to_vec(&row.doc)?.len())?,
-                Subject::Plain,
-            );
-            Ok(serde_json::from_value(row.doc)?)
-        })
-        .collect()
 }

@@ -300,6 +300,23 @@ impl TaskHeadMut {
     /// folded into the summary.
     pub fn start_run(&mut self, run: Run) -> Result<()> {
         self.adjust_projections()?;
+        self.head.summary.current_artifacts = Default::default();
+        // A pre-registered run id is legal. Its scalar facts must not be inferred from the
+        // previous current run.
+        for artifact in self.head.artifacts_of(&run.id)? {
+            self.head.summary.current_artifacts.fold(&artifact);
+        }
+        for row in self
+            .rows
+            .values()
+            .flatten()
+            .filter(|row| row.part == TaskPart::Artifact)
+        {
+            let artifact: crate::Artifact = serde_json::from_value(row.doc.clone())?;
+            if artifact.run == run.id {
+                self.head.summary.current_artifacts.fold(&artifact);
+            }
+        }
         // The outgoing run is folded into the summary now, so its usage facts must be final.
         if self.usage_dirty {
             self.recompute_usage()?;
@@ -491,6 +508,30 @@ impl TaskHeadMut {
             false,
             serde_json::to_value(comment)?,
             Vec::new(),
+        ));
+        Ok(())
+    }
+
+    /// Appends a registration and folds its scalar facts without loading earlier artifacts.
+    pub fn add_artifact(&mut self, artifact: crate::Artifact) -> Result<()> {
+        self.head.summary.artifacts += 1;
+        self.head.summary.kept_artifacts +=
+            u64::from(artifact.tier() == crate::ArtifactTier::Keep && artifact.purged_at.is_none());
+        if self
+            .head
+            .current_run
+            .as_ref()
+            .is_some_and(|r| r.id == artifact.run)
+        {
+            self.head.summary.current_artifacts.fold(&artifact);
+        }
+        self.put(history_row(
+            TaskPart::Artifact,
+            ordinal_key(usize::try_from(self.head.summary.artifacts)?),
+            false,
+            false,
+            serde_json::to_value(&artifact)?,
+            super::head_api::artifact_indexes(&artifact),
         ));
         Ok(())
     }

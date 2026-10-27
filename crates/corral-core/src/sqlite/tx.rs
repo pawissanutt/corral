@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use jiff::Timestamp;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use super::codec::*;
 use super::load::{self, first};
@@ -415,6 +415,9 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        if row.part == TaskPart::Artifact {
+            super::artifact_reviews::put(self.db, num, &row.key, Some(&row.doc)).or_io()?;
+        }
         if row.part == TaskPart::PaneRef {
             let before = self
                 .row(num, row.part, &row.key)?
@@ -463,32 +466,10 @@ impl Tx<'_> {
         self.set_refs(Owner::Row(num, row.part, &row.key), refs)
     }
 
-    /// Deletes a row's index tokens by their full primary key, found in the row's own `idx`.
-    fn delete_index_tokens(&self, task: i64, part: &str, key: &str) -> Applied<()> {
-        let stored: Option<String> = self
-            .db
-            .query_row(
-                super::plans::ROW_TOKENS,
-                rusqlite::params![task, part, key],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let tokens: Vec<String> = match stored {
-            Some(idx) => serde_json::from_str(&idx)
-                .map_err(anyhow::Error::from)
-                .or_io()?,
-            None => Vec::new(),
-        };
-        for token in tokens {
-            self.db.execute(
-                super::plans::DELETE_TOKEN,
-                rusqlite::params![task, part, token, key],
-            )?;
-        }
-        Ok(())
-    }
-
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        if part == TaskPart::Artifact {
+            super::artifact_reviews::put(self.db, num, key, None).or_io()?;
+        }
         let socket = if part == TaskPart::PaneRef {
             self.row(num, part, key)?
                 .as_ref()

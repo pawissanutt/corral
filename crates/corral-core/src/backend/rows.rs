@@ -4,6 +4,8 @@
 //! payload as JSON values whose shape the facade owns; header columns are typed so backends can
 //! index them.
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -370,9 +372,12 @@ pub enum AggregateName {
     UsageTotals,
     /// The session ownership summary: pane references per socket (`""` is legacy socket-less).
     PaneOwners,
+    /// Reviewed, unpurged Keep registrations for exactly one task.
+    ArtifactReviewed(TaskNum),
 }
 
 impl AggregateName {
+    /// Board-wide families. Keyed artifact counts require the caller's task number.
     pub const ALL: [AggregateName; 3] = [Self::StatusCounts, Self::UsageTotals, Self::PaneOwners];
 }
 
@@ -403,6 +408,8 @@ pub struct Aggregates {
     pub status_counts: Vec<StatusCount>,
     pub usage_totals: Vec<UsageTotal>,
     pub pane_owners: Vec<PaneOwner>,
+    #[serde(default)]
+    pub artifact_reviewed: BTreeMap<TaskNum, u64>,
 }
 
 /// What one committed operation touched (plan section 1, change feed).

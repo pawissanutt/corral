@@ -25,12 +25,13 @@ pub struct BoardSnapshot {
 
 impl BoardSnapshot {
     pub(crate) fn load(ctx: &Ctx) -> Result<Self> {
-        let _hot = corral_core::work::HotScope::enter();
         let live_ctx = ctx.clone();
         let ctx = &Ctx {
             store: ctx.store.read_only_snapshot()?,
             ..ctx.clone()
         };
+        corral_ops::lesson_rows::prepare_evaluation(ctx)?;
+        let _hot = corral_core::work::HotScope::enter();
         let sources::FrameSources {
             tasks,
             heads,
@@ -71,37 +72,23 @@ impl BoardSnapshot {
             .iter()
             .filter_map(|task| Some((task.id.clone(), corral_ops::plan_review_wait(ctx, task)?)))
             .collect();
-        let reviewed = corral_ops::reviewed_set(ctx);
         let unreviewed = heads
             .iter()
             .filter(|task| task.status == Status::Review)
-            .filter_map(|task| {
-                let seen = reviewed
-                    .iter()
-                    .map(|path| task.artifacts_by_path(path))
-                    .collect::<Result<Vec<_>>>();
-                match seen {
-                    Ok(artifacts) => {
-                        let seen = artifacts
-                            .iter()
-                            .flatten()
-                            .filter(|a| {
-                                a.tier() == corral_core::ArtifactTier::Keep && a.purged_at.is_none()
-                            })
-                            .count();
-                        let count = usize::try_from(task.summary.kept_artifacts)
-                            .unwrap_or(usize::MAX)
-                            .saturating_sub(seen);
-                        (count > 0).then(|| (task.id.clone(), count))
-                    }
-                    Err(error) => {
-                        corral_ops::report_message(
-                            Some(&task.id),
-                            "artifact review count",
-                            format!("{error:#}"),
-                        );
-                        None
-                    }
+            .filter_map(|task| match task.reviewed_keep_artifacts() {
+                Ok(seen) => {
+                    let count = usize::try_from(task.summary.kept_artifacts)
+                        .unwrap_or(usize::MAX)
+                        .saturating_sub(usize::try_from(seen).unwrap_or(usize::MAX));
+                    (count > 0).then(|| (task.id.clone(), count))
+                }
+                Err(error) => {
+                    corral_ops::report_message(
+                        Some(&task.id),
+                        "artifact review count",
+                        format!("{error:#}"),
+                    );
+                    None
                 }
             })
             .collect();

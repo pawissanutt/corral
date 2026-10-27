@@ -15,11 +15,18 @@ use serde::{Deserialize, Serialize};
 use crate::Ctx;
 use crate::integration::LandedTask;
 
+#[path = "approvals_numbers.rs"]
+pub(crate) mod numbers;
+
 #[derive(Default, Serialize, Deserialize)]
 struct Cursor {
-    change: ChangeSeq,
-    event: u64,
     #[serde(default)]
+    version: u32,
+    #[serde(with = "numbers::sequence")]
+    change: ChangeSeq,
+    #[serde(with = "numbers::number")]
+    event: u64,
+    #[serde(default, with = "numbers::number")]
     recomputations: u64,
 }
 
@@ -41,10 +48,19 @@ pub(crate) fn lock(store: &Store, name: &str) -> Result<File> {
 }
 
 pub(crate) fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    match File::open(path) {
-        Ok(file) => Ok(Some(serde_json::from_reader(file).with_context(|| {
-            format!("decoding derived rows {}", path.display())
-        })?)),
+    use corral_core::work::{self, Counter, Subject};
+    work::counted(Counter::FileStats, 1);
+    match fs::read(path) {
+        Ok(bytes) => {
+            work::decoded(
+                Counter::RecordDecodes,
+                u64::try_from(bytes.len())?,
+                Subject::Plain,
+            );
+            Ok(Some(serde_json::from_slice(&bytes).with_context(|| {
+                format!("decoding derived rows {}", path.display())
+            })?))
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("opening {}", path.display())),
     }
@@ -130,7 +146,9 @@ fn row_path(root: &Path, sha: &str) -> PathBuf {
 /// after the first call; resource/condition writes merely advance the feed cursor.
 pub fn prepare(ctx: &Ctx) -> Result<()> {
     let _lock = lock(&ctx.store, "approval-rows")?;
-    prepare_locked(ctx)
+    ctx.store
+        .pass_derived("approval-rows-prepared-v2", || prepare_locked(ctx))
+        .map(|_| ())
 }
 
 fn prepare_locked(ctx: &Ctx) -> Result<()> {
@@ -141,7 +159,7 @@ fn prepare_locked(ctx: &Ctx) -> Result<()> {
     let previous: Option<Cursor> = read(&path)?;
     let delta = previous
         .as_ref()
-        .filter(|c| c.change <= seq)
+        .filter(|c| c.version == 2 && c.change <= seq)
         .map(|c| changes(&store, c.change))
         .transpose()?
         .flatten();
@@ -204,6 +222,7 @@ fn prepare_locked(ctx: &Ctx) -> Result<()> {
         }
     }
     cursor.change = seq;
+    cursor.version = 2;
     save(&path, &cursor)
 }
 
@@ -220,7 +239,6 @@ pub(crate) fn lookup(
     shas: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<LandedTask>>> {
     let _lock = lock(&ctx.store, "approval-rows")?;
-    prepare_locked(ctx)?;
     let root = ctx.store.cache_root()?.join("approval-rows-v1");
     let mut out = BTreeMap::new();
     for sha in shas {

@@ -14,6 +14,34 @@ use crate::{
     ProfileSwitch, Run, RunOutcome, UsageTotals, Verdict, WaitState,
 };
 
+/// Scalar card inputs for one run. Append order, including purged records, defines the
+/// latest Diff, just as it does in the full-task card catalog.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ArtifactFacts {
+    #[serde(with = "fixed")]
+    pub count: u64,
+    pub latest_diff: Option<String>,
+}
+
+impl ArtifactFacts {
+    pub fn fold(&mut self, artifact: &crate::Artifact) {
+        self.count += 1;
+        if artifact.kind == crate::ArtifactKind::Diff {
+            self.latest_diff = Some(artifact.title.clone());
+        }
+    }
+
+    pub fn lines(&self) -> Option<String> {
+        let mut words = self
+            .latest_diff
+            .as_ref()?
+            .split_whitespace()
+            .filter(|w| w.starts_with('+') || w.starts_with('\u{2212}') || w.starts_with('-'));
+        Some(format!("{} {}", words.next()?, words.next()?))
+    }
+}
+
 /// Fixed-width encodings that keep summary and fact documents constant in size as counts grow:
 /// counts as 20-digit strings and costs as the 16 hex digits of their exact bits. Plain JSON
 /// numbers are still accepted on read.

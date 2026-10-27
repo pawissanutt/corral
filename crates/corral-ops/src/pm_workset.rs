@@ -246,7 +246,6 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
 
 /// The workset and the effective policy it was computed from, both from one read of the board.
 pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
-    let _hot = corral_core::work::HotScope::enter();
     let frozen;
     let ctx = if ctx.store.is_snapshot() {
         ctx
@@ -257,6 +256,9 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         };
         &frozen
     };
+    crate::lesson_rows::prepare(ctx)?;
+    crate::approvals::prepare(ctx)?;
+    let _hot = corral_core::work::HotScope::enter();
     let heads = crate::pm_next::heads::inputs(ctx)?;
     let policy = ctx.store.effective_operating_policy()?;
     let tasks = heads

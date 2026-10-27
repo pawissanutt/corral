@@ -116,21 +116,11 @@ impl CardField {
             }
             Self::Priority => Some(t.priority.clone()),
             Self::Artifacts => {
-                run.map(|r| format!("◆ {}", artifacts.iter().filter(|a| a.run == r.id).count()))
+                let _ = artifacts;
+                t.artifact_card_text(Self::Artifacts)
             }
             Self::Pinned => pinned.then(|| "★".to_string()),
-            Self::Lines => {
-                let run = run?;
-                let artifact = artifacts
-                    .iter()
-                    .rev()
-                    .find(|a| a.run == run.id && a.kind == ArtifactKind::Diff)?;
-                let mut words = artifact
-                    .title
-                    .split_whitespace()
-                    .filter(|w| w.starts_with('+') || w.starts_with('−') || w.starts_with('-'));
-                Some(format!("{} {}", words.next()?, words.next()?))
-            }
+            Self::Lines => t.artifact_card_text(Self::Lines),
             Self::NeedsMe => {
                 if t.status != Status::NeedsMe {
                     return None;

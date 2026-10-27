@@ -46,6 +46,9 @@ pub(crate) fn artifact_indexes(artifact: &crate::Artifact) -> Vec<String> {
     };
     vec![
         format!("run:{}", artifact.run),
+        format!("run-path:{}:{}", artifact.run, artifact.path),
+        format!("run-title:{}:{}", artifact.run, artifact.title),
+        format!("run-kind:{}:{}", artifact.run, artifact.kind.as_str()),
         format!("path:{}", artifact.path),
         format!("file:{}:{file}", artifact.run),
         format!("original:{}:{original}", artifact.run),
@@ -55,6 +58,82 @@ pub(crate) fn artifact_indexes(artifact: &crate::Artifact) -> Vec<String> {
 }
 
 impl TaskHead {
+    /// Number of this task's Keep registrations marked reviewed, on this pinned view.
+    pub fn reviewed_keep_artifacts(&self) -> Result<u64> {
+        let view = self
+            .view
+            .as_ref()
+            .context("reviewed count needs a pinned view")?;
+        let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = guard
+            .aggregates(&[crate::backend::AggregateName::ArtifactReviewed(self.num)])?
+            .artifact_reviewed
+            .get(&self.num)
+            .copied()
+            .unwrap_or(0);
+        work::decoded(Counter::NestedRowDecodes, 8, work::Subject::Plain);
+        Ok(count)
+    }
+
+    /// Card/list artifact scalars, using only the head's maintained facts.
+    pub fn artifact_card_text(&self, field: crate::CardField) -> Option<String> {
+        self.current_run.as_ref()?;
+        match field {
+            crate::CardField::Artifacts => {
+                Some(format!("\u{25c6} {}", self.summary.current_artifacts.count))
+            }
+            crate::CardField::Lines => self.summary.current_artifacts.lines(),
+            _ => None,
+        }
+    }
+
+    /// First registration of a path in a run, preserving the full-task evidence oracle.
+    pub fn artifact_in_run(&self, run: &str, path: &str) -> Result<Option<crate::Artifact>> {
+        self.artifact_index(&format!("run-path:{run}:{path}"), false)
+    }
+
+    pub fn latest_artifact_kind(
+        &self,
+        run: &str,
+        kind: crate::ArtifactKind,
+    ) -> Result<Option<crate::Artifact>> {
+        self.artifact_index(&format!("run-kind:{run}:{}", kind.as_str()), true)
+    }
+
+    /// A newest-first, title-keyed page. Unrelated artifacts are never decoded.
+    pub fn artifacts_by_title(
+        &self,
+        run: &str,
+        title: &str,
+        page: PageReq,
+    ) -> Result<crate::backend::Page<crate::Artifact>> {
+        let view = self
+            .view
+            .as_ref()
+            .context("artifact page needs a pinned view")?;
+        let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
+        let rows = guard.rows(
+            self.num,
+            &crate::backend::RowQuery::part(crate::backend::TaskPart::Artifact)
+                .with_index(format!("run-title:{run}:{title}"))
+                .newest_first(),
+            page,
+        )?;
+        let mut items = Vec::new();
+        for row in rows.items {
+            work::decoded(
+                Counter::HistoryRowDecodes,
+                super::read::doc_bytes(&row.doc),
+                work::Subject::Plain,
+            );
+            items.push(serde_json::from_value(row.doc)?);
+        }
+        Ok(crate::backend::Page {
+            items,
+            next: rows.next,
+        })
+    }
+
     /// Exactly the obligations that can produce a board card line, including uncertain
     /// deliveries with receipts. This does not change the `open_obligations` page's contract.
     pub fn card_obligations(&self, run: &str) -> Result<crate::RunObligations> {

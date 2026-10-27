@@ -4,6 +4,9 @@ use crate::blob_ref::BlobHash;
 
 use super::rows::{BlobState, EventSeq, ScratchState, TaskPart};
 
+#[path = "artifact_reviews.rs"]
+pub(crate) mod artifact_reviews;
+
 /// One page request. `after` is the opaque cursor a previous page returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageReq {
@@ -26,6 +29,10 @@ pub struct Page<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeadQuery {
+    /// Latest tasks of a project, ordered by `(updated DESC, id DESC)`.
+    ProjectUpdated {
+        project: String,
+    },
     /// The open index, optionally limited to one project.
     Open {
         project: Option<String>,

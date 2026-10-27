@@ -44,6 +44,18 @@ pub struct LessonProposal {
 
 /// Read-only schedule evaluation. Active distillation tasks suppress duplicate filing.
 pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
+    let frozen;
+    let ctx = if ctx.store.is_snapshot() {
+        ctx
+    } else {
+        frozen = Ctx {
+            store: ctx.store.read_only_snapshot()?,
+            ..ctx.clone()
+        };
+        &frozen
+    };
+    crate::lesson_rows::prepare(ctx)?;
+    let _hot = corral_core::work::HotScope::enter();
     let config = &ctx.store.config.lessons;
     let mut due = Vec::new();
     for project in ctx.store.config.projects.keys() {
@@ -101,16 +113,22 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("lessons-schedule")? else {
         return Ok(());
     };
-    for due in lessons_due(ctx, now)?
+    let snapshot = Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    crate::lesson_rows::prepare(&snapshot)?;
+    let _hot = corral_core::work::HotScope::enter();
+    for due in lessons_due(&snapshot, now)?
         .into_iter()
         .filter(|due| due.pending.is_none() && !due.reasons.is_empty())
     {
-        let row = crate::lesson_rows::due(ctx, &due.project)?;
+        let row = crate::lesson_rows::due(&snapshot, &due.project)?;
         let request = row
             .requested
             .as_ref()
             .and_then(|event| event.task.as_deref());
-        if announced(ctx, &due.project, request)? {
+        if crate::lesson_rows::announced(ctx, &due.project, request)? {
             continue;
         }
         ctx.store.log_event(
@@ -123,36 +141,6 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
         )?;
     }
     Ok(())
-}
-
-fn announced(ctx: &Ctx, project: &str, request: Option<&str>) -> Result<bool> {
-    use corral_core::backend::{EventQuery, PageReq};
-    let view = ctx.store.view()?;
-    let query = EventQuery {
-        kinds: vec!["lessons_due".into()],
-        newest_first: true,
-        valid_only: true,
-        ..EventQuery::default()
-    };
-    let mut page = PageReq::first(16);
-    loop {
-        let rows = view.events(&query, page)?;
-        if rows.items.iter().any(|row| {
-            row.event.detail["project"].as_str() == Some(project)
-                && row.event.detail["request"].as_str() == request
-        }) {
-            return Ok(true);
-        }
-        match rows.next {
-            Some(next) => {
-                page = PageReq {
-                    after: Some(next),
-                    limit: 16,
-                }
-            }
-            None => return Ok(false),
-        }
-    }
 }
 
 /// File one spike on an explicit strong profile. This never launches an agent.

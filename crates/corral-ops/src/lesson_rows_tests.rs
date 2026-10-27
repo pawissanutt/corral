@@ -1,6 +1,7 @@
 use super::*;
-use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
+use corral_core::work::{self, Counter, WorkSnapshot};
 use corral_core::{Artifact, ArtifactKind, Project, Store};
+use jiff::Timestamp;
 use serde_json::json;
 
 fn ts(second: i64) -> Timestamp {
@@ -80,7 +81,7 @@ fn legacy(ctx: &Ctx, project: &str) -> Vec<LessonSignal> {
 }
 
 fn measure<T>(f: impl FnOnce() -> T) -> (T, WorkSnapshot) {
-    let _scope = HotScope::enter();
+    // Public lesson readers own their production preparation boundary and HotScope.
     let before = work::snapshot();
     let value = f();
     let snapshot = work::snapshot().since(&before);
@@ -166,6 +167,7 @@ fn derived_rows_hot_reads_ignore_terminal_history_events_and_unrelated_records()
         .create("Current", Some("app"), Status::Running, "")
         .unwrap();
     task.runs.push(run(1, "Not verified: network"));
+    task.runs.splice(0..0, (0..31).map(|i| run(i + 10, "")));
     ctx.store.fixture_put_task(&task).unwrap();
     prepare(&ctx).unwrap();
     let (base, counts) = measure(|| crate::lesson_signals(&ctx, "app").unwrap());
@@ -177,13 +179,13 @@ fn derived_rows_hot_reads_ignore_terminal_history_events_and_unrelated_records()
             .log_event(None, "unrelated", json!({"n":i}))
             .unwrap();
     }
-    task.runs.splice(0..0, (0..10).map(|i| run(i + 10, "")));
+    task.runs.splice(0..0, (0..320).map(|i| run(i + 100, "")));
     ctx.store.fixture_put_task(&task).unwrap();
     prepare(&ctx).unwrap();
-    // Run-stat output may grow, but every measured read remains output-only.
+    // History grows tenfold below the bounded prefix; emitted signals stay equal.
     let (grown, grown_counts) = measure(|| crate::lesson_signals(&ctx, "app").unwrap());
     assert_eq!(grown, legacy(&ctx, "app"));
-    assert!(grown.iter().any(|signal| base.contains(signal)));
+    assert_eq!(grown, base);
     same_cells(&counts, &grown_counts);
     assert_eq!(counts.get(Counter::EventDecodes), 0);
     assert_eq!(counts.get(Counter::Processes), 0);
@@ -447,5 +449,53 @@ fn derived_recent_tail_keeps_malformed_row_bytes_when_following_events() {
         actual
             .iter()
             .any(|signal| signal.key == "failed_test:new::case")
+    );
+}
+
+#[test]
+fn artifact_acquisition_bounds_keys_before_decoding_under_history_growth() {
+    // Given 32 retained artifacts, all newer than any history added below.
+    let (_dir, ctx) = fixture();
+    let mut task = ctx
+        .store
+        .create("Artifacts", Some("app"), Status::Running, "")
+        .unwrap();
+    let artifact = |i: usize| Artifact {
+        run: "R1".into(),
+        kind: ArtifactKind::Report,
+        title: "Report".into(),
+        path: format!("artifacts/report-{i:04}"),
+        source: "/unused".into(),
+        sha256: String::new(),
+        bytes: 0,
+        added: ts(i64::try_from(i).unwrap()),
+        tier_override: None,
+        compressed_bytes: None,
+        purged_at: None,
+    };
+    task.artifacts.extend((1000..1032).map(artifact));
+    ctx.store.fixture_put_task(&task).unwrap();
+    let acquire = || {
+        let head = ctx.store.head(&task.id).unwrap();
+        let _scope = corral_core::work::HotScope::enter();
+        let before = work::snapshot();
+        let input = source(&ctx, &head).unwrap();
+        let counts = work::snapshot().since(&before);
+        counts.check_identity().unwrap();
+        assert_eq!(counts.unattributed_hydrations(), 0);
+        (input.task.artifacts, counts)
+    };
+    let (base, counts) = acquire();
+    // When 320 older artifact keys are prepended to the same active task.
+    task.artifacts.splice(0..0, (0..320).map(artifact));
+    ctx.store.fixture_put_task(&task).unwrap();
+    let (grown, grown_counts) = acquire();
+    // Then only the same newest 32 documents are decoded, not the full accumulated vector.
+    assert_eq!(base, grown);
+    assert_eq!(counts.get(Counter::HistoryRowDecodes), 32);
+    same_cells(&counts, &grown_counts);
+    assert_eq!(
+        crate::lesson_signals(&ctx, "app").unwrap(),
+        legacy(&ctx, "app")
     );
 }

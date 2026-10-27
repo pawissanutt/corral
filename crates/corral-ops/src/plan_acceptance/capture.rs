@@ -199,13 +199,23 @@ fn member(
     tracker: &Task,
     id: &str,
 ) -> Result<std::result::Result<AggregateMember, String>> {
-    let child = store
-        .get(id)
+    let child_head = store
+        .head(id)
         .with_context(|| format!("missing Plan member {id}"))?;
     ensure!(
-        store.execution_plan(&child)?.map(|plan| plan.id) == Some(tracker.id.clone()),
+        store
+            .execution_plan_head(&child_head)?
+            .map(|plan| plan.id.clone())
+            == Some(tracker.id.clone()),
         "execution Plan membership changed"
     );
+    let mut child = child_head.to_shell_task()?;
+    if let Some(run) = &child_head.current_run
+        && run.facts.pending_decision.is_some()
+        && let Some(current) = child.runs.last_mut()
+    {
+        current.obligations = child_head.open_obligations(&run.id)?;
+    }
     crate::queue::dependency_check(store, &child)?;
     if child.status != Status::Done {
         return Ok(Err(format!(
@@ -227,12 +237,27 @@ fn member(
     if child.project != tracker.project {
         return Ok(Err(format!("{id}: member belongs to another repository")));
     }
-    let events = store.events_of(Some(id), &["approved"])?;
-    let Some(receipt) = events.iter().rev().find(|event| {
-        event.kind == "approved"
-            && event.task.as_deref() == Some(id)
-            && event.detail["run"].as_str() == Some(run.id.as_str())
-    }) else {
+    use corral_core::backend::{EventQuery, PageReq};
+    let receipt = store
+        .view()?
+        .events(
+            &EventQuery {
+                task: Some(id.into()),
+                kinds: vec!["approved".into()],
+                run: Some(run.id.clone()),
+                newest_first: true,
+                valid_only: true,
+                ..EventQuery::default()
+            },
+            PageReq::first(1),
+        )?
+        .items
+        .into_iter()
+        .next()
+        .map(crate::approvals::event)
+        .transpose()?
+        .flatten();
+    let Some(receipt) = receipt else {
         return Ok(Err(format!("{id}: accepted but no acceptance receipt")));
     };
     if !matches!(
@@ -257,10 +282,8 @@ fn member(
         }
     }
     let code = sha != run.base_sha;
-    let accepted = child
-        .artifacts
-        .iter()
-        .filter(|artifact| artifact.run == run.id);
+    let artifacts = child_head.artifacts_of(&run.id)?;
+    let accepted = artifacts.iter().filter(|artifact| artifact.run == run.id);
     if !code {
         // No commit carries this member's delivery: its accepted snapshot bytes are the proof.
         for artifact in accepted.clone() {

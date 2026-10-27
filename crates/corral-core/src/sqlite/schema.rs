@@ -148,6 +148,7 @@ CREATE TABLE legacy_files(path TEXT PRIMARY KEY, kind TEXT NOT NULL, bytes INTEG
 "#;
 
 pub const BACKEND_TABLES: &str = r#"
+CREATE INDEX IF NOT EXISTS tasks_project_updated ON tasks(project, updated DESC, id DESC);
 -- The contract's history rows (backend::HistoryRow) keyed by family and key; `part` is the
 -- family's snake_case name. store-tasks-db moves each family into its typed table above.
 CREATE TABLE task_rows(task INTEGER NOT NULL REFERENCES tasks(num), part TEXT NOT NULL, key TEXT NOT NULL,
@@ -212,5 +213,10 @@ pub(super) fn init(conn: &mut Connection, workspace_id: &str) -> Result<()> {
             );
         }
     }
+    // Additive lookup indexes apply to existing v1 databases as well as fresh ones.
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS tasks_project_updated ON tasks(project, updated DESC, id DESC);",
+    )
+    .context("create project updated index")?;
     tx.commit().context("commit schema transaction")
 }

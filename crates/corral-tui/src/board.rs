@@ -42,6 +42,8 @@ mod overlay;
 mod view;
 pub(crate) use overlay::Overlay;
 #[cfg(test)]
+mod artifact_hot_tests;
+#[cfg(test)]
 mod hot_read_tests;
 mod pins;
 #[cfg(test)]
@@ -56,6 +58,8 @@ pub use snapshot::BoardSnapshot;
 mod slots_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod tracker_hot_tests;
 #[cfg(test)]
 mod tracker_tests;
 #[cfg(test)]

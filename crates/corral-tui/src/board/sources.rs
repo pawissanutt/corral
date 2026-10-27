@@ -54,7 +54,9 @@ impl FrameSources {
         for head in &heads {
             let mut shell = head.to_shell_task()?;
             if let Some(run) = &head.current_run {
-                shell.artifacts = head.artifacts_of(&run.id)?;
+                shell
+                    .artifacts
+                    .extend(head.latest_artifact_kind(&run.id, corral_core::ArtifactKind::Diff)?);
                 obligations.insert(head.id.clone(), head.card_obligations(&run.id)?);
             }
             tasks.push(shell);
