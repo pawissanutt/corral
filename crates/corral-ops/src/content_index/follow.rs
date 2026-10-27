@@ -7,9 +7,10 @@
 //! - an artifact row change arrives with its `artifact-keys` record, so only that row is read
 //!   (writers that bypass those records fall back to the task's artifact rows);
 //! - events are read after the index's own durable event position;
-//! - run and plan review documents are re-derived from the current run and its review
-//!   children, and the current plan's reviews, read as keyed child rows: ended runs and older
-//!   plans keep their text, and a scalar run change leaves its documents as they were.
+//! - a run or plan change re-derives every run and plan review document of that task from
+//!   its run, review-child, plan and plan-review rows, never the full task: the feed names
+//!   families, not rows, so this keeps containers demoted since the cursor correct. Reading
+//!   only the changed rows needs per-row change records (follow-up).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -178,40 +179,52 @@ fn task(
             records.push(Record::text_of(ident, None, "reviews", &key, comment.text));
         }
     }
-    if [TaskPart::Run, TaskPart::ReviewRun]
-        .iter()
-        .any(|part| changed.parts.contains(part))
-        && let Some(run) = &head.current_run
+    if [
+        TaskPart::Run,
+        TaskPart::ReviewRun,
+        TaskPart::Plan,
+        TaskPart::PlanReview,
+    ]
+    .iter()
+    .any(|part| changed.parts.contains(part))
     {
-        // Only the current run and its review children can change; ended runs keep their text.
-        let prefix = format!("{id}:{}:", run.id);
-        documents.retain(|r, doc| doc.scope != "reviews" || !r.starts_with(&prefix));
-        let children = head.review_children(&run.id)?;
-        run_records(ident, run, &run.id, records);
-        for (i, child) in children.iter().enumerate() {
-            run_records(ident, child, &format!("{}:reviewer:{i}", run.id), records);
+        // The feed names changed families, not rows: every run and plan review document is
+        // re-derived from rows, so a container demoted since the cursor is never missed.
+        documents
+            .retain(|r, doc| doc.task != id || doc.scope != "reviews" || r.starts_with(&comment));
+        let mut page = PageReq::first(256);
+        for doc in ctx
+            .store
+            .task_rows(id, TaskPart::Run, None, None, &mut page)?
+        {
+            let run: corral_core::RunHead = serde_json::from_value(doc).context("decoding run")?;
+            run_records(ident, &run, &run.id, records);
+            for (i, child) in head.review_children(&run.id)?.iter().enumerate() {
+                run_records(ident, child, &format!("{}:reviewer:{i}", run.id), records);
+            }
         }
-    }
-    if [TaskPart::Plan, TaskPart::PlanReview]
-        .iter()
-        .any(|part| changed.parts.contains(part))
-        && let Some(plan) = &head.last_plan
-    {
-        // Only the current plan's reviews can change.
-        let prefix = format!("{id}:{}:", plan.id);
-        documents.retain(|r, doc| doc.scope != "reviews" || !r.starts_with(&prefix));
-        for review in head.plan_reviews(&plan.id)? {
-            records.push(Record::text_of(
-                ident,
-                None,
-                "reviews",
-                &format!("{}:{}", plan.id, review.id),
-                format!(
-                    "Verdict: {}\n{}",
-                    review.verdict.map_or("", |v| v.as_str()),
-                    review.notes.as_deref().unwrap_or("")
-                ),
-            ));
+        let mut page = PageReq::first(256);
+        for doc in ctx
+            .store
+            .task_rows(id, TaskPart::Plan, None, None, &mut page)?
+        {
+            let plan = doc["id"]
+                .as_str()
+                .context("plan row without id")?
+                .to_string();
+            for review in head.plan_reviews(&plan)? {
+                records.push(Record::text_of(
+                    ident,
+                    None,
+                    "reviews",
+                    &format!("{plan}:{}", review.id),
+                    format!(
+                        "Verdict: {}\n{}",
+                        review.verdict.map_or("", |v| v.as_str()),
+                        review.notes.as_deref().unwrap_or("")
+                    ),
+                ));
+            }
         }
     }
     if changed.parts.contains(&TaskPart::Artifact) {
