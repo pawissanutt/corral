@@ -97,6 +97,16 @@ pub fn checks(ctx: &Ctx) -> Result<Vec<DoctorCheck>> {
     checks_with(ctx, install::data_root().ok(), find_bun())
 }
 
+/// Whether every doctor line (Bun in range, assets with GO and all roles, credentials) is ok.
+/// Setup discovery reports the host installed exactly when `corral agent doctor` would.
+pub fn ready(ctx: &Ctx) -> bool {
+    ready_with(ctx, install::data_root().ok(), find_bun())
+}
+
+pub(crate) fn ready_with(ctx: &Ctx, root: Option<PathBuf>, bun: Option<PathBuf>) -> bool {
+    checks_with(ctx, root, bun).is_ok_and(|checks| checks.iter().all(|check| check.ok))
+}
+
 pub(crate) fn checks_with(
     ctx: &Ctx,
     root: Option<PathBuf>,
@@ -295,6 +305,25 @@ mod tests {
         assert!(!state.to_string().contains("SYNTHETIC-SECRET-BYTES"));
         assert_eq!(state["roles"], json!(["worker", "reviewer", "pm"]));
         assert_eq!(state["auth"], "corral-pi");
+    }
+
+    #[test]
+    fn ready_needs_every_doctor_line_including_credentials() {
+        // Given a full installation and a working Bun.
+        let fx = fx();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let bun = fake_bun(tmp.path(), "1.4.2", 0);
+        install::install_into(&package(), &root, Some(bun.clone())).unwrap();
+        // Then it is not ready without credentials.
+        assert!(!ready_with(&fx.ctx, Some(root.clone()), Some(bun.clone())));
+        // And it is ready once a login wrote a private credential file.
+        let dir = credentials::auth_dir(&root);
+        credentials::ensure_auth_dir(&dir).unwrap();
+        let file = dir.join(credentials::AUTH_FILE);
+        std::fs::write(&file, "{}").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(ready_with(&fx.ctx, Some(root), Some(bun)));
     }
 
     #[test]

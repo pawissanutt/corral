@@ -102,6 +102,7 @@ fn add_fallback(input: &mut SetupProposalInput) {
         installed: true,
         models: vec!["anthropic/fixture-fallback-v1".into()],
         efforts: vec!["medium".into()],
+        vendors: vec![],
     });
     let metadata = input
         .proposal
