@@ -1,7 +1,7 @@
 // The real reviewer role (T-252 reviewer-role) in a host session: the read-only loadout, the
 // contract from the installed assets only, corral_verdict as one envelope, and the kickoff turn.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,7 @@ import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-cor
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { RoleContext } from "../types.ts";
 
 import reviewer, { CONTRACT_ASSET, kickoff, reviewerRole } from "./index.ts";
 
@@ -135,7 +136,7 @@ test("corral_verdict is one verdict envelope whose request ID derives from the s
   expect(verdicts[0]?.payload).toEqual({ verdict: "changes", notes });
 });
 
-test("a fresh session starts one first turn with the review prompt; a reload or a session with messages does not", () => {
+test("review kickoff is attempt-scoped and recovery retries only unobserved requests", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const sent: string[] = [];
   const pi = {
@@ -143,17 +144,56 @@ test("a fresh session starts one first turn with the review prompt; a reload or 
     sendUserMessage: (text: string) => sent.push(text),
   } as unknown as ExtensionAPI;
   const context = { identity, cwd: "/tmp", model: "m", promptFile: "/store/prompts/T-007-R2-review.md" };
-  reviewer.extend?.(pi, context);
-  const start = handlers.get("session_start");
-  if (!start) throw new Error("the reviewer role handles session_start");
-  const session = (entries: { type: string }[]) => ({ sessionManager: { getEntries: () => entries } });
+  const install = (bound: RoleContext) => {
+    reviewer.extend?.(pi, bound);
+    const start = handlers.get("session_start");
+    if (!start) throw new Error("the reviewer role handles session_start");
+    return start;
+  };
+  const session = (contents: (string | { type: "text"; text: string }[])[]) => ({
+    sessionManager: {
+      getEntries: () => contents.map((content, index) => ({
+        type: "message", id: `m${index}`, parentId: null, timestamp: new Date(0).toISOString(),
+        message: { role: "user", content, timestamp: 0 },
+      })),
+    },
+  });
+  const start = install(context);
   start({ type: "session_start", reason: "reload" }, session([]));
-  start({ type: "session_start", reason: "startup" }, session([{ type: "message" }]));
   expect(sent).toEqual([]);
+  start({ type: "session_start", reason: "startup" }, session(["a previous review request"]));
+  expect(sent.length).toBe(1);
+  const observed = sent[0];
+  if (!observed) throw new Error("review request not emitted");
+  expect(observed).toContain(JSON.stringify([
+    identity.store, identity.task, identity.run, identity.review, identity.callback,
+  ]));
+  // Rebinding the same host cannot enqueue another request before its first one is persisted.
   start({ type: "session_start", reason: "startup" }, session([]));
-  expect(sent).toEqual([kickoff(context) ?? ""]);
-  expect(sent[0]?.startsWith("Read /store/prompts/T-007-R2-review.md in full and follow it")).toBeTrue();
-  expect(sent[0]).toContain("call corral_verdict");
+  expect(sent.length).toBe(1);
+
+  const recovered = { ...context, identity: { ...identity, generation: 2 } };
+  sent.length = 0;
+  install(recovered)({ type: "session_start", reason: "startup" }, session([[{ type: "text", text: observed }]]));
+  expect(sent).toEqual([]);
+  // Recovery after a crash before observation still needs to deliver the current attempt.
+  install(recovered)({ type: "session_start", reason: "startup" }, session(["a previous review request"]));
+  expect(sent.length).toBe(1);
+
+  sent.length = 0;
+  const legacy = kickoff(context);
+  if (!legacy) throw new Error("review request missing");
+  install(recovered)({ type: "session_start", reason: "startup" }, session([legacy]));
+  expect(sent).toEqual([]);
+  const next = { ...context, identity: { ...identity, review: "R2-review2", callback: "g2:c2" } };
+  install(next)({ type: "session_start", reason: "startup" }, session([observed]));
+  expect(sent.length).toBe(1);
+
+  sent.length = 0;
+  install(context)({ type: "session_start", reason: "startup" }, session([]));
+  expect(sent.length).toBe(1);
+  sent.length = 0;
+  install({ identity, cwd: "/tmp", model: "m" })({ type: "session_start", reason: "startup" }, session([]));
+  expect(sent).toEqual([]);
   expect(kickoff({ identity, cwd: "/tmp", model: "m" })).toBeUndefined();
-  expect(readFileSync(join(PACKAGE_ROOT, CONTRACT_ASSET), "utf8")).toContain("corral_verdict");
 });
