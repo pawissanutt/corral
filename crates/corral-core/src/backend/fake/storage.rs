@@ -27,9 +27,9 @@ impl Tx<'_> {
             let paths = write
                 .doc
                 .as_ref()
-                .map(|doc| serde_json::from_value(doc.clone()))
+                .map(crate::backend::artifact_reviews::paths)
                 .transpose()
-                .map_err(|e| ApplyError::Io(e.into()))?
+                .map_err(ApplyError::Io)?
                 .unwrap_or_default();
             Arc::make_mut(&mut self.state.artifact_reviews).replace(paths);
         }

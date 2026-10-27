@@ -33,6 +33,10 @@ impl<T> RecordArea<T> {
 }
 
 impl<T: DeserializeOwned> RecordArea<T> {
+    pub(crate) fn decode_document(&self, doc: serde_json::Value) -> Result<T> {
+        self.decode(serde_json::from_value(doc)?)
+    }
+
     pub fn load(&self, store: &Store, key: &str) -> Result<Option<T>> {
         store
             .record::<Document<T>>(self.name, key)?

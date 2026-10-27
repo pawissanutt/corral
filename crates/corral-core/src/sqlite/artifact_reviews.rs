@@ -8,6 +8,14 @@ use serde_json::Value;
 use super::{codec::int, load};
 use crate::backend::{TaskNum, artifact_reviews::kept_path};
 
+pub const TABLES: &str = "
+CREATE TABLE artifact_reviewed_paths(path TEXT PRIMARY KEY) STRICT;
+CREATE TABLE artifact_keep_paths(task INTEGER NOT NULL, key TEXT NOT NULL,
+    path TEXT NOT NULL, PRIMARY KEY(task, key)) STRICT;
+CREATE INDEX artifact_keep_paths_path ON artifact_keep_paths(path, task, key);
+CREATE TABLE artifact_review_counts(task INTEGER PRIMARY KEY, n INTEGER NOT NULL) STRICT;
+";
+
 /// Initializes old databases once, at database open rather than in a hot evaluation.
 pub(super) fn init(db: &mut Connection) -> Result<()> {
     let tx = db
@@ -23,14 +31,8 @@ pub(super) fn init(db: &mut Connection) -> Result<()> {
     if exists {
         return Ok(());
     }
-    tx.execute_batch(
-        "CREATE TABLE artifact_reviewed_paths(path TEXT PRIMARY KEY) STRICT;
-         CREATE TABLE artifact_keep_paths(task INTEGER NOT NULL, key TEXT NOT NULL,
-             path TEXT NOT NULL, PRIMARY KEY(task, key)) STRICT;
-         CREATE INDEX artifact_keep_paths_path ON artifact_keep_paths(path, task, key);
-         CREATE TABLE artifact_review_counts(task INTEGER PRIMARY KEY, n INTEGER NOT NULL) STRICT;",
-    )
-    .context("create artifact facts tables")?;
+    tx.execute_batch(TABLES)
+        .context("create artifact facts tables")?;
     let reviewed: Option<Value> = load::first(
         &tx,
         "SELECT doc FROM records WHERE area = 'reviewed-artifacts' AND key = 'set'",
@@ -162,7 +164,7 @@ pub(super) fn put(db: &Connection, task: TaskNum, key: &str, doc: Option<&Value>
 
 pub(super) fn replace(db: &Connection, doc: Option<&Value>) -> Result<()> {
     let paths: BTreeSet<String> = doc
-        .map(|d| serde_json::from_value(d.clone()))
+        .map(crate::backend::artifact_reviews::paths)
         .transpose()?
         .unwrap_or_default();
     let old = load::all(db, "SELECT path FROM artifact_reviewed_paths", [], |r| {

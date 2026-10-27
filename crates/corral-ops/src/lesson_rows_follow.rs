@@ -130,7 +130,10 @@ fn prepare_view(ctx: &Ctx) -> Result<()> {
             schedule::task_changed(&root, id, before.as_ref(), after.as_ref())?;
             match after {
                 Some(meta) => save(&path, &meta)?,
-                None => fs::remove_file(&path).context("removing deleted lesson task metadata")?,
+                None if before.is_some() => {
+                    fs::remove_file(&path).context("removing deleted lesson task metadata")?
+                }
+                None => {}
             }
         }
     }

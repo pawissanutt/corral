@@ -33,6 +33,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use rusqlite::{Connection, TransactionBehavior, params};
 
+pub use artifact_reviews::TABLES as ARTIFACT_REVIEW_TABLES;
 pub use fs::{FilesystemProbe, is_refused_filesystem, statfs_probe};
 pub use schema::{BACKEND_TABLES, SCHEMA_VERSION, SECTION_11};
 

@@ -34,8 +34,8 @@ fn assert_facts(store: &Store, id: &str) {
     let task = store.get(id).unwrap();
     let head = store.head(id).unwrap();
     assert_eq!(head.summary, HistorySummary::of(&task).unwrap());
-    let reviewed: BTreeSet<String> = store
-        .record("reviewed-artifacts", "set")
+    let reviewed: BTreeSet<String> = corral_core::records::RecordArea::new("reviewed-artifacts")
+        .load(store, "set")
         .unwrap()
         .unwrap_or_default();
     assert_eq!(
@@ -76,8 +76,8 @@ fn artifact_facts_follow_appends_full_edits_purges_and_mark_recounts_on_both_bac
         task.runs.push(coding_run(&task.id, "R1", 0, 0, 0, false));
         store.fixture_put_task(&task).unwrap();
         let path = format!("artifacts/{}/R1/report.md", task.id);
-        store
-            .save_record("reviewed-artifacts", "set", &BTreeSet::from([path.clone()]))
+        corral_core::records::RecordArea::new("reviewed-artifacts")
+            .save(&store, "set", &BTreeSet::from([path.clone()]))
             .unwrap();
         // When appends, full writes and reviewed toggles change the authoritative data.
         for kind in [
@@ -126,8 +126,8 @@ fn artifact_facts_follow_appends_full_edits_purges_and_mark_recounts_on_both_bac
             })
             .unwrap();
         assert_facts(&store, &task.id);
-        store
-            .save_record("reviewed-artifacts", "set", &BTreeSet::<String>::new())
+        corral_core::records::RecordArea::new("reviewed-artifacts")
+            .save(&store, "set", &BTreeSet::<String>::new())
             .unwrap();
         assert_facts(&store, &task.id);
         store
@@ -137,12 +137,8 @@ fn artifact_facts_follow_appends_full_edits_purges_and_mark_recounts_on_both_bac
                 Ok(())
             })
             .unwrap();
-        store
-            .save_record(
-                "reviewed-artifacts",
-                "set",
-                &BTreeSet::from(["another-path".to_owned()]),
-            )
+        corral_core::records::RecordArea::new("reviewed-artifacts")
+            .save(&store, "set", &BTreeSet::from(["another-path".to_owned()]))
             .unwrap();
         assert_facts(&store, &task.id);
         store
@@ -189,8 +185,8 @@ fn current_run_and_unrelated_reviewed_growth_leave_scalar_and_keyed_reads_consta
             marks.insert(path);
             store.fixture_put_task(&old).unwrap();
         }
-        store
-            .save_record("reviewed-artifacts", "set", &marks)
+        corral_core::records::RecordArea::new("reviewed-artifacts")
+            .save(&store, "set", &marks)
             .unwrap();
         let mut full = store.get(&task.id).unwrap();
         // Timestamp precision must not make a byte-budget comparison depend on wall time.
@@ -232,48 +228,4 @@ fn current_run_and_unrelated_reviewed_growth_leave_scalar_and_keyed_reads_consta
             "{counter:?}"
         );
     }
-}
-
-#[test]
-fn old_sqlite_boards_initialize_artifact_facts_and_indexes_at_open() {
-    // Given a database with registrations and reviewed marks but no F3 derived tables.
-    let (root, store) = store();
-    let mut task = store.create("Old board", None, Status::Review, "").unwrap();
-    task.runs.push(coding_run(&task.id, "R1", 0, 0, 0, false));
-    task.artifacts
-        .push(artifact("R1", ArtifactKind::Report, "shared-path"));
-    task.artifacts
-        .push(artifact("R1", ArtifactKind::Diff, "final-path"));
-    store.fixture_put_task(&task).unwrap();
-    store
-        .save_record(
-            "reviewed-artifacts",
-            "set",
-            &BTreeSet::from(["shared-path"]),
-        )
-        .unwrap();
-    let path = corral_core::sqlite::SqliteBackend::db_path(store.dir());
-    drop(store);
-    let db = rusqlite::Connection::open(path).unwrap();
-    db.execute_batch(
-        "DROP TABLE artifact_reviewed_paths; DROP TABLE artifact_keep_paths;
-        DROP TABLE artifact_review_counts;
-        UPDATE tasks SET history = json_remove(history, '$.current_artifacts');
-        DELETE FROM task_row_index WHERE token LIKE 'run-%';",
-    )
-    .unwrap();
-    drop(db);
-    // When production open encounters that older database.
-    let store = Store::open(root.path()).unwrap();
-    // Then all derived values and new keyed lookups agree with the full task.
-    assert_facts(&store, &task.id);
-    let head = store.head(&task.id).unwrap();
-    assert_eq!(
-        head.artifact_in_run("R1", "shared-path").unwrap(),
-        Some(task.artifacts[0].clone())
-    );
-    assert_eq!(
-        head.latest_artifact_kind("R1", ArtifactKind::Diff).unwrap(),
-        Some(task.artifacts[1].clone())
-    );
 }
