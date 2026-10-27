@@ -149,44 +149,47 @@ fn runs(task: &Task, run: &Run, key: &str, records: &mut Vec<Record>) {
     }
 }
 
-fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
-    let mut records = Vec::new();
-    for task in tasks {
-        records.push(Record::text(task, None, "specs", "spec", task.body.clone()));
-        for (i, comment) in task.comments.iter().enumerate() {
+fn task_records(ctx: &Ctx, task: &Task, records: &mut Vec<Record>) -> Result<()> {
+    records.push(Record::text(task, None, "specs", "spec", task.body.clone()));
+    for (i, comment) in task.comments.iter().enumerate() {
+        records.push(Record::text(
+            task,
+            None,
+            "reviews",
+            &format!("comment:{i}"),
+            comment.text.clone(),
+        ));
+    }
+    for run in &task.runs {
+        runs(task, run, &run.id, records);
+    }
+    for plan in &task.plans {
+        for review in &plan.reviews {
             records.push(Record::text(
                 task,
                 None,
                 "reviews",
-                &format!("comment:{i}"),
-                comment.text.clone(),
+                &format!("{}:{}", plan.id, review.id),
+                format!(
+                    "Verdict: {}\n{}",
+                    review.verdict.map_or("", |v| v.as_str()),
+                    review.notes.as_deref().unwrap_or("")
+                ),
             ));
         }
-        for run in &task.runs {
-            runs(task, run, &run.id, &mut records);
-        }
-        for plan in &task.plans {
-            for review in &plan.reviews {
-                records.push(Record::text(
-                    task,
-                    None,
-                    "reviews",
-                    &format!("{}:{}", plan.id, review.id),
-                    format!(
-                        "Verdict: {}\n{}",
-                        review.verdict.map_or("", |v| v.as_str()),
-                        review.notes.as_deref().unwrap_or("")
-                    ),
-                ));
-            }
-        }
-        for artifact in task
-            .artifacts
-            .iter()
-            .filter(|a| a.purged_at.is_none() && ctx.store.dir().join(&a.path).is_file())
-        {
+    }
+    for artifact in task.artifacts.iter().filter(|a| a.purged_at.is_none()) {
+        if crate::artifact_storage::content_available(ctx, artifact)? {
             records.push(Record::artifact(&task.id, artifact));
         }
+    }
+    Ok(())
+}
+
+fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
+    let mut records = Vec::new();
+    for task in tasks {
+        task_records(ctx, task, &mut records)?;
     }
     events::records(&ctx.store, &mut records)?;
     records.sort_by(|a, b| {
@@ -198,6 +201,83 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
     Ok(records)
 }
 
+/// Follows a change-feed step: replaces only the documents of `changed` tasks, adds documents of newly committed events when `events` is set, and
+/// keeps every other document as it is. Unchanged text is reused by fingerprint. Returns false,
+/// writing nothing, when there is no current index or the result would exceed the index
+/// budgets; the caller then rebuilds.
+pub(crate) fn follow(ctx: &Ctx, changed: &[Task], events: bool) -> Result<bool> {
+    let dir = ctx.store.cache_root()?;
+    let _lock = lock_index(&dir)?;
+    let path = dir.join("content-search.json");
+    let previous = match File::open(&path) {
+        Ok(file)
+            if file
+                .metadata()
+                .context("reading search index metadata")?
+                .len()
+                <= INDEX_BYTES =>
+        {
+            read_cache(file)
+        }
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).context("opening search index"),
+    };
+    if previous.version != VERSION {
+        return Ok(false);
+    }
+    let affected: BTreeSet<&str> = changed.iter().map(|t| t.id.as_str()).collect();
+    let mut records = Vec::new();
+    for task in changed {
+        task_records(ctx, task, &mut records)?;
+    }
+    if events {
+        let mut all = Vec::new();
+        events::records(&ctx.store, &mut all)?;
+        records.extend(
+            all.into_iter()
+                .filter(|r| !previous.documents.contains_key(&r.document.reference)),
+        );
+    }
+    let mut documents = previous.documents.clone();
+    documents.retain(|id, doc| id.starts_with("events:") || !affected.contains(doc.task.as_str()));
+    for mut record in records {
+        if let Source::Artifact(artifact) = &record.source {
+            record.document.file_stamp = Some(crate::content_refresh::file_stamp(
+                &ctx.store.dir().join(&artifact.path),
+            )?);
+        }
+        match previous
+            .documents
+            .get(&record.document.reference)
+            .filter(|c| {
+                c.fingerprint == record.document.fingerprint
+                    && c.file_stamp == record.document.file_stamp
+            }) {
+            Some(cached) => {
+                record.document.text = cached.text.clone();
+                record.document.complete = cached.complete;
+                record.document.binary = cached.binary;
+            }
+            None => extract(ctx, &mut record)?,
+        }
+        documents.insert(record.document.reference.clone(), record.document);
+    }
+    let text: usize = documents.values().map(|d| d.text.len()).sum();
+    if documents.len() > 4096 || text > TEXT_BUDGET {
+        return Ok(false);
+    }
+    let mut cache = previous;
+    update_postings(&mut cache, &documents);
+    cache.documents = documents;
+    let bytes = serde_json::to_vec(&cache).context("serializing search index")?;
+    if u64::try_from(bytes.len()).context("index size overflow")? > INDEX_BYTES {
+        return Ok(false);
+    }
+    crate::artifact_storage::replace(&path, &bytes)?;
+    Ok(true)
+}
+
 fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
     let mut bytes = Vec::new();
     match &record.source {
@@ -205,7 +285,7 @@ fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
             bytes.extend_from_slice(&text.as_bytes()[..text.len().min(DOCUMENT_BYTES + 1)])
         }
         Source::Artifact(artifact) => {
-            if !ctx.store.dir().join(&artifact.path).exists() {
+            if !crate::artifact_storage::content_available(ctx, artifact)? {
                 // Imported task metadata can outlive its snapshot file.
                 record.document.complete = true;
                 return Ok(());
@@ -376,6 +456,9 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     };
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
+    // An explicit reindex rebuilds from a listing taken just before it, so it also brings the
+    // index to the feed position it started at.
+    let seq = ctx.store.view()?.seq();
     let dir = ctx.store.cache_root()?;
     let _lock = lock_index(&dir)?;
     let inputs = inspect_artifacts
@@ -465,6 +548,9 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     }
     if let Some(inputs) = inputs {
         crate::content_refresh::record_build(ctx, &inputs)?;
+    }
+    if reindex {
+        crate::content_refresh::write_cursor(&dir, seq)?;
     }
     Ok(Snapshot {
         records,

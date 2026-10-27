@@ -5,8 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use anyhow::{Context, Result};
+use corral_core::backend::BlobState;
 use corral_core::backend::{Clock, SystemClock};
 use corral_core::blob::GcRun;
+use corral_core::blob_ref::BlobHash;
 use corral_core::{Artifact, ArtifactRetention, ArtifactTier, RetentionAction, Status, Task};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -84,9 +86,26 @@ fn entries(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Entry>> {
             let (identity, len) = if a.purged_at.is_some() {
                 (None, 0)
             } else {
-                let meta = fs::metadata(ctx.store.dir().join(&a.path))
-                    .with_context(|| format!("reading snapshot metadata {}", a.path))?;
-                (Some(identity(&meta, &a.path)), meta.len())
+                match fs::metadata(ctx.store.dir().join(&a.path)) {
+                    Ok(meta) => (Some(identity(&meta, &a.path)), meta.len()),
+                    // Without its legacy copy an artifact is its blob.
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        let row = BlobHash::parse(&a.sha256)
+                            .ok()
+                            .map(|hash| ctx.store.blob_row(&hash))
+                            .transpose()?
+                            .flatten()
+                            .filter(|row| row.state == BlobState::Live)
+                            .with_context(|| {
+                                format!("artifact {} has neither a snapshot nor a blob", a.path)
+                            })?;
+                        (Some(format!("{BLOB}{}", row.hash)), row.stored_bytes)
+                    }
+                    Err(error) => {
+                        return Err(error)
+                            .with_context(|| format!("reading snapshot metadata {}", a.path));
+                    }
+                }
             };
             entries.push(Entry {
                 task_id: t.id.clone(),
@@ -97,6 +116,14 @@ fn entries(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Entry>> {
         }
     }
     Ok(entries)
+}
+
+/// Identity prefix of an artifact stored only as its blob; legacy-copy dedup and compression
+/// never touch it.
+const BLOB: &str = "blob:";
+
+fn blob_only(e: &Entry) -> bool {
+    e.identity.as_deref().is_some_and(|id| id.starts_with(BLOB))
 }
 
 fn stored(entries: &[Entry]) -> u64 {
@@ -217,7 +244,11 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
             e.artifact.compressed_bytes.is_some(),
         );
         if let Some(&source) = canonical.get(&key) {
-            if !protected.contains(&e.artifact.path) && e.identity != entries[source].identity {
+            if !protected.contains(&e.artifact.path)
+                && e.identity != entries[source].identity
+                && !blob_only(e)
+                && !blob_only(&entries[source])
+            {
                 operations.push(Operation::Link {
                     index: i,
                     source,
@@ -266,6 +297,8 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         }
         match rule.action {
             RetentionAction::Keep => {}
+            // Only transcript retention may purge a transcript (owner decision, plan section 10).
+            RetentionAction::Purge if is_transcript_in(ctx.store.dir(), &e.artifact) => {}
             RetentionAction::Purge => {
                 entries[i].identity = None;
                 entries[i].len = 0;
@@ -274,7 +307,8 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
                 actions.push(action(&entries[i], "purge"));
             }
             RetentionAction::Compress => {
-                if e.artifact.compressed_bytes.is_some() {
+                // A blob is already compressed; only a legacy copy can be.
+                if e.artifact.compressed_bytes.is_some() || blob_only(e) {
                     continue;
                 }
                 let bytes = gzip(&crate::artifact_read(ctx, &e.artifact)?)?;
@@ -317,7 +351,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
                 .filter(|t| matches!(t.status, Status::Done | Status::Dropped))
                 .and_then(|t| finishes.get(&t.id));
             if entry.identity.is_none()
-                || !is_transcript(&entry.artifact)
+                || !is_transcript_in(ctx.store.dir(), &entry.artifact)
                 || protected.contains(&entry.artifact.path)
                 || kept.contains(entry.artifact.sha256.as_str())
                 || finished.is_none_or(|f| now.duration_since(f.at) <= retention)
@@ -358,12 +392,16 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     })
 }
 
-/// Raw agent, reviewer and Pi-session transcripts are the artifacts named as transcripts.
-fn is_transcript(a: &Artifact) -> bool {
-    corral_core::snapshot_name(a)
+/// Raw agent, reviewer and Pi-session transcripts: log snapshots whose file name carries a
+/// `transcript` segment (`<child>.transcript.log` from review capture), or whose source is a
+/// Pi session under `.corral/agent/sessions`. Titles never classify evidence.
+fn is_transcript_in(dir: &std::path::Path, a: &Artifact) -> bool {
+    let named = corral_core::snapshot_name(a)
         .to_ascii_lowercase()
-        .contains("transcript")
-        || a.title.to_ascii_lowercase().contains("transcript")
+        .split('.')
+        .any(|segment| segment == "transcript");
+    let session = std::path::Path::new(&a.source).starts_with(dir.join("agent").join("sessions"));
+    a.kind == corral_core::ArtifactKind::Log && (named || session)
 }
 
 fn action(e: &Entry, kind: &str) -> GcAction {

@@ -1,9 +1,11 @@
 //! Cheap observations of search inputs, without reading artifacts, events, or the index.
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use corral_core::backend::{ChangeScope, ChangeSeq, FeedError, ReadView};
 use corral_core::{Run, Task};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -161,28 +163,87 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
-/// Refreshes the index using a caller-owned, current task listing.
+/// Refreshes the index by following the change feed from its persisted cursor.
 ///
-/// The caller must supply current tasks; no task, artifact, event, or index contents
-/// are read on an unchanged refresh. Missing indexes are always rebuilt.
+/// An unchanged feed reads no task, artifact, event or index contents. Otherwise only the
+/// tasks the new changes touch are re-derived (from the caller's current listing, else read
+/// by id) and newly committed events added; a missing or unreadable index, a pruned feed
+/// (gap) or a budget overflow rebuilds from the listing.
 pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> {
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let root = ctx.store.cache_root()?;
-    let path = root.join("content-search.fingerprint");
-    let inputs = fingerprint(ctx, tasks)?;
     let index = root.join("content-search.json");
-    // Another snapshot writer (including explicit reindex) invalidates our observation.
-    let current = format!("{inputs}\n{}", file_stamp(&index)?);
-    let previous = match fs::read_to_string(&path) {
-        Ok(previous) => Some(previous),
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => return Err(error).context("reading search input fingerprint"),
-    };
-    if previous.as_deref() == Some(&current) && index.is_file() {
-        return Ok(());
+    let view = ctx.store.view()?;
+    let seq = view.seq();
+    if let Some(at) = read_cursor(&root)?
+        && index.is_file()
+    {
+        if at == seq {
+            return Ok(());
+        }
+        if let Some((ids, events)) = changes_after(view.as_ref(), at)? {
+            let changed = ids
+                .iter()
+                .map(|id| match tasks.iter().find(|t| &t.id == id) {
+                    Some(task) => Ok(task.clone()),
+                    None => ctx.store.get(id),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if (changed.is_empty() && !events)
+                || crate::content_index::follow(ctx, &changed, events)?
+            {
+                return write_cursor(&root, seq);
+            }
+        }
     }
     crate::content_index::refresh_snapshot(ctx, tasks)?;
-    Ok(())
+    write_cursor(&root, seq)
+}
+
+/// The feed position the index was last brought to.
+fn read_cursor(root: &Path) -> Result<Option<ChangeSeq>> {
+    match fs::read_to_string(root.join(CURSOR)) {
+        Ok(text) => Ok(text.trim().parse().ok().map(ChangeSeq)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).context("reading search index cursor"),
+    }
+}
+
+pub(crate) fn write_cursor(root: &Path, seq: ChangeSeq) -> Result<()> {
+    crate::artifact_storage::replace(&root.join(CURSOR), seq.0.to_string().as_bytes())
+}
+
+const CURSOR: &str = "content-search.cursor";
+
+/// Tasks and whether events changed after `at`, on `view`; `None` when the feed was pruned
+/// past `at`.
+fn changes_after(view: &dyn ReadView, at: ChangeSeq) -> Result<Option<(BTreeSet<String>, bool)>> {
+    let (mut after, mut ids, mut events) = (at, BTreeSet::new(), false);
+    loop {
+        let page = match view.changes(after, 256) {
+            Ok(page) => page,
+            Err(FeedError::Gap { .. }) => return Ok(None),
+            Err(error) => return Err(error).context("reading the change feed"),
+        };
+        for entry in &page.entries {
+            after = entry.seq;
+            for scope in &entry.scopes {
+                match scope {
+                    ChangeScope::Task { num, .. } => {
+                        ids.insert(corral_core::Store::normalize_id(&num.0.to_string())?);
+                    }
+                    ChangeScope::Artifact { task } => {
+                        ids.insert(task.clone());
+                    }
+                    ChangeScope::Events { .. } => events = true,
+                    _ => {}
+                }
+            }
+        }
+        if !page.more {
+            return Ok(Some((ids, events)));
+        }
+    }
 }
 
 /// Successful refreshes and reindexes publish while holding the index lock.

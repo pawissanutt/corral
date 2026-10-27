@@ -122,7 +122,20 @@ fn pin_unpin_pins_json_and_open() {
     let pins = pins_json(&root, &log);
     assert_eq!(pins.len(), 1);
 
+    // Without its legacy snapshot the artifact still opens from its blob.
     std::fs::remove_file(&latest).expect("remove snapshot");
+    assert_eq!(pins_json(&root, &log)[0]["state"], "ok");
+    std::fs::remove_file(&log).expect("reset opener log");
+    ok(&root, &log, &["open", "1"]);
+    let opened = std::fs::read_to_string(&log).expect("opener ran");
+    assert_eq!(
+        std::fs::read_to_string(opened.trim()).expect("decoded"),
+        "v2\n"
+    );
+    // Once the blob content is gone too, the pin is broken.
+    let store = corral_core::Store::open(&root).expect("store");
+    let hash = corral_core::blob_ref::BlobHash::of(b"v2\n");
+    std::fs::remove_file(store.blob_store().expect("blobs").path_of(&hash)).expect("remove blob");
     let pins = pins_json(&root, &log);
     assert_eq!(pins[0]["state"], "broken");
     assert!(ok(&root, &log, &["pins"]).contains("BROKEN"));

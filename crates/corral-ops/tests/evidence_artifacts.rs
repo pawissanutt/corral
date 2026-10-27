@@ -309,9 +309,20 @@ fn opening_an_artifact_reads_a_decoded_copy_under_the_cache_root() {
     assert_eq!(back.path, a.path);
 }
 
-/// Counters of the keyed artifact operations on one active task, with `grow` extra terminal
-/// tasks of `grow` artifacts each.
-fn keyed_work(grow: usize) -> (Vec<(Counter, u64)>, u64, Vec<String>) {
+fn counters(before: &work::WorkSnapshot, after: &work::WorkSnapshot) -> Counted {
+    Counter::ALL
+        .into_iter()
+        .map(|c| (c, after.total(c) - before.total(c)))
+        .collect()
+}
+
+/// The keyed artifact reads and writes of one active task, beside `grow` terminal tasks of
+/// `grow` artifacts each, with `grow` more artifacts of the active task in another run.
+/// Returns the read counters (every counter, bytes included), the write counters, board
+/// listings and what the operations observed.
+type Counted = Vec<(Counter, u64)>;
+
+fn keyed_work(grow: usize) -> (Counted, Counted, u64, Vec<String>) {
     let f = Fixture::new(|_| {});
     let active = f.task(Status::Ready);
     let report = f.add(
@@ -321,6 +332,25 @@ fn keyed_work(grow: usize) -> (Vec<(Counter, u64)>, u64, Vec<String>) {
         ArtifactKind::Report,
     );
     f.add(&active, "style.css", b"p{}", ArtifactKind::Other);
+    let fixed: jiff::Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+    f.ctx
+        .store
+        .update(&active, |t| {
+            let mut history = Vec::new();
+            for i in 0..grow {
+                let mut other = t.artifacts[0].clone();
+                other.run = "R7".into();
+                other.path = format!("artifacts/{}/R7/{i:08x}-old.html", t.id);
+                other.title = format!("old {i}");
+                history.push(other);
+            }
+            t.artifacts.extend(history);
+            for a in &mut t.artifacts {
+                a.added = fixed;
+            }
+            Ok(())
+        })
+        .unwrap();
     for t in 0..grow {
         let task = f.task(Status::Done);
         for i in 0..grow {
@@ -333,47 +363,265 @@ fn keyed_work(grow: usize) -> (Vec<(Counter, u64)>, u64, Vec<String>) {
             );
         }
     }
+    let report = f.current(&active, &report);
+    let reference = Fixture::reference(&active, &report);
+    f.ctx.store.pin(&reference, None, false).unwrap();
     let gate_log = f.tmp.path().join("gate.log");
     fs::write(&gate_log, b"gate output\n").unwrap();
-    let reference = Fixture::reference(&active, &report);
     let lists = work::count(Work::TaskList);
     let before = work::snapshot();
     let scope = work::HotScope::enter();
-    let added = add_artifact(&f.ctx, &active, &gate_log, Some(ArtifactKind::Log), None).unwrap();
     let by_ref = resolve_artifact(&f.ctx, &reference).unwrap();
     let by_path = resolve_artifact(&f.ctx, &report.path).unwrap();
-    let tiered = set_artifact_tier(
-        &f.ctx,
-        &Fixture::reference(&active, &added),
-        ArtifactTier::Keep,
-    )
-    .unwrap();
+    let by_pin = resolve_artifact(&f.ctx, "1").unwrap();
     let opened = artifact_path(&f.ctx, &by_ref).unwrap();
+    let read = work::snapshot();
+    let added = add_artifact(&f.ctx, &active, &gate_log, Some(ArtifactKind::Log), None).unwrap();
+    let added_ref = Fixture::reference(&active, &added);
+    let tiered = set_artifact_tier(&f.ctx, &added_ref, ArtifactTier::Keep).unwrap();
     drop(scope);
-    let after = work::snapshot();
-    let counters = Counter::ALL
+    let wrote = work::snapshot();
+    let writes = counters(&read, &wrote)
         .into_iter()
-        .filter(|c| !matches!(c, Counter::DecodedDocBytes))
-        .map(|c| (c, after.total(c) - before.total(c)))
+        .filter(|(c, _)| !matches!(c, Counter::DecodedDocBytes))
         .collect();
     let observed = vec![
         by_ref.path,
         by_path.path,
+        by_pin.path,
         format!("{:?}", tiered.tier()),
         fs::read_to_string(opened).unwrap(),
     ];
-    (counters, work::count(Work::TaskList) - lists, observed)
+    let lists = work::count(Work::TaskList) - lists;
+    (counters(&before, &read), writes, lists, observed)
 }
 
 #[test]
-fn keyed_artifact_operations_do_the_same_work_with_ten_times_the_board() {
-    // Given the same active task alone and beside 10 terminal tasks of 10 artifacts each.
-    let (base, base_lists, base_seen) = keyed_work(1);
-    let (grown, grown_lists, grown_seen) = keyed_work(10);
-    // Then attaching, resolving, re-tiering and opening never list the board and do
-    // identical work at both sizes, with the same results.
+fn keyed_artifact_operations_do_the_same_work_with_ten_times_the_history() {
+    // Given the same active task alone, then beside 10 terminal tasks of 10 artifacts each and
+    // with 10 more of its own artifacts in another run.
+    let (base_reads, base_writes, base_lists, base_seen) = keyed_work(1);
+    let (grown_reads, grown_writes, grown_lists, grown_seen) = keyed_work(10);
+    // Then resolving by reference, path and pin and opening read only that run's rows, never
+    // hydrate the task, and do byte-identical work; nothing lists the board.
+    assert_eq!((base_lists, grown_lists), (0, 0));
+    let hydrations = |c: &[(Counter, u64)]| {
+        c.iter()
+            .find(|(k, _)| *k == Counter::FullTaskHydrations)
+            .map(|(_, n)| *n)
+    };
+    assert_eq!(hydrations(&base_reads), Some(0));
+    assert_eq!(base_reads, grown_reads);
+    // And attaching and re-tiering are still two full-task writes: they never list the board,
+    // and only the acted task's own history rows they hydrate grow (head-form artifact writes
+    // are a follow-up outside this task's write scope).
+    let without_rows = |c: &[(Counter, u64)]| {
+        c.iter()
+            .filter(|(k, _)| *k != Counter::HistoryRowDecodes)
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(hydrations(&base_writes), Some(2));
+    assert_eq!(without_rows(&base_writes), without_rows(&grown_writes));
+    assert_eq!(base_seen, grown_seen);
+    assert_eq!(base_seen[4], "<p>report</p>");
+}
+
+#[test]
+fn an_index_failure_never_drops_a_committed_artifacts_blob_reference() {
+    // Given a search index path that cannot be written.
+    let f = Fixture::new(|_| {});
+    let task = f.task(Status::Ready);
+    let cache = f.ctx.store.cache_root().unwrap();
+    fs::create_dir_all(cache.join("content-search.json")).unwrap();
+    // When evidence is attached.
+    let a = f.add(
+        &task,
+        "evidence.txt",
+        b"durable evidence",
+        ArtifactKind::Evidence,
+    );
+    // Then the artifact is committed and its blob stays referenced.
+    assert_eq!(f.current(&task, &a).purged_at, None);
+    assert_eq!(f.blob(&a).refs, 1);
+    let key = format!("{task}/{}", a.sha256);
+    assert!(
+        f.ctx
+            .store
+            .record_row("artifact-blobs", &key)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn attaching_to_a_missing_task_stores_no_blob_reference() {
+    // Given a file and no task T-999.
+    let f = Fixture::new(|_| {});
+    let path = f.tmp.path().join("orphan.txt");
+    fs::write(&path, b"orphan").unwrap();
+    // When attaching it to the missing task, it fails before any blob reference is written.
+    assert!(add_artifact(&f.ctx, "T-999", &path, None, None).is_err());
+    let hash = BlobHash::of(b"orphan");
+    let key = format!("T-999/{hash}");
+    assert!(
+        f.ctx
+            .store
+            .record_row("artifact-blobs", &key)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.ctx
+            .store
+            .blob_row(&hash)
+            .unwrap()
+            .is_none_or(|row| row.refs == 0)
+    );
+}
+
+#[test]
+fn generic_purge_never_purges_transcripts_and_transcript_retention_decides_alone() {
+    // Given a size-triggered purge rule on every tier and transcripts on open, recently
+    // finished and long-dropped tasks.
+    let configure = |retention: Option<u32>| {
+        move |store: &mut Store| {
+            store.config.artifacts.retention.action = RetentionAction::Purge;
+            store.config.artifacts.retention.larger_than = Some("1B".into());
+            store.config.storage.transcript_retention_days = retention;
+        }
+    };
+    for retention in [None, Some(30)] {
+        let f = Fixture::new(configure(retention));
+        let open = f.task(Status::Ready);
+        let recent = f.task(Status::Done);
+        let dropped = f.task(Status::Dropped);
+        let transcripts: Vec<_> = [&open, &recent, &dropped]
+            .into_iter()
+            .map(|task| {
+                let name = "R1-r1.transcript.log";
+                let bytes = format!("{task} transcript");
+                (task, f.add(task, name, bytes.as_bytes(), ArtifactKind::Log))
+            })
+            .collect();
+        let plain = f.add(&recent, "run.log", b"plain log", ArtifactKind::Log);
+        f.finish_days_ago(&recent, 10);
+        let at = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24 * 40);
+        let event = Event {
+            seq: 0,
+            task: Some(dropped.clone()),
+            ts: at,
+            kind: "moved".into(),
+            actor: None,
+            via: None,
+            detail: json!({"to": "dropped"}),
+        };
+        f.ctx
+            .store
+            .fixture_append_events(&format!("{}\n", serde_json::to_string(&event).unwrap()))
+            .unwrap();
+        // When retention applies.
+        artifact_gc(&f.ctx, false).unwrap();
+        // Then the generic rule purged the plain log but no transcript, and only a set
+        // retention purged the transcript of the task dropped more than 30 days ago.
+        assert!(f.current(&recent, &plain).purged_at.is_some());
+        for (task, a) in &transcripts {
+            let purged = f.current(task, a).purged_at.is_some();
+            assert_eq!(
+                purged,
+                retention.is_some() && *task == &dropped,
+                "{task} {retention:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn blob_only_artifacts_serve_gc_stats_and_search() {
+    // Given an artifact whose legacy copy is gone.
+    let f = Fixture::new(|_| {});
+    let task = f.task(Status::Ready);
+    let a = f.add(
+        &task,
+        "notes.md",
+        b"blobonlyprobe text",
+        ArtifactKind::Evidence,
+    );
+    fs::remove_file(f.ctx.store.dir().join(&a.path)).unwrap();
+    // When retention, storage totals and search run.
+    artifact_gc(&f.ctx, true).unwrap();
+    artifact_gc(&f.ctx, false).unwrap();
+    let stats = corral_ops::storage_stats(&f.ctx).unwrap();
+    corral_ops::refresh_search_index(&f.ctx).unwrap();
+    let hits = corral_ops::search_content(
+        &f.ctx,
+        "blobonlyprobe",
+        &corral_ops::ContentSearch::default(),
+    )
+    .unwrap();
+    // Then each works from the blob without recreating the legacy copy.
+    assert_eq!(stats.stored_bytes, f.blob(&a).stored_bytes);
+    assert_eq!(hits.len(), 1);
+    assert!(!f.ctx.store.dir().join(&a.path).exists());
+}
+
+/// Search hits for `token`, and the counters of one index refresh after a body change of the
+/// active task, beside `grow` terminal tasks with `grow` artifacts each.
+fn feed_refresh(grow: usize) -> (Counted, u64, usize, usize) {
+    let f = Fixture::new(|_| {});
+    let active = f.task(Status::Ready);
+    for t in 0..grow {
+        let task = f.task(Status::Done);
+        for i in 0..grow {
+            let bytes = format!("terminal {t} artifact {i}");
+            f.add(
+                &task,
+                &format!("a{i}.txt"),
+                bytes.as_bytes(),
+                ArtifactKind::Evidence,
+            );
+        }
+    }
+    corral_ops::refresh_search_index(&f.ctx).unwrap();
+    f.ctx
+        .store
+        .update(&active, |t| {
+            t.body = "feedprobe body".into();
+            Ok(())
+        })
+        .unwrap();
+    let lists = work::count(Work::TaskList);
+    let before = work::snapshot();
+    let scope = work::HotScope::enter();
+    corral_ops::refresh_search_index_with_tasks(&f.ctx, &[]).unwrap();
+    drop(scope);
+    let after = work::snapshot();
+    let lists = work::count(Work::TaskList) - lists;
+    let search = |token: &str| {
+        corral_ops::search_content(&f.ctx, token, &corral_ops::ContentSearch::default())
+            .unwrap()
+            .len()
+    };
+    let warm = search("feedprobe");
+    // A deleted cache root rebuilds to the same results.
+    fs::remove_dir_all(f.ctx.store.cache_root().unwrap()).unwrap();
+    corral_ops::refresh_search_index(&f.ctx).unwrap();
+    let cold = search("feedprobe");
+    let counted = counters(&before, &after)
+        .into_iter()
+        .filter(|(c, _)| !matches!(c, Counter::DecodedDocBytes))
+        .collect();
+    (counted, lists, warm, cold)
+}
+
+#[test]
+fn the_search_index_follows_the_change_feed_with_work_independent_of_the_board() {
+    // Given an indexed board, then one task body change.
+    let (base, base_lists, base_warm, base_cold) = feed_refresh(1);
+    let (grown, grown_lists, grown_warm, grown_cold) = feed_refresh(10);
+    // Then the refresh re-derives only that task (no board listing, identical counted work at
+    // both sizes) and the change is searchable, warm and after a cold rebuild.
     assert_eq!((base_lists, grown_lists), (0, 0));
     assert_eq!(base, grown);
-    assert_eq!(base_seen, grown_seen);
-    assert_eq!(base_seen[3], "<p>report</p>");
+    assert_eq!((base_warm, base_cold, grown_warm, grown_cold), (1, 1, 1, 1));
 }

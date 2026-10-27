@@ -70,6 +70,39 @@ impl Store {
         Ok(created)
     }
 
+    /// The artifacts of `task` read as its artifact rows alone, never the full task: only those
+    /// of `run` when given (by the rows' run index), in stored order. Each decoded row counts
+    /// as a history row decode.
+    pub fn artifact_rows(&self, task: &str, run: Option<&str>) -> Result<Vec<Artifact>> {
+        use crate::backend::{RowQuery, TaskNum, TaskPart};
+        use crate::work::{Counter, Subject};
+        let num = TaskNum(crate::store::id_number(&Self::normalize_id(task)?));
+        let query = RowQuery {
+            part: TaskPart::Artifact,
+            key: None,
+            prefix: None,
+            index: run.map(|run| format!("run:{run}")),
+            current_only: false,
+            open_only: false,
+            newest_first: false,
+        };
+        let view = self.view()?;
+        let mut page = PageReq::first(256);
+        let mut artifacts = Vec::new();
+        loop {
+            let rows = view.rows(num, &query, page.clone())?;
+            for row in rows.items {
+                let bytes = u64::try_from(serde_json::to_string(&row.doc)?.len())?;
+                crate::work::decoded(Counter::HistoryRowDecodes, bytes, Subject::Plain);
+                artifacts.push(serde_json::from_value(row.doc)?);
+            }
+            match rows.next {
+                Some(after) => page.after = Some(after),
+                None => return Ok(artifacts),
+            }
+        }
+    }
+
     /// The blob row of `hash`, in any state.
     pub fn blob_row(&self, hash: &BlobHash) -> Result<Option<BlobRow>> {
         let query = BlobQuery {
