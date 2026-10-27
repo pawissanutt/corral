@@ -8,6 +8,8 @@ use corral_ops::*;
 mod independence;
 #[path = "setup_services/journeys.rs"]
 mod journeys;
+#[path = "setup_services/pi_native.rs"]
+mod pi_native;
 #[path = "setup_services/rejections.rs"]
 mod rejections;
 #[path = "setup_services/support_persistence.rs"]
@@ -137,6 +139,7 @@ fn fixture() -> (tempfile::TempDir, Store, SetupProposalInput) {
                     installed: true,
                     models: vec!["openai/fixture-v1".into()],
                     efforts: vec!["high".into()],
+                    vendors: vec![],
                 }],
                 candidates: vec![observation],
             },

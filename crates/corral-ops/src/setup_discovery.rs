@@ -4,10 +4,13 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use corral_core::{
-    AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PathProblems, Read,
+    AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PI_NATIVE_HARNESS,
+    PI_NATIVE_VENDORS, PathProblems, Read, is_pi_native,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+
+use crate::Ctx;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -24,6 +27,9 @@ pub struct DiscoveredHarness {
     pub installed: bool,
     pub models: Vec<String>,
     pub efforts: Vec<String>,
+    /// Vendors the harness accepts; reported only by harnesses that restrict them (pi-native).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vendors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,8 +54,42 @@ pub struct CandidateObservation {
 
 /// Only existing harness probes run here. Listing a model proves neither authentication
 /// nor execution, and cannot identify an exact connection or settings.
-pub fn setup_discover(config: &Config) -> SetupDiscovery {
-    sanitized_discovery(Timestamp::now(), crate::detect_harnesses(config))
+///
+/// The built-in pi-native host has no command to probe: it is installed exactly when
+/// `corral agent doctor` reports it ready (credentials from file metadata only).
+pub fn setup_discover(ctx: &Ctx) -> SetupDiscovery {
+    let config = &ctx.store.config;
+    let ready = crate::agent::hooks::doctor::ready(ctx);
+    discover_with(
+        Timestamp::now(),
+        crate::detect_harnesses(config),
+        config,
+        ready,
+    )
+}
+
+fn discover_with(
+    observed_at: Timestamp,
+    harnesses: Vec<crate::HarnessInfo>,
+    config: &Config,
+    pi_native_ready: bool,
+) -> SetupDiscovery {
+    let mut discovery = sanitized_discovery(observed_at, harnesses);
+    if pi_native_ready || crate::agent::hooks::configured(config) {
+        discovery.harnesses.retain(|h| !is_pi_native(&h.key));
+        discovery.harnesses.push(DiscoveredHarness {
+            key: PI_NATIVE_HARNESS.into(),
+            installed: pi_native_ready,
+            models: Vec::new(),
+            efforts: config
+                .harness(PI_NATIVE_HARNESS)
+                .map(|(_, flags)| flags.efforts)
+                .unwrap_or_default(),
+            vendors: PI_NATIVE_VENDORS.map(String::from).into(),
+        });
+        discovery.harnesses.sort_by(|a, b| a.key.cmp(&b.key));
+    }
+    discovery
 }
 
 fn sanitized_discovery(
@@ -68,6 +108,7 @@ fn sanitized_discovery(
                     installed,
                     models: h.models.into_iter().filter(|s| safe_identity(s)).collect(),
                     efforts: h.efforts.into_iter().filter(|s| safe_identity(s)).collect(),
+                    vendors: Vec::new(),
                 }
             })
             .collect(),
@@ -107,13 +148,15 @@ impl SetupDiscovery {
                     .models
                     .iter()
                     .chain(&harness.efforts)
+                    .chain(&harness.vendors)
                     .all(|s| safe_identity(s)),
                 &path,
                 vec![
                     Read::Value(path.key("models")),
                     Read::Value(path.key("efforts")),
+                    Read::Value(path.key("vendors")),
                 ],
-                "invalid harness model or effort",
+                "invalid harness model, effort or vendor",
             );
         }
         let candidates_path = base.key("candidates");
