@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,6 +16,7 @@ import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { forbiddenRuns, holdNextInput } from "./fixtures/roles/fixture-role.ts";
 import { type FakeCorral, writeFakeCorral } from "./support/fake-corral.ts";
 import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
+import { expectReplacementsRefused } from "./support/replacement.ts";
 import { nextEvent, within } from "./support/wait.ts";
 
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
@@ -221,16 +222,36 @@ async function expectRestricted(): Promise<void> {
   expect(refused instanceof NetworkRefused).toBeTrue();
 }
 
-test("only the role loadout is active, before and after reload and session replacement", async () => {
+test("only the role loadout is active, before and after reload", async () => {
   await expectRestricted();
   expect((await host.submit(input("/fixture-reload", "prompt", "reload"), "rq-reload")).disposition).toBe("handled");
   await expectRestricted();
-  expect((await host.runtime.newSession()).cancelled).toBeFalse();
-  const session = host.state().session as { bound_id: string; current_id: string; created: number };
-  expect(session.created).toBe(2);
-  expect(session.current_id).not.toBe(session.bound_id);
-  await expectRestricted();
   const network = host.state().network as { refused: number; allowed: number };
-  expect(network.refused).toBe(3);
+  expect(network.refused).toBe(2);
   expect(network.allowed).toBeGreaterThan(0);
+}, 60_000);
+
+test("while bound, every native session replacement is refused and later delivery and tool calls stay in the bound file", async () => {
+  // Given the bound host and the session file its hello reported to corral:
+  const boundFile = String(corral.calls()[0]?.envelope.payload.session_file);
+  expect(host.session.sessionFile).toBe(boundFile);
+  // When the owner attempts /new, /resume, /fork and import:
+  await expectReplacementsRefused(host, events);
+  // Then a delivery and a tool call made afterwards are written to the bound file, after its marker.
+  await host.submit(input("/fixture-call read", "prompt", "call-after"), "rq-call-after");
+  const ended = nextEvent(events, (event) => event.kind === "turn_ended");
+  expect((await host.submit(input("Reply only AFTER.", "prompt", "after-replace"), "rq-after")).disposition).toBe("started");
+  await ended;
+  const entries = readFileSync(boundFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const marker = entries.findIndex((entry) => entry.customType === "corral_host_bound");
+  const delivered = entries.findIndex((entry) => entry.customType === "corral_fixture_delivery"
+    && entry.data.idempotencyKey === "after-replace");
+  const called = entries.findIndex((entry, index) => index > delivered && entry.type === "message"
+    && entry.message.role === "assistant"
+    && entry.message.content.some((item: { type: string; name?: string }) => item.type === "toolCall" && item.name === "read"));
+  expect(marker).toBeGreaterThanOrEqual(0);
+  expect(delivered).toBeGreaterThan(marker);
+  expect(called).toBeGreaterThan(delivered);
+  expect(entries[marker].data.session_id).toBe(host.sessionId());
+  expect((host.state().session as { created: number }).created).toBe(1);
 }, 60_000);

@@ -14,6 +14,7 @@ import { CorralClient, sha256Hex, toolRequestId } from "../../tools/corral.ts";
 import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
 import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
+import { expectReplacementsRefused } from "../../../test/support/replacement.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { RoleContext } from "../types.ts";
@@ -196,4 +197,8 @@ test("review kickoff is attempt-scoped and recovery retries only unobserved requ
   install({ identity, cwd: "/tmp", model: "m" })({ type: "session_start", reason: "startup" }, session([]));
   expect(sent).toEqual([]);
   expect(kickoff({ identity, cwd: "/tmp", model: "m" })).toBeUndefined();
+});
+
+test("while bound, the reviewer refuses /new, /resume, /fork and import before the session changes", async () => {
+  await expectReplacementsRefused(host, events);
 });

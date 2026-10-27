@@ -214,6 +214,19 @@ export class HostSession {
         result: { output: "bash is not in this role's loadout", exitCode: 1, cancelled: false, truncated: false },
       }));
     }
+    // Corral observes, recovers and resumes only the file hello bound, so while a binding is active
+    // every in-process replacement (/new, /resume, /fork, import) is refused before it happens.
+    const refuse = (operation: string, ui: { notify(message: string, type?: "info" | "warning" | "error"): void }) => {
+      if (!this.bound) return undefined;
+      const message = `corral: ${operation} is refused while this pane is bound to corral session ${this.boundSessionId}; ` +
+        "corral observes and recovers only that session. Continue here, or stop the run and use `corral agent resume`.";
+      this.options.events.emit("session_replacement_refused", { operation, session_id: this.boundSessionId, message });
+      ui.notify(message, "warning");
+      return { cancel: true };
+    };
+    pi.on("session_before_switch", (event, ctx) =>
+      refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui));
+    pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
     pi.on("input", (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
