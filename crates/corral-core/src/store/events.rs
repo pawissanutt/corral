@@ -10,9 +10,9 @@ use anyhow::{Context, Result};
 
 use super::Store;
 use crate::backend::{
-    AppendEvents, Authorization, EventQuery, EventSeq, GateAttempt, GateStart, NewEvent, Operation,
-    PageReq, PutRecords, RecordWrite, ReservationUse, StoredEvent, StoredRecord, TaskChange,
-    UpdateForm, UpdateTask,
+    AppendEvents, Authorization, ConditionWrite, EventQuery, EventSeq, GateAttempt, GateStart,
+    NewEvent, Operation, PageReq, PutRecords, RecordWrite, ReservationUse, StoredEvent,
+    StoredRecord, TaskChange, UpdateForm, UpdateTask,
 };
 
 use crate::Event;
@@ -20,7 +20,7 @@ use crate::Event;
 struct Unit {
     db: Arc<super::db::Db>,
     events: RefCell<Vec<NewEvent>>,
-    conditions: RefCell<Vec<Operation>>,
+    conditions: RefCell<Vec<ConditionWrite>>,
     records: RefCell<Vec<RecordWrite>>,
     reads: RefCell<BTreeMap<(String, String), Option<StoredRecord>>>,
     view: RefCell<Option<super::head::PinnedView>>,
@@ -181,16 +181,16 @@ impl Store {
         })
     }
 
-    /// Condition operations wait in the unit until its task operation commits.
-    pub(super) fn buffer_condition(&self, op: Operation) -> Result<()> {
+    /// Conditions wait in the unit and commit inside its task operation.
+    pub(super) fn buffer_condition(&self, write: ConditionWrite) -> Result<()> {
         let unit = self
             .current_unit()
             .context("buffering a condition needs an open unit")?;
-        unit.conditions.borrow_mut().push(op);
+        unit.conditions.borrow_mut().push(write);
         Ok(())
     }
 
-    pub(super) fn buffered_conditions(&self) -> Vec<Operation> {
+    pub(super) fn buffered_conditions(&self) -> Vec<ConditionWrite> {
         self.current_unit().map_or_else(Vec::new, |unit| {
             std::mem::take(&mut *unit.conditions.borrow_mut())
         })
@@ -398,6 +398,7 @@ impl Store {
         let _unit = self.event_unit();
         let result = f()?;
         if !nested {
+            self.refuse_buffered_conditions("a records-only unit")?;
             let writes = self.buffered_records();
             let events = self.buffered_events();
             if !writes.is_empty() || !events.is_empty() {
@@ -411,7 +412,6 @@ impl Store {
                     .map_err(super::write::apply_error)
                     .context("committing record unit")?;
             }
-            self.flush_conditions()?;
         }
         Ok(result)
     }

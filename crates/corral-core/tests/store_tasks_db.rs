@@ -357,6 +357,7 @@ fn a_writer_that_bypasses_the_leases_gets_a_conflict() {
             records: Vec::new(),
             aggregates: Vec::new(),
             reservations: Vec::new(),
+            conditions: Vec::new(),
         },
         form: UpdateForm::Head,
     }));

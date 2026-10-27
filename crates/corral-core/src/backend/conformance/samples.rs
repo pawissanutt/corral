@@ -108,6 +108,7 @@ pub(super) fn change(fx: &Fixture, num: TaskNum) -> Result<TaskChange> {
         records: Vec::new(),
         aggregates: Vec::new(),
         reservations: Vec::new(),
+        conditions: Vec::new(),
     })
 }
 

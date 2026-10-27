@@ -145,8 +145,8 @@ pub enum AggregateWrite {
 
 /// One write of one existing task, carried by every task-writing operation. Requires the task
 /// to exist at revision `expected_rev`; commits the new header fields, head document, summary,
-/// row writes, events, record writes and aggregate writes, and bumps the revision by one.
-/// Status counts follow the header change without an aggregate write.
+/// row writes, events, record writes, aggregate writes and condition transitions, and bumps the
+/// revision by one. Status counts follow the header change without an aggregate write.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskChange {
     pub num: TaskNum,
@@ -159,6 +159,17 @@ pub struct TaskChange {
     pub records: Vec<RecordWrite>,
     pub aggregates: Vec<AggregateWrite>,
     pub reservations: Vec<ReservationUse>,
+    /// Applied in order after the change's events, in the same transaction, with the
+    /// semantics of [`ObserveCondition`] and [`ClearCondition`].
+    #[serde(default)]
+    pub conditions: Vec<ConditionWrite>,
+}
+
+/// A condition transition that commits with a task change (plan T-253 section 9).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ConditionWrite {
+    Observe(ObserveCondition),
+    Clear(ClearCondition),
 }
 
 /// Head form puts only new rows, rows that are currently `current`, or rows whose document stays

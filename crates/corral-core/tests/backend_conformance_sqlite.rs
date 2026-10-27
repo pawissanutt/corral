@@ -61,6 +61,7 @@ conformance!(
     scratch_transitions,
     lifecycle_and_leases,
     conditions_claims_and_binding,
+    task_change_commits_its_conditions,
     view_isolation,
     view_expiry,
     row_queries,
@@ -341,6 +342,7 @@ fn a_stale_handle_conflicts_and_applies_nothing() -> Result<()> {
             delta: 1,
         }],
         reservations: Vec::new(),
+        conditions: Vec::new(),
     };
     match a.apply(Operation::UpdateTask(UpdateTask {
         change: mine,
@@ -418,6 +420,7 @@ fn backups_taken_while_a_writer_commits_are_consistent() -> Result<()> {
                     records: Vec::new(),
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
+                    conditions: Vec::new(),
                 };
                 backend
                     .apply(Operation::UpdateTask(UpdateTask {
