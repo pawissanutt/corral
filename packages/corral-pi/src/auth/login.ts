@@ -1,19 +1,18 @@
-// `corral agent login` runs this entry point in the owner's pane: one interactive OpenAI Codex
-// (ChatGPT subscription) OAuth login through Pi's own flow, persisted into the corral-owned auth
-// directory. Its network is restricted to POSTs to the OAuth token and device-code endpoints.
+// `corral agent login` runs this entry point in the owner's pane with the provider the owner
+// picked (`--provider openai-codex|anthropic`): one interactive subscription OAuth login through
+// Pi's own flow, persisted into that provider's file in the corral-owned auth directory. Its
+// network is restricted to POSTs to that provider's OAuth endpoints.
 import { createInterface } from "node:readline/promises";
 
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 
 import type { Fetch } from "./types.ts";
 import { CredentialsUnavailable, authDir } from "./paths.ts";
+import { PROVIDERS, type ProviderId, isProviderId } from "./providers.ts";
 import { FileCredentialStore } from "./store.ts";
 
-export const LOGIN_DESTINATIONS: readonly string[] = [
-  "https://auth.openai.com/oauth/token",
-  "https://auth.openai.com/api/accounts/deviceauth/usercode",
-  "https://auth.openai.com/api/accounts/deviceauth/token",
-];
+/** The OpenAI Codex login endpoints; every provider's list is `PROVIDERS[id].login`. */
+export const LOGIN_DESTINATIONS: readonly string[] = PROVIDERS["openai-codex"].login;
 
 export class LoginNetworkRefused extends Error {
   readonly code = "network_refused";
@@ -22,11 +21,12 @@ export class LoginNetworkRefused extends Error {
   }
 }
 
-export function loginFetch(send: Fetch): Fetch {
+export function loginFetch(send: Fetch, provider: ProviderId = "openai-codex"): Fetch {
+  const allowed = PROVIDERS[provider].login;
   return async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
-    if (method !== "POST" || !LOGIN_DESTINATIONS.includes(url)) {
+    if (method !== "POST" || !allowed.includes(url)) {
       const parsed = URL.parse(url);
       throw new LoginNetworkRefused(parsed ? `${parsed.origin}${parsed.pathname}` : "<unparseable>");
     }
@@ -35,11 +35,12 @@ export function loginFetch(send: Fetch): Fetch {
 }
 
 export interface LoginResult {
-  readonly provider: "openai-codex";
+  readonly provider: ProviderId;
   readonly file: string;
 }
 
-const FIXED_FAILURES = ["Login cancelled", "State mismatch", "Missing authorization code", "Device flow timed out"];
+const FIXED_FAILURES = ["Login cancelled", "State mismatch", "OAuth state mismatch", "Missing authorization code",
+  "Device flow timed out"];
 const NOTICE_MAX = 240;
 
 /**
@@ -47,17 +48,17 @@ const NOTICE_MAX = 240;
  * response bodies, so only corral's own errors, a few fixed upstream phrases, the failing step
  * and an HTTP status ever reach the terminal.
  */
-export function loginDiagnostic(error: unknown): string {
+export function loginDiagnostic(error: unknown, provider: ProviderId = "openai-codex"): string {
   if (error instanceof LoginNetworkRefused || error instanceof CredentialsUnavailable) return error.message;
   const message = error instanceof Error ? error.message : "";
   if (message.startsWith("login_failed:")) return message;
   const fixed = FIXED_FAILURES.find((text) => message.startsWith(text));
   if (fixed) return fixed;
-  const step = /token exchange/.test(message) ? "the token exchange"
-    : /token refresh/.test(message) ? "the token refresh"
+  const step = /token exchange/i.test(message) ? "the token exchange"
+    : /token refresh/i.test(message) ? "the token refresh"
     : /device (code|auth)/i.test(message) ? "the device-code request" : "the OAuth flow";
-  const status = /(?:failed \(|status )(\d{3})\b/.exec(message)?.[1];
-  return `OpenAI login failed at ${step}${status ? ` (HTTP ${status})` : ""}; response content is not shown`;
+  const status = /(?:failed \(|status[ =])(\d{3})\b/.exec(message)?.[1];
+  return `${PROVIDERS[provider].brand} login failed at ${step}${status ? ` (HTTP ${status})` : ""}; response content is not shown`;
 }
 
 /** Progress text from the OAuth flow, bounded and with every token-like run redacted. */
@@ -65,16 +66,18 @@ export function redactNotice(text: string): string {
   return text.replace(/[A-Za-z0-9._~+/=-]{24,}/g, "<redacted>").slice(0, NOTICE_MAX);
 }
 
-export async function login(dir: string, interaction: AuthInteraction): Promise<LoginResult> {
-  const store = new FileCredentialStore(dir);
+export async function login(
+  dir: string, interaction: AuthInteraction, provider: ProviderId = "openai-codex",
+): Promise<LoginResult> {
+  const store = new FileCredentialStore(dir, provider);
   store.ensureDir();
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const models = await ModelRuntime.create({
     credentials: store, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
   });
-  const credential = await models.login("openai-codex", "oauth", interaction, { agentName: "corral" });
+  const credential = await models.login(provider, "oauth", interaction, { agentName: "corral" });
   if (credential.type !== "oauth" || !store.present()) throw new Error("login_failed: no OAuth credential was stored");
-  return { provider: "openai-codex", file: store.file };
+  return { provider, file: store.file };
 }
 
 function terminalInteraction(): AuthInteraction {
@@ -105,14 +108,22 @@ if (import.meta.main) {
   process.env.PI_OFFLINE = "1";
   process.env.PI_TELEMETRY = "0";
   process.env.PI_SKIP_VERSION_CHECK = "1";
-  const index = process.argv.indexOf("--auth-dir");
-  const dir = index === -1 ? authDir() : process.argv[index + 1];
-  globalThis.fetch = loginFetch(globalThis.fetch.bind(globalThis)) as typeof globalThis.fetch;
-  login(dir ?? authDir(), terminalInteraction()).then((result) => {
+  const arg = (flag: string) => {
+    const index = process.argv.indexOf(flag);
+    return index === -1 ? undefined : process.argv[index + 1];
+  };
+  const dir = arg("--auth-dir") ?? authDir();
+  const provider = arg("--provider") ?? "openai-codex";
+  if (!isProviderId(provider)) {
+    process.stderr.write(`corral agent login failed: unknown provider ${provider}; use openai-codex or anthropic\n`);
+    process.exit(2);
+  }
+  globalThis.fetch = loginFetch(globalThis.fetch.bind(globalThis), provider) as typeof globalThis.fetch;
+  login(dir, terminalInteraction(), provider).then((result) => {
     process.stdout.write(`Logged in: ${result.provider} credentials stored in ${result.file}\n`);
     process.exit(0);
   }, (error: unknown) => {
-    process.stderr.write(`corral agent login failed: ${loginDiagnostic(error)}\n`);
+    process.stderr.write(`corral agent login failed: ${loginDiagnostic(error, provider)}\n`);
     process.exit(1);
   });
 }

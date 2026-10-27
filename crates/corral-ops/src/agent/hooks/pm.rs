@@ -98,6 +98,9 @@ pub fn command(ctx: &Ctx, pane: &str, resolved: &ResolvedProfile) -> Result<Stri
             .model
             .clone()
             .context("a Pi-native PM needs a model")?,
+        provider: resolved.model.as_deref().and_then(|model| {
+            super::super::launch::host_provider(resolved.vendor.as_deref(), model)
+        }),
         effort: resolved.effort.clone(),
         prompt_file: Some(ctx.store.prompts_dir().join("pm.md")),
     };

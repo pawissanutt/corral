@@ -26,8 +26,9 @@ assets_dir = "/path/to/pi-assets"
 ```
 
 Model and effort travel in the host's one-shot bootstrap, not on the command line, so a
-pi-native profile takes no `args`. Only the `openai` vendor is allowed; any other vendor (an
-Anthropic model, for example) is refused when you dispatch, before a worktree exists.
+pi-native profile takes no `args`. The `openai` and `anthropic` vendors are allowed (for
+example `model = "claude-opus-5-5"` with `vendor = "anthropic"`); any other vendor is refused
+when you dispatch, before a worktree exists.
 
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
@@ -51,22 +52,50 @@ and PM roles. Reinstall to include a newly added role in an older managed instal
 
 ## Credentials
 
-`corral agent login` runs once, interactively, in your own pane. It uses Pi's OpenAI Codex
-(ChatGPT Plus/Pro subscription) OAuth flow from the installed `src/auth/login.ts`, offering a
-browser or a device-code login. The credential is written to
-`$XDG_DATA_HOME/corral/pi-native/auth/auth.json`: the directory is 0700, the file 0600. During
-login the network is limited to POST requests to OpenAI's OAuth token and device-code
-endpoints. A fixture installation is refused, because its credential is synthetic. A failed
+`corral agent login` runs interactively, in your own pane, once per provider you use. On a
+terminal it first shows a picker:
+
+```
+Log in a model provider for pi-native
+> OpenAI Codex (ChatGPT Plus/Pro)   [logged in]
+  Anthropic Claude (Pro/Max)        [not logged in]
+↑/↓ move · Enter select · q cancel
+```
+
+The arrow keys or j/k move, Enter selects, and q or Esc cancels with exit status 130 and writes
+nothing. Each row's state comes from the credential file's metadata; its contents are never read.
+`corral agent login --provider openai-codex` or `--provider anthropic` skips the picker. Without
+a terminal on stdin, `corral agent login` without `--provider` exits with a usage error instead
+of prompting.
+
+The selected provider's Pi subscription OAuth flow then runs from the installed
+`src/auth/login.ts`: for OpenAI Codex (ChatGPT Plus/Pro) a browser or device-code login, for
+Anthropic Claude (Pro/Max) a browser login or a copy-code login for a headless pane. Each
+provider's credential is its own file in `$XDG_DATA_HOME/corral/pi-native/auth/`:
+`openai-codex.json` or `anthropic.json`. The directory is 0700 and every file 0600. Logging in
+again replaces that provider's file atomically. A Codex login made before per-provider files keeps
+working without a new login: it stays in the shared `auth.json` until its first refresh moves it
+to `openai-codex.json`. During login the network is limited to POST requests to that provider's
+OAuth endpoints: OpenAI's token and device-code endpoints, or Anthropic's
+`https://platform.claude.com/v1/oauth/token` (the Anthropic browser callback is a loopback
+listener). A fixture installation is refused, because its credential is synthetic. A failed
 login prints only the failing step and an HTTP status, never the provider's response, so no
 token reaches the terminal or a log.
 
-A running host reads that file through the installed `src/auth/index.ts` and lets Pi refresh the
+A running host loads the credential of its profile's vendor (`openai` uses `openai-codex`,
+`anthropic` uses `anthropic`) through the installed `src/auth/index.ts` and lets Pi refresh the
 token in place. Every write holds an exclusive kernel lock (`flock`) on `auth.json.lock`, and the
 kernel releases it if a host dies, so concurrent hosts never double-refresh and no stale lock
-needs recovery. Without a login, the host
-stops with `credentials_unavailable` and asks you to run `corral agent login`. Only OAuth
-credentials are stored. There is no API-key or other paid fallback, and corral never reads or
-writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
+needs recovery. Without a login for that provider, dispatch from the managed installation
+refuses `credentials_unavailable` naming the provider, and the host stops with
+`credentials_unavailable`; both name the command to run, for example
+`corral agent login --provider anthropic`. Only OAuth credentials are stored. There is no
+API-key or other paid fallback, and corral never reads or writes `~/.codex`, `~/.pi`,
+`~/.claude` or another harness's store.
+
+Anthropic profiles run on your Claude Pro/Max subscription through the same OAuth route Pi
+uses. That route is outside Anthropic's documented API terms; the evidence and the accepted
+policy risk are recorded in `docs/records/pi-native-claude-route.md`.
 
 ## Readback
 
@@ -77,7 +106,7 @@ configured:
 |---|---|
 | `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
 | `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles and each role's readiness with the refusal it would get. |
-| `pi_native_credentials` | Whether a credential is present and its permissions are safe, from file metadata only; its contents are never read into the output. |
+| `pi_native_credentials` | Whether any provider is logged in, each provider's state (`openai-codex`, `anthropic`) and whether the files' permissions are safe, from file metadata only; their contents are never read into the output. |
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Needs me after `question_unattended_secs`. |
 
 `corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
@@ -98,7 +127,7 @@ pane or prompt exists, and refuse with a stable code naming what is missing:
 | `compat_unavailable` | The assets have no `compat.json` recording a `GO` verdict. |
 | `role_unavailable <role>` | The assets lack `src/roles/<role>/index.ts`; the reason names the stage that adds it. |
 | `delivery_unavailable` | The assets lack `src/delivery/index.ts`. |
-| `credentials_unavailable` | The assets lack `src/auth/index.ts`. |
+| `credentials_unavailable` | The assets lack `src/auth/index.ts`, or (managed installation only) the profile's provider has no login; the reason names the provider and `corral agent login --provider <provider>`. An `[agent] assets_dir` installation skips the login check, and its host refuses at launch instead. |
 
 Until every stage has landed, a pi-native dispatch therefore stops at one of these refusals.
 `corral doctor` reports the same readback for each role when a pi-native profile is configured,
@@ -144,9 +173,12 @@ Only the role's tools are active; any other tool call is refused. The host loads
 but corral's own, and no MCP, prompt templates, themes or context files such as `AGENTS.md`.
 The only skill is the one the role ships inside the installation (the worker's corral-worker
 skill); skills in the worktree, your home directory or another harness are never loaded. Install telemetry, analytics, the cache warmer and the remote model catalog are
-off. Its network is a guarded fetch that sends only POST requests to the pinned provider API
-(`https://chatgpt.com/backend-api/codex/responses`) and that provider's token-refresh endpoint;
-every other request, bug-report uploads included, is refused. The same holds after a reload and
+off. Its network is a guarded fetch that sends only POST requests to the bound profile's provider
+API and that provider's token-refresh endpoint: for `openai`,
+`https://chatgpt.com/backend-api/codex/responses` and `https://auth.openai.com/oauth/token`; for
+`anthropic`, `https://api.anthropic.com/v1/messages` (with Pi's `?beta=true` query) and
+`https://platform.claude.com/v1/oauth/token`. Every other request, the other provider's endpoints
+and bug-report uploads included, is refused. The same holds after a reload and
 after the session is replaced.
 
 ### The bridge
@@ -244,11 +276,12 @@ are never nudged.
 
 **Vendors.** The allowlist admits `openai` and `anthropic`; a worker profile with any other vendor
 is refused `vendor_refused` before a worktree exists. A vendor also has to be one the installed
-host declares in `compat.json` `providers`; the shipped host declares none beyond the `openai`
-default, so an Anthropic profile is refused `provider_unsupported_by_host` until a host that
-declares `anthropic` is installed. Setup discovery lists only the vendors the installed host
-declares, so it does not offer an Anthropic profile the host cannot run. Anthropic profiles are opt-in and, once the host supports them,
-use subscription OAuth held only in the corral-owned Pi auth directory; see
+host declares in `compat.json` `providers`; the shipped host declares `openai` and
+`anthropic`, and an older installation without the list is refused
+`provider_unsupported_by_host` for Anthropic until you reinstall. Setup discovery lists only the
+vendors the installed host declares, so it does not offer an Anthropic profile the host cannot
+run. Anthropic profiles are opt-in and use subscription OAuth held only in the corral-owned Pi
+auth directory (`corral agent login --provider anthropic`); see
 `docs/records/pi-native-claude-route.md` for the evidence and the accepted policy risk.
 
 ## The reviewer role

@@ -85,7 +85,7 @@ const credential = (label: string, expires: string) =>
 const waitForRelease = `await new Promise((resolve) => process.stdin.once("data", resolve));`;
 
 function stored(dir: string): Record<string, { refresh: string; access: string }> {
-  return JSON.parse(readFileSync(join(dir, "auth.json"), "utf8"));
+  return { "openai-codex": JSON.parse(readFileSync(join(dir, "openai-codex.json"), "utf8")) };
 }
 
 describe("the credential lock across processes", () => {
@@ -112,7 +112,7 @@ describe("the credential lock across processes", () => {
     const contender = child(`
       const { appendFileSync } = await import("node:fs");
       const { FileCredentialStore } = await import(${STORE});
-      const store = new FileCredentialStore(${JSON.stringify(dir)}, { onContended: () => console.log("B_CONTENDED") });
+      const store = new FileCredentialStore(${JSON.stringify(dir)}, "openai-codex", { onContended: () => console.log("B_CONTENDED") });
       await store.modify("openai-codex", async (current) => {
         appendFileSync(${JSON.stringify(log)}, \`B-enter \${current?.refresh}\\n\`);
         return ${credential("B", "Date.now() + 3600000")};
@@ -150,7 +150,7 @@ describe("the credential lock across processes", () => {
     await holder.exited();
 
     let contended = false;
-    const after = new FileCredentialStore(dir, { onContended: () => { contended = true; } });
+    const after = new FileCredentialStore(dir, "openai-codex", { onContended: () => { contended = true; } });
     const result = await after.modify("openai-codex", async (current) => ({ ...current!, access: "access-after" }));
     expect(contended).toBeFalse();
     expect([result?.type, (result as { refresh?: string }).refresh, (result as { access?: string }).access])
@@ -180,7 +180,7 @@ describe("the credential lock across processes", () => {
       };
       const { FileCredentialStore } = await import(${STORE});
       const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-      const store = new FileCredentialStore(${JSON.stringify(dir)}, ${hooks});
+      const store = new FileCredentialStore(${JSON.stringify(dir)}, "openai-codex", ${hooks});
       const models = await ModelRuntime.create({ credentials: store, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
       const resolved = await models.getAuth("openai-codex");
       console.log("${label}_AUTH " + refreshes + " " + JSON.stringify(resolved?.auth));

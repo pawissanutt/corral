@@ -174,18 +174,38 @@ pub(crate) fn checks_with(
             ),
         },
     };
-    let stored = root.as_deref().map(credentials::status_in);
+    let stored = root.as_deref().map(|root| {
+        let each = credentials::PROVIDERS
+            .iter()
+            .map(|p| {
+                let state = if credentials::provider_status(root, p.id).present {
+                    "logged in"
+                } else {
+                    "not logged in"
+                };
+                format!("{} {state}", p.id)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        (credentials::status_in(root), each)
+    });
     let credential = match &stored {
         None => (false, "pi-native credentials: no data directory".to_owned()),
-        Some(status) => match (&status.problem, status.present) {
+        Some((status, each)) => match (&status.problem, status.present) {
             (Some(problem), _) => (false, format!("pi-native credentials unsafe: {problem}")),
             (None, true) => (
                 true,
-                format!("pi-native credentials present in {}", status.dir.display()),
+                format!(
+                    "pi-native credentials present in {} ({each})",
+                    status.dir.display()
+                ),
             ),
             (None, false) => (
                 false,
-                format!("pi-native credentials absent from {}", status.dir.display()),
+                format!(
+                    "pi-native credentials absent from {} ({each})",
+                    status.dir.display()
+                ),
             ),
         },
     };
@@ -217,7 +237,7 @@ pub(crate) fn checks_with(
             "pi_native_credentials",
             credential.0,
             credential.1,
-            "Run `corral agent login` once in a pane to provision the corral-owned Pi credentials.",
+            "Run `corral agent login` in a pane to log in each provider your pi-native profiles use.",
         ),
         line("pi_native_question_wake", true, wake, ""),
     ])

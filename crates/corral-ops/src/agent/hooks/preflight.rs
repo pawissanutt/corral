@@ -73,7 +73,46 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
         })?,
     };
     assets(&dir, role, explicit.is_some())?;
-    Ok(host_provider(&dir, resolved.vendor.as_deref())?)
+    host_provider(&dir, resolved.vendor.as_deref())?;
+    // A development or fixture `[agent] assets_dir` brings its own auth module; only the managed
+    // installation reads the corral-owned login, so only it is checked here.
+    if explicit.is_none() {
+        credential(
+            &super::super::install::data_root()?,
+            resolved.vendor.as_deref(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Refuses a vendor whose provider has no usable corral-owned login, naming the provider and the
+/// command that provisions it. Reads file metadata only.
+pub fn credential(data_root: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
+    use super::super::credentials::{provider_for_vendor, provider_status};
+    let Some(provider) = vendor.and_then(provider_for_vendor) else {
+        return Ok(());
+    };
+    let status = provider_status(data_root, provider.id);
+    let login = format!("run `corral agent login --provider {}`", provider.id);
+    match (status.present, status.problem) {
+        (true, None) => Ok(()),
+        (_, Some(problem)) => Err(refuse(
+            "credentials_unavailable",
+            format!(
+                "provider {} ({}) credential is unusable: {problem}; {login}",
+                provider.id, provider.label
+            ),
+        )),
+        (false, None) => Err(refuse(
+            "credentials_unavailable",
+            format!(
+                "provider {} ({}) has no login in {}; {login}",
+                provider.id,
+                provider.label,
+                status.dir.display()
+            ),
+        )),
+    }
 }
 
 /// Providers a host declares when `compat.json` has no `providers` list: the original host
@@ -220,4 +259,64 @@ pub fn assets(dir: &Path, role: AgentRole, explicit: bool) -> Result<(), Refusal
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+    use crate::agent::credentials::{auth_dir, ensure_auth_dir};
+
+    fn login(root: &Path, file: &str) {
+        ensure_auth_dir(&auth_dir(root)).unwrap();
+        let path = auth_dir(root).join(file);
+        std::fs::write(&path, "{\"type\":\"oauth\"}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn an_anthropic_profile_needs_an_anthropic_login_and_openai_keeps_its_own() {
+        // Given only a Codex login (still in the pre-T-479 shared file):
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        login(root, "auth.json");
+        // Then openai passes and anthropic is refused naming its provider and login command:
+        assert_eq!(credential(root, Some("openai")), Ok(()));
+        let refused = credential(root, Some("anthropic")).unwrap_err();
+        assert_eq!(refused.code, "credentials_unavailable");
+        assert!(
+            refused
+                .detail
+                .starts_with("provider anthropic (Anthropic Claude (Pro/Max)) has no login")
+                && refused
+                    .detail
+                    .ends_with("run `corral agent login --provider anthropic`"),
+            "{refused}"
+        );
+        // And once Anthropic is logged in, a claude profile passes too:
+        login(root, "anthropic.json");
+        assert_eq!(credential(root, Some("anthropic")), Ok(()));
+        // An Anthropic login alone does not make an openai profile runnable:
+        std::fs::remove_file(auth_dir(root).join("auth.json")).unwrap();
+        let openai = credential(root, Some("openai")).unwrap_err();
+        assert!(
+            openai
+                .detail
+                .ends_with("run `corral agent login --provider openai-codex`"),
+            "{openai}"
+        );
+        // A loose file is unusable, not absent:
+        std::fs::set_permissions(
+            auth_dir(root).join("anthropic.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(
+            credential(root, Some("anthropic"))
+                .unwrap_err()
+                .detail
+                .contains("is unusable")
+        );
+    }
 }

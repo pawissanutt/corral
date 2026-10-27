@@ -1,11 +1,12 @@
 // Restricted resources: no MCP, inherited skills, prompt templates, context files, themes,
 // telemetry, bug-report upload, cache warmer or remote catalog, and a guarded fetch that
-// reaches only the pinned provider API and that provider's token-refresh endpoint.
+// reaches only the bound provider's model API and that provider's token-refresh endpoint.
+import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { Fetch } from "../auth/types.ts";
 
-export const PROVIDER_API = "https://chatgpt.com/backend-api/codex/responses";
-export const TOKEN_REFRESH = "https://auth.openai.com/oauth/token";
-export const ALLOWED_DESTINATIONS: readonly string[] = [PROVIDER_API, TOKEN_REFRESH];
+export const PROVIDER_API = PROVIDERS["openai-codex"].api;
+export const TOKEN_REFRESH = PROVIDERS["openai-codex"].refresh;
+export const ALLOWED_DESTINATIONS: readonly string[] = hostDestinations("openai-codex");
 
 /** Every built-in upstream extension (pi-coding-agent 1.3.0 `builtInExtensions`). */
 export const BUILTIN_EXTENSIONS: readonly string[] = ["llama.cpp", "codemode", "tool-search", "mcp"];
@@ -79,15 +80,21 @@ export interface GuardedFetch {
   ledger(): NetworkLedger;
 }
 
-/** A fetch that sends only POSTs to the pinned endpoints, through `send`, without redirects. */
-export function guardedFetch(send: Fetch, onRefused?: (destination: string) => void): GuardedFetch {
+/**
+ * A fetch that sends only POSTs to `provider`'s pinned endpoints, through `send`, without
+ * redirects. Every other provider's endpoints are refused like any other destination.
+ */
+export function guardedFetch(
+  send: Fetch, onRefused?: (destination: string) => void, provider: ProviderId = "openai-codex",
+): GuardedFetch {
+  const destinations = hostDestinations(provider);
   let allowed = 0;
   let refused = 0;
   const refusedDestinations: string[] = [];
   const fetch: Fetch = async (input, init) => {
     const target = destination(input);
     const method = (init?.method ?? target.method ?? "GET").toUpperCase();
-    if (method !== "POST" || !ALLOWED_DESTINATIONS.includes(target.url)) {
+    if (method !== "POST" || !destinations.includes(target.url)) {
       refused++;
       const where = redact(target.url);
       if (refusedDestinations.length < 32 && !refusedDestinations.includes(where)) refusedDestinations.push(where);

@@ -42,7 +42,11 @@ enum AgentCmd {
         json: bool,
     },
     /// Provision the corral-owned Pi credentials with one interactive owner login
-    Login,
+    Login {
+        /// Provider to log in; without it a terminal shows an arrow-key picker
+        #[arg(long, value_parser = ["openai-codex", "anthropic"])]
+        provider: Option<String>,
+    },
     /// Report the Bun runtime, installed assets, GO manifest, roles and credential presence
     Doctor {
         #[arg(long)]
@@ -125,7 +129,13 @@ pub fn run(start: &Path, args: AgentArgs, entry: &Entry) -> Result<()> {
             cli::launch(start, &cli::LaunchArgs { bootstrap, assets })
         }
         AgentCmd::Install { from, json } => cli::install(start, &cli::InstallArgs { from, json }),
-        AgentCmd::Login => cli::login(start),
+        AgentCmd::Login { provider } => match cli::login(start, provider.as_deref()) {
+            Err(error) if error.is::<corral_ops::agent::credentials::LoginCancelled>() => {
+                eprintln!("{error}");
+                std::process::exit(130);
+            }
+            result => result,
+        },
         AgentCmd::Doctor { json } => cli::doctor(&entry.open(start)?, json),
         AgentCmd::State { target, json } => cli::state(
             &entry.open(start)?,

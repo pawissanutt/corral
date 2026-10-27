@@ -50,6 +50,7 @@ impl Fixture {
         HostSpec {
             cwd: self._tmp.path().join("worktree"),
             model: "gpt-6.1-sol".into(),
+            provider: None,
             effort: Some("high".into()),
             prompt_file: None,
         }
@@ -607,4 +608,21 @@ fn the_asset_digest_covers_shipped_files_only_and_refuses_symlinks() {
     assert_ne!(asset_digest(&dir).unwrap(), with_fixture);
     std::os::unix::fs::symlink("/etc/hostname", dir.join("src/linked.ts")).unwrap();
     assert!(asset_digest(&dir).is_err());
+}
+
+#[test]
+fn the_host_provider_follows_the_bound_vendor_else_the_model() {
+    for (vendor, model, provider) in [
+        (Some("anthropic"), "claude-opus-5-5", Some("anthropic")),
+        (None, "claude-sonnet-5-5", Some("anthropic")),
+        (Some("openai"), "gpt-6.1-sol", Some("openai-codex")),
+        (None, "gpt-6.1-sol", Some("openai-codex")),
+        (None, "mystery-model", None),
+    ] {
+        assert_eq!(
+            host_provider(vendor, model).as_deref(),
+            provider,
+            "{vendor:?} {model}"
+        );
+    }
 }

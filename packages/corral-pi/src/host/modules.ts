@@ -4,6 +4,7 @@ import { existsSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { ProviderId } from "../auth/providers.ts";
 import type { AuthModule } from "../auth/types.ts";
 import type { DeliveryModule } from "../delivery/types.ts";
 import { CORRAL_OPS, ROLES, type Role, type RoleModule, UPSTREAM_TOOLS } from "../roles/types.ts";
@@ -118,10 +119,14 @@ function checkDelivery(value: unknown, module: string): DeliveryModule {
   return candidate as unknown as DeliveryModule;
 }
 
-function checkAuth(value: unknown, module: string): AuthModule {
+function checkAuth(value: unknown, module: string, provider: ProviderId): AuthModule {
   const candidate = object(value, module);
   if (candidate.provider !== "openai-codex" || typeof candidate.credentials !== "function") {
     throw new ModuleInvalid(module, "needs provider openai-codex and credentials()");
+  }
+  const serves = candidate.providers === undefined ? [candidate.provider] : candidate.providers;
+  if (!Array.isArray(serves) || !serves.includes(provider)) {
+    throw new ModuleUnavailable("auth", `${module} for provider ${provider}`, "host-install");
   }
   return candidate as unknown as AuthModule;
 }
@@ -133,13 +138,15 @@ export interface LoadedModules {
 }
 
 /** Loads the role, delivery and auth modules from their fixed paths under the asset root. */
-export async function loadModules(assetRoot: string, role: Role): Promise<LoadedModules> {
+export async function loadModules(
+  assetRoot: string, role: Role, provider: ProviderId = "openai-codex",
+): Promise<LoadedModules> {
   const [first] = missingModules(assetRoot, role);
   if (first) throw first;
   const paths = modulePaths(role);
   return {
     role: checkRole(await importDefault(assetRoot, paths.role), paths.role, role),
     delivery: checkDelivery(await importDefault(assetRoot, paths.delivery), paths.delivery),
-    auth: checkAuth(await importDefault(assetRoot, paths.auth), paths.auth),
+    auth: checkAuth(await importDefault(assetRoot, paths.auth), paths.auth, provider),
   };
 }

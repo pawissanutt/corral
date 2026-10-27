@@ -22,3 +22,11 @@ test("the optional exact resume path survives launch parsing; older launch messa
   expect(() => parseLaunchMessage(JSON.stringify({ ...message, fresh_session: "true" }))).toThrow(LaunchMessageInvalid);
   expect(() => parseLaunchMessage(JSON.stringify({ ...message, resume_session: "relative.jsonl" }))).toThrow(LaunchMessageInvalid);
 });
+
+test("the launch provider is optional, defaults to Codex in the host, and must be a known provider", () => {
+  expect(parseLaunchMessage(JSON.stringify(message)).provider).toBeUndefined();
+  expect(parseLaunchMessage(JSON.stringify({ ...message, provider: null })).provider).toBeUndefined();
+  expect(parseLaunchMessage(JSON.stringify({ ...message, provider: "anthropic", model: "claude-opus-5-5" })).provider)
+    .toBe("anthropic");
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, provider: "mistral" }))).toThrow(LaunchMessageInvalid);
+});
