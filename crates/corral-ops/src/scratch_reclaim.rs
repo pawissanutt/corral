@@ -517,11 +517,22 @@ fn deliver(ctx: &Ctx, row: &ScratchRow, state: &State, warning: OwedWarning) -> 
     };
     WARNINGS.save(&ctx.store, &row.id, &submitting)?;
     let delivery = ctx.herdr.agent_prompt(pane, &submitting.message)?;
-    // A definite refusal submitted nothing, so the message stays owed for the next pass.
+    // Only a proven non-submission returns to Owed: the message still waits in the pane's
+    // input (a retry submits it without pasting again), or the terminal path never sent Enter.
+    // Any other unconfirmed outcome, such as a transport that died after the engine accepted
+    // the prompt, stays Submitting and becomes Uncertain, never resent.
+    let proven_unsent = !delivery.submitted
+        && ((delivery.via == corral_herdr::DeliveryVia::SendText && delivery.attempts == 0)
+            || ctx
+                .herdr
+                .input_pending(pane, &submitting.message)
+                .unwrap_or(false));
     let stage = if delivery.submitted {
         Stage::Delivered
-    } else {
+    } else if proven_unsent {
         Stage::Owed
+    } else {
+        Stage::Submitting
     };
     WARNINGS.save(
         &ctx.store,
@@ -533,7 +544,12 @@ fn deliver(ctx: &Ctx, row: &ScratchRow, state: &State, warning: OwedWarning) -> 
     )?;
     anyhow::ensure!(
         delivery.submitted,
-        "steering message to pane {pane} was not submitted; retrying next pass: {}",
+        "steering message to pane {pane} was not confirmed ({}): {}",
+        if proven_unsent {
+            "retrying next pass"
+        } else {
+            "left uncertain, never resent"
+        },
         delivery.error.as_deref().unwrap_or("unconfirmed")
     );
     Ok(())

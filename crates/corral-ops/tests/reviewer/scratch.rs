@@ -438,7 +438,8 @@ fn a_crashed_reclaim_waits_for_a_held_cargo_lock_then_completes_once() {
     });
 }
 
-/// A herdr wrapper that logs each `agent prompt` the fake engine accepts.
+/// A herdr wrapper that logs each `agent prompt` the fake engine accepts; while
+/// `<tmp>/crash-after-accept` exists the CLI dies after acceptance, before acknowledging it.
 fn logging_herdr(tmp: &Path) -> PathBuf {
     let log = tmp.join("prompts.log");
     let wrapper = tmp.join("herdr-logged");
@@ -447,9 +448,11 @@ fn logging_herdr(tmp: &Path) -> PathBuf {
         format!(
             "#!/usr/bin/env bash\nif [ \"$1\" = --session ]; then a=(\"$3\" \"$4\"); else a=(\"$1\" \"$2\"); fi\n\
              if [ \"${{a[0]}} ${{a[1]}}\" = 'agent prompt' ] && [ ! -e '{refuse}' ]; then\n\
-               printf '%s\\n' \"$*\" >> '{log}'\nfi\n\
+               printf '%s\\n' \"$*\" >> '{log}'\n\
+               if [ -e '{crash}' ]; then kill -9 $$; fi\nfi\n\
              exec '{herdr}' \"$@\"\n",
             refuse = tmp.join("not-ready").display(),
+            crash = tmp.join("crash-after-accept").display(),
             log = log.display(),
             herdr = tmp.join("herdr").display(),
         ),
@@ -596,6 +599,40 @@ fn a_send_accepted_before_a_crash_is_never_resubmitted() {
 
     // Then the engine accepted exactly one steering message, with one warning event and one
     // uncertainty alert, and the journal never sends it again.
+    assert_eq!(delivered(tmp.path()), 1);
+    assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
+    assert_eq!(
+        events(&restarted, "storage_scratch_warning_uncertain").len(),
+        1
+    );
+    let stage = restarted
+        .store
+        .record_row("scratch-warnings", &scratch)
+        .unwrap()
+        .unwrap()
+        .doc["value"]["stage"]
+        .clone();
+    assert_eq!(stage, serde_json::json!("uncertain"));
+}
+
+#[test]
+fn a_transport_that_dies_after_acceptance_leaves_the_warning_uncertain_not_resent() {
+    // Given an engine that accepts the warning and then loses its acknowledgment, while the
+    // sending process survives.
+    let (tmp, ctx, id, _dir) = oversized_review();
+    let scratch = format!("review-{id}-R1-review1");
+    std::fs::write(tmp.path().join("crash-after-accept"), "").unwrap();
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    assert_eq!(delivered(tmp.path()), 1, "the engine accepted it");
+    std::fs::remove_file(tmp.path().join("crash-after-accept")).unwrap();
+
+    // When the pass runs again, also after a restart.
+    corral_ops::reclaim_scratch_pass(&ctx, Timestamp::now()).unwrap();
+    let mut restarted = ctx.clone();
+    restarted.store = Store::open(tmp.path()).unwrap();
+    corral_ops::reclaim_scratch_pass(&restarted, Timestamp::now()).unwrap();
+
+    // Then nothing is resent: one accepted message, one warning, one uncertainty alert.
     assert_eq!(delivered(tmp.path()), 1);
     assert_eq!(events(&restarted, "storage_scratch_warning").len(), 1);
     assert_eq!(
