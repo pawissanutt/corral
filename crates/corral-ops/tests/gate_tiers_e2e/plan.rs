@@ -205,7 +205,8 @@ fn land_members(p: &PlanFx) -> Vec<GateRecord> {
         assert_eq!(started.len(), receipts.len(), "{id}: {started:?}");
         for (event, receipt) in started.iter().zip(&receipts) {
             assert_eq!(event["tier"], "quick", "{id}");
-            assert_eq!(event["identity"], json!(receipt.identity), "{id}");
+            let attempt = &receipt.identity.as_ref().unwrap().attempt;
+            assert_eq!(event["attempt"], json!(attempt), "{id}");
         }
         assert_eq!(fx.events(id, "evidence_recorded").len(), receipts.len());
         assert_eq!(fx.events(id, "review_started").len(), receipts.len());
