@@ -526,7 +526,8 @@ fn classify_lost(
             running: Vec::new(),
         });
     };
-    let dangling = interrupted::dangling_calls(&bound.session_file, generation.created)?;
+    let dangling =
+        interrupted::dangling_calls(&bound.session_file, generation.n, &bound.session_id)?;
     let all = receipts(ctx, container)?;
     let needs_snapshot = dangling
         .calls
@@ -835,6 +836,9 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "recovery_cancel_tests.rs"]
 mod cancel_tests;
+#[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_clock_tests.rs"]
+mod clock_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "recovery_crash_tests.rs"]
 mod crash_tests;
