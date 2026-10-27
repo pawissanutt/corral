@@ -272,8 +272,11 @@ fn when(event: &Event) -> Timestamp {
 /// Whether a condition was open at a canonical instant: from its canonical `since` (or opening)
 /// through its resolution, both inclusive. Publication order never stands in for time.
 fn open_at(row: &ConditionRow, at: Timestamp) -> bool {
-    row.since.or(row.opened_at).is_some_and(|since| since <= at)
-        && row.resolved_at.is_none_or(|end| at <= end)
+    row.since.or(row.opened_at).is_some_and(|since| since <= at) && resolved_after(row, at)
+}
+
+fn resolved_after(row: &ConditionRow, at: Timestamp) -> bool {
+    row.resolved_at.is_none_or(|end| at <= end)
 }
 
 fn counted(ids: &Timed, window: Window) -> u64 {
