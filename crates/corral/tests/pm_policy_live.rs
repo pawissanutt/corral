@@ -100,7 +100,13 @@ impl Journey {
     }
 
     fn receipt(&self, label: &str) -> Value {
-        let bytes = std::fs::read(self.root.path().join(".corral/state/pm-policy.json")).unwrap();
+        let record = Store::open_unobserved(self.root.path())
+            .unwrap()
+            .record::<Value>("pm-policy", "state")
+            .unwrap()
+            .unwrap();
+        assert_eq!(record["doc_version"], 1);
+        let bytes = serde_json::to_vec(&record["value"]).unwrap();
         self.save(&format!("{label}-receipt.json"), &bytes);
         serde_json::from_slice::<Value>(&bytes).unwrap()["panes"][self.pane.as_deref().unwrap()]
             .clone()
