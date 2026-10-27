@@ -501,6 +501,7 @@ fn entry_condition(
 fn incomplete(entry: &OwnerEntry) -> bool {
     let evidence = &entry.message.retry_evidence;
     evidence.coverage != RetryCoverage::Complete
+        || !entry.message.claim_mirrored
         || evidence.route != RetryRoute::EnvelopeOnly
         || evidence.pending.is_some()
         || entry.message.envelope.is_some() && entry.message.delivery.is_none()

@@ -25,6 +25,8 @@ mod review_run_key_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_claim;
+#[cfg(test)]
 mod tests_header;
 #[cfg(test)]
 mod tests_retry;

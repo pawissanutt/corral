@@ -220,16 +220,23 @@ impl Inbox<'_> {
             .body
             .split_once('\n')
             .context("message body header missing")?;
+        // Mirror first: an interruption before the marker leaves a visible, conservative claim
+        // the next exact retry overwrites, never a marker the bounded reader cannot see.
         let claim = json!({"at": Timestamp::now()});
-        if !create_new_json(&marker, &claim)? {
-            return Err(already());
-        }
         let mirrored = {
             let _inbox = self.lock()?;
             self.mirror_retry_claim(seq, Some(&claim))
         };
         if let Err(error) = mirrored {
             return Err(self.release_retry_claim(seq, &marker, error));
+        }
+        #[cfg(test)]
+        super::header::checkpoint("retry_claim_mirrored")?;
+        if !create_new_json(&marker, &claim)? {
+            // A foreign claim won: restore its exact mirror instead of ours.
+            let _inbox = self.lock()?;
+            self.mirror_retry_claim(seq, read_optional::<Value>(&marker)?.as_ref())?;
+            return Err(already());
         }
         let mut reserving = false;
         let posted = self.post_with_reservation(
@@ -258,8 +265,8 @@ impl Inbox<'_> {
             |replacement| {
                 let claim =
                     json!({"at": Timestamp::now(), "from": original.id, "to": replacement.id});
-                write_json(&marker, &claim)?;
                 self.mirror_retry_claim(seq, Some(&claim))?;
+                write_json(&marker, &claim)?;
                 reserving = true;
                 Ok(())
             },
@@ -283,16 +290,15 @@ impl Inbox<'_> {
         marker: &std::path::Path,
         error: anyhow::Error,
     ) -> anyhow::Error {
+        // Marker first: an interruption leaves a visible mirror, never a hidden marker.
         let released = (|| -> Result<()> {
-            {
-                let _inbox = self.lock()?;
-                self.mirror_retry_claim(seq, None)?;
-            }
             match fs::remove_file(marker) {
-                Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(e.into()),
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
             }
+            let _inbox = self.lock()?;
+            self.mirror_retry_claim(seq, None)
         })();
         match released {
             Ok(()) => error,

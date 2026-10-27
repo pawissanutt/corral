@@ -115,6 +115,32 @@ fn incomplete_retry_claims_never_resolve_or_replay_a_predecessor() {
                     )
                     .unwrap();
                 }
+                // Given a claim written before the bounded mirror existed: unverified entries.
+                store
+                    .update(&id, |task| {
+                        let header = recipients[index]
+                            .state_mut(task)?
+                            .owner_header
+                            .as_mut()
+                            .unwrap();
+                        for entry in header
+                            .entries
+                            .iter_mut()
+                            .chain(header.overflow_entries.iter_mut())
+                        {
+                            entry.claim_mirrored = false;
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+                // Then an absent mirror never offers a PM retry command before the backfill.
+                let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
+                assert_ne!(
+                    message_row(&rows, &original.id).next_action.command,
+                    Some(format!("corral inbox retry {}", original.id))
+                );
+                // When bounded maintenance runs, the exact claim is visible again.
+                inbox.maintain_owner_header(at()).unwrap();
                 let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
                 let pending = message_row(&rows, &original.id);
                 assert_eq!(pending.kind, "delivery_retry_pending");
