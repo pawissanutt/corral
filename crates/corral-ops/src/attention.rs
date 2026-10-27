@@ -21,6 +21,7 @@ mod classify;
 mod classify_tests;
 mod delivery;
 mod handling;
+pub mod metrics;
 mod outbox;
 pub use handling::{attend, guard};
 pub(crate) use handling::{reconcile, reconcile_projected};

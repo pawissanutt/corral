@@ -171,7 +171,48 @@ A park replaces an otherwise stalled task's primary display but retains its
 decisions, delivery conditions and infrastructure waits keep their independent
 keys, ages, handling and notification claims.
 
-Attention-specific statistics belong to a later plan child.
+## Statistics
+
+```sh
+corral attention stats --since 7d
+corral attention stats --since 24h --json
+```
+
+`stats` reads the event log, the current task ledgers and the existing
+standalone notice records (availability episodes, post-land operations and the
+resource alert) on demand. It never syncs, sends, or writes. `--since` is the
+window length ending now, 1 minute through 365 days, default 7 days. Facts are
+deduplicated by `fact_id`, so a replayed append or a fact that is both appended
+and still pending counts once.
+
+The population is every condition open at any time in the window: opened in it,
+resolved in it, or still open. Conditions opened before the window are reported
+as `carry_in`. `pm_available` counts conditions whose `pm_live_at_open` was true;
+false and unknown form `pm_absent`. Handling latency is the earlier of the first
+accepted attend and resolution, minus `since`; it is censored only while a
+condition is open and unhandled at the window end. Backlog samples PM-responsible
+conditions hourly and at the window end.
+
+Owner notifications count physical batches (one `batch_id`) separately from the
+claims they cover. A missing outcome is `outcome_unknown` for both a stop before
+transport and a stop after it; it is never treated as unsent. `calls` is the
+interval `[success + failure, success + failure + unknown]` of transport
+invocations, not delivery to a person. `budget_batches` and `budget_calls` exclude
+exempt owner-responsible entry batches; outside-ladder producers (empty coverage)
+remain counted.
+
+Actions attach to a condition only through an exact identity: the message ID of
+`message_retried`, the recipient key of a fresh post, the question key, the park
+revision, or the task's run-level events for escalation and stall kinds. An
+action matching several open conditions is `ambiguous` and attributed to none.
+A repeat of the same identity while the condition stays open is a `duplicate`;
+a repeat after a failed submission is reported as `after_terminal`. Lost review
+rounds sum `released_review_runs` of escalations whose reason begins
+`integration preflight error`. Events without a canonical detail time are
+selected by append time from the window start.
+
+See [attention evaluation](../records/attention-evaluation.md) for the offline
+scenario results and the live operational protocol.
 
 See [attention record contracts](../records/attention-records.md) for the stored
 shapes and bounded owner-inbox projection.
