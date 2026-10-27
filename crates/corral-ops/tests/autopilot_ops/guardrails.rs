@@ -324,28 +324,26 @@ fn peer_review(fx: &Fx, project: &str, verdict: Option<Verdict>) -> Task {
 }
 
 #[test]
-fn manual_landing_refuses_pending_same_project_review() {
+fn manual_landing_proceeds_while_same_project_review_is_pending() {
     for strategy in [ApproveStrategy::FastForward, ApproveStrategy::Rebase] {
         // Given another task with a pending review in the same project.
         let fx = Fx::new(|_| {});
         fx.change("widget.txt", "widget\n");
         fx.done();
         let peer = peer_review(&fx, "app", None);
-        let base = git(&fx.app, &["rev-parse", "main"]);
 
-        // When the owner tries to land.
-        let error = corral_ops::approve(&fx.ctx, &fx.id, strategy, false, true).unwrap_err();
+        // When the owner lands.
+        corral_ops::approve(&fx.ctx, &fx.id, strategy, false, true).unwrap();
 
-        // Then the shared boundary blocks before git advancement.
-        assert!(error.to_string().contains(&peer.id));
-        assert_eq!(git(&fx.app, &["rev-parse", "main"]), base);
-        assert_eq!(fx.task().status, Status::Review);
-        assert_eq!(fx.events("approved"), 0);
+        // Then main advances and the peer's review is left untouched.
+        assert_eq!(fx.task().status, Status::Done);
+        assert!(fx.app.join("widget.txt").is_file());
+        assert_eq!(fx.ctx.store.get(&peer.id).unwrap().status, Status::Review);
     }
 }
 
 #[test]
-fn autopilot_landing_refuses_pending_same_project_review() {
+fn autopilot_landing_proceeds_while_same_project_review_is_pending() {
     // Given an approved autonomous candidate and a peer awaiting a verdict.
     let fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
@@ -357,15 +355,13 @@ fn autopilot_landing_refuses_pending_same_project_review() {
     fx.sync();
     fx.verdict(Verdict::Approve, "Reviewed.");
     peer_review(&fx, "app", None);
-    let base = git(&fx.app, &["rev-parse", "main"]);
 
     // When autopilot reaches the common landing boundary.
     fx.sync();
 
-    // Then main and the approval ledger remain unchanged.
-    assert_eq!(git(&fx.app, &["rev-parse", "main"]), base);
-    assert_ne!(fx.task().status, Status::Done);
-    assert_eq!(fx.events("approved"), 0);
+    // Then it lands without waiting for the peer's verdict.
+    assert_eq!(fx.task().status, Status::Done);
+    assert_eq!(fx.events("approved"), 1);
 }
 
 #[test]
@@ -418,7 +414,7 @@ fn reworking_or_obsolete_peer_review_does_not_block_landing() {
 }
 
 #[test]
-fn changing_peer_is_refused_without_waiting_under_landing_lock() {
+fn changing_peer_does_not_block_landing() {
     // Given a peer being updated by another operation.
     let fx = Fx::new(|_| {});
     fx.change("widget.txt", "widget\n");
@@ -438,12 +434,10 @@ fn changing_peer_is_refused_without_waiting_under_landing_lock() {
         )
         .unwrap();
     _lock.lock().unwrap();
-    let base = git(&fx.app, &["rev-parse", "main"]);
 
-    // When landing cannot stabilize the peer's review state.
-    let result = corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, false, true);
+    // When another task lands while that peer's lock is held.
+    corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, false, true).unwrap();
 
-    // Then it refuses rather than waiting with the shared landing lock held.
-    assert!(result.is_err());
-    assert_eq!(git(&fx.app, &["rev-parse", "main"]), base);
+    // Then landing never takes peer locks, so it neither waits nor refuses.
+    assert_eq!(fx.task().status, Status::Done);
 }

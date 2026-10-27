@@ -479,36 +479,6 @@ pub fn approve(
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
 
-/// Called under the repository landing and board locks. Hold peer task locks through landing
-/// so an existing peer cannot start a review after this check and before the merge.
-fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<corral_core::StoreLock>> {
-    let mut locks = Vec::new();
-    for peer in ctx.store.list()? {
-        if peer.id == task.id || peer.project != task.project {
-            continue;
-        }
-        let lock = ctx
-            .store
-            .try_lock(&peer.id)?
-            .with_context(|| format!("{} is changing; retry landing after it settles", peer.id))?;
-        let peer = ctx.store.get(&peer.id)?;
-        if peer.project == task.project
-            && peer.status == Status::Review
-            && let Some(run) = peer.current_run()
-            && !run.review_interrupted()
-            && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
-            && corral_git::rev_sha(&run.worktree, "HEAD")? == review.sha
-        {
-            bail!(
-                "{} has a review in progress; wait for its verdict before landing",
-                peer.id
-            );
-        }
-        locks.push(lock);
-    }
-    Ok(locks)
-}
-
 /// `approve`, also returning the sha the base (or kept branch) ended at.
 pub(crate) fn approve_landed(
     ctx: &Ctx,
@@ -567,12 +537,8 @@ pub(crate) fn approve_landed(
     let mut landed = None;
     let mut operation = None;
     let mut previous_sha = None;
+    // Peers under review keep going: their approval carries over a clean replay onto the new base.
     let task = ctx.store.dispatch_update(&task.id, |store, t| {
-        let _review_locks = if strategy != ApproveStrategy::KeepBranch {
-            lock_review_peers(ctx, t)?
-        } else {
-            Vec::new()
-        };
         if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
         }
