@@ -15,6 +15,10 @@ use corral_core::records::RecordArea;
 
 const OPERATIONS: RecordArea<PostLandOperation> = RecordArea::new("post-land");
 
+#[cfg(test)]
+#[path = "hooks_tests.rs"]
+mod tests;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookState {
@@ -175,7 +179,9 @@ pub(crate) fn prepare(
     if let Some(previous) = OPERATIONS.load(&ctx.store, &op.key)? {
         return Ok(Some(previous));
     }
-    save(ctx, &op)?;
+    // Git commits independently of the surrounding task update. Its obligation
+    // must survive a later callback failure, not join that update's buffered rows.
+    OPERATIONS.save_intent(&ctx.store, &op.key, &op)?;
     Ok(Some(op))
 }
 
