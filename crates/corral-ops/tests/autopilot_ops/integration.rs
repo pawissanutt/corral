@@ -395,13 +395,7 @@ fn gone_worker_retry_carries_the_original_packet_path() {
     });
     assert_eq!(p["key"], expected_key);
     assert_request(&fx, &expected_key, &path);
-    let prompt = std::fs::read_to_string(
-        fx.ctx
-            .store
-            .prompts_dir()
-            .join(format!("{}-{}.md", fx.id, run.id)),
-    )
-    .unwrap();
+    let prompt = std::fs::read_to_string(dispatch_prompt(&fx.ctx.store, &fx.id, &run.id)).unwrap();
     assert!(prompt.contains(path.to_str().unwrap()));
     assert!(fx.herdr_log("prompts.log").is_empty());
     assert_no_launches(&fx);
@@ -528,4 +522,13 @@ fn moved_main_packet_keeps_reviewer_authored_notes_at_the_reviewed_sha() {
     assert_eq!(fx.task().rounds, 1);
     assert_eq!(fx.events("gate_started"), 1);
     assert_eq!(fx.events("review_started"), 1);
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

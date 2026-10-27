@@ -220,13 +220,7 @@ fn every_coding_revocation_retains_preparation_without_submitting_or_stopping_ru
             assert_eq!(run.id, "R1");
             assert_eq!(run.herdr, prepared.current_run().unwrap().herdr);
             assert!(run.worktree.is_dir());
-            assert!(
-                fx.ctx
-                    .store
-                    .prompts_dir()
-                    .join(format!("{}-R1.md", task.id))
-                    .is_file()
-            );
+            assert!(dispatch_prompt(&fx.ctx.store, &task.id, "R1").is_file());
             let record = authorization(&fx, &task.id, OperatingActionKind::Dispatch);
             assert_eq!(record.authorization, original.authorization);
             assert!(matches!(
@@ -523,4 +517,13 @@ fn concrete_gate_and_profile_reviewer_refuse_all_revocations_and_reuse_preparati
             }
         }
     }
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

@@ -1,6 +1,167 @@
+use std::io::Read;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{Artifact, ArtifactKind};
+use crate::backend::{
+    BlobQuery, BlobRow, BlobState, Clock, LeaseOp, Operation, PageReq, PutRecords, RecordWrite,
+    ScratchKind, ScratchRow, SystemClock,
+};
+use crate::blob::{FsBlobStore, Gc, GcRun, ProcessIdentity, Putter};
+use crate::blob_ref::{BlobHash, BlobRef};
+use crate::scratch::{NewScratch, ScratchArea};
+use crate::{Artifact, ArtifactKind, Store};
+
+/// How long a reader lease keeps blob GC's horizon behind a read that may outlive the grace.
+const READ_LEASE: Duration = Duration::from_secs(3600);
+
+/// The evidence facade (plan T-253 sections 7-8): content-addressed blobs referenced by
+/// record documents, reader leases, blob GC and registered scratch directories.
+impl Store {
+    /// The workspace's content-addressed evidence store, `.corral/blobs`.
+    pub fn blob_store(&self) -> Result<FsBlobStore> {
+        FsBlobStore::open(self.dir())
+    }
+
+    /// Puts `bytes` as a blob and commits record `area`/`key`, whose document `doc` builds
+    /// around the blob's reference, consuming the put's reservation in that same write: the
+    /// blob is live and referenced once this returns. Returns whether the record is new.
+    /// Call it outside a task update; its record write commits on its own.
+    pub fn put_evidence(
+        &self,
+        area: &str,
+        key: &str,
+        bytes: &[u8],
+        doc: impl FnOnce(&BlobRef) -> serde_json::Value,
+    ) -> Result<bool> {
+        anyhow::ensure!(!self.is_snapshot(), "a snapshot cannot store evidence");
+        self.check_runtime()?;
+        let blobs = self.blob_store()?;
+        let put = Putter::new(self.backend(), &blobs, &SystemClock)?.put(
+            &mut &bytes[..],
+            &mut |attempt| {
+                // Busy only while GC deletes this exact content; it finishes in one pass.
+                if attempt > 600 {
+                    bail!("blob GC kept {area}/{key} busy for a minute");
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                Ok(())
+            },
+        )?;
+        let before = self.record_row(area, key)?;
+        let created = before.is_none();
+        let write = RecordWrite {
+            area: area.to_owned(),
+            key: key.to_owned(),
+            expected: before.map(|row| row.version),
+            doc: Some(doc(&put.blob)),
+            updated: jiff::Timestamp::now(),
+        };
+        self.backend()
+            .apply(Operation::PutRecords(PutRecords {
+                writes: vec![write],
+                events: Vec::new(),
+                reservations: vec![put.reservation],
+            }))
+            .map_err(|error| anyhow!("storing evidence {area}/{key}: {error}"))?;
+        Ok(created)
+    }
+
+    /// The blob row of `hash`, in any state.
+    pub fn blob_row(&self, hash: &BlobHash) -> Result<Option<BlobRow>> {
+        let query = BlobQuery {
+            hash: Some(hash.clone()),
+            state: None,
+        };
+        Ok(self
+            .backend()
+            .view()?
+            .blobs(&query, PageReq::first(1))?
+            .items
+            .pop())
+    }
+
+    /// A verifying reader of a live blob's original bytes; `None` without a live row.
+    pub fn blob_reader(&self, hash: &BlobHash) -> Result<Option<Box<dyn Read + Send>>> {
+        match self.blob_row(hash)? {
+            Some(row) if row.state == BlobState::Live => {
+                use crate::backend::BlobStore;
+                Ok(Some(Box::new(self.blob_store()?.get(hash)?)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Runs `read` under a storage lease, so blob GC's horizon stays before its start
+    /// however long it takes; the lease is released whatever `read` returns.
+    pub fn with_blob_lease<T>(&self, read: impl FnOnce() -> Result<T>) -> Result<T> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let holder = ProcessIdentity::current()?.owner();
+        let id = format!("read-{holder}-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+        let expires =
+            jiff::Timestamp::now().checked_add(jiff::SignedDuration::try_from(READ_LEASE)?)?;
+        let lease = |op| {
+            self.backend()
+                .apply(Operation::Lease(op))
+                .map_err(|error| anyhow!("storage lease {id}: {error}"))
+        };
+        lease(LeaseOp::Acquire {
+            id: id.clone(),
+            holder: holder.clone(),
+            expires,
+        })?;
+        let result = read();
+        lease(LeaseOp::Release {
+            id: id.clone(),
+            holder,
+        })?;
+        result
+    }
+
+    /// One blob GC pass under the `storage-gc` claim with the configured grace period.
+    pub fn blob_gc(&self, clock: &dyn Clock) -> Result<GcRun> {
+        let blobs = self.blob_store()?;
+        Gc::new(self.backend(), &blobs, clock)?
+            .grace(self.config.storage.blob_grace())
+            .run()
+    }
+
+    /// Registers and creates scratch directory `rel` below the validated scratch root.
+    pub fn register_scratch(
+        &self,
+        kind: ScratchKind,
+        id: &str,
+        task: &str,
+        attempt: &str,
+        rel: &str,
+    ) -> Result<PathBuf> {
+        let layout = self.storage_layout()?;
+        let new = NewScratch {
+            id: id.to_owned(),
+            kind,
+            task: Some(task.to_owned()),
+            subject: None,
+            attempt: Some(attempt.to_owned()),
+            path: rel.to_owned(),
+        };
+        ScratchArea::open(self.backend(), &layout)?.register(new, jiff::Timestamp::now())
+    }
+
+    /// The scratch registration `id`, in any state.
+    pub fn scratch_row(&self, id: &str) -> Result<Option<ScratchRow>> {
+        let layout = self.storage_layout()?;
+        ScratchArea::open(self.backend(), &layout)?.row(id)
+    }
+
+    /// Closes open scratch registration `id`, making it eligible for reclaim.
+    pub fn close_scratch(&self, id: &str) -> Result<()> {
+        let layout = self.storage_layout()?;
+        ScratchArea::open(self.backend(), &layout)?.close(id, jiff::Timestamp::now())
+    }
+}
 
 /// Storage lifetime classification, independent of pin protection in operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

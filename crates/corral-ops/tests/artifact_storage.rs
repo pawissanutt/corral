@@ -96,8 +96,12 @@ fn identical_contents_share_storage_across_tasks() {
     let a = f.add(&first, "one.txt", bytes, ArtifactKind::Evidence);
     // When the second snapshot is attached.
     let b = f.add(&second, "two.txt", bytes, ArtifactKind::Evidence);
-    // Then references stay distinct while storage is shared.
+    // Then references stay distinct while one blob holds the content for both tasks.
     assert_ne!(a.path, b.path);
+    let hash = corral_core::blob_ref::BlobHash::parse(&a.sha256).unwrap();
+    assert_eq!(f.ctx.store.blob_row(&hash).unwrap().unwrap().refs, 2);
+    // And retention shares the legacy copies, which storage totals count once.
+    artifact_gc(&f.ctx, false).unwrap();
     assert!(same_inode(&f.path(&a), &f.path(&b)));
     let stats = storage_stats(&f.ctx).unwrap();
     assert_eq!(stats.original_bytes, 24);
@@ -128,7 +132,7 @@ fn gzip_keeps_stable_paths_and_transparent_text_reads() {
         artifact_preview(&f.ctx, &current).unwrap(),
         Preview::Text(bytes.clone())
     );
-    assert!(!f.ctx.store.state_dir().join("artifact-decoded").exists());
+    assert!(!f.ctx.store.cache_root().unwrap().join("decoded").exists());
     assert_eq!(
         report.bytes_saved,
         a.bytes - current.compressed_bytes.unwrap()
@@ -216,7 +220,7 @@ fn dry_run_predicts_exact_dedup_and_compression_without_writes() {
     let events = f.ctx.store.events().unwrap();
     let before = storage_stats(&f.ctx).unwrap().stored_bytes;
     let task_before = f.ctx.store.get(&first).unwrap();
-    let cache = f.ctx.store.state_dir().join("artifact-decoded");
+    let cache = f.ctx.store.cache_root().unwrap().join("decoded");
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("sentinel"), "retained during dry run").unwrap();
     // When GC is simulated.
@@ -628,9 +632,13 @@ fn new_snapshot_reuses_already_compressed_workspace_content() {
     let second = f.task();
     // When another task captures identical content.
     let b = f.add(&second, "second.log", &vec![b'D'; 4000], ArtifactKind::Log);
-    // Then it reuses encoded bytes without losing transparent reads.
-    assert!(same_inode(&f.path(&a), &f.path(&b)));
-    assert_eq!(b.compressed_bytes, a.compressed_bytes);
+    // Then it references the same blob, keeps a raw legacy copy and reads transparently.
+    assert!(a.compressed_bytes.is_some());
+    let hash = corral_core::blob_ref::BlobHash::parse(&b.sha256).unwrap();
+    assert_eq!(f.ctx.store.blob_row(&hash).unwrap().unwrap().refs, 2);
+    assert_eq!(b.compressed_bytes, None);
+    assert_eq!(fs::read(f.path(&b)).unwrap(), vec![b'D'; 4000]);
+    assert_eq!(artifact_read(&f.ctx, &a).unwrap(), vec![b'D'; 4000]);
     assert_eq!(artifact_read(&f.ctx, &b).unwrap(), vec![b'D'; 4000]);
 }
 

@@ -19,7 +19,12 @@ fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
         .records(&RecordQuery::default(), PageReq::first(128))
         .unwrap();
     assert!(state.next.is_none(), "fixture record page was truncated");
-    let state_records = state.items;
+    // Evidence references need their blob rows, which the disposable database lacks.
+    let state_records: Vec<_> = state
+        .items
+        .into_iter()
+        .filter(|record| corral_core::blob_ref::scan(&record.doc).is_empty())
+        .collect();
     let events = ctx
         .store
         .events()

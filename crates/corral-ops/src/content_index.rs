@@ -96,11 +96,11 @@ impl Record {
         }
     }
 
-    fn artifact(task: &Task, artifact: &Artifact) -> Self {
+    fn artifact(task: &str, artifact: &Artifact) -> Self {
         Self {
             document: Document {
-                reference: PinRef::of_artifact(&task.id, artifact).to_string(),
-                task: task.id.clone(),
+                reference: PinRef::of_artifact(task, artifact).to_string(),
+                task: task.to_string(),
                 run: Some(artifact.run.clone()),
                 scope: "artifacts".into(),
                 kind: artifact.kind.as_str().into(),
@@ -185,7 +185,7 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
             .iter()
             .filter(|a| a.purged_at.is_none() && ctx.store.dir().join(&a.path).is_file())
         {
-            records.push(Record::artifact(task, artifact));
+            records.push(Record::artifact(&task.id, artifact));
         }
     }
     events::records(&ctx.store, &mut records)?;
@@ -275,6 +275,75 @@ fn read_cache(reader: impl Read) -> Cache {
     serde_json::from_reader(BufReader::new(reader)).unwrap_or_default()
 }
 
+fn lock_index(dir: &std::path::Path) -> Result<File> {
+    fs::create_dir_all(dir).context("creating search state directory")?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("content-search.lock"))
+        .context("opening search index lock")?;
+    lock.lock().context("locking search index")?;
+    Ok(lock)
+}
+
+/// Adds one newly attached artifact's document to the index, reading only that artifact: the
+/// index follows each attach rather than re-snapshotting every task. Whatever does not fit
+/// (a full index or text budget) is left to the next refresh.
+pub(crate) fn index_artifact(ctx: &Ctx, task: &str, artifact: &Artifact) -> Result<()> {
+    let dir = ctx.store.cache_root()?;
+    let _lock = lock_index(&dir)?;
+    let path = dir.join("content-search.json");
+    let mut cache = match File::open(&path) {
+        Ok(file)
+            if file
+                .metadata()
+                .context("reading search index metadata")?
+                .len()
+                <= INDEX_BYTES =>
+        {
+            read_cache(file)
+        }
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Cache::default(),
+        Err(error) => return Err(error).context("opening search index"),
+    };
+    if cache.version != VERSION {
+        cache = Cache {
+            version: VERSION,
+            ..Cache::default()
+        };
+    }
+    let text: usize = cache.documents.values().map(|d| d.text.len()).sum();
+    if cache.documents.len() >= 4096 || text + DOCUMENT_BYTES > TEXT_BUDGET {
+        return Ok(());
+    }
+    let mut record = Record::artifact(task, artifact);
+    extract(ctx, &mut record)?;
+    let id = record.document.reference.clone();
+    if cache.documents.get(&id) == Some(&record.document) {
+        return Ok(());
+    }
+    cache.postings.retain(|_, ids| {
+        ids.retain(|other| *other != id);
+        !ids.is_empty()
+    });
+    let terms: BTreeSet<_> = words(&record.document.title)
+        .chain(words(&record.document.text))
+        .collect();
+    for term in terms {
+        let ids = cache.postings.entry(term).or_default();
+        ids.push(id.clone());
+        ids.sort();
+    }
+    cache.documents.insert(id, record.document);
+    let bytes = serde_json::to_vec(&cache).context("serializing search index")?;
+    if u64::try_from(bytes.len()).context("index size overflow")? > INDEX_BYTES {
+        return Ok(());
+    }
+    crate::artifact_storage::replace(&path, &bytes)
+}
+
 /// Reuses unchanged SHA-identified artifact text even after gzip retention.
 /// Oversized/evicted documents remain in the snapshot and are streamed during search.
 pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
@@ -308,14 +377,7 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
     let dir = ctx.store.cache_root()?;
-    fs::create_dir_all(&dir).context("creating search state directory")?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join("content-search.lock"))
-        .context("opening search index lock")?;
-    lock.lock().context("locking search index")?;
+    let _lock = lock_index(&dir)?;
     let inputs = inspect_artifacts
         .then(|| crate::content_refresh::fingerprint(ctx, tasks))
         .transpose()?;

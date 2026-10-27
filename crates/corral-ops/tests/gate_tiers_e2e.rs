@@ -280,13 +280,7 @@ struct Round<'a> {
 /// audit, and the Run contract's `done`.
 fn work(fx: &Fx, id: &str, tier: &str, round: &Round) -> GateRecord {
     let run = fx.run(id);
-    let prompt = std::fs::read_to_string(
-        fx.ctx
-            .store
-            .prompts_dir()
-            .join(format!("{id}-{}.md", run.id)),
-    )
-    .unwrap();
+    let prompt = std::fs::read_to_string(dispatch_prompt(&fx.ctx.store, id, &run.id)).unwrap();
     let contract = section(&prompt, WORKER_SECTION);
     assert_eq!(parsed_tier(contract), tier, "{contract}");
     assert!(
@@ -436,4 +430,13 @@ fn review(fx: &Fx, id: &str, tier: &str, verdict: Verdict, request: &str) -> Rev
     let record = corral_ops::verdict(&fx.ctx, id, verdict, notes.trim()).unwrap();
     assert_eq!(record.verdict, Some(verdict), "{:?}", record.notes);
     record
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

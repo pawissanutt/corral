@@ -139,7 +139,44 @@ fn add_artifact_inner(
         .map(|n| n.to_string_lossy().into_owned())
         .with_context(|| format!("artifact {} has no file name", path.display()))?;
     let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let id = corral_core::Store::normalize_id(id)?;
+    // The blob and this task's reference to it commit first; attaching then only adds rows.
+    let created = crate::artifact_storage::store_blob(ctx, &id, &sha, &bytes)?;
+    let attached = attach(
+        ctx,
+        &id,
+        target,
+        &bytes,
+        &sha,
+        (&file_name, &source),
+        kind,
+        title,
+        origin,
+    );
+    if let Err(error) = &attached
+        && created
+        && let Err(cleanup) = ctx.store.delete_record(
+            crate::artifact_storage::ARTIFACT_BLOBS,
+            &crate::artifact_storage::blob_key(&id, &sha),
+        )
+    {
+        return Err(cleanup.context(format!("dropping the blob reference after: {error:#}")));
+    }
+    attached
+}
 
+#[allow(clippy::too_many_arguments)]
+fn attach(
+    ctx: &Ctx,
+    id: &str,
+    target: Target<'_>,
+    bytes: &[u8],
+    sha: &str,
+    (file_name, source): (&str, &Path),
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+    origin: Option<&RequestOrigin>,
+) -> Result<(Artifact, Option<RequestReceipt>)> {
     let mut result: Option<(Artifact, bool)> = None;
     let mut receipt = None;
     ctx.store.update(id, |t| {
@@ -172,12 +209,8 @@ fn add_artifact_inner(
         {
             let revived = existing.purged_at.is_some();
             if revived {
-                existing.compressed_bytes = crate::artifact_storage::snapshot(
-                    ctx,
-                    &ctx.store.dir().join(&existing.path),
-                    &bytes,
-                    existing,
-                )?;
+                crate::artifact_storage::mirror(ctx, existing, bytes)?;
+                existing.compressed_bytes = None;
                 existing.purged_at = None;
             }
             let existing = existing.clone();
@@ -192,26 +225,22 @@ fn add_artifact_inner(
             return Ok(());
         }
         let snap_name = format!("{}-{file_name}", &sha[..8]);
-        let dir = ctx.store.artifacts_dir(&t.id, &run);
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        let dest = dir.join(&snap_name);
-        let mut artifact = Artifact {
+        let artifact = Artifact {
             run: run.clone(),
-            kind: kind.unwrap_or_else(|| ArtifactKind::guess(&file_name)),
+            kind: kind.unwrap_or_else(|| ArtifactKind::guess(file_name)),
             title: title
                 .map(str::to_string)
-                .unwrap_or_else(|| file_name.clone()),
+                .unwrap_or_else(|| file_name.to_string()),
             path: format!("artifacts/{}/{run}/{snap_name}", t.id),
             source: source.to_string_lossy().into_owned(),
-            sha256: sha.clone(),
+            sha256: sha.to_string(),
             bytes: u64::try_from(bytes.len()).context("artifact length overflow")?,
             added: corral_core::clock::now(),
             tier_override: None,
             compressed_bytes: None,
             purged_at: None,
         };
-        artifact.compressed_bytes =
-            crate::artifact_storage::snapshot(ctx, &dest, &bytes, &artifact)?;
+        crate::artifact_storage::mirror(ctx, &artifact, bytes)?;
         if artifact.kind == ArtifactKind::Diff {
             for previous in t.artifacts.iter_mut().filter(|a| {
                 a.run == run && a.kind == ArtifactKind::Diff && a.tier_override.is_none()
@@ -232,11 +261,10 @@ fn add_artifact_inner(
         Ok(())
     })?;
     let (artifact, _) = result.context("artifact update produced no result")?;
-    if origin.is_some() {
-        return Ok((artifact, receipt));
+    if origin.is_none() {
+        crate::content_index::index_artifact(ctx, id, &artifact)?;
     }
-    crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
-    Ok((artifact, None))
+    Ok((artifact, receipt))
 }
 
 fn artifact_detail(artifact: &Artifact) -> serde_json::Value {

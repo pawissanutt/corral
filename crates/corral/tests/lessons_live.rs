@@ -197,7 +197,7 @@ fn isolated_distillation_apply_dispatch_and_review_share_exact_lessons() {
         herdr,
         id: run.herdr.as_ref().unwrap().workspace_id.clone(),
     };
-    let dispatch_path = store.prompts_dir().join(format!("{task}-{}.md", run.id));
+    let dispatch_path = dispatch_prompt(&store, &task, &run.id);
     let dispatch_prompt = std::fs::read_to_string(&dispatch_path).unwrap();
     let preview: Vec<Lesson> = serde_json::from_str(&cli(
         &root,
@@ -277,4 +277,13 @@ fn isolated_distillation_apply_dispatch_and_review_share_exact_lessons() {
         .unwrap();
     }
     println!("{log}");
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }
