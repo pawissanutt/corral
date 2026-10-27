@@ -53,7 +53,7 @@ fn openai_pi_native_profile_validates_previews_approves_and_applies() {
 fn non_openai_pi_native_profile_is_refused_with_vendor_refused() {
     // Given a pi-native profile on a vendor outside the allowlist.
     let (_dir, store, mut input) = fixture();
-    pi_native(&mut input, "anthropic", "claude-sonnet-5");
+    pi_native(&mut input, "mistral", "mistral-large");
     let gathering = setup_begin(&store, store.profile_setup().unwrap().revision).unwrap();
     // When proposing, then validation refuses it by the shared vendor rule.
     let error = format!(

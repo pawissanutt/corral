@@ -258,12 +258,18 @@ fn preflight_names_the_missing_piece_and_its_owner() {
         r#"{"verdict":"GO","providers":["openai"]}"#,
     );
     assert!(refused(&fx).starts_with("provider_unsupported_by_host"));
+    // Setup reports only what the installed host declares, never the bare allowlist.
+    assert_eq!(preflight::supported_vendors(&fx.ctx), vec!["openai"]);
     write(
         &dir,
         "compat.json",
         r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
     );
     assert_eq!(refused(&fx), "");
+    assert_eq!(
+        preflight::supported_vendors(&fx.ctx),
+        vec!["openai", "anthropic"]
+    );
 }
 
 #[test]

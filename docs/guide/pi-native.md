@@ -246,7 +246,8 @@ are never nudged.
 is refused `vendor_refused` before a worktree exists. A vendor also has to be one the installed
 host declares in `compat.json` `providers`; the shipped host declares none beyond the `openai`
 default, so an Anthropic profile is refused `provider_unsupported_by_host` until a host that
-declares `anthropic` is installed. Anthropic profiles are opt-in and, once the host supports them,
+declares `anthropic` is installed. Setup discovery lists only the vendors the installed host
+declares, so it does not offer an Anthropic profile the host cannot run. Anthropic profiles are opt-in and, once the host supports them,
 use subscription OAuth held only in the corral-owned Pi auth directory; see
 `docs/records/pi-native-claude-route.md` for the evidence and the accepted policy risk.
 
