@@ -155,6 +155,16 @@ impl ReviewLaunch<'_> {
                     .clone()
                     .context("prepared gate identity missing")?;
                 started["attempt"] = json!(identity.attempt);
+                // The same launch-boundary fact a normal start records.
+                started["behind_at_start"] = json!(
+                    corral_git::is_ancestor(
+                        &run.worktree,
+                        &identity.integration_base,
+                        &identity.head
+                    )
+                    .ok()
+                    .map(|contained| !contained)
+                );
                 crate::gate::evidence::tier_detail(&mut started, gate.tier.as_deref());
                 let commands =
                     crate::gate_tier::receipt_commands(&verification::policy(ctx, &task)?, gate);
@@ -211,11 +221,15 @@ impl ReviewLaunch<'_> {
                             commands,
                             context: context.as_deref(),
                         };
-                        crate::gate::evidence::record_start(
-                            ctx,
-                            &start,
-                            ("gate_started", gate_started),
-                        )?;
+                        // A start refused after its row committed keeps that row; its
+                        // resumed launch still records the start event.
+                        match crate::gate::evidence::put_start(ctx, &start)? {
+                            Some(staged) => staged.commit(ctx, ("gate_started", gate_started))?,
+                            None => {
+                                ctx.store
+                                    .log_event(Some(&task.id), "gate_started", gate_started)?
+                            }
+                        }
                     }
                     ctx.herdr.pane_run(&pane, &command)
                 }

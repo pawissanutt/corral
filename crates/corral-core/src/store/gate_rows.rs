@@ -12,14 +12,45 @@ use serde_json::Value;
 
 use super::Store;
 use crate::backend::{
-    ApplyError, GateAttempt, Operation, PageReq, ReservationUse, ScratchOp, ScratchState,
-    SystemClock, TaskChange, TaskNum, TaskPart, gate_key,
+    ApplyError, GateAttempt, GateResult as GateResultOp, HistoryRow, Operation, PageReq,
+    ReservationUse, RowWrite, ScratchOp, ScratchState, SystemClock, TaskChange, TaskNum, TaskPart,
+    gate_key,
 };
 use crate::blob::{PutBlob, Putter};
 use crate::blob_ref::BlobRef;
 use crate::scratch::ScratchArea;
 
 const CONFLICT_RETRIES: u32 = 16;
+
+/// The result of one gate attempt, as a task update commits it (`GateResult`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GateOutcome {
+    pub run: String,
+    pub attempt: String,
+    pub result: String,
+    pub failed_cmd: Option<String>,
+    pub log: Option<BlobRef>,
+    pub result_doc: Option<BlobRef>,
+    /// Open scratch registrations the result closes.
+    pub close_scratch: Vec<String>,
+}
+
+impl GateOutcome {
+    pub(super) fn operation(self, change: TaskChange) -> GateResultOp {
+        GateResultOp {
+            change,
+            run: self.run,
+            attempt: self.attempt,
+            result: self.result,
+            failed_cmd: self.failed_cmd,
+            log: self.log,
+            result_doc: self.result_doc,
+            context: None,
+            ended: Timestamp::now(),
+            close_scratch: self.close_scratch,
+        }
+    }
+}
 const FIRST_DEFER: Duration = Duration::from_secs(60);
 const MAX_DEFER: Duration = Duration::from_secs(3600);
 
@@ -97,6 +128,43 @@ impl Store {
             }
         }
         bail!("recording gate of {id}: the task kept changing")
+    }
+
+    /// Stages a new attempt row into the open task update, which then commits the row, its
+    /// blob references (consuming `reservations`) and the update's own marker together. Call
+    /// it from inside `update`; the attempt must not have a row yet.
+    pub fn stage_gate_start(
+        &self,
+        attempt: &GateAttempt,
+        reservations: Vec<ReservationUse>,
+    ) -> Result<()> {
+        let row = RowWrite::Put(HistoryRow {
+            part: TaskPart::GateAttempt,
+            key: attempt.key(),
+            current: true,
+            open: attempt.ended.is_none(),
+            doc: serde_json::to_value(attempt).context("encoding gate attempt row")?,
+            index: Vec::new(),
+        });
+        self.stage_gate(|staged| {
+            staged.rows.push(row);
+            staged.reservations.extend(reservations);
+        })
+    }
+
+    /// Stages an attempt's result into the open task update, which then commits as one
+    /// `GateResult`: the update's marker and events, the ended row with its log and result
+    /// references (consuming `reservations`) and the closure of `outcome.close_scratch`.
+    /// Call it from inside `update`.
+    pub fn stage_gate_result(
+        &self,
+        outcome: GateOutcome,
+        reservations: Vec<ReservationUse>,
+    ) -> Result<()> {
+        self.stage_gate(|staged| {
+            staged.result = Some(outcome);
+            staged.reservations.extend(reservations);
+        })
     }
 
     /// The gate attempt row of `task` for `run`/`attempt`, read as that one row.

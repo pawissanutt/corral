@@ -321,6 +321,7 @@ impl Store {
         if events.is_empty()
             && records.is_empty()
             && !self.has_buffered_authorization()
+            && !self.has_staged_gate()
             && rows.is_empty()
             && doc == base_doc
             && summary == base_summary
@@ -348,7 +349,7 @@ impl Store {
                 } else {
                     UpdateForm::Head
                 },
-            ))
+            )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", new.task.id))?;
         if let Outcome::Task { rev, .. } = committed.outcome {

@@ -11,7 +11,8 @@ use anyhow::{Context, Result};
 use super::Store;
 use crate::backend::{
     AppendEvents, Authorization, EventQuery, EventSeq, NewEvent, Operation, PageReq, PutRecords,
-    RecordWrite, StoredEvent, StoredRecord, TaskChange, UpdateForm, UpdateTask,
+    RecordWrite, ReservationUse, RowWrite, StoredEvent, StoredRecord, TaskChange, UpdateForm,
+    UpdateTask,
 };
 
 use crate::Event;
@@ -23,6 +24,16 @@ struct Unit {
     reads: RefCell<BTreeMap<(String, String), Option<StoredRecord>>>,
     view: RefCell<Option<super::head::PinnedView>>,
     authorization: RefCell<Option<Authorization>>,
+    gate: RefCell<StagedGate>,
+}
+
+/// Gate transitions staged into a unit: attempt rows and blob reservations join its task
+/// change, and a result makes that change one `GateResult` operation.
+#[derive(Default)]
+pub(super) struct StagedGate {
+    pub(super) rows: Vec<RowWrite>,
+    pub(super) reservations: Vec<ReservationUse>,
+    pub(super) result: Option<super::gate_rows::GateOutcome>,
 }
 
 thread_local! {
@@ -106,6 +117,7 @@ impl Store {
             reads: RefCell::default(),
             view: RefCell::default(),
             authorization: RefCell::default(),
+            gate: RefCell::default(),
         });
         UNITS.with(|units| units.borrow_mut().push(Rc::clone(&unit)));
         EventUnit(Some(unit))
@@ -213,16 +225,61 @@ impl Store {
             .is_some_and(|unit| unit.authorization.borrow().is_some())
     }
 
-    pub(super) fn task_operation(&self, change: TaskChange, form: UpdateForm) -> Operation {
-        let authorization = self
+    /// Stages gate attempt rows, blob reservations or a result into the open unit; a unit
+    /// holds at most one result and never a result together with an authorization.
+    pub(super) fn stage_gate(&self, stage: impl FnOnce(&mut StagedGate)) -> Result<()> {
+        let unit = self
             .current_unit()
-            .and_then(|unit| unit.authorization.borrow_mut().take());
-        match authorization {
-            Some(mut authorization) => {
+            .context("staging a gate transition needs an open task update")?;
+        let had_result = unit.gate.borrow().result.is_some();
+        stage(&mut unit.gate.borrow_mut());
+        let staged = unit.gate.borrow();
+        anyhow::ensure!(
+            !(had_result && staged.result.is_some()),
+            "a task update commits at most one gate result"
+        );
+        anyhow::ensure!(
+            staged.result.is_none() || unit.authorization.borrow().is_none(),
+            "a gate result cannot commit with an authorization"
+        );
+        Ok(())
+    }
+
+    pub(super) fn has_staged_gate(&self) -> bool {
+        self.current_unit().is_some_and(|unit| {
+            let staged = unit.gate.borrow();
+            !staged.rows.is_empty() || staged.result.is_some()
+        })
+    }
+
+    pub(super) fn task_operation(
+        &self,
+        mut change: TaskChange,
+        form: UpdateForm,
+    ) -> Result<Operation> {
+        let Some(unit) = self.current_unit() else {
+            return Ok(Operation::UpdateTask(UpdateTask { change, form }));
+        };
+        let staged = std::mem::take(&mut *unit.gate.borrow_mut());
+        change.rows.extend(staged.rows);
+        change.reservations.extend(staged.reservations);
+        let authorization = unit.authorization.borrow_mut().take();
+        match (authorization, staged.result) {
+            (Some(mut authorization), None) => {
                 authorization.change = Some((change, form));
-                Operation::Authorization(authorization)
+                Ok(Operation::Authorization(authorization))
             }
-            None => Operation::UpdateTask(UpdateTask { change, form }),
+            (None, Some(result)) => {
+                anyhow::ensure!(
+                    form == UpdateForm::Head,
+                    "a gate result cannot commit with a history edit"
+                );
+                Ok(Operation::GateResult(result.operation(change)))
+            }
+            (None, None) => Ok(Operation::UpdateTask(UpdateTask { change, form })),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("a gate result cannot commit with an authorization")
+            }
         }
     }
 

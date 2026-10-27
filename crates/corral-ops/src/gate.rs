@@ -494,6 +494,19 @@ fn gate_start_origin(
             })
         }),
     };
+    let identity = record.identity.as_ref().context("missing gate identity")?;
+    let start = evidence::Start {
+        task: &task.id,
+        run: &run.id,
+        attempt: &attempt,
+        scope: evidence::RUN_SCOPE,
+        sha: &sha,
+        tier: record.tier.as_ref().map(|tier| tier.tier.as_str()),
+        identity,
+        commands: &contract.commands,
+        context: context_file.as_deref(),
+    };
+    let staged = evidence::put_start(ctx, &start)?;
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {
         let expected = record.identity.as_ref().context("missing gate identity")?;
@@ -515,24 +528,15 @@ fn gate_start_origin(
         if r.review.as_ref().and_then(|r| r.verdict) != Some(corral_core::Verdict::Approve) {
             r.review = None;
         }
-        Ok(())
+        // The attempt row commits with this Running marker.
+        staged
+            .as_ref()
+            .map_or(Ok(()), |staged| staged.stage(&ctx.store))
     })?;
     crate::watch::start_gate(ctx, &task, &run, &record, &contract.commands, &paths.log)?;
     let expected_status = task.status;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
-    let identity = record.identity.as_ref().context("missing gate identity")?;
-    let start = evidence::Start {
-        task: &task.id,
-        run: &run.id,
-        attempt: &attempt,
-        scope: evidence::RUN_SCOPE,
-        sha: &sha,
-        tier: record.tier.as_ref().map(|tier| tier.tier.as_str()),
-        identity,
-        commands: &contract.commands,
-        context: context_file.as_deref(),
-    };
     let behind = corral_git::is_ancestor(&run.worktree, &identity.integration_base, &identity.head)
         .ok()
         .map(|contained| !contained);
@@ -556,7 +560,8 @@ fn gate_start_origin(
             Ok(())
         },
         || {
-            evidence::record_start(ctx, &start, ("gate_started", started))?;
+            ctx.store
+                .log_event(Some(&task.id), "gate_started", started)?;
             ctx.herdr.pane_run(&pane, &command)
         },
     )?;
@@ -584,21 +589,6 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         .clone()
         .with_context(|| format!("{}: no gate has been started for run {}", task.id, run.id))?;
     if record.result != GateResult::Running {
-        if let Some(identity) = &record.identity {
-            // Completes a collection that ended before its row did.
-            let stem = attempt_stem(&task.id, &run.id, Some(&identity.attempt));
-            let outcome = (record.result, record.failed_cmd.as_deref());
-            let paths = attempt_paths(ctx, &task.id, &run.id, Some(&identity.attempt));
-            evidence::record_result(
-                ctx,
-                &task.id,
-                &run.id,
-                &identity.attempt,
-                &stem,
-                outcome,
-                &paths,
-            )?;
-        }
         // A finished receipt is stale once no phase would accept it; the review phase accepts
         // every binding a landing gate may carry.
         let review = crate::gate_tier::GatePhase::Review;
@@ -635,7 +625,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         }
         return Ok(Some(record));
     }
-    record.identity.as_ref().ok_or(LegacyGate)?;
+    let attempt = record.identity.as_ref().ok_or(LegacyGate)?.attempt.clone();
     let paths = gate_paths(ctx, &task.id, &run.id);
     let text = match std::fs::read_to_string(&paths.result) {
         Ok(t) => t,
@@ -699,6 +689,8 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         }
     };
 
+    let stem = attempt_stem(&task.id, &run.id, Some(&attempt));
+    let staged = evidence::put_result(ctx, &task.id, &run.id, &attempt, &stem, &paths)?;
     let mut finished: Option<GateRecord> = None;
     let run_id = run.id.clone();
     let task = ctx.store.update(&task.id, |t| {
@@ -738,6 +730,11 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             let mut detail = json!({ "run": run_id, "attempt": attempt, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "log_sha256": record.log_sha256 });
             evidence::tier_detail(&mut detail, record.tier.as_deref());
             ctx.store.log_event(Some(&t.id), "gate", detail)?;
+            // The row, its evidence and the scratch closure commit with this receipt.
+            evidence::failpoint("gate_collect_commit");
+            if let Some(staged) = &staged {
+                staged.stage(&ctx.store, (record.result, record.failed_cmd.as_deref()))?;
+            }
         }
         Ok(())
     })?;
@@ -745,19 +742,6 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         // Another caller recorded it between our read and our update.
         return Ok(task.current_run().and_then(|r| r.gate.clone()));
     };
-    if let Some(identity) = &record.identity {
-        let stem = attempt_stem(&task.id, &run_id, Some(&identity.attempt));
-        let outcome = (record.result, record.failed_cmd.as_deref());
-        evidence::record_result(
-            ctx,
-            &task.id,
-            &run_id,
-            &identity.attempt,
-            &stem,
-            outcome,
-            &paths,
-        )?;
-    }
     crate::watch::load(ctx, &task.id)?;
     let title = format!("Gate: {}", record.result.as_str());
     if paths.log.is_file() {

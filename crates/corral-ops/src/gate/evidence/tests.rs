@@ -1,0 +1,272 @@
+//! Gate transitions commit atomically: an interrupted collection commits nothing, and the next
+//! start collects the attempt whole. The fake herdr records pane commands without running
+//! them; each test runs the gate script itself, as the pane would.
+use std::os::unix::fs::PermissionsExt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
+
+use corral_core::backend::ScratchState;
+use corral_core::{GateResult, Run, Status, Store};
+use corral_herdr::Herdr;
+use serde_json::json;
+
+use super::FAILPOINT;
+use crate::Ctx;
+use crate::test_support as support;
+
+const HERDR: &str = r#"#!/usr/bin/env bash
+cd "$(dirname "$0")" || exit 1
+if [ "${1:-}" = "--session" ]; then shift 2; fi
+ok() { printf '{"id":"fake","result":%s}\n' "$1"; }
+case "$1 $2" in
+  "workspace create"|"tab create")
+    n=1
+    while [ -f "created-$n" ]; do n=$((n+1)); done
+    touch "created-$n" "w1:p$n"
+    ok "{\"workspace\":{\"workspace_id\":\"w1\"},\"root_pane\":{\"workspace_id\":\"w1\",\"tab_id\":\"w1:t$n\",\"pane_id\":\"w1:p$n\"}}"
+    ;;
+  "workspace list") ok '{"workspaces":[]}' ;;
+  "pane list")
+    panes='{"pane_id":"w0:p1"}'
+    for pane in w1:*; do
+      [ -f "$pane" ] || continue
+      panes="$panes,{\"pane_id\":\"$pane\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}"
+    done
+    ok "{\"panes\":[$panes]}" ;;
+  "pane get")
+    if [ -f "$3" ]; then
+      ok "{\"pane\":{\"pane_id\":\"$3\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\"}}"
+    else ok '{}'; fi
+    ;;
+  "pane close") rm -f "$3"; ok '{}' ;;
+  *) ok '{}' ;;
+esac
+"#;
+
+struct Fx {
+    _tmp: tempfile::TempDir,
+    ctx: Ctx,
+    app: PathBuf,
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = support::command("git", dir)
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().into()
+}
+
+impl Fx {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("app");
+        std::fs::create_dir(&app).unwrap();
+        git(&app, &["init", "-q", "-b", "main"]);
+        git(&app, &["config", "user.name", "test"]);
+        git(&app, &["config", "user.email", "test@example.invalid"]);
+        std::fs::write(app.join("tracked"), "initial\n").unwrap();
+        git(&app, &["add", "."]);
+        git(&app, &["commit", "-qm", "initial"]);
+        let bin = tmp.path().join("herdr");
+        std::fs::write(&bin, HERDR).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut store = Store::init(tmp.path()).unwrap();
+        store.config.limits.count_reviews = false;
+        store.config.limits.count_gates = false;
+        store.config.dispatch.paused = true;
+        store.config.review.gate = Some(vec!["echo collected".into()]);
+        store.config.projects.insert(
+            "app".into(),
+            serde_json::from_value(json!({"path": "app"})).unwrap(),
+        );
+        store.save_config().unwrap();
+        let ctx = Ctx {
+            resource_probe: crate::resources::FixedResourceProbe::arc(),
+            store,
+            herdr: Herdr::with_bin(bin, None),
+        };
+        Self {
+            _tmp: tmp,
+            ctx,
+            app,
+        }
+    }
+
+    fn task(&self) -> String {
+        let task = self
+            .ctx
+            .store
+            .create("Gate", Some("app"), Status::Review, "")
+            .unwrap();
+        let run: Run = serde_json::from_value(json!({
+            "id": "R1", "agent": "rev", "worktree": self.app,
+            "branch": "main", "base": "main",
+            "base_sha": git(&self.app, &["rev-parse", "HEAD"]),
+            "started": "2026-10-15T00:00:00Z"
+        }))
+        .unwrap();
+        self.ctx
+            .store
+            .update(&task.id, |t| {
+                t.runs.push(run);
+                Ok(())
+            })
+            .unwrap();
+        task.id
+    }
+
+    /// Runs the current attempt's script to completion, as its pane would; it exits with the
+    /// failing command's status, which the result file records.
+    fn run_gate(&self, id: &str) {
+        let script = crate::gate::gate_paths(&self.ctx, id, "R1").script;
+        support::command("bash", &self.app)
+            .arg(&script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            crate::gate::gate_paths(&self.ctx, id, "R1")
+                .result
+                .is_file()
+        );
+    }
+
+    fn gate_events(&self, id: &str) -> Vec<serde_json::Value> {
+        self.ctx
+            .store
+            .events()
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.task.as_deref() == Some(id) && e.kind == "gate")
+            .map(|e| e.detail)
+            .collect()
+    }
+
+    fn scratch(&self, id: &str, attempt: &str) -> ScratchState {
+        self.ctx
+            .store
+            .scratch_row(&format!("gate-{id}-R1-{attempt}"))
+            .unwrap()
+            .unwrap()
+            .state
+    }
+}
+
+/// Runs `op` with a hook that panics when `point` is reached; true when it was interrupted.
+fn interrupt_at<T>(point: &'static str, op: impl FnOnce() -> T) -> bool {
+    FAILPOINT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |reached: &str| {
+            if reached == point {
+                panic!("interrupted at {reached}");
+            }
+        }));
+    });
+    let interrupted = catch_unwind(AssertUnwindSafe(op)).is_err();
+    FAILPOINT.with(|hook| *hook.borrow_mut() = None);
+    interrupted
+}
+
+#[test]
+fn interrupted_collection_commits_nothing_and_the_next_start_collects_it_whole() {
+    // Given a started gate whose runner finished.
+    let fx = Fx::new();
+    let id = fx.task();
+    let started = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    let attempt = started.identity.unwrap().attempt;
+    fx.run_gate(&id);
+
+    // When its collection is interrupted at the commit.
+    assert!(interrupt_at("gate_collect_commit", || {
+        crate::gate::gate_collect(&fx.ctx, &id)
+    }));
+
+    // Then neither the receipt, its event, the row nor the scratch closure was committed.
+    let task = fx.ctx.store.get(&id).unwrap();
+    let gate = task.current_run().unwrap().gate.clone().unwrap();
+    assert_eq!(gate.result, GateResult::Running);
+    assert!(fx.gate_events(&id).is_empty());
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(&id, "R1", &attempt)
+        .unwrap()
+        .unwrap();
+    assert!(row.ended.is_none() && row.result.is_none() && row.log.is_none());
+    assert_eq!(fx.scratch(&id, &attempt), ScratchState::Open);
+
+    // When a new gate starts on the same candidate.
+    crate::gate::gate_start(&fx.ctx, &id).unwrap();
+
+    // Then the interrupted attempt was collected whole: one event, and a row whose outcome
+    // and evidence match the receipt, before its closed directory was reclaimed.
+    let events = fx.gate_events(&id);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["attempt"], json!(attempt));
+    assert_eq!(events[0]["result"], "pass");
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(&id, "R1", &attempt)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.result.as_deref(), row.failed_cmd.as_deref()),
+        (Some("pass"), None)
+    );
+    let log = fx
+        .ctx
+        .store
+        .blob_bytes(row.log.as_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        events[0]["log_sha256"],
+        json!(crate::verification::digest(&log))
+    );
+    assert_eq!(fx.scratch(&id, &attempt), ScratchState::Reclaimed);
+}
+
+#[test]
+fn every_collected_receipt_matches_its_row() {
+    // Given passing and failing gates collected normally.
+    for (command, result, failed) in [
+        ("echo fine", "pass", None),
+        ("echo boom; exit 3", "fail", Some("echo boom; exit 3")),
+    ] {
+        let fx = Fx::new();
+        let mut store = fx.ctx.store.reopen().unwrap();
+        store.config.review.gate = Some(vec![command.into()]);
+        store.save_config().unwrap();
+        let id = fx.task();
+        let started = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+        fx.run_gate(&id);
+        let record = crate::gate::gate_collect(&fx.ctx, &id).unwrap().unwrap();
+
+        // Then the receipt, its event and the closed row agree.
+        assert_eq!(record.result.as_str(), result);
+        assert_eq!(record.failed_cmd.as_deref(), failed);
+        let attempt = started.identity.unwrap().attempt;
+        let row = fx
+            .ctx
+            .store
+            .gate_attempt(&id, "R1", &attempt)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (row.result.as_deref(), row.failed_cmd.as_deref()),
+            (Some(result), failed)
+        );
+        assert_eq!(fx.scratch(&id, &attempt), ScratchState::Closed);
+        assert_eq!(fx.gate_events(&id)[0]["result"], result);
+    }
+}

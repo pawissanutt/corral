@@ -289,6 +289,7 @@ impl Store {
         if events.is_empty()
             && records.is_empty()
             && !self.has_buffered_authorization()
+            && !self.has_staged_gate()
             && same_fields == head.header.fields
             && doc == head.doc
             && summary == head.summary
@@ -315,7 +316,7 @@ impl Store {
                     reservations: Vec::new(),
                 },
                 form,
-            ))
+            )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", record.task.id))?;
         match committed.outcome {
