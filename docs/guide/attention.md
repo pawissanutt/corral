@@ -219,7 +219,8 @@ replacing `parked` (an initial park answers nothing); or the run of `replied`,
 `stuck_process`), its recipient key (`delivery_*`), or otherwise the task's retained run that
 had started by the condition's canonical `since`. One durable message effect is one action: a
 post named by a retry, reply or change request is not counted again, and the effect keeps its
-post's log position and time, so a later naming event never moves it across a report boundary.
+post's log position and time, and actions are consumed in that causal order, so a later naming
+event never moves an effect across a report boundary or reorders it against other effects.
 An action never responds to the condition about its own message. A delivery condition opens
 with its message's own `message_posted` event, appended in the write that creates the message:
 an action joins it only when later in the log and not after its resolution. Other conditions
