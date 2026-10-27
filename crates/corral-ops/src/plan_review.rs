@@ -508,6 +508,29 @@ pub struct PlanVerdict<'a> {
 }
 
 pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<PlanReview> {
+    plan_verdict_report(ctx, id, input).map(|(review, _)| review)
+}
+
+/// A Done design task whose accepted plan already published its children. Its
+/// status is the dependency barrier for those children and must not be reopened.
+fn published_design(task: &corral_core::Task) -> bool {
+    task.status == corral_core::Status::Done
+        && !task.children.is_empty()
+        && task.plan.as_deref()
+            == Some(&format!(
+                "{}@{}",
+                task.id,
+                task.plans.last().map_or("", |p| &p.id)
+            ))
+}
+
+/// Record a plan verdict; also returns the published children whose approval
+/// binding an owner re-acceptance of an already decomposed plan refreshed.
+pub fn plan_verdict_report(
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+) -> Result<(PlanReview, Vec<String>)> {
     let _attribution = input
         .attempt
         .map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
@@ -642,7 +665,8 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
                 Verdict::Escalate => PlanRunState::Escalated,
             };
         }
-        if !cancelled && verdict == Verdict::Approve && !accepted {
+        let published = published_design(task);
+        if !cancelled && !published && verdict == Verdict::Approve && !accepted {
             let effective = ctx.store.effective_operating_policy()?;
             task.status = if decisions || config.explicit_owner_acceptance(task, true)
                 || !config.automation.authority.plan_accept
@@ -651,7 +675,12 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             } else {
                 corral_core::Status::Review
             };
-        } else if !cancelled && verdict == Verdict::Approve && accepted && run_id.is_some() {
+        } else if !cancelled
+            && !published
+            && verdict == Verdict::Approve
+            && accepted
+            && run_id.is_some()
+        {
             task.status = corral_core::Status::Ready;
         }
         ctx.store.log_event(Some(&task.id), "plan_verdict",
@@ -667,8 +696,9 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
         close_plan_review(ctx, &previous)?;
     }
     close_plan_review(ctx, p)?;
+    let mut refreshed = Vec::new();
     if p.approval.is_some() {
-        crate::plan_decompose::apply(ctx, id, input.plan)?;
+        refreshed = crate::plan_decompose::apply_refreshing(ctx, id, input.plan)?;
     } else if input.attempt.is_some()
         && p.reviews
             .last()
@@ -709,7 +739,7 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             crate::messages::report(Some(id), "owner plan revision", hint);
         }
     }
-    Ok(review)
+    Ok((review, refreshed))
 }
 
 /// Reconcile an already completed independent review under explicit automatic policy.
@@ -793,7 +823,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 run.state = PlanRunState::Approved;
             }
             task.queued = false;
-            if run_id.is_some() {
+            if run_id.is_some() && !published_design(task) {
                 task.status = corral_core::Status::Ready;
             }
             Ok(())

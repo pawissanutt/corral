@@ -465,7 +465,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             let Some(verdict) = Verdict::parse(&verdict) else {
                 bail!("invalid plan verdict");
             };
-            let record = corral_ops::plan_verdict(
+            let (record, refreshed) = corral_ops::plan_verdict_report(
                 ctx,
                 &id,
                 &PlanVerdict {
@@ -485,6 +485,9 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     record.verdict.map_or("pending", Verdict::as_str),
                     record.reviewer
                 );
+                if !refreshed.is_empty() {
+                    println!("refreshed children: {}", refreshed.join(", "));
+                }
             }
         }
         PlanCmd::AddMember {
