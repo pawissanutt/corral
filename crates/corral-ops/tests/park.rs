@@ -373,59 +373,71 @@ fn parked_ready_tasks_do_not_starve_unrelated_work_in_the_same_grant() {
 
 #[test]
 fn parked_review_starts_no_gate_and_refuses_explicit_owner_entrypoints() {
-    // Given a real completed candidate whose next automatic action would start a gate.
-    let mut fx = operating_fixture::Fx::new();
-    let task = fx.task("Review", Status::Ready);
-    fx.start(&task.id);
-    fx.done(&task.id, "change.txt");
-    fx.grant(&[&task.id]);
-    let parked = park(&fx.ctx.store, &task.id, &[]);
-    let count = fx.records("submissions.jsonl").len();
-    corral_ops::sync_at(&fx.fresh(), at(20)).unwrap();
-    assert_eq!(fx.records("submissions.jsonl").len(), count);
-    assert!(
+    for delivery in [
+        corral_core::inbox::DeliveryMode::Legacy,
+        corral_core::inbox::DeliveryMode::Inbox,
+    ] {
+        // Given a real completed candidate whose next automatic action would start a gate.
+        let mut fx = operating_fixture::Fx::new();
+        let task = fx.task("Review", Status::Ready);
+        fx.start(&task.id);
+        fx.done(&task.id, "change.txt");
         fx.ctx
             .store
-            .get(&task.id)
-            .unwrap()
-            .current_run()
-            .unwrap()
-            .gate
-            .is_none()
-    );
-    // When each explicit start path is called, then the park refuses before task mutation.
-    for kind in ["dispatch", "changes", "retry", "review-run", "plan"] {
-        let before = fx.ctx.store.get(&task.id).unwrap();
-        let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
-        let error = match kind {
-            "dispatch" => {
-                corral_ops::dispatch(&fx.ctx, &task.id, &DispatchOpts::default()).unwrap_err()
-            }
-            "changes" => corral_ops::request_changes(&fx.ctx, &task.id, "Fix").unwrap_err(),
-            "retry" => corral_ops::retry(&fx.ctx, &task.id, &Default::default()).unwrap_err(),
-            "review-run" => corral_ops::review_run(&fx.ctx, &task.id, None).unwrap_err(),
-            "plan" => corral_ops::dispatch(
-                &fx.ctx,
-                &task.id,
-                &DispatchOpts {
-                    plan: true,
-                    ..Default::default()
-                },
-            )
-            .unwrap_err(),
-            _ => unreachable!(),
-        };
-        let message = error.to_string();
+            .update(&task.id, |task| {
+                task.current_run_mut().unwrap().delivery = delivery;
+                Ok(())
+            })
+            .unwrap();
+        fx.grant(&[&task.id]);
+        let parked = park(&fx.ctx.store, &task.id, &[]);
+        let count = fx.records("submissions.jsonl").len();
+        corral_ops::sync_at(&fx.fresh(), at(20)).unwrap();
+        assert_eq!(fx.records("submissions.jsonl").len(), count);
         assert!(
-            message.contains(&parked.park.as_ref().unwrap().refusal(&task.id)),
-            "{kind}: {error:#}"
+            fx.ctx
+                .store
+                .get(&task.id)
+                .unwrap()
+                .current_run()
+                .unwrap()
+                .gate
+                .is_none()
         );
-        assert_eq!(fx.ctx.store.get(&task.id).unwrap(), before, "{kind}");
-        assert_eq!(
-            std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
-            events,
-            "{kind}"
-        );
+        // When each explicit start path is called, then the park refuses before task mutation.
+        for kind in ["dispatch", "changes", "retry", "review-run", "plan"] {
+            let before = fx.ctx.store.get(&task.id).unwrap();
+            let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+            let error = match kind {
+                "dispatch" => {
+                    corral_ops::dispatch(&fx.ctx, &task.id, &DispatchOpts::default()).unwrap_err()
+                }
+                "changes" => corral_ops::request_changes(&fx.ctx, &task.id, "Fix").unwrap_err(),
+                "retry" => corral_ops::retry(&fx.ctx, &task.id, &Default::default()).unwrap_err(),
+                "review-run" => corral_ops::review_run(&fx.ctx, &task.id, None).unwrap_err(),
+                "plan" => corral_ops::dispatch(
+                    &fx.ctx,
+                    &task.id,
+                    &DispatchOpts {
+                        plan: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err(),
+                _ => unreachable!(),
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains(&parked.park.as_ref().unwrap().refusal(&task.id)),
+                "{kind}: {error:#}"
+            );
+            assert_eq!(fx.ctx.store.get(&task.id).unwrap(), before, "{kind}");
+            assert_eq!(
+                std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+                events,
+                "{kind}"
+            );
+        }
     }
 }
 
