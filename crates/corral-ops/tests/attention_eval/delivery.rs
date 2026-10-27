@@ -317,8 +317,9 @@ fn s20_retry_by_id_is_attributed_and_a_fresh_reply_over_two_conditions_is_ambigu
     sync(&fx, 60);
     // Then the retry joins its own condition, the reply is ambiguous, and nothing duplicates.
     let stats = stats(&fx, 60);
-    // The second setup post is itself a fresh post on the recipient while the first
-    // condition (canonically open since its message's creation) is open, so it joins it too.
+    // The second setup post is itself a fresh post on the recipient after the first message's
+    // own post, which opens the first condition, so it joins it too. Log order, not raw clock
+    // stamps, decides this.
     assert_eq!(stats.actions.by_condition.get(&first_key), Some(&2));
     assert_eq!(stats.actions.by_condition.get(&second_key), None);
     assert_eq!(stats.actions.attributed, 2);

@@ -729,25 +729,15 @@ fn membership_follows_canonical_times_not_publication_order() {
     early.push(answer(50));
     let early = compute(&[], &early, &[], window(0, 200)).actions;
     assert_eq!((early.attributed, early.unattributed), (0, 1));
-    // And a retry naming a message is causally after it, even if a wall-clock step stamps the
-    // retry before the condition's since; its resolution bound still applies.
+    // And a delivery condition opens with its message's own post in the log, so a backward
+    // raw-clock step between that post and a later post cannot reorder them.
     let failed = "T-001/delivery_failed/T-001_R1#1";
-    let mut opening = opened(failed, "pm", 0, json!(true));
-    opening.detail["since"] = json!(t(100));
-    let retry = at(
-        event(
-            "message_retried",
-            Some("T-001"),
-            json!({"from": "T-001_R1#1", "to": "T-001_R1#2"}),
-        ),
-        98,
-    );
-    let stepped = compute(&[], &[opening.clone(), retry.clone()], &[], window(0, 200)).actions;
-    assert_eq!(stepped.by_condition.get(failed), Some(&1));
-    let late = at(retry, 150);
-    let resolved = resolved(failed, 120);
-    let late = compute(&[], &[opening, resolved, late], &[], window(0, 200)).actions;
-    assert_eq!((late.attributed, late.unattributed), (0, 1));
+    let first = at(posted("T-001_R1", 1), 10);
+    let mut opening = opened(failed, "pm", 10, json!(true));
+    opening.detail["since"] = json!(t(10));
+    let stepped = at(posted("T-001_R1", 2), 9);
+    let actions = compute(&[], &[first, opening, stepped], &[], window(0, 200)).actions;
+    assert_eq!(actions.by_condition.get(failed), Some(&1));
 }
 
 #[test]
@@ -790,9 +780,20 @@ fn a_raw_push_joins_the_condition_its_source_event_announced() {
     assert_eq!((raw.submitted, raw.replayed, raw.ambiguous), (1, 1, 0));
 }
 
+fn posted(key: &str, seq: u64) -> Event {
+    event(
+        "message_posted",
+        Some("T-001"),
+        json!({"id": format!("{key}#{seq}"), "key": key, "seq": seq}),
+    )
+}
+
 #[cfg(unix)]
 #[path = "../../tests/attention_eval/crashes.rs"]
 mod eval_crashes;
+#[cfg(unix)]
+#[path = "../../tests/attention_eval/joins_unit.rs"]
+mod eval_joins;
 #[cfg(unix)]
 #[path = "../../tests/attention_eval/producers.rs"]
 mod eval_producers;

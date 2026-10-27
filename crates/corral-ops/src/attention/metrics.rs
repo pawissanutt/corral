@@ -266,7 +266,9 @@ fn within(at: Option<Timestamp>, window: Window) -> bool {
 
 /// An event's canonical detail time when it records one, otherwise its append time.
 fn when(event: &Event) -> Timestamp {
-    time(&event.detail["at"]).unwrap_or(event.ts)
+    (time(&event.detail["at"]))
+        .or_else(|| time(&event.detail["park"]["at"]))
+        .unwrap_or(event.ts)
 }
 
 /// Whether a condition was open at a canonical instant: from its canonical `since` (or opening)
