@@ -228,13 +228,13 @@ fn preflight_names_the_missing_piece_and_its_owner() {
     assert_eq!(check(&fx, AgentRole::Worker), "");
     let implicit = preflight::assets(&dir, AgentRole::Worker, false).unwrap_err();
     assert_eq!(implicit.code, "fixture_assets_not_allowed");
-    // An anthropic vendor is refused before any asset is consulted.
-    pi_profile(&mut fx, "anthropic");
-    let anthropic = resolved(&fx, Some("pi"));
-    let error = preflight::check(&fx.ctx, AgentRole::Worker, &anthropic).unwrap_err();
+    // An unlisted vendor is refused before any asset is consulted.
+    pi_profile(&mut fx, "mistral");
+    let unlisted = resolved(&fx, Some("pi"));
+    let error = preflight::check(&fx.ctx, AgentRole::Worker, &unlisted).unwrap_err();
     assert!(
         format!("{error:#}")
-            .starts_with("vendor_refused: pi-native profile 'pi' uses vendor 'anthropic'"),
+            .starts_with("vendor_refused: pi-native profile 'pi' uses vendor 'mistral'"),
         "{error:#}"
     );
 }
@@ -284,7 +284,7 @@ fn dispatch_and_pm_open_refuse_before_any_worktree_or_pane() {
     // missing assets and, before any asset is read, for a vendor outside the allowlist.
     for (vendor, code) in [
         ("openai", "assets_unavailable"),
-        ("anthropic", "vendor_refused"),
+        ("mistral", "vendor_refused"),
     ] {
         pi_profile(&mut fx, vendor);
         let error = refusal(crate::dispatch(&fx.ctx, &task.id, &opts).unwrap_err());
