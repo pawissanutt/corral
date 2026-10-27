@@ -414,6 +414,27 @@ remains false. These are not a complete-cohort verdict or a causal host claim.
 Worker 11/12 is now OmO T-006/R1 for the final large T-180 pair, in its frozen
 OmO-first order. Only its matched native worker 12 remains available.
 
+## Final large pair: OmO captured, native worker 12 running
+
+T-180 OmO T-006/R1 was independently approved on review 2 at
+2026-10-27T02:41:41.745628348Z, on
+`5c214170ca5ba78694a7015caedbbabf882b52c6`. Review 1 identified a cancellation
+path that could probe or prompt a colliding pane on a foreign server without
+checking saved session ownership. The same R1 repaired the boundary and added
+deterministic foreign/unknown-ownership coverage. Supported inbox delivery was
+observed; no pane-input rescue or replacement worker was needed.
+
+The approved capture measures 53,102,159 worker-plus-review tokens,
+USD 7.9853388 API-equivalent, two reviews, two passes from four quick gate
+attempts, 803.311 gate seconds and 4,418.175 wall seconds. Recorded rescues,
+Needs me, PM/owner answers and silent endings are zero. Both failed repair
+gates remain in the metric window. The branch and exact raw window are retained;
+the arm was discarded only after capture to preserve the matched frozen base.
+
+Matched Pi-native T-012/R1 is now worker 12/12 in private p06, from that same
+base and original controls/order. No thirteenth admission or replacement is
+permitted. This is still a partial fifth pair, not a complete-cohort verdict.
+
 The full landing gate is separate from the initial approval-window metrics
 above. Those metrics are now a historical checkpoint, not a final measurement
 of the reopened arm. The exact four-pair checkpoint report is protected as
