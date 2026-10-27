@@ -90,8 +90,11 @@ needs recovery. Without a login for that provider, dispatch from the managed ins
 refuses `credentials_unavailable` naming the provider, and the host stops with
 `credentials_unavailable`; both name the command to run, for example
 `corral agent login --provider anthropic`. Only OAuth credentials are stored. There is no
-API-key or other paid fallback, and corral never reads or writes `~/.codex`, `~/.pi`,
-`~/.claude` or another harness's store.
+API-key or other paid fallback: the host drops Pi's Anthropic API-key handler and clears every
+`ANTHROPIC_*` variable (API key, auth and OAuth tokens, workload federation) before Pi loads, so
+after a `/logout` or a removed credential the provider has no auth rather than a paid key, and
+any Anthropic request without the subscription OAuth token is refused before it is sent. corral
+never reads or writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
 
 Anthropic profiles run on your Claude Pro/Max subscription through the same OAuth route Pi
 uses. That route is outside Anthropic's documented API terms; the evidence and the accepted

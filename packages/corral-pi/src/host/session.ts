@@ -52,6 +52,42 @@ function bounded(value: Record<string, unknown> | null): Record<string, unknown>
   return size > STATE_SECTION_MAX_BYTES ? { omitted: "state_too_large", bytes: size } : value;
 }
 
+type Models = Awaited<ReturnType<typeof Sdk.ModelRuntime.create>>;
+
+/**
+ * Re-registers the bound provider so it can only run on its stored subscription OAuth
+ * credential and only through the guarded fetch. Pi's API-key handler (an API key, ambient
+ * environment tokens or workload federation) is dropped, so a logout or a removed credential
+ * leaves the provider without auth instead of falling back to a paid key; and a request whose
+ * auth is not the provider's OAuth token is refused before it is sent, since paid and
+ * subscription Anthropic traffic share one endpoint.
+ */
+export function restrictProvider(models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch): void {
+  const route = PROVIDERS[providerId];
+  const provider = models.getProvider(route.id);
+  if (!provider?.auth.oauth) throw new Error(`model_unavailable: ${route.id} has no subscription OAuth`);
+  const stream = provider.stream.bind(provider) as StreamFunction;
+  const streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
+  const checked = (current: { api: string }, streamOptions: unknown) => {
+    if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
+    const auth = (streamOptions ?? {}) as { apiKey?: unknown; headers?: Record<string, unknown> };
+    const headers = Object.keys(auth.headers ?? {}).map((name) => name.toLowerCase());
+    if (route.oauthTokenMarker !== undefined &&
+        (typeof auth.apiKey !== "string" || !auth.apiKey.includes(route.oauthTokenMarker) ||
+         headers.includes("authorization") || headers.includes("x-api-key"))) {
+      throw new Error(`credentials_unavailable: ${route.id} requests must use the subscription OAuth login; ` +
+        `run \`corral agent login --provider ${route.id}\``);
+    }
+    return { ...(streamOptions as object), fetch };
+  };
+  models.registerNativeProvider({
+    ...provider,
+    auth: { oauth: provider.auth.oauth },
+    stream: (current, context, streamOptions) => stream(current, context, checked(current, streamOptions)),
+    streamSimple: (current, context, streamOptions) => streamSimple(current, context, checked(current, streamOptions)),
+  });
+}
+
 export function authContext(provider: ProviderId = "openai-codex"): AuthContext {
   return { provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
 }
@@ -113,19 +149,9 @@ export class HostSession {
       modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
-    const provider = models.getProvider(route.id);
     const model = models.getModel(route.id, modelId);
-    if (!provider || !model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    const fetch = options.network.fetch as typeof globalThis.fetch;
-    const stream = provider.stream.bind(provider) as StreamFunction;
-    models.registerNativeProvider({
-      ...provider,
-      stream(current, context, streamOptions) {
-        if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
-        return stream(current, context, { ...streamOptions, fetch });
-      },
-      streamSimple: (current, context, streamOptions) => provider.streamSimple(current, context, { ...streamOptions, fetch }),
-    });
+    if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
+    restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch);
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);

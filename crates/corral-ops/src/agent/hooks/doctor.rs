@@ -192,7 +192,10 @@ pub(crate) fn checks_with(
     let credential = match &stored {
         None => (false, "pi-native credentials: no data directory".to_owned()),
         Some((status, each)) => match (&status.problem, status.present) {
-            (Some(problem), _) => (false, format!("pi-native credentials unsafe: {problem}")),
+            (Some(problem), _) => (
+                false,
+                format!("pi-native credentials unsafe: {problem} ({each})"),
+            ),
             (None, true) => (
                 true,
                 format!(

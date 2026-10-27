@@ -16,6 +16,11 @@ export interface ProviderRoute {
   /** Exact query strings Pi's client appends to the model endpoint. */
   readonly apiQueries: readonly string[];
   readonly refresh: string;
+  /**
+   * A marker every subscription OAuth access token of this provider carries; requests whose key
+   * lacks it would be paid API traffic on the same endpoint and are refused.
+   */
+  readonly oauthTokenMarker?: string;
   /** The OAuth endpoints a login may POST to. */
   readonly login: readonly string[];
 }
@@ -46,6 +51,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
     // Pi sends subscription OAuth requests through the SDK's beta messages client.
     apiQueries: ["?beta=true"],
     refresh: "https://platform.claude.com/v1/oauth/token",
+    oauthTokenMarker: "sk-ant-oat",
     login: ["https://platform.claude.com/v1/oauth/token"],
   },
 };
