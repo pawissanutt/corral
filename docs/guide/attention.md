@@ -212,24 +212,27 @@ remain counted.
 
 Actions attach to a condition only through an exact identity: the message ID of
 `message_retried`; the recipient key of a fresh post; the question key and revision of
-`question_answered`; the park revision; or the run of `replied`, `changes_requested`,
-`dispatched`, `resumed`, `automation_resumed`, `gate_started` and `review_started`. A
-condition's run comes from its key (`agent_lost`, `silent_turn`, `stuck_process`), its
-recipient key (`delivery_*`), or otherwise the task's retained run that had started by the
-condition's canonical `since`, so resolution, pruning and newer runs do not change it. One
-message effect is one action: a post named by a retry, reply or change request is not counted
-again, and an action never responds to the condition about its own message. A condition is
-open for an action when the action's canonical time (its detail `at`, else its append time)
-lies within the condition's `since` through `resolved_at`, both inclusive; publication order
-plays no part. An action that names the condition's own message or park revision and has no
-canonical time of its own is causally later than that source, so only the resolution bound
-applies to it, whatever backward wall-clock step its append time shows. An action whose identity is missing or unknown is `unattributed`, never attached
-by task alone. An action matching several open conditions is `ambiguous`. A repeat through the
-same condition and identity is a `duplicate` while the earlier action's message is neither
-observed nor terminal, judged from history before the window too; after a terminal message
-state it is `after_terminal`. Only actions inside the window are charged. A raw question push
-resolves its source event through the receipt's reader cursor and joins only the question
-condition of that key and revision that was open at the source event's time.
+`question_answered`; the park revision of `unparked`, or the previous revision for a
+replacing `parked` (an initial park answers nothing); or the run of `replied`,
+`changes_requested`, `dispatched`, `resumed`, `automation_resumed`, `gate_started` and
+`review_started`. A condition's run comes from its key (`agent_lost`, `silent_turn`,
+`stuck_process`), its recipient key (`delivery_*`), or otherwise the task's retained run that
+had started by the condition's canonical `since`. One durable message effect is one action: a
+post named by a retry, reply or change request is not counted again, and the effect keeps its
+post's log position and time, so a later naming event never moves it across a report boundary.
+An action never responds to the condition about its own message. A delivery condition opens
+with its message's own `message_posted` event, appended in the write that creates the message:
+an action joins it only when later in the log and not after its resolution. Other conditions
+are open for an action when the action's canonical time (its detail `at`, `park.at`, else its
+append time) lies within `since` through `resolved_at`, both inclusive. An action whose identity
+is missing or unknown is `unattributed`, never attached by task alone. An action matching
+several open conditions is `ambiguous`. A repeat on the same condition is a `duplicate` while
+the earlier effect's message is neither observed nor terminal; duplicate state uses the delivery
+identity (the recipient for posts, replies and change requests; the source message for retries)
+and history before the window. After a terminal message state it is `after_terminal`. Only
+actions inside the window are charged. A raw question push resolves its source event through
+the receipt's reader cursor and joins only the question condition of that key and revision that
+was open at the source event's time.
 Lost review rounds sum `released_review_runs` of escalations whose reason begins
 `integration preflight error`.
 

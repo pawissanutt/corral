@@ -13,7 +13,7 @@ and the protocol for the separately authorized live evaluation.
   (28 tests).
 - Kill-barrier, T-128 interleaving and persisted-stats fixtures (in-crate,
   because the barriers are `cfg(test)` seams and the replay uses a crate-private
-  delivery pass): `cargo test -p corral-ops --lib attention::metrics` (15 tests).
+  delivery pass): `cargo test -p corral-ops --lib attention::metrics` (24 tests).
 - CLI: `cargo test -p corral --bin corral attention_cmd`.
 - The suite uses no sleep and no wall-clock read, and starts no live herdr
   server. Clocks are explicit `sync_at` timestamps. Engines are the existing
@@ -62,9 +62,12 @@ The ones the scenarios rely on:
   - `message_retried.from` joins its message's `delivery_*` condition.
   - A fresh `message_posted` joins by recipient key. A post named by a retry
     (`to`), reply or change request (`message`) is the same action as that
-    event, not another one.
+    event, not another one. The action keeps the post's log position and time,
+    so a later naming event never moves it across a window boundary.
   - `question_answered` joins by question key **and** revision.
-  - `parked`/`unparked` join by park revision.
+  - `unparked` joins by park revision; a replacing `parked` joins the previous
+    revision's conditions; an initial park answers nothing (its canonical time
+    is `park.at`).
   - `replied`, `changes_requested`, `dispatched`, `resumed`,
     `automation_resumed`, `gate_started` and `review_started` join by run. The
     run comes from `detail.run` or, for inbox actions, the message ID's
@@ -74,19 +77,23 @@ The ones the scenarios rely on:
     This holds after resolution and pruning and when newer runs exist.
   - `moved` joins `unexpected_stall`.
   - An action never responds to the condition about its own effect message.
-  - A condition is open at an action when the action's canonical time (detail
-    `at`, else append time) lies within `since`..`resolved_at`, both inclusive.
-    An action naming the condition's own message or park revision without a
-    canonical time of its own is causally later than that source. Only the
-    resolution bound applies to it, because inbox and event stamps come from a
-    wall clock that can step backwards (about 1.9 s on WSL2).
-    Publication order and delayed or pending facts play no part.
+  - A delivery condition opens with its message's own `message_posted`. That
+    event is appended in the write that creates the message, so an action joins
+    it only when later in the log and not after its resolution. This is causal
+    append order, immune to backward wall-clock steps (inbox and event stamps
+    use the raw wall clock, which steps up to about 1.9 s on WSL2).
+  - Other conditions are open at an action when the action's canonical time
+    (detail `at`, `park.at`, else append time) lies within
+    `since`..`resolved_at`, both inclusive. Lifecycle publication order and
+    delayed or pending facts play no part.
   - An action that matches more than one open condition is `ambiguous`.
   - **Duplicate:** another action on the same condition and identity, whatever
     the event kind, while the earlier action's effect message is neither
     `message_observed` nor terminal (`message_<state>` for its key and seq).
     Earlier actions before the window seed this; only in-window actions are
-    charged. Actions without an effect message settle immediately.
+    charged. Duplicate state uses the delivery identity: the recipient for
+    posts, replies and change requests, the source message for retries.
+    Actions without an effect message settle immediately.
   - **After terminal:** such a repeat after the effect message turned terminal.
 - **Raw pushes:** a submitted `pm_event_delivery` is deduplicated by pane,
   cursor and kind. It is attributed only through its source event, found by the
@@ -270,11 +277,22 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
 - **One action per message:** a production-shaped `message_posted` plus
   owner `replied` counts as 1 action and 1 rescue; two such pairs give 2
   actions, 1 duplicate and 2 rescues.
+- **Park edges** (`eval_joins`): an initial park at 0 joins neither a
+  resume-ready edge at 60 nor, with both edges, causes ambiguity. A later
+  unpark answers the ready edge, or is ambiguous with both open. A replacing
+  revision-2 park answers revision 1's edge.
+- **Stable effect windows:** a post at 60 in 0..100 stays one action after its
+  `replied`, `changes_requested` or `message_retried` naming event is logged
+  at 120.
+- **Recipient duplicate identity:** an outstanding standalone post #2 then a
+  post+`replied` or post+`changes_requested` pair for #3 gives 2 actions and
+  1 duplicate. It gives no duplicate after `message_observed` for #2, and
+  1 after-terminal after `message_failed`.
 - **Canonical membership:** an answer canonically at 60 joins its question
   whether the opening (since 0) is published after it or is still pending in
-  the ledger; an answer at 50 before a since of 100 stays unattributed. A
-  `message_retried` naming the condition's message joins even when stamped 2 s
-  before its since, but not after its resolution.
+  the ledger; an answer at 50 before a since of 100 stays unattributed. A post
+  stamped 1 s before the first message's post (a backward wall-clock step)
+  still joins that message's condition, because the posts' log order decides.
 - **Real event streams** (`eval_retire`): two real `corral reply` calls on a
   run with a definitive delivery failure log a post and a reply each. They give
   2 actions on that condition and 1 duplicate. A real `request_changes` on an
@@ -305,10 +323,10 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
 - **S12's** reopening runs inside a real delivery pass through the public
   `DeliveryAdapter::send` seam, not a cfg(test) hook. The unfenced control
   writes the cancellation that the pre-fence stale retire would have written.
-- **Wall-clock steps:** event and inbox stamps use the raw wall clock. Own-object
-  joins (`message`, `park`) are causal and immune to backward steps. Run-level
-  and recipient joins compare times strictly. S20 therefore assumes no backward
-  step within the few milliseconds between its own consecutive posts.
+- **Wall-clock steps:** event and inbox stamps use the raw wall clock. Delivery
+  joins are ordered by the condition message's own post in the log, so S12, S20,
+  S21 and the reply-stream scenarios do not depend on raw stamp order. The
+  changes-stream scenario's stall is dated 2020, years before any stamp.
 - **Clock domains in fixtures:** production stamps actions with the process
   clock while scenario conditions use fixed fixture times. Attribution
   scenarios therefore use conditions whose canonical `since` precedes those

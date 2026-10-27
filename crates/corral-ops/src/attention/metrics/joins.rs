@@ -37,7 +37,18 @@ fn join(event: &Event) -> Option<(&'static [&'static str], String)> {
             format!("question:{}@{}", field("key"), detail["revision"]),
         ),
         "unparked" => (&["park_"], format!("park:{}", detail["revision"])),
-        "parked" => (&["park_"], format!("park:{}", detail["park"]["revision"])),
+        // A new park revision replaces, and so responds to, the previous revision's
+        // conditions. The initial park creates the park and responds to nothing.
+        "parked" => (
+            &["park_"],
+            format!(
+                "park:{}",
+                (detail["park"]["revision"].as_u64())
+                    .and_then(|revision| revision.checked_sub(1))
+                    .filter(|previous| *previous > 0)
+                    .map_or_else(String::new, |previous| previous.to_string())
+            ),
+        ),
         "message_posted" => (DELIVERY, format!("recipient:{}", field("key"))),
         "replied" | "changes_requested" => (RUN, format!("run:{}", run())),
         "dispatched" | "resumed" | "automation_resumed" | "gate_started" | "review_started" => {
@@ -106,42 +117,46 @@ pub(super) fn actions(
                 .or_insert((pos, kind != "message_observed"));
         }
     }
-    let mut prior = BTreeMap::<(String, String), Option<String>>::new();
-    // One message effect can be logged twice: as its post and as the retry, reply or change
-    // request that names it. The naming event is the action; its post is not another one.
-    let named: BTreeSet<_> = (events.iter())
-        .filter_map(|event| match event.kind.as_str() {
-            "message_retried" => event.detail["to"].as_str(),
-            "replied" | "changes_requested" => event.detail["message"].as_str(),
-            _ => None,
-        })
+    // A message's own post orders and times it: appended in the write that creates it, it is
+    // causal log order, not publication order or a raw clock comparison.
+    let posts: BTreeMap<_, _> = (events.iter().enumerate())
+        .filter(|(_, event)| event.kind == "message_posted")
+        .filter_map(|(pos, event)| Some((event.detail["id"].as_str()?, (pos, when(event)))))
         .collect();
+    // One durable effect can be logged twice: its post and the retry, reply or change request
+    // naming it. The naming event carries the identity; the post keeps the effect's position
+    // and time, so a later naming event never moves the action across a report boundary.
+    let named: BTreeSet<_> = (events.iter())
+        .filter(|event| event.kind != "message_posted")
+        .filter_map(effect)
+        .filter(|id| posts.contains_key(id.as_str()))
+        .collect();
+    let mut prior = BTreeMap::<(String, String), Option<String>>::new();
     // History before the window seeds prior effects; only in-window actions are charged.
     for (pos, event) in events.iter().enumerate() {
-        let named_post = event.kind == "message_posted"
-            && (event.detail["id"].as_str()).is_some_and(|id| named.contains(id));
+        let message = effect(event);
+        let named_post =
+            event.kind == "message_posted" && message.as_ref().is_some_and(|id| named.contains(id));
         let Some((family, identity)) = join(event).filter(|_| !named_post) else {
             continue;
         };
-        let at = when(event);
+        let (pos, at) = (message.as_deref())
+            .and_then(|id| posts.get(id).copied())
+            .unwrap_or((pos, when(event)));
         let charged = within(Some(at), window);
-        // An action whose own effect is a condition's message created that condition; it
-        // cannot also be a response to it.
-        let own = effect(event).map(|id| format!("/{id}"));
-        // An action naming a condition's own source (its message or park revision) without a
-        // canonical time of its own is causally later than that source, whatever wall-clock
-        // steps its append time shows; only the resolution bound applies. Actions that carry a
-        // canonical `at` are always checked against both bounds.
-        let causal = event.detail["at"].is_null()
-            && matches!(identity.split_once(':'), Some(("message" | "park", _)));
+        let own = message.as_ref().map(|id| format!("/{id}"));
         let matches: Vec<_> = (rows.iter())
             .filter(|(key, row)| {
+                // A delivery condition is about one message: it opens with that message's post.
+                let source = (row.kind.starts_with("delivery_"))
+                    .then(|| key.rsplit('/').next().and_then(|id| posts.get(id)))
+                    .flatten();
+                let open = match source {
+                    Some((source, _)) => *source < pos && resolved_after(row, at),
+                    None => open_at(row, at),
+                };
                 Some(row.task.as_str()) == event.task.as_deref()
-                    && (if causal {
-                        resolved_after(row, at)
-                    } else {
-                        open_at(row, at)
-                    })
+                    && open
                     && own.as_ref().is_none_or(|own| !key.ends_with(own.as_str()))
                     && candidate(key, row, family, &identity)
             })
@@ -154,9 +169,15 @@ pub(super) fn actions(
             }
             continue;
         };
-        // A repeat through the same identity is a duplicate only while the earlier effect is
-        // still outstanding: neither observed nor terminal before this action.
-        let repeat = match prior.insert(((*key).clone(), identity), effect(event)) {
+        // Duplicate state follows the delivery identity: a post, reply or change request is a
+        // fresh post to its recipient; a retry keeps its exact source message.
+        let effect_identity = match (event.kind.as_str(), &message) {
+            ("message_retried", _) | (_, None) => identity,
+            (_, Some(id)) => format!("recipient:{}", id.split('#').next().unwrap_or_default()),
+        };
+        // A repeat is a duplicate only while the earlier effect is still outstanding:
+        // neither observed nor terminal before this action.
+        let repeat = match prior.insert(((*key).clone(), effect_identity), message) {
             Some(Some(previous)) => match settled.get(&previous) {
                 Some((settled, terminal)) if *settled < pos => Some(*terminal),
                 _ => None,
