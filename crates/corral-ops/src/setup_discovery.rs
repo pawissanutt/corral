@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use anyhow::Result;
 use corral_core::{
     AccessFacets, Config, JsonPath, ModelEvidence, ModelEvidenceSource, PI_NATIVE_HARNESS,
-    PI_NATIVE_VENDORS, PathProblems, Read, is_pi_native,
+    PathProblems, Read, is_pi_native,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -65,6 +65,7 @@ pub fn setup_discover(ctx: &Ctx) -> SetupDiscovery {
         crate::detect_harnesses(config),
         config,
         ready,
+        crate::agent::hooks::preflight::supported_vendors(ctx),
     )
 }
 
@@ -73,6 +74,7 @@ fn discover_with(
     harnesses: Vec<crate::HarnessInfo>,
     config: &Config,
     pi_native_ready: bool,
+    pi_native_vendors: Vec<String>,
 ) -> SetupDiscovery {
     let mut discovery = sanitized_discovery(observed_at, harnesses);
     if pi_native_ready || crate::agent::hooks::configured(config) {
@@ -85,7 +87,7 @@ fn discover_with(
                 .harness(PI_NATIVE_HARNESS)
                 .map(|(_, flags)| flags.efforts)
                 .unwrap_or_default(),
-            vendors: PI_NATIVE_VENDORS.map(String::from).into(),
+            vendors: pi_native_vendors,
         });
         discovery.harnesses.sort_by(|a, b| a.key.cmp(&b.key));
     }

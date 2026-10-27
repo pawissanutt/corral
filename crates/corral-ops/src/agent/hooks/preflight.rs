@@ -80,14 +80,9 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
 /// reaches OpenAI only.
 const DEFAULT_HOST_PROVIDERS: [&str; 1] = ["openai"];
 
-/// Refuses an allowlisted vendor the installed host cannot yet reach. The allowlist says which
-/// vendors a profile may name; `compat.json` `providers` says which ones this installation's host
-/// can run, so a profile never passes preflight and then fails at runtime.
-fn host_provider(dir: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
-    let Some(vendor) = vendor else {
-        return Ok(());
-    };
-    let declared: Option<Vec<String>> = std::fs::read(dir.join("compat.json"))
+/// The providers an installation's `compat.json` declares, or the default when it lists none.
+fn declared_providers(dir: &Path) -> Vec<String> {
+    std::fs::read(dir.join("compat.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
         .and_then(|value| {
@@ -96,13 +91,49 @@ fn host_provider(dir: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
                     .filter_map(|item| item.as_str().map(str::to_owned))
                     .collect()
             })
-        });
-    let declared = declared.unwrap_or_else(|| {
-        DEFAULT_HOST_PROVIDERS
-            .iter()
-            .map(|p| (*p).to_owned())
-            .collect()
-    });
+        })
+        .unwrap_or_else(|| {
+            DEFAULT_HOST_PROVIDERS
+                .iter()
+                .map(|p| (*p).to_owned())
+                .collect()
+        })
+}
+
+/// The allowlisted vendors the host a dispatch would use can run: setup reports these, not the
+/// bare allowlist, so it never offers a vendor that preflight would refuse.
+pub fn supported_vendors(ctx: &Ctx) -> Vec<String> {
+    let dir = ctx
+        .store
+        .config
+        .agent
+        .assets_dir
+        .clone()
+        .or_else(|| super::super::install::installed_assets(ctx).ok().flatten());
+    let declared = dir.map_or_else(
+        || {
+            DEFAULT_HOST_PROVIDERS
+                .iter()
+                .map(|p| (*p).to_owned())
+                .collect()
+        },
+        |dir| declared_providers(&dir),
+    );
+    corral_core::PI_NATIVE_VENDORS
+        .iter()
+        .filter(|vendor| declared.iter().any(|d| d == *vendor))
+        .map(|vendor| (*vendor).to_owned())
+        .collect()
+}
+
+/// Refuses an allowlisted vendor the installed host cannot yet reach. The allowlist says which
+/// vendors a profile may name; `compat.json` `providers` says which ones this installation's host
+/// can run, so a profile never passes preflight and then fails at runtime.
+fn host_provider(dir: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
+    let Some(vendor) = vendor else {
+        return Ok(());
+    };
+    let declared = declared_providers(dir);
     if declared.iter().any(|provider| provider == vendor) {
         return Ok(());
     }
