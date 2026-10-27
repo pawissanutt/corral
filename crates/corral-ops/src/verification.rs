@@ -247,6 +247,33 @@ pub(crate) fn gate_fresh_for_review(
     gate_fresh_for(ctx, task, run, gate, &requirement)
 }
 
+/// Fresh for review on the reviewed base `moved.expected` while main moved forward to
+/// `moved.actual`: only the integration base may differ, and only by that move.
+pub(crate) fn gate_fresh_for_review_at(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    gate: &GateRecord,
+    moved: Option<&IdentityChange>,
+) -> Result<bool> {
+    let (Some(moved), Some(expected)) = (moved, &gate.identity) else {
+        return gate_fresh_for_review(ctx, task, run, gate);
+    };
+    let review = crate::gate_tier::GatePhase::Review;
+    let requirement = crate::gate_tier::requirement_for(ctx, task, run, review)?;
+    let mut actual = identity(ctx, task, run, expected)?;
+    if gate.sha != expected.head
+        || expected.integration_base != moved.expected
+        || actual.integration_base != moved.actual
+        || !crate::gate_tier::satisfies(expected.gate_tier.as_deref(), &requirement)
+        || !corral_git::is_clean(&run.worktree)?
+    {
+        return Ok(false);
+    }
+    actual.integration_base = moved.expected.clone();
+    Ok(actual == *expected)
+}
+
 /// The receipt re-derives under its own binding, and that binding satisfies `requirement`.
 pub(crate) fn gate_fresh_for(
     ctx: &Ctx,
@@ -327,4 +354,24 @@ pub(crate) fn review_changes(
         });
     }
     Ok(changes)
+}
+
+/// Changes that void a verdict on the exact candidate the reviewer saw. Main moving forward past
+/// the reviewed base is not one: the verdict stays bound to the base it reviewed (returned as the
+/// second value), and autopilot replays and re-gates it, carrying an approval only across a clean
+/// replay with an equal patch.
+pub(crate) fn verdict_changes(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    review: &ReviewRecord,
+) -> Result<(Vec<IdentityChange>, Option<IdentityChange>)> {
+    let changes = review_changes(ctx, task, run, review)?;
+    if let [moved] = changes.as_slice()
+        && moved.field == "integration_base"
+        && corral_git::is_ancestor(&run.worktree, &moved.expected, &moved.actual)?
+    {
+        return Ok((Vec::new(), Some(moved.clone())));
+    }
+    Ok((changes, None))
 }

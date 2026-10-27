@@ -278,6 +278,7 @@ pub(crate) fn evidence_gaps(
     task: &Task,
     run: &Run,
     route: &ReviewRoute,
+    moved: Option<&IdentityChange>,
 ) -> Result<Vec<EvidenceGap>> {
     let mut gaps = Vec::new();
     let mut gap = |code, detail: String| gaps.push(EvidenceGap { code, detail });
@@ -297,7 +298,7 @@ pub(crate) fn evidence_gaps(
         None => {}
         Some(g) => {
             if g.result != GateResult::Running
-                && !verification::gate_fresh_for_review(ctx, task, run, g)?
+                && !verification::gate_fresh_for_review_at(ctx, task, run, g, moved)?
             {
                 let detail = match &tiered {
                     Some(c) => format!(
@@ -506,7 +507,7 @@ pub(crate) fn build(
                 .collect(),
             reusable,
         },
-        gaps: evidence_gaps(ctx, task, run, route)?,
+        gaps: evidence_gaps(ctx, task, run, route, None)?,
         previous_findings: findings(task, attempt),
         gate_contract: gate_contract(ctx, task, run)?,
     };
@@ -624,13 +625,14 @@ pub(crate) fn route_changes(
 }
 
 /// An approval is recorded only when the contract's proof holds and the reviewer can meet it.
+/// `moved` names the reviewed base when main has since moved past it; proof is judged there.
 pub(crate) fn enforce(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
     route: &ReviewRoute,
-    verdict: Verdict,
-    notes: &str,
+    (verdict, notes): (Verdict, &str),
+    moved: Option<&IdentityChange>,
 ) -> Result<(Verdict, String)> {
     if verdict != Verdict::Approve {
         return Ok((verdict, notes.to_string()));
@@ -645,7 +647,7 @@ pub(crate) fn enforce(
             ),
         ));
     }
-    let gaps = evidence_gaps(ctx, task, run, route)?;
+    let gaps = evidence_gaps(ctx, task, run, route, moved)?;
     if gaps.is_empty() {
         return Ok((verdict, notes.to_string()));
     }

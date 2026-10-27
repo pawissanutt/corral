@@ -621,7 +621,8 @@ fn review_parent<'a>(task: &'a mut Task, run_id: &str) -> Result<&'a mut Run> {
 /// `review_run` started, else "owner".
 /// Refused when the worktree has uncommitted changes (a reviewer must not edit files): records verdict escalate
 /// "reviewer modified the worktree" instead and returns an error. Refused without recording when HEAD moved
-/// since the review started (stale review), or when `notes` is empty.
+/// since the review started (stale review), or when `notes` is empty. Main moving forward is not stale: the
+/// verdict stays bound to the base it reviewed (event "verdict_base_moved") for autopilot to replay and carry.
 pub fn verdict(ctx: &Ctx, id: &str, verdict: Verdict, notes: &str) -> Result<ReviewRecord> {
     verdict_bound(ctx, id, verdict, notes, None)
 }
@@ -783,20 +784,25 @@ fn verdict_inner(
             run.worktree.display()
         );
     }
+    let mut moved = None;
     let (verdict, notes) = match started.as_ref() {
         Some(s) => {
-            let mut changes = verification::review_changes(ctx, &task, &run, s)?;
+            let mut changes;
+            (changes, moved) = verification::verdict_changes(ctx, &task, &run, s)?;
+            // The packet records the new base's gate freshness; the assessment alone must hold.
+            let packet = moved.is_none();
             if changes.is_empty()
                 && let Some(route) = s.route.as_deref()
             {
-                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route, true)?;
+                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route, packet)?;
             }
             if !changes.is_empty() {
                 bail!("stale review: {}", serde_json::to_string(&changes)?);
             }
             match s.route.as_deref() {
                 Some(route) => {
-                    crate::review_packet::enforce(ctx, &task, &run, route, verdict, notes)?
+                    let moved = moved.as_ref();
+                    crate::review_packet::enforce(ctx, &task, &run, route, (verdict, notes), moved)?
                 }
                 None => (verdict, notes.to_string()),
             }
@@ -813,5 +819,12 @@ fn verdict_inner(
             .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
         record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
-    record_verdict(ctx, &task, &run, record, (verdict, notes), now(), report)
+    let recorded = record_verdict(ctx, &task, &run, record, (verdict, notes), now(), report)?;
+    if let Some(base) = moved {
+        let detail = json!({"run": run.id, "verdict": verdict.as_str(),
+            "reviewed_base": base.expected, "current_base": base.actual});
+        ctx.store
+            .log_event(Some(&task.id), "verdict_base_moved", detail)?;
+    }
+    Ok(recorded)
 }
