@@ -614,6 +614,33 @@ fn a_verdict_for_a_stale_candidate_is_rejected_by_the_verdict_binding_and_record
 }
 
 #[test]
+fn a_verdict_after_main_moved_forward_commits_bound_to_the_reviewed_base() {
+    let mut review = review();
+    committed(&review.event("turn_started", 1));
+    let app = review.task().runs[0].worktree.clone();
+    let reviewed = git(&app, &["rev-parse", "HEAD"]);
+    git(&app, &["checkout", "-q", "--detach"]);
+    let tree = git(&app, &["rev-parse", "HEAD^{tree}"]);
+    let landed = git(
+        &app,
+        &["commit-tree", &tree, "-p", &reviewed, "-m", "other lands"],
+    );
+    git(&app, &["update-ref", "refs/heads/main", &landed]);
+    let call = review.op(
+        Some(1),
+        "call-moved",
+        "verdict",
+        json!({"verdict": "approve", "notes": "Looks right."}),
+    );
+    committed(&call);
+    let record = review.task().runs[0].review.clone().unwrap();
+    assert_eq!(record.verdict, Some(Verdict::Approve), "{:?}", record.notes);
+    assert_eq!(record.sha, reviewed);
+    assert_eq!(record.identity.unwrap().integration_base, reviewed);
+    assert_eq!(ts::events(&review.fx, "verdict_base_moved"), 1);
+}
+
+#[test]
 fn a_silent_reviewer_turn_is_no_verdict_gets_one_nudge_then_escalates_without_the_idle_window() {
     let mut review = review();
     assert!(review.ctx().store.config.sync.review_idle_after_secs >= 1800);
