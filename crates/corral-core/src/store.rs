@@ -718,7 +718,13 @@ impl Store {
 
     /// Validated root for rebuildable application caches (not created).
     pub fn cache_root(&self) -> Result<PathBuf> {
-        let layout = crate::StorageLayout::resolve(
+        Ok(self.storage_layout()?.cache_root().to_path_buf())
+    }
+
+    /// The validated storage layout (fixed class roots plus the configured cache and scratch
+    /// roots, plan section 8).
+    pub fn storage_layout(&self) -> Result<crate::StorageLayout> {
+        crate::StorageLayout::resolve(
             &self.root,
             &self.config.storage,
             &self.config.projects,
@@ -733,8 +739,12 @@ impl Store {
                     .collect::<Vec<_>>()
                     .join("; ")
             )
-        })?;
-        Ok(layout.cache_root().to_path_buf())
+        })
+    }
+
+    /// The backend behind this store, for the evidence facade's own operations.
+    pub(crate) fn backend(&self) -> &dyn crate::backend::StoreBackend {
+        self.db.backend.as_ref()
     }
 
     /// Absolute path of a project's repo: config path joined to root (absolute paths kept).

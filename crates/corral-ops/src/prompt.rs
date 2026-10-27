@@ -432,6 +432,96 @@ pub fn render_command(
     )
 }
 
+/// Records referencing each run's rendered dispatch prompt blob, keyed `<task>/<run>`.
+const RUN_PROMPTS: &str = "run-prompts";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RunPrompt {
+    blob: corral_core::blob_ref::BlobRef,
+    /// The scratch registration holding the materialized copy, and that copy.
+    scratch: String,
+    file: PathBuf,
+}
+
+/// Stores a run's rendered prompt as a blob referenced by the run's prompt record and
+/// materializes the copy the harness reads in a registered scratch directory: the run's
+/// still-open one, so a resumed launch keeps its prompt path, else a newly registered one (the
+/// previous registration is closed). Returns the materialized file.
+pub(crate) fn store_run_prompt(ctx: &Ctx, task: &str, run: &str, text: &str) -> Result<PathBuf> {
+    use corral_core::backend::{ScratchKind, ScratchState};
+    let key = format!("{task}/{run}");
+    let mut reuse = None;
+    if let Some(previous) = ctx.store.record::<RunPrompt>(RUN_PROMPTS, &key)?
+        && ctx
+            .store
+            .scratch_row(&previous.scratch)?
+            .is_some_and(|row| row.state == ScratchState::Open)
+    {
+        if previous.file.parent().is_some_and(Path::is_dir) {
+            reuse = Some((previous.scratch, previous.file));
+        } else {
+            ctx.store.close_scratch(&previous.scratch)?;
+        }
+    }
+    let (id, file) = match reuse {
+        Some(found) => found,
+        None => {
+            let id = format!(
+                "prompt-{task}-{run}-{}",
+                jiff::Timestamp::now().as_nanosecond()
+            );
+            let rel = format!("prompts/{id}");
+            let dir = ctx
+                .store
+                .register_scratch(ScratchKind::Prompt, &id, task, run, &rel)?;
+            let file = dir.join(format!("{task}-{run}.md"));
+            (id, file)
+        }
+    };
+    std::fs::write(&file, text).with_context(|| format!("writing {}", file.display()))?;
+    ctx.store
+        .put_evidence(RUN_PROMPTS, &key, text.as_bytes(), |blob| {
+            serde_json::json!(RunPrompt {
+                blob: blob.clone(),
+                scratch: id.clone(),
+                file: file.clone(),
+            })
+        })?;
+    Ok(file)
+}
+
+/// The rendered prompt of `task`'s run `run`, read from its blob; `None` before dispatch
+/// rendered one.
+pub(crate) fn run_prompt(ctx: &Ctx, task: &str, run: &str) -> Result<Option<String>> {
+    let Some(record) = ctx
+        .store
+        .record::<RunPrompt>(RUN_PROMPTS, &format!("{task}/{run}"))?
+    else {
+        return Ok(None);
+    };
+    let mut reader = ctx
+        .store
+        .blob_reader(record.blob.hash())?
+        .with_context(|| format!("prompt blob of {task} {run} is missing"))?;
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut reader, &mut text).context("reading prompt blob")?;
+    Ok(Some(text))
+}
+
+/// The materialized prompt file the harness of `task`'s run `run` reads, materialized again
+/// from its blob when the copy is gone.
+pub(crate) fn run_prompt_file(ctx: &Ctx, task: &str, run: &str) -> Result<PathBuf> {
+    let record = ctx
+        .store
+        .record::<RunPrompt>(RUN_PROMPTS, &format!("{task}/{run}"))?
+        .with_context(|| format!("{task} {run} has no rendered prompt"))?;
+    if record.file.is_file() {
+        return Ok(record.file);
+    }
+    let text = run_prompt(ctx, task, run)?.context("prompt record disappeared")?;
+    store_run_prompt(ctx, task, run, &text)
+}
+
 /// Task id the settings preview renders commands for.
 pub const PREVIEW_TASK: &str = "T-042";
 

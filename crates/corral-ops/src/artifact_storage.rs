@@ -1,14 +1,69 @@
-//! Snapshot bytes stay at their original paths; encoding is described by artifact metadata.
+//! Artifact bytes are content-addressed blobs (plan T-253 section 7): each task holds one
+//! `artifact-blobs` record per distinct content, whose document references the blob. Until
+//! `review-scratch` removes `artifacts_dir()`, the legacy copy at `<store dir>/<path>` is still
+//! written for the readers that open it directly, and reads keep its checks: they read the
+//! copy while it exists and decode the blob once it is gone. Encoding of that copy is
+//! described by artifact metadata.
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Artifact, ArtifactTier, PinRef, PinTarget};
-use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
+use corral_core::{Artifact, ArtifactTier, PinRef, PinTarget, Store};
+use flate2::read::MultiGzDecoder;
 
 use crate::Ctx;
+
+/// Records whose documents hold each task's artifact blob references, keyed `<task>/<sha256>`.
+pub(crate) const ARTIFACT_BLOBS: &str = "artifact-blobs";
+
+pub(crate) fn blob_key(task: &str, sha256: &str) -> String {
+    format!("{task}/{sha256}")
+}
+
+/// Puts `bytes` as a blob and references it from `task`'s record for that content. Returns
+/// whether the record is new (the caller drops it again if attaching fails).
+pub(crate) fn store_blob(ctx: &Ctx, task: &str, sha256: &str, bytes: &[u8]) -> Result<bool> {
+    ctx.store.put_evidence(
+        ARTIFACT_BLOBS,
+        &blob_key(task, sha256),
+        bytes,
+        |blob| serde_json::json!({ "task": task, "sha256": sha256, "blob": blob }),
+    )
+}
+
+/// The task an artifact belongs to, from its `artifacts/<task>/<run>/<file>` path.
+pub(crate) fn task_of(path: &str) -> Option<&str> {
+    path.strip_prefix("artifacts/")?
+        .split('/')
+        .next()
+        .filter(|task| !task.is_empty())
+}
+
+fn blob_reader(ctx: &Ctx, a: &Artifact) -> Result<Option<Box<dyn Read + Send>>> {
+    match corral_core::blob_ref::BlobHash::parse(&a.sha256) {
+        Ok(hash) => ctx.store.blob_reader(&hash),
+        Err(_) => Ok(None),
+    }
+}
+
+/// The legacy copy is missing (not replaced by something else, which stays an error).
+fn absent(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            || cause
+                .downcast_ref::<rustix::io::Errno>()
+                .is_some_and(|e| *e == rustix::io::Errno::NOENT)
+    })
+}
+
+/// Root of decoded copies handed to openers: `<cache_root>/decoded`, never under `.corral`.
+pub(crate) fn decoded_root(ctx: &Ctx) -> Result<PathBuf> {
+    Ok(ctx.store.cache_root()?.join("decoded"))
+}
 
 pub(crate) fn storage_lock(ctx: &Ctx) -> Result<fs::File> {
     let dir = ctx.store.dir().join("lock");
@@ -50,6 +105,7 @@ pub(crate) fn link_replace(source: &Path, dest: &Path) -> Result<()> {
 }
 
 pub(crate) fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
+    use flate2::{Compression, write::GzEncoder};
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(bytes).context("compressing artifact")?;
     encoder.finish().context("finishing artifact compression")
@@ -72,8 +128,16 @@ pub fn artifact_reader(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
         return Ok(Box::new(Cursor::new(stub(a))));
     }
     let path = ctx.store.dir().join(&a.path);
-    let meta =
-        fs::metadata(&path).with_context(|| format!("inspecting artifact {}", path.display()))?;
+    let meta = match fs::metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if let Some(reader) = blob_reader(ctx, a)? {
+                return Ok(reader);
+            }
+            Err(error)
+        }
+        meta => meta,
+    }
+    .with_context(|| format!("inspecting artifact {}", path.display()))?;
     if !meta.is_file() {
         bail!("artifact is not a regular file: {}", path.display());
     }
@@ -120,7 +184,20 @@ pub(crate) fn artifact_read_confined(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>>
     if a.purged_at.is_some() {
         return Ok(stub(a));
     }
-    let file = open_beneath_artifacts(ctx, &a.path)?;
+    let file = match open_beneath_artifacts(ctx, &a.path) {
+        Ok(file) => file,
+        Err(error) if absent(&error) => {
+            let Some(mut reader) = blob_reader(ctx, a)? else {
+                return Err(error);
+            };
+            let mut decoded = Vec::new();
+            reader
+                .read_to_end(&mut decoded)
+                .context("reading artifact blob")?;
+            return Ok(decoded);
+        }
+        Err(error) => return Err(error),
+    };
     if !file
         .metadata()
         .context("inspecting opened artifact")?
@@ -266,41 +343,39 @@ pub fn artifact_read(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-/// Returns an opener-ready path, preserving extensions and the run's relative asset layout.
+/// Returns an opener-ready decoded copy under `<cache_root>/decoded`, read under a storage
+/// lease, preserving extensions and the run's relative asset layout; never a path under
+/// `.corral`. A report's assets are its own task's artifacts in the same run directory.
 pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
-    let parent = Path::new(&a.path).parent();
-    let report_assets = Path::new(&a.path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "svg"))
-        && ctx
-            .store
-            .list()?
-            .iter()
-            .flat_map(|t| &t.artifacts)
-            .any(|s| {
-                s.purged_at.is_none()
-                    && s.source != a.source
-                    && Path::new(&s.path).parent() == parent
-            });
-    if a.purged_at.is_none() && a.compressed_bytes.is_none() && !report_assets {
-        return Ok(ctx.store.dir().join(&a.path));
-    }
-    let cache = ctx.store.state_dir().join("artifact-decoded");
+    let cache = decoded_root(ctx)?;
     if a.purged_at.is_some() {
         let path = cache.join(&a.path).with_extension("purged.txt");
         replace(&path, &stub(a))?;
         return Ok(path);
     }
-    for task in ctx.store.list()? {
-        for sibling in task
-            .artifacts
-            .iter()
-            .filter(|s| Path::new(&s.path).parent() == parent)
-        {
-            if sibling.purged_at.is_some() {
-                continue;
-            }
+    let parent = Path::new(&a.path).parent();
+    let report = Path::new(&a.path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "svg"));
+    ctx.store.with_blob_lease(|| {
+        let siblings: Vec<Artifact> = if report {
+            let task = task_of(&a.path).context("artifact path names no task")?;
+            ctx.store
+                .get(task)?
+                .artifacts
+                .into_iter()
+                .filter(|s| s.purged_at.is_none() && Path::new(&s.path).parent() == parent)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !siblings.iter().any(|s| s.source != a.source) {
+            let path = cache.join(&a.path);
+            replace(&path, &artifact_read(ctx, a)?)?;
+            return Ok(path);
+        }
+        for sibling in &siblings {
             let path = cache.join(&sibling.path);
             replace(&path, &artifact_read(ctx, sibling)?)?;
             // Reports refer to source-relative assets, including subdirectories and ../.
@@ -312,19 +387,19 @@ pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
                 link_replace(&path, &source_root.join(relative))?;
             }
         }
-    }
-    match source_layout(&a.source) {
-        Some(relative) => {
-            let path = cache
-                .join(parent.context("artifact has no run directory")?)
-                .join("sources")
-                .join(relative);
-            // Multiple snapshots can share a source name; the requested revision wins.
-            link_replace(&cache.join(&a.path), &path)?;
-            Ok(path)
+        match source_layout(&a.source) {
+            Some(relative) => {
+                let path = cache
+                    .join(parent.context("artifact has no run directory")?)
+                    .join("sources")
+                    .join(relative);
+                // Multiple snapshots can share a source name; the requested revision wins.
+                link_replace(&cache.join(&a.path), &path)?;
+                Ok(path)
+            }
+            None => Ok(cache.join(&a.path)),
         }
-        None => Ok(cache.join(&a.path)),
-    }
+    })
 }
 
 pub(crate) fn source_layout(source: &str) -> Option<PathBuf> {
@@ -344,14 +419,9 @@ pub(crate) fn source_layout(source: &str) -> Option<PathBuf> {
 pub fn set_artifact_tier(ctx: &Ctx, reference: &str, tier: ArtifactTier) -> Result<Artifact> {
     let _lock = storage_lock(ctx)?;
     let artifact = resolve_artifact(ctx, reference)?;
-    let task = ctx
-        .store
-        .list()?
-        .into_iter()
-        .find(|t| t.artifacts.iter().any(|a| a.path == artifact.path))
-        .context("artifact task not found")?;
+    let task = task_of(&artifact.path).context("artifact task not found")?;
     let mut result = None;
-    ctx.store.update(&task.id, |t| {
+    ctx.store.update(task, |t| {
         let a = t
             .artifacts
             .iter_mut()
@@ -365,14 +435,31 @@ pub fn set_artifact_tier(ctx: &Ctx, reference: &str, tier: ArtifactTier) -> Resu
     result.context("artifact update produced no result")
 }
 
+/// The stored `artifacts/...` path a reference names: the path itself, or the absolute path of
+/// its legacy copy or of its decoded copy.
+fn stored_path(ctx: &Ctx, reference: &str) -> Result<Option<String>> {
+    let path = Path::new(reference);
+    let relative = if path.is_absolute() {
+        let decoded = decoded_root(ctx)?;
+        path.strip_prefix(ctx.store.dir())
+            .or_else(|_| path.strip_prefix(&decoded))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    } else {
+        Some(reference.to_string())
+    };
+    Ok(relative.filter(|p| task_of(p).is_some()))
+}
+
 /// Resolves a pin number, stable task:run:file reference, or exact stored/absolute snapshot path.
-/// Purged artifacts remain resolvable even though their content file is gone.
+/// Purged artifacts remain resolvable even though their content file is gone. Only the named
+/// task is read.
 pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
-    let tasks = ctx.store.list()?;
-    if let Some(a) = tasks
-        .iter()
-        .flat_map(|t| &t.artifacts)
-        .find(|a| a.path == reference || ctx.store.dir().join(&a.path) == Path::new(reference))
+    if let Some(path) = stored_path(ctx, reference)?
+        && let Some(task) = task_of(&path)
+        && let Ok(task) = Store::normalize_id(task)
+        && let Ok(task) = ctx.store.get(&task)
+        && let Some(a) = task.artifacts.iter().find(|a| a.path == path)
     {
         return Ok(a.clone());
     }
@@ -382,20 +469,17 @@ pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
         .ok()
         .and_then(|n| n.checked_sub(1))
         .and_then(|n| pins.get(n));
-    if let Some(pin) = pin
-        && let PinTarget::Artifact { artifact, .. } =
-            corral_core::resolve_pin(pin, &tasks, ctx.store.dir())
-    {
-        return Ok(artifact);
-    }
     let reference = pin.map_or(reference, |p| p.target.as_str());
     let PinRef::Artifact { task, run, file } = PinRef::parse(reference)? else {
         bail!("expected an artifact reference (task:run:file)");
     };
-    let task = tasks
-        .iter()
-        .find(|t| t.id == task)
-        .context("artifact task not found")?;
+    let task = ctx.store.get(&task).context("artifact task not found")?;
+    if let Some(pin) = pin
+        && let PinTarget::Artifact { artifact, .. } =
+            corral_core::resolve_pin(pin, std::slice::from_ref(&task), ctx.store.dir())
+    {
+        return Ok(artifact);
+    }
     let exact = task
         .artifacts
         .iter()
@@ -454,22 +538,7 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
     Ok(paths)
 }
 
-pub(crate) fn snapshot(
-    ctx: &Ctx,
-    dest: &Path,
-    bytes: &[u8],
-    artifact: &Artifact,
-) -> Result<Option<u64>> {
-    for task in ctx.store.list()? {
-        if let Some(a) = task.artifacts.iter().find(|a| {
-            a.sha256 == artifact.sha256
-                && a.purged_at.is_none()
-                && (a.compressed_bytes.is_none() || artifact.tier() != ArtifactTier::Keep)
-        }) {
-            link_replace(&ctx.store.dir().join(&a.path), dest)?;
-            return Ok(a.compressed_bytes);
-        }
-    }
-    replace(dest, bytes)?;
-    Ok(None)
+/// Writes the legacy copy at the artifact's stored path (see the module comment).
+pub(crate) fn mirror(ctx: &Ctx, a: &Artifact, bytes: &[u8]) -> Result<()> {
+    replace(&ctx.store.dir().join(&a.path), bytes)
 }

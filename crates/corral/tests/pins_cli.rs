@@ -105,7 +105,13 @@ fn pin_unpin_pins_json_and_open() {
     let opened = std::fs::read_to_string(&log).expect("opener ran");
     let lines: Vec<&str> = opened.lines().collect();
     assert_eq!(lines.len(), 2, "{opened}");
-    assert_eq!(lines[0], latest);
+    // An artifact opens as its decoded copy under the cache root, never under .corral.
+    assert!(
+        lines[0].ends_with("/decoded/artifacts/T-001/R0/81db67b6-dash.html"),
+        "{opened}"
+    );
+    assert!(!std::path::Path::new(lines[0]).starts_with(root.join(".corral")));
+    assert_eq!(std::fs::read_to_string(lines[0]).expect("decoded"), "v2\n");
     assert!(
         lines[1].ends_with(".md") && lines[1].contains("T-001"),
         "{opened}"

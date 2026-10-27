@@ -398,7 +398,8 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         assert_eq!(run.herdr.as_ref().unwrap().pane_id, pane_id);
         assert_eq!(run.worktree, tmp.path().join("app/.worktrees/T-001"));
         assert!(run.worktree.join("README.md").exists());
-        assert!(ctx.store.prompts_dir().join("T-001-R1.md").exists());
+        assert!(dispatch_prompt(&ctx.store, "T-001", "R1").is_file());
+        assert!(!ctx.store.prompts_dir().join("T-001-R1.md").exists());
         let mut signal = [0; 16];
         let received = ready.recv(&mut signal).unwrap();
         assert_eq!(&signal[..received], b"READY");
@@ -481,4 +482,13 @@ fn herdr_dispatch_sync_reply_jump_retry() {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

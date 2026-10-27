@@ -92,7 +92,7 @@ impl Fx {
     }
 
     fn delivered(&self, id: &str) -> String {
-        std::fs::read_to_string(self.ctx.store.prompts_dir().join(format!("{id}-R1.md"))).unwrap()
+        std::fs::read_to_string(dispatch_prompt(&self.ctx.store, id, "R1")).unwrap()
     }
 
     /// The task as `launch` renders it: without the run being prepared.
@@ -337,4 +337,13 @@ fn the_built_in_template_passes_the_dispatch_gate_instruction_scan() {
         corral_ops::scan_gate_instructions(&template, &[FULL.to_owned()]),
         None
     );
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

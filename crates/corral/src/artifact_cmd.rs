@@ -198,6 +198,12 @@ fn print_gc(report: &corral_ops::GcReport) {
         println!("{:<8} {} {}", action.action, action.task_id, action.path);
     }
     println!("bytes saved: {}", report.bytes_saved);
+    if !report.dry_run {
+        println!(
+            "blobs freed: {} ({} bytes; unreferenced blobs go after the grace period)",
+            report.blobs_deleted, report.blob_bytes_freed
+        );
+    }
 }
 
 pub fn storage(ctx: &Ctx, json: bool) -> Result<()> {

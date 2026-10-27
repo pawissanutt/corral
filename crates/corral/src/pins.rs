@@ -105,8 +105,9 @@ pub fn open(ctx: &Ctx, query: &str) -> Result<()> {
             follow: None,
         },
     };
-    let tasks = ctx.store.list()?;
-    let path: PathBuf = match resolve_pin(&pin, &tasks, ctx.store.dir()) {
+    // Only the pinned task is read; an artifact opens as its decoded copy under the cache root.
+    let task = ctx.store.get(PinRef::parse(&pin.target)?.task())?;
+    let path: PathBuf = match resolve_pin(&pin, std::slice::from_ref(&task), ctx.store.dir()) {
         // The store keeps no task files: open a read-only Markdown rendering of the task.
         PinTarget::Task { id, .. } => {
             let task = ctx.store.get(&id)?;
@@ -117,7 +118,7 @@ pub fn open(ctx: &Ctx, query: &str) -> Result<()> {
                 .with_context(|| format!("writing {}", path.display()))?;
             path
         }
-        PinTarget::Artifact { path, .. } => path,
+        PinTarget::Artifact { artifact, .. } => corral_ops::artifact_path(ctx, &artifact)?,
         PinTarget::Broken(reason) => bail!("{} is broken: {reason}", pin.target),
     };
     let opened = corral_ops::open_path(ctx, &path, true)?;

@@ -756,7 +756,7 @@ fn a_gone_agent_pane_gets_a_retry_run_carrying_the_request() {
     assert_eq!(run.id, "R2");
     assert_eq!(run.agent, "fake", "same profile");
     assert_eq!(run.autopilot.map(|a| a.stage), Some(AutoStage::Changes));
-    let prompt = std::fs::read_to_string(fx.ctx.store.prompts_dir().join("T-001-R2.md")).unwrap();
+    let prompt = std::fs::read_to_string(dispatch_prompt(&fx.ctx.store, "T-001", "R2")).unwrap();
     assert!(
         prompt.contains("## Changes requested")
             && prompt.contains("`test -f fixed.txt`")
@@ -819,4 +819,13 @@ fn without_a_review_section_nothing_lands_or_merges() {
     }
     assert_eq!(fx.herdr_log("prompts.log"), "");
     assert_eq!(fx.herdr_log("notify.log"), "");
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

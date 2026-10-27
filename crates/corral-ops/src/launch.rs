@@ -231,10 +231,7 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
     let name = format!("{} {}", task.id, task.title);
     ctx.herdr
         .pane_report_metadata(pane, &name, &[("task", &task.id), ("run", &run.id)])?;
-    let prompt = ctx
-        .store
-        .prompts_dir()
-        .join(format!("{}-{}.md", task.id, run.id));
+    let prompt = crate::prompt::run_prompt_file(ctx, &task.id, &run.id)?;
     let command = if crate::agent::hooks::run_is_pi_native(run) {
         crate::agent::hooks::launch::worker_command(ctx, &task, run)?
     } else {
@@ -461,9 +458,6 @@ fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
         Ok(())
     })?;
     crate::dispatch::install_skill(ctx, &task.id, run.harness.as_deref().unwrap_or(&run.agent))?;
-    let prompts = ctx.store.prompts_dir();
-    std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
-    let prompt_file = prompts.join(format!("{}-{}.md", task.id, run.id));
     crate::lessons::record_lessons(ctx, task, &run)?;
     let mut prompt = crate::task_prompt(ctx, &source, &run)?;
     if let Some(plan) = task
@@ -514,6 +508,5 @@ fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
             }
         }
     }
-    std::fs::write(&prompt_file, prompt)
-        .with_context(|| format!("writing {}", prompt_file.display()))
+    crate::prompt::store_run_prompt(ctx, &task.id, &run.id, &prompt).map(drop)
 }

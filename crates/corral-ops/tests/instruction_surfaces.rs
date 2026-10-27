@@ -405,7 +405,7 @@ fn assert_reduced(surface: &str, text: &str) {
 fn surfaces_rendered_for_a_reduced_tier_task_carry_the_tier_commands_and_no_full_command() {
     // Given a main-bound task dispatched with quick review rounds, so its worker prompt is rendered.
     let fx = Fx::new();
-    let worker = fx.prompts_matching("-R1.md");
+    let worker = std::fs::read_to_string(dispatch_prompt(&fx.ctx.store, &fx.id, "R1")).unwrap();
     assert_reduced("worker prompt", &worker);
 
     // When its quick gate fails and autopilot sends the change request.
@@ -473,4 +473,13 @@ fn the_review_prompt_and_packet_of_a_reduced_tier_task_carry_the_tier_commands_a
         "review packet",
         &packet["bound"]["gate_contract"].to_string(),
     );
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

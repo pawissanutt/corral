@@ -1,20 +1,26 @@
-//! Explicit retention; dry runs simulate inode ownership without touching the store.
+//! Explicit retention; dry runs simulate inode ownership without touching the store. A purge
+//! also drops the task's blob reference, so blob GC frees the bytes once the grace horizon
+//! passes; transcript retention (`[storage] transcript_retention_days`) purges transcripts.
 use std::collections::{HashMap, HashSet};
 use std::fs;
 
 use anyhow::{Context, Result};
-use corral_core::{Artifact, ArtifactRetention, RetentionAction, Task};
+use corral_core::backend::{Clock, SystemClock};
+use corral_core::blob::GcRun;
+use corral_core::{Artifact, ArtifactRetention, ArtifactTier, RetentionAction, Status, Task};
 use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::Ctx;
-use crate::artifact_storage::{gzip, link_replace, protected, replace, storage_lock};
+use crate::artifact_storage::{
+    ARTIFACT_BLOBS, blob_key, decoded_root, gzip, link_replace, protected, replace, storage_lock,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GcAction {
     pub task_id: String,
     pub path: String,
-    /// "dedup", "compress", or "purge".
+    /// "dedup", "compress", "purge", or "transcript" (a purge by transcript retention).
     pub action: String,
 }
 
@@ -26,6 +32,9 @@ pub struct GcReport {
     pub bytes_saved: u64,
     pub stored_before: u64,
     pub stored_after: u64,
+    /// Blobs this run's blob GC pass deleted: only unreferenced ones past the grace horizon.
+    pub blobs_deleted: u64,
+    pub blob_bytes_freed: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,7 +231,8 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
             canonical.insert(key, i);
         }
     }
-    let now = Timestamp::now();
+    let clock = SystemClock;
+    let now = clock.now();
     // Encoding keys refer only to compressed snapshots that survive this policy.
     let mut compressed: HashMap<String, usize> = HashMap::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -292,17 +302,50 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
             }
         }
     }
+    if let Some(retention) = ctx.store.config.storage.transcript_retention() {
+        let retention = jiff::SignedDuration::try_from(retention)?;
+        let kept: HashSet<&str> = tasks
+            .iter()
+            .flat_map(|t| &t.artifacts)
+            .filter(|a| a.purged_at.is_none() && a.tier() == ArtifactTier::Keep)
+            .map(|a| a.sha256.as_str())
+            .collect();
+        for (i, entry) in entries.iter_mut().enumerate() {
+            let finished = tasks
+                .iter()
+                .find(|t| t.id == entry.task_id)
+                .filter(|t| matches!(t.status, Status::Done | Status::Dropped))
+                .and_then(|t| finishes.get(&t.id));
+            if entry.identity.is_none()
+                || !is_transcript(&entry.artifact)
+                || protected.contains(&entry.artifact.path)
+                || kept.contains(entry.artifact.sha256.as_str())
+                || finished.is_none_or(|f| now.duration_since(f.at) <= retention)
+            {
+                continue;
+            }
+            entry.identity = None;
+            entry.len = 0;
+            operations.push(Operation::Purge { index: i });
+            actions.push(action(entry, "transcript"));
+        }
+    }
     let after = stored(&entries);
     let bytes_saved = before.saturating_sub(after);
+    let (mut blobs_deleted, mut blob_bytes_freed) = (0, 0);
     if !dry_run {
         for operation in operations {
             apply(ctx, &entries, operation, now)?;
         }
-        let cache = ctx.store.state_dir().join("artifact-decoded");
+        let cache = decoded_root(ctx)?;
         if cache.exists() {
             fs::remove_dir_all(&cache).context("invalidating decoded artifact cache")?;
         }
         crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
+        if let GcRun::Done(report) = ctx.store.blob_gc(&clock)? {
+            blobs_deleted = u64::try_from(report.deleted.len() + report.completed.len())?;
+            blob_bytes_freed = report.freed_bytes;
+        }
     }
     Ok(GcReport {
         dry_run,
@@ -310,7 +353,17 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         bytes_saved,
         stored_before: before,
         stored_after: after,
+        blobs_deleted,
+        blob_bytes_freed,
     })
+}
+
+/// Raw agent, reviewer and Pi-session transcripts are the artifacts named as transcripts.
+fn is_transcript(a: &Artifact) -> bool {
+    corral_core::snapshot_name(a)
+        .to_ascii_lowercase()
+        .contains("transcript")
+        || a.title.to_ascii_lowercase().contains("transcript")
 }
 
 fn action(e: &Entry, kind: &str) -> GcAction {
@@ -352,8 +405,11 @@ fn apply(ctx: &Ctx, entries: &[Entry], operation: Operation, now: Timestamp) -> 
             (index, Some(entries[index].len), None)
         }
         Operation::Purge { index } => {
-            fs::remove_file(ctx.store.dir().join(&entries[index].artifact.path))
-                .context("purging artifact contents")?;
+            match fs::remove_file(ctx.store.dir().join(&entries[index].artifact.path)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error).context("purging artifact contents"),
+            }
             (index, None, Some(now))
         }
     };
@@ -366,6 +422,17 @@ fn apply(ctx: &Ctx, entries: &[Entry], operation: Operation, now: Timestamp) -> 
             .context("artifact disappeared during retention")?;
         a.compressed_bytes = compressed;
         a.purged_at = purged;
+        let sha = a.sha256.clone();
+        // The task's blob reference goes with its last live artifact of that content.
+        if purged.is_some()
+            && !task
+                .artifacts
+                .iter()
+                .any(|a| a.sha256 == sha && a.purged_at.is_none())
+        {
+            ctx.store
+                .delete_record(ARTIFACT_BLOBS, &blob_key(&task.id, &sha))?;
+        }
         Ok(())
     })?;
     Ok(())

@@ -169,9 +169,56 @@ fn implementation_run_launches_a_prompt_over_the_argument_limit() {
     // When a run whose prompt exceeds MAX_ARG_STRLEN is dispatched through it.
     fx.dispatch();
     // Then the agent starts with the prompt by reference and the run stays live.
-    let prompt = fx.ctx.store.prompts_dir().join(format!("{}-R1.md", fx.id));
+    let prompt = dispatch_prompt(&fx.ctx.store, &fx.id, "R1");
     fx.assert_received_by_reference(&prompt);
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().status, Status::Running);
+}
+
+#[test]
+fn dispatch_stores_the_prompt_as_a_run_blob_and_launches_a_registered_scratch_copy() {
+    // Given a run template that reads its prompt by reference.
+    let fx = fixture("'{bin}/agent' {model_args} {prompt_ref}", false);
+    // When the task is dispatched.
+    fx.dispatch();
+    // Then the run's prompt record references a live blob holding exactly the rendered prompt.
+    let record = fx
+        .ctx
+        .store
+        .record_row("run-prompts", &format!("{}/R1", fx.id))
+        .unwrap()
+        .expect("prompt record");
+    let blob: corral_core::blob_ref::BlobRef =
+        record.doc["blob"].as_str().unwrap().parse().unwrap();
+    let row = fx.ctx.store.blob_row(blob.hash()).unwrap().unwrap();
+    assert_eq!(row.state, corral_core::backend::BlobState::Live);
+    assert!(row.refs >= 1);
+    let mut stored = Vec::new();
+    std::io::Read::read_to_end(
+        &mut fx.ctx.store.blob_reader(blob.hash()).unwrap().unwrap(),
+        &mut stored,
+    )
+    .unwrap();
+    // And the harness read a materialized copy in an open, registered prompt scratch directory.
+    let file = dispatch_prompt(&fx.ctx.store, &fx.id, "R1");
+    assert_eq!(std::fs::read(&file).unwrap(), stored);
+    fx.assert_received_by_reference(&file);
+    let scratch = fx
+        .ctx
+        .store
+        .scratch_row(record.doc["scratch"].as_str().unwrap())
+        .unwrap()
+        .expect("scratch registration");
+    assert_eq!(scratch.kind, corral_core::backend::ScratchKind::Prompt);
+    assert_eq!(scratch.state, corral_core::backend::ScratchState::Open);
+    let layout = fx.ctx.store.storage_layout().unwrap();
+    assert_eq!(
+        file.parent().unwrap(),
+        layout.scratch_root().join(&scratch.path)
+    );
+    // And nothing was written under .corral/prompts.
+    let prompts = fx.ctx.store.prompts_dir();
+    let written = std::fs::read_dir(&prompts).map_or(0, |entries| entries.count());
+    assert_eq!(written, 0, "{}", prompts.display());
 }
 
 #[test]
@@ -424,4 +471,13 @@ fn pm_shell_without_its_agent_is_not_reused_as_the_pm() {
         let opens = runs.lines().filter(|l| l.contains("CORRAL_PM=1")).count();
         assert_eq!(opens, 2, "{command}: {runs}");
     }
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }

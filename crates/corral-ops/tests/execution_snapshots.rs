@@ -113,7 +113,7 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
     let (tmp, mut ctx, id, engine) = fixture();
     let task = reserve(&ctx, &id, &engine);
     let run = task.current_run().unwrap().clone();
-    let prompt = ctx.store.prompts_dir().join(format!("{id}-R1.md"));
+    let prompt = dispatch_prompt(&ctx.store, &id, "R1");
     let command = corral_ops::render_command(&ctx, &run.agent, &task, &run, &prompt).unwrap();
     let snapshot = run.execution.as_ref().unwrap();
     assert_eq!(snapshot.revision.as_deref(), Some("binding-1"));
@@ -242,4 +242,13 @@ fn execution_snapshot_preserves_unknown_model_effort_and_vendor() {
         command
     );
     assert!(ctx.store.config.run_vendor(run).is_err());
+}
+
+/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
+fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
+    let record = store
+        .record_row("run-prompts", &format!("{task}/{run}"))
+        .unwrap()
+        .expect("dispatch rendered no prompt");
+    record.doc["file"].as_str().unwrap().into()
 }
