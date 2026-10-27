@@ -17,8 +17,10 @@ pub const PI_NATIVE_HARNESS: &str = "pi-native";
 /// Built-in launch template; `{corral}` and `{delivery_args}` are rendered by the agent launch
 /// hook. Model and effort travel in the one-shot bootstrap, never on the command line.
 pub const PI_NATIVE_COMMAND: &str = "{corral} agent launch {delivery_args}";
-/// Vendors a pi-native profile may use (OD5); widening it is a reviewed follow-up.
-pub const PI_NATIVE_VENDORS: [&str; 1] = ["openai"];
+/// Vendors a pi-native profile may use (OD5); widening it is a reviewed follow-up. Anthropic
+/// joined after the T-306 probe recorded GO (docs/records/pi-native-claude-route.md) and the
+/// owner accepted its subscription-OAuth policy risk on T-357.
+pub const PI_NATIVE_VENDORS: [&str; 2] = ["openai", "anthropic"];
 
 pub fn is_pi_native(harness: &str) -> bool {
     harness == PI_NATIVE_HARNESS

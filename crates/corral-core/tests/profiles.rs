@@ -290,6 +290,41 @@ fn resolution_order_and_overrides() {
 }
 
 #[test]
+fn pi_native_profiles_resolve_for_listed_vendors_and_refuse_unlisted_ones() {
+    // Given opt-in pi-native profiles for anthropic, openai and an unlisted vendor.
+    let d = tempdir().unwrap();
+    let mut c = Config::default_for(d.path());
+    for vendor in ["anthropic", "openai", "mistral"] {
+        let mut p = profile("pi-native", Some("some-model"), None);
+        p.vendor = Some(vendor.into());
+        c.profiles.insert(vendor.into(), p);
+    }
+    for (name, allowed) in [("anthropic", true), ("openai", true), ("mistral", false)] {
+        // When the profile resolves and its vendor meets the allowlist.
+        let r = c
+            .resolve_profile(&choice(Some(name), None, None), None, None)
+            .unwrap();
+        assert_eq!(r.harness, "pi-native");
+        let checked = corral_core::check_pi_native_vendor(&r.profile, r.vendor.as_deref());
+        // Then only the listed vendors pass; the refusal names the allowlist.
+        assert_eq!(checked.is_ok(), allowed, "{name}");
+        if !allowed {
+            let msg = format!("{:#}", checked.unwrap_err());
+            assert!(
+                msg.starts_with(
+                    "vendor_refused: pi-native profile 'mistral' uses vendor 'mistral'"
+                ) && msg.contains("openai, anthropic"),
+                "{msg}"
+            );
+        }
+    }
+    // And a missing vendor is still refused.
+    assert!(corral_core::check_pi_native_vendor("p", None).is_err());
+    // The built-in default stays the OmO profile (OD4): the opt-in profiles change nothing.
+    assert_eq!(c.default_profile(None, None), "omo");
+}
+
+#[test]
 fn profiles_round_trip_through_toml() {
     let d = tempdir().unwrap();
     let mut c = Config::default_for(d.path());
