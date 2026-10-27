@@ -435,10 +435,10 @@ mod tests {
         // Given our writer handle and an external replacement of its pathname.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
-        store.set_task_settle_window(std::time::Duration::ZERO);
         let task = store
             .create("Retained", None, Status::Backlog, "before\n")
             .unwrap();
+        store.set_task_settle_window(std::time::Duration::ZERO);
         let source = crate::render_task(&task);
         let file = super::super::atomic_write_retained(&task.path, &source).unwrap();
         let mut changed = task.clone();
@@ -452,13 +452,15 @@ mod tests {
 
     #[test]
     fn attention_write_reuses_encoded_bytes_without_hiding_external_edits() {
-        // Given a warm cache using the existing deterministic stamp mode.
+        // Create under the normal settle policy: ID allocation lists the empty directory.
+        // Trusting stamps before creation can retain that empty listing if the directory's
+        // timestamps collide. Only enable stamp trust once the fixture exists.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::init(dir.path()).unwrap();
-        store.set_task_settle_window(std::time::Duration::ZERO);
         let task = store
             .create("Written", None, Status::Backlog, "before\n")
             .unwrap();
+        store.set_task_settle_window(std::time::Duration::ZERO);
         store.get(&task.id).unwrap();
         let decodes = store.task_cache.decodes.load(Ordering::Relaxed);
         // When an attention transaction persists bytes it already knows.
@@ -479,6 +481,20 @@ mod tests {
             store.task_cache.decodes.load(Ordering::Relaxed),
             decodes + 1
         );
+    }
+
+    #[test]
+    fn attention_write_cache_stress() {
+        // Each worker owns its store; exercise fixture setup and replacements under load.
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for _ in 0..25 {
+                        attention_write_reuses_encoded_bytes_without_hiding_external_edits();
+                    }
+                });
+            }
+        });
     }
 
     #[test]
