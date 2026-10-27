@@ -72,7 +72,50 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
             )
         })?,
     };
-    Ok(assets(&dir, role, explicit.is_some())?)
+    assets(&dir, role, explicit.is_some())?;
+    Ok(host_provider(&dir, resolved.vendor.as_deref())?)
+}
+
+/// Providers a host declares when `compat.json` has no `providers` list: the original host
+/// reaches OpenAI only.
+const DEFAULT_HOST_PROVIDERS: [&str; 1] = ["openai"];
+
+/// Refuses an allowlisted vendor the installed host cannot yet reach. The allowlist says which
+/// vendors a profile may name; `compat.json` `providers` says which ones this installation's host
+/// can run, so a profile never passes preflight and then fails at runtime.
+fn host_provider(dir: &Path, vendor: Option<&str>) -> Result<(), Refusal> {
+    let Some(vendor) = vendor else {
+        return Ok(());
+    };
+    let declared: Option<Vec<String>> = std::fs::read(dir.join("compat.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value["providers"].as_array().map(|list| {
+                list.iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect()
+            })
+        });
+    let declared = declared.unwrap_or_else(|| {
+        DEFAULT_HOST_PROVIDERS
+            .iter()
+            .map(|p| (*p).to_owned())
+            .collect()
+    });
+    if declared.iter().any(|provider| provider == vendor) {
+        return Ok(());
+    }
+    Err(refuse(
+        "provider_unsupported_by_host",
+        format!(
+            "vendor '{vendor}' is allowed for pi-native profiles but the installed host declares \
+             providers [{}] in {}/compat.json; use a supported vendor or install a host that \
+             declares '{vendor}'",
+            declared.join(", "),
+            dir.display()
+        ),
+    ))
 }
 
 /// The asset-directory half of the check, in the order a launch needs them: the directory, the

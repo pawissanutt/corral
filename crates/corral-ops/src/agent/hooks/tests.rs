@@ -237,6 +237,33 @@ fn preflight_names_the_missing_piece_and_its_owner() {
             .starts_with("vendor_refused: pi-native profile 'pi' uses vendor 'mistral'"),
         "{error:#}"
     );
+    // An allowlisted vendor the installed host does not declare is refused with its own code,
+    // and passes once compat.json lists it (or any listed provider alongside the default).
+    pi_profile(&mut fx, "anthropic");
+    let anthropic = resolved(&fx, Some("pi"));
+    let refused = |fx: &Fx| {
+        preflight::check(&fx.ctx, AgentRole::Worker, &anthropic)
+            .err()
+            .map(refusal)
+            .unwrap_or_default()
+    };
+    assert!(
+        refused(&fx).starts_with("provider_unsupported_by_host: vendor 'anthropic'"),
+        "{}",
+        refused(&fx)
+    );
+    write(
+        &dir,
+        "compat.json",
+        r#"{"verdict":"GO","providers":["openai"]}"#,
+    );
+    assert!(refused(&fx).starts_with("provider_unsupported_by_host"));
+    write(
+        &dir,
+        "compat.json",
+        r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
+    );
+    assert_eq!(refused(&fx), "");
 }
 
 #[test]

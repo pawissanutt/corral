@@ -4,8 +4,10 @@
 Anthropic Pro/Max OAuth login, and Anthropic's own response headers attribute the usage to the
 subscription's five-hour window, not to extra usage. This record changes no default.
 **Update (T-357):** the owner accepted the policy risk below on 2026-10-27, and the pi-native vendor
-allowlist in `crates/corral-core/src/profile.rs` is now `[openai, anthropic]`. Anthropic profiles are
-opt-in only: OmO stays the default worker, reviewer and PM, and credentials come only from the
+allowlist in `crates/corral-core/src/profile.rs` is now `[openai, anthropic]`. The shipped Pi host still
+reaches OpenAI only, so preflight refuses an anthropic profile with `provider_unsupported_by_host` unless
+the installed host's `compat.json` `providers` list declares `anthropic`; the host's Anthropic provider,
+login and network pins are separate work (T-479). Anthropic profiles are opt-in only: OmO stays the default worker, reviewer and PM, and credentials come only from the
 corral-owned Pi auth directory.
 
 ## Authorization and budget
@@ -94,7 +96,8 @@ live response carried one. The decision above is therefore unchanged. The captur
 
 GO filed a reviewed follow-up that changes the pi-native vendor allowlist, filed as an Idea so the
 owner decides before anything runs (T-357). The owner accepted the risk and T-357 added `anthropic` to
-the allowlist; before it landed, anthropic-vendor pi-native profiles were refused. The probe login remains in the probe-owned
+the allowlist; before it landed, anthropic-vendor pi-native profiles were refused, and they now run only
+once a host declares Anthropic support. The probe login remains in the probe-owned
 directory above; it is separate from the production corral-owned Pi auth directory that OD8 assigns to
 `corral agent login`, and the owner can delete it at any time.
 
