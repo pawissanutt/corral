@@ -374,3 +374,28 @@ fn sync_refresh_relists_when_tasks_change_after_its_sample() {
     // Then the current body, not the stale sampled body, is indexed.
     assert!(f.cached("reconciledprobe"));
 }
+
+#[test]
+fn sync_refresh_after_a_concurrent_change_never_lists_the_board() {
+    // Given an indexed board and a stamp sampled before another task changes.
+    let f = Fixture::new();
+    f.refresh();
+    let stamp = task_stamp(&f.ctx).unwrap();
+    for i in 0..5 {
+        f.ctx
+            .store
+            .create(&format!("Other {i}"), None, Status::Done, "other")
+            .unwrap();
+    }
+    // When sync refreshes on its changed-stamp route.
+    let lists = corral_core::work::count(corral_core::work::Work::TaskList);
+    let before = SNAPSHOTS.get();
+    refresh_after_sync(&f.ctx, &f.tasks, &stamp).unwrap();
+    // Then it follows the feed: no board listing and no snapshot, and the new tasks are indexed.
+    assert_eq!(
+        corral_core::work::count(corral_core::work::Work::TaskList),
+        lists
+    );
+    assert_eq!(SNAPSHOTS.get(), before);
+    assert!(f.cached("other"));
+}
