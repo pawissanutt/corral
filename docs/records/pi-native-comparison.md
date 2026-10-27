@@ -1,6 +1,6 @@
 # Pi-native worker comparison: incomplete cohort
 
-T-313 / T-252@P5, 2026-10-26. **Three pairs are independently reviewed; the six-pair comparison is incomplete.**
+T-313 / T-252@P5, 2026-10-27. **Four pairs are independently reviewed; the six-pair comparison is incomplete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -322,7 +322,7 @@ that threshold is false. Other diagnostic thresholds are true; they do not
 override incompleteness, prior counterpart reuse, solution exposure or the
 different operational question/silent-ending detection surfaces.
 
-## Fourth pair: native arm captured, OmO arm running
+## Fourth reviewed pair
 
 T-246 native T-005/R1 was approved after two independent reviews at
 2026-10-26T23:59:39.010704739Z on repaired candidate
@@ -343,9 +343,28 @@ load. Refused launches allocated no review. The configured policy was retained;
 launch succeeded after canonical resource admission recovered.
 
 The approved native raw window was captured before discard; its branch is
-retained. Matched OmO T-011/R1 is now worker 10/12 from the same frozen base,
-with the same independent-implementation instruction. This single approved arm
-is not a fourth completed paired result or an aggregate verdict.
+retained. Matched OmO T-011/R1, worker 10/12, was independently approved on its
+first review at 2026-10-27T00:34:32.538710643Z, on candidate
+`96373e89810f6276c7bdf9d5e797ccedb143b52b`. Its captured totals are 7,355,911
+worker-plus-review tokens, USD 2.0306252 API-equivalent, one passing quick gate,
+419.767 gate seconds and 1,982.876 wall seconds. Recorded rescues, Needs me,
+PM/owner answers and silent endings are zero. Its checkpoint discloses that
+required board search exposed counterpart review snippets and branch inventory
+exposed a commit subject; it reports reading no counterpart source or tests.
+This remains an exposed, not blinded, comparison.
+
+Both approved capture windows are retained. Corral's private p05 landing of the
+OmO candidate is in progress; its full landing gate is separate from the
+approval-window metrics above. The exact four-pair report is protected as
+`T-313:R1:b3688579-comparison-four-pairs.json`, with its matching manifest and
+raw inputs. It exits 2 with `complete: false`, `valid: false`,
+`outcome: not_evaluated`, no per-pair invalidations and no budget stop.
+Diagnostic OmO/native totals are 67,583,326 / 35,565,018 tokens and
+USD 12.2178216 / 6.5714664 API-equivalent. Native has six reviews against
+OmO's four, so the review-round threshold is now false as well as Needs me.
+Neither these diagnostics nor the lower native cost establish a host verdict.
+The final large pair remains unstarted, with two of twelve worker admissions
+available and no replacement allowance.
 
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
