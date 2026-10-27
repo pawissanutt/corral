@@ -206,6 +206,29 @@ fn explicit_choices_and_owner_rules_precede_even_stale_auto_receipts() {
 }
 
 #[test]
+fn an_enqueued_task_opens_a_queued_run_that_dequeue_clears() {
+    // Given an authorized Auto selection that is enqueued.
+    let fx = Fixture::new();
+    fx.save(&fx.selection("database", SelectionActor::Proposer, "selection-1"));
+    corral_ops::enqueue(&fx.ctx, &fx.task.id, &DispatchOpts::default()).unwrap();
+    let events = |kind: &str| fx.ctx.store.events_of(Some(&fx.task.id), &[kind]).unwrap();
+    // Then one queued event opened one open run.
+    assert_eq!(events("queued").len(), 1);
+    let runs = fx.ctx.store.condition_runs(Some(&fx.task.id)).unwrap();
+    assert_eq!(
+        (runs.len(), runs[0].count, runs[0].closed_seq),
+        (1, 1, None)
+    );
+    // When the task leaves Ready through dequeue.
+    corral_ops::dequeue(&fx.ctx, &fx.task.id).unwrap();
+    // Then the run is cleared once with its count.
+    let cleared = events("queued_cleared");
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(cleared[0].detail["count"], 1);
+    assert_eq!(cleared[0].detail["run"], events("queued")[0].seq);
+}
+
+#[test]
 fn changed_specification_blocks_queued_auto_until_new_receipt() {
     // Given an authorized queued Auto selection.
     let fx = Fixture::new();

@@ -377,8 +377,23 @@ fn approve_case(strategy: ApproveStrategy, remove_worktree: bool, policy_keeps: 
     let run = fx.run();
     let ws = run.herdr.unwrap().workspace_id;
     fx.reset_calls();
+    for _ in 0..2 {
+        let stale = json!({"run": run.id, "outcome": "stale_retry", "reason": "moved"});
+        fx.ctx
+            .store
+            .log_event(Some(&fx.id), "landing_stale", stale)
+            .unwrap();
+    }
     corral_ops::approve(&fx.ctx, &fx.id, strategy, remove_worktree, false).unwrap();
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().status, Status::Done);
+    // A current landing clears the open landing_stale run once, with its count.
+    let cleared = fx
+        .ctx
+        .store
+        .events_of(Some(&fx.id), &["landing_stale_cleared"])
+        .unwrap();
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(cleared[0].detail["count"], 2);
     assert_eq!(run.worktree.exists(), !remove_worktree || policy_keeps);
     assert_eq!(
         fx.app.join("feature.txt").exists(),

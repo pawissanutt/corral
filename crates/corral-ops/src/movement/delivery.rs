@@ -33,6 +33,10 @@ pub(super) fn record(
             "context":notice.artifact, "receipt":format!("main-movement/{}", receipt.key),
         }),
     )?;
+    if notice.state.terminal() {
+        ctx.store
+            .clear_condition(Some(&notice.target.task), "main_movement_notice")?;
+    }
     if notice.state != DeliveryState::Delivered && notice.state != DeliveryState::Sending {
         crate::messages::report(
             Some(&notice.target.task),

@@ -42,6 +42,33 @@ fn unresolved_vendor_escalates_once_instead_of_retrying_sync() {
 }
 
 #[test]
+fn a_clean_autopilot_pass_clears_the_open_error_run_once() {
+    // Given a reviewer tab failure observed on two syncs.
+    let fx = Fx::new(|review| {
+        review.gate = gate(&["true"]);
+        review.reviewer = Some("rev".into());
+    });
+    fx.done();
+    let failure = fx.bin_dir.join("tab-error");
+    std::fs::write(&failure, "tab failure\n").unwrap();
+    fx.sync();
+    fx.sync();
+    assert_eq!(fx.events("autopilot_error"), 1);
+    // When the failure is gone and sync passes cleanly twice.
+    std::fs::remove_file(&failure).unwrap();
+    fx.sync();
+    fx.sync();
+    // Then one clear closes the run with both observations.
+    let cleared = fx
+        .ctx
+        .store
+        .events_of(Some(&fx.id), &["autopilot_error_cleared"])
+        .unwrap();
+    assert_eq!(cleared.len(), 1, "{cleared:#?}");
+    assert_eq!(cleared[0].detail["count"], 2);
+}
+
+#[test]
 fn transient_autopilot_errors_are_logged_once_until_the_reason_changes() {
     // Given a finished run whose engine rejects reviewer tab creation.
     let fx = Fx::new(|review| {

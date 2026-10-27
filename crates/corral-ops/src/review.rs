@@ -759,6 +759,7 @@ pub(crate) fn approve_landed(
         "approved",
         json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
     )?;
+    ctx.store.clear_condition(Some(&task.id), "landing_stale")?;
     Ok((
         sha,
         format!("{action}; worktree {worktree_note}; {branch_note}{operational_note}"),

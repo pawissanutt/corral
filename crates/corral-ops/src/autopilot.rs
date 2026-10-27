@@ -72,7 +72,10 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         }
         output::record_authority(&ctx, &task)?;
         match advance(&ctx, &task.id, now) {
-            Ok(c) => changes.extend(c),
+            Ok(c) => {
+                output::record_clean(&ctx, &task)?;
+                changes.extend(c);
+            }
             Err(e) => {
                 let error = format!("{e:#}");
                 crate::messages::report(
