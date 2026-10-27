@@ -292,7 +292,9 @@ fn idea_dispatch_requires_promotion_even_when_queueing() {
         assert!(task.runs.is_empty());
         assert!(!task.queued);
         assert_eq!(
-            std::fs::read_dir(ctx.store.prompts_dir()).unwrap().count(),
+            std::fs::read_dir(ctx.store.dir().join("prompts"))
+                .unwrap()
+                .count(),
             0
         );
     }

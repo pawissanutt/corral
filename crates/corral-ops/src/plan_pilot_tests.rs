@@ -80,7 +80,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, std::path::PathBuf) {
             "Widget design",
         )
         .unwrap();
-    let output = store.state_dir().join("plan-output");
+    let output = store.dir().join("state").join("plan-output");
     std::fs::create_dir_all(&output).unwrap();
     let path = output.join("plan.md");
     std::fs::write(&path, PLAN).unwrap();
@@ -503,7 +503,8 @@ fn automatic_plan_reviewer_refusal_keeps_exact_suspended_attempt() {
     );
     assert!(
         !ctx.store
-            .state_dir()
+            .dir()
+            .join("state")
             .join(format!("plan-review-{id}-P1.json"))
             .exists()
     );

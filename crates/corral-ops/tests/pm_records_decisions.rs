@@ -29,8 +29,14 @@ fn decision_presentation_and_answer_survive_restart_without_legacy_authority() {
         }),
     )
     .unwrap();
-    assert!(!ctx.store.state_dir().join("pm-decisions.json").exists());
-    let legacy = ctx.store.state_dir().join("pm-decisions.json");
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join("pm-decisions.json")
+            .exists()
+    );
+    let legacy = ctx.store.dir().join("state").join("pm-decisions.json");
     let obsolete = json!({
         "version":1,
         "records":{"decision-fixture":{"decision":decision,"answer":"obsolete answer"}}
@@ -83,7 +89,7 @@ fn legacy_decisions_do_not_supply_missing_canonical_state() {
     let temp = tempfile::tempdir().unwrap();
     let ctx = Ctx::from_store(Store::init(temp.path()).unwrap());
     std::fs::write(
-        ctx.store.state_dir().join("pm-decisions.json"),
+        ctx.store.dir().join("state").join("pm-decisions.json"),
         "invalid legacy",
     )
     .unwrap();

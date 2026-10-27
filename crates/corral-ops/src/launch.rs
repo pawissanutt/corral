@@ -238,8 +238,9 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
         crate::render_command(ctx, &run.agent, &task, run, &prompt)?
     };
     let command = crate::launch_exit::arm(
+        ctx,
         &command,
-        &crate::launch_exit::receipt(ctx, &task.id, &run.id),
+        &crate::launch_exit::receipt(ctx, &task.id, &run.id)?,
     )?;
     let pane = pane.clone();
     let run_id = run.id.clone();

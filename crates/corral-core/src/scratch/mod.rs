@@ -5,6 +5,7 @@
 //! locks) and their deferral belong to the callers that close attempts.
 
 mod deleter;
+mod store_api;
 
 use std::path::{Path, PathBuf};
 
@@ -12,6 +13,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use jiff::Timestamp;
 
 pub use deleter::{ClassDeleter, Registration};
+pub use store_api::AttemptScratch;
 
 use crate::backend::{
     Operation, PageReq, ReclaimResult, ScratchKind, ScratchOp, ScratchRow, ScratchState,
@@ -115,12 +117,28 @@ impl<'a> ScratchArea<'a> {
 
     /// Every scratch registration, in every state.
     pub fn rows(&self) -> Result<Vec<ScratchRow>> {
+        self.rows_in(&[])
+    }
+
+    /// The open registration with `id`, read among open registrations only, so the read is
+    /// bounded by work in flight rather than by every directory ever registered.
+    pub fn open_row(&self, id: &str) -> Result<Option<ScratchRow>> {
+        Ok(self
+            .rows_in(&[ScratchState::Open])?
+            .into_iter()
+            .find(|row| row.id == id))
+    }
+
+    /// The registrations in `states` (every state when empty).
+    pub fn rows_in(&self, states: &[ScratchState]) -> Result<Vec<ScratchRow>> {
         let mut out = Vec::new();
         let view = self
             .backend
             .view()
             .map_err(|error| anyhow!("open a view: {error}"))?;
-        let query = StorageQuery::Scratch { states: Vec::new() };
+        let query = StorageQuery::Scratch {
+            states: states.to_vec(),
+        };
         let mut page = PageReq::first(PAGE);
         loop {
             let rows = view

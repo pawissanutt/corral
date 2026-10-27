@@ -277,7 +277,7 @@ blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition an
 pm_decision_resolved (all ten by default). Delivery and presentation accounting never wakes
 its own subscription.
 Sync emits lessons_due once per project and distillation request when its configured schedule is due.
-Delivery position persists in `.corral/state/pm-events.json`.
+Delivery position persists in the store's `pm-events` records.
 Effective-policy replacement is separate and mandatory for a remembered live PM,
 even with push disabled. Its confirmed, refused or uncertain delivery is visible in
 brief health and survives restart; it does not restart workers or replay commands.

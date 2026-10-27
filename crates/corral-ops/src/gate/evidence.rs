@@ -47,11 +47,11 @@ pub(crate) fn failpoint(name: &str) {
 #[cfg(all(test, unix))]
 mod tests;
 
-/// `<scratch_root>/gates`; under `.corral/state/gates` only when the configured roots are
-/// invalid, where every registration is refused before anything is written.
+/// `<scratch_root>/gates`; a relative placeholder only when the configured roots are invalid,
+/// where every registration is refused before anything is written.
 pub(crate) fn gates_root(ctx: &Ctx) -> PathBuf {
     ctx.store.storage_layout().map_or_else(
-        |_| ctx.store.dir().join("state").join("gates"),
+        |_| PathBuf::from("invalid-scratch-root").join("gates"),
         |layout| layout.scratch_root().join("gates"),
     )
 }
@@ -317,67 +317,8 @@ fn in_use(dir: &Path) -> Result<Option<String>> {
             "process use cannot be checked on this platform".into(),
         ));
     }
-    if let Some(user) = process_under(&dir)? {
+    if let Some(user) = crate::scratch_reclaim::dir_user(&dir)? {
         return Ok(Some(user));
     }
-    held_cargo_lock(&dir)
-}
-
-fn process_under(dir: &Path) -> Result<Option<String>> {
-    let processes = std::fs::read_dir("/proc").context("listing /proc")?;
-    for process in processes.flatten() {
-        let name = process.file_name();
-        if !name.to_string_lossy().bytes().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        let base = process.path();
-        let mut links: Vec<PathBuf> = vec![base.join("cwd")];
-        // A process that exits or is not ours to inspect mid-scan uses nothing we can see.
-        if let Ok(fds) = std::fs::read_dir(base.join("fd")) {
-            links.extend(fds.flatten().map(|fd| fd.path()));
-        }
-        if let Some(path) = links
-            .iter()
-            .filter_map(|link| std::fs::read_link(link).ok())
-            .find(|target| target.starts_with(dir))
-        {
-            return Ok(Some(format!(
-                "process {} uses {}",
-                name.to_string_lossy(),
-                path.display()
-            )));
-        }
-    }
-    Ok(None)
-}
-
-fn held_cargo_lock(dir: &Path) -> Result<Option<String>> {
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(next) = pending.pop() {
-        let entries = match std::fs::read_dir(&next) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error).with_context(|| format!("listing {}", next.display())),
-        };
-        for entry in entries {
-            let entry = entry.with_context(|| format!("listing {}", next.display()))?;
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                pending.push(entry.path());
-            } else if kind.is_file() && entry.file_name() == ".cargo-lock" {
-                let file = std::fs::File::open(entry.path())?;
-                match file.try_lock() {
-                    Ok(()) => file.unlock()?,
-                    Err(std::fs::TryLockError::WouldBlock) => {
-                        return Ok(Some(format!("{} is held", entry.path().display())));
-                    }
-                    Err(std::fs::TryLockError::Error(error)) => {
-                        return Err(error)
-                            .with_context(|| format!("locking {}", entry.path().display()));
-                    }
-                }
-            }
-        }
-    }
-    Ok(None)
+    crate::scratch_reclaim::held_cargo_lock(&dir)
 }

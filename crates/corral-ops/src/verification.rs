@@ -142,8 +142,8 @@ pub(crate) fn identity_with(
         run.worktree.join(".cargo/config.toml"),
         run.worktree.join("rust-toolchain.toml"),
         run.worktree.join("scripts/check-candidate.py"),
-        ctx.store.prompts_dir().join("review.md"),
-        ctx.store.prompts_dir().join("run.md"),
+        ctx.store.template_override("review.md"),
+        ctx.store.template_override("run.md"),
     ] {
         let hash = match std::fs::read(&path) {
             Ok(bytes) => Some(digest(&bytes)),

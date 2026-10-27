@@ -384,7 +384,7 @@ fn repeated_distill_returns_one_pending_backlog_spike_without_dispatch() {
     );
     assert!(!events.iter().any(|e| e.kind == "dispatched"));
     let (path, request) = fx.request(&second);
-    assert!(path.starts_with(fx.root.path()));
+    assert!(path.starts_with(fx.store.scratch_path("tmp").unwrap()));
     assert_eq!(request.version, 1);
     assert_eq!(request.task, second["id"].as_str().unwrap());
     assert_eq!(request.project, "p");

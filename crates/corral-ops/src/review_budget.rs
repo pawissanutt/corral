@@ -515,9 +515,7 @@ pub(crate) fn reconcile(
                 let exited = kind == Kind::Reviewer
                     && run.review_runs.last().is_some_and(|child| {
                         let attempt = format!("{}-{}", run.id, child.id);
-                        crate::launch_exit::exited(&crate::launch_exit::receipt(
-                            ctx, &task.id, &attempt,
-                        ))
+                        crate::launch_exit::exited_for(ctx, &task.id, &attempt)
                     });
                 if exited
                     || crate::pane_liveness::gone(

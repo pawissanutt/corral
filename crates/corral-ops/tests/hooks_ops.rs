@@ -264,7 +264,7 @@ fn clean_approval_runs_ordered_hooks_once_and_persists_sha_bound_evidence() {
             .unwrap()
             .is_some()
     );
-    assert!(!ws.ctx.store.state_dir().join("post-land").exists());
+    assert!(!ws.ctx.store.dir().join("state").join("post-land").exists());
     assert!(op.ready());
     assert_eq!(op.landed_sha, sha);
     assert_eq!(ws.ctx.store.get(&task.id).unwrap().status, Status::Done);

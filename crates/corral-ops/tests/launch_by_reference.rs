@@ -216,7 +216,7 @@ fn dispatch_stores_the_prompt_as_a_run_blob_and_launches_a_registered_scratch_co
         layout.scratch_root().join(&scratch.path)
     );
     // And nothing was written under .corral/prompts.
-    let prompts = fx.ctx.store.prompts_dir();
+    let prompts = fx.ctx.store.dir().join("prompts");
     let written = std::fs::read_dir(&prompts).map_or(0, |entries| entries.count());
     assert_eq!(written, 0, "{}", prompts.display());
 }
@@ -229,13 +229,55 @@ fn plan_review_launches_a_prompt_over_the_argument_limit() {
     let review = fx.plan_review();
     // Then the reviewer starts with the prompt by reference.
     let plan = &fx.ctx.store.get(&fx.id).unwrap().plans[0].id;
-    let prompt = fx
+    let dir = fx
         .ctx
         .store
-        .prompts_dir()
-        .join(format!("{}-{plan}-{}-plan-review.md", fx.id, review.id));
+        .scratch_path(&format!("plan-reviews/{}-{plan}-{}", fx.id, review.id))
+        .unwrap();
+    let prompt = dir.join(format!("{}-{plan}-{}-plan-review.md", fx.id, review.id));
     fx.assert_received_by_reference(&prompt);
     assert_eq!(review.verdict, None);
+    // And the prompt names its registered scratch directory and evidence budget.
+    let text = std::fs::read_to_string(&prompt).unwrap();
+    assert!(text.contains(&dir.display().to_string()));
+    assert!(text.contains("at most 64MiB in total"));
+}
+
+#[test]
+fn plan_verdict_promotes_evidence_from_its_attempt_dir_or_refuses_with_no_verdict() {
+    // Given a launched plan review and a file in its scratch directory.
+    let fx = fixture("'{bin}/agent' {model_args} {prompt_ref}", false);
+    let review = fx.plan_review();
+    let plan = fx.ctx.store.get(&fx.id).unwrap().plans[0].id.clone();
+    let dir = fx
+        .ctx
+        .store
+        .scratch_path(&format!("plan-reviews/{}-{plan}-{}", fx.id, review.id))
+        .unwrap();
+    let shot = dir.join("diagram.png");
+    std::fs::write(&shot, b"png").unwrap();
+    let outside = fx.ctx.store.root().join("outside.txt");
+    std::fs::write(&outside, "elsewhere").unwrap();
+    let input = corral_ops::PlanVerdict {
+        plan: &plan,
+        attempt: Some(&review.id),
+        verdict: corral_core::Verdict::Changes,
+        notes: "split the scope",
+    };
+    // When evidence outside the attempt directory is offered, no verdict is recorded.
+    assert!(corral_ops::plan_verdict_with_evidence(&fx.ctx, &fx.id, &input, &[outside]).is_err());
+    let pending = fx.ctx.store.get(&fx.id).unwrap();
+    assert_eq!(pending.plans[0].reviews.last().unwrap().verdict, None);
+    // Then evidence from the attempt directory is promoted with the verdict.
+    let recorded =
+        corral_ops::plan_verdict_with_evidence(&fx.ctx, &fx.id, &input, &[shot]).unwrap();
+    assert_eq!(recorded.verdict, Some(corral_core::Verdict::Changes));
+    let task = fx.ctx.store.get(&fx.id).unwrap();
+    assert!(
+        task.artifacts
+            .iter()
+            .any(|a| a.title == "Evidence: diagram.png")
+    );
 }
 
 fn dispatch_and_sync(fx: &Fx) -> corral_core::Task {
@@ -376,7 +418,12 @@ fn the_generic_display_is_the_only_unarmed_launch() {
 fn restarted_sync_reconciles_exit_into_canonical_state_before_scratch_cleanup() {
     let mut fx = fixture("exit 23", false);
     fx.dispatch();
-    let scratch = fx.ctx.store.state_dir().join("tmp/launch-exits");
+    let scratch = fx
+        .ctx
+        .store
+        .scratch_path("tmp")
+        .unwrap()
+        .join("launch-exits");
     assert!(scratch.join(format!("{}-R1.exited", fx.id)).is_file());
     fx.ctx.store = Store::open(fx.tmp.path()).unwrap();
     corral_ops::sync(&fx.ctx).unwrap();

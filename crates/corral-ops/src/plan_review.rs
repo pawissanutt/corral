@@ -10,6 +10,7 @@ use serde_json::json;
 use crate::{Ctx, plan, prompt};
 
 mod prepared;
+pub(crate) use prepared::retains;
 
 fn current<'a>(task: &'a mut Task, id: &str) -> Result<&'a mut PlanRecord> {
     task.plans
@@ -183,22 +184,14 @@ fn review_with_origin(
     );
     action.plan = Some(plan_id.clone());
     let authorization = crate::operating::authorize(ctx, action, origin)?;
-    let prompt_file = ctx
-        .store
-        .prompts_dir()
-        .join(format!("{}-{plan_id}-{attempt}-plan-review.md", task.id));
-    let notes_file = ctx
-        .store
-        .state_dir()
-        .join("reviews")
-        .join(format!("{}-{plan_id}-{attempt}-plan-notes.md", task.id));
-    std::fs::create_dir_all(
-        notes_file
-            .parent()
-            .context("plan notes directory missing")?,
-    )
-    .context("creating plan notes directory")?;
-    std::fs::create_dir_all(ctx.store.prompts_dir()).context("creating plan prompt directory")?;
+    let dir = crate::scratch_reclaim::Attempt::PlanReview {
+        task: &task.id,
+        plan: &plan_id,
+        review: &attempt,
+    }
+    .open(ctx)?;
+    let prompt_file = dir.join(format!("{}-{plan_id}-{attempt}-plan-review.md", task.id));
+    let notes_file = dir.join(format!("{}-{plan_id}-{attempt}-plan-notes.md", task.id));
     let corral = prompt::corral_bin()?;
     let verdict_cmd = format!(
         "{} --root '{}' plan verdict {} approve|changes|escalate --plan {plan_id} --attempt {attempt} --notes-file '{}'",
@@ -232,6 +225,7 @@ fn review_with_origin(
     );
     text.push_str(&crate::review_contracts::plan_context(ctx, &task, &route)?);
     text.push_str(&crate::comments::owner_comments(&task));
+    text.push_str(&crate::scratch_reclaim::prompt_section(ctx, &dir));
     // The renderer sizes the prompt to decide how `{prompt_file}` may reach the reviewer.
     std::fs::write(&prompt_file, &text).context("writing plan review prompt")?;
     let command = prompt::render_template(
@@ -243,8 +237,8 @@ fn review_with_origin(
             ("worktree", ctx.store.root().display().to_string()),
         ],
     )?;
-    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"));
-    let command = crate::launch_exit::arm(&command, &receipt)?;
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"))?;
+    let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
     let mut preparation = match retained {
         Some(mut retained) => {
             retained.authorization = authorization.clone();
@@ -508,14 +502,31 @@ pub struct PlanVerdict<'a> {
 }
 
 pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<PlanReview> {
+    plan_verdict_with_evidence(ctx, id, input, &[])
+}
+
+/// [`plan_verdict`] that also promotes `evidence` (`--evidence PATH`) inside the verdict's
+/// update; a refused set records no verdict.
+pub fn plan_verdict_with_evidence(
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+    evidence: &[std::path::PathBuf],
+) -> Result<PlanReview> {
     let _attribution = input
         .attempt
         .map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
     if input.notes.trim().is_empty() {
         bail!("plan verdict needs nonempty notes");
     }
+    let before = ctx.store.get(id)?;
+    let roots = crate::reviewer::plan_roots(ctx, &before, input.plan, input.attempt)?;
+    let roots: Vec<&std::path::Path> = roots.iter().map(std::path::PathBuf::as_path).collect();
+    let evidence = crate::reviewer::Evidence::check(ctx, evidence, &roots)?;
+    let staged = evidence.stage(ctx, id)?;
     let mut superseded = None;
     let saved = ctx.store.update(id, |task| {
+        let target = crate::reviewer::current_target(task);
         let config = plan::config(ctx)?;
         let selected = task.plans.last().filter(|p| p.id == input.plan).context(
             "stale plan verdict: plan was replaced; inspect `corral plan show <id> --json`",
@@ -660,8 +671,26 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
             ctx.store.log_event(Some(&task.id), "plan_awaiting_owner",
                 json!({"target":"plan","plan":input.plan,"reason":"awaiting owner approval"}))?;
         }
-        Ok(())
-    })?;
+        staged.attach(ctx, task, &target)
+    });
+    let saved = match saved {
+        Ok(saved) => saved,
+        Err(error) => {
+            staged.release(ctx)?;
+            return Err(error);
+        }
+    };
+    drop(staged);
+    if let Some(review) = input.attempt {
+        let dir = crate::scratch_reclaim::Attempt::PlanReview {
+            task: id,
+            plan: input.plan,
+            review,
+        };
+        if let Err(error) = dir.close(ctx) {
+            crate::messages::report(Some(id), "scratch", format!("{error:#}"));
+        }
+    }
     let p = saved.plans.last().context("plan disappeared")?;
     if let Some(previous) = superseded {
         close_plan_review(ctx, &previous)?;

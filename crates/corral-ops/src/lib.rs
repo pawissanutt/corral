@@ -94,6 +94,7 @@ mod review;
 mod review_budget;
 mod reviewer;
 mod routing;
+mod scratch_reclaim;
 mod search;
 mod session_scope;
 mod setup;
@@ -200,7 +201,7 @@ pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
-pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
+pub use plan_review::{PlanVerdict, plan_review, plan_verdict, plan_verdict_with_evidence};
 pub use plan_review_offer::{
     PlanReviewOffer, plan_review_offer, plan_review_retryable, plan_review_wait,
 };
@@ -232,9 +233,10 @@ pub use review::{
 };
 pub use reviewer::{
     reconcile_review_at, review_notes_path, review_prompt, review_run, verdict, verdict_at,
-    verdict_bound,
+    verdict_bound, verdict_with_evidence,
 };
 pub use routing::{implementer_set, recorded_route, reviewer_set, route_snapshot};
+pub use scratch_reclaim::reclaim_scratch_pass;
 pub use setup::{
     SETUP_TEMPLATE, SetupCatalog, SetupProposalInput, SetupStatus, setup_answers, setup_apply,
     setup_approve, setup_begin, setup_cancel, setup_catalog, setup_diff, setup_propose,
@@ -248,8 +250,8 @@ pub use setup_validation::{SetupValidationError, SetupValidationErrors};
 mod review_routing;
 pub use plan_acceptance::{
     AggregateProgress, AggregateVerdict, CheckpointProgress, PlanCheckpoint, plan_accept,
-    plan_aggregate_review, plan_aggregate_verdict, plan_checkpoint, plan_checkpoint_automatic,
-    plan_evidence, plan_verify,
+    plan_aggregate_review, plan_aggregate_verdict, plan_aggregate_verdict_with_evidence,
+    plan_checkpoint, plan_checkpoint_automatic, plan_evidence, plan_verify,
 };
 pub use review_routing::ReviewMapping;
 pub mod review_contracts;

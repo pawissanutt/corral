@@ -6,7 +6,12 @@ use std::path::PathBuf;
 use super::*;
 
 fn capture_file(fx: &Fx, child: &str) -> PathBuf {
-    let dir = fx.ctx.store.state_dir().join("review-watch").join(&fx.id);
+    let dir = fx
+        .ctx
+        .store
+        .scratch_path("review-watch")
+        .unwrap()
+        .join(&fx.id);
     dir.join(format!("{child}.json"))
 }
 

@@ -149,8 +149,20 @@ fn deleting_caches_preserves_resource_latches_and_alerts_after_restart() {
         ctx.store.record_row("resource-alert", "state").unwrap(),
         Some(alert)
     );
-    assert!(!ctx.store.state_dir().join("resources.json").exists());
-    assert!(!ctx.store.state_dir().join("resource-alert.json").exists());
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join("resources.json")
+            .exists()
+    );
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join("resource-alert.json")
+            .exists()
+    );
 
     // Recovery clears both the persisted alert and its attention card.
     let healthy = sample(&mut ctx, 0.1, 110, 110);

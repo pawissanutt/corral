@@ -4,6 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use corral_core::backend::ScratchKind;
 use corral_core::{GateRecord, GateResult, Run, Status, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ mod tests;
 #[path = "watch_review.rs"]
 mod review;
 pub use review::ReviewerAttempt;
-pub(crate) use review::{capture_review, capture_review_exact, start_review};
+pub(crate) use review::{REVIEW_WATCH, capture_review, capture_review_exact, start_review};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,12 +80,15 @@ pub(crate) fn elapsed(start: Timestamp, end: Timestamp) -> u64 {
     u64::try_from(end.duration_since(start).as_millis()).unwrap_or(0)
 }
 
-fn metadata_path(ctx: &Ctx, task: &str, run: &str, attempt: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("watch")
+/// The scratch spool of gate monitor sidecars.
+const WATCH: &str = "watch";
+
+fn metadata_path(ctx: &Ctx, task: &str, run: &str, attempt: &str) -> Result<PathBuf> {
+    Ok(ctx
+        .store
+        .scratch_spool(ScratchKind::TmpStaging, WATCH)?
         .join(task)
-        .join(format!("{run}-{attempt}.json"))
+        .join(format!("{run}-{attempt}.json")))
 }
 
 pub(crate) fn start_gate(
@@ -128,7 +132,7 @@ pub(crate) fn start_gate(
 
 fn save_gate(ctx: &Ctx, task: &str, attempt: &GateAttempt) -> Result<()> {
     crate::artifact_storage::replace(
-        &metadata_path(ctx, task, &attempt.run, &attempt.attempt),
+        &metadata_path(ctx, task, &attempt.run, &attempt.attempt)?,
         &serde_json::to_vec(attempt).context("encoding gate monitor")?,
     )
 }
@@ -265,7 +269,7 @@ fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
 pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
     let task = ctx.store.get(task)?;
     let owned = crate::session_scope::owns_inventory(ctx)?;
-    let dir = ctx.store.state_dir().join("watch").join(&task.id);
+    let dir = ctx.store.scratch_path(WATCH)?.join(&task.id);
     let mut gates = Vec::new();
     match fs::read_dir(&dir) {
         Ok(entries) => {

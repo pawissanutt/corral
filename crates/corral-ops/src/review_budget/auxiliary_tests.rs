@@ -76,11 +76,9 @@ fn prepared<'a>(fx: &'a Fixture, id: &str, kind: Kind) -> ReviewLaunch<'a> {
         .unwrap();
     let prepared_file = match kind {
         Kind::Gate => crate::gate::gate_paths(&fx.ctx, id, &run.id).script,
-        Kind::Reviewer => fx
-            .ctx
-            .store
-            .prompts_dir()
-            .join(format!("{id}-R1-review.md")),
+        Kind::Reviewer => crate::reviewer::review_dir(&fx.ctx, id, &run.id, "R1-review1")
+            .unwrap()
+            .join("review.md"),
     };
     std::fs::create_dir_all(prepared_file.parent().unwrap()).unwrap();
     std::fs::write(prepared_file, "prepared").unwrap();
@@ -241,10 +239,9 @@ fn refusal_retains_exact_auxiliary_identity_without_holding_capacity() {
                     assert!(child.ended.is_some());
                     assert!(!child.review.as_ref().unwrap().process_lost);
                     assert!(
-                        fx.ctx
-                            .store
-                            .prompts_dir()
-                            .join(format!("{id}-R1-review.md"))
+                        crate::reviewer::review_dir(&fx.ctx, id, "R1", "R1-review1")
+                            .unwrap()
+                            .join("review.md")
                             .is_file()
                     );
                 }

@@ -152,8 +152,7 @@ fn done_inner(
 
     let tmp = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_tmp()?
         .join(format!("{}-{}", task.id, run.id));
     std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
     let diff_file = tmp.join("final.diff");
@@ -291,7 +290,7 @@ pub(crate) fn audit_artifact(
 ) -> Result<()> {
     let file = ctx
         .store
-        .state_dir()
+        .scratch_tmp()?
         .join(format!("{id}-{run}-completion-audit.json"));
     std::fs::write(&file, serde_json::to_vec_pretty(audit)?)
         .with_context(|| format!("writing {}", file.display()))?;

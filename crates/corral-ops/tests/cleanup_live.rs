@@ -186,8 +186,8 @@ fn isolated_terminal_cleanup_lifecycle() {
         }
         let sidecar = ctx
             .store
-            .state_dir()
-            .join("review-watch")
+            .scratch_path("review-watch")
+            .unwrap()
             .join(&task.id)
             .join(format!("{}-review1.json", run.id));
         let captured = std::fs::read(&sidecar).unwrap();

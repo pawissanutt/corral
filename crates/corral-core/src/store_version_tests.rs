@@ -92,7 +92,7 @@ fn open_writer_refuses_schema_upgraded_by_another_process_at_check_runtime() {
         .unwrap();
     assert_eq!(store.get(&task.id).unwrap(), task);
     // When another process upgrades the store schema.
-    fs::write(store.state_dir().join("schema-version"), "999\n").unwrap();
+    fs::write(store.dir().join("state").join("schema-version"), "999\n").unwrap();
     // Then reads trust open and check_runtime, without re-reading the marker...
     let reads = count(Work::SchemaRead);
     assert_eq!(store.list().unwrap(), vec![task.clone()]);
@@ -105,7 +105,7 @@ fn open_writer_refuses_schema_upgraded_by_another_process_at_check_runtime() {
     assert!(store.check_runtime().is_err());
     assert_eq!(store.events().unwrap().last().unwrap().kind, "version_skew");
     assert_eq!(
-        fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
+        fs::read_to_string(store.dir().join("state").join("schema-version")).unwrap(),
         "999\n"
     );
 }
@@ -116,7 +116,7 @@ fn incompatible_older_store_schema_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     // When
-    fs::write(store.state_dir().join("schema-version"), "1\n").unwrap();
+    fs::write(store.dir().join("state").join("schema-version"), "1\n").unwrap();
     // Then
     assert_ne!(STORE_SCHEMA_VERSION, 1);
     assert!(Store::open(tmp.path()).is_err());

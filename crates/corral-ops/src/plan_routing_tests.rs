@@ -182,7 +182,8 @@ fn plan_reviewer_profile_revision_change_stales_the_verdict() {
     let plan = ctx.store.get(&id).unwrap().plans.last().unwrap().id.clone();
     let prompt = std::fs::read_to_string(
         ctx.store
-            .prompts_dir()
+            .scratch_path(&format!("plan-reviews/{id}-{plan}-{}", review.id))
+            .unwrap()
             .join(format!("{id}-{plan}-{}-plan-review.md", review.id)),
     )
     .unwrap();

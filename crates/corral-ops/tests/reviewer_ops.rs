@@ -14,6 +14,8 @@ use serde_json::json;
 const SPEC: &str =
     "## Goal\nMake the widget spin.\n\n## Acceptance\n- The widget spins clockwise.\n";
 
+#[path = "reviewer/scratch.rs"]
+mod scratch;
 #[path = "reviewer/transcript.rs"]
 mod transcript;
 #[path = "reviewer/watch.rs"]
@@ -148,7 +150,7 @@ fn review_prompt_has_spec_acceptance_gate_and_verdict_footer() {
         prompt.contains("Do not edit files; finish with `corral verdict`"),
         "{prompt}"
     );
-    let notes = corral_ops::review_notes_path(&ctx, &id, "R1");
+    let notes = corral_ops::review_notes_path(&ctx, &id, "R1").unwrap();
     let attempt = &run
         .gate
         .as_ref()
@@ -171,7 +173,7 @@ fn review_prompt_has_spec_acceptance_gate_and_verdict_footer() {
 fn review_prompt_template_is_overridable() {
     let (_tmp, ctx, id, _worktree) = task_in_review();
     std::fs::write(
-        ctx.store.prompts_dir().join("review.md"),
+        ctx.store.dir().join("prompts").join("review.md"),
         "Custom {{id}} / {{run}} / {{unknown}}\n",
     )
     .unwrap();
@@ -200,7 +202,9 @@ fn review_run_with_profile_opens_a_reviewer_pane_and_records_the_review() {
 
     let task = ctx.store.get(&id).unwrap();
     assert_eq!(task.current_run().unwrap().review.as_ref(), Some(&record));
-    let prompt_file = ctx.store.prompts_dir().join(format!("{id}-R1-review.md"));
+    let prompt_file = corral_ops::review_notes_path(&ctx, &id, "R1")
+        .unwrap()
+        .with_file_name("review.md");
     let text = std::fs::read_to_string(prompt_file).unwrap();
     assert!(text.contains("Make the widget spin."), "{text}");
     let events = ctx.store.events().unwrap();

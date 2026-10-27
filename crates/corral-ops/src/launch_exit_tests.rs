@@ -10,14 +10,15 @@ fn fixture() -> (tempfile::TempDir, Ctx) {
 #[test]
 fn shell_receipts_are_scratch_notifications_that_survive_reopen() {
     let (root, ctx) = fixture();
-    let path = receipt(&ctx, "T-001", "R1");
+    let path = receipt(&ctx, "T-001", "R1").unwrap();
     assert_eq!(
         path,
         ctx.store
-            .state_dir()
-            .join("tmp/launch-exits/T-001-R1.exited")
+            .scratch_path("tmp")
+            .unwrap()
+            .join("launch-exits/T-001-R1.exited")
     );
-    let command = arm("exit 23", &path).unwrap();
+    let command = arm(&ctx, "exit 23", &path).unwrap();
     let status = std::process::Command::new("/bin/sh")
         .args(["-c", &command])
         .status()
@@ -25,11 +26,12 @@ fn shell_receipts_are_scratch_notifications_that_survive_reopen() {
     assert!(status.success());
     let mut reopened = ctx.clone();
     reopened.store = Store::open(root.path()).unwrap();
-    assert!(exited(&receipt(&reopened, "T-001", "R1")));
+    assert!(exited_for(&reopened, "T-001", "R1"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "23\n");
     assert!(
         !ctx.store
-            .state_dir()
+            .dir()
+            .join("state")
             .join("launch-exits/T-001-R1.exited")
             .exists()
     );
@@ -38,27 +40,31 @@ fn shell_receipts_are_scratch_notifications_that_survive_reopen() {
 #[test]
 fn rearming_clears_the_previous_scratch_receipt_only() {
     let (_root, ctx) = fixture();
-    let path = receipt(&ctx, "T-001", "R1");
-    arm("exit 0", &path).unwrap();
+    let path = receipt(&ctx, "T-001", "R1").unwrap();
+    arm(&ctx, "exit 0", &path).unwrap();
     std::fs::write(&path, "0\n").unwrap();
-    let other = receipt(&ctx, "T-001", "R2");
+    let other = receipt(&ctx, "T-001", "R2").unwrap();
     std::fs::write(&other, "1\n").unwrap();
-    arm("exit 1", &path).unwrap();
+    arm(&ctx, "exit 1", &path).unwrap();
     assert!(!exited(&path));
     assert!(exited(&other));
     let display = "cat '/prompt.md'";
-    assert_eq!(arm(display, &other).unwrap(), display);
+    assert_eq!(arm(&ctx, display, &other).unwrap(), display);
     assert!(exited(&other), "display never arms or clears a launch");
 }
 
 #[test]
 fn legacy_receipts_are_not_read_or_mirrored() {
     let (_root, ctx) = fixture();
-    let legacy = ctx.store.state_dir().join("launch-exits/T-001-R1.exited");
+    let legacy = ctx
+        .store
+        .dir()
+        .join("state")
+        .join("launch-exits/T-001-R1.exited");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     std::fs::write(&legacy, "1\n").unwrap();
-    let path = receipt(&ctx, "T-001", "R1");
+    let path = receipt(&ctx, "T-001", "R1").unwrap();
     assert!(!exited(&path));
-    arm("exit 0", &path).unwrap();
+    arm(&ctx, "exit 0", &path).unwrap();
     assert_eq!(std::fs::read_to_string(&legacy).unwrap(), "1\n");
 }

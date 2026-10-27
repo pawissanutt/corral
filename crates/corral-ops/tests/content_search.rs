@@ -52,7 +52,8 @@ fn deleting_the_cache_root_preserves_search_output_after_restart() {
     assert!(
         !restarted
             .store
-            .state_dir()
+            .dir()
+            .join("state")
             .join("content-search.json")
             .exists()
     );

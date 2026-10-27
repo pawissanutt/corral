@@ -76,7 +76,7 @@ fn full_gate_directives_refuse_dispatch_then_each_review_launch_and_nothing_land
     let mut p = imported(false);
     let (a, b) = (p.a.clone(), p.b.clone());
     let main = git(&p.fx.app, &["rev-parse", "main"]);
-    let prompts = p.fx.ctx.store.prompts_dir();
+    let prompts = p.fx.ctx.store.dir().join("prompts");
     std::fs::create_dir_all(&prompts).unwrap();
 
     // Given a run.md override containing "Run the full gate".

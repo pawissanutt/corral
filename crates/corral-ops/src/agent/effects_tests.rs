@@ -487,7 +487,7 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
 
 /// Snapshot files of R1 whose names end with `suffix`.
 fn blobs(fx: &Fx, suffix: &str) -> usize {
-    let dir = fx.ctx.store.artifacts_dir(&fx.id, "R1");
+    let dir = fx.ctx.store.dir().join("artifacts").join(&fx.id).join("R1");
     let names = std::fs::read_dir(dir).into_iter().flatten().flatten();
     names
         .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))

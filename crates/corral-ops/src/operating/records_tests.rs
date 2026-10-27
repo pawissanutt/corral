@@ -41,7 +41,7 @@ fn claim_reuses_owner_authority_and_refuses_automatic_conversion() {
         owner
     );
     assert_eq!(ctx.store.record_row(CLAIMS, &key).unwrap().unwrap(), before);
-    assert!(!ctx.store.state_dir().join(CLAIMS).exists());
+    assert!(!ctx.store.dir().join("state").join(CLAIMS).exists());
 }
 
 #[test]
@@ -59,7 +59,13 @@ fn start_references_are_snapshot_consistent_and_direct_starts_are_new_actions() 
     assert_ne!(first.id, second.id);
     assert_eq!(load_start(&ctx, &action).unwrap(), Some(second));
     assert_eq!(load_start(&snapshot, &action).unwrap(), Some(first));
-    assert!(!ctx.store.state_dir().join("operating-starts").exists());
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join("operating-starts")
+            .exists()
+    );
 }
 
 #[test]

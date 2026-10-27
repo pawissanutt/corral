@@ -152,7 +152,7 @@ fn verdict_refuses_changed_verification_files() {
             "AGENTS.md\n.cargo/\nrust-toolchain.toml\nscripts/\n",
         );
         let path = if matches!(relative, "review.md" | "run.md") {
-            fx.ctx.store.prompts_dir().join(relative)
+            fx.ctx.store.dir().join("prompts").join(relative)
         } else {
             fx.run().worktree.join(relative)
         };

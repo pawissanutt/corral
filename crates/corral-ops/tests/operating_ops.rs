@@ -270,7 +270,7 @@ fn exact_reviewed_scopes_admit_published_children_without_expanding_the_grant() 
     // Given an independently reviewed plan whose exact labels are confirmed before publication.
     let mut fx = Fx::new();
     let parent = fx.task("bounded plan parent", Status::Ready);
-    let source = fx.ctx.store.state_dir().join("scoped-plan.md");
+    let source = fx.ctx.store.dir().join("state").join("scoped-plan.md");
     std::fs::write(&source, "---\ngoal: Ship bounded children\nnon_goals: []\ndecisions: []\naffected_paths: [first.txt, second.txt]\ncontracts: []\ndependencies:\n  - task: First\n    write_scope: [first.txt]\n    depends_on: []\n    acceptance: [{scenario: first, expected: works}]\n  - task: Second\n    write_scope: [second.txt]\n    depends_on: [First]\n    acceptance: [{scenario: second, expected: works}]\nacceptance: [{scenario: bounded, expected: accepted}]\nverification: [check]\nowner_decisions: []\n---\n").unwrap();
     let plan = corral_ops::plan_submit(&fx.ctx, &parent.id, &source).unwrap();
     let review = corral_ops::plan_review(&fx.ctx, &parent.id, Some("rev")).unwrap();

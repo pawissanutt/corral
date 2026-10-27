@@ -668,19 +668,10 @@ impl Store {
         self.database_events(None, &[]).map(Arc::new)
     }
 
-    /// `<dir>/artifacts/<task>/<run>` (not created).
-    pub fn artifacts_dir(&self, task: &str, run: &str) -> PathBuf {
-        self.dir.join("artifacts").join(task).join(run)
-    }
-
-    /// `<dir>/prompts` (not created).
-    pub fn prompts_dir(&self) -> PathBuf {
-        self.dir.join("prompts")
-    }
-
-    /// `<dir>/state` (not created).
-    pub fn state_dir(&self) -> PathBuf {
-        self.dir.join("state")
+    /// The owner's override `<dir>/prompts/<name>` of a built-in prompt template (`run.md`,
+    /// `review.md`): configuration the owner edits, read but never written by corral.
+    pub fn template_override(&self, name: &str) -> PathBuf {
+        self.dir.join("prompts").join(name) // path-guard: allow (owner template configuration)
     }
 
     /// Intent/effect journals must be durable before a callback performs the effect.

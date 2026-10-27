@@ -104,8 +104,8 @@ impl Fx {
         }
         configure(&mut store);
         store.save_config().unwrap();
-        std::fs::create_dir_all(store.prompts_dir()).unwrap();
-        std::fs::write(store.prompts_dir().join("run.md"), CLEAN_TEMPLATE).unwrap();
+        std::fs::create_dir_all(store.dir().join("prompts")).unwrap();
+        std::fs::write(store.dir().join("prompts").join("run.md"), CLEAN_TEMPLATE).unwrap();
         let ctx = Ctx {
             resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
@@ -513,7 +513,7 @@ fn refused_first_member_dispatch_leaves_the_plan_target_unclaimed() {
         let fx = Fx::new(true, configure);
         if surface == "run_template" {
             std::fs::write(
-                fx.ctx.store.prompts_dir().join("run.md"),
+                fx.ctx.store.dir().join("prompts").join("run.md"),
                 "{{id}}\nRun the full gate before done.\n",
             )
             .unwrap();
@@ -541,7 +541,7 @@ fn tiered_dispatch_refuses_full_gate_directives_before_creating_anything() {
     // A run template override.
     let fx = Fx::new(true, |_| {});
     std::fs::write(
-        fx.ctx.store.prompts_dir().join("run.md"),
+        fx.ctx.store.dir().join("prompts").join("run.md"),
         "{{id}}\n2. Run the full gate before `done`.\n",
     )
     .unwrap();
@@ -600,7 +600,7 @@ fn tiered_dispatch_refuses_full_gate_directives_before_creating_anything() {
     assert_eq!(run.gate_rules, GateRules::Tiered);
     let fx = Fx::new(false, |_| {});
     std::fs::write(
-        fx.ctx.store.prompts_dir().join("run.md"),
+        fx.ctx.store.dir().join("prompts").join("run.md"),
         "{{id}}\nRun the full gate.\n",
     )
     .unwrap();
@@ -645,7 +645,7 @@ fn explicit_full_tier_invocations_are_refused_on_every_surface() {
         let fx = Fx::new(true, configure);
         let template = format!("{{{{id}}}}\n{directive}\n");
         if surface == "run_template" {
-            std::fs::write(fx.ctx.store.prompts_dir().join("run.md"), &template).unwrap();
+            std::fs::write(fx.ctx.store.dir().join("prompts").join("run.md"), &template).unwrap();
         }
         std::fs::write(fx.ctx.store.root().join("harness.md"), &template).unwrap();
         let id = fx.create(surface);
@@ -655,7 +655,7 @@ fn explicit_full_tier_invocations_are_refused_on_every_surface() {
     // An explicit quick invocation stays clean and dispatches a tiered run.
     let fx = Fx::new(true, run_template);
     std::fs::write(
-        fx.ctx.store.prompts_dir().join("run.md"),
+        fx.ctx.store.dir().join("prompts").join("run.md"),
         "{{id}}\nThe quick tier is bash scripts/gate.sh --tier quick.\n",
     )
     .unwrap();

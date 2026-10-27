@@ -175,8 +175,7 @@ pub(crate) fn record_acceptance(
         .with_context(|| format!("{id}: run {run_id} not found"))?;
     let tmp = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_tmp()?
         .join(format!("{id}-{run_id}-acceptance"));
     std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
     let file = tmp.join("acceptance-record.md");

@@ -50,7 +50,7 @@ pub(crate) fn conflict(
             phrase,
         })
     };
-    let template = ctx.store.prompts_dir().join("review.md");
+    let template = ctx.store.template_override("review.md");
     match std::fs::read_to_string(&template) {
         Ok(text) => {
             if let Some(found) = scan("review_template", template.display().to_string(), &text) {

@@ -121,7 +121,7 @@ fn one_connection_bootstraps_without_completed_profile_catalog() {
         1
     );
     assert!(ctx.store.list().unwrap().is_empty());
-    let prompt = fs::read_to_string(ctx.store.prompts_dir().join("pm.md")).unwrap();
+    let prompt = fs::read_to_string(ctx.store.scratch_path("pm").unwrap().join("pm.md")).unwrap();
     let procedure = MODEL_SELECTION_PROCEDURE.replace(
         "corral setup ",
         &format!("{} setup ", std::env::current_exe().unwrap().display()),
@@ -134,7 +134,7 @@ fn reopening_setup_reuses_pane_and_reads_saved_answers_without_regenerating_prom
     // Given a running PM and answers saved after its startup prompt was generated.
     let (dir, ctx, connection) = fixture();
     open_setup_pm(&ctx, &connection).unwrap();
-    let prompt = fs::read(ctx.store.prompts_dir().join("pm.md")).unwrap();
+    let prompt = fs::read(ctx.store.scratch_path("pm").unwrap().join("pm.md")).unwrap();
     let answers = BTreeMap::from([("access".into(), "One local model".into())]);
     let saved = setup_answers(&ctx.store, &answers, 1).unwrap();
 
@@ -146,7 +146,7 @@ fn reopening_setup_reuses_pane_and_reads_saved_answers_without_regenerating_prom
     assert_eq!(current.record, saved);
     assert_eq!(current.record.answers, answers);
     assert_eq!(
-        fs::read(ctx.store.prompts_dir().join("pm.md")).unwrap(),
+        fs::read(ctx.store.scratch_path("pm").unwrap().join("pm.md")).unwrap(),
         prompt
     );
     assert_eq!(

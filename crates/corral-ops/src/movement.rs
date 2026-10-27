@@ -366,8 +366,7 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
 fn attach(ctx: &Ctx, notice: &Notice) -> Result<String> {
     let path = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_tmp()?
         .join(format!("main-movement-{}.json", notice.id));
     std::fs::create_dir_all(
         path.parent()

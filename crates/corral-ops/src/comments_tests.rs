@@ -7,8 +7,12 @@ use serde_json::json;
 fn custom_dispatch_and_review_templates_keep_exact_comment_payloads() {
     // Given custom templates without comment placeholders and a note containing template syntax.
     let (_tmp, ctx, task) = fixture();
-    std::fs::write(ctx.store.prompts_dir().join("run.md"), "{{title}}").unwrap();
-    std::fs::write(ctx.store.prompts_dir().join("review.md"), "{{title}}").unwrap();
+    std::fs::write(ctx.store.dir().join("prompts").join("run.md"), "{{title}}").unwrap();
+    std::fs::write(
+        ctx.store.dir().join("prompts").join("review.md"),
+        "{{title}}",
+    )
+    .unwrap();
     let payload = "Decision 046: preserve {{title}} literally.\nhttps://example.invalid/decision";
     let task = comment(&ctx, &task.id, payload, CommentAuthor::Pm, false).unwrap();
     let run = task.current_run().unwrap();

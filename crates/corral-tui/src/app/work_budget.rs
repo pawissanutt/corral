@@ -295,7 +295,7 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
         .map(|(id, _)| id.clone())
         .chain(history_ids)
         .collect();
-    let (trap, scratch_files) = scratch(&store.state_dir(), &all);
+    let (trap, scratch_files) = scratch(&store.dir().join("state"), &all);
     let runs: Vec<_> = store
         .list()
         .unwrap()
@@ -337,7 +337,7 @@ fn counters(row: &Row) -> Vec<(&'static str, u64)> {
 fn measure(size: (usize, usize)) -> (Vec<Row>, u64, u64) {
     let fx = fixture(size);
     let tasks = fx.ctx.store.list().unwrap().len() as u64;
-    let state = fx.ctx.store.state_dir();
+    let state = fx.ctx.store.dir().join("state");
     assert!(
         !trap_ineffective(&state),
         "reviewer scratch is readable here (running as root?); the trap proves nothing"

@@ -34,7 +34,7 @@ fn typed_records_round_trip_across_restart_and_keep_view_identity() {
     );
     assert_eq!(AREA.load(&snapshot, "state").unwrap(), Some(first));
     assert_eq!(AREA.list(&snapshot).unwrap().len(), 1);
-    assert!(!store.state_dir().join("ops-fixture.json").exists());
+    assert!(!store.dir().join("state").join("ops-fixture.json").exists());
 }
 
 #[test]

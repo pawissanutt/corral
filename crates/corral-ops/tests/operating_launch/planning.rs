@@ -38,7 +38,7 @@ fn concrete_planning_paths_refuse_every_revocation_and_collect_running_receipts(
             if !matches!(path, Path::Initial) {
                 // The initial owner start supplies no authority for automatic revision/review.
                 fx.start(&task.id);
-                let source = fx.ctx.store.state_dir().join("prepared-plan.md");
+                let source = fx.ctx.store.dir().join("state").join("prepared-plan.md");
                 std::fs::write(&source, PLAN).unwrap();
                 let plan = corral_ops::plan_submit(&fx.ctx, &task.id, &source).unwrap();
                 if matches!(path, Path::Revision) {
@@ -80,6 +80,17 @@ fn concrete_planning_paths_refuse_every_revocation_and_collect_running_receipts(
                 assert_eq!(design.id, "D1");
                 assert!(design.herdr.is_some());
                 assert!(design.output_dir.join("prompt.md").is_file());
+                // The planner's output directory is its registered scratch directory, and its
+                // prompt names that directory and the evidence budget.
+                assert!(
+                    design
+                        .output_dir
+                        .starts_with(fx.ctx.store.scratch_path("plans").unwrap())
+                );
+                let contract =
+                    std::fs::read_to_string(design.output_dir.join("prompt.md")).unwrap();
+                assert!(contract.contains(&design.output_dir.display().to_string()));
+                assert!(contract.contains("at most 64MiB in total"));
                 // When another context commits revocation before releasing final submission.
                 revoke(&fx, &task.id, &running.id, change);
                 release.write_all(b"R").unwrap();

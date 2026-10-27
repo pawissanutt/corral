@@ -59,6 +59,13 @@ impl Prepared {
     }
 }
 
+/// Whether a refused launch retains review attempt `review` of plan `plan` for a later resume.
+pub(crate) fn retains(ctx: &Ctx, task: &str, plan: &str, review: &str) -> Result<bool> {
+    Ok(PREPARED
+        .load(&ctx.store, &format!("{task}-{plan}"))?
+        .is_some_and(|prepared| prepared.review.id == review))
+}
+
 pub(super) fn load(ctx: &Ctx, task: &str) -> Result<Option<Prepared>> {
     let current = ctx.store.get(task)?;
     let Some(plan) = current.plans.last() else {

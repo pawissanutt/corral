@@ -95,7 +95,7 @@ fn inputs_changed_between_approval_and_the_full_gate_refuse_the_carry() {
             std::fs::write(&file, "edited\n").unwrap();
         }),
         ("verification input .corral/prompts/run.md", |fx, _| {
-            let file = fx.ctx.store.prompts_dir().join("run.md");
+            let file = fx.ctx.store.dir().join("prompts").join("run.md");
             let mut text = std::fs::read_to_string(&file).unwrap();
             text.push_str("Keep commits small.\n");
             std::fs::write(file, text).unwrap();
@@ -182,7 +182,7 @@ fn replaced_landing_gates_refuse_the_carry_when_the_origin_or_inputs_no_longer_m
             std::fs::remove_file(out.join("full-fails")).unwrap();
         }),
         ("disallowed input changed", |fx, _| {
-            let file = fx.ctx.store.prompts_dir().join("run.md");
+            let file = fx.ctx.store.dir().join("prompts").join("run.md");
             std::fs::write(file, "{{id}}\n{{gate}}\n").unwrap();
         }),
         ("origin differs from C's copy", |_, _| {}),

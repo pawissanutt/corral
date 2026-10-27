@@ -200,6 +200,7 @@ fn sync_scoped(
     }
     crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
+    crate::scratch_reclaim::reclaim_scratch_pass(ctx, now)?;
     let panes: HashMap<String, PaneInfo> = inventory
         .panes
         .iter()
@@ -341,8 +342,7 @@ fn reconcile(
     );
     let omo_active = looks_idle && omo_recently_active(ctx, run, now, idle_after);
     let working = herdr_status == Some(AgentStatus::Working) || omo_active;
-    let exited = !working
-        && crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &task.id, &run.id));
+    let exited = !working && crate::launch_exit::exited_for(ctx, &task.id, &run.id);
     let state = match pane {
         None if !gone => run.agent_state.clone().unwrap_or_else(|| "starting".into()),
         None => "gone".to_string(),

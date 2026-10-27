@@ -770,7 +770,14 @@ fn foreign_sync_and_hook_preserve_gate_only_state_and_capacity() {
         );
         assert_eq!(fx.ctx.store.events().unwrap(), events);
         assert_eq!(crate::slots(&fx.ctx).unwrap(), capacity);
-        assert!(!fx.ctx.store.state_dir().join("pane-liveness.json").exists());
+        assert!(
+            !fx.ctx
+                .store
+                .dir()
+                .join("state")
+                .join("pane-liveness.json")
+                .exists()
+        );
         assert!(
             fx.ctx
                 .store

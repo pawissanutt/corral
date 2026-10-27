@@ -183,7 +183,9 @@ pub fn open(ctx: &Ctx, query: &str) -> Result<()> {
         // The store keeps no task files: open a read-only Markdown rendering of the task.
         PinRef::Task(task) => {
             let task = ctx.store.get(&task)?;
-            let dir = ctx.store.state_dir().join("open");
+            let dir = ctx
+                .store
+                .scratch_spool(corral_core::backend::ScratchKind::TmpStaging, "open")?;
             std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
             let path = dir.join(format!("{}.md", task.id));
             std::fs::write(&path, corral_core::Store::render_task_markdown(&task))

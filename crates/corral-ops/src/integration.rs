@@ -282,8 +282,7 @@ impl IntegrationPacket {
         PACKETS.save(&ctx.store, &digest, self)?;
         let file = ctx
             .store
-            .state_dir()
-            .join("tmp")
+            .scratch_tmp()?
             .join("integration")
             .join(format!("{digest}.json"));
         std::fs::create_dir_all(

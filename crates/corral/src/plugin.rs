@@ -16,8 +16,11 @@ const MANIFEST: corral_core::records::RecordArea<PluginManifest> =
     corral_core::records::RecordArea::new("herdr-plugin");
 
 /// Materialized input for herdr's file-only plugin interface, never a state reader.
-pub fn manifest_path(store: &corral_core::Store) -> PathBuf {
-    store.state_dir().join("tmp/herdr-plugin/herdr-plugin.toml")
+pub fn manifest_path(store: &corral_core::Store) -> Result<PathBuf> {
+    Ok(store
+        .scratch_path("tmp")?
+        .join("herdr-plugin")
+        .join("herdr-plugin.toml"))
 }
 
 pub fn installed(store: &corral_core::Store) -> Result<bool> {
@@ -158,7 +161,8 @@ fn write_manifest(ctx: &Ctx) -> Result<(PathBuf, bool)> {
         .root()
         .canonicalize()
         .unwrap_or_else(|_| ctx.store.root().to_path_buf());
-    let file = manifest_path(&ctx.store);
+    ctx.store.scratch_tmp()?;
+    let file = manifest_path(&ctx.store)?;
     let dir = file
         .parent()
         .context("plugin manifest has no parent")?

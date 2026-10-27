@@ -236,9 +236,16 @@ fn restarted_sync_resumes_after_the_last_successful_push() {
         .unwrap()
         .unwrap();
     assert_eq!(saved.doc["doc_version"], 1);
-    assert!(!fx.ctx.store.state_dir().join("pm-events.json").exists());
+    assert!(
+        !fx.ctx
+            .store
+            .dir()
+            .join("state")
+            .join("pm-events.json")
+            .exists()
+    );
     std::fs::write(
-        fx.ctx.store.state_dir().join("pm-events.json"),
+        fx.ctx.store.dir().join("state").join("pm-events.json"),
         "invalid legacy cursor",
     )
     .unwrap();

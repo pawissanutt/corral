@@ -64,13 +64,13 @@ fn instruction_sources(store: &Store) -> (Vec<(&'static str, String, String)>, V
     let mut sources = Vec::new();
     let mut failures = Vec::new();
     let mut files: Vec<(&'static str, PathBuf)> =
-        vec![("run_template", store.prompts_dir().join("run.md"))];
+        vec![("run_template", store.template_override("run.md"))];
     for harness in config.harnesses.values() {
         if let Some(prompt) = &harness.prompt {
             files.push(("harness_template", store.root().join(prompt)));
         }
     }
-    files.push(("review_template", store.prompts_dir().join("review.md")));
+    files.push(("review_template", store.template_override("review.md")));
     for (surface, file) in files {
         match std::fs::read_to_string(&file) {
             Ok(text) => sources.push((surface, file.display().to_string(), text)),

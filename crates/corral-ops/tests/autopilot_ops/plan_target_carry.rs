@@ -41,8 +41,8 @@ fn plan(accept: Accept) -> (Fx, PathBuf, [String; 3]) {
     fx.done();
     let out = fx._tmp.path().join("out");
     std::fs::create_dir_all(&out).unwrap();
-    std::fs::create_dir_all(fx.ctx.store.prompts_dir()).unwrap();
-    std::fs::write(fx.ctx.store.prompts_dir().join("run.md"), TEMPLATE).unwrap();
+    std::fs::create_dir_all(fx.ctx.store.dir().join("prompts")).unwrap();
+    std::fs::write(fx.ctx.store.dir().join("prompts").join("run.md"), TEMPLATE).unwrap();
     configure(&mut fx, &out, "");
     let source = fx.ctx.store.root().join("plan.md");
     std::fs::write(

@@ -71,7 +71,7 @@ impl Fx {
             tier(&mut store);
         }
         store.save_config().unwrap();
-        std::fs::create_dir_all(store.prompts_dir()).unwrap();
+        std::fs::create_dir_all(store.dir().join("prompts")).unwrap();
         let ctx = Ctx {
             resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
             store,
@@ -218,7 +218,7 @@ fn a_tiered_quick_member_prompt_has_one_gate_contract_from_every_template_source
     let mut fresh = run.clone();
     fresh.execution = None;
     std::fs::write(
-        fx.ctx.store.prompts_dir().join("run.md"),
+        fx.ctx.store.dir().join("prompts").join("run.md"),
         "# {{id}} custom\n\nDo the work, then `{{done_cmd}}`.\n",
     )
     .unwrap();

@@ -32,6 +32,8 @@ mod history;
 mod instruction_guard;
 mod stronger;
 pub use stronger::{StrongerOutcome, request_stronger_review};
+mod evidence;
+pub(crate) use evidence::{Evidence, current_target, plan_roots};
 mod record;
 use record::{record_verdict, worktree_changes};
 mod submission;
@@ -44,12 +46,49 @@ fn short(sha: &str) -> &str {
     sha.get(..7).unwrap_or(sha)
 }
 
-/// Where a reviewer writes its notes: outside the worktree, so writing them never dirties it.
-pub fn review_notes_path(ctx: &Ctx, task: &str, run: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("reviews")
-        .join(format!("{task}-{run}-notes.md"))
+const NOTES: &str = "notes.md";
+
+/// Where review child `child` of run `run` keeps its prompt, packet and notes: its registered
+/// scratch directory, outside the worktree, so writing there never dirties it.
+pub(crate) fn review_dir(ctx: &Ctx, task: &str, run: &str, child: &str) -> Result<PathBuf> {
+    crate::scratch_reclaim::Attempt::Review { task, run, child }.dir(ctx)
+}
+
+/// The attempt whose scratch directory a review uses: its callback attempt, which a retry of an
+/// undelivered request inherits, so the retained request keeps naming the same files.
+pub(crate) fn dir_attempt(review: Option<&ReviewRecord>, child: &str) -> String {
+    review
+        .and_then(|review| review.route.as_deref())
+        .and_then(|route| route.callback.clone().or_else(|| route.attempt.clone()))
+        .unwrap_or_else(|| child.to_owned())
+}
+
+/// The notes file of `run`'s current review, or of its first attempt before any launched.
+fn notes_of(ctx: &Ctx, task: &str, run: &Run) -> Result<PathBuf> {
+    let child = run
+        .review_runs
+        .last()
+        .map_or_else(|| format!("{}-review1", run.id), |child| child.id.clone());
+    let review = run
+        .review
+        .as_ref()
+        .or_else(|| run.review_runs.last()?.review.as_ref());
+    Ok(review_dir(ctx, task, &run.id, &dir_attempt(review, &child))?.join(NOTES))
+}
+
+/// Where the reviewer of `run`'s current review attempt (its first, before any) writes its notes.
+pub fn review_notes_path(ctx: &Ctx, task: &str, run: &str) -> Result<PathBuf> {
+    let head = ctx.store.head(task)?;
+    let current = head
+        .current_run
+        .as_ref()
+        .filter(|current| current.id == run);
+    let latest = current.and_then(|current| current.current_child.as_deref());
+    let child = latest.map_or_else(|| format!("{run}-review1"), |child| child.id.clone());
+    let review = current
+        .and_then(|current| current.review.as_ref())
+        .or_else(|| latest?.review.as_ref());
+    Ok(review_dir(ctx, task, run, &dir_attempt(review, &child))?.join(NOTES))
 }
 
 mod prompt_text;
@@ -92,8 +131,8 @@ fn launch_profile(
         child = review.id.clone();
         Ok(())
     })?;
-    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{child}", run.id));
-    let command = crate::launch_exit::arm(&command, &receipt)?;
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{child}", run.id))?;
+    let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
     let pane = herdr.pane_id;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
@@ -139,7 +178,7 @@ fn prompt_pm(
     };
     attach_pane(ctx, task, run, &pane, false, launch)?;
     let corral = corral_bin()?.display().to_string();
-    let notes = review_notes_path(ctx, &task.id, &run.id);
+    let notes = prompt_file.with_file_name(NOTES);
     let prepared = ctx.store.get(&task.id)?;
     let attempt = prepared
         .current_run()
@@ -371,6 +410,13 @@ fn review_run_origin(
         route.callback = Some(inherited.unwrap_or_else(|| review_id.clone()));
     }
     let route = record.route.as_deref().context("review route missing")?;
+    let key = dir_attempt(Some(&record), &review_id);
+    let dir = crate::scratch_reclaim::Attempt::Review {
+        task: &task.id,
+        run: &run.id,
+        child: &key,
+    }
+    .open(ctx)?;
     let (packet_digest, packet_section) = crate::review_packet::write(
         ctx,
         &captured,
@@ -394,17 +440,12 @@ fn review_run_origin(
     {
         ctx.herdr.pane_close(p)?;
     }
-    let prompts = ctx.store.prompts_dir();
-    std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
-    let prompt_file = prompts.join(format!("{}-{}-review.md", task.id, run.id));
-    let notes = review_notes_path(ctx, &task.id, &run.id);
+    let prompt_file = dir.join("review.md");
+    let notes = dir.join(NOTES);
     match std::fs::remove_file(&notes) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e).context("clearing replaced reviewer notes"),
-    }
-    if let Some(dir) = notes.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
     // Persist the window and active record before dispatch: the agent can answer immediately.
     let saved = ctx.store.update(&task.id, |t| {
@@ -497,7 +538,8 @@ fn review_run_origin(
             ctx,
             &saved,
             saved.current_run().context("review run disappeared")?,
-        )? + &packet_section,
+        )? + &packet_section
+            + &crate::scratch_reclaim::prompt_section(ctx, &dir),
     )
     .with_context(|| format!("writing {}", prompt_file.display()))?;
     let launched = match &reviewer {
@@ -610,7 +652,7 @@ pub fn verdict_at(
     notes: &str,
     at: Timestamp,
 ) -> Result<ReviewRecord> {
-    verdict_with_clock(ctx, id, verdict, notes, None, None, || at).map(|(record, _)| record)
+    verdict_with_clock(ctx, id, verdict, notes, (None, &[]), None, || at).map(|(record, _)| record)
 }
 
 /// Reviewer callbacks must carry the attempt from their prompt. An unbound call is
@@ -622,8 +664,31 @@ pub fn verdict_bound(
     notes: &str,
     expected_attempt: Option<&str>,
 ) -> Result<ReviewRecord> {
+    verdict_with_evidence(ctx, id, verdict, notes, expected_attempt, &[])
+}
+
+/// [`verdict_bound`] that also promotes `evidence` (`--evidence PATH`) inside the verdict's
+/// update; a refused set (outside the attempt directory and the reviewed worktree, a symlink,
+/// over `review_evidence_max`) records no verdict.
+pub fn verdict_with_evidence(
+    ctx: &Ctx,
+    id: &str,
+    verdict: Verdict,
+    notes: &str,
+    expected_attempt: Option<&str>,
+    evidence: &[PathBuf],
+) -> Result<ReviewRecord> {
     let now = Timestamp::now;
-    verdict_with_clock(ctx, id, verdict, notes, expected_attempt, None, now).map(|(r, _)| r)
+    verdict_with_clock(
+        ctx,
+        id,
+        verdict,
+        notes,
+        (expected_attempt, evidence),
+        None,
+        now,
+    )
+    .map(|(r, _)| r)
 }
 
 /// The Pi-native `verdict` op on the bound review child: the receipt and VerdictReport commit
@@ -639,8 +704,16 @@ pub fn verdict_request(
     let home = crate::agent::effects::Home::of(report.origin);
     crate::agent::effects::swept(ctx, report.origin, home, || {
         let now = Timestamp::now;
-        verdict_with_clock(ctx, id, verdict, notes, expected_attempt, Some(report), now)
-            .map(|(_, receipt)| receipt)
+        verdict_with_clock(
+            ctx,
+            id,
+            verdict,
+            notes,
+            (expected_attempt, &[]),
+            Some(report),
+            now,
+        )
+        .map(|(_, receipt)| receipt)
     })
 }
 
@@ -651,7 +724,7 @@ fn verdict_with_clock(
     id: &str,
     verdict: Verdict,
     notes: &str,
-    expected_attempt: Option<&str>,
+    (expected_attempt, evidence): (Option<&str>, &[PathBuf]),
     report: Option<&crate::agent::effects::Report<'_>>,
     now: impl FnOnce() -> Timestamp,
 ) -> Result<Recorded> {
@@ -665,7 +738,8 @@ fn verdict_with_clock(
                 && expected_attempt.is_none_or(|attempt| callback::matches(run, review, attempt))
         })
     });
-    let result = verdict_inner(ctx, id, verdict, notes, expected_attempt, report, now);
+    let bound = (expected_attempt, evidence);
+    let result = verdict_inner(ctx, id, verdict, notes, bound, report, now);
     if let Err(error) = &result
         && let Some(review) = pending
     {
@@ -679,7 +753,7 @@ fn verdict_inner(
     id: &str,
     verdict: Verdict,
     notes: &str,
-    expected_attempt: Option<&str>,
+    (expected_attempt, evidence): (Option<&str>, &[PathBuf]),
     report: Option<&crate::agent::effects::Report<'_>>,
     now: impl FnOnce() -> Timestamp,
 ) -> Result<Recorded> {
@@ -699,6 +773,17 @@ fn verdict_inner(
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    let attempt_dir = match run.review_runs.last() {
+        Some(_) => notes_of(ctx, &task.id, &run)?
+            .parent()
+            .map(Path::to_path_buf),
+        None => None,
+    };
+    let roots: Vec<&Path> = [Some(run.worktree.as_path()), attempt_dir.as_deref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let evidence = Evidence::check(ctx, evidence, &roots)?;
     let started = run.review.clone().filter(|r| r.verdict.is_none());
     if let Some(attempt) = expected_attempt
         && !started
@@ -745,7 +830,7 @@ fn verdict_inner(
             &task,
             &run,
             record,
-            (Verdict::Escalate, escalation),
+            (Verdict::Escalate, escalation, &evidence),
             now(),
             report,
         )?;
@@ -789,5 +874,13 @@ fn verdict_inner(
             .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
         record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
-    record_verdict(ctx, &task, &run, record, (verdict, notes), now(), report)
+    record_verdict(
+        ctx,
+        &task,
+        &run,
+        record,
+        (verdict, notes, &evidence),
+        now(),
+        report,
+    )
 }

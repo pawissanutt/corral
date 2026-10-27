@@ -26,7 +26,7 @@ fn verdict_and_transcript_survive_replacement_and_send_back() {
     assert_eq!(active.reviews.len(), 2);
     assert!(active.reviews[0].live_pane.is_none());
     assert!(active.reviews[1].live_pane.is_some());
-    let second_notes = corral_ops::review_notes_path(&ctx, &id, "R1");
+    let second_notes = corral_ops::review_notes_path(&ctx, &id, "R1").unwrap();
     std::fs::write(&second_notes, "Partial second notes").unwrap();
     // When send-back cleans up the second review's pane.
     corral_ops::request_changes(&ctx, &id, "Please fix this.").unwrap();
@@ -76,7 +76,7 @@ fn superseded_review_retains_partial_notes_without_a_verdict() {
     // Given an active reviewer with partial notes.
     let (_tmp, ctx, id, _worktree) = task_in_review();
     corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
-    let notes = corral_ops::review_notes_path(&ctx, &id, "R1");
+    let notes = corral_ops::review_notes_path(&ctx, &id, "R1").unwrap();
     std::fs::write(&notes, "Unfinished findings").unwrap();
     // When a new reviewer replaces it.
     corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
@@ -111,8 +111,10 @@ fn superseded_review_retains_partial_notes_without_a_verdict() {
     );
     assert!(old.live_pane.is_none());
     assert_eq!(old.artifacts.len(), 1);
+    let replacement = corral_ops::review_notes_path(&ctx, &id, "R1").unwrap();
+    assert_ne!(replacement, notes);
     assert!(
-        !notes.exists(),
+        !replacement.exists(),
         "replacement must not inherit the old notes file"
     );
 }

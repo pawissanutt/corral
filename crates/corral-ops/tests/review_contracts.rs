@@ -211,7 +211,8 @@ fn packet(fx: &Fx, id: &str) -> Value {
     let file = fx
         .ctx
         .store
-        .prompts_dir()
+        .scratch_path(&format!("reviews/{id}-{}", child.id))
+        .unwrap()
         .join(format!("{id}-{}-{}-review-packet.json", run.id, child.id));
     serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
 }

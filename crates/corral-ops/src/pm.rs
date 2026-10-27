@@ -174,7 +174,7 @@ fn open_pm_with(
     };
     crate::pm_policy::begin_startup(ctx, &created.pane_id, &policy)?;
     STATE.save(&ctx.store, "state", &state)?;
-    let command = crate::launch_exit::arm(&command, &pm_receipt(ctx, &created.pane_id))?;
+    let command = crate::launch_exit::arm(ctx, &command, &pm_receipt(ctx, &created.pane_id)?)?;
     ctx.herdr
         .pane_run(&created.pane_id, &format!("export CORRAL_PM=1; {command}"))?;
     crate::pm_policy::confirm_startup(ctx, &created.pane_id)?;
@@ -204,14 +204,14 @@ pub(crate) fn pm_session(ctx: &Ctx) -> Result<PmSession> {
     Ok(PmSession::None)
 }
 
-fn pm_receipt(ctx: &Ctx, pane: &str) -> std::path::PathBuf {
+fn pm_receipt(ctx: &Ctx, pane: &str) -> Result<std::path::PathBuf> {
     crate::launch_exit::receipt(ctx, "PM", &pane.replace(':', "_"))
 }
 
 /// A pane whose PM agent returned to its shell is only a shell: report why once, close it and
 /// forget it, so the next open launches a fresh PM instead of typing into the shell.
 fn exited(ctx: &Ctx, pane: &str) -> Result<bool> {
-    let receipt = pm_receipt(ctx, pane);
+    let receipt = pm_receipt(ctx, pane)?;
     if !crate::launch_exit::exited(&receipt) {
         return Ok(false);
     }
@@ -240,7 +240,10 @@ pub(crate) fn save_prompt(
     ctx: &Ctx,
     policy: &crate::pm_policy::PolicySnapshot,
 ) -> Result<std::path::PathBuf> {
-    let path = ctx.store.prompts_dir().join("pm.md");
+    let path = ctx
+        .store
+        .scratch_spool(corral_core::backend::ScratchKind::Prompt, "pm")?
+        .join("pm.md");
     crate::pm_policy::write_atomic(&path, pm_prompt(ctx, policy)?.as_bytes())?;
     Ok(path)
 }

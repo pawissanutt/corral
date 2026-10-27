@@ -317,7 +317,7 @@ impl Fx {
             .unwrap();
             return;
         }
-        let dir = self.ctx.store.state_dir().join(directory);
+        let dir = self.ctx.store.dir().join("state").join(directory);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(format!("{key}.json")),

@@ -612,10 +612,9 @@ fn recovered_setup(path: Path, automatic: bool) -> (Fx, String) {
         let prepared_file = if kind == Kind::Gate {
             crate::gate::gate_paths(&fx.ctx, &id, &run.id).script
         } else {
-            fx.ctx
-                .store
-                .prompts_dir()
-                .join(format!("{id}-R1-review.md"))
+            crate::reviewer::review_dir(&fx.ctx, &id, &run.id, "R1-review1")
+                .unwrap()
+                .join("review.md")
         };
         std::fs::create_dir_all(prepared_file.parent().unwrap()).unwrap();
         std::fs::write(prepared_file, "prepared regression fixture").unwrap();

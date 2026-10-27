@@ -208,7 +208,9 @@ fn repeated_readbacks_are_write_free_and_empty_scope_is_not_complete() {
     let fx = Fx::new();
     fx.task("recommendation", Status::Ready);
     let before = (fx.ctx.store.list().unwrap(), fx.ctx.store.events().unwrap());
-    let state_files = std::fs::read_dir(fx.ctx.store.state_dir()).unwrap().count();
+    let state_files = std::fs::read_dir(fx.ctx.store.dir().join("state"))
+        .unwrap()
+        .count();
     // When all shared readbacks are requested repeatedly.
     for _ in 0..2 {
         let state = corral_ops::pm_workset(&fx.ctx).unwrap();
@@ -224,7 +226,9 @@ fn repeated_readbacks_are_write_free_and_empty_scope_is_not_complete() {
     );
     assert_eq!(
         state_files,
-        std::fs::read_dir(fx.ctx.store.state_dir()).unwrap().count()
+        std::fs::read_dir(fx.ctx.store.dir().join("state"))
+            .unwrap()
+            .count()
     );
 }
 
