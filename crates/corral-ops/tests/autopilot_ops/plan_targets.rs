@@ -230,6 +230,44 @@ fn independent_candidates_rebase_into_owned_plan_before_dependent_dispatch() {
 }
 
 #[test]
+fn plan_member_landings_clear_their_open_landing_stale_run_once() {
+    // Given two reviewed Plan members, each with an open landing_stale run of two observations.
+    let (mut fx, _plan, [a, b, _c]) = plan();
+    dispatch(&mut fx, &a);
+    dispatch(&mut fx, &b);
+    reviewed(&mut fx, &a, "a.txt", "A\n");
+    reviewed(&mut fx, &b, "b.txt", "B\n");
+    for (id, strategy) in [
+        (&a, ApproveStrategy::FastForward),
+        (&b, ApproveStrategy::Rebase),
+    ] {
+        for _ in 0..2 {
+            let stale =
+                serde_json::json!({"run": "R1", "outcome": "stale_retry", "reason": "moved"});
+            fx.ctx
+                .store
+                .log_event(Some(id), "landing_stale", stale)
+                .unwrap();
+        }
+        // When the member lands into the owned integration target.
+        corral_ops::approve(&fx.ctx, id, strategy, true, false).unwrap();
+        // Then one clear closes the run with its count and no stale run stays open.
+        let store = &fx.ctx.store;
+        let opened = store.events_of(Some(id), &["landing_stale"]).unwrap();
+        let cleared = store
+            .events_of(Some(id), &["landing_stale_cleared"])
+            .unwrap();
+        assert_eq!((opened.len(), cleared.len()), (1, 1), "{strategy:?}");
+        assert_eq!(cleared[0].detail["count"], 2);
+        assert_eq!(cleared[0].detail["run"], opened[0].seq);
+        let runs = store.condition_runs(Some(id)).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].closed_seq.map(|seq| seq.0), Some(cleared[0].seq));
+        assert!(runs.iter().all(|run| run.closed_seq.is_some()));
+    }
+}
+
+#[test]
 fn done_and_keep_branch_acceptance_do_not_qualify_a_plan_prerequisite() {
     // Given A's completed candidate but no published target receipt.
     let (mut fx, plan, [a, _, c]) = plan();
