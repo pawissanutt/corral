@@ -45,6 +45,9 @@ Attempted but unobserved messages are reported as `delivery_orphaned`.
 `delivery_uncertain`, `delivery_orphaned` and `message_unobserved` (a wake message still
 unobserved 10 minutes after posting) are actionable alerts, logged once per subject, that can be
 added to `pm.push_kinds`.
+A `changes_requested` message that no delivery pass has attempted a minute after posting raises
+the attention condition `changes_not_delivered`, naming the task and message; run `corral sync`
+and read `corral inbox show <id>` for the blocked reason.
 
 Inbox recipients have keys such as `T-144_R2`, `T-144_plan-P1`,
 `T-144_P1_PR1` and `pm`. A message id adds a sequence: `T-144_R2#7`.

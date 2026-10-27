@@ -281,3 +281,36 @@ fn indexing_cursor_progress_keeps_identity_but_a_new_debt_episode_changes_it() {
         );
     }
 }
+
+#[test]
+fn an_unattempted_change_request_names_itself_instead_of_a_generic_wait() {
+    let (_root, store, id, recipients) = fixture();
+    let inbox = Inbox::new(&store, recipients[0].clone()).unwrap();
+    let changes = inbox
+        .post(Post {
+            kind: "changes_requested",
+            urgency: Urgency::Wake,
+            author: "autopilot",
+            body: "fix the findings",
+            binding: MessageBinding::default(),
+            subject: None,
+            max_payload: MAX_PAYLOAD,
+        })
+        .unwrap();
+    let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
+    let row = message_row(&rows, &changes.id);
+    assert_eq!(row.kind, "changes_not_delivered");
+    assert_eq!(row.responsible, Responsible::Pm);
+    assert!(
+        row.reason.contains(&id) && row.reason.contains(&changes.id),
+        "{row:#?}"
+    );
+    assert_eq!(row.next_action.command.as_deref(), Some("corral sync"));
+    // Once a delivery pass has published an envelope, the generic delivery kinds apply again.
+    publish(&inbox);
+    let rows = classify(&store, &store.get(&id).unwrap(), &recipients, false);
+    assert_ne!(
+        message_row(&rows, &changes.id).kind,
+        "changes_not_delivered"
+    );
+}

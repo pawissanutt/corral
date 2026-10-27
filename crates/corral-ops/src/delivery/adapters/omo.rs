@@ -23,6 +23,10 @@ pub const HARNESS: &str = "omo";
 const SEND_TIMEOUT: Duration = Duration::from_secs(90);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_TRANSCRIPT_READ: u64 = 32 * 1024 * 1024;
+/// Launch re-stamps `Run.started` after the terminal accepts the command, so the agent's
+/// session can be created a few milliseconds (or, under load, seconds) before that stamp.
+/// A session older than this window still predates the run (a stale binding).
+const SESSION_START_SKEW: jiff::SignedDuration = jiff::SignedDuration::from_secs(5);
 
 /// Errors that prove nothing was accepted yet or that only the same key can settle.
 const RETRYABLE: [&str; 4] = [
@@ -114,6 +118,10 @@ pub(crate) fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Target> {
 pub(crate) fn candidates(list: &Value, target: &Target, now: Timestamp) -> Result<Vec<Value>> {
     let rows = list.as_array().context("omo thread list is not an array")?;
     let mut out = Vec::new();
+    let earliest = target
+        .started
+        .checked_sub(SESSION_START_SKEW)
+        .unwrap_or(target.started);
     for row in rows {
         let created = row["created_at"]
             .as_str()
@@ -126,7 +134,7 @@ pub(crate) fn candidates(list: &Value, target: &Target, now: Timestamp) -> Resul
                 .as_array()
                 .is_some_and(|c| c.iter().any(|c| c == "send"))
             && row["durableSessionId"].as_str().is_some()
-            && created.is_some_and(|at| at >= target.started && at <= target.ended.unwrap_or(now))
+            && created.is_some_and(|at| at >= earliest && at <= target.ended.unwrap_or(now))
         {
             out.push(row.clone());
         }
