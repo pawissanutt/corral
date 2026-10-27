@@ -296,21 +296,28 @@ fn missing_worker_transcript_refuses_recovery_without_changing_the_run() {
 
 #[test]
 fn incompatible_reviewer_gets_one_explicit_new_session_and_diagnostic() {
-    // Given a reviewer conversation on the previous selected model.
-    let (_tmp, mut ctx, id, _) = task_in_review();
-    session_profile(&mut ctx);
-    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
-    ctx.store.config.profiles.get_mut("rev").unwrap().model = Some("different-model".into());
-    ctx.store.save_config().unwrap();
+    for adapter_changed in [false, true] {
+        // Given a reviewer conversation on the previous model and adapter family.
+        let (_tmp, mut ctx, id, _) = task_in_review();
+        session_profile(&mut ctx);
+        corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+        if adapter_changed {
+            ctx.store.config.harnesses.get_mut("omo").unwrap().flags = Some("omp".into());
+        } else {
+            ctx.store.config.profiles.get_mut("rev").unwrap().model =
+                Some("different-model".into());
+        }
+        ctx.store.save_config().unwrap();
 
-    // When routing selects a different model for the next attempt.
-    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+        // When routing selects an incompatible model or adapter for the next attempt.
+        corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
 
-    // Then the task records a new session and explicitly reports context incompatibility.
-    let task = ctx.store.get(&id).unwrap();
-    let children = &task.current_run().unwrap().review_runs;
-    let new = children.last().unwrap().session.as_ref().unwrap();
-    assert_eq!(new.action, corral_core::SessionAction::New);
-    assert_ne!(new.id, children[0].session.as_ref().unwrap().id);
-    assert!(new.diagnostic.as_deref().unwrap().contains("incompatible"));
+        // Then one new session explicitly reports context incompatibility.
+        let task = ctx.store.get(&id).unwrap();
+        let children = &task.current_run().unwrap().review_runs;
+        let new = children.last().unwrap().session.as_ref().unwrap();
+        assert_eq!(new.action, corral_core::SessionAction::New);
+        assert_ne!(new.id, children[0].session.as_ref().unwrap().id);
+        assert!(new.diagnostic.as_deref().unwrap().contains("incompatible"));
+    }
 }

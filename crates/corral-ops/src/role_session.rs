@@ -3,11 +3,14 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result};
+use anyhow::{bail, ensure};
 use corral_core::{ResolvedProfile, RoleSession, Run, SessionAction, SessionPolicy, Task};
-use serde_json::{Value, json};
+use serde_json::Value;
+use serde_json::json;
 
-use crate::{Ctx, provider_session};
+use crate::Ctx;
+use crate::provider_session;
 
 mod claude;
 #[cfg(test)]
@@ -39,6 +42,13 @@ pub(crate) fn fresh(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result
     getrandom::fill(&mut nonce)
         .map_err(|error| anyhow::anyhow!("allocating role session identity: {error}"))?;
     let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
+    let harness = run.harness.as_deref().unwrap_or(&run.agent);
+    let selected_adapter = run
+        .execution
+        .as_ref()
+        .and_then(|_| run.session.as_ref())
+        .and_then(|session| session.adapter.as_deref())
+        .unwrap_or_else(|| adapter(ctx, harness));
     let mut session = RoleSession {
         policy: if reviewer {
             policy.reviewer_session
@@ -54,13 +64,14 @@ pub(crate) fn fresh(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result
             .join(&task.id)
             .join(&run.id)
             .join(nonce),
-        harness: run.harness.as_deref().unwrap_or(&run.agent).into(),
+        harness: harness.into(),
+        adapter: Some(selected_adapter.into()),
         model: run.model.clone(),
         vendor: run.vendor.clone(),
         action: SessionAction::New,
         diagnostic: None,
     };
-    if adapter(ctx, &session.harness) == "claude" {
+    if selected_adapter == "claude" {
         if let Some((id, directory)) = claude::location(&run.worktree, &session.directory) {
             session.transcript = Some(directory.join(format!("{id}.jsonl")));
             session.directory = directory;
@@ -115,6 +126,9 @@ pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Resu
         Some(session) => session.clone(),
         None => fresh(ctx, task, run, reviewer)?,
     };
+    if session.adapter.is_none() {
+        session.adapter = Some(adapter(ctx, &session.harness).into());
+    }
     ensure!(
         session.harness == run.harness.as_deref().unwrap_or(&run.agent)
             && session.model == run.model
@@ -213,6 +227,10 @@ pub(crate) fn reviewer(ctx: &Ctx, task: &Task, parent: &Run, child: &Run) -> Res
             "reviewer session is incompatible with the selected harness/model/vendor/worktree"
         );
         let mut session = capture(ctx, task, previous, true)?;
+        ensure!(
+            session.adapter == next.adapter,
+            "reviewer session adapter is incompatible"
+        );
         session.policy = next.policy;
         session.action = SessionAction::Resumed;
         Ok::<_, anyhow::Error>(session)
@@ -247,7 +265,10 @@ pub(crate) fn command(ctx: &Ctx, run: &Run, resolved: &ResolvedProfile) -> Resul
             "recorded session is incompatible with the launch profile's harness/model/vendor"
         );
     }
-    let adapter = adapter(ctx, &resolved.harness);
+    let adapter = session
+        .adapter
+        .as_deref()
+        .unwrap_or_else(|| adapter(ctx, &resolved.harness));
     let quote = |path: &Path| {
         format!(
             "'{}'",

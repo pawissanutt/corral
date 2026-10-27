@@ -92,6 +92,7 @@ fn automatic_gone_worker_resumes_its_exact_session_in_the_same_run() {
                 transcript: Some(transcript.clone()),
                 directory,
                 harness: "owned".into(),
+                adapter: None,
                 model: run.model.clone(),
                 vendor: run.vendor.clone(),
                 action: SessionAction::New,

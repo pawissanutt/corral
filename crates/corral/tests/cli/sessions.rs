@@ -1,6 +1,7 @@
 use super::*;
 use corral_core::{RoleSession, Run, SessionAction, SessionPolicy, Status, Store};
-use serde_json::{Value, json};
+use serde_json::Value;
+use serde_json::json;
 
 #[test]
 fn show_reports_effective_role_policies_and_distinct_persisted_session_ids() {
@@ -56,6 +57,7 @@ fn show_reports_effective_role_policies_and_distinct_persisted_session_ids() {
             transcript: Some(transcript),
             directory,
             harness: "generic".into(),
+            adapter: None,
             model: None,
             vendor: None,
             action: if reviewer {

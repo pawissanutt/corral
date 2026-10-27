@@ -36,6 +36,9 @@ pub struct RoleSession {
     pub transcript: Option<PathBuf>,
     pub directory: PathBuf,
     pub harness: String,
+    /// Frozen CLI flag family, independent of later harness configuration edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
     pub model: Option<String>,
     pub vendor: Option<String>,
     pub action: SessionAction,
