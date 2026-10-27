@@ -132,17 +132,23 @@ pub(super) fn actions(
         .filter(|id| posts.contains_key(id.as_str()))
         .collect();
     let mut prior = BTreeMap::<(String, String), Option<String>>::new();
+    // Normalize first: each action takes its effect's post position and time. Then consume the
+    // actions in that causal order, so a delayed naming event cannot reorder prior effects.
+    let mut normalized: Vec<_> = (events.iter().enumerate())
+        .filter_map(|(pos, event)| {
+            let message = effect(event);
+            let named_post = event.kind == "message_posted"
+                && message.as_ref().is_some_and(|id| named.contains(id));
+            let (family, identity) = join(event).filter(|_| !named_post)?;
+            let (pos, at) = (message.as_deref())
+                .and_then(|id| posts.get(id).copied())
+                .unwrap_or((pos, when(event)));
+            Some((pos, at, event, message, family, identity))
+        })
+        .collect();
+    normalized.sort_by_key(|(pos, ..)| *pos);
     // History before the window seeds prior effects; only in-window actions are charged.
-    for (pos, event) in events.iter().enumerate() {
-        let message = effect(event);
-        let named_post =
-            event.kind == "message_posted" && message.as_ref().is_some_and(|id| named.contains(id));
-        let Some((family, identity)) = join(event).filter(|_| !named_post) else {
-            continue;
-        };
-        let (pos, at) = (message.as_deref())
-            .and_then(|id| posts.get(id).copied())
-            .unwrap_or((pos, when(event)));
+    for (pos, at, event, message, family, identity) in normalized {
         let charged = within(Some(at), window);
         let own = message.as_ref().map(|id| format!("/{id}"));
         let matches: Vec<_> = (rows.iter())

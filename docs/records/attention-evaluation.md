@@ -13,7 +13,7 @@ and the protocol for the separately authorized live evaluation.
   (28 tests).
 - Kill-barrier, T-128 interleaving and persisted-stats fixtures (in-crate,
   because the barriers are `cfg(test)` seams and the replay uses a crate-private
-  delivery pass): `cargo test -p corral-ops --lib attention::metrics` (24 tests).
+  delivery pass): `cargo test -p corral-ops --lib attention::metrics` (25 tests).
 - CLI: `cargo test -p corral --bin corral attention_cmd`.
 - The suite uses no sleep and no wall-clock read, and starts no live herdr
   server. Clocks are explicit `sync_at` timestamps. Engines are the existing
@@ -63,7 +63,9 @@ The ones the scenarios rely on:
   - A fresh `message_posted` joins by recipient key. A post named by a retry
     (`to`), reply or change request (`message`) is the same action as that
     event, not another one. The action keeps the post's log position and time,
-    so a later naming event never moves it across a window boundary.
+    and all actions are consumed in that causal order. A later naming event
+    therefore never moves an effect across a window boundary or reorders it
+    against other effects when building duplicate state.
   - `question_answered` joins by question key **and** revision.
   - `unparked` joins by park revision; a replacing `parked` joins the previous
     revision's conditions; an initial park answers nothing (its canonical time
@@ -284,6 +286,14 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
 - **Stable effect windows:** a post at 60 in 0..100 stays one action after its
   `replied`, `changes_requested` or `message_retried` naming event is logged
   at 120.
+- **Delayed two-effect naming:** for each of `replied`, `changes_requested` and
+  `message_retried`, a failed delivery has an older effect #2 (at -10 or 10)
+  and a newer post+naming pair #3 at 20/21, and #2's naming event is appended
+  only at 120. The results are: outstanding #2, 1 duplicate; observed #2,
+  none; terminal #2, 1 after-terminal. Charged actions are 1 for a
+  pre-window #2 and 2 for an in-window one. For replies and change requests
+  the result is identical before and after the delayed append. The test fails
+  if actions are consumed in naming-log order.
 - **Recipient duplicate identity:** an outstanding standalone post #2 then a
   post+`replied` or post+`changes_requested` pair for #3 gives 2 actions and
   1 duplicate. It gives no duplicate after `message_observed` for #2, and
