@@ -226,12 +226,8 @@ fn record_entry_notice(
 }
 
 fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion) -> Result<()> {
-    if question.state == QuestionState::Withdrawn {
-        return Err(refuse(
-            RefusalKind::Withdrawn,
-            format!("{} was withdrawn", question.key),
-        ));
-    }
+    // Container closure governs every new action, even on an already withdrawn question.
+    // Committed PM receipt replays are handled by transact before reaching this check.
     if let Some(reason) = agent::container_closure(task, container) {
         return Err(refuse(
             RefusalKind::Closed,
@@ -240,6 +236,12 @@ fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion
                 question.key,
                 reason.as_str()
             ),
+        ));
+    }
+    if question.state == QuestionState::Withdrawn {
+        return Err(refuse(
+            RefusalKind::Withdrawn,
+            format!("{} was withdrawn", question.key),
         ));
     }
     if let Some(terminal) = &question.terminal {
