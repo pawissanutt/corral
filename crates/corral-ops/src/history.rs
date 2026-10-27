@@ -3,7 +3,10 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use corral_core::{Event, Status, Store, Task};
+#[cfg(test)]
+use corral_core::Event;
+use corral_core::backend::{EventQuery, HeadQuery, PageReq};
+use corral_core::{Status, Store, Task};
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -42,12 +45,116 @@ pub struct Finish {
 /// moved the task into its current status ("approved", "discarded", or "moved" to done/dropped); a task with no
 /// such event (edited by hand) uses its `updated` time. `landed` comes from the task's last "approved" event.
 pub fn finishes(store: &Store, tasks: &[Task]) -> Result<HashMap<String, Finish>> {
-    Ok(finishes_from(
-        &store.events_of(None, &["approved", "discarded", "moved"])?,
-        tasks,
-    ))
+    tasks
+        .iter()
+        .filter(|task| matches!(task.status, Status::Done | Status::Dropped))
+        .map(|task| {
+            Ok((
+                task.id.clone(),
+                finish_for(store, &task.id, task.status, task.updated)?,
+            ))
+        })
+        .collect()
 }
 
+/// Finish records for precisely the requested terminal heads, on the caller's read view.
+pub fn finishes_for(store: &Store, ids: &[String]) -> Result<HashMap<String, Finish>> {
+    store
+        .heads(&HeadQuery::Ids(ids.to_vec()))?
+        .into_iter()
+        .filter(|task| matches!(task.status, Status::Done | Status::Dropped))
+        .map(|task| {
+            Ok((
+                task.id.clone(),
+                finish_for(store, &task.id, task.status, task.updated)?,
+            ))
+        })
+        .collect()
+}
+
+fn finish_for(store: &Store, id: &str, status: Status, updated: Timestamp) -> Result<Finish> {
+    let view = store.view()?;
+    let query = EventQuery {
+        task: Some(id.to_owned()),
+        kinds: ["approved", "discarded", "moved"].map(str::to_owned).into(),
+        newest_first: true,
+        valid_only: true,
+        ..EventQuery::default()
+    };
+    let mut page = PageReq::first(1);
+    loop {
+        let rows = view.events(&query, page)?;
+        for row in rows.items {
+            let event = row.event;
+            let to = match event.kind.as_str() {
+                "approved" => Some(Status::Done),
+                "discarded" => Some(Status::Dropped),
+                "moved" => event.detail["to"].as_str().and_then(Status::parse),
+                _ => None,
+            };
+            if to != Some(status) {
+                continue;
+            }
+            let landed = if status == Status::Done {
+                // A move to Done keeps the latest approval's landing. Query that
+                // kind separately rather than walking all the intervening moves.
+                latest_landing(store, id)?
+            } else {
+                None
+            };
+            return Ok(Finish {
+                at: event.ts,
+                landed,
+            });
+        }
+        let Some(after) = rows.next else { break };
+        page = PageReq {
+            after: Some(after),
+            limit: 1,
+        };
+    }
+    Ok(Finish {
+        at: updated,
+        landed: None,
+    })
+}
+
+fn latest_landing(store: &Store, id: &str) -> Result<Option<Landed>> {
+    let view = store.view()?;
+    let query = EventQuery {
+        task: Some(id.to_owned()),
+        kinds: vec!["approved".into()],
+        newest_first: true,
+        valid_only: true,
+        ..EventQuery::default()
+    };
+    let mut page = PageReq::first(1);
+    loop {
+        let rows = view.events(&query, page)?;
+        for row in rows.items {
+            if let Some(sha) = row.event.detail["sha"].as_str() {
+                return Ok(Some(Landed {
+                    sha: sha.to_owned(),
+                    strategy: row.event.detail["strategy"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                }));
+            }
+        }
+        match rows.next {
+            Some(next) => {
+                page = PageReq {
+                    after: Some(next),
+                    limit: 1,
+                }
+            }
+            None => return Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
 fn finishes_from(events: &[Event], tasks: &[Task]) -> HashMap<String, Finish> {
     let finished: HashMap<&str, &Task> = tasks
         .iter()
@@ -172,6 +279,97 @@ mod tests {
             actor: None,
             via: None,
             detail,
+        }
+    }
+
+    #[test]
+    fn derived_finish_page_equals_baseline_including_no_runs_and_retained_approval() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let mut tasks = Vec::new();
+        let mut seed = 17_u64;
+        for i in 0..18 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let status =
+                [Status::Done, Status::Dropped, Status::Review][usize::try_from(seed % 3).unwrap()];
+            let task = store
+                .create(&format!("Task {i}"), None, status, "")
+                .unwrap();
+            if i % 4 != 0 {
+                store
+                    .log_event(
+                        Some(&task.id),
+                        "approved",
+                        json!({"sha":"abcdef","strategy":"rebase"}),
+                    )
+                    .unwrap();
+                store
+                    .log_event(Some(&task.id), "moved", json!({"to":"done"}))
+                    .unwrap();
+                store
+                    .log_event(Some(&task.id), "approved", json!({"sha":null}))
+                    .unwrap();
+                store
+                    .log_event(Some(&task.id), "discarded", json!({}))
+                    .unwrap();
+            }
+            tasks.push(task);
+        }
+        let events = store.events().unwrap();
+        let expected = finishes_from(&events, &tasks);
+        assert_eq!(finishes(&store, &tasks).unwrap(), expected);
+        let ids = tasks.iter().map(|task| task.id.clone()).collect::<Vec<_>>();
+        assert_eq!(finishes_for(&store, &ids).unwrap(), expected);
+        for task in &tasks {
+            assert_eq!(
+                finishes_for(&store, std::slice::from_ref(&task.id)).unwrap(),
+                expected
+                    .iter()
+                    .filter(|(id, _)| *id == &task.id)
+                    .map(|(id, finish)| (id.clone(), finish.clone()))
+                    .collect()
+            );
+        }
+    }
+
+    #[test]
+    fn derived_finish_page_work_ignores_other_tasks_and_earlier_history() {
+        use corral_core::work::{self, Counter, HotScope};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let task = store
+            .create("Done without a run", None, Status::Done, "")
+            .unwrap();
+        store
+            .log_event(
+                Some(&task.id),
+                "approved",
+                json!({"sha":"abc","strategy":"rebase"}),
+            )
+            .unwrap();
+        let measure = || {
+            let _scope = HotScope::enter();
+            let before = work::snapshot();
+            let result = finishes_for(&store, std::slice::from_ref(&task.id)).unwrap();
+            let counts = work::snapshot().since(&before);
+            counts.check_identity().unwrap();
+            assert_eq!(counts.unattributed_hydrations(), 0);
+            (result, counts)
+        };
+        let (before, base) = measure();
+        for i in 0..10 {
+            let old = store.create("Other", None, Status::Done, "").unwrap();
+            store
+                .log_event(Some(&old.id), "approved", json!({"sha":"other","round":i}))
+                .unwrap();
+            store
+                .log_event(Some(&task.id), "unrelated", json!({"i":i}))
+                .unwrap();
+        }
+        let (after, grown) = measure();
+        assert_eq!(before, after);
+        for counter in Counter::ALL {
+            assert_eq!(base.get(counter), grown.get(counter), "{counter:?}");
         }
     }
 

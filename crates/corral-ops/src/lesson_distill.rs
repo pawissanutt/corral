@@ -44,70 +44,22 @@ pub struct LessonProposal {
 
 /// Read-only schedule evaluation. Active distillation tasks suppress duplicate filing.
 pub fn lessons_due(ctx: &Ctx, now: Timestamp) -> Result<Vec<LessonDue>> {
-    let events = ctx.store.events_of(
-        None,
-        &[
-            "lessons_distill_requested",
-            "approved",
-            "gate",
-            "changes_requested",
-            "discarded",
-            "escalated",
-            "autopilot",
-            "plan_escalated",
-            "plan_failed",
-        ],
-    )?;
-    let tasks = ctx.store.list()?;
     let config = &ctx.store.config.lessons;
     let mut due = Vec::new();
     for project in ctx.store.config.projects.keys() {
-        let requested_index = events.iter().rposition(|e| {
-            e.kind == "lessons_distill_requested"
-                && e.detail["project"].as_str() == Some(project.as_str())
-        });
-        let requested = requested_index.map(|index| &events[index]);
-        let pending = requested
-            .and_then(|e| e.task.as_deref())
-            .and_then(|id| tasks.iter().find(|t| t.id == id))
-            .filter(|t| !matches!(t.status, Status::Done | Status::Dropped))
-            .map(|t| t.id.clone());
+        let row = crate::lesson_rows::due(ctx, project)?;
+        let requested = row.requested.as_ref();
+        let pending = match requested.and_then(|event| event.task.as_ref()) {
+            Some(id) => ctx
+                .store
+                .heads(&corral_core::backend::HeadQuery::Ids(vec![id.clone()]))?
+                .into_iter()
+                .find(|head| !matches!(head.status, Status::Done | Status::Dropped))
+                .map(|head| head.id.clone()),
+            None => None,
+        };
         let baseline = requested.map(|e| e.ts);
-        // Count by durable append order: wall time can tie or move backwards.
-        let relevant: Vec<_> = events
-            .iter()
-            .skip(requested_index.map_or(0, |index| index + 1))
-            .filter(|e| {
-                e.task.as_ref().is_some_and(|id| {
-                    tasks
-                        .iter()
-                        .any(|t| &t.id == id && t.project.as_deref() == Some(project.as_str()))
-                })
-            })
-            .collect();
-        // Missing or unknown historical strategies do not prove a landing.
-        let landings = relevant
-            .iter()
-            .filter(|e| {
-                e.kind == "approved"
-                    && matches!(
-                        e.detail["strategy"].as_str(),
-                        Some("fast_forward" | "rebase")
-                    )
-            })
-            .count();
-        let failures = relevant
-            .iter()
-            .filter(|e| {
-                (e.kind == "gate" && e.detail["result"] == "fail")
-                    || matches!(e.kind.as_str(), "changes_requested" | "discarded")
-                    || corral_core::actionable_kind(e) == Some("escalated")
-            })
-            .count();
-        let has_history = tasks.iter().any(|t| {
-            t.project.as_deref() == Some(project.as_str())
-                && (matches!(t.status, Status::Done | Status::Dropped) || !t.runs.is_empty())
-        });
+        let (landings, failures, has_history) = (row.landings, row.failures, row.has_history);
         let mut reasons = Vec::new();
         if let Some(every) = &config.every {
             let duration = corral_core::parse_age(every)?;
@@ -149,26 +101,16 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock("lessons-schedule")? else {
         return Ok(());
     };
-    let events = ctx
-        .store
-        .events_of(None, &["lessons_distill_requested", "lessons_due"])?;
     for due in lessons_due(ctx, now)?
         .into_iter()
         .filter(|due| due.pending.is_none() && !due.reasons.is_empty())
     {
-        let request = events
-            .iter()
-            .rev()
-            .find(|e| {
-                e.kind == "lessons_distill_requested"
-                    && e.detail["project"].as_str() == Some(due.project.as_str())
-            })
-            .and_then(|e| e.task.as_deref());
-        if events.iter().any(|e| {
-            e.kind == "lessons_due"
-                && e.detail["project"].as_str() == Some(due.project.as_str())
-                && e.detail["request"].as_str() == request
-        }) {
+        let row = crate::lesson_rows::due(ctx, &due.project)?;
+        let request = row
+            .requested
+            .as_ref()
+            .and_then(|event| event.task.as_deref());
+        if announced(ctx, &due.project, request)? {
             continue;
         }
         ctx.store.log_event(
@@ -181,6 +123,36 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn announced(ctx: &Ctx, project: &str, request: Option<&str>) -> Result<bool> {
+    use corral_core::backend::{EventQuery, PageReq};
+    let view = ctx.store.view()?;
+    let query = EventQuery {
+        kinds: vec!["lessons_due".into()],
+        newest_first: true,
+        valid_only: true,
+        ..EventQuery::default()
+    };
+    let mut page = PageReq::first(16);
+    loop {
+        let rows = view.events(&query, page)?;
+        if rows.items.iter().any(|row| {
+            row.event.detail["project"].as_str() == Some(project)
+                && row.event.detail["request"].as_str() == request
+        }) {
+            return Ok(true);
+        }
+        match rows.next {
+            Some(next) => {
+                page = PageReq {
+                    after: Some(next),
+                    limit: 16,
+                }
+            }
+            None => return Ok(false),
+        }
+    }
 }
 
 /// File one spike on an explicit strong profile. This never launches an agent.

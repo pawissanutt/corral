@@ -21,6 +21,8 @@ use crate::theme;
 /// one of its artifacts is pinned.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CardExtra<'a> {
+    pub head: Option<&'a corral_core::TaskHead>,
+    pub obligations: Option<&'a corral_core::RunObligations>,
     pub plan_progress: Option<&'a crate::plan::tracker::Progress>,
     pub route: Option<&'a crate::routes::CardRoute>,
     pub finish: Option<&'a Finish>,
@@ -180,7 +182,10 @@ fn meta_lines(
             Style::new().fg(theme::CYAN),
         )];
     }
-    let plan = crate::plan::stage(t, Some(config));
+    let plan = extra.head.map_or_else(
+        || crate::plan::stage(t, Some(config)),
+        |head| crate::plan::stage_head(head, Some(config)),
+    );
     if let Some(stage) = plan.filter(|s| s.active() && t.current_run().is_none()) {
         let waiting = extra.plan_review_wait.map(automation_short);
         return crate::plan::card_lines(t, stage, width, now, waiting.as_deref());
@@ -246,7 +251,14 @@ fn meta_lines(
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started, now), dim));
                 if r.stuck.is_none() {
-                    if obligations::waiting(r) {
+                    if extra.head.map_or_else(
+                        || obligations::waiting(r),
+                        |head| {
+                            head.current_run
+                                .as_ref()
+                                .is_some_and(|r| r.facts.pending_waits > 0)
+                        },
+                    ) {
                         spans.push(sep());
                         spans.push(Span::styled("⧗ waiting", Style::new().fg(theme::BLUE)));
                     } else if r.idle_no_report {
@@ -273,8 +285,13 @@ fn meta_lines(
                 ));
             }
             out.extend(
-                run.map(|r| obligations::card_lines(r, true))
-                    .unwrap_or_default(),
+                run.map(|r| {
+                    extra.obligations.map_or_else(
+                        || obligations::card_lines(r, true),
+                        |o| obligations::card_lines_from(o, true),
+                    )
+                })
+                .unwrap_or_default(),
             );
         }
         Status::NeedsMe => {
@@ -284,7 +301,11 @@ fn meta_lines(
                 Span::styled(format!("waiting {}", ago(t.updated, now)), dim),
             ]));
             // An exact owner question beats the escalation reason and the terminal-excerpt heuristic.
-            let decision = run.and_then(|r| r.obligations.pending_decision());
+            let decision = extra
+                .head
+                .and_then(|head| head.current_run.as_ref())
+                .and_then(|r| r.facts.pending_decision.as_ref())
+                .or_else(|| run.and_then(|r| r.obligations.pending_decision()));
             let question = decision.map(|d| d.request.question.clone());
             let question = question
                 .or_else(|| autopilot::escalation(t))
@@ -311,8 +332,13 @@ fn meta_lines(
                 );
             }
             out.extend(
-                run.map(|r| obligations::card_lines(r, false))
-                    .unwrap_or_default(),
+                run.map(|r| {
+                    extra.obligations.map_or_else(
+                        || obligations::card_lines(r, false),
+                        |o| obligations::card_lines_from(o, false),
+                    )
+                })
+                .unwrap_or_default(),
             );
         }
         Status::Review => {
@@ -407,7 +433,12 @@ fn done_lines(t: &Task, extra: CardExtra) -> [Line<'static>; 2] {
         ));
     }
     second.push(Span::styled(
-        format!("◆ {}", t.artifacts.len()),
+        format!(
+            "◆ {}",
+            extra
+                .head
+                .map_or(t.artifacts.len() as u64, |h| h.summary.artifacts)
+        ),
         Style::new().fg(theme::MAGENTA),
     ));
     [first, Line::from(second)]
@@ -472,9 +503,13 @@ pub(crate) fn card_lines(
     };
     let card_cfg = &config.board.card;
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
-        let plan = crate::plan::stage(t, Some(config));
+        let plan = extra.head.map_or_else(
+            || crate::plan::stage(t, Some(config)),
+            |head| crate::plan::stage_head(head, Some(config)),
+        );
         let plan = plan.map(crate::plan::PlanStage::label);
         let compact = compact::Compact {
+            head: extra.head,
             plan_progress: extra.plan_progress,
             t,
             done,
@@ -522,14 +557,14 @@ pub(crate) fn card_lines(
         lines.push(Line::from(spans));
     }
     if !t.tracker
-        && let Some(fields) = card_fields::field_spans(
+        && let Some(fields) = card_fields::field_spans_head(
             t,
             done,
             card_cfg,
             width,
             now,
             extra.pinned,
-            extra.route.map(|r| r.label.as_str()),
+            (extra.route.map(|r| r.label.as_str()), extra.head),
         )
     {
         let mut spans = vec![bar.clone()];

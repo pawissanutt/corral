@@ -2,7 +2,6 @@
 //! snapshot is applied, so frames, keys and mouse input touch only the cards they show.
 use std::cmp::Reverse;
 
-use corral_core::Limits;
 use corral_core::work::{Work, record};
 
 use super::*;
@@ -18,7 +17,6 @@ pub(super) struct BoardIndex {
     done_pinned: Vec<usize>,
     /// Ids of every Done task, for the open-dependency and tracker-progress card fields.
     pub(super) done_ids: HashSet<String>,
-    usage: Option<(Limits, SlotUsage)>,
 }
 
 fn slot(col: Status) -> Option<usize> {
@@ -94,15 +92,5 @@ impl BoardIndex {
         );
         let older = self.done.len() - shown.len();
         (shown, older)
-    }
-
-    /// Slot usage of `tasks` under `limits`, recomputed only when the limits differ.
-    pub(super) fn usage(&mut self, tasks: &[Task], limits: &Limits) -> &SlotUsage {
-        if self.usage.as_ref().is_none_or(|(known, _)| known != limits) {
-            record(Work::BoardVisit, tasks.len() as u64);
-            self.usage = Some((limits.clone(), SlotUsage::from_tasks(tasks, limits)));
-        }
-        let (_, usage) = self.usage.get_or_insert_with(Default::default);
-        usage
     }
 }

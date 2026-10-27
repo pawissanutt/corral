@@ -1,5 +1,68 @@
 use super::*;
 
+#[test]
+fn pinned_readings_preserve_inventory_and_count_real_walks() {
+    // Given a real store, project directories and the validated default thresholds.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    assert_eq!(store.config.resources, corral_core::ResourcesCfg::default());
+    store.config.validate(store.root()).unwrap();
+    let real = SystemResourceProbe.sample(&store).unwrap();
+    let probe = PinnedReadingsProbe::new(8.0, 123, 456);
+    assert_eq!(probe.samples(), 0);
+    // When numeric readings are pinned, the real inventory still runs on every call.
+    let pinned = probe.sample(&store).unwrap();
+    probe.sample(&store).unwrap();
+    // Then only the requested numbers change; paths and core inventory are preserved.
+    assert_eq!(probe.samples(), 2);
+    assert_eq!(pinned.cores, real.cores);
+    assert_eq!(pinned.load_one, 8.0);
+    assert_eq!(pinned.load_per_core, 8.0 / f64::from(real.cores));
+    assert_eq!(pinned.mem_available, 123);
+    assert_eq!(
+        pinned.disks.iter().map(|d| &d.path).collect::<Vec<_>>(),
+        real.disks.iter().map(|d| &d.path).collect::<Vec<_>>()
+    );
+    assert!(pinned.disks.iter().all(|d| d.free_bytes == 456));
+    assert_eq!(pinned.cpu_psi.is_some(), real.cpu_psi.is_some());
+    assert_eq!(pinned.mem_psi.is_some(), real.mem_psi.is_some());
+}
+
+#[test]
+fn admitting_pinned_readings_clear_every_persisted_latch() {
+    for (held, severe) in [(false, false), (true, false), (true, true)] {
+        // Given a persisted latch and unchanged, valid resource defaults.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::init(tmp.path()).unwrap();
+        store.config.validate(store.root()).unwrap();
+        let probe = Arc::new(PinnedReadingsProbe::admitting());
+        let ctx = Ctx {
+            resource_probe: probe.clone(),
+            ..Ctx::from_store(store)
+        };
+        let mut previous = read_status(&ctx).unwrap();
+        previous.held = held;
+        previous.severe = severe;
+        previous.reason = held.then(|| "previous pressure".into());
+        OBSERVATIONS.save(&ctx.store, "state", &previous).unwrap();
+        // When the real walk finishes and admitting numbers reach the evaluator.
+        let state = observe(&ctx, previous.observed_at).unwrap();
+        // Then the evaluator clears either latch using its normal recovery margins.
+        assert!(!state.held && !state.severe && state.reason.is_none());
+        assert_eq!(state.snapshot.load_one, 0.0);
+        assert_eq!(state.snapshot.load_per_core, 0.0);
+        assert_eq!(state.snapshot.mem_available, u64::MAX);
+        assert!(
+            state
+                .snapshot
+                .disks
+                .iter()
+                .all(|d| d.free_bytes == u64::MAX)
+        );
+        assert_eq!(probe.samples(), 2);
+    }
+}
+
 fn fixture() -> (tempfile::TempDir, Ctx) {
     let tmp = tempfile::tempdir().unwrap();
     let mut ctx = FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());

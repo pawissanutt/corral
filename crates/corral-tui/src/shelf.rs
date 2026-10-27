@@ -56,6 +56,36 @@ pub(crate) fn load(ctx: &Ctx, tasks: &[Task]) -> Vec<Entry> {
         .collect()
 }
 
+/// Resolve only the heads and keyed artifacts actually named by shelf pins.
+pub(crate) fn load_heads(ctx: &Ctx) -> Result<Vec<Entry>> {
+    ctx.store
+        .pins()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|pin| {
+            let target = (|| -> Result<PinTarget> {
+                let reference = PinRef::parse(&pin.target)?;
+                let head = ctx.store.head(reference.task())?;
+                let mut task = head.to_shell_task()?;
+                if let PinRef::Artifact { run, file, .. } = reference
+                    && let Some(anchor) = head.artifact_by_file(&run, &file)?
+                {
+                    task.artifacts.push(anchor.clone());
+                    if pin.follow.is_some() {
+                        let latest = head.latest_artifact(&anchor)?;
+                        if latest.path != anchor.path {
+                            task.artifacts.push(latest);
+                        }
+                    }
+                }
+                Ok(resolve_pin(&pin, &[task], ctx.store.dir()))
+            })()
+            .unwrap_or_else(|error| PinTarget::Broken(format!("{error:#}")));
+            Ok(Entry { pin, target })
+        })
+        .collect()
+}
+
 /// Refs of every pin ("T-042", "T-042:R1:<file>") for ★ markers.
 pub(crate) fn pinned_refs(ctx: &Ctx) -> HashSet<String> {
     ctx.store

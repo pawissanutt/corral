@@ -79,17 +79,17 @@ impl SlotUsage {
 }
 
 pub fn slot_usage(ctx: &Ctx) -> Result<SlotUsage> {
-    Ok(SlotUsage::from_tasks(
-        &ctx.store.list()?,
+    Ok(SlotUsage::from_heads(
+        &crate::pm_next::heads::open(&ctx.store)?,
         &ctx.store.config.limits,
     ))
 }
 
 /// Called inside Store::dispatch_update for both coding and review admissions.
 pub(crate) fn capacity_reason(store: &Store, task: &Task, credit: usize) -> Result<Option<String>> {
-    let tasks = store.list_shared()?;
+    let tasks = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
-    let used = SlotUsage::from_tasks(&tasks, limits)
+    let used = SlotUsage::from_heads(&tasks, limits)
         .total()
         .saturating_sub(credit);
     if used >= limits.running {
@@ -101,7 +101,12 @@ pub(crate) fn capacity_reason(store: &Store, task: &Task, credit: usize) -> Resu
     if let Some(project) = &task.project
         && let Some(cap) = limits.per_project.get(project)
     {
-        let used = SlotUsage::from_iter(tasks.iter().filter(|t| t.project == task.project), limits)
+        let project_tasks = tasks
+            .iter()
+            .filter(|t| t.project == task.project)
+            .cloned()
+            .collect::<Vec<_>>();
+        let used = SlotUsage::from_heads(&project_tasks, limits)
             .total()
             .saturating_sub(credit);
         if used >= *cap {
@@ -121,12 +126,13 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
     {
         return Ok(None);
     }
-    let tasks = store.list()?;
-    let usage = SlotUsage::from_tasks(&tasks, &store.config.limits);
+    let heads = crate::pm_next::heads::open(store)?;
+    let usage = SlotUsage::from_heads(&heads, &store.config.limits);
     if usage.reviews + usage.gates >= store.config.limits.review {
         return Ok(None);
     }
-    for task in tasks {
+    for head in heads.iter() {
+        let task = head.to_shell_task()?;
         if task.status != Status::Review || task.id == candidate {
             continue;
         }
@@ -205,4 +211,72 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
         }
     }
     Ok(None)
+}
+
+impl SlotUsage {
+    /// Slot accounting over bounded current containers and folded history counts.
+    pub fn from_heads(heads: &[corral_core::TaskHead], limits: &Limits) -> Self {
+        let mut usage = Self {
+            count_reviews: limits.count_reviews,
+            count_gates: limits.count_gates,
+            ..Self::default()
+        };
+        for head in heads {
+            let run = head.current_run.as_ref();
+            let planning = head.last_plan_run.as_ref().filter(|p| {
+                p.state != corral_core::PlanRunState::Approved
+                    && run.is_none_or(|r| r.outcome.is_some())
+            });
+            let worker = planning.map_or_else(
+                || {
+                    head.status.holds_slot()
+                        && run.is_none_or(|r| r.outcome != Some(corral_core::RunOutcome::Failed))
+                        && !(run.is_none_or(|r| r.outcome.is_some())
+                            && head.last_plan.as_ref().is_some_and(|p| {
+                                p.approval.is_none()
+                                    && p.current_review.as_ref().is_some_and(|r| {
+                                        r.verdict == Some(corral_core::Verdict::Approve)
+                                    })
+                            }))
+                },
+                |p| {
+                    p.ended.is_none()
+                        && matches!(
+                            p.state,
+                            corral_core::PlanRunState::Planning
+                                | corral_core::PlanRunState::Changes
+                        )
+                },
+            );
+            let reserved = head.launch.as_ref().is_some_and(|l| l.reserved);
+            usage.tasks += usize::from(head.status.holds_slot() && (worker || reserved));
+            usage.reservations += usize::from(!head.status.holds_slot() && reserved);
+            let gate = run
+                .and_then(|r| r.gate.as_ref())
+                .is_some_and(corral_core::GateRecord::holds_slot);
+            let review = run
+                .and_then(|r| r.review.as_ref())
+                .is_some_and(corral_core::ReviewRecord::holds_slot);
+            usage.gates +=
+                usize::try_from(head.summary.held_gates).unwrap_or(usize::MAX) + usize::from(gate);
+            usage.reviews += usize::try_from(
+                head.summary.held_reviews
+                    + head.summary.pending_plan_reviews
+                    + head
+                        .last_plan
+                        .as_ref()
+                        .map_or(0, |p| p.facts.pending_children),
+            )
+            .unwrap_or(usize::MAX)
+                + usize::from(review);
+            if let Some(work) = head.review_reservation {
+                let (recorded, counted) = match work {
+                    ReviewWork::Gate => (gate, limits.count_gates),
+                    ReviewWork::Reviewer => (review, limits.count_reviews),
+                };
+                usage.reservations += usize::from(counted && !recorded);
+            }
+        }
+        usage
+    }
 }

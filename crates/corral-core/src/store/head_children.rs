@@ -2,11 +2,6 @@
 //! child and fold the container's facts; keyed edits read only the edited child's own rows and
 //! adjust facts by its delta; ids, ordinals and starts never change.
 
-use std::collections::BTreeMap;
-
-use anyhow::{Context, Result, ensure};
-use serde_json::Value;
-
 use super::RunHead;
 use super::assemble::{TaskRows, run_value};
 use super::codec::{Rows, SELF, child_key, cursor_token, seq, split_run};
@@ -22,6 +17,9 @@ use crate::{
     CheckpointMeta, CheckpointRecord, ContainerFacts, DecisionRecord, ProfileSwitch, Run, Usage,
     UsageEntry, UsageTotals, WaitRecord, WaitState,
 };
+use anyhow::{Context, Result, ensure};
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 const RUN_NESTED: [TaskPart; 5] = [
     TaskPart::RunUsage,
@@ -32,7 +30,6 @@ const RUN_NESTED: [TaskPart; 5] = [
 ];
 
 type RowMap = BTreeMap<(TaskPart, String), HistoryRow>;
-
 impl TaskHeadMut {
     /// Rows matching `q` as this mutation would store them: the view's, overlaid with the rows
     /// already queued.
@@ -399,6 +396,9 @@ impl TaskHeadMut {
         row.index = std::iter::once(format!("id:{id}"))
             .chain(receipt.map(|r| format!("receipt:{r}")))
             .collect();
+        if crate::card::card_obligation_visible(kind, &row.doc) {
+            row.index.push("card".into());
+        }
         row
     }
 

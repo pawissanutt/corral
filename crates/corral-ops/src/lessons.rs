@@ -53,6 +53,7 @@ pub(crate) fn likely_files(ctx: &Ctx, task: &Task) -> Result<Vec<String>> {
     let Some(project) = task.project.as_deref() else {
         return Ok(vec![]);
     };
+    let _followup = corral_core::work::followup("FU-3", "likely_files");
     let words = keywords(&format!("{} {}", task.title, task.body));
     let similar: BTreeSet<_> = ctx
         .store

@@ -32,13 +32,24 @@ struct LoadCheck {
 }
 
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
-    let mut tasks = ctx.store.list()?;
+    let heads = super::heads::inputs(ctx)?;
+    let mut tasks = heads
+        .iter()
+        .map(|head| super::heads::observed_task(ctx, head))
+        .collect::<Result<Vec<_>>>()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let mut out = Vec::new();
-    let used = crate::SlotUsage::from_tasks(&tasks, &ctx.store.config.limits).total();
+    let used =
+        crate::SlotUsage::from_heads(&super::heads::open(&ctx.store)?, &ctx.store.config.limits)
+            .total();
     let limit = ctx.store.config.limits.running;
     let operating = ctx.store.effective_operating_policy()?;
     for task in &tasks {
+        if matches!(task.status, Status::Done | Status::Dropped)
+            && !operating.tasks.contains_key(&task.id)
+        {
+            continue;
+        }
         if task.status == Status::Idea {
             continue;
         }
@@ -131,7 +142,12 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                 });
                 continue;
             }
-            if let Some(reason) = crate::automation_blocker(ctx, task)? {
+            let task_head = heads
+                .iter()
+                .find(|head| head.id == task.id)
+                .context("observed task head missing")?;
+            if let Some(reason) = crate::automation_status::automation_blocker_head(ctx, task_head)?
+            {
                 out.push(PmObservation::Owner {
                     task: task.id.clone(),
                     reason,
@@ -193,7 +209,7 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
                     && operating.allows(&candidate.id, corral_core::OperatingActionKind::Dispatch)))
                 && crate::dispatch_policy::automatic_capacity_reason(
                     &ctx.store,
-                    &ctx.store.get(&candidate.id)?,
+                    &ctx.store.head(&candidate.id)?.to_shell_task()?,
                 )?
                 .is_none()
             {
@@ -213,8 +229,11 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
 }
 
 fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Result<PmObservation> {
-    let id = &task.id;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+    let checked = super::heads::review_task(&ctx.store.head(&task.id)?, task, &head)?;
+    let task = &checked;
+    let run = task.current_run().context("review run missing")?;
+    let id = &task.id;
     let base = corral_git::rev_sha(&run.worktree, &run.base)?;
     let policy = verification::policy(ctx, task)?;
     let gate = format!("corral gate {id} --wait");
@@ -235,9 +254,13 @@ fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Resu
         ),
     };
     let failure = run.blocked_excerpt.as_deref().unwrap_or("");
-    let events = ctx
-        .store
-        .events_of(Some(id), &["landing_stale", "gate_invalidated"])?;
+    let events = super::heads::events(
+        ctx,
+        Some(id),
+        &["landing_stale", "gate_invalidated"],
+        Some(&run.id),
+        1,
+    )?;
     let stale_event = events.iter().rev().find(|e| {
         e.task.as_deref() == Some(id)
             && e.detail["run"].as_str() == Some(run.id.as_str())
@@ -453,8 +476,9 @@ fn landing_blocker(
 }
 
 fn load_check(ctx: &Ctx, task: &Task, run: &Run, head: &str) -> Result<Option<PmObservation>> {
-    for artifact in task
-        .artifacts
+    let task_head = ctx.store.head(&task.id)?;
+    let artifacts = super::heads::artifacts(ctx, &task_head, &run.id)?;
+    for artifact in artifacts
         .iter()
         .rev()
         .filter(|a| a.run == run.id && a.title == "PM isolated test result")

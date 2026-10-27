@@ -187,9 +187,16 @@ impl IntegrationPacket {
         let repo = &run.worktree;
         let memo = git_memo(ctx);
         let merge_base = memo.merge_base(repo, &key.base, &key.head)?;
-        let approvals = approvals(ctx, task)?;
-        let commits = |older: &str| -> Result<Vec<LandedCommit>> {
-            corral_git::commits_between(repo, older, &key.base)?
+        let dispatch_commits = corral_git::commits_between(repo, &run.base_sha, &key.base)?;
+        let missing_commits = corral_git::commits_between(repo, &key.head, &key.base)?;
+        let shas = dispatch_commits
+            .iter()
+            .chain(&missing_commits)
+            .map(|commit| commit.sha.clone())
+            .collect();
+        let approvals = crate::approvals::lookup(ctx, &task.project, &shas)?;
+        let commits = |commits: Vec<corral_git::Commit>| -> Result<Vec<LandedCommit>> {
+            commits
                 .into_iter()
                 .map(|c| {
                     let tasks = approvals.get(&c.sha).cloned().unwrap_or_default();
@@ -201,8 +208,8 @@ impl IntegrationPacket {
                 })
                 .collect()
         };
-        let dispatch_history = commits(&run.base_sha)?;
-        let missing_from_candidate = commits(&key.head)?;
+        let dispatch_history = commits(dispatch_commits)?;
+        let missing_from_candidate = commits(missing_commits)?;
         let candidate_changed_paths = memo.changed_paths_between(repo, &merge_base, &key.head)?;
         let main_changed_paths = memo.changed_paths_between(repo, &merge_base, &key.base)?;
         let candidate_paths: BTreeSet<_> = candidate_changed_paths.iter().cloned().collect();
@@ -304,6 +311,7 @@ impl IntegrationPacket {
     }
 }
 
+#[cfg(test)]
 fn approvals(ctx: &Ctx, candidate: &Task) -> Result<BTreeMap<String, Vec<LandedTask>>> {
     let tasks: BTreeMap<_, _> = ctx
         .store
@@ -338,4 +346,176 @@ fn approvals(ctx: &Ctx, candidate: &Task) -> Result<BTreeMap<String, Vec<LandedT
         rows.sort_by(|a, b| (&a.id, &a.run).cmp(&(&b.id, &b.run)));
     }
     Ok(approvals)
+}
+
+#[cfg(test)]
+mod derived_rows_tests {
+    use super::*;
+    use corral_core::Store;
+    use corral_core::work::{self, Counter, HotScope};
+    use serde_json::json;
+    use std::path::Path;
+
+    fn git(repo: &Path, args: &[&str]) -> String {
+        let output = crate::test_support::command("git", repo)
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn derived_approval_packet_matches_full_board_oracle_with_landed_git_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("app");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("base.rs"), "fn base() {}\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "initial"]);
+        let initial = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-qb", "candidate"]);
+        std::fs::write(repo.join("candidate.rs"), "fn candidate() {}\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "candidate"]);
+        let head = git(&repo, &["rev-parse", "HEAD"]);
+        git(&repo, &["checkout", "-q", "main"]);
+        std::fs::write(repo.join("landed.rs"), "fn landed() {}\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-qm", "landed"]);
+        let base = git(&repo, &["rev-parse", "HEAD"]);
+        let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
+        let task = ctx
+            .store
+            .create("Candidate", Some("app"), Status::Review, "")
+            .unwrap();
+        let landed = ctx
+            .store
+            .create("Landed", Some("app"), Status::Done, "")
+            .unwrap();
+        let other = ctx
+            .store
+            .create("Other repo", Some("other"), Status::Done, "")
+            .unwrap();
+        for id in [&landed.id, &other.id] {
+            ctx.store
+                .log_event(
+                    Some(id),
+                    "approved",
+                    json!({"sha":base,"previous_sha":initial,"strategy":"rebase","run":"R1"}),
+                )
+                .unwrap();
+        }
+        // Duplicate approvals and unknown historical task identities retain baseline rules.
+        ctx.store
+            .log_event(
+                Some(&landed.id),
+                "approved",
+                json!({"sha":base,"strategy":"rebase","run":"R1"}),
+            )
+            .unwrap();
+        ctx.store
+            .log_event(
+                Some("T-999"),
+                "approved",
+                json!({"sha":base,"strategy":"rebase","run":"R2"}),
+            )
+            .unwrap();
+        ctx.store
+            .log_event(
+                Some(&landed.id),
+                "approved",
+                json!({"sha":head,"strategy":"keep_branch","run":"R3"}),
+            )
+            .unwrap();
+        let run: Run = serde_json::from_value(json!({
+            "id":"R1","agent":"worker","worktree":repo,"branch":"candidate","base":"main",
+            "base_sha":initial,"started":"2026-10-01T00:00:00Z","outcome":"done"
+        }))
+        .unwrap();
+        let key = RepairKey {
+            task: task.id.clone(),
+            run: run.id.clone(),
+            head,
+            base: base.clone(),
+            reason: "merge".into(),
+        };
+        let policy = ReviewPolicy::default();
+        crate::approvals::prepare(&ctx).unwrap();
+        let oracle = approvals(&ctx, &task).unwrap();
+        let packet =
+            IntegrationPacket::build(&ctx, &task, &run, &policy, key.clone(), vec![], None)
+                .unwrap();
+        for commit in packet
+            .dispatch_history
+            .iter()
+            .chain(&packet.missing_from_candidate)
+        {
+            assert_eq!(
+                commit.tasks,
+                oracle.get(&commit.sha).cloned().unwrap_or_default()
+            );
+        }
+        assert_eq!(packet.dispatch_history.len(), 1);
+        assert_eq!(packet.dispatch_history[0].tasks.len(), 2);
+        let measure = || {
+            let _scope = HotScope::enter();
+            let before = work::snapshot();
+            let result =
+                IntegrationPacket::build(&ctx, &task, &run, &policy, key.clone(), vec![], None)
+                    .unwrap();
+            let counts = work::snapshot().since(&before);
+            counts.check_identity().unwrap();
+            assert_eq!(counts.unattributed_hydrations(), 0);
+            (result, counts)
+        };
+        let (base_packet, base_counts) = measure();
+        for i in 0..10 {
+            let mut old = ctx
+                .store
+                .create("Unrelated", Some("app"), Status::Done, "")
+                .unwrap();
+            old.runs.extend((0..10).map(|_| run.clone()));
+            ctx.store.fixture_put_task(&old).unwrap();
+            ctx.store
+                .log_event(Some(&old.id), "unrelated", json!({"i":i}))
+                .unwrap();
+        }
+        crate::approvals::prepare(&ctx).unwrap();
+        let (grown_packet, grown_counts) = measure();
+        assert_eq!(base_packet, grown_packet);
+        for counter in Counter::ALL {
+            assert_eq!(
+                base_counts.get(counter),
+                grown_counts.get(counter),
+                "{counter:?}"
+            );
+        }
+        assert_eq!(base_counts.get(Counter::EventDecodes), 0);
+        let recomputed = crate::approvals::recomputations(&ctx).unwrap();
+        for area in ["resources", "condition-counts"] {
+            corral_core::records::RecordArea::new(area)
+                .save(&ctx.store, "observation", &json!({"count":10}))
+                .unwrap();
+            assert_eq!(measure().0, packet);
+            assert_eq!(crate::approvals::recomputations(&ctx).unwrap(), recomputed);
+        }
+        std::fs::remove_dir_all(ctx.store.cache_root().unwrap()).unwrap();
+        crate::approvals::prepare(&ctx).unwrap();
+        assert_eq!(measure().0, packet);
+        ctx.store
+            .update(&landed.id, |task| {
+                task.title = "Renamed".into();
+                Ok(())
+            })
+            .unwrap();
+        let packet = measure().0;
+        assert_eq!(
+            packet.dispatch_history[0].tasks[0].title.as_deref(),
+            Some("Renamed")
+        );
+    }
 }

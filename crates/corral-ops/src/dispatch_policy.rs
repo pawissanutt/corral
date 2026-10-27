@@ -12,34 +12,37 @@ use crate::{Change, Ctx, DispatchOutcome, SlotUsage};
 mod tests;
 
 /// Headroom is reserved even before the next finishing process starts.
-fn available(store: &Store, tasks: &[Task], credit: usize) -> usize {
+fn available_heads(store: &Store, credit: usize) -> Result<usize> {
+    let heads = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
-    let usage = SlotUsage::from_tasks(tasks, limits);
+    let usage = SlotUsage::from_heads(&heads, limits);
     let finishing = usize::from(limits.count_gates) * usage.gates
         + usize::from(limits.count_reviews) * usage.reviews
-        + tasks
+        + heads
             .iter()
-            .filter(|t| {
-                t.review_reservation.is_some_and(|work| match work {
+            .filter(|head| {
+                head.review_reservation.is_some_and(|work| match work {
                     corral_core::ReviewWork::Gate => {
                         limits.count_gates
-                            && !t
-                                .current_run()
-                                .is_some_and(|r| r.gate.as_ref().is_some_and(|g| g.holds_slot()))
+                            && !head.current_run.as_ref().is_some_and(|run| {
+                                run.gate.as_ref().is_some_and(|gate| gate.holds_slot())
+                            })
                     }
                     corral_core::ReviewWork::Reviewer => {
                         limits.count_reviews
-                            && !t
-                                .current_run()
-                                .is_some_and(|r| r.review.as_ref().is_some_and(|r| r.holds_slot()))
+                            && !head.current_run.as_ref().is_some_and(|run| {
+                                run.review
+                                    .as_ref()
+                                    .is_some_and(|review| review.holds_slot())
+                            })
                     }
                 })
             })
             .count();
-    limits
+    Ok(limits
         .running
         .saturating_sub(usage.total().saturating_sub(credit))
-        .saturating_sub(limits.review.saturating_sub(finishing))
+        .saturating_sub(limits.review.saturating_sub(finishing)))
 }
 
 /// Read-only capacity used by PM cards and the automatic admission pass.
@@ -47,7 +50,7 @@ pub(crate) fn free_slots(ctx: &Ctx) -> Result<usize> {
     if ctx.store.config.dispatch.paused || crate::resources::read_admission(ctx)?.is_some() {
         return Ok(0);
     }
-    Ok(available(&ctx.store, &ctx.store.list_shared()?, 0))
+    available_heads(&ctx.store, 0)
 }
 
 /// Rechecked under the same board lock as dispatch's durable reservation.
@@ -72,7 +75,7 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
 
 pub(crate) fn queued_capacity_reason(store: &Store, task: &Task) -> Result<Option<String>> {
     let credit = usize::from(task.holds_dispatch_slot());
-    if available(store, &store.list_shared()?, credit) == 0 {
+    if available_heads(store, credit)? == 0 {
         return Ok(Some(format!(
             "waiting for automatic coding capacity ({} review slots reserved)",
             store.config.limits.review

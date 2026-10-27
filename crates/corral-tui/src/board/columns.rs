@@ -39,8 +39,8 @@ impl BoardView {
     ) {
         let focused = self.columns().get(self.col) == Some(&col);
         let title = col.label().to_string();
-        let usage_badge = (col == Status::Running && config.ui.show_wip)
-            .then(|| self.index.usage(&self.tasks, &config.limits).clone());
+        let usage_badge =
+            (col == Status::Running && config.ui.show_wip).then(|| self.slot_usage.clone());
         let tasks = self.column_tasks(col);
         let right = match (col, usage_badge) {
             (Status::Running, Some(usage)) => {
@@ -55,10 +55,26 @@ impl BoardView {
             (Status::NeedsMe, _) if !tasks.is_empty() => {
                 Span::styled(" ● ", Style::new().fg(theme::YELLOW))
             }
-            _ => Span::styled(format!(" {} ", tasks.len()), theme::dim()),
+            _ => {
+                let count = self
+                    .status_counts
+                    .iter()
+                    .filter(|c| {
+                        let status = Status::parse(&c.status);
+                        if col == Status::Backlog && self.ideas_only {
+                            status == Some(Status::Idea)
+                        } else {
+                            status.and_then(Status::column) == Some(col)
+                        }
+                    })
+                    .map(|c| usize::try_from(c.n).unwrap_or(usize::MAX))
+                    .sum::<usize>();
+                Span::styled(format!(" {count} "), theme::dim())
+            }
         };
         let right = if config.board.card.column_cost {
-            let sum = corral_core::cost_sum_label(tasks.iter().copied());
+            let sum =
+                corral_core::cost_sum_heads(tasks.iter().filter_map(|t| self.heads.get(&t.id)));
             let text = format!(" {sum} {}", right.content.trim_start());
             if area.width as usize >= title.len() + text.len() + 4 {
                 Span::styled(text, right.style)
@@ -124,6 +140,8 @@ impl BoardView {
                 .or_insert_with(|| {
                     let t = tasks[i];
                     let extra = CardExtra {
+                        head: self.heads.get(&t.id),
+                        obligations: self.obligations.get(&t.id),
                         plan_progress: self.plan_progress.get(&t.id),
                         finish: self.finishes.get(&t.id),
                         pinned: self.pinned.contains(&t.id),
@@ -138,12 +156,13 @@ impl BoardView {
                     let mut lines =
                         card_lines(t, &self.tasks, config, cw, sel_row == Some(i), now, extra);
                     if !t.tracker && extra.wait.is_none() {
-                        crate::resources::append_hold(
+                        crate::resources::append_hold_head(
                             &mut lines,
                             t,
                             config,
                             self.resources.reason.as_deref(),
                             cw,
+                            extra.head,
                         );
                     }
                     lines

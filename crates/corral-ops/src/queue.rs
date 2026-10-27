@@ -550,31 +550,38 @@ pub(crate) fn validate_plan(ctx: &Ctx, plan: &DispatchPlan) -> Result<()> {
 pub(crate) fn dependency_check(store: &Store, task: &Task) -> Result<Option<String>> {
     fn visit(
         store: &Store,
-        task: &Task,
+        id: &str,
+        depends_on: &[String],
         path: &mut Vec<String>,
         checked: &mut Vec<String>,
     ) -> Result<()> {
-        if path.contains(&task.id) {
-            path.push(task.id.clone());
+        if path.iter().any(|seen| seen == id) {
+            path.push(id.to_owned());
             bail!("dependency cycle: {}", path.join(" -> "));
         }
-        if checked.contains(&task.id) {
+        if checked.iter().any(|seen| seen == id) {
             return Ok(());
         }
-        path.push(task.id.clone());
-        for id in &task.depends_on {
-            let dep = store
-                .get(id)
-                .with_context(|| format!("{}: missing dependency {id}", task.id))?;
-            visit(store, &dep, path, checked)?;
+        path.push(id.to_owned());
+        for dep in depends_on {
+            let head = store
+                .head(dep)
+                .with_context(|| format!("{id}: missing dependency {dep}"))?;
+            visit(store, &head.task.id, &head.task.depends_on, path, checked)?;
         }
         path.pop();
-        checked.push(task.id.clone());
+        checked.push(id.to_owned());
         Ok(())
     }
-    visit(store, task, &mut Vec::new(), &mut Vec::new())?;
+    visit(
+        store,
+        &task.id,
+        &task.depends_on,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )?;
     for id in &task.depends_on {
-        let dep = store.get(id)?;
+        let dep = store.head(id)?.task;
         if dep.status != Status::Done {
             return Ok(Some(format!(
                 "waiting on {} ({})",
@@ -620,7 +627,7 @@ pub(crate) fn capacity_reason(
         return Ok(Some(reason));
     }
     for id in &task.depends_on {
-        let dep = store.get(id)?;
+        let dep = store.head(id)?.task;
         if let Some(project) = dep.project.as_deref()
             && let Some(reason) = crate::operational_blocker(ctx, project)?
         {
@@ -679,12 +686,15 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
         ..ctx.clone()
     };
     let resource_wait = crate::resources::read_admission(&fresh)?;
-    let mut tasks: Vec<_> = store
-        .list_shared()?
-        .iter()
-        .filter(|t| t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some())
-        .cloned()
-        .collect();
+    let mut tasks = Vec::new();
+    for head in store.heads(&corral_core::backend::HeadQuery::Open { project: None })? {
+        if head.task.status == Status::Ready
+            || head.task.launch.is_some()
+            || head.task.review_wait.is_some()
+        {
+            tasks.push(head.to_shell_task()?);
+        }
+    }
     sort_candidates(&mut tasks);
     tasks
         .into_iter()

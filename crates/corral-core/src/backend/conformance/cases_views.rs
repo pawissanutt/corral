@@ -42,8 +42,9 @@ fn head_queries(make: MakeFixture<'_>) -> Result<()> {
     let fx = make();
     let now = fx.clock.now();
     let mut made = Vec::new();
+    type Spec<'a> = (i64, &'a str, &'a str, i64, &'a [(&'a str, &'a str)]);
     // (created hours ago, project, status, updated hours ago, edges)
-    let specs: [(i64, &str, &str, i64, &[(&str, &str)]); 5] = [
+    let specs: [Spec<'_>; 5] = [
         (5, "corral", "done", 1, &[("child", "T-900")]),
         (4, "corral", "backlog", 3, &[("depends_on", "T-900")]),
         (4, "other", "done", 2, &[("child", "T-900")]),

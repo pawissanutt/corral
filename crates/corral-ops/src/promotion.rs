@@ -43,7 +43,23 @@ pub struct PromotionCandidate {
 /// All eligible Ideas, irrespective of promotion mode or current free capacity.
 /// Reads tasks and bounded historical lesson signals; never mutates board state.
 pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
-    let tasks = ctx.store.list_shared()?;
+    let heads = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
+    let tasks = heads
+        .iter()
+        .map(|head| head.to_shell_task())
+        .collect::<Result<Vec<_>>>()?;
+    let dependency_ids: Vec<_> = tasks
+        .iter()
+        .filter(|task| task.status == Status::Idea)
+        .flat_map(|task| task.depends_on.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let dependencies = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Ids(dependency_ids))?;
     let mut out = Vec::new();
     for task in tasks.iter().filter(|t| t.status == Status::Idea) {
         let Some(project) = task.project.as_deref() else {
@@ -63,7 +79,7 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
             || task.dispatch_hold
             || task.launch.is_some()
             || !task.depends_on.iter().all(|id| {
-                tasks
+                dependencies
                     .iter()
                     .any(|t| t.id == *id && t.status == Status::Done)
             })
@@ -273,6 +289,51 @@ fn scopes_overlap(a: &str, b: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod derived_rows_tests {
+    use super::*;
+    use corral_core::Store;
+    use corral_core::work::{self, Counter, HotScope};
+
+    #[test]
+    fn derived_promotion_listing_ignores_terminal_tasks_and_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Ctx::from_store(Store::init(dir.path()).unwrap());
+        // This Idea is ineligible before likely_files. That separately owned FU-3 walk
+        // must not obscure this regression on promotion_shortlist's listing itself.
+        let mut idea = ctx
+            .store
+            .create("Design", Some("app"), Status::Idea, "")
+            .unwrap();
+        idea.design = true;
+        ctx.store.fixture_put_task(&idea).unwrap();
+        let measure = || {
+            let _scope = HotScope::enter();
+            let before = work::snapshot();
+            let output = promotion_shortlist(&ctx).unwrap();
+            let counts = work::snapshot().since(&before);
+            counts.check_identity().unwrap();
+            assert_eq!(counts.unattributed_hydrations(), 0);
+            (output, counts)
+        };
+        let (before, base) = measure();
+        for i in 0..10 {
+            ctx.store
+                .create(&format!("Old {i}"), Some("app"), Status::Done, "")
+                .unwrap();
+            ctx.store
+                .log_event(None, "unrelated", serde_json::json!({"i":i}))
+                .unwrap();
+        }
+        let (after, grown) = measure();
+        assert!(before.is_empty());
+        assert_eq!(before, after);
+        for counter in Counter::ALL {
+            assert_eq!(base.get(counter), grown.get(counter), "{counter:?}");
+        }
+    }
 }
 
 fn segments_overlap(a: &str, b: &str) -> bool {

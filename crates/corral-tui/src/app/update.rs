@@ -43,7 +43,7 @@ impl App {
                         snapshot.ctx.store.config_path().display().to_string(),
                     ));
                 }
-                self.counts = Counts::from_tasks(&snapshot.tasks, &snapshot.ctx.store.config);
+                self.counts = Counts::from_snapshot(&snapshot);
                 self.resources = snapshot.resources.clone();
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
@@ -98,10 +98,14 @@ impl App {
     pub(super) fn load_counts(&mut self) {
         self.resources = crate::resources::ResourceDisplay::sample(&self.ctx);
         self.operating_header = operating::readback(&self.ctx);
-        let Ok(tasks) = self.ctx.store.list() else {
+        let _hot = corral_core::work::HotScope::enter();
+        let Ok(store) = self.ctx.store.read_only_snapshot() else {
             return;
         };
-        self.counts = Counts::from_tasks(&tasks, &self.ctx.store.config);
+        let Ok(board) = store.board(None) else {
+            return;
+        };
+        self.counts = Counts::from_heads(&board.heads, &board.status_counts, &store.config);
     }
 
     pub(super) fn reload_config(&mut self) {
@@ -133,9 +137,38 @@ impl App {
 }
 
 impl Counts {
-    fn from_tasks(tasks: &[corral_core::Task], config: &corral_core::Config) -> Self {
-        let count = |status: Status| tasks.iter().filter(|task| task.status == status).count();
-        let slots = corral_ops::SlotUsage::from_tasks(tasks, &config.limits);
+    fn from_snapshot(snapshot: &crate::board::BoardSnapshot) -> Self {
+        Self::with_counts(
+            &snapshot.status_counts,
+            &snapshot.slot_usage,
+            &snapshot.ctx.store.config,
+        )
+    }
+
+    fn from_heads(
+        heads: &[corral_core::TaskHead],
+        counts: &[corral_core::backend::StatusCount],
+        config: &corral_core::Config,
+    ) -> Self {
+        Self::with_counts(
+            counts,
+            &corral_ops::SlotUsage::from_heads(heads, &config.limits),
+            config,
+        )
+    }
+
+    fn with_counts(
+        counts: &[corral_core::backend::StatusCount],
+        slots: &corral_ops::SlotUsage,
+        config: &corral_core::Config,
+    ) -> Self {
+        let count = |status: Status| {
+            counts
+                .iter()
+                .filter(|c| Status::parse(&c.status) == Some(status))
+                .map(|c| usize::try_from(c.n).unwrap_or(usize::MAX))
+                .sum()
+        };
         Self {
             needs: count(Status::NeedsMe),
             used: slots.total(),

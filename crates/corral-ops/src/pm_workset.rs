@@ -6,6 +6,36 @@ use serde::{Deserialize, Serialize};
 use crate::Ctx;
 use crate::pm_next::{PmAction, PmActionKind, pm_card};
 
+thread_local! {
+    static OPEN_HEADS_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn after_open_heads() {
+    let hook = OPEN_HEADS_HOOK.with(|hook| hook.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+impl PmWorkset {
+    /// Install a one-shot barrier for snapshot-isolation tests on this thread.
+    pub fn with_open_heads_hook<T>(
+        hook: impl FnOnce() + 'static,
+        evaluate: impl FnOnce() -> T,
+    ) -> T {
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                OPEN_HEADS_HOOK.with(|hook| hook.borrow_mut().take());
+            }
+        }
+        OPEN_HEADS_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+        let _reset = Reset;
+        evaluate()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatingStatus {
@@ -216,6 +246,7 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
 
 /// The workset and the effective policy it was computed from, both from one read of the board.
 pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
+    let _hot = corral_core::work::HotScope::enter();
     let frozen;
     let ctx = if ctx.store.is_snapshot() {
         ctx
@@ -226,8 +257,12 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         };
         &frozen
     };
+    let heads = crate::pm_next::heads::inputs(ctx)?;
     let policy = ctx.store.effective_operating_policy()?;
-    let tasks = ctx.store.list()?;
+    let tasks = heads
+        .iter()
+        .map(crate::pm_next::heads::shell)
+        .collect::<Result<Vec<_>>>()?;
     let bin = format!(
         "{} --root {}",
         crate::gate_script::q(&crate::prompt::corral_bin()?.display().to_string()),
@@ -280,7 +315,11 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
             let target_identity = if action.kind == PmActionKind::StaleVerdict {
                 let run = target.current_run().context("repair has no current run")?;
                 serde_json::to_vec(&(
-                    corral_core::operating_contract_revision(target)?,
+                    heads
+                        .iter()
+                        .find(|head| head.id == target.id)
+                        .context("repair head missing")?
+                        .operating_contract_revision(),
                     target.status,
                     target.rounds,
                     (
@@ -297,7 +336,11 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
                     (&run.gate, &run.review),
                 ))?
             } else {
-                serde_json::to_vec(target)?
+                let head = heads
+                    .iter()
+                    .find(|head| head.id == target.id)
+                    .context("automatic option head missing")?;
+                serde_json::to_vec(&(&head.id, head.rev))?
             };
             let id = crate::verification::digest(&serde_json::to_vec(&(
                 &policy.revision,

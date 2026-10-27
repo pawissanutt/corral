@@ -13,6 +13,7 @@ use crate::overlays::truncate;
 use crate::theme;
 
 pub(super) struct Compact<'a> {
+    pub head: Option<&'a corral_core::TaskHead>,
     pub plan_progress: Option<&'a crate::plan::tracker::Progress>,
     pub route: Option<&'a crate::routes::CardRoute>,
     pub route_warning: bool,
@@ -68,16 +69,27 @@ impl Compact<'_> {
             .into_iter()
             .find_map(|f| {
                 let text = match f {
-                    CardField::Cost => Some(TaskCost::of(self.t).short()),
+                    CardField::Cost => Some(
+                        self.head
+                            .map_or_else(|| TaskCost::of(self.t), TaskCost::of_head)
+                            .short(),
+                    ),
                     CardField::Profile => self
                         .route
                         .map(|r| r.label.clone())
-                        .or_else(|| f.text_with(self.t, self.done, self.now, self.pinned)),
-                    other => other.text_with(self.t, self.done, self.now, self.pinned),
+                        .or_else(|| self.field_text(f)),
+                    other => self.field_text(other),
                 };
                 text.map(|s| s.width())
             })
             .unwrap_or(0)
+    }
+
+    fn field_text(&self, field: CardField) -> Option<String> {
+        self.head.map_or_else(
+            || field.text_with(self.t, self.done, self.now, self.pinned),
+            |head| field.text_head_with(head, &self.t.artifacts, self.done, self.now, self.pinned),
+        )
     }
 
     /// At a width too narrow for the id and the first field, the id shrinks to its numeric tail (`004`) so the
@@ -157,14 +169,14 @@ impl Compact<'_> {
             (id, "")
         };
         let mut used = id.width() + star.width() + 1;
-        let fields = card_fields::field_spans(
+        let fields = card_fields::field_spans_head(
             t,
             self.done,
             self.cfg,
             width.saturating_sub(used + inline_min + marker_min),
             self.now,
             self.pinned,
-            self.route.map(|r| r.label.as_str()),
+            (self.route.map(|r| r.label.as_str()), self.head),
         )
         .unwrap_or_default();
         let fields_w: usize = fields.iter().map(|s| s.width()).sum();

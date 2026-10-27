@@ -60,8 +60,15 @@ pub(crate) fn waiting(run: &Run) -> bool {
 /// Card lines for a run's obligations: one `<state> <condition>` line per open wait, the pending owner
 /// question when `with_decision`, and answered decisions whose delivery is unknown.
 pub(crate) fn card_lines(run: &Run, with_decision: bool) -> Vec<Line<'static>> {
+    card_lines_from(&run.obligations, with_decision)
+}
+
+pub(crate) fn card_lines_from(
+    obligations: &corral_core::RunObligations,
+    with_decision: bool,
+) -> Vec<Line<'static>> {
     let mut out = Vec::new();
-    for d in &run.obligations.decisions {
+    for d in &obligations.decisions {
         let state = d.observation.state;
         if (d.pending() && with_decision) || (!d.pending() && state == WaitState::DeliveryUnknown) {
             out.push(Line::from(vec![
@@ -71,7 +78,13 @@ pub(crate) fn card_lines(run: &Run, with_decision: bool) -> Vec<Line<'static>> {
             ]));
         }
     }
-    for w in open_waits(run) {
+    for w in obligations.waits.iter().filter(|w| {
+        !(w.observation.state == WaitState::Cancelled
+            || w.observation.state == WaitState::Ready
+                && w.receipt
+                    .as_ref()
+                    .is_some_and(|r| r.delivery == ResumeDelivery::Acknowledged))
+    }) {
         out.push(Line::from(vec![
             state_span(w.observation.state),
             Span::styled(format!(" {}", w.request.condition), crate::theme::dim()),

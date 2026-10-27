@@ -24,7 +24,7 @@ use corral_core::{
 };
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
-use corral_ops::resources::{FixedResourceProbe, ResourceProbe};
+use corral_ops::resources::{PinnedReadingsProbe, ResourceProbe};
 use jiff::Timestamp;
 
 use super::work_paths::{Paths, Row, report};
@@ -72,13 +72,14 @@ impl Drop for ScratchTrap {
     }
 }
 
-/// A healthy machine until `severe` is set, then one with no memory available.
+/// The real resource walk with admitting pinned readings (plan T-253 section 4, "Budget
+/// fixture rules") until `severe` is set, then one with no memory available.
 #[derive(Debug)]
-struct PressureProbe(Arc<AtomicBool>);
+struct PressureProbe(Arc<AtomicBool>, PinnedReadingsProbe);
 
 impl ResourceProbe for PressureProbe {
-    fn sample(&self, _store: &Store) -> anyhow::Result<ResourceSnapshot> {
-        let mut snapshot = FixedResourceProbe::healthy().0;
+    fn sample(&self, store: &Store) -> anyhow::Result<ResourceSnapshot> {
+        let mut snapshot = self.1.sample(store)?;
         if self.0.load(Ordering::SeqCst) {
             snapshot.mem_available = 0;
         }
@@ -312,7 +313,10 @@ fn fixture((history, events): (usize, usize)) -> Fixture {
         ctx: Ctx {
             store,
             herdr,
-            resource_probe: Arc::new(PressureProbe(pressure.clone())),
+            resource_probe: Arc::new(PressureProbe(
+                pressure.clone(),
+                PinnedReadingsProbe::admitting(),
+            )),
         },
         _trap: trap,
         _root: root,

@@ -15,7 +15,7 @@ use crate::Ctx;
 const OBSERVATIONS: RecordArea<ResourceState> = RecordArea::new("resources");
 
 mod system;
-pub use system::SystemResourceProbe;
+pub use system::{PinnedReadingsProbe, SystemResourceProbe};
 
 pub trait ResourceProbe: Send + Sync + Debug {
     fn sample(&self, store: &Store) -> Result<ResourceSnapshot>;
@@ -158,7 +158,10 @@ pub fn read_admission(ctx: &Ctx) -> Result<Option<String>> {
 
 fn existing_parent(path: &Path) -> Result<PathBuf> {
     path.ancestors()
-        .find(|p| p.exists())
+        .find(|p| {
+            corral_core::work::counted(corral_core::work::Counter::FileStats, 1);
+            p.exists()
+        })
         .map(Path::to_path_buf)
         .with_context(|| format!("no existing ancestor for {}", path.display()))
 }
