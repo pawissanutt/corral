@@ -319,6 +319,11 @@ impl Store {
             )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", record.task.id))?;
+        self.clear_left_ready(
+            &record.task.id,
+            stored.record.task.status,
+            record.task.status,
+        )?;
         match committed.outcome {
             Outcome::Task { rev, .. } => Ok(Some(rev)),
             other => bail!("saving {} returned {other:?}", record.task.id),

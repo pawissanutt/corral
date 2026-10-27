@@ -13,6 +13,7 @@ use crate::runtime::Executable;
 mod assemble;
 mod batch;
 pub mod codec;
+mod conditions;
 pub mod db;
 pub(crate) mod events;
 mod fixture;
@@ -33,6 +34,7 @@ mod snapshot;
 mod submission;
 mod write;
 pub use codec::{spec_revision, task_panes};
+pub use conditions::{SLIM_TEXT_BYTES, is_condition_kind};
 pub use db::{store_holders, try_exclusive_store_gate};
 pub use gate_rows::{GateOutcome, ScratchReclaim};
 pub use head::{CheckpointMetas, TaskHead};
@@ -644,13 +646,18 @@ impl Store {
         }
     }
 
-    /// Appends one database event, or joins the active update's atomic write.
+    /// Appends one database event, or joins the active update's atomic write. Outside an
+    /// update a condition kind is observed as a condition run; inside one it stays an event of
+    /// the update, which commits or refuses it with the rest.
     pub fn log_event(
         &self,
         task: Option<&str>,
         kind: &str,
         detail: serde_json::Value,
     ) -> Result<()> {
+        if conditions::is_condition_kind(kind) && !self.has_record_unit() {
+            return self.observe_condition(task, kind, detail).map(drop);
+        }
         let ev = self.attributed_event(task, kind, detail)?;
         self.append_database_event(ev)
     }

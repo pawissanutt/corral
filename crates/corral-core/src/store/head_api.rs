@@ -352,6 +352,7 @@ impl Store {
             )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", new.task.id))?;
+        self.clear_left_ready(&after.id, before.status, after.status)?;
         if let Outcome::Task { rev, .. } = committed.outcome {
             new.rev = rev;
         }
