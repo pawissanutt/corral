@@ -80,7 +80,8 @@ identical repeats inside one run are not kept.
 | `autopilot_error` | an autopilot pass over the task that ends without an error |
 | `main_movement_notice` | the notice reaching a terminal state (`delivered`, `uncertain` or `cancelled`) |
 
-A kind whose resolution is never observed keeps its run open. Events imported from a legacy
+A condition observed or cleared inside a task update is applied once that update commits; a
+refused update records nothing. A kind whose resolution is never observed keeps its run open. Events imported from a legacy
 log keep their original lines and have no runs.
 
 `corral log <id> --json` orders entries by `seq`, so events with equal timestamps keep their

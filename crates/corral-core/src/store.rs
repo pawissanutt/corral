@@ -646,16 +646,16 @@ impl Store {
         }
     }
 
-    /// Appends one database event, or joins the active update's atomic write. Outside an
-    /// update a condition kind is observed as a condition run; inside one it stays an event of
-    /// the update, which commits or refuses it with the rest.
+    /// Appends one database event, or joins the active update's atomic write. A condition
+    /// kind is observed as a condition run; inside an update it is applied once that update
+    /// commits and discarded if it refuses.
     pub fn log_event(
         &self,
         task: Option<&str>,
         kind: &str,
         detail: serde_json::Value,
     ) -> Result<()> {
-        if conditions::is_condition_kind(kind) && !self.has_record_unit() {
+        if conditions::is_condition_kind(kind) {
             return self.observe_condition(task, kind, detail).map(drop);
         }
         let ev = self.attributed_event(task, kind, detail)?;

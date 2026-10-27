@@ -24,19 +24,20 @@ pub fn is_condition_kind(kind: &str) -> bool {
 impl Store {
     /// Observes condition `kind` of `task` (`None` for workspace kinds) with `detail`: a repeat
     /// of the open run's detail counts without an event; any other detail appends one event
-    /// that closes the open run as `changed` and opens a new run. Never inside a task update,
-    /// whose single operation cannot carry it.
+    /// that closes the open run as `changed` and opens a new run. Inside a task update the
+    /// observation is applied only after that update commits, and discarded if it refuses;
+    /// it then returns `None`.
     ///
     /// # Errors
-    /// Returns attribution, snapshot, nesting or backend errors.
+    /// Returns attribution, snapshot or backend errors.
     pub fn observe_condition(
         &self,
         task: Option<&str>,
         kind: &str,
         detail: Value,
-    ) -> Result<ConditionOutcome> {
+    ) -> Result<Option<ConditionOutcome>> {
         let event = super::events::new_event(self.attributed_event(task, kind, detail)?)?;
-        self.apply_condition(Operation::ObserveCondition(ObserveCondition {
+        self.condition(Operation::ObserveCondition(ObserveCondition {
             task: event.task.unwrap_or_default(),
             kind: event.kind,
             detail: event.detail,
@@ -48,13 +49,18 @@ impl Store {
     }
 
     /// Clears condition `kind` of `task`: an open run is closed as `cleared` by one
-    /// `<kind>_cleared` event carrying its count; without one nothing is written.
+    /// `<kind>_cleared` event carrying its count; without one nothing is written. Inside a
+    /// task update it is applied after that update commits, and returns `None`.
     ///
     /// # Errors
-    /// Returns attribution, snapshot, nesting or backend errors.
-    pub fn clear_condition(&self, task: Option<&str>, kind: &str) -> Result<ConditionOutcome> {
+    /// Returns attribution, snapshot or backend errors.
+    pub fn clear_condition(
+        &self,
+        task: Option<&str>,
+        kind: &str,
+    ) -> Result<Option<ConditionOutcome>> {
         let event = super::events::new_event(self.attributed_event(task, kind, Value::Null)?)?;
-        self.apply_condition(Operation::ClearCondition(ClearCondition {
+        self.condition(Operation::ClearCondition(ClearCondition {
             task: event.task.unwrap_or_default(),
             kind: event.kind,
             at: event.ts,
@@ -62,6 +68,23 @@ impl Store {
             via: event.via,
         }))
         .with_context(|| format!("clearing {kind}"))
+    }
+
+    fn condition(&self, op: Operation) -> Result<Option<ConditionOutcome>> {
+        anyhow::ensure!(!self.is_snapshot(), "a snapshot cannot record conditions");
+        if self.has_record_unit() {
+            self.buffer_condition(op)?;
+            return Ok(None);
+        }
+        self.apply_condition(op).map(Some)
+    }
+
+    /// Applies the conditions an update buffered, once its task operation has committed.
+    pub(super) fn flush_conditions(&self) -> Result<()> {
+        for op in self.buffered_conditions() {
+            self.apply_condition(op)?;
+        }
+        Ok(())
     }
 
     fn apply_condition(&self, op: Operation) -> Result<ConditionOutcome> {
@@ -114,7 +137,18 @@ impl Store {
                 open_only: true,
             };
             if !view.conditions(&query, PageReq::first(1))?.items.is_empty() {
-                self.clear_condition(Some(task), kind)?;
+                let event = super::events::new_event(self.attributed_event(
+                    Some(task),
+                    kind,
+                    Value::Null,
+                )?)?;
+                self.apply_condition(Operation::ClearCondition(ClearCondition {
+                    task: task.to_owned(),
+                    kind: event.kind,
+                    at: event.ts,
+                    actor: event.actor,
+                    via: event.via,
+                }))?;
             }
         }
         Ok(())

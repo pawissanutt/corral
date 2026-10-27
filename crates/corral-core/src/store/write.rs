@@ -295,6 +295,7 @@ impl Store {
             && summary == head.summary
             && rows == old
         {
+            self.flush_conditions()?;
             return Ok(None);
         }
         let writes = row_writes(&old, &rows);
@@ -319,6 +320,7 @@ impl Store {
             )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", record.task.id))?;
+        self.flush_conditions()?;
         self.clear_left_ready(
             &record.task.id,
             stored.record.task.status,
@@ -354,6 +356,7 @@ impl Store {
             }))
             .map_err(apply_error)
             .context("creating a task")?;
+        self.flush_conditions()?;
         let Outcome::Created { id, .. } = committed.outcome else {
             bail!("creating a task returned {:?}", committed.outcome);
         };
