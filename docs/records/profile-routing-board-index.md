@@ -57,6 +57,21 @@ until the end.
   checkpoint/recovery services, not invent a second recovery subsystem.
 - These are coordination references, not silently changed dependencies of existing work.
 
+## Agent-first amendment (T-457)
+
+On 2026-10-27 the owner accepted the T-457 design,
+`docs/records/T-457-agent-first-routing-design.md` (plan `T-457@P2`). It
+renames the user-facing vocabulary from model-named profiles to named specialist
+agents. It keeps the safety, review and authority contracts of the original design.
+At that point T-150 through T-155 were Done, and T-156 through T-159 were in Backlog with
+`dispatch_hold = true`.
+
+Section 10 of that design keeps T-156 through T-159 as the implementation owners,
+with in-place amendments. T-158's scope expands to shared resolution and migration,
+and a new T-158 -> T-157 dependency serializes it ahead of the TUI. The design
+made none of these board changes: the task specs, dependencies and dispatch holds
+above stay unchanged until the board is explicitly amended.
+
 ## Starting work later
 
 Filing did not authorize dispatch. Once the owner requests implementation, release
