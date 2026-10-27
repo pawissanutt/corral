@@ -10,14 +10,22 @@ pub(super) struct Continuation {
 pub(super) struct Prepared {
     pub herdr: corral_core::HerdrRef,
     command: String,
+    old_pane: Option<String>,
+    receipt: std::path::PathBuf,
     ctx: Ctx,
     submitted: std::cell::Cell<bool>,
 }
 
 impl Prepared {
     pub fn submit(&self, ctx: &Ctx) -> Result<()> {
+        if let Some(old) = &self.old_pane
+            && ctx.herdr.pane_get(old)?.is_some()
+        {
+            ctx.herdr.pane_close(old)?;
+        }
+        let command = crate::launch_exit::arm(&self.command, &self.receipt)?;
         self.submitted.set(true);
-        ctx.herdr.pane_run(&self.herdr.pane_id, &self.command)
+        ctx.herdr.pane_run(&self.herdr.pane_id, &command)
     }
 }
 
@@ -71,7 +79,7 @@ impl Continuation {
         Ok(Self { session, restart })
     }
 
-    /// Prepare resources outside the board/task locks; submission itself is one pane IPC.
+    /// Allocate outside board/task locks; replace the old process only after final admission.
     pub fn prepare_legacy(&self, ctx: &Ctx, task: &Task, text: &str) -> Result<Option<Prepared>> {
         let run = task.current_run().context("worker run disappeared")?;
         if !self.restart || run.delivery != corral_core::inbox::DeliveryMode::Legacy {
@@ -106,19 +114,12 @@ impl Continuation {
                     error
                 }
             })?;
-        let command = crate::launch_exit::arm(
-            &command,
-            &crate::launch_exit::receipt(ctx, &task.id, &run.id),
-        )?;
-        if let Some(old) = &run.herdr
-            && ctx.herdr.pane_get(&old.pane_id)?.is_some()
-        {
-            ctx.herdr.pane_close(&old.pane_id)?;
-        }
         let herdr = crate::gate::open_run_pane(ctx, task, run, "worker")?;
         Ok(Some(Prepared {
             herdr,
             command,
+            old_pane: run.herdr.as_ref().map(|old| old.pane_id.clone()),
+            receipt: crate::launch_exit::receipt(ctx, &task.id, &run.id),
             ctx: ctx.clone(),
             submitted: std::cell::Cell::new(false),
         }))

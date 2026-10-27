@@ -136,6 +136,13 @@ fn clean<'a>(
                 workspaces.insert(workspace, task);
             }
         }
+        // Workspace-creation events also include recovered workers. Their saved dispatch
+        // reference is authoritative: round cleanup releases tools, not the current worker.
+        if scope == Cleanup::Round
+            && let Some(worker) = task.current_run().and_then(|run| run.herdr.as_ref())
+        {
+            panes.remove(worker.pane_id.as_str());
+        }
         owned.extend(panes.into_iter().map(|pane| (pane, task)));
     }
     if owned.is_empty() && workspaces.is_empty() {
