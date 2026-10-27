@@ -29,22 +29,24 @@ pub(crate) fn events(
         .events(&query, PageReq::first(limit))?
         .items
         .into_iter()
-        .map(|row| {
-            let event = row.event;
-            Ok(corral_core::Event {
-                seq: row.seq.0,
-                ts: event.ts,
-                task: event.task,
-                kind: event.kind,
-                actor: event
-                    .actor
-                    .map(|actor| serde_json::from_value(actor.into()))
-                    .transpose()?,
-                via: event.via,
-                detail: event.detail,
-            })
-        })
+        .map(event_of)
         .collect()
+}
+
+pub(crate) fn event_of(row: corral_core::backend::StoredEvent) -> Result<corral_core::Event> {
+    let event = row.event;
+    Ok(corral_core::Event {
+        seq: row.seq.0,
+        ts: event.ts,
+        task: event.task,
+        kind: event.kind,
+        actor: event
+            .actor
+            .map(|actor| serde_json::from_value(actor.into()))
+            .transpose()?,
+        via: event.via,
+        detail: event.detail,
+    })
 }
 
 pub(crate) fn open(store: &Store) -> Result<Arc<Vec<TaskHead>>> {
