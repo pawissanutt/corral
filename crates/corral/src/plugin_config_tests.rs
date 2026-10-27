@@ -221,7 +221,7 @@ fn setup_links_manifest_and_returns_diff_using_only_explicit_temp_paths() {
     assert!(
         ctx.store
             .state_dir()
-            .join("herdr-plugin/herdr-plugin.toml")
+            .join("tmp/herdr-plugin/herdr-plugin.toml")
             .is_file()
     );
     assert!(present_at(&path).unwrap());
@@ -240,7 +240,7 @@ fn setup_does_not_relink_when_manifest_unchanged_and_plugin_enabled() {
     let temp = tempfile::tempdir().unwrap();
     let plugins = serde_json::json!({"result": {"plugins": [{
         "plugin_id": "corral", "enabled": true,
-        "manifest_path": temp.path().join(".corral/state/herdr-plugin/herdr-plugin.toml"),
+        "manifest_path": temp.path().join(".corral/state/tmp/herdr-plugin/herdr-plugin.toml"),
     }]}});
     let bin = fake_herdr(temp.path(), Some(plugins), false);
     let ctx = corral_ops::Ctx {
