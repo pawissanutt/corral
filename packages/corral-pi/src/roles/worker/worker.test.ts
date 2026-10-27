@@ -14,6 +14,7 @@ import { CorralClient, sha256Hex, toolRequestId } from "../../tools/corral.ts";
 import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
 import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
+import { expectReplacementsRefused } from "../../../test/support/replacement.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -157,6 +158,10 @@ test("bridge input and owner terminal input are attributed per turn ID", async (
     { kind: "turn_started", turn: 2, origin: { kind: "bridge", idempotency_key: "k-bridge" } },
     { kind: "turn_started", turn: 3, origin: { kind: "owner_terminal" } },
   ]);
+});
+
+test("while bound, the worker refuses /new, /resume, /fork and import before the session changes", async () => {
+  await expectReplacementsRefused(host, events);
 });
 
 test("a fresh session starts one first turn with the run prompt; a reload or a session with messages does not", () => {

@@ -13,6 +13,7 @@ import { canonicalJson, CorralClient, sha256Hex, toolRequestId } from "../../too
 import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
 import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
+import { expectReplacementsRefused } from "../../../test/support/replacement.ts";
 import { nextEvent } from "../../../test/support/wait.ts";
 
 import pm, { CONTEXT_ASSET, pmRole } from "./index.ts";
@@ -142,16 +143,12 @@ for (const [index, [name, payload]] of invalidCases.entries()) test(`the ${name}
   expect(Check(spec(name).parameters, payload)).toBeFalse();
 });
 
-for (const stage of ["startup", "reload", "replacement"]) test(
+for (const stage of ["startup", "reload", "refused replacement"]) test(
   `the PM retains its enforced loadout and receipt tools after ${stage}`,
   async () => {
     // Given the actual host lifecycle transition:
     if (stage === "reload") await host.session.reload();
-    if (stage === "replacement") {
-      const old = host.session.sessionId;
-      expect((await host.runtime.newSession()).cancelled).toBeFalse();
-      expect(host.session.sessionId).not.toBe(old);
-    }
+    if (stage === "refused replacement") await expectReplacementsRefused(host, events);
     const state = host.state();
     expect(host.session.getActiveToolNames().sort()).toEqual([...names].sort());
     expect(state.loadout).toEqual(names);

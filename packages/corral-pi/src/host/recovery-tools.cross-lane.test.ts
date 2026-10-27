@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { type TestClient, connect } from "../../test/support/bridge-client.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../test/support/fixture-install.ts";
+import { ownerNewIsRefused } from "../../test/support/replacement.ts";
 import { within } from "../../test/support/wait.ts";
 import {
   EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
@@ -231,8 +232,11 @@ test("a host killed inside an upstream edit, then inside a command whose child k
   expect(afterEdit.calls.map((c: any) => [c.tool, c.class])).toEqual([["edit", "outcome_unknown"]]);
   expect(afterEdit.calls[0].detail).toContain("artifact");
 
-  // When generation 2's notice turn runs a command that starts a child and blocks, and its host
-  // is killed inside that command:
+  // When the owner's /new in generation 2's pane is refused, then its notice turn runs a command
+  // that starts a child and blocks, and its host is killed inside that command:
+  const refused = await ownerNewIsRefused(show("T-001").runs.at(-1).herdr.pane_id,
+    generationDir(workspace, "T-001", "R1", 2), 2);
+  expect(refused.session_id).toBe(show("T-001").runs.at(-1).agent_host.generations[1].bound.session_id);
   const bashRecorded = recorded("call_bash", "bash");
   cli("sync");
   await within(writeFile(providerFifo, "go"), 90_000, "the bash provider rendezvous");

@@ -11,6 +11,7 @@ import { type FixtureInstall, buildFixtureInstall } from "../../test/support/fix
 import {
   EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, run, sha256,
 } from "../../test/support/workspace.ts";
+import { ownerNewIsRefused } from "../../test/support/replacement.ts";
 import { ENTRY_TYPE } from "./index.ts";
 
 const isolated = privateHerdr();
@@ -71,6 +72,11 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   await bound;
   const delivery = show("T-001").runs.at(-1).delivery;
   expect(delivery).toBe("inbox");
+  // The owner's /new in the pane is refused, so the reply below still lands in the bound session.
+  const binding = show("T-001").runs.at(-1).agent_host.generations[0].bound;
+  const refused = await ownerNewIsRefused(show("T-001").runs.at(-1).herdr.pane_id,
+    generationDir(workspace, "T-001", "R1", 1), 1);
+  expect(refused.session_id).toBe(binding.session_id);
 
   const ended = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001");
   cli("reply", "T-001", "Reply only INBOX.");
@@ -98,6 +104,8 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   expect(written[0].data.text_sha256).toBe(envelope.payload_sha256);
   expect(written[0].data.origin).toBe("corral-inbox");
   expect(sha256(readFileSync(envelope.payload_path, "utf8"))).toBe(envelope.payload_sha256);
+  expect(envelope.binding.transcript).toBe(binding.session_file);
+  expect(written[0].data.session_id).toBe(binding.session_id);
   expect(receipt.detail.entry_id).toBe(written[0].id);
   const turns = show("T-001").runs.at(-1).agent_host.turns as { origin: { kind: string; idempotency_key?: string } }[];
   const replied = turns.find((turn) => turn.origin.idempotency_key === written[0].data.idempotency_key);
