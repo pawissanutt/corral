@@ -23,7 +23,8 @@ config subscription includes UI-only changes as well as policy changes.
 `--since` includes events at or after an RFC3339 timestamp and scans retained history.
 `--after SEQ` resumes strictly after a stored event sequence rather than starting
 at the tail; `--after 0` replays all history. When combined, `--since` still filters timestamps.
-The old `--after-offset` flag is rejected: byte offsets cannot be used as event sequences.
+The removed byte-offset cursor flag is rejected with a message: byte offsets cannot be used
+as event sequences.
 Without `--timeout`, the wait is
 unlimited. Durations need a suffix: `ms`, `s`, `m`, `h`, or `d`. A match exits 0; timeout exits 124.
 
@@ -49,6 +50,48 @@ Export's `--since` is an exclusive sequence checkpoint, unlike wait's timestamp 
 It defaults to 0 (all events); `--json` is required. Each line includes the stored `seq`,
 timestamp, kind, optional task and detail. An export with no later events emits nothing.
 `corral export tasks DIR` still exports Markdown task records.
+
+```bash
+corral export events --since 12345 --with-conditions --json
+```
+
+`--with-conditions` appends one `{"condition_run": {...}}` line, in opened order, for every
+[condition run](#condition-runs) that is still open or whose `opened_seq` or `closed_seq` is
+greater than `--since`. A consumer that re-exports from its last seen sequence therefore
+receives every run summary that could have changed since then.
+
+### Condition runs
+
+Five noisy kinds are recorded as condition runs keyed by task and kind: `dispatch_failed`,
+`queued`, `landing_stale`, `autopilot_error` and `main_movement_notice`. The first observation
+appends an event and opens a run. An observation whose detail is identical (same canonical
+JSON) to the open run's only increments the run's `count` and its `last_at`, `last_actor` and
+`last_via`; it appends no event. A different detail appends a new event, which closes the old
+run as `changed` and opens a new one. When the condition resolves, a `<kind>_cleared` event
+(`run`, `count`, `first_at`, `last_at`) closes the run as `cleared`; with no open run nothing is
+written. Each run is a durable row, so later changes, clears and restarts never overwrite an
+earlier run's count, first and last time or attribution. Only the individual timestamps of
+identical repeats inside one run are not kept.
+
+| Kind | Cleared by |
+|---|---|
+| `queued`, `dispatch_failed` | a write that moves the task out of Ready (a successful dispatch, a dequeue or any move) |
+| `landing_stale` | a landing that records `approved` |
+| `autopilot_error` | an autopilot pass over the task that ends without an error |
+| `main_movement_notice` | the notice reaching a terminal state (`delivered`, `uncertain` or `cancelled`) |
+
+A kind whose resolution is never observed keeps its run open. Events imported from a legacy
+log keep their original lines and have no runs.
+
+`corral log <id> --json` orders entries by `seq`, so events with equal timestamps keep their
+commit order. An entry whose event opened a run carries `repeats` (`count`, `first_at`,
+`last_at`, `last_actor`, `last_via`, `closed_seq`, `close_reason`), read when the log runs: an
+open run's count can still grow. `corral wait` never wakes on a suppressed repeat, because a
+repeat appends no event.
+
+Verdict notes of 16 KiB or more are stored once as a blob, and the `verdict` event's `notes`
+holds its `blob:sha256:<hex>` reference. `log`, `review-sprint` and the other reports read the
+text back from the blob; `export events` emits the reference as stored.
 
 Workspace PMs on OmO or Claude Code should subscribe through their harness's `monitor`, not
 foreground polling. Monitor the completion of `corral wait --json --print-cursor`.

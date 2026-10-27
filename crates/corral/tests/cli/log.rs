@@ -87,16 +87,17 @@ fn log_text_orders_lifecycle_review_and_run_with_actor_via_columns() {
     let rows: Vec<_> = lines
         .map(|line| line.split_whitespace().collect::<Vec<_>>())
         .collect();
+    // Rows follow commit (seq) order: the gate line was committed first despite its later time.
     assert_eq!(
         rows.iter().map(|row| row[2]).collect::<Vec<_>>(),
         [
+            "gate",
             "created",
             "edited",
             "moved",
             "dispatched",
             "needs_me",
             "replied",
-            "gate",
             "verdict",
             "approved",
             "commented",
@@ -143,7 +144,11 @@ fn log_json_is_typed_jsonl_with_identical_filtering() {
             .map(|line| serde_json::from_str(line).expect("one TimelineEntry per line"))
             .collect();
         assert_eq!(entries.len(), count);
-        assert!(entries.windows(2).all(|pair| pair[0].at <= pair[1].at));
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[0].event.seq < pair[1].event.seq)
+        );
         assert!(
             entries
                 .iter()

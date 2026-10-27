@@ -182,14 +182,15 @@ fn timeline_scenario_rows_render_once_without_wrapping_at_80_and_120() {
 
 #[test]
 fn timeline_mouse_selection_opens_raw_json_and_modal_scrolls() {
-    // Given Timeline's actual rendered row hit for the edited event.
+    // Given Timeline's actual rendered row hit for the edited event (third in seq order,
+    // after the fixture's first-committed gate and the creation).
     let (_dir, ctx, id) = fixture();
     let mut view = DetailView::new(&ctx, &id).unwrap();
     timeline(&mut view, &ctx);
     let (_, hits) = render_at(&mut view, &ctx, 80, 24);
     let (rect, hit) = hits
         .iter()
-        .find(|(_, h)| *h == Hit::Item(Z_TIMELINE, 1))
+        .find(|(_, h)| *h == Hit::Item(Z_TIMELINE, 2))
         .unwrap();
     let mouse = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),

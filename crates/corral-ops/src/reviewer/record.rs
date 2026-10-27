@@ -176,10 +176,11 @@ pub(super) fn record_verdict(
             let kind = corral_core::agent::AgentReportKind::Verdict;
             receipt = Some(report.record(t, kind, Some(verdict), commit)?);
         } else {
+            let notes = record.notes.as_deref().map(|notes| ctx.store.event_text(notes)).transpose()?;
             ctx.store.log_event(
                 Some(&task.id),
                 "verdict",
-                json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
+                json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": notes }),
             )?;
         }
         staged.attach(ctx, t, &run.id)
