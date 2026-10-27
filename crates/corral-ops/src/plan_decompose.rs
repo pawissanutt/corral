@@ -228,11 +228,17 @@ fn check_publication_identity(journal: &Journal, parent: &Task, plan_id: &str) -
 /// board lock. Child writes use rendered files directly under that same lock,
 /// not create/save/update (which would acquire it again).
 pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
+    apply_refreshing(ctx, id, plan_id).map(drop)
+}
+
+/// Like `apply`, returning the already published children whose approval binding
+/// this re-acceptance refreshed (empty for a first publication).
+pub(crate) fn apply_refreshing(ctx: &Ctx, id: &str, plan_id: &str) -> Result<Vec<String>> {
     apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Owner)
 }
 
 pub(crate) fn apply_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
-    apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Automatic)
+    apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Automatic).map(drop)
 }
 
 fn apply_with_origin(
@@ -240,8 +246,8 @@ fn apply_with_origin(
     id: &str,
     plan_id: &str,
     origin: crate::operating::Origin,
-) -> Result<()> {
-    ctx.store.dispatch_update(id, |store, parent| {
+) -> Result<Vec<String>> {
+    let (_, refreshed) = ctx.store.dispatch_update(id, |store, parent| {
         crate::operating::require_origin(store, parent, OperatingActionKind::AcceptPlan, origin)?;
         ensure!(
             parent.plans.last().is_some_and(|plan| plan.id == plan_id),
@@ -340,7 +346,7 @@ fn apply_with_origin(
             };
             write_atomic(&journal_path, &serde_json::to_vec(&journal)?)?;
             *parent = projected;
-            return Ok(());
+            return Ok(Vec::new());
         }
         if parent.plan.as_ref() == Some(&backlink)
             && parent.status == Status::Done
@@ -352,7 +358,9 @@ fn apply_with_origin(
                         .context("published child authorization is missing")?;
                 }
             }
-            return Ok(());
+            // Children read the parent's current approval, so a re-accepted
+            // plan needs no child rewrite: report who is bound by it again.
+            return Ok(parent.children.clone());
         }
         ensure!(
             parent.children.is_empty(),
@@ -493,9 +501,9 @@ fn apply_with_origin(
                 "target":"plan", "plan":plan_id, "children":parent.children,
             }),
         )?;
-        Ok(())
+        Ok(Vec::new())
     })?;
-    Ok(())
+    Ok(refreshed)
 }
 
 pub(crate) fn validate(document: &PlanDocument) -> Result<()> {

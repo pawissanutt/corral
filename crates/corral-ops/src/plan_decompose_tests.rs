@@ -7,6 +7,9 @@ mod recovery;
 #[path = "plan_tracker_tests.rs"]
 mod tracker_plans;
 
+#[path = "plan_reaccept_tests.rs"]
+mod reaccept;
+
 fn acceptance(id: &str) -> PlanAcceptance {
     PlanAcceptance {
         criterion: Some(id.into()),

@@ -203,7 +203,7 @@ pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
-pub use plan_review::{PlanVerdict, plan_review, plan_verdict};
+pub use plan_review::{PlanVerdict, plan_review, plan_verdict, plan_verdict_report};
 pub use plan_review_offer::{
     PlanReviewOffer, plan_review_offer, plan_review_retryable, plan_review_wait,
 };
