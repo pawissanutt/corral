@@ -2,7 +2,7 @@
 // picked (`--provider openai-codex|anthropic`): one interactive subscription OAuth login through
 // Pi's own flow, persisted into that provider's file in the corral-owned auth directory. Its
 // network is restricted to POSTs to that provider's OAuth endpoints.
-import { createInterface } from "node:readline/promises";
+import { type Interface, createInterface } from "node:readline/promises";
 
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 
@@ -80,20 +80,116 @@ export async function login(
   return { provider, file: store.file };
 }
 
-function terminalInteraction(): AuthInteraction {
-  const lines = createInterface({ input: process.stdin, output: process.stderr });
-  lines.once("close", () => {
-    process.stderr.write("corral agent login failed: the terminal input closed before the login completed\n");
-    process.exit(1);
+export type PickKey = "up" | "down" | "enter" | "cancel" | number;
+
+/** One terminal read as picker keys: arrows (normal and application mode), j/k, Enter, a digit
+ *  that picks its row, and q, Esc, Ctrl-C or Ctrl-D to cancel; anything else is ignored. */
+export function pickKeys(chunk: string): PickKey[] {
+  const keys: PickKey[] = [];
+  for (let i = 0; i < chunk.length; i++) {
+    const c = chunk[i];
+    if (c === "\x1b") {
+      const seq = chunk.slice(i + 1, i + 3);
+      if (seq === "[A" || seq === "OA") keys.push("up");
+      else if (seq === "[B" || seq === "OB") keys.push("down");
+      else if (seq.length === 0) keys.push("cancel");
+      i += seq.length === 2 && (seq[0] === "[" || seq[0] === "O") ? 2 : 0;
+    } else if (c === "\r" || c === "\n") keys.push("enter");
+    else if (c === "k") keys.push("up");
+    else if (c === "j") keys.push("down");
+    else if (c === "q" || c === "Q" || c === "\x03" || c === "\x04") keys.push("cancel");
+    else if (c !== undefined && c >= "1" && c <= "9") keys.push(Number(c) - 1);
+  }
+  return keys;
+}
+
+export const PICK_HINT = "\u2191/\u2193 move \u00b7 Enter select \u00b7 q cancel";
+
+export interface PickInput {
+  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+  off(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+  setRawMode?(raw: boolean): unknown;
+  resume(): unknown;
+  pause(): unknown;
+}
+
+/** The same arrow-key picker as corral's provider step; resolves the chosen option's id and
+ *  rejects with "Login cancelled" on q, Esc, Ctrl-C or end of input. */
+export function pickOption(
+  message: string, options: readonly { id: string; label: string }[], input: PickInput,
+  out: { write(text: string): unknown }, signal?: AbortSignal,
+): Promise<string> {
+  let selected = 0;
+  const draw = (redraw: boolean) => {
+    if (redraw) out.write(`\x1b[${options.length + 2}A\x1b[J`);
+    out.write(`${message}\r\n`);
+    options.forEach((option, index) => out.write(`${index === selected ? ">" : " "} ${option.label}\r\n`));
+    out.write(`${PICK_HINT}\r\n`);
+  };
+  return new Promise((resolve, reject) => {
+    const finish = (done: () => void) => {
+      input.off("data", onData);
+      signal?.removeEventListener("abort", onAbort);
+      input.setRawMode?.(false);
+      input.pause();
+      done();
+    };
+    const onAbort = () => finish(() => reject(signal?.reason ?? new Error("Login cancelled")));
+    const onData = (chunk: Buffer | string) => {
+      for (const key of pickKeys(chunk.toString())) {
+        if (key === "cancel") return finish(() => reject(new Error("Login cancelled")));
+        if (key === "enter") return finish(() => resolve(options[selected]!.id));
+        if (typeof key === "number") {
+          if (key < options.length) return finish(() => resolve(options[key]!.id));
+          continue;
+        }
+        selected = key === "up" ? Math.max(0, selected - 1) : Math.min(options.length - 1, selected + 1);
+        draw(true);
+      }
+    };
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    draw(false);
+    input.setRawMode?.(true);
+    input.on("data", onData);
+    input.resume();
   });
+}
+
+function terminalInteraction(): AuthInteraction {
+  // Text prompts share one line reader; an arrow-key pick needs the raw terminal, so the reader is
+  // closed (without treating that as end of input) and reopened by the next text prompt.
+  let lines: Interface | undefined;
+  let handingOff = false;
+  const reader = (): Interface => {
+    if (lines) return lines;
+    const opened = createInterface({ input: process.stdin, output: process.stderr });
+    opened.once("close", () => {
+      if (handingOff) return;
+      process.stderr.write("corral agent login failed: the terminal input closed before the login completed\n");
+      process.exit(1);
+    });
+    lines = opened;
+    return opened;
+  };
   return {
     async prompt(prompt: AuthPrompt): Promise<string> {
+      if (prompt.type === "select" && process.stdin.isTTY) {
+        if (lines) {
+          handingOff = true;
+          lines.close();
+          lines = undefined;
+          handingOff = false;
+        }
+        return pickOption(prompt.message, prompt.options, process.stdin, process.stderr, prompt.signal);
+      }
+      const text = reader();
       if (prompt.type === "select") {
         prompt.options.forEach((option, index) => process.stderr.write(`  ${index + 1}. ${option.label}\n`));
-        const answer = (await lines.question(`${prompt.message} [1] `, { signal: prompt.signal })).trim();
+        const answer = (await text.question(`${prompt.message} [1] `, { signal: prompt.signal })).trim();
         return prompt.options[Number(answer || "1") - 1]?.id ?? answer;
       }
-      return lines.question(`${prompt.message} `, prompt.signal ? { signal: prompt.signal } : {});
+      return text.question(`${prompt.message} `, prompt.signal ? { signal: prompt.signal } : {});
     },
     notify(event: AuthEvent) {
       if (event.type === "auth_url") process.stderr.write(`Open this URL to sign in:\n  ${event.url}\n`);
