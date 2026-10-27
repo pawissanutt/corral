@@ -4,8 +4,9 @@ T-313 / T-252@P5, October 26-27, 2026.
 
 **Five pairs reached independent approval within twelve worker admissions.
 The first pair retains a native pre-bind startup failure. This is not a
-six-pair pass and does not justify a default switch.** All five private pair
-landings are complete; the final landing reused its current full PASS.
+six-pair pass and does not justify a default switch.** Only one arm per
+measured pair was privately landed. Five required counterpart landings are
+missing; acceptance of this gap needs an explicit owner amendment.
 The PM stayed on OmO in both arms and was not evaluated. Paid API spend was
 $0; all model routes used subscriptions. USD below is API-equivalent cost,
 not a subscription invoice.
@@ -18,21 +19,22 @@ stop above twice each preregistered expected pair token count. All twelve
 admissions were consumed, including the failed pre-bind launch. Eleven arms
 were approved, with at most three reviews each. No thirteenth admission,
 replacement, budget stop, paid API route or default change occurred.
-The completed mix is one s, three m and one l: the original six-pair/mix
+The measured approval-window mix is one s, three m and one l: the original six-pair/mix
 criterion remains unmet.
 
 The owner allowed starting before T-297 closes, selected private clone
 landings, then answered "allow Independent, allow" to T-245's escalated
 method question and "okay do it" to bounded qualified closeout within twelve
-runs and release of the source freeze. These amendments do not authorize a
-fabricated complete-cohort pass. Remaining implementations were instructed
+runs and release of the source freeze. These amendments do not explicitly
+waive per-arm landings or authorize a fabricated complete-cohort pass.
+Remaining implementations were instructed
 to be independent, importing accepted prerequisites only, not counterpart
 same-task code or tests.
 
 Preregistration was attached before inference at 2026-10-26T03:43:31.892Z.
 Frozen controls:
 
-- Base:d4f1cd444cc9697b9bc9d239dcc1f6f07790f1e4.
+- Base: d4f1cd444cc9697b9bc9d239dcc1f6f07790f1e4.
 - Binary SHA-256: b838eacc3c563d609bf74b4e1d0f38956c21597f89b920ddd0a4c63b703660ee.
 - Effective-config SHA-256: 8e88f4dae3489d07eee50faeac298464f6ff4a8e4a61002007f3ec6983800e3f.
 - Seed: 3cef08e6f8e0c714d4d2dcd53f1eb598.
@@ -63,6 +65,37 @@ the owner's live server, source cohort cards/main and defaults untouched.
 Credential contents were never read, copied or attached. Login was interactive
 and owner-confirmed. The XDG launch-environment correction reused only Pi's
 original corral-owned credential root, without changing frozen binary/config.
+
+## Missing per-arm landings
+
+The destination amendment requires independently reviewed candidate landings
+in each arm clone. The execution instead used one repository per pair, kept its
+main at the frozen base for both admissions, discarded the approved first arm,
+and landed only the second arm. The earlier winner-only README instruction
+was wrong and has been corrected. This is an unmet acceptance behavior, not a
+different interpretation of branch preservation.
+
+| Pair | Landed arm | Missing approved counterpart | Retained counterpart head |
+|---|---|---|---|
+| T-249 | OmO T-008 | Native T-002 | b0fe5801052edce83bf940f63a1dbc32be939ddb |
+| T-244 | Native T-009 | OmO T-003 | e8f8bcf71c26e8761714969e3bbe75fe4524845d |
+| T-245 | Native T-010 | OmO T-004 | 88c66dd1d290e8f5575bb8730521a8c03b014b26 |
+| T-246 | OmO T-011 | Native T-005 | d5f2478b692be71ea1a06334b7bf7bd821ae9f0f |
+| T-180 | Native T-012 | OmO T-006 | 5c214170ca5ba78694a7015caedbbabf882b52c6 |
+
+All five missing counterparts are Dropped, not privately accepted. Their
+reviews, raw records and candidate bundles remain retained, but none supplies
+the missing landing receipt or equivalent landing-boundary validation.
+The public approval path accepts only Review tasks; the terminal runs and
+stopped private session have not been rewritten or restarted. No replacement,
+source-board landing, extra worker, review waiver or post-hoc experiment has
+been used to hide this gap.
+
+Owner disposition remains required for accepting this bounded research report
+in place of both the original six-complete-pair/mix scenario and these five
+missing counterpart landings. The earlier bounded-closeout approval is not
+treated as an implicit per-arm landing waiver. The metrics below describe five
+paired approval windows, not five fully landed matched pairs.
 
 ## Measured five-pair results
 
@@ -232,9 +265,18 @@ The offline tool makes no provider calls. Its fixtures are explicitly synthetic,
 never live acceptance evidence. Real schema/tier/alias handling, explicit rescue
 counts, matching-question wait closure and reopened-approval regressions were
 reproduced before fixes. The final local run passed **32 deterministic tests**
-and strict tsc --noEmit. Production diagnostics were clean; test-file LSP
-freshness timed out. The real five-pair CLI exits 2, not a fabricated pass.
+and strict tsc --noEmit on the initial submitted candidate. Review revision 1
+adds matching non-control delivery acknowledgements and question
+cancellation/withdrawal settlement, without clearing unrelated holds or
+counting those question settlements as answers. Eleven deterministic
+regressions include overlaps, failed/control delivery and non-resuming
+acknowledgements; eight failed before the fix. All **43 tests** and strict
+typecheck now pass, with clean diagnostics for both changed code/test files.
+Real-data replay remains byte-identical to the retained final JSON, since
+these newly covered settlement paths do not occur in its ten measured arms.
+The real five-pair CLI exits 2, not a fabricated pass.
 Parent verification belongs to T-313's post-rebase Corral receipt, not a private
-worker gate. Unverified: six-complete-pair acceptance, a blinded host effect,
-equal silent-ending instrumentation, post-cutover export compatibility, any
-PM-host conclusion or default-switch approval.
+worker gate. Missing counterpart landings and the original six-complete-pair
+acceptance remain subject to explicit owner disposition. Also unverified:
+a blinded host effect, equal silent-ending instrumentation, post-cutover
+export compatibility, any PM-host conclusion or default-switch approval.

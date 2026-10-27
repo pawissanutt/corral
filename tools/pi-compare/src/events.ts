@@ -104,19 +104,21 @@ export function interventions(events: readonly Event[], end: number) {
       if (question) questions.add(question);
     }
     const decisionAnswer = event.kind === "run_resumed" && d["outcome"] === "answered";
-    if (decisionAnswer) {
+    const deliveryAnswer = event.kind === "reply_marked_delivered"
+      && d["control"] === false && d["submitted"] !== false;
+    if (decisionAnswer || deliveryAnswer) {
       const decision = text(d, "decision") ?? text(d, "receipt");
       if (decision) decisions.delete(decision);
     }
-    const questionAnswer = (event.kind === "question_answered" || event.kind === "question_expired")
+    const questionSettled = ["question_answered", "question_expired", "question_cancelled", "question_withdrawn"]
+      .includes(event.kind)
       && questions.delete(text(d, "key") ?? "");
     const holdsCleared = !decisions.size && !questions.size;
     const reply = event.kind === "replied" && d["submitted"] !== false && holdsCleared;
-    const marked = event.kind === "reply_marked_delivered" && d["control"] === false
-      && d["resumes"] === true && holdsCleared;
+    const marked = deliveryAnswer && d["resumes"] === true && holdsCleared;
     const closes = event.kind === "resumed" || event.kind === "done"
       || event.kind === "discarded" || event.kind === "approved"
-      || ((decisionAnswer || questionAnswer) && holdsCleared) || reply || marked;
+      || ((decisionAnswer || questionSettled) && holdsCleared) || reply || marked;
     if (closes && opened !== undefined) {
       needsMeSeconds += (at - opened) / 1000;
       opened = undefined;
