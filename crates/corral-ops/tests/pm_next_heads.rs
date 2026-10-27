@@ -353,6 +353,13 @@ fn history_budget(automation: bool) {
                 .log_event(Some(&active.id), "current", json!({"anchor":"current"}))
                 .unwrap();
         }
+        // Wall-clock stamps vary in fractional width; byte equality must not depend on them.
+        let fixed: jiff::Timestamp = "2026-10-18T00:00:00Z".parse().unwrap();
+        for mut task in ctx.store.list().unwrap() {
+            task.created = fixed;
+            task.updated = fixed;
+            ctx.store.fixture_put_task(&task).unwrap();
+        }
         // When measured warm, twice in the same process.
         measure(&ctx, automation);
         let measured = measure(&ctx, automation);
