@@ -194,10 +194,15 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
          You are the planner, not an implementer or the workspace PM. Read {}/AGENTS.md \
          and the repository contracts. The repository is mounted read-only. \
          Do not create a branch or worktree, edit source, run the code gate, commit, land, or call corral done.\n\
-         Write {} in the YAML frontmatter format documented in docs/guide/plans.md. \
+         Write one canonical plan at {} in the new YAML frontmatter format documented in docs/guide/plans.md. \
+         Include human_review with a nonblank problem and nonempty changes and retained lists. \
+         Keep goal, non_goals, decisions and acceptance canonical; non_goals and decisions must be nonempty. \
+         Use explicit None, No exclusions or No important choices statements when appropriate. \
+         Put human sections before technical details: problem, goal, included changes and retained behavior, \
+         exclusions, choices, done scenarios, then implementation. Do not write a separate brief or guess extra product scope. \
          Include goal/non-goals, alternatives, risks, contracts, owner decisions, verification, \
          and dependencies with task names, write_scope, depends_on and acceptance. \
-         An optional design note belongs beside the plan in {}.\n\
+         On revisions, identify scope additions and changed promises separately from technical-only edits.\n\
          Finish by submitting the plan:\n\n    '{}' --root '{}' plan submit {} '{}'\n",
         task.id,
         task.title,
@@ -205,7 +210,6 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         crate::skill::PLANNER_SKILL,
         repo.display(),
         output.display(),
-        run.output_dir.display(),
         prompt::sh_escape(&corral.display().to_string()),
         prompt::sh_escape(&ctx.store.root().display().to_string()),
         task.id,

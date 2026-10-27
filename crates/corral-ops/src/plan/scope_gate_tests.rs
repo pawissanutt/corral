@@ -76,6 +76,7 @@ fn published(target: PlanDeliveryTarget) -> (tempfile::TempDir, Ctx, String) {
                 spec_revision: "accepted-before-projection".into(),
                 document: PlanDocument {
                     delivery_target: Some(target),
+                    human_review: None,
                     goal: "Ship feature".into(),
                     non_goals: Vec::new(),
                     decisions: Vec::new(),

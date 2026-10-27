@@ -578,7 +578,11 @@ impl View for DetailView {
             return action;
         }
         let on_plan = self.tab == PLAN;
+        let was_details = self.plan.showing_details();
         if let Some(action) = self.plan.on_key(&key, ctx, &self.task, on_plan) {
+            if self.plan.showing_details() != was_details {
+                self.scroll = Scroll::default();
+            }
             return action;
         }
         if key.code == KeyCode::F(5) && self.plan.enabled {
@@ -752,6 +756,11 @@ impl DetailView {
             );
         }
         if let Ok(t) = ctx.store.get(&self.task.id) {
+            if self.tab == PLAN
+                && self.task.plans.last().map(|p| &p.id) != t.plans.last().map(|p| &p.id)
+            {
+                self.scroll = Scroll::default();
+            }
             self.task = t;
             self.operating = acceptance::effective_lines(ctx, &self.task);
             self.routing.refresh(ctx, &self.task);

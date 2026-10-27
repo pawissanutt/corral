@@ -61,6 +61,7 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
                 spec_revision: "fixture".into(),
                 document: PlanDocument {
                     delivery_target: None,
+                    human_review: None,
                     goal: "Fixture plan".into(),
                     non_goals: Vec::new(),
                     decisions: Vec::new(),

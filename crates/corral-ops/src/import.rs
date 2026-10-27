@@ -291,6 +291,7 @@ fn validate(store: &Store, document: &Document) -> Result<()> {
     }
     crate::plan_decompose::validate(&PlanDocument {
         delivery_target: None,
+        human_review: None,
         goal: document.title.clone(),
         dependencies: scopes,
         non_goals: Vec::new(),

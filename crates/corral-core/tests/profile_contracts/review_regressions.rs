@@ -333,6 +333,7 @@ fn recorded_planner_default_review_uses_existing_policy_through_store_restart() 
         },
         document: PlanDocument {
             delivery_target: None,
+            human_review: None,
             goal: "Bounded work".into(),
             non_goals: vec![],
             decisions: vec![],
