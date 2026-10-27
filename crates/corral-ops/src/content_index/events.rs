@@ -20,7 +20,7 @@ struct Checkpoint {
 
 static CHECKPOINTS: Mutex<BTreeMap<PathBuf, Checkpoint>> = Mutex::new(BTreeMap::new());
 
-fn document(event: Event) -> (Document, String) {
+pub(super) fn document(event: Event) -> (Document, String) {
     let detail = event.detail.to_string();
     let document = Document {
         reference: format!("events:{}", event.seq),

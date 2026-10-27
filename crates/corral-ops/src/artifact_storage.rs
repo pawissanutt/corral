@@ -33,6 +33,157 @@ pub(crate) fn store_blob(ctx: &Ctx, task: &str, sha256: &str, bytes: &[u8]) -> R
     )
 }
 
+/// Keyed artifact lookups, each a record written in the task update that writes its row:
+/// `artifact-keys/<path>` names the row; `artifact-names/<task>/<run>/<file>` the newest
+/// artifact whose snapshot is `<sha8>-<file>`; `artifact-latest/<task>/title|source/<value>`
+/// the newest with that title or source. Artifacts attached without them (before keyed
+/// lookups, or by other writers) fall back to their run's rows.
+pub(crate) const ARTIFACT_KEYS: &str = "artifact-keys";
+const ARTIFACT_NAMES: &str = "artifact-names";
+const ARTIFACT_LATEST: &str = "artifact-latest";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct KeyDoc {
+    pub task: String,
+    pub row: String,
+    /// Changing with the row's retention state, so every row edit is a change of this record.
+    pub tier: ArtifactTier,
+    pub purged: bool,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RowDoc {
+    path: String,
+    row: String,
+}
+
+/// The row key of the artifact at `index` of a task's artifacts.
+fn row_key(index: usize) -> String {
+    corral_core::store::codec::ordinal_key(index + 1)
+}
+
+/// The snapshot name without its `<sha8>-` prefix.
+fn unprefixed(name: &str) -> Option<&str> {
+    let hex = name.get(..8)?;
+    (hex.chars().all(|c| c.is_ascii_hexdigit()) && name.get(8..9) == Some("-")).then(|| &name[9..])
+}
+
+/// Records the keyed lookups of the artifact at `index` of `task`, joining the caller's task
+/// update. `added` also makes it the newest artifact of its name, title and source.
+pub(crate) fn record_keys(
+    ctx: &Ctx,
+    task: &corral_core::Task,
+    index: usize,
+    added: bool,
+) -> Result<()> {
+    let a = &task.artifacts[index];
+    let row = row_key(index);
+    let key = KeyDoc {
+        task: task.id.clone(),
+        row: row.clone(),
+        tier: a.tier(),
+        purged: a.purged_at.is_some(),
+    };
+    ctx.store.save_record(ARTIFACT_KEYS, &a.path, &key)?;
+    if added {
+        let to = RowDoc {
+            path: a.path.clone(),
+            row,
+        };
+        if let Some(file) = unprefixed(corral_core::snapshot_name(a)) {
+            let name = format!("{}/{}/{file}", task.id, a.run);
+            ctx.store.save_record(ARTIFACT_NAMES, &name, &to)?;
+        }
+        let title = format!("{}/title/{}", task.id, a.title);
+        ctx.store.save_record(ARTIFACT_LATEST, &title, &to)?;
+        let source = format!("{}/source/{}", task.id, a.source);
+        ctx.store.save_record(ARTIFACT_LATEST, &source, &to)?;
+    }
+    Ok(())
+}
+
+/// The artifact a lookup record points at, read as its one row.
+fn pointed(ctx: &Ctx, task: &str, to: Option<RowDoc>) -> Result<Option<(String, Artifact)>> {
+    let Some(to) = to else {
+        return Ok(None);
+    };
+    Ok(ctx
+        .store
+        .artifact_row(task, &to.row)?
+        .filter(|a| a.path == to.path)
+        .map(|a| (to.row, a)))
+}
+
+/// The artifact stored at `path`, by its key record alone.
+fn keyed(ctx: &Ctx, path: &str) -> Result<Option<Artifact>> {
+    let Some(key) = ctx.store.record::<KeyDoc>(ARTIFACT_KEYS, path)? else {
+        return Ok(None);
+    };
+    Ok(ctx
+        .store
+        .artifact_row(&key.task, &key.row)?
+        .filter(|a| a.path == path))
+}
+
+/// The artifact stored at `path`: by its key record, else (an artifact attached before keyed
+/// lookups) from its run's rows.
+fn by_path(ctx: &Ctx, path: &str) -> Result<Option<Artifact>> {
+    if let Some(a) = keyed(ctx, path)? {
+        return Ok(Some(a));
+    }
+    let (Some(task), Some(run)) = (task_of(path), run_of(path)) else {
+        return Ok(None);
+    };
+    Ok(ctx
+        .store
+        .artifact_rows(task, Some(run))?
+        .into_iter()
+        .find(|a| a.path == path))
+}
+
+/// The artifact `task:run:file` names: the exact snapshot, else the newest `<sha8>-<file>`, each
+/// by its record; only artifacts attached before keyed lookups fall back to the run's rows.
+fn by_reference(ctx: &Ctx, task: &str, run: &str, file: &str) -> Result<Option<Artifact>> {
+    if let Some(a) = keyed(ctx, &format!("artifacts/{task}/{run}/{file}"))? {
+        return Ok(Some(a));
+    }
+    let to = ctx
+        .store
+        .record::<RowDoc>(ARTIFACT_NAMES, &format!("{task}/{run}/{file}"))?;
+    if let Some((_, a)) = pointed(ctx, task, to)? {
+        return Ok(Some(a));
+    }
+    let rows = ctx.store.artifact_rows(task, Some(run))?;
+    let exact = rows.iter().find(|a| corral_core::snapshot_name(a) == file);
+    Ok(exact
+        .or_else(|| {
+            rows.iter()
+                .rev()
+                .find(|a| unprefixed(corral_core::snapshot_name(a)) == Some(file))
+        })
+        .cloned())
+}
+
+/// The newest artifact of `task` sharing `anchor`'s title or source (a followed pin).
+fn newest_like(ctx: &Ctx, task: &str, anchor: &Artifact) -> Result<Artifact> {
+    let lookup = |kind: &str, value: &str| {
+        ctx.store
+            .record::<RowDoc>(ARTIFACT_LATEST, &format!("{task}/{kind}/{value}"))
+    };
+    let title = pointed(ctx, task, lookup("title", &anchor.title)?)?;
+    let source = pointed(ctx, task, lookup("source", &anchor.source)?)?;
+    if let Some((_, newest)) = title.into_iter().chain(source).max_by(|a, b| a.0.cmp(&b.0)) {
+        return Ok(newest);
+    }
+    Ok(ctx
+        .store
+        .artifact_rows(task, None)?
+        .into_iter()
+        .rev()
+        .find(|other| other.title == anchor.title || other.source == anchor.source)
+        .unwrap_or_else(|| anchor.clone()))
+}
+
 /// The task an artifact belongs to, from its `artifacts/<task>/<run>/<file>` path.
 pub(crate) fn task_of(path: &str) -> Option<&str> {
     path.strip_prefix("artifacts/")?
@@ -436,15 +587,14 @@ pub fn set_artifact_tier(ctx: &Ctx, reference: &str, tier: ArtifactTier) -> Resu
     let task = task_of(&artifact.path).context("artifact task not found")?;
     let mut result = None;
     ctx.store.update(task, |t| {
-        let a = t
+        let index = t
             .artifacts
-            .iter_mut()
-            .rev()
-            .find(|a| a.path == artifact.path)
+            .iter()
+            .rposition(|a| a.path == artifact.path)
             .context("artifact reference not found")?;
-        a.tier_override = Some(tier);
-        result = Some(a.clone());
-        Ok(())
+        t.artifacts[index].tier_override = Some(tier);
+        result = Some(t.artifacts[index].clone());
+        record_keys(ctx, t, index, false)
     })?;
     result.context("artifact update produced no result")
 }
@@ -471,16 +621,12 @@ fn run_of(path: &str) -> Option<&str> {
 }
 
 /// Resolves a pin number, stable task:run:file reference, or exact stored/absolute snapshot path.
-/// Purged artifacts remain resolvable even though their content file is gone. Only the named
-/// task's artifact rows are read (one run's, unless a pin follows the latest), never the task.
+/// Purged artifacts remain resolvable even though their content file is gone. One artifact is
+/// read by its key record as one row; only artifacts attached without keyed lookups fall back
+/// to their run's (or, for a followed pin, their task's) artifact rows.
 pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
     if let Some(path) = stored_path(ctx, reference)?
-        && let (Some(task), Some(run)) = (task_of(&path), run_of(&path))
-        && let Some(a) = ctx
-            .store
-            .artifact_rows(task, Some(run))?
-            .into_iter()
-            .find(|a| a.path == path)
+        && let Some(a) = by_path(ctx, &path)?
     {
         return Ok(a);
     }
@@ -495,33 +641,17 @@ pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
         bail!("expected an artifact reference (task:run:file)");
     };
     let task = Store::normalize_id(&task)?;
-    ctx.store.head(&task).context("artifact task not found")?;
-    let in_run = ctx.store.artifact_rows(&task, Some(&run))?;
-    let exact = in_run
-        .iter()
-        .find(|a| corral_core::snapshot_name(a) == file);
-    let a = exact
-        .or_else(|| {
-            in_run.iter().rev().find(|a| {
-                let name = corral_core::snapshot_name(a);
-                name.get(..8)
-                    .is_some_and(|s| s.chars().all(|c| c.is_ascii_hexdigit()))
-                    && name.get(8..9) == Some("-")
-                    && name.get(9..) == Some(file.as_str())
-            })
-        })
-        .context("artifact reference not found")?;
+    let a = match by_reference(ctx, &task, &run, &file)? {
+        Some(a) => a,
+        None => {
+            ctx.store.head(&task).context("artifact task not found")?;
+            bail!("artifact reference not found");
+        }
+    };
     if pin.is_some_and(|p| p.follow == Some(corral_core::Follow::Latest)) {
-        // Artifacts append under the task lock; the newest same-title or same-source one wins.
-        return Ok(ctx
-            .store
-            .artifact_rows(&task, None)?
-            .into_iter()
-            .rev()
-            .find(|other| other.title == a.title || other.source == a.source)
-            .unwrap_or_else(|| a.clone()));
+        return newest_like(ctx, &task, &a);
     }
-    Ok(a.clone())
+    Ok(a)
 }
 
 pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSet<String>> {

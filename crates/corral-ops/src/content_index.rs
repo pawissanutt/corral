@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read};
 
 use anyhow::{Context, Result};
+use corral_core::backend::ChangeSeq;
 use corral_core::{Artifact, ArtifactTier, PinRef, Run, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,9 @@ use sha2::{Digest, Sha256};
 use crate::Ctx;
 
 mod events;
+mod follow;
+
+pub(crate) use follow::{Delta, follow};
 #[cfg(test)]
 mod tests;
 
@@ -56,6 +60,10 @@ struct Cache {
     version: u32,
     documents: BTreeMap<String, Document>,
     postings: BTreeMap<String, Vec<String>>,
+    /// The last event sequence whose document the index derived; following the feed reads
+    /// only events after it, in any process.
+    #[serde(default)]
+    events_after: Option<u64>,
 }
 
 /// Content snapshots are shared by command search and the board's task search.
@@ -76,16 +84,27 @@ fn digest(text: &str) -> String {
 
 impl Record {
     fn text(task: &Task, run: Option<&str>, scope: &str, key: &str, text: String) -> Self {
+        Self::text_of((&task.id, &task.title, task.updated), run, scope, key, text)
+    }
+
+    /// A text document of the task identified by `(id, title, updated)`.
+    fn text_of(
+        (id, title, updated): (&str, &str, Timestamp),
+        run: Option<&str>,
+        scope: &str,
+        key: &str,
+        text: String,
+    ) -> Self {
         Self {
             document: Document {
-                reference: format!("{}:{key}", task.id),
-                task: task.id.clone(),
+                reference: format!("{id}:{key}"),
+                task: id.to_string(),
                 run: run.map(str::to_string),
                 scope: scope.into(),
                 kind: scope.trim_end_matches('s').into(),
                 tier: ArtifactTier::Keep,
-                title: task.title.clone(),
-                updated: task.updated,
+                title: title.to_string(),
+                updated,
                 fingerprint: digest(&text),
                 file_stamp: None,
                 text: String::new(),
@@ -199,83 +218,6 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
             .then_with(|| a.document.reference.cmp(&b.document.reference))
     });
     Ok(records)
-}
-
-/// Follows a change-feed step: replaces only the documents of `changed` tasks, adds documents of newly committed events when `events` is set, and
-/// keeps every other document as it is. Unchanged text is reused by fingerprint. Returns false,
-/// writing nothing, when there is no current index or the result would exceed the index
-/// budgets; the caller then rebuilds.
-pub(crate) fn follow(ctx: &Ctx, changed: &[Task], events: bool) -> Result<bool> {
-    let dir = ctx.store.cache_root()?;
-    let _lock = lock_index(&dir)?;
-    let path = dir.join("content-search.json");
-    let previous = match File::open(&path) {
-        Ok(file)
-            if file
-                .metadata()
-                .context("reading search index metadata")?
-                .len()
-                <= INDEX_BYTES =>
-        {
-            read_cache(file)
-        }
-        Ok(_) => return Ok(false),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(error).context("opening search index"),
-    };
-    if previous.version != VERSION {
-        return Ok(false);
-    }
-    let affected: BTreeSet<&str> = changed.iter().map(|t| t.id.as_str()).collect();
-    let mut records = Vec::new();
-    for task in changed {
-        task_records(ctx, task, &mut records)?;
-    }
-    if events {
-        let mut all = Vec::new();
-        events::records(&ctx.store, &mut all)?;
-        records.extend(
-            all.into_iter()
-                .filter(|r| !previous.documents.contains_key(&r.document.reference)),
-        );
-    }
-    let mut documents = previous.documents.clone();
-    documents.retain(|id, doc| id.starts_with("events:") || !affected.contains(doc.task.as_str()));
-    for mut record in records {
-        if let Source::Artifact(artifact) = &record.source {
-            record.document.file_stamp = Some(crate::content_refresh::file_stamp(
-                &ctx.store.dir().join(&artifact.path),
-            )?);
-        }
-        match previous
-            .documents
-            .get(&record.document.reference)
-            .filter(|c| {
-                c.fingerprint == record.document.fingerprint
-                    && c.file_stamp == record.document.file_stamp
-            }) {
-            Some(cached) => {
-                record.document.text = cached.text.clone();
-                record.document.complete = cached.complete;
-                record.document.binary = cached.binary;
-            }
-            None => extract(ctx, &mut record)?,
-        }
-        documents.insert(record.document.reference.clone(), record.document);
-    }
-    let text: usize = documents.values().map(|d| d.text.len()).sum();
-    if documents.len() > 4096 || text > TEXT_BUDGET {
-        return Ok(false);
-    }
-    let mut cache = previous;
-    update_postings(&mut cache, &documents);
-    cache.documents = documents;
-    let bytes = serde_json::to_vec(&cache).context("serializing search index")?;
-    if u64::try_from(bytes.len()).context("index size overflow")? > INDEX_BYTES {
-        return Ok(false);
-    }
-    crate::artifact_storage::replace(&path, &bytes)?;
-    Ok(true)
 }
 
 fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
@@ -427,19 +369,33 @@ pub(crate) fn index_artifact(ctx: &Ctx, task: &str, artifact: &Artifact) -> Resu
 /// Reuses unchanged SHA-identified artifact text even after gzip retention.
 /// Oversized/evicted documents remain in the snapshot and are streamed during search.
 pub(crate) fn snapshot(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
-    build_snapshot(
-        ctx,
-        tasks,
-        if reindex {
-            Update::Reindex
-        } else {
-            Update::Incremental
-        },
-    )
+    if !reindex {
+        return build_snapshot(ctx, tasks, Update::Incremental, None);
+    }
+    // An explicit reindex derives from one read view and publishes that view's feed position,
+    // so a change committed after the caller's listing is never acknowledged unindexed.
+    let (view_ctx, seq) = one_view(ctx)?;
+    let tasks = view_ctx.store.list()?;
+    build_snapshot(&view_ctx, &tasks, Update::Reindex, Some(seq))
 }
 
-pub(crate) fn refresh_snapshot(ctx: &Ctx, tasks: &[Task]) -> Result<Snapshot> {
-    build_snapshot(ctx, tasks, Update::Refresh)
+/// Rebuilds the index from `tasks` (read on `ctx`'s view) and publishes `seq`, the feed position
+/// of that view.
+pub(crate) fn refresh_snapshot(ctx: &Ctx, tasks: &[Task], seq: ChangeSeq) -> Result<Snapshot> {
+    build_snapshot(ctx, tasks, Update::Refresh, Some(seq))
+}
+
+/// `ctx` bound to one read view of its store, and that view's feed position.
+pub(crate) fn one_view(ctx: &Ctx) -> Result<(Ctx, ChangeSeq)> {
+    let store = ctx.store.read_only_snapshot()?;
+    let seq = store.view()?.seq();
+    Ok((
+        Ctx {
+            store,
+            ..ctx.clone()
+        },
+        seq,
+    ))
 }
 
 enum Update {
@@ -448,7 +404,12 @@ enum Update {
     Reindex,
 }
 
-fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
+fn build_snapshot(
+    ctx: &Ctx,
+    tasks: &[Task],
+    update: Update,
+    cursor: Option<ChangeSeq>,
+) -> Result<Snapshot> {
     let (reindex, inspect_artifacts) = match update {
         Update::Incremental => (false, false),
         Update::Refresh => (false, true),
@@ -456,9 +417,6 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     };
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
-    // An explicit reindex rebuilds from a listing taken just before it, so it also brings the
-    // index to the feed position it started at.
-    let seq = ctx.store.view()?.seq();
     let dir = ctx.store.cache_root()?;
     let _lock = lock_index(&dir)?;
     let inputs = inspect_artifacts
@@ -518,10 +476,22 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
         previous = Cache::default();
     }
     update_postings(&mut previous, &documents);
+    let events_after = records
+        .iter()
+        .filter_map(|r| {
+            r.document
+                .reference
+                .strip_prefix("events:")?
+                .parse::<u64>()
+                .ok()
+        })
+        .max()
+        .or(Some(0));
     let mut cache = Cache {
         version: VERSION,
         postings: previous.postings,
         documents,
+        events_after,
     };
     let bytes = loop {
         if !changed {
@@ -549,7 +519,7 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     if let Some(inputs) = inputs {
         crate::content_refresh::record_build(ctx, &inputs)?;
     }
-    if reindex {
+    if let Some(seq) = cursor {
         crate::content_refresh::write_cursor(&dir, seq)?;
     }
     Ok(Snapshot {

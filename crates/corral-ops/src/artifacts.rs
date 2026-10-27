@@ -232,11 +232,12 @@ fn attach(
                 .or_else(|| t.current_run().map(|r| r.id.clone()))
                 .unwrap_or_else(|| "R0".to_string()),
         };
-        if let Some(existing) = t
+        if let Some(index) = t
             .artifacts
-            .iter_mut()
-            .find(|a| a.run == run && a.sha256 == sha)
+            .iter()
+            .position(|a| a.run == run && a.sha256 == sha)
         {
+            let existing = &mut t.artifacts[index];
             let revived = existing.purged_at.is_some();
             if revived {
                 crate::artifact_storage::mirror(ctx, existing, bytes)?;
@@ -244,6 +245,7 @@ fn attach(
                 existing.purged_at = None;
             }
             let existing = existing.clone();
+            crate::artifact_storage::record_keys(ctx, t, index, false)?;
             if let Some(origin) = origin {
                 receipt = Some(artifact_receipt(t, origin, &existing, revived)?);
             }
@@ -272,13 +274,22 @@ fn attach(
         };
         crate::artifact_storage::mirror(ctx, &artifact, bytes)?;
         if artifact.kind == ArtifactKind::Diff {
-            for previous in t.artifacts.iter_mut().filter(|a| {
-                a.run == run && a.kind == ArtifactKind::Diff && a.tier_override.is_none()
-            }) {
-                previous.tier_override = Some(corral_core::ArtifactTier::Transient);
+            let superseded: Vec<usize> = t
+                .artifacts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    a.run == run && a.kind == ArtifactKind::Diff && a.tier_override.is_none()
+                })
+                .map(|(i, _)| i)
+                .collect();
+            for i in superseded {
+                t.artifacts[i].tier_override = Some(corral_core::ArtifactTier::Transient);
+                crate::artifact_storage::record_keys(ctx, t, i, false)?;
             }
         }
         t.artifacts.push(artifact.clone());
+        crate::artifact_storage::record_keys(ctx, t, t.artifacts.len() - 1, true)?;
         if let Some(origin) = origin {
             receipt = Some(artifact_receipt(t, origin, &artifact, true)?);
             effects::failpoint("swept_before_commit");
