@@ -9,7 +9,7 @@ use super::Store;
 use crate::Status;
 use crate::backend::{
     CONDITION_KINDS, ClearCondition, ConditionOutcome, ConditionQuery, ConditionRun,
-    ObserveCondition, Operation, Outcome, PageReq,
+    ConditionWrite, ObserveCondition, Operation, Outcome, PageReq,
 };
 use crate::blob_ref::BlobRef;
 
@@ -37,7 +37,7 @@ impl Store {
         detail: Value,
     ) -> Result<Option<ConditionOutcome>> {
         let event = super::events::new_event(self.attributed_event(task, kind, detail)?)?;
-        self.condition(Operation::ObserveCondition(ObserveCondition {
+        self.condition(ConditionWrite::Observe(ObserveCondition {
             task: event.task.unwrap_or_default(),
             kind: event.kind,
             detail: event.detail,
@@ -60,7 +60,7 @@ impl Store {
         kind: &str,
     ) -> Result<Option<ConditionOutcome>> {
         let event = super::events::new_event(self.attributed_event(task, kind, Value::Null)?)?;
-        self.condition(Operation::ClearCondition(ClearCondition {
+        self.condition(ConditionWrite::Clear(ClearCondition {
             task: event.task.unwrap_or_default(),
             kind: event.kind,
             at: event.ts,
@@ -70,21 +70,17 @@ impl Store {
         .with_context(|| format!("clearing {kind}"))
     }
 
-    fn condition(&self, op: Operation) -> Result<Option<ConditionOutcome>> {
+    fn condition(&self, write: ConditionWrite) -> Result<Option<ConditionOutcome>> {
         anyhow::ensure!(!self.is_snapshot(), "a snapshot cannot record conditions");
         if self.has_record_unit() {
-            self.buffer_condition(op)?;
+            self.buffer_condition(write)?;
             return Ok(None);
         }
-        self.apply_condition(op).map(Some)
-    }
-
-    /// Applies the conditions an update buffered, once its task operation has committed.
-    pub(super) fn flush_conditions(&self) -> Result<()> {
-        for op in self.buffered_conditions() {
-            self.apply_condition(op)?;
-        }
-        Ok(())
+        self.apply_condition(match write {
+            ConditionWrite::Observe(op) => Operation::ObserveCondition(op),
+            ConditionWrite::Clear(op) => Operation::ClearCondition(op),
+        })
+        .map(Some)
     }
 
     fn apply_condition(&self, op: Operation) -> Result<ConditionOutcome> {
@@ -124,33 +120,40 @@ impl Store {
         }
     }
 
-    /// A committed task write that left Ready resolves its dispatch conditions.
-    pub(super) fn clear_left_ready(&self, task: &str, from: Status, to: Status) -> Result<()> {
-        if from != Status::Ready || to == Status::Ready {
-            return Ok(());
-        }
-        let view = self.view()?;
-        for kind in ["queued", "dispatch_failed"] {
-            let query = ConditionQuery {
-                task: Some(task.to_owned()),
-                kind: Some(kind.to_owned()),
-                open_only: true,
-            };
-            if !view.conditions(&query, PageReq::first(1))?.items.is_empty() {
+    /// The conditions a task write commits with: those its callback buffered, then, when the
+    /// write leaves Ready, the clears of its dispatch conditions (`queued`, `dispatch_failed`).
+    pub(super) fn task_conditions(
+        &self,
+        task: &str,
+        from: Status,
+        to: Status,
+    ) -> Result<Vec<ConditionWrite>> {
+        let mut writes = self.buffered_conditions();
+        if from == Status::Ready && to != Status::Ready {
+            for kind in ["queued", "dispatch_failed"] {
                 let event = super::events::new_event(self.attributed_event(
                     Some(task),
                     kind,
                     Value::Null,
                 )?)?;
-                self.apply_condition(Operation::ClearCondition(ClearCondition {
+                writes.push(ConditionWrite::Clear(ClearCondition {
                     task: task.to_owned(),
                     kind: event.kind,
                     at: event.ts,
                     actor: event.actor,
                     via: event.via,
-                }))?;
+                }));
             }
         }
+        Ok(writes)
+    }
+
+    /// Operations that carry no task change cannot carry a buffered condition.
+    pub(super) fn refuse_buffered_conditions(&self, what: &str) -> Result<()> {
+        anyhow::ensure!(
+            self.buffered_conditions().is_empty(),
+            "a condition commits with a task update, not with {what}"
+        );
         Ok(())
     }
 

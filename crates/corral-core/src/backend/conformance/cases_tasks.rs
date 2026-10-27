@@ -9,6 +9,15 @@ use super::*;
 pub(super) fn cases() -> Vec<Case> {
     vec![
         Case {
+            name: "task_change_commits_its_conditions",
+            covers: &[
+                OpKind::UpdateTask,
+                OpKind::ObserveCondition,
+                OpKind::ClearCondition,
+            ],
+            run: task_change_conditions,
+        },
+        Case {
             name: "review_completion",
             covers: &[OpKind::Verdict, OpKind::PlanVerdict],
             run: review_completion,
@@ -447,4 +456,124 @@ fn review_completion(make: MakeFixture<'_>) -> Result<()> {
     )?;
     apply(&fx, plan_verdict("PR3")?)?;
     ensure_integrity(&fx)
+}
+
+fn condition_write(op: Operation) -> Result<ConditionWrite> {
+    match op {
+        Operation::ObserveCondition(op) => Ok(ConditionWrite::Observe(op)),
+        other => bail!("not an observation: {other:?}"),
+    }
+}
+
+fn clear_write(fx: &Fixture) -> ConditionWrite {
+    ConditionWrite::Clear(ClearCondition {
+        task: "T-001".to_owned(),
+        kind: "queued".to_owned(),
+        at: fx.clock.now(),
+        actor: None,
+        via: None,
+    })
+}
+
+fn update(change: TaskChange) -> Operation {
+    Operation::UpdateTask(UpdateTask {
+        change,
+        form: UpdateForm::Head,
+    })
+}
+
+/// Conditions carried by a task change commit in its transaction: repeats count on one run,
+/// a stale revision or any failed primitive write commits neither the change nor a condition.
+fn task_change_conditions(make: MakeFixture<'_>) -> Result<()> {
+    let open_run = |fx: &Fixture| -> Result<TaskNum> {
+        let num = base_task(fx)?;
+        let mut first = change(fx, num)?;
+        first.conditions = vec![
+            condition_write(observe(fx, "queued", json!({"n": 1})))?,
+            condition_write(observe(fx, "queued", json!({"n": 1})))?,
+        ];
+        apply(fx, update(first))?;
+        Ok(num)
+    };
+    let fx = make();
+    let num = base_task(&make())?;
+    let rev = {
+        let probe = make();
+        head(&probe, base_task(&probe)?)?.header.rev
+    };
+    ensure!(
+        open_run(&fx)? == num,
+        "fixtures allocate different task numbers"
+    );
+    let dump = snapshot(fx.backend.as_ref())?;
+    ensure!(
+        head(&fx, num)?.header.rev == rev + 1,
+        "the change did not commit"
+    );
+    let queued: Vec<_> = dump
+        .events
+        .iter()
+        .filter(|e| e.event.kind == "queued")
+        .collect();
+    ensure!(queued.len() == 1, "repeat appended an event: {queued:?}");
+    ensure!(
+        dump.conditions.len() == 1
+            && dump.conditions[0].count == 2
+            && dump.conditions[0].opened_seq == queued[0].seq,
+        "conditions {:?}",
+        dump.conditions
+    );
+
+    let mut stale = change(&fx, num)?;
+    stale.expected_rev -= 1;
+    stale.conditions = vec![clear_write(&fx)];
+    let before = snapshot(fx.backend.as_ref())?;
+    let refused = fx.backend.apply(update(stale));
+    ensure!(
+        matches!(refused, Err(ApplyError::Conflict(_))),
+        "stale change: {refused:?}"
+    );
+    ensure!(
+        snapshot(fx.backend.as_ref())? == before,
+        "a refused change wrote a condition"
+    );
+
+    let both = |fx: &Fixture| -> Result<Operation> {
+        let mut next = change(fx, num)?;
+        next.conditions = vec![
+            condition_write(observe(fx, "queued", json!({"n": 2})))?,
+            clear_write(fx),
+        ];
+        Ok(update(next))
+    };
+    let probe = make();
+    open_run(&probe)?;
+    probe.faults.reset_count();
+    apply(&probe, both(&probe)?)?;
+    let writes = probe.faults.writes();
+    ensure!(writes > 0, "the change reported no primitive writes");
+    for nth in 1..=writes {
+        let before = snapshot(fx.backend.as_ref())?;
+        fx.faults.arm(nth);
+        let result = fx.backend.apply(both(&fx)?);
+        fx.faults.disarm();
+        ensure!(
+            matches!(result, Err(ApplyError::Io(_))),
+            "write {nth}/{writes}: {result:?}"
+        );
+        ensure!(
+            snapshot(fx.backend.as_ref())? == before,
+            "write {nth}/{writes} left partial state"
+        );
+    }
+    apply(&fx, both(&fx)?)?;
+    let runs = snapshot(fx.backend.as_ref())?.conditions;
+    ensure!(
+        runs.len() == 2
+            && runs[0].close_reason == Some(CloseReason::Changed)
+            && runs[1].close_reason == Some(CloseReason::Cleared)
+            && runs[1].count == 1,
+        "runs {runs:?}"
+    );
+    Ok(())
 }

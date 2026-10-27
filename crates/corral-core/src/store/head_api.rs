@@ -318,15 +318,16 @@ impl Store {
         self.buffer_events(callback_events)?;
         let events = self.buffered_task_events(&new.task.id, new.task.updated)?;
         let records = self.buffered_records();
+        let conditions = self.task_conditions(&after.id, before.status, after.status)?;
         if events.is_empty()
             && records.is_empty()
+            && conditions.is_empty()
             && !self.has_buffered_authorization()
             && !self.has_staged_gate()
             && rows.is_empty()
             && doc == base_doc
             && summary == base_summary
         {
-            self.flush_conditions()?;
             return Ok(new);
         }
         let committed = self
@@ -344,6 +345,7 @@ impl Store {
                     records,
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
+                    conditions,
                 },
                 if history_edit {
                     UpdateForm::Full
@@ -353,8 +355,6 @@ impl Store {
             )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", new.task.id))?;
-        self.flush_conditions()?;
-        self.clear_left_ready(&after.id, before.status, after.status)?;
         if let Outcome::Task { rev, .. } = committed.outcome {
             new.rev = rev;
         }

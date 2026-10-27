@@ -473,6 +473,12 @@ impl Tx<'_> {
         for event in &change.events {
             self.append_event(event.clone())?;
         }
+        for condition in &change.conditions {
+            match condition.clone() {
+                ConditionWrite::Observe(op) => self.observe_condition(op)?,
+                ConditionWrite::Clear(op) => self.clear_condition(op)?,
+            };
+        }
         for write in &change.records {
             self.put_record(write)?;
         }

@@ -30,6 +30,7 @@ fn bypass(backend: &SqliteBackend) {
                 records: Vec::new(),
                 aggregates: Vec::new(),
                 reservations: Vec::new(),
+                conditions: Vec::new(),
             },
             form: UpdateForm::Head,
         }))

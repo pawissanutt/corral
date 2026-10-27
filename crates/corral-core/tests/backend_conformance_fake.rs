@@ -39,6 +39,7 @@ conformance!(
     scratch_transitions,
     lifecycle_and_leases,
     conditions_claims_and_binding,
+    task_change_commits_its_conditions,
     view_isolation,
     view_expiry,
     row_queries,

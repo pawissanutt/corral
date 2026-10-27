@@ -133,6 +133,7 @@ impl Store {
                 records: Vec::new(),
                 aggregates: Vec::new(),
                 reservations: reservations.clone(),
+                conditions: Vec::new(),
             };
             match self.backend().apply(build(change)) {
                 Ok(_) => return Ok(()),

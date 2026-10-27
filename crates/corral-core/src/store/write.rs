@@ -286,8 +286,14 @@ impl Store {
         }
         let events = self.buffered_task_events(&record.task.id, record.task.updated)?;
         let records = self.buffered_records();
+        let conditions = self.task_conditions(
+            &record.task.id,
+            stored.record.task.status,
+            record.task.status,
+        )?;
         if events.is_empty()
             && records.is_empty()
+            && conditions.is_empty()
             && !self.has_buffered_authorization()
             && !self.has_staged_gate()
             && same_fields == head.header.fields
@@ -295,7 +301,6 @@ impl Store {
             && summary == head.summary
             && rows == old
         {
-            self.flush_conditions()?;
             return Ok(None);
         }
         let writes = row_writes(&old, &rows);
@@ -315,17 +320,12 @@ impl Store {
                     records,
                     aggregates: Vec::new(),
                     reservations: Vec::new(),
+                    conditions,
                 },
                 form,
             )?)
             .map_err(apply_error)
             .with_context(|| format!("saving {}", record.task.id))?;
-        self.flush_conditions()?;
-        self.clear_left_ready(
-            &record.task.id,
-            stored.record.task.status,
-            record.task.status,
-        )?;
         match committed.outcome {
             Outcome::Task { rev, .. } => Ok(Some(rev)),
             other => bail!("saving {} returned {other:?}", record.task.id),
@@ -341,6 +341,7 @@ impl Store {
             task: t.clone(),
             recoveries: Vec::new(),
         })?;
+        self.refuse_buffered_conditions("a task creation")?;
         let committed = self
             .db
             .backend
@@ -356,7 +357,6 @@ impl Store {
             }))
             .map_err(apply_error)
             .context("creating a task")?;
-        self.flush_conditions()?;
         let Outcome::Created { id, .. } = committed.outcome else {
             bail!("creating a task returned {:?}", committed.outcome);
         };
