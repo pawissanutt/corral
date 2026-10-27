@@ -49,6 +49,12 @@ pub enum AttentionCmd {
         #[arg(long)]
         expected_revision: u64,
     },
+    /// Report PM-attention metrics from retained lifecycle facts over a window
+    Stats {
+        /// Window length ending now, e.g. 24h or 7d
+        #[arg(long, default_value = "7d", value_parser = stats_window)]
+        since: u64,
+    },
 }
 
 pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
@@ -93,6 +99,20 @@ pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
                 );
             } else {
                 println!("{id}: unparked revision {expected_revision}");
+            }
+            return Ok(());
+        }
+        Some(AttentionCmd::Stats { since }) => {
+            let end = jiff::Timestamp::now();
+            let start = end.checked_sub(jiff::SignedDuration::from_secs(i64::try_from(*since)?))?;
+            let stats = corral_ops::attention::metrics::stats(
+                ctx,
+                corral_ops::attention::metrics::Window { start, end },
+            )?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                print_stats(&stats);
             }
             return Ok(());
         }
@@ -195,6 +215,85 @@ fn next_check(value: &str) -> Result<u64, String> {
 
 fn review_by(value: &str) -> Result<u64, String> {
     duration(value, "review-by", 3600..=604800, "1h..7d")
+}
+
+fn stats_window(value: &str) -> Result<u64, String> {
+    duration(value, "since", 60..=31_536_000, "1m..365d")
+}
+
+fn print_stats(stats: &corral_ops::attention::metrics::Stats) {
+    let secs = |value: Option<i64>| value.map_or_else(|| "-".into(), |s| format!("{s}s"));
+    let p = &stats.population;
+    println!(
+        "conditions {} (carry-in {}, opened {}, resolved {}, open {}); PM {} owner {}; pm_available {} pm_absent {}",
+        p.total,
+        p.carry_in,
+        p.opened,
+        p.resolved,
+        p.open_at_end,
+        p.pm_responsible,
+        p.owner_responsible,
+        p.pm_available,
+        p.pm_absent
+    );
+    for (label, latency) in [
+        ("handling (PM available)", &stats.handling),
+        ("handling (PM absent)", &stats.handling_pm_absent),
+        ("resolution", &stats.resolution),
+    ] {
+        println!(
+            "{label}: observed {} censored {} p50 {} p95 {} max {}",
+            latency.observed,
+            latency.censored,
+            secs(latency.p50_secs),
+            secs(latency.p95_secs),
+            secs(latency.max_secs)
+        );
+    }
+    let b = &stats.backlog;
+    println!(
+        "backlog: {} samples, peak open {}, peak p95 {}, at end open {} max {}",
+        b.samples,
+        b.peak_open,
+        secs(b.peak_p95_secs),
+        b.end_open,
+        secs(b.end_max_secs)
+    );
+    let w = &stats.wakes;
+    println!(
+        "wakes: attention_due {} over {} project passes, {} attention levels (max {} per condition), raw pushes {} ({} replayed)",
+        w.attention_due,
+        w.due_pairs,
+        w.attention_levels,
+        w.max_levels_per_condition,
+        w.raw_push.submitted,
+        w.raw_push.replayed
+    );
+    let n = &stats.notifications;
+    println!(
+        "owner notifications: {} claims in {} batches; success {} failure {} unknown {} not invoked {}; calls [{}, {}]; budget batches {} calls [{}, {}]",
+        n.claims,
+        n.batches,
+        n.success,
+        n.failure,
+        n.outcome_unknown,
+        n.certainly_not_invoked,
+        n.calls[0],
+        n.calls[1],
+        n.budget_batches,
+        n.budget_calls[0],
+        n.budget_calls[1]
+    );
+    let a = &stats.actions;
+    println!(
+        "actions: attributed {} ambiguous {} duplicates {} after terminal {} owner rescues {}; lost review rounds {}",
+        a.attributed,
+        a.ambiguous,
+        a.duplicates,
+        a.after_terminal,
+        a.owner_rescues,
+        stats.lost_review_rounds
+    );
 }
 
 fn one_line(value: &str) -> String {
@@ -385,5 +484,51 @@ mod tests {
                 None => assert!(parsed.is_err(), "{duration}"),
             }
         }
+    }
+
+    #[test]
+    fn stats_parses_its_window_refuses_out_of_range_and_reports_an_empty_store() {
+        // Given the public stats syntax and its adopted window interval.
+        for (window, expected) in [
+            ("59s", None),
+            ("1m", Some(60)),
+            ("7d", Some(604800)),
+            ("366d", None),
+        ] {
+            let parsed = crate::Cli::try_parse_from([
+                "corral",
+                "attention",
+                "stats",
+                "--since",
+                window,
+                "--json",
+            ]);
+            // When Clap parses it, then the window or the refusal is exact.
+            match expected {
+                Some(seconds) => match parsed.unwrap().cmd {
+                    Some(crate::Cmd::Attention(AttentionArgs {
+                        cmd: Some(AttentionCmd::Stats { since }),
+                        json: true,
+                        ..
+                    })) => assert_eq!(since, seconds),
+                    _ => panic!("expected attention stats"),
+                },
+                None => assert!(parsed.is_err(), "{window}"),
+            }
+        }
+        // When stats run against a fresh store, then the read succeeds and writes nothing.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let before = store.list().unwrap();
+        let ctx = Ctx::from_store(store);
+        let Some(crate::Cmd::Attention(args)) =
+            crate::Cli::try_parse_from(["corral", "attention", "stats", "--since", "24h"])
+                .unwrap()
+                .cmd
+        else {
+            panic!("expected attention")
+        };
+        run(&ctx, args).unwrap();
+        assert_eq!(ctx.store.list().unwrap(), before);
     }
 }
