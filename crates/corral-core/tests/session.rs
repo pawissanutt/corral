@@ -57,6 +57,10 @@ fn fresh_session_policies_are_independent_for_each_role() {
             role == "reviewer_session"
         );
         assert!(!config.review.is_empty());
+        assert!(
+            !config.has_review_policy(None, None),
+            "session policy alone must not activate review"
+        );
         let encoded = serde_json::to_value(&policy).unwrap();
         assert_eq!(encoded[role], "fresh");
         let effective = config.effective_value().unwrap();
@@ -108,9 +112,16 @@ fn project_session_settings_inherit_and_override_global_roles_independently() {
         assert_eq!(sources.worker_session, worker_source);
         assert_eq!(sources.reviewer_session, reviewer_source);
         let effective = config.effective_value().unwrap();
-        let review = &effective["projects"][project]["review"];
-        assert_eq!(review["worker_session"].as_str(), Some(worker));
-        assert_eq!(review["reviewer_session"].as_str(), Some(reviewer));
+        let actual = effective["projects"][project].get("review");
+        let explicit = &config.projects[project].review;
+        if explicit.is_empty() {
+            assert!(
+                actual.is_none(),
+                "inherited policy must not materialize a project table"
+            );
+        } else {
+            assert_eq!(actual, Some(&toml::Value::try_from(explicit).unwrap()));
+        }
     }
     let decoded: Config = toml::from_str(&config.to_toml()).unwrap();
     assert_eq!(decoded.review, config.review);
