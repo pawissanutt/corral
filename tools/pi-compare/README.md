@@ -80,7 +80,8 @@ review. This tool does not authorize those board or Git actions.
 
 - Review rounds are recorded verdict events, cross-checked against independent
   review children. Missing approval or reviewer usage refuses measurement.
-  Wall time ends at the first approve verdict, not at `done` or landing.
+  Wall time ends at the latest approve verdict, not at `done` or landing.
+  A reopened run includes its repair work, failed gates and later reviews.
 - Worker and independent-review usage are summed, using only `estimated_usd`
   for API-equivalent cost. `reported_usd` stays separate. Missing pricing stays
   null and invalidates the pair; unknown tokens never become zero-dollar work.
