@@ -8,7 +8,7 @@ const DEFAULT_TEMPLATE: &str = include_str!("../../assets/review.md");
 /// A routed review always appends its versioned contract, even under a custom template, and a
 /// tiered run's review always appends one authoritative Gate contract (review) section.
 pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
-    let gate_contract = crate::review_packet::gate_contract(ctx, task, run)?;
+    let gate_contract = crate::review_packet::gate_contract(ctx, task, run, None)?;
     let override_file = ctx.store.prompts_dir().join("review.md");
     let template = match std::fs::read_to_string(&override_file) {
         Ok(t) => t,

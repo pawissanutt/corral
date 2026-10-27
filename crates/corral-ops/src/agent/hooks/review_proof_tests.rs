@@ -140,6 +140,47 @@ fn a_new_reviewer_artifact_then_verdict_both_commit_and_replay_without_the_sourc
     }
 }
 
+/// Another task lands on main past the reviewed base; the reviewed HEAD stays checked out.
+fn land_on_main(review: &Review) {
+    let app = review.task().runs[0].worktree.clone();
+    let reviewed = git(&app, &["rev-parse", "HEAD"]);
+    git(&app, &["checkout", "-q", "--detach"]);
+    let tree = git(&app, &["rev-parse", "HEAD^{tree}"]);
+    let landed = git(
+        &app,
+        &["commit-tree", &tree, "-p", &reviewed, "-m", "lands"],
+    );
+    git(&app, &["update-ref", "refs/heads/main", &landed]);
+}
+
+#[test]
+fn a_late_candidate_artifact_stales_the_verdict_even_when_main_moved() {
+    let (mut review, _) = review_with_criteria();
+    committed(&review.event("turn_started", 1));
+    let late = review.ctx().store.root().join("late-candidate.log");
+    std::fs::write(&late, "a new worker artifact\n").unwrap();
+    crate::add_artifact(review.ctx(), &review.id, &late, None, None).unwrap();
+    land_on_main(&review);
+    let (code, reason) = rejection(&changes(&review, "call-verdict"));
+    assert_eq!(code, "review_closed");
+    assert!(reason.contains("packet_digest"), "{reason}");
+    assert!(!reason.contains("integration_base"), "{reason}");
+}
+
+#[test]
+fn reviewer_proof_and_a_moved_main_still_let_the_verdict_commit() {
+    let (mut review, _) = review_with_criteria();
+    committed(&review.event("turn_started", 1));
+    let fresh = review.ctx().store.root().join("reviewer-proof.log");
+    std::fs::write(&fresh, "reviewer proof\n").unwrap();
+    let payload = json!({"path": fresh, "title": "Reviewer observation"});
+    committed(&review.op(Some(1), "call-artifact", "artifact", payload));
+    land_on_main(&review);
+    let verdict = committed(&changes(&review, "call-verdict"));
+    assert_eq!(verdict.result["verdict"], "changes");
+    assert_eq!(ts::events(&review.fx, "verdict_base_moved"), 1);
+}
+
 #[test]
 fn a_candidate_artifact_added_after_the_review_started_still_stales_the_verdict() {
     let (mut review, _) = review_with_criteria();

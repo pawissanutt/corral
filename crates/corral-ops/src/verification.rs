@@ -256,22 +256,9 @@ pub(crate) fn gate_fresh_for_review_at(
     gate: &GateRecord,
     moved: Option<&IdentityChange>,
 ) -> Result<bool> {
-    let (Some(moved), Some(expected)) = (moved, &gate.identity) else {
-        return gate_fresh_for_review(ctx, task, run, gate);
-    };
     let review = crate::gate_tier::GatePhase::Review;
     let requirement = crate::gate_tier::requirement_for(ctx, task, run, review)?;
-    let mut actual = identity(ctx, task, run, expected)?;
-    if gate.sha != expected.head
-        || expected.integration_base != moved.expected
-        || actual.integration_base != moved.actual
-        || !crate::gate_tier::satisfies(expected.gate_tier.as_deref(), &requirement)
-        || !corral_git::is_clean(&run.worktree)?
-    {
-        return Ok(false);
-    }
-    actual.integration_base = moved.expected.clone();
-    Ok(actual == *expected)
+    gate_fresh_for_at(ctx, task, run, gate, &requirement, moved)
 }
 
 /// The receipt re-derives under its own binding, and that binding satisfies `requirement`.
@@ -282,13 +269,36 @@ pub(crate) fn gate_fresh_for(
     gate: &GateRecord,
     requirement: &crate::gate_tier::GateRequirement,
 ) -> Result<bool> {
+    gate_fresh_for_at(ctx, task, run, gate, requirement, None)
+}
+
+/// [`gate_fresh_for`], judged on the reviewed base `moved.expected` while main moved forward to
+/// `moved.actual`: the integration base may differ by exactly that move, nothing else.
+pub(crate) fn gate_fresh_for_at(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    gate: &GateRecord,
+    requirement: &crate::gate_tier::GateRequirement,
+    moved: Option<&IdentityChange>,
+) -> Result<bool> {
     let Some(expected) = &gate.identity else {
         return Ok(false);
     };
-    Ok(gate.sha == expected.head
-        && crate::gate_tier::satisfies(expected.gate_tier.as_deref(), requirement)
-        && corral_git::is_clean(&run.worktree)?
-        && identity(ctx, task, run, expected)? == *expected)
+    if gate.sha != expected.head
+        || !crate::gate_tier::satisfies(expected.gate_tier.as_deref(), requirement)
+        || !corral_git::is_clean(&run.worktree)?
+    {
+        return Ok(false);
+    }
+    let mut actual = identity(ctx, task, run, expected)?;
+    if let Some(moved) = moved
+        && expected.integration_base == moved.expected
+        && actual.integration_base == moved.actual
+    {
+        actual.integration_base = moved.expected.clone();
+    }
+    Ok(actual == *expected)
 }
 
 pub(crate) fn gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {

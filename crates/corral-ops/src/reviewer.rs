@@ -789,12 +789,12 @@ fn verdict_inner(
         Some(s) => {
             let mut changes;
             (changes, moved) = verification::verdict_changes(ctx, &task, &run, s)?;
-            // The packet records the new base's gate freshness; the assessment alone must hold.
-            let packet = moved.is_none();
             if changes.is_empty()
                 && let Some(route) = s.route.as_deref()
             {
-                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route, packet)?;
+                let at = moved.as_ref();
+                changes =
+                    crate::review_packet::route_changes_at(ctx, &task, &run, s, route, true, at)?;
             }
             if !changes.is_empty() {
                 bail!("stale review: {}", serde_json::to_string(&changes)?);
