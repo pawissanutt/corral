@@ -15,6 +15,30 @@ fn result_file(fx: &Fx) -> (corral_ops::GatePaths, Value) {
     (paths, result)
 }
 
+/// Deletes, or overwrites with bytes that fail verification, the collected attempt's recorded
+/// log blob: the evidence a pass rests on once collected.
+fn spoil_recorded_log(fx: &Fx, missing: bool) {
+    let run = fx.run();
+    let attempt = run.gate.unwrap().identity.unwrap().attempt;
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(&fx.id, &run.id, &attempt)
+        .unwrap()
+        .unwrap();
+    let path = fx
+        .ctx
+        .store
+        .blob_store()
+        .unwrap()
+        .path_of(row.log.unwrap().hash());
+    if missing {
+        std::fs::remove_file(path).unwrap();
+    } else {
+        std::fs::write(path, b"tampered").unwrap();
+    }
+}
+
 #[test]
 fn collection_refuses_incomplete_or_mismatched_command_ranges() {
     for corruption in [
@@ -156,17 +180,11 @@ fn missing_log_cannot_complete_a_running_gate() {
 #[test]
 fn collected_pass_is_invalidated_when_log_is_missing_or_tampered() {
     for missing in [true, false] {
-        // Given a completed pass, then loss or same-length tampering of its log.
+        // Given a completed pass, then loss or tampering of its recorded log.
         let fx = gated(Accept::Owner);
         corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
         corral_ops::gate_collect(&fx.ctx, &fx.id).unwrap();
-        let (paths, _) = result_file(&fx);
-        if missing {
-            std::fs::remove_file(paths.log).unwrap();
-        } else {
-            let log = std::fs::read_to_string(&paths.log).unwrap();
-            std::fs::write(paths.log, log.replace("\nfirst\n", "\nother\n")).unwrap();
-        }
+        spoil_recorded_log(&fx, missing);
 
         // When the already-finished record is collected again.
         let record = corral_ops::gate_collect(&fx.ctx, &fx.id).unwrap().unwrap();
@@ -187,13 +205,7 @@ fn owner_cannot_approve_missing_or_tampered_pass_logs() {
             corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
             corral_ops::gate_collect(&fx.ctx, &fx.id).unwrap();
             let base = git(&fx.app, &["rev-parse", "main"]);
-            let (paths, _) = result_file(&fx);
-            if missing {
-                std::fs::remove_file(paths.log).unwrap();
-            } else {
-                let log = std::fs::read_to_string(&paths.log).unwrap();
-                std::fs::write(paths.log, log.replace("\nfirst\n", "\nother\n")).unwrap();
-            }
+            spoil_recorded_log(&fx, missing);
 
             // When the owner approves directly, without another collection.
             let result = corral_ops::approve(&fx.ctx, &fx.id, strategy, false, true);
@@ -221,13 +233,7 @@ fn autopilot_cannot_accept_event_only_or_tampered_pass() {
         fx.sync();
         fx.verdict(Verdict::Approve, "Reviewed.");
         let base = git(&fx.app, &["rev-parse", "main"]);
-        let (paths, _) = result_file(&fx);
-        if missing {
-            std::fs::remove_file(paths.log).unwrap();
-        } else {
-            let log = std::fs::read_to_string(&paths.log).unwrap();
-            std::fs::write(paths.log, log.replace("\nfirst\n", "\nother\n")).unwrap();
-        }
+        spoil_recorded_log(&fx, missing);
 
         // When autopilot checks acceptance without collecting the finished gate again.
         fx.sync();

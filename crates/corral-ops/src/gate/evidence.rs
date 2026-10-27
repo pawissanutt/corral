@@ -205,17 +205,36 @@ pub(crate) fn record_result(
         })
 }
 
-/// The exact bytes of the attempt's recorded log; `None` without a row, log or live blob.
+/// The exact bytes of the attempt's recorded log; `None` without a row, log or live blob, and
+/// when the blob's file is gone or fails verification, which proves nothing as a missing or
+/// changed log file did. Other read errors are returned.
 pub(crate) fn attempt_log(
     ctx: &Ctx,
     task: &str,
     run: &str,
     attempt: &str,
 ) -> Result<Option<Vec<u8>>> {
-    match ctx.store.gate_attempt(task, run, attempt)? {
-        Some(GateAttempt { log: Some(log), .. }) => ctx.store.blob_bytes(&log),
-        _ => Ok(None),
+    let Some(GateAttempt { log: Some(log), .. }) = ctx.store.gate_attempt(task, run, attempt)?
+    else {
+        return Ok(None);
+    };
+    match ctx.store.blob_bytes(&log) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if lost_or_corrupt(&error) => Ok(None),
+        Err(error) => Err(error),
     }
+}
+
+fn lost_or_corrupt(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<std::io::Error>())
+        .any(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData
+            )
+        })
 }
 
 /// Reclaims the closed scratch directory of attempt `stem` unless a process still uses it;
