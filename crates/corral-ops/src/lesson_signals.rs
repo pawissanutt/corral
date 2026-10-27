@@ -376,6 +376,20 @@ fn bounded_source(
     Ok(Some(bytes))
 }
 
+/// The last `cap` bytes of `bytes`, starting at a line boundary, as a recent bounded read.
+fn recent_lines(bytes: &[u8], cap: usize) -> &[u8] {
+    let start = bytes.len().saturating_sub(cap);
+    let tail = &bytes[start..];
+    if start == 0 || bytes[start - 1] == b'\n' {
+        return tail;
+    }
+    let end = tail
+        .iter()
+        .position(|b| *b == b'\n')
+        .map_or(tail.len(), |n| n + 1);
+    &tail[end..]
+}
+
 fn evidence(task: &Task, ts: Timestamp, source: impl Into<String>) -> LessonEvidence {
     LessonEvidence {
         task: task.id.clone(),
@@ -764,23 +778,25 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
         }
         for run in task.runs.iter().rev().take(32) {
             run_signals(&mut collector, &task, run, &files);
-            let path = crate::gate::gate_paths(ctx, &task.id, &run.id).log;
-            if let Ok(relative) = path.strip_prefix(ctx.store.dir()) {
-                let cap = ARTIFACT_BYTES.min(CONTEXT_BYTES.saturating_sub(collector.consumed));
-                if let Some(bytes) = bounded_source(ctx.store.dir(), relative, cap, true)? {
-                    let source = evidence(
-                        &task,
-                        run.gate.as_ref().map_or(run.started, |g| g.at),
-                        relative.to_string_lossy(),
-                    );
-                    collector.lines(
-                        &task,
-                        &source,
-                        &String::from_utf8_lossy(&bytes),
-                        false,
-                        &files,
-                    );
-                }
+            let cap = ARTIFACT_BYTES.min(CONTEXT_BYTES.saturating_sub(collector.consumed));
+            if let Some(gate) = &run.gate
+                && let Some(identity) = &gate.identity
+                && cap > 0
+                && let Some(log) =
+                    crate::gate::evidence::attempt_log(ctx, &task.id, &run.id, &identity.attempt)?
+            {
+                let source = evidence(
+                    &task,
+                    gate.at,
+                    format!("gate_attempts/{}/{}/log", run.id, identity.attempt),
+                );
+                collector.lines(
+                    &task,
+                    &source,
+                    &String::from_utf8_lossy(recent_lines(&log, cap)),
+                    false,
+                    &files,
+                );
             }
         }
     }

@@ -4,6 +4,8 @@
 
 use std::path::{Path, PathBuf};
 
+#[path = "gate_ops/evidence.rs"]
+mod evidence;
 #[path = "gate_ops/review_regressions.rs"]
 mod review_regressions;
 mod support;
@@ -410,11 +412,12 @@ fn stale_result_file_cannot_complete_a_new_attempt() {
     corral_ops::gate_start(&ctx, &id).unwrap();
     let old_path = corral_ops::gate_paths(&ctx, &id, "R1").result;
     let first = corral_ops::gate_wait(&ctx, &id).unwrap();
+    // The next start reclaims the collected attempt's directory, so keep its result first.
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&old_path).unwrap()).unwrap();
     corral_ops::gate_start(&ctx, &id).unwrap();
     let current_path = corral_ops::gate_paths(&ctx, &id, "R1").result;
     assert_ne!(old_path, current_path);
-    let mut old: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(old_path).unwrap()).unwrap();
     let current: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&current_path).unwrap()).unwrap();
     // Isolate identity validation from the independent ownership check.
@@ -454,8 +457,9 @@ fn pipeline_failure_is_not_hidden_by_successful_last_command() {
 }
 
 #[test]
-fn legacy_pass_is_removed_before_new_attempt_launch() {
-    let (_tmp, ctx, id, _) = running_task(&["true"]);
+fn legacy_unversioned_pass_is_never_consulted() {
+    // Given a pre-T075 unversioned pass left in the legacy gate area and a failing gate.
+    let (_tmp, ctx, id, _) = running_task(&["false"]);
     let legacy = ctx
         .store
         .state_dir()
@@ -463,22 +467,16 @@ fn legacy_pass_is_removed_before_new_attempt_launch() {
         .join(format!("{id}-R1.json"));
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     std::fs::write(&legacy, r#"{"result":"pass","exit_code":0}"#).unwrap();
-    let mut store = Store::open(ctx.store.root()).unwrap();
-    store.config.review.gate = Some(vec![format!("test ! -e '{}'", legacy.display())]);
-    store.save_config().unwrap();
-
+    // When a gate runs and is collected.
     corral_ops::gate_start(&ctx, &id).unwrap();
-
-    // Pre-T075 collectors read only <task>-<run>.json. Even before their Task
-    // decoder rejects the parent's v2 envelope, that path cannot supply a pass.
-    let old_result = std::fs::read_to_string(&legacy)
-        .ok()
-        .map(|text| serde_json::from_str::<serde_json::Value>(&text).unwrap());
-    assert!(old_result.is_none());
-    assert_eq!(
-        corral_ops::gate_wait(&ctx, &id).unwrap().result,
-        GateResult::Pass
-    );
+    let collected = corral_ops::gate_wait(&ctx, &id).unwrap();
+    // Then only the attempt's own scratch result counts, and nothing is added to the area.
+    assert_eq!(collected.result, GateResult::Fail);
+    let area: Vec<_> = std::fs::read_dir(legacy.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(area, [legacy]);
 }
 
 #[test]
@@ -612,6 +610,7 @@ fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
         .state_dir()
         .join("gates")
         .join(format!("{id}-R1.json"));
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     std::fs::write(&legacy, r#"{"result":"pass","exit_code":0}"#).unwrap();
     let refusal = ctx.store.root().join("refuse-close");
     std::fs::write(&refusal, "").unwrap();
@@ -634,7 +633,6 @@ fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
     let fresh = corral_ops::gate_start(&ctx, &id).unwrap();
     // Then
     assert!(fresh.identity.is_some());
-    assert!(!legacy.exists());
     assert!(!ctx.store.events().unwrap().iter().any(|e| e.kind == "gate"));
     assert_eq!(
         corral_ops::gate_wait(&ctx, &id).unwrap().result,

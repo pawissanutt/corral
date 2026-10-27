@@ -152,7 +152,7 @@ fn finish_held_gate(fx: &Fx) {
         .records("submissions.jsonl")
         .into_iter()
         .rev()
-        .find(|line| line.contains("/state/gates/"))
+        .find(|line| line.contains("/scratch/gates/"))
         .expect("a held gate submission");
     let args: Vec<String> = serde_json::from_str(&gate).unwrap();
     let status = Command::new("sh")

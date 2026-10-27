@@ -254,10 +254,11 @@ fn gate_metrics_split_cohorts_tiers_and_destinations_and_count_legacy_as_full() 
     assert_eq!(windowed.groups.len(), 1);
 }
 
-/// Ancestry by head name and gate logs by attempt.
+/// Ancestry by head name, gate logs by attempt and recorded receipts by attempt.
 #[derive(Default)]
 struct Fixture {
     logs: HashMap<String, Vec<u8>>,
+    receipts: HashMap<String, Vec<(String, f64)>>,
 }
 
 impl GateSources for Fixture {
@@ -269,6 +270,91 @@ impl GateSources for Fixture {
         let steps = parse_step_markers(self.logs.get(attempt)?);
         (!steps.is_empty()).then_some(steps)
     }
+
+    fn receipt_steps(&mut self, _: &str, _: &str, attempt: &str) -> Option<Vec<(String, f64)>> {
+        self.receipts.get(attempt).cloned()
+    }
+}
+
+/// The storage-v2 form of a legacy gate event: the attempt and behind-at-start instead of the
+/// identity, and no command receipts (they live in the attempt's row).
+fn slim(event: &Event) -> Event {
+    let detail = &event.detail;
+    let attempt = detail["identity"]["attempt"].clone();
+    let mut slim = json!({"run": detail["run"], "attempt": attempt});
+    match event.kind.as_str() {
+        "gate_started" => {
+            slim["behind_at_start"] = json!(detail["identity"]["head"] != "new");
+            if let Some(tier) = detail.get("tier") {
+                slim["tier"] = tier.clone();
+            }
+        }
+        "gate" => {
+            slim["result"] = detail["result"].clone();
+            slim["failed_cmd"] = detail["failed_cmd"].clone();
+        }
+        _ => return event.clone(),
+    }
+    Event {
+        detail: slim,
+        ..event.clone()
+    }
+}
+
+#[test]
+fn legacy_and_slim_gate_events_with_row_receipts_give_equal_metrics() {
+    // Given the same gates as legacy events and as slim events whose receipts are in rows.
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let ids = tiered_tasks(&store, 2);
+    let legacy = vec![
+        started(
+            &ids[0],
+            "R1",
+            "2026-01-01T00:00:00Z",
+            "a1",
+            Some("quick"),
+            "new",
+        ),
+        finished(&ids[0], "R1", "2026-01-01T00:06:00Z", "a1", None),
+        started(&ids[1], "R1", "2026-01-01T01:00:00Z", "b1", None, "old"),
+        finished(
+            &ids[1],
+            "R1",
+            "2026-01-01T01:02:00Z",
+            "b1",
+            Some("stale_result: moved"),
+        ),
+        gate_event(
+            &ids[1],
+            "candidate_rebased",
+            "2026-01-01T01:03:00Z",
+            "autopilot",
+            json!({"run":"R1"}),
+        ),
+        started(&ids[1], "R1", "2026-01-01T01:04:00Z", "b2", None, "new"),
+        finished(
+            &ids[1],
+            "R1",
+            "2026-01-01T01:09:00Z",
+            "b2",
+            Some("cargo test"),
+        ),
+    ];
+    let native: Vec<Event> = legacy.iter().map(slim).collect();
+    assert!(native.iter().all(|e| e.detail.get("identity").is_none()));
+    let mut rows = Fixture::default();
+    for attempt in ["a1", "b1", "b2"] {
+        rows.receipts
+            .insert(attempt.into(), vec![("cargo test".into(), 90.0)]);
+    }
+    // Then counts, durations, stale classes, behind-at-start and step seconds are equal.
+    let before = report(&store, &legacy, &mut Fixture::default(), None);
+    let after = report(&store, &native, &mut rows, None);
+    assert_eq!(before, after);
+    assert_eq!(before["totals"]["gates_started"], 3);
+    assert_eq!(before["totals"]["classes"]["stale_result"], 1);
+    assert_eq!(before["totals"]["behind"]["behind_at_start"]["gates"], 1);
 }
 
 fn tiered_tasks(store: &Store, count: usize) -> Vec<String> {

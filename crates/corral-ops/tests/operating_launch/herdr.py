@@ -59,7 +59,7 @@ def main() -> None:
         case ("pane", "run"):
             with (directory / "submissions.jsonl").open("a") as log:
                 log.write(json.dumps(args) + "\n")
-            if "/state/gates/" in args[3] and not (directory / "hold-gates").exists():
+            if "/scratch/gates/" in args[3] and not (directory / "hold-gates").exists():
                 environment = os.environ.copy()
                 environment["CORRAL_ROOT"] = str(directory.parent)
                 subprocess.run(args[3], shell=True, check=False, stdin=subprocess.DEVNULL,

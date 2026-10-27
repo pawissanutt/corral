@@ -297,17 +297,14 @@ fn assert_legacy(fx: &Fx, id: &str, gate: &GateRecord) {
     assert!(started.get("tier").is_none(), "{started}");
     let collected = fx.events(id, "gate").pop().unwrap();
     assert!(collected.get("tier").is_none() && collected.get("context_sha256").is_none());
-    let contexts = std::fs::read_dir(fx.ctx.store.state_dir().join("gates"))
+    let identity = gate.identity.as_ref().unwrap();
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(id, &identity.run, &identity.attempt)
         .unwrap()
-        .filter(|e| {
-            e.as_ref()
-                .unwrap()
-                .path()
-                .to_string_lossy()
-                .ends_with(".context.json")
-        })
-        .count();
-    assert_eq!(contexts, 0);
+        .unwrap();
+    assert_eq!((row.tier, row.context), (None, None));
 }
 
 #[test]
@@ -368,13 +365,22 @@ fn quick_member_gate_runs_exactly_the_quick_commands_with_its_context() {
             .iter()
             .all(|(name, _)| name != "CORRAL_GATE_TIER" && name != "CORRAL_GATE_CONTEXT")
     );
+    // The slim start event names the attempt; its commands and identity live in the row.
     let started = fx.events(&member, "gate_started").pop().unwrap();
     assert_eq!(started["tier"], "quick");
-    assert_eq!(started["commands"], json!(quick));
-    assert_eq!(
-        started["identity"]["gate_tier"]["source"],
-        "policy:plan_member"
-    );
+    assert_eq!(started["attempt"], json!(identity.attempt));
+    assert!(started.get("commands").is_none() && started.get("identity").is_none());
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(&member, &identity.run, &identity.attempt)
+        .unwrap()
+        .unwrap();
+    let blob = |blob| fx.ctx.store.blob_bytes(blob).unwrap().unwrap();
+    let recorded: Vec<String> = serde_json::from_slice(&blob(&row.commands)).unwrap();
+    assert_eq!(recorded, quick);
+    let recorded: CandidateIdentity = serde_json::from_slice(&blob(&row.identity)).unwrap();
+    assert_eq!(recorded.gate_tier.unwrap().source, "policy:plan_member");
     let collected = fx.events(&member, "gate").pop().unwrap();
     assert_eq!(collected["tier"], "quick");
     assert_eq!(collected["context_sha256"], tier.context_sha256);

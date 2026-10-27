@@ -225,12 +225,11 @@ fn refusal_retains_exact_auxiliary_identity_without_holding_capacity() {
                     assert_eq!(record.identity, expected.action.candidate);
                     assert!(!record.process_lost);
                     assert_eq!(record.result, GateResult::Running);
+                    let stem = format!("{id}-R1-candidate");
                     assert!(
-                        fx.ctx
-                            .store
-                            .state_dir()
-                            .join("gates")
-                            .join(format!("{id}-R1-candidate.sh"))
+                        crate::gate::evidence::gates_root(&fx.ctx)
+                            .join(&stem)
+                            .join(format!("{stem}.sh"))
                             .is_file()
                     );
                 }
@@ -421,7 +420,8 @@ fn owner_wrapper_persists_explicit_provenance_and_running_receipt_survives_revoc
     assert_eq!(collected.identity, gate.identity);
 }
 
-fn resumed_gate_started(tier: Option<&str>) -> serde_json::Value {
+/// The recovered `gate_started` event and the commands its attempt row records.
+fn resumed_gate_started(tier: Option<&str>) -> (serde_json::Value, serde_json::Value) {
     // Given a prepared gate whose retained record is (or is not) tiered.
     let mut fx = Fixture::new(1);
     fx.ctx.store.config.review.gate_tiers = Some(
@@ -464,20 +464,32 @@ fn resumed_gate_started(tier: Option<&str>) -> serde_json::Value {
         .iter()
         .find(|event| event.kind == "gate_started")
         .unwrap();
-    serde_json::to_value(event).unwrap()
+    let attempt = event.detail["attempt"].as_str().unwrap();
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(&id, "R1", attempt)
+        .unwrap()
+        .unwrap();
+    let commands = fx.ctx.store.blob_bytes(&row.commands).unwrap().unwrap();
+    (
+        serde_json::to_value(event).unwrap(),
+        serde_json::from_slice(&commands).unwrap(),
+    )
 }
 
 #[test]
 fn resumed_tiered_gate_logs_the_tier_and_commands_of_a_normal_start() {
-    let event = resumed_gate_started(Some("quick"));
+    let (event, commands) = resumed_gate_started(Some("quick"));
     assert_eq!(event["detail"]["recovered"], true);
     assert_eq!(event["detail"]["tier"], "quick");
-    assert_eq!(event["detail"]["commands"], json!(["quick-cmd"]));
+    assert!(event["detail"].get("commands").is_none());
+    assert_eq!(commands, json!(["quick-cmd"]));
 }
 
 #[test]
 fn resumed_legacy_gate_keeps_its_event_payload() {
-    let event = resumed_gate_started(None);
+    let (event, _) = resumed_gate_started(None);
     assert!(event["detail"].get("tier").is_none());
     assert!(event["detail"].get("commands").is_none());
 }

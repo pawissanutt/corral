@@ -146,6 +146,28 @@ impl ReviewLaunch<'_> {
             .review_runs
             .last()
             .and_then(|child| child.pending_reply.clone());
+        let mut started =
+            json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane});
+        let gate = match (self.pending.kind, self.pending.prepared_gate.as_ref()) {
+            (Kind::Gate, Some(gate)) => {
+                let identity = gate
+                    .identity
+                    .clone()
+                    .context("prepared gate identity missing")?;
+                started["attempt"] = json!(identity.attempt);
+                crate::gate::evidence::tier_detail(&mut started, gate.tier.as_deref());
+                let commands =
+                    crate::gate_tier::receipt_commands(&verification::policy(ctx, &task)?, gate);
+                let log = crate::gate::gate_paths(ctx, &task.id, &run.id).log;
+                let context = gate
+                    .tier
+                    .as_ref()
+                    .map(|_| crate::gate_tier::context_path(&log));
+                Some((gate.clone(), identity, commands, context))
+            }
+            _ => None,
+        };
+        let gate_started = started.clone();
         self.submit(
             |store, task| {
                 let fresh = Ctx {
@@ -177,21 +199,36 @@ impl ReviewLaunch<'_> {
                     ensure!(delivery.submitted, "prepared PM delivery is unconfirmed");
                     Ok(())
                 } else {
+                    if let Some((gate, identity, commands, context)) = &gate {
+                        let start = crate::gate::evidence::Start {
+                            task: &task.id,
+                            run: &run.id,
+                            attempt: &identity.attempt,
+                            scope: crate::gate::evidence::RUN_SCOPE,
+                            sha: &gate.sha,
+                            tier: gate.tier.as_ref().map(|tier| tier.tier.as_str()),
+                            identity,
+                            commands,
+                            context: context.as_deref(),
+                        };
+                        crate::gate::evidence::record_start(
+                            ctx,
+                            &start,
+                            ("gate_started", gate_started),
+                        )?;
+                    }
                     ctx.herdr.pane_run(&pane, &command)
                 }
             },
         )?;
-        let mut started =
-            json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane});
-        if self.pending.kind == Kind::Gate
-            && let Some(gate) = self.pending.prepared_gate.as_ref()
-            && let Some(tier) = &gate.tier
-        {
-            started["tier"] = json!(tier.tier);
-            started["commands"] = json!(crate::gate_tier::receipt_commands(
-                &verification::policy(ctx, &task)?,
-                gate
-            ));
+        if let Some((_, identity, _, _)) = &gate {
+            return crate::gate::evidence::record_launched(
+                ctx,
+                &task.id,
+                &run.id,
+                &identity.attempt,
+                &pane,
+            );
         }
         if self.pending.kind == Kind::Reviewer {
             ctx.store.update(&task.id, |task| {

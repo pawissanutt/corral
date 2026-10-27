@@ -277,16 +277,21 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         log: None,
         fix_command: None,
     };
+    let previous = journal.attempts.last().map(|previous| previous.id.clone());
     journal.attempts.push(attempt.clone());
     journal.save(&store, id)?;
-    store.log_event(
-        Some(id),
-        "plan_checkpoint_started",
-        json!({"attempt": attempt.id, "target": attempt.target, "head": attempt.head,
-               "landings": attempt.landings, "automatic": automatic, "advisory": true}),
-    )?;
+    let run = gate::PlanGate {
+        attempt: &attempt.id,
+        scope: gate::CHECKPOINT_SCOPE,
+        previous: previous.as_deref(),
+        event: (
+            "plan_checkpoint_started",
+            json!({"attempt": attempt.id, "target": attempt.target, "head": attempt.head,
+                   "landings": attempt.landings, "automatic": automatic, "advisory": true}),
+        ),
+    };
     let contract = crate::gate_tier::aggregate(&store.config, &tracker, &policy);
-    let mut record = match gate::run(ctx, &attempt.identity, &attempt.id, &verify, &contract) {
+    let mut record = match gate::run(ctx, &attempt.identity, run, &verify, &contract) {
         Ok(record) => record,
         Err(error) => GateRecord {
             result: GateResult::Fail,
