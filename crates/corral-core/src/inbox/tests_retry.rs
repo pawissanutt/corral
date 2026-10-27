@@ -373,6 +373,52 @@ fn retry_retains_exact_replacement_when_publication_announcement_fails() {
 }
 
 #[test]
+fn mirrored_retry_claim_is_read_within_five_probes_and_survives_observation() {
+    // Given a retry whose replacement identity committed but whose body could not publish.
+    let (_root, store, recipient) = publication_fixture(true);
+    let inbox = Inbox::new(&store, recipient).unwrap();
+    let original = post(&inbox, "reserved replacement");
+    inbox
+        .mark_terminal(original.seq, TerminalState::Cancelled, "fixture", "test")
+        .unwrap();
+    fs::create_dir(inbox.message_path(2)).unwrap();
+    assert!(inbox.retry(original.seq).is_err());
+    fs::remove_dir(inbox.message_path(2)).unwrap();
+    let owner_read = |inbox: &Inbox<'_>| {
+        let state = inbox.state().unwrap();
+        let reads = crate::work::count(crate::work::Work::InboxRecordRead);
+        let entries = inbox.owner_entries(&state).unwrap();
+        let used = crate::work::count(crate::work::Work::InboxRecordRead) - reads;
+        (entries.into_iter().next().unwrap(), used)
+    };
+    // When the bounded owner read runs (two retained entries), then the exact claim and
+    // successor are visible at five probes each.
+    let (entry, used) = owner_read(&inbox);
+    assert_eq!(used, 10);
+    assert!(entry.retry_claimed_at.is_some());
+    assert_eq!(entry.retry_successor, Some(format!("{}#2", inbox.key())));
+    // And a later observation keeps the claim, as the marker file does.
+    inbox
+        .record_receipt(
+            original.seq,
+            ReceiptLevel::Observed,
+            &Receipt {
+                envelope: None,
+                binding: None,
+                observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
+                via: "fixture".into(),
+                detail: json!({}),
+            },
+        )
+        .unwrap();
+    let (entry, used) = owner_read(&inbox);
+    assert_eq!(used, 10);
+    assert!(entry.observed.is_some() && entry.terminal.is_none());
+    assert!(entry.retry_claimed_at.is_some());
+    assert!(inbox.record_path(original.seq, "retried").exists());
+}
+
+#[test]
 fn retry_releases_claim_after_definitive_admission_refusal() {
     // Given a task message eligible for retry before the live admission callback refuses.
     let (_root, store, recipient) = publication_fixture(true);
@@ -392,6 +438,11 @@ fn retry_releases_claim_after_definitive_admission_refusal() {
     // Then no delivery evidence is lost, and a later corrected admission can retry.
     assert_eq!(error.to_string(), "fixture admission refusal");
     assert!(!inbox.record_path(original.seq, "retried").exists());
+    assert!(
+        inbox.owner_entries(&state).unwrap()[0]
+            .retry_claimed_at
+            .is_none()
+    );
     assert_eq!(inbox.state().unwrap(), state);
     assert_eq!(inbox.messages().unwrap(), vec![original.clone()]);
     assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), log);
@@ -604,7 +655,7 @@ fn stale_adverse_finishes_keep_the_first_witness_and_current_fence_across_restar
                 let entries = inbox.owner_entries(&state).unwrap();
                 assert_eq!(
                     crate::work::count(crate::work::Work::InboxRecordRead) - reads,
-                    6
+                    5
                 );
                 assert!(!entries[0].retry_eligible());
                 assert_eq!(

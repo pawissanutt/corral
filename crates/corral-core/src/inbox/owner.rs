@@ -220,8 +220,16 @@ impl Inbox<'_> {
             .body
             .split_once('\n')
             .context("message body header missing")?;
-        if !create_new_json(&marker, &json!({"at": Timestamp::now()}))? {
+        let claim = json!({"at": Timestamp::now()});
+        if !create_new_json(&marker, &claim)? {
             return Err(already());
+        }
+        let mirrored = {
+            let _inbox = self.lock()?;
+            self.mirror_retry_claim(seq, Some(&claim))
+        };
+        if let Err(error) = mirrored {
+            return Err(self.release_retry_claim(seq, &marker, error));
         }
         let mut reserving = false;
         let posted = self.post_with_reservation(
@@ -248,10 +256,10 @@ impl Inbox<'_> {
                 }
             },
             |replacement| {
-                write_json(
-                    &marker,
-                    &json!({"at": Timestamp::now(), "from": original.id, "to": replacement.id}),
-                )?;
+                let claim =
+                    json!({"at": Timestamp::now(), "from": original.id, "to": replacement.id});
+                write_json(&marker, &claim)?;
+                self.mirror_retry_claim(seq, Some(&claim))?;
                 reserving = true;
                 Ok(())
             },
@@ -259,22 +267,37 @@ impl Inbox<'_> {
         let retried = match posted {
             Ok(retried) => retried,
             Err(error) if reserving => return Err(error),
-            Err(error) => {
-                match fs::remove_file(&marker) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        return Err(error.context(format!("releasing retry claim: {e}")));
-                    }
-                }
-                return Err(error);
-            }
+            Err(error) => return Err(self.release_retry_claim(seq, &marker, error)),
         };
         self.event(
             "message_retried",
             json!({"from": original.id, "to": retried.id}),
         )?;
         Ok(retried)
+    }
+
+    /// Drop a claim whose post was definitively refused; a failed release keeps it (conservative).
+    fn release_retry_claim(
+        &self,
+        seq: u64,
+        marker: &std::path::Path,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
+        let released = (|| -> Result<()> {
+            {
+                let _inbox = self.lock()?;
+                self.mirror_retry_claim(seq, None)?;
+            }
+            match fs::remove_file(marker) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.into()),
+            }
+        })();
+        match released {
+            Ok(()) => error,
+            Err(e) => error.context(format!("releasing retry claim: {e:#}")),
+        }
     }
 
     /// The first reason the message's own evidence forbids a re-post, as `code: explanation`.

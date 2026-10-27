@@ -82,7 +82,7 @@ fn seventeenth_post_refuses_before_admission_and_all_identities_survive_restart(
 }
 
 #[test]
-fn owner_reads_use_six_keyed_probes_and_no_envelope_or_body_reads() {
+fn owner_reads_use_five_keyed_probes_and_no_envelope_or_body_reads() {
     // Given two retained messages.
     let (_root, store, recipient) = fixture();
     let inbox = Inbox::new(&store, recipient).unwrap();
@@ -107,7 +107,7 @@ fn owner_reads_use_six_keyed_probes_and_no_envelope_or_body_reads() {
             .zip(before)
             .map(|(a, b)| a - b)
             .collect::<Vec<_>>(),
-        vec![12, 0, 0, 0]
+        vec![10, 0, 0, 0]
     );
 }
 

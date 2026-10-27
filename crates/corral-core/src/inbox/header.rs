@@ -6,6 +6,13 @@ use super::storage::read_optional;
 use super::*;
 use crate::work::{self, Work};
 
+#[derive(Deserialize)]
+struct RetryClaim {
+    at: Timestamp,
+    from: Option<String>,
+    to: Option<String>,
+}
+
 pub const PRIMARY_CAPACITY: usize = 8;
 pub const OWNER_CAPACITY: usize = 16;
 
@@ -168,7 +175,8 @@ pub struct DeliveryHeader {
     pub attempt: Option<AttemptRef>,
 }
 
-/// Five keyed receipt/terminal probes plus one retry-claim probe. No body/envelope reads.
+/// Five keyed receipt/terminal probes; the retry claim is mirrored in the failed-record slot.
+/// No body/envelope reads.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerEntry {
     pub message: OwnerMessage,
@@ -380,12 +388,6 @@ impl Inbox<'_> {
     }
 
     fn owner_entry(&self, entry: &OwnerMessage) -> Result<(OwnerEntry, Option<Value>)> {
-        #[derive(Deserialize)]
-        struct RetryClaim {
-            at: Timestamp,
-            from: Option<String>,
-            to: Option<String>,
-        }
         let admitted = self.receipt(entry.seq, ReceiptLevel::Admitted)?;
         let observed = self.receipt(entry.seq, ReceiptLevel::Observed)?;
         let mut terminal = None;
@@ -411,8 +413,17 @@ impl Inbox<'_> {
                 failed_record = record;
             }
         }
-        work::record(Work::InboxRecordRead, 1);
-        let retry = read_optional::<RetryClaim>(&self.record_path(entry.seq, "retried"))?;
+        // The exact `retried` marker stays authoritative for retry; the hot read uses its
+        // mirror in the failed-record slot already probed above.
+        let retry = failed_record
+            .as_ref()
+            .and_then(|record| record.get("retry_claim"))
+            .filter(|claim| !claim.is_null())
+            .map(|claim| {
+                serde_json::from_value::<RetryClaim>(claim.clone())
+                    .context("parsing mirrored retry claim")
+            })
+            .transpose()?;
         if let Some(from) = retry.as_ref().and_then(|claim| claim.from.as_ref()) {
             ensure!(
                 *from == format!("{}#{}", self.key(), entry.seq),

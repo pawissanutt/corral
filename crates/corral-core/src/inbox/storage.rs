@@ -334,6 +334,41 @@ impl<'a> Inbox<'a> {
         Ok(())
     }
 
+    /// Mirror (or clear) the exact retry claim in the failed-record slot, so the bounded owner
+    /// read finds it without a sixth probe. The `retried` marker stays authoritative for retry.
+    /// Caller holds this recipient's inbox lock.
+    pub(super) fn mirror_retry_claim(&self, seq: u64, claim: Option<&Value>) -> Result<()> {
+        let path = self.record_path(seq, TerminalState::Failed.suffix());
+        let record = read_optional::<Value>(&path)?;
+        let Some(claim) = claim else {
+            let Some(mut record) = record else {
+                return Ok(());
+            };
+            if record
+                .as_object_mut()
+                .and_then(|object| object.remove("retry_claim"))
+                .is_none()
+            {
+                return Ok(());
+            }
+            return if record == json!({"proof_only": true}) {
+                match fs::remove_file(&path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(e).context("removing mirrored retry claim"),
+                }
+            } else {
+                write_json(&path, &record)
+            };
+        };
+        let mut record = record.unwrap_or_else(|| json!({"proof_only": true}));
+        record
+            .as_object_mut()
+            .context("terminal proof record must be an object")?
+            .insert("retry_claim".into(), claim.clone());
+        write_json(&path, &record)
+    }
+
     pub(super) fn write_terminal_record(
         &self,
         seq: u64,
@@ -390,6 +425,21 @@ impl<'a> Inbox<'a> {
                 TerminalState::Abandoned,
             ] {
                 let path = self.record_path(seq, state.suffix());
+                if state == TerminalState::Failed
+                    && let Some(claim) = read_optional::<Value>(&path)?
+                        .and_then(|record| record.get("retry_claim").cloned())
+                {
+                    // The retry claim outlives observation, as its marker file does.
+                    let kept = json!({"proof_only": true, "retry_claim": claim});
+                    if read_optional::<Value>(&path)?.as_ref() != Some(&kept) {
+                        write_json(&path, &kept)?;
+                        self.event(
+                            "message_terminal_noop",
+                            json!({"seq":seq,"state":state,"reason":"observed wins"}),
+                        )?;
+                    }
+                    continue;
+                }
                 match fs::remove_file(&path) {
                     Ok(()) => self.event(
                         "message_terminal_noop",
