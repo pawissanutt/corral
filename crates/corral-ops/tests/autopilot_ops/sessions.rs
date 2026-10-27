@@ -3,6 +3,30 @@ use corral_core::{RoleSession, SessionAction, SessionPolicy};
 use serde_json::json;
 
 #[test]
+fn session_only_configuration_does_not_activate_automatic_review() {
+    for reviewer in [false, true] {
+        // Given only a fresh session setting, without an automatic review policy.
+        let fx = Fx::new(|policy| {
+            if reviewer {
+                policy.reviewer_session = Some(SessionPolicy::Fresh);
+            } else {
+                policy.worker_session = Some(SessionPolicy::Fresh);
+            }
+        });
+        fx.change("widget.txt", "w\n");
+        fx.done();
+
+        // When sync sees the completed worker.
+        let task = fx.sync();
+
+        // Then the existing manual Review flow remains, without starting or requiring a gate.
+        assert_eq!(task.status, Status::Review);
+        assert_eq!(fx.stage(), None);
+        assert_eq!(fx.events("gate_started"), 0);
+    }
+}
+
+#[test]
 fn automatic_missing_worker_context_escalates_once_instead_of_retrying_empty() {
     // Given a default-reuse worker whose pane and conversation are unavailable.
     let fx = Fx::new(|r| {

@@ -692,6 +692,7 @@ Turning diversity off does not turn off reviewers, gates, plan approval or owner
 `corral config get review.require_cross_family --source` shows the configured boolean.
 
 Worker and reviewer session settings inherit independently from global and project review tables.
+Session settings alone do not activate the review autopilot or require a gate.
 Omitting both preserves the worker conversation and a distinct reviewer conversation by default.
 `corral show <id>` prints the effective policy, selected session identity and new/reused/resumed
 action; `--json` includes `session_policy` and each run's `session` record. A session ID is

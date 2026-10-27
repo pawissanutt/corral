@@ -501,10 +501,16 @@ impl Config {
 
     /// Whether review was explicitly configured, even if its effective gate is empty.
     pub fn has_review_policy(&self, project: Option<&str>, task_accept: Option<Accept>) -> bool {
-        !self.review.is_empty()
+        let configured = |layer: &ReviewOverride| {
+            let mut review = layer.clone();
+            review.worker_session = None;
+            review.reviewer_session = None;
+            !review.is_empty()
+        };
+        configured(&self.review)
             || project
                 .and_then(|name| self.projects.get(name))
-                .is_some_and(|project| !project.review.is_empty())
+                .is_some_and(|project| configured(&project.review))
             || task_accept.is_some()
     }
 
