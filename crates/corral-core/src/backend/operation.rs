@@ -286,6 +286,14 @@ pub fn gate_key(run: &str, attempt: &str) -> String {
 pub struct GateStart {
     pub change: TaskChange,
     pub attempt: GateAttempt,
+    /// How `change` writes the task's rows; a start that replaces an earlier gate's pane
+    /// reference is a full-form write.
+    #[serde(default = "head_form")]
+    pub form: UpdateForm,
+}
+
+fn head_form() -> UpdateForm {
+    UpdateForm::Head
 }
 
 /// Records the gate pane. Requires the attempt to exist, be unended and not yet launched.
@@ -311,6 +319,9 @@ pub struct GateResult {
     pub context: Option<BlobRef>,
     pub ended: Timestamp,
     pub close_scratch: Vec<String>,
+    /// How `change` writes the task's rows.
+    #[serde(default = "head_form")]
+    pub form: UpdateForm,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

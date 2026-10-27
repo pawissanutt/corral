@@ -10,9 +10,9 @@ use anyhow::{Context, Result};
 
 use super::Store;
 use crate::backend::{
-    AppendEvents, Authorization, EventQuery, EventSeq, NewEvent, Operation, PageReq, PutRecords,
-    RecordWrite, ReservationUse, RowWrite, StoredEvent, StoredRecord, TaskChange, UpdateForm,
-    UpdateTask,
+    AppendEvents, Authorization, EventQuery, EventSeq, GateAttempt, GateStart, NewEvent, Operation,
+    PageReq, PutRecords, RecordWrite, ReservationUse, StoredEvent, StoredRecord, TaskChange,
+    UpdateForm, UpdateTask,
 };
 
 use crate::Event;
@@ -27,11 +27,13 @@ struct Unit {
     gate: RefCell<StagedGate>,
 }
 
-/// Gate transitions staged into a unit: attempt rows and blob reservations join its task
-/// change, and a result makes that change one `GateResult` operation.
+/// Gate transitions staged into a unit. A start alone makes its task change one `GateStart`;
+/// a result makes it one `GateResult`, which then carries a staged start's row (a start that
+/// supersedes a lost attempt); with an authorization the start's row joins the authorized
+/// change. Blob reservations always join the change.
 #[derive(Default)]
 pub(super) struct StagedGate {
-    pub(super) rows: Vec<RowWrite>,
+    pub(super) start: Option<GateAttempt>,
     pub(super) reservations: Vec<ReservationUse>,
     pub(super) result: Option<super::gate_rows::GateOutcome>,
 }
@@ -227,19 +229,16 @@ impl Store {
 
     /// Stages gate attempt rows, blob reservations or a result into the open unit; a unit
     /// holds at most one result and never a result together with an authorization.
-    pub(super) fn stage_gate(&self, stage: impl FnOnce(&mut StagedGate)) -> Result<()> {
+    pub(super) fn stage_gate(
+        &self,
+        stage: impl FnOnce(&mut StagedGate) -> Result<()>,
+    ) -> Result<()> {
         let unit = self
             .current_unit()
             .context("staging a gate transition needs an open task update")?;
-        let had_result = unit.gate.borrow().result.is_some();
-        stage(&mut unit.gate.borrow_mut());
-        let staged = unit.gate.borrow();
+        stage(&mut unit.gate.borrow_mut())?;
         anyhow::ensure!(
-            !(had_result && staged.result.is_some()),
-            "a task update commits at most one gate result"
-        );
-        anyhow::ensure!(
-            staged.result.is_none() || unit.authorization.borrow().is_none(),
+            unit.gate.borrow().result.is_none() || unit.authorization.borrow().is_none(),
             "a gate result cannot commit with an authorization"
         );
         Ok(())
@@ -248,7 +247,7 @@ impl Store {
     pub(super) fn has_staged_gate(&self) -> bool {
         self.current_unit().is_some_and(|unit| {
             let staged = unit.gate.borrow();
-            !staged.rows.is_empty() || staged.result.is_some()
+            staged.start.is_some() || staged.result.is_some()
         })
     }
 
@@ -261,25 +260,35 @@ impl Store {
             return Ok(Operation::UpdateTask(UpdateTask { change, form }));
         };
         let staged = std::mem::take(&mut *unit.gate.borrow_mut());
-        change.rows.extend(staged.rows);
         change.reservations.extend(staged.reservations);
         let authorization = unit.authorization.borrow_mut().take();
-        match (authorization, staged.result) {
-            (Some(mut authorization), None) => {
+        match (authorization, staged.start, staged.result) {
+            (Some(_), _, Some(_)) => {
+                anyhow::bail!("a gate result cannot commit with an authorization")
+            }
+            (Some(mut authorization), start, None) => {
+                change.rows.extend(
+                    start
+                        .map(|start| super::gate_rows::start_row(&start))
+                        .transpose()?,
+                );
                 authorization.change = Some((change, form));
                 Ok(Operation::Authorization(authorization))
             }
-            (None, Some(result)) => {
-                anyhow::ensure!(
-                    form == UpdateForm::Head,
-                    "a gate result cannot commit with a history edit"
+            (None, start, Some(result)) => {
+                change.rows.extend(
+                    start
+                        .map(|start| super::gate_rows::start_row(&start))
+                        .transpose()?,
                 );
-                Ok(Operation::GateResult(result.operation(change)))
+                Ok(Operation::GateResult(result.operation(change, form)))
             }
-            (None, None) => Ok(Operation::UpdateTask(UpdateTask { change, form })),
-            (Some(_), Some(_)) => {
-                anyhow::bail!("a gate result cannot commit with an authorization")
-            }
+            (None, Some(attempt), None) => Ok(Operation::GateStart(GateStart {
+                change,
+                attempt,
+                form,
+            })),
+            (None, None, None) => Ok(Operation::UpdateTask(UpdateTask { change, form })),
         }
     }
 

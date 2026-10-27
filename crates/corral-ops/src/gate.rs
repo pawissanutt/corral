@@ -413,6 +413,8 @@ fn gate_start_origin(
         bail!("candidate changed while starting gate");
     }
     launch.bind(&identity, &attempt, None)?;
+    // The previous attempt this start supersedes, with the evidence a lost one left.
+    let mut superseded = None;
     if let Some(prev) = &run.gate {
         crate::watch::load(ctx, &task.id)?;
         if prev.result == GateResult::Running
@@ -435,13 +437,16 @@ fn gate_start_origin(
         }
         if let Some(previous) = prev.identity.as_ref().filter(|i| i.attempt != attempt) {
             let stem = attempt_stem(&task.id, &run.id, Some(&previous.attempt));
-            if let Err(error) = evidence::reclaim(ctx, &stem) {
-                crate::messages::report(
-                    Some(&task.id),
-                    "gate",
-                    format!("reclaiming gate scratch {stem} failed: {error:#}"),
-                );
-            }
+            // Still Running here, it produced no result and its pane is gone: it is lost, and
+            // its open row ends with whatever it left in the start that replaces it.
+            let lost = match prev.result {
+                GateResult::Running => {
+                    let paths = attempt_paths(ctx, &task.id, &run.id, Some(&previous.attempt));
+                    evidence::put_result(ctx, &task.id, &run.id, &previous.attempt, &stem, &paths)?
+                }
+                GateResult::Pass | GateResult::Fail => None,
+            };
+            superseded = Some((stem, lost));
         }
     }
 
@@ -507,6 +512,11 @@ fn gate_start_origin(
         context: context_file.as_deref(),
     };
     let staged = evidence::put_start(ctx, &start)?;
+    let behind = corral_git::is_ancestor(&run.worktree, &identity.integration_base, &identity.head)
+        .ok()
+        .map(|contained| !contained);
+    let mut started = json!({ "run": run.id, "sha": sha, "pane": pane, "attempt": attempt, "behind_at_start": behind });
+    evidence::tier_detail(&mut started, record.tier.as_deref());
     let run_id = run.id.clone();
     ctx.store.update(&task.id, |t| {
         let expected = record.identity.as_ref().context("missing gate identity")?;
@@ -528,20 +538,35 @@ fn gate_start_origin(
         if r.review.as_ref().and_then(|r| r.verdict) != Some(corral_core::Verdict::Approve) {
             r.review = None;
         }
-        // The attempt row commits with this Running marker.
-        staged
-            .as_ref()
-            .map_or(Ok(()), |staged| staged.stage(&ctx.store))
+        // The marker, the attempt row, its references and the start event commit as one
+        // GateStart, with a superseded lost attempt's end when there is one.
+        ctx.store
+            .log_event(Some(&task.id), "gate_started", started.clone())?;
+        if let Some(staged) = &staged {
+            staged.stage(&ctx.store)?;
+        }
+        if let Some((_, Some(lost))) = &superseded {
+            lost.stage(
+                &ctx.store,
+                (GateResult::Fail, Some(evidence::SUPERSEDED_LOST)),
+            )?;
+        }
+        evidence::failpoint("gate_start_commit");
+        Ok(())
     })?;
+    if let Some((stem, _)) = &superseded
+        && let Err(error) = evidence::reclaim(ctx, stem)
+    {
+        crate::messages::report(
+            Some(&task.id),
+            "gate",
+            format!("reclaiming gate scratch {stem} failed: {error:#}"),
+        );
+    }
     crate::watch::start_gate(ctx, &task, &run, &record, &contract.commands, &paths.log)?;
     let expected_status = task.status;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
-    let behind = corral_git::is_ancestor(&run.worktree, &identity.integration_base, &identity.head)
-        .ok()
-        .map(|contained| !contained);
-    let mut started = json!({ "run": run.id, "sha": sha, "pane": pane, "attempt": attempt, "behind_at_start": behind });
-    evidence::tier_detail(&mut started, record.tier.as_deref());
     launch.submit(
         |store, task| {
             let mut fresh = ctx.clone();
@@ -559,11 +584,7 @@ fn gate_start_origin(
             verification::require_gate(&verification::policy(&fresh, task)?, task)?;
             Ok(())
         },
-        || {
-            ctx.store
-                .log_event(Some(&task.id), "gate_started", started)?;
-            ctx.herdr.pane_run(&pane, &command)
-        },
+        || ctx.herdr.pane_run(&pane, &command),
     )?;
     launch.commit()?;
     evidence::record_launched(ctx, &task.id, &run.id, &attempt, &pane)?;

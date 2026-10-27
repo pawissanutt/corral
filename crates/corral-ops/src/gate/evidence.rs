@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use corral_core::backend::{
-    GateAttempt, GateLaunched, GateStart, Operation, ReservationUse, ScratchKind, ScratchState,
+    GateAttempt, GateLaunched, Operation, ReservationUse, ScratchKind, ScratchState,
 };
 use corral_core::blob_ref::BlobRef;
 use corral_core::{CandidateIdentity, GateOutcome, GateResult, ScratchReclaim, Store};
@@ -18,6 +18,10 @@ use crate::Ctx;
 
 /// The `gate_attempts.scope` of a task run's gate.
 pub(crate) const RUN_SCOPE: &str = "run";
+
+/// The failed command of an attempt that ended without a result and was replaced.
+pub(crate) const SUPERSEDED_LOST: &str =
+    "process_lost: the gate ended without a result and was superseded";
 
 #[cfg(test)]
 type FailpointHook = Option<Box<dyn FnMut(&str)>>;
@@ -101,7 +105,6 @@ pub(crate) struct Start<'a> {
 
 /// A started attempt's row with its put identity, commands and context blobs, ready to commit.
 pub(crate) struct StagedStart {
-    task: String,
     row: GateAttempt,
     reservations: Vec<ReservationUse>,
 }
@@ -111,19 +114,6 @@ impl StagedStart {
     /// be staged again when the update retries its callback.
     pub(crate) fn stage(&self, store: &Store) -> Result<()> {
         store.stage_gate_start(&self.row, self.reservations.clone())
-    }
-
-    /// Commits the row with `event` as its own `GateStart`, for a start whose marker the
-    /// task already holds (a recovered launch).
-    pub(crate) fn commit(self, ctx: &Ctx, event: (&str, Value)) -> Result<()> {
-        let row = self.row;
-        ctx.store
-            .apply_gate(&self.task, vec![event], self.reservations, |change| {
-                Operation::GateStart(GateStart {
-                    change,
-                    attempt: row.clone(),
-                })
-            })
     }
 }
 
@@ -170,11 +160,7 @@ pub(crate) fn put_start(ctx: &Ctx, start: &Start<'_>) -> Result<Option<StagedSta
         ended: None,
     };
     reservations.extend(context.map(|put| put.reservation));
-    Ok(Some(StagedStart {
-        task: start.task.to_owned(),
-        row,
-        reservations,
-    }))
+    Ok(Some(StagedStart { row, reservations }))
 }
 
 /// Records the attempt's pane once (`GateLaunched`); a row-less (legacy) attempt is left alone.

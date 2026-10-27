@@ -270,3 +270,131 @@ fn every_collected_receipt_matches_its_row() {
         assert_eq!(fx.gate_events(&id)[0]["result"], result);
     }
 }
+
+fn rows(fx: &Fx, id: &str) -> Vec<corral_core::backend::GateAttempt> {
+    let mut page = corral_core::backend::PageReq::first(64);
+    fx.ctx
+        .store
+        .task_rows(
+            id,
+            corral_core::backend::TaskPart::GateAttempt,
+            None,
+            None,
+            &mut page,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|doc| serde_json::from_value(doc).unwrap())
+        .collect()
+}
+
+fn started_events(fx: &Fx, id: &str) -> Vec<serde_json::Value> {
+    fx.ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.task.as_deref() == Some(id) && e.kind == "gate_started")
+        .map(|e| e.detail)
+        .collect()
+}
+
+#[test]
+fn interrupted_start_commits_nothing_and_the_next_start_commits_marker_row_and_event_once() {
+    // Given a run with no gate yet.
+    let fx = Fx::new();
+    let id = fx.task();
+
+    // When its first gate start is interrupted at the commit.
+    assert!(interrupt_at("gate_start_commit", || {
+        crate::gate::gate_start(&fx.ctx, &id)
+    }));
+
+    // Then neither the marker, a row nor a start event was committed.
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert!(task.current_run().unwrap().gate.is_none());
+    assert!(rows(&fx, &id).is_empty());
+    assert!(started_events(&fx, &id).is_empty());
+
+    // When the gate starts again.
+    let started = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+
+    // Then the marker, its one row and its one start event name the same attempt.
+    let attempt = started.identity.unwrap().attempt;
+    let task = fx.ctx.store.get(&id).unwrap();
+    let marker = task.current_run().unwrap().gate.clone().unwrap();
+    assert_eq!(marker.identity.unwrap().attempt, attempt);
+    let rows = rows(&fx, &id);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].attempt, attempt);
+    assert_eq!(rows[0].launched, Some(json!(started.pane)));
+    let events = started_events(&fx, &id);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["attempt"], json!(attempt));
+}
+
+#[test]
+fn a_lost_attempt_ends_with_its_partial_log_when_a_new_start_replaces_it() {
+    // Given a started gate whose runner wrote part of its log and died without a result.
+    let fx = Fx::new();
+    let id = fx.task();
+    let lost = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+    let lost_attempt = lost.identity.clone().unwrap().attempt;
+    let paths = crate::gate::gate_paths(&fx.ctx, &id, "R1");
+    let partial = b"\n$ echo collected\ncollec".to_vec();
+    std::fs::write(&paths.log, &partial).unwrap();
+    assert!(!paths.result.exists());
+    // Its pane is listed once, then missed by two successive inventories, which releases it.
+    let inventory = || -> std::collections::HashMap<String, corral_herdr::PaneInfo> {
+        fx.ctx
+            .herdr
+            .pane_list()
+            .unwrap()
+            .into_iter()
+            .map(|pane| (pane.pane_id.clone(), pane))
+            .collect()
+    };
+    let reconcile = |panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>, at| {
+        crate::review_budget::reconcile(
+            &fx.ctx,
+            crate::pane_liveness::Snapshot::injected(panes),
+            at,
+        )
+        .unwrap();
+    };
+    reconcile(&inventory(), lost.at);
+    std::fs::remove_file(fx._tmp.path().join(lost.pane.as_deref().unwrap())).unwrap();
+    let absent = inventory();
+    reconcile(&absent, lost.at + jiff::SignedDuration::from_secs(1));
+    reconcile(&absent, lost.at + jiff::SignedDuration::from_secs(2));
+
+    // When a new gate replaces it.
+    let next = crate::gate::gate_start(&fx.ctx, &id).unwrap();
+
+    // Then the lost attempt's row ended as lost with exactly the log it left, never a pass,
+    // its directory was reclaimed, and the marker names the new attempt.
+    let row = fx
+        .ctx
+        .store
+        .gate_attempt(&id, "R1", &lost_attempt)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (row.result.as_deref(), row.failed_cmd.as_deref()),
+        (Some("fail"), Some(super::SUPERSEDED_LOST))
+    );
+    assert!(row.ended.is_some() && row.result_doc.is_none());
+    let log = fx
+        .ctx
+        .store
+        .blob_bytes(row.log.as_ref().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(log, partial);
+    assert_eq!(fx.scratch(&id, &lost_attempt), ScratchState::Reclaimed);
+    assert!(fx.gate_events(&id).is_empty());
+    let task = fx.ctx.store.get(&id).unwrap();
+    let marker = task.current_run().unwrap().gate.clone().unwrap();
+    assert_eq!(marker.identity, next.identity);
+    assert_eq!(started_events(&fx, &id).len(), 2);
+}

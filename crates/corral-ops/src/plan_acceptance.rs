@@ -160,6 +160,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         "{} already has an accepted aggregate attempt",
         tracker.id
     );
+    let tracker = reconcile_lost(ctx, tracker)?;
     let attempt_id = format!("A{}", tracker.aggregate_attempts.len() + 1);
     let repo = capture::repo(&ctx.store, &tracker)?;
     let verify = repo
@@ -228,6 +229,7 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         // The Running attempt commits with its started gate row.
         prepared.as_ref().map_or(Ok(()), |gate| gate.stage_start(&ctx.store))
     })?;
+    crate::gate::evidence::failpoint("plan_verify_running");
     let Some(prepared) = prepared else {
         return Ok(attempt);
     };
@@ -302,6 +304,42 @@ pub fn plan_verify(ctx: &Ctx, id: &str) -> Result<AggregateAttempt> {
         )?;
     }
     Ok(attempt)
+}
+
+/// Ends an aggregate attempt whose gate is still Running, which the verification lock proves
+/// lost: its marker, its row (with whatever log it left), a `plan_gate` event and its scratch
+/// closure commit together, before a new attempt is allocated. Returns the current tracker.
+fn reconcile_lost(ctx: &Ctx, tracker: Task) -> Result<Task> {
+    let Some(lost) = tracker.aggregate_attempts.last().filter(|attempt| {
+        attempt
+            .gate
+            .as_ref()
+            .is_some_and(|gate| gate.result == GateResult::Running)
+    }) else {
+        return Ok(tracker);
+    };
+    let staged = gate::put_lost(ctx, &tracker.id, gate::AGGREGATE_SCOPE, &lost.id)?;
+    let failed = "process_lost: verification ended before its gate finished";
+    ctx.store.update(&tracker.id, |task| {
+        let stored = task
+            .aggregate_attempts
+            .iter_mut()
+            .find(|stored| stored.id == lost.id && stored.identity == lost.identity)
+            .context("lost aggregate attempt changed")?;
+        let gate = stored.gate.as_mut().context("lost aggregate attempt has no gate")?;
+        gate.result = GateResult::Fail;
+        gate.process_lost = true;
+        gate.failed_cmd = Some(failed.into());
+        gate.at = corral_core::clock::now();
+        ctx.store.log_event(
+            Some(&tracker.id),
+            "plan_gate",
+            json!({"attempt": lost.id, "result": "fail", "failed_cmd": failed, "identity": lost.identity, "process_lost": true}),
+        )?;
+        staged
+            .as_ref()
+            .map_or(Ok(()), |staged| staged.stage(&ctx.store, (GateResult::Fail, Some(failed))))
+    })
 }
 
 /// Record one aggregate scenario observation against the current attempt.

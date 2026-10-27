@@ -204,7 +204,7 @@ fn checkpoint(ctx: &Ctx, id: &str, automatic: bool) -> Result<Option<PlanCheckpo
         .filter(|&index| journal.attempts[index].gate.result == GateResult::Running)
         .collect();
     for index in lost {
-        let staged = gate::put_lost_checkpoint(ctx, id, &journal.attempts[index].id)?;
+        let staged = gate::put_lost(ctx, id, gate::CHECKPOINT_SCOPE, &journal.attempts[index].id)?;
         let gate = &mut journal.attempts[index].gate;
         gate.result = GateResult::Fail;
         gate.process_lost = true;

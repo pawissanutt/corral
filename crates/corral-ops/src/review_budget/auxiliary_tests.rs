@@ -540,3 +540,124 @@ fn resumed_gates_record_behind_at_start_like_a_normal_start() {
         }
     }
 }
+
+fn gate_started_count(fx: &Fixture, id: &str) -> usize {
+    fx.ctx
+        .store
+        .events()
+        .unwrap()
+        .iter()
+        .filter(|e| e.task.as_deref() == Some(id) && e.kind == "gate_started")
+        .count()
+}
+
+/// The prepared gate's marker attempt and its committed row, if any.
+fn prepared_row(fx: &Fixture, id: &str) -> (String, Option<corral_core::backend::GateAttempt>) {
+    let task = fx.ctx.store.get(id).unwrap();
+    let attempt = task
+        .current_run()
+        .unwrap()
+        .gate
+        .clone()
+        .unwrap()
+        .identity
+        .unwrap()
+        .attempt;
+    let row = fx.ctx.store.gate_attempt(id, "R1", &attempt).unwrap();
+    (attempt, row)
+}
+
+#[test]
+fn interrupted_recovered_start_commits_nothing_and_resumes_once() {
+    // Given a prepared gate whose start never committed a row or start event.
+    let mut fx = Fixture::new(1);
+    let id = fx.task();
+    grant(&mut fx, std::slice::from_ref(&id));
+    let mut launch = prepared(&fx, &id, Kind::Gate);
+    let marker = fx
+        .ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .gate
+        .clone();
+    launch.pending.prepared_gate = marker;
+    std::fs::write(fx.tmp.path().join("w1:prepared"), "").unwrap();
+    assert!(prepared_row(&fx, &id).1.is_none());
+
+    // When its resumed launch is interrupted inside the authorized commit.
+    crate::gate::evidence::FAILPOINT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|point: &str| {
+            assert_ne!(point, "gate_resume_commit", "interrupted");
+        }));
+    });
+    let interrupted =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| launch.resume())).is_err();
+    crate::gate::evidence::FAILPOINT.with(|hook| *hook.borrow_mut() = None);
+    assert!(interrupted);
+
+    // Then neither its row nor a start event was committed.
+    assert!(prepared_row(&fx, &id).1.is_none());
+    assert_eq!(gate_started_count(&fx, &id), 0);
+
+    // When it resumes again.
+    launch.resume().unwrap();
+
+    // Then the marker, its row and its single start event agree.
+    let (attempt, row) = prepared_row(&fx, &id);
+    let row = row.unwrap();
+    assert_eq!(row.attempt, attempt);
+    assert_eq!(row.launched, Some(json!("w1:prepared")));
+    assert_eq!(gate_started_count(&fx, &id), 1);
+}
+
+#[test]
+fn recovered_start_with_a_committed_row_adds_no_second_start_event() {
+    // Given a prepared gate whose start already committed its row and start event, as a
+    // normal start refused at authorization does.
+    let mut fx = Fixture::new(1);
+    let id = fx.task();
+    grant(&mut fx, std::slice::from_ref(&id));
+    let mut launch = prepared(&fx, &id, Kind::Gate);
+    let task = fx.ctx.store.get(&id).unwrap();
+    let gate = task.current_run().unwrap().gate.clone().unwrap();
+    launch.pending.prepared_gate = Some(gate.clone());
+    let identity = gate.identity.clone().unwrap();
+    let commands = vec!["true".to_owned()];
+    let start = crate::gate::evidence::Start {
+        task: &id,
+        run: "R1",
+        attempt: &identity.attempt,
+        scope: crate::gate::evidence::RUN_SCOPE,
+        sha: &gate.sha,
+        tier: None,
+        identity: &identity,
+        commands: &commands,
+        context: None,
+    };
+    let staged = crate::gate::evidence::put_start(&fx.ctx, &start)
+        .unwrap()
+        .unwrap();
+    fx.ctx
+        .store
+        .update(&id, |_| {
+            fx.ctx.store.log_event(
+                Some(&id),
+                "gate_started",
+                json!({"run": "R1", "attempt": identity.attempt}),
+            )?;
+            staged.stage(&fx.ctx.store)
+        })
+        .unwrap();
+    std::fs::write(fx.tmp.path().join("w1:prepared"), "").unwrap();
+
+    // When the retained launch resumes.
+    launch.resume().unwrap();
+
+    // Then it launches that row without a second start event.
+    let (_, row) = prepared_row(&fx, &id);
+    assert_eq!(row.unwrap().launched, Some(json!("w1:prepared")));
+    assert_eq!(gate_started_count(&fx, &id), 1);
+}
