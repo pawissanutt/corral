@@ -19,22 +19,24 @@ use crate::support::{invariants, stats, sync};
 
 const PLAN: &str = "---\ngoal: Spin\nnon_goals: []\ndecisions: []\naffected_paths: [w.rs]\ncontracts: []\ndependencies: []\nacceptance:\n  - criterion: C1\n    scenario: spin\n    expected: clockwise\nverification: [cargo test]\nowner_decisions: []\n---\nDetails.\n";
 
-struct Transport {
+pub(super) struct Transport {
     outcome: RefCell<SendOutcome>,
     sent: RefCell<Vec<String>>,
+    pub(super) idempotent_retry: bool,
 }
 
 impl Transport {
-    fn new(outcome: SendOutcome) -> Self {
+    pub(super) fn new(outcome: SendOutcome) -> Self {
         Self {
             outcome: RefCell::new(outcome),
             sent: RefCell::new(Vec::new()),
+            idempotent_retry: false,
         }
     }
-    fn set(&self, outcome: SendOutcome) {
+    pub(super) fn set(&self, outcome: SendOutcome) {
         *self.outcome.borrow_mut() = outcome;
     }
-    fn sent_to(&self, recipient: &Recipient) -> usize {
+    pub(super) fn sent_to(&self, recipient: &Recipient) -> usize {
         let key = recipient.key().unwrap();
         self.sent.borrow().iter().filter(|k| **k == key).count()
     }
@@ -46,7 +48,7 @@ impl DeliveryAdapter for Transport {
     }
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            idempotent_retry: false,
+            idempotent_retry: self.idempotent_retry,
             admission: false,
             non_waking: false,
             max_payload: MAX_PAYLOAD,
@@ -83,7 +85,7 @@ impl DeliveryAdapter for Transport {
     }
 }
 
-fn rejected() -> SendOutcome {
+pub(super) fn rejected() -> SendOutcome {
     SendOutcome::Rejected {
         reason: "payload refused by fixture policy".into(),
         retryable_after_fix: true,
@@ -99,13 +101,19 @@ fn inbox_run(id: &str) -> Run {
 }
 
 /// A coding run, its reviewer, a planner and its plan reviewer on the fake-engine store.
-fn world() -> (Fx, [Recipient; 4]) {
+pub(super) fn world() -> (Fx, [Recipient; 4]) {
     let fx = Fx::new();
     let store = &fx.ctx.store;
     store
         .edit_config(|doc| doc.set_str("projects.app.path", "."))
         .unwrap();
     let ctx = fx.reopen();
+    // Every saved pane belongs to this fake client, including after reopening the store.
+    let pane = corral_core::HerdrRef {
+        workspace_id: "worker".into(),
+        pane_id: "worker:p1".into(),
+        socket: Some(ctx.herdr.socket_path().unwrap()),
+    };
     let code = ctx
         .store
         .create("Code", Some("app"), Status::Running, "")
@@ -141,7 +149,7 @@ fn world() -> (Fx, [Recipient; 4]) {
                 spec_revision: "fixture".into(),
                 started: at(0),
                 ended: None,
-                herdr: None,
+                herdr: Some(pane.clone()),
                 output_dir: fx.tmp.path().join("plan-output"),
                 submitted: None,
                 rounds: 0,
@@ -162,7 +170,7 @@ fn world() -> (Fx, [Recipient; 4]) {
                     verdict: None,
                     notes: None,
                     at: at(0),
-                    herdr: None,
+                    herdr: Some(pane.clone()),
                     pending_reply: None,
                 });
             Ok(())
@@ -191,7 +199,7 @@ fn world() -> (Fx, [Recipient; 4]) {
     (fx, recipients)
 }
 
-fn post(ctx: &Ctx, recipient: &Recipient, body: &str) -> Message {
+pub(super) fn post(ctx: &Ctx, recipient: &Recipient, body: &str) -> Message {
     Inbox::new(&ctx.store, recipient.clone())
         .unwrap()
         .post(Post {
@@ -209,7 +217,7 @@ fn post(ctx: &Ctx, recipient: &Recipient, body: &str) -> Message {
         .unwrap()
 }
 
-fn condition(
+pub(super) fn condition(
     fx: &Fx,
     recipient: &Recipient,
     message: &Message,
@@ -324,17 +332,7 @@ fn s21_safe_rejections_retry_exactly_and_uncertain_evidence_sends_nothing_on_all
         // Given a first definitive rejection on this recipient.
         let (fx, recipients) = world();
         let recipient = &recipients[index];
-        // The fake engine hosts no planner pane, so plan recipients are assessed without
-        // sync passes, which would correctly retire their planner as gone.
-        let synced = matches!(
-            recipient,
-            Recipient::Run { .. } | Recipient::ReviewRun { .. }
-        );
-        let pass = |seconds| {
-            if synced {
-                sync(&fx, seconds);
-            }
-        };
+        let pass = |seconds| sync(&fx, seconds);
         let ctx = fx.reopen();
         let transport = Transport::new(rejected());
         let safe = post(&ctx, recipient, "safe");
@@ -358,22 +356,21 @@ fn s21_safe_rejections_retry_exactly_and_uncertain_evidence_sends_nothing_on_all
         corral_ops::delivery::retry(&ctx.store, recipient, safe.seq).unwrap();
         deliver(&ctx, recipient, &transport, None).unwrap();
         assert_eq!(transport.sent_to(recipient), 2, "{recipient:?}");
-        pass(60);
-        if synced {
-            let stats = stats(&fx, 60);
-            let safe_key = safe_row.key.unwrap().0;
-            assert_eq!(stats.actions.by_condition.get(&safe_key), Some(&1));
-            invariants(&stats);
+        for sibling in recipients.iter().filter(|other| *other != recipient) {
+            assert_eq!(transport.sent_to(sibling), 0);
         }
+        pass(60);
+        let stats = stats(&fx, 60);
+        let safe_key = safe_row.key.unwrap().0;
+        assert_eq!(stats.conditions[&safe_key].kind, "delivery_failed");
+        assert_eq!(stats.actions.by_condition.get(&safe_key), Some(&1));
+        assert_eq!(stats.actions.attributed, 1);
+        invariants(&stats);
 
         // Given an uncertain first attempt on a fresh copy of the same recipient.
         let (fx, recipients) = world();
         let recipient = &recipients[index];
-        let pass = |seconds| {
-            if synced {
-                sync(&fx, seconds);
-            }
-        };
+        let pass = |seconds| sync(&fx, seconds);
         let ctx = fx.reopen();
         let transport = Transport::new(SendOutcome::Uncertain {
             reason: "transport lost the acknowledgement".into(),
@@ -394,11 +391,12 @@ fn s21_safe_rejections_retry_exactly_and_uncertain_evidence_sends_nothing_on_all
             "uncertain evidence sends nothing"
         );
         pass(60);
-        if synced {
-            let stats = crate::support::stats(&fx, 60);
-            assert!(stats.conditions.contains_key(&unsafe_row.key.unwrap().0));
-            assert_eq!(stats.actions.attributed, 0);
-            invariants(&stats);
-        }
+        let stats = crate::support::stats(&fx, 60);
+        assert_eq!(
+            stats.conditions[&unsafe_row.key.unwrap().0].kind,
+            "delivery_uncertain"
+        );
+        assert_eq!(stats.actions.attributed, 0);
+        invariants(&stats);
     }
 }

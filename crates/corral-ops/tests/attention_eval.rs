@@ -7,6 +7,8 @@ pub use corral_ops::{Ctx, resources};
 
 #[path = "attention_eval/delivery.rs"]
 mod delivery;
+#[path = "attention_eval/delivery_history.rs"]
+mod delivery_history;
 #[path = "attention_handling/fixture.rs"]
 mod fixture;
 #[path = "attention_eval/git_fixture.rs"]

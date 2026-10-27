@@ -4,7 +4,7 @@
 use corral_core::Status;
 use serde_json::json;
 
-use super::{Stats, Window, stats};
+use super::super::{Stats, Window, stats};
 use crate::attention::handling::{CRASH as HANDLING_CRASH, CrashPoint as HandlingPoint};
 use crate::owner_notice::{CRASH, CrashPoint};
 

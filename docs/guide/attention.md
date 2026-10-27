@@ -193,8 +193,17 @@ accepted attend and resolution, minus `since`; it is censored only while a
 condition is open and unhandled at the window end. Backlog samples PM-responsible
 conditions hourly and at the window end.
 
+Every windowed count uses the closed window `[now - since, now]`: an event's canonical
+detail time when it records one, otherwise its append time. Lifecycle history before the
+window still rebuilds each condition's age and carry-in state. Per-condition `wakes`,
+`owner_levels` and `handled` count facts timed inside the window; `lifetime_wakes` and
+`max_levels_per_condition` cover the condition's whole history.
+
 Owner notifications count physical batches (one `batch_id`) separately from the
-claims they cover. A missing outcome is `outcome_unknown` for both a stop before
+claims they cover. A batch belongs to the window by its claim time. A batch claimed
+earlier that covers a condition open in the window is reported only under `carry_in`
+and `carry_in_calls`, never in `calls` or the budget, whether or not its source record
+has been pruned. A missing outcome is `outcome_unknown` for both a stop before
 transport and a stop after it; it is never treated as unsent. `calls` is the
 interval `[success + failure, success + failure + unknown]` of transport
 invocations, not delivery to a person. `budget_batches` and `budget_calls` exclude
@@ -202,14 +211,19 @@ exempt owner-responsible entry batches; outside-ladder producers (empty coverage
 remain counted.
 
 Actions attach to a condition only through an exact identity: the message ID of
-`message_retried`, the recipient key of a fresh post, the question key, the park
-revision, or the task's run-level events for escalation and stall kinds. An
-action matching several open conditions is `ambiguous` and attributed to none.
-A repeat of the same identity while the condition stays open is a `duplicate`;
-a repeat after a failed submission is reported as `after_terminal`. Lost review
-rounds sum `released_review_runs` of escalations whose reason begins
-`integration preflight error`. Events without a canonical detail time are
-selected by append time from the window start.
+`message_retried`; the recipient key of a fresh post that is not a retry's successor;
+the question key and revision of `question_answered`; the park revision; or the run of
+`replied`, `changes_requested`, `dispatched`, `resumed`, `automation_resumed`,
+`gate_started` and `review_started`. A run joins conditions whose key or open record names
+that run, and delivery conditions of that run's recipient. An action whose identity is
+missing or unknown is `unattributed`, never attached by task alone. An action matching
+several open conditions is `ambiguous` and attributed to none. A repeat through the same
+condition and identity is a `duplicate` while the earlier action's message is neither
+observed nor terminal; after a terminal message state it is `after_terminal`, and after
+an observation it is an ordinary new action. Raw question pushes resolve their source
+event through the receipt's reader cursor and join that question key and revision only.
+Lost review rounds sum `released_review_runs` of escalations whose reason begins
+`integration preflight error`.
 
 See [attention evaluation](../records/attention-evaluation.md) for the offline
 scenario results and the live operational protocol.
