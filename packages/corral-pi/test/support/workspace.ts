@@ -1,6 +1,6 @@
 // Helpers for the cross-lane fixture: the real corral binaries built from this checkout, a
 // throwaway workspace, an events.jsonl follower and a secret scan.
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readSync, readdirSync, readFileSync, realpathSync, statSync, watch } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,15 +91,19 @@ export interface StoreEvent {
   readonly detail?: Record<string, unknown>;
 }
 
-/** Follows inode writes and watches the directory to reconnect after file replacement. */
+/**
+ * Follows events.jsonl. `tail -F` from the construction-time size is the notification source: it
+ * follows the name across replacement and pushes every appended byte through a pipe, where Bun's
+ * `fs.watch` drops notifications under load. Each push drains the file itself, so the reads, partial
+ * lines and inode handling do not depend on what tail printed.
+ */
 export class EventFollower {
   private offset: number;
   private carry = Buffer.alloc(0);
   private readonly seen: StoreEvent[] = [];
   malformed = 0;
   private readonly waiters: { match: (event: StoreEvent) => boolean; resolve: (event: StoreEvent) => void }[] = [];
-  private readonly watcher;
-  private fileWatcher;
+  private readonly tail: ChildProcess;
 
   private inode: number;
 
@@ -108,19 +112,13 @@ export class EventFollower {
     const stat = statSync(path);
     this.offset = stat.size;
     this.inode = stat.ino;
-    this.fileWatcher = watch(path, () => this.drain());
-    this.watcher = watch(dirname(path), (_event, name) => {
-      if (name === null || name === basename(path)) this.drain();
-    });
+    this.tail = spawn("tail", ["-c", `+${stat.size + 1}`, "-F", path], { stdio: ["ignore", "pipe", "ignore"] });
+    this.tail.stdout?.on("data", () => this.drain());
   }
 
   private drain(): void {
     if (!existsSync(this.path)) return;
     const stat = statSync(this.path);
-    if (stat.ino !== this.inode) {
-      this.fileWatcher.close();
-      this.fileWatcher = watch(this.path, () => this.drain());
-    }
     if (stat.ino !== this.inode || stat.size < this.offset) {
       this.inode = stat.ino;
       this.offset = 0;
@@ -175,8 +173,7 @@ export class EventFollower {
   }
 
   close(): void {
-    this.watcher.close();
-    this.fileWatcher.close();
+    this.tail.kill();
   }
 }
 
