@@ -364,7 +364,17 @@ fn owner_change_reads_only_its_approval_when_unrelated_history_grows_tenfold() {
         let backend = SqliteBackend::open(base.dir(), SqliteOptions::default()).unwrap();
         let store = base.with_backend(Box::new(backend.handle().unwrap()));
         let idea = store
-            .create("Owner idea", None, corral_core::Status::Idea, "Scope\n")
+            .create_initialized(
+                "Owner idea",
+                None,
+                corral_core::Status::Idea,
+                "Scope\n",
+                |task| {
+                    // Byte budgets must compare identical timestamp precision.
+                    task.created = at(0);
+                    Ok(())
+                },
+            )
             .unwrap();
         import(
             &backend,
