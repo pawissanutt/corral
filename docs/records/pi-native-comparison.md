@@ -6,7 +6,9 @@ T-313 / T-252@P5, October 26-27, 2026.
 The first pair retains a native pre-bind startup failure. This is not a
 six-pair pass and does not justify a default switch.** Only one arm per
 measured pair was privately landed. Five required counterpart landings are
-missing; acceptance of this gap needs an explicit owner amendment.
+missing. On October 27, 2026, the owner explicitly accepted this qualified
+non-pass report in place of those landings and the six-complete-pair/mix
+requirement. This amends delivery acceptance, not the experimental outcome.
 The PM stayed on OmO in both arms and was not evaluated. Paid API spend was
 $0; all model routes used subscriptions. USD below is API-equivalent cost,
 not a subscription invoice.
@@ -25,8 +27,11 @@ criterion remains unmet.
 The owner allowed starting before T-297 closes, selected private clone
 landings, then answered "allow Independent, allow" to T-245's escalated
 method question and "okay do it" to bounded qualified closeout within twelve
-runs and release of the source freeze. These amendments do not explicitly
-waive per-arm landings or authorize a fabricated complete-cohort pass.
+runs and release of the source freeze. Those earlier amendments did not
+explicitly waive per-arm landings. The later exact closeout answer,
+"Closeout: Accept qualified report", discharges the missing landings and
+six-complete-pair/mix requirement for this research delivery only.
+No amendment authorizes a fabricated complete-cohort pass.
 Remaining implementations were instructed
 to be independent, importing accepted prerequisites only, not counterpart
 same-task code or tests.
@@ -91,10 +96,13 @@ stopped private session have not been rewritten or restarted. No replacement,
 source-board landing, extra worker, review waiver or post-hoc experiment has
 been used to hide this gap.
 
-Owner disposition remains required for accepting this bounded research report
-in place of both the original six-complete-pair/mix scenario and these five
-missing counterpart landings. The earlier bounded-closeout approval is not
-treated as an implicit per-arm landing waiver. The metrics below describe five
+The owner explicitly accepted this bounded research report in place of both
+the original six-complete-pair/mix scenario and these five missing counterpart
+landings. The exact question named both gaps and kept all experiment caps
+unchanged; the answer was "Closeout: Accept qualified report". The canonical
+decision is review-r1-missing-arm-landings, receipt
+owner-T313-qualified-closeout-20261027. No additional landing or experiment
+was performed to obtain acceptance. The metrics below still describe five
 paired approval windows, not five fully landed matched pairs.
 
 ## Measured five-pair results
@@ -277,6 +285,7 @@ these newly covered settlement paths do not occur in its ten measured arms.
 The real five-pair CLI exits 2, not a fabricated pass.
 Parent verification belongs to T-313's post-rebase Corral receipt, not a private
 worker gate. Missing counterpart landings and the original six-complete-pair
-acceptance remain subject to explicit owner disposition. Also unverified:
+scenario did not occur; the owner's exact amendment accepts the qualified
+research delivery instead. Also unverified:
 a blinded host effect, equal silent-ending instrumentation, post-cutover
 export compatibility, any PM-host conclusion or default-switch approval.
