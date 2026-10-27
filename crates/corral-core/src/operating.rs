@@ -16,31 +16,13 @@ use crate::{
     PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
 };
 
+mod authority;
 mod membership;
 mod projects;
 mod publication;
 
+pub use authority::{OperatingAuthority, OperatingMode};
 pub use projects::{DEFAULT_GRANT_DAYS, ScopedProject};
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OperatingMode {
-    #[default]
-    Assist,
-    Autopilot,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct OperatingAuthority {
-    pub dispatch: bool,
-    pub accept: bool,
-    pub plan_accept: bool,
-    /// Final tracker Plan acceptance, never implied by `accept` or `plan_accept`.
-    /// Omitted when off so grants confirmed before this field keep their digest.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub aggregate_accept: bool,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +66,10 @@ pub struct OperatingScope {
 pub struct OperatingPolicy {
     pub mode: OperatingMode,
     pub paused: bool,
+    /// Owner-toggled: ignore owner-only acceptance and repair round limits until turned off.
+    /// Outside the grant digest like `paused`; omitted when off so existing files are unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub turbo: bool,
     /// Changes on scope/authority confirmation, not ordinary execution progress.
     pub revision: u64,
     pub authorization: Option<String>,
@@ -495,6 +481,7 @@ impl Store {
         let policy = OperatingPolicy {
             mode: OperatingMode::Autopilot,
             paused: false,
+            turbo: false,
             revision,
             authorization: Some(id.clone()),
             authority: selection.authority.clone(),
@@ -716,8 +703,9 @@ impl Store {
                     action,
                     OperatingActionKind::Accept | OperatingActionKind::AcceptAggregate
                 ) {
-                    if config.explicit_owner_acceptance(&task, false)
-                        || (aggregate && config.explicit_owner_acceptance(&task, true))
+                    if !policy.turbo
+                        && (config.explicit_owner_acceptance(&task, false)
+                            || (aggregate && config.explicit_owner_acceptance(&task, true)))
                     {
                         reasons.push("explicit owner-only acceptance".into());
                     }
@@ -731,11 +719,13 @@ impl Store {
                     }
                 }
                 if action == OperatingActionKind::AcceptPlan
+                    && !policy.turbo
                     && config.explicit_owner_acceptance(&task, true)
                 {
                     reasons.push("explicit owner-only plan acceptance".into());
                 }
                 if action == OperatingActionKind::Repair
+                    && !policy.turbo
                     && task.rounds >= resolved.review.max_rounds
                 {
                     reasons.push("automatic repair rounds exhausted".into());

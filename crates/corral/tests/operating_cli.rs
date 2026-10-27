@@ -231,6 +231,28 @@ fn confirmed_project_selection_is_finite_and_preserves_exclusions_and_exceptions
             .refusals
             .contains_key(&corral_core::OperatingActionKind::Accept)
     );
+    // When turbo is switched on and then off, the same grant toggles the owner exception.
+    for (turbo, owner_only) in [(true, false), (false, true)] {
+        fixture.store.turbo_operating_policy(turbo).unwrap();
+        let policy = fixture
+            .store
+            .reopen()
+            .unwrap()
+            .effective_operating_policy()
+            .unwrap();
+        assert_eq!(
+            policy.mode,
+            corral_core::OperatingMode::Autopilot,
+            "turbo={turbo}"
+        );
+        let refusals = &policy.tasks[&fixture.id].refusals;
+        let accept = &refusals[&corral_core::OperatingActionKind::Accept];
+        assert_eq!(
+            accept.iter().any(|r| r == "explicit owner-only acceptance"),
+            owner_only,
+            "turbo={turbo}: {refusals:?}"
+        );
+    }
 }
 
 #[test]
