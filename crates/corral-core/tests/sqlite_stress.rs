@@ -85,6 +85,45 @@ fn a_kill_at_any_barrier_of_any_operation_leaves_it_all_or_nothing() -> Result<(
     Ok(())
 }
 
+/// T-328: a kill after the event row, after closing the old run, after inserting the new run or
+/// at the pointer leaves the event, both runs and the pointer all present or all absent.
+#[test]
+fn a_kill_inside_a_condition_change_or_clear_keeps_event_runs_and_pointer_together() -> Result<()> {
+    let expected = [
+        (
+            OpKind::ObserveCondition,
+            &[
+                "event",
+                "condition close",
+                "condition run",
+                "condition pointer",
+            ][..],
+        ),
+        (
+            OpKind::ClearCondition,
+            &["event", "condition close", "condition pointer"][..],
+        ),
+    ];
+    let mut jobs = Vec::new();
+    for (kind, names) in expected {
+        let script = Script { kind, fillers: 0 };
+        let plan = Arc::new(crash::plan(script)?);
+        let points = plan.final_points();
+        let seen: Vec<_> = points.iter().map(|&i| plan.points[i].2.as_str()).collect();
+        for name in names {
+            ensure!(
+                seen.contains(name),
+                "{kind:?} has no {name} barrier: {seen:?}"
+            );
+        }
+        for point in points {
+            jobs.push((script, Arc::clone(&plan), point));
+        }
+    }
+    run_all(jobs)?;
+    Ok(())
+}
+
 struct XorShift(u64);
 
 impl XorShift {
