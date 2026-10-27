@@ -10,6 +10,10 @@ use sha2::{Digest, Sha256};
 
 use super::{Neighborhood, row};
 
+/// A change request with no delivery attempt raises its own attention kind this soon,
+/// well before the generic ten-minute unobserved bound.
+const CHANGES_UNDELIVERED_SECS: i64 = 60;
+
 struct Delivery<'a> {
     recipient: Recipient,
     state: &'a InboxState,
@@ -455,6 +459,22 @@ fn entry_condition(
         command = Some(inspect.clone());
         description = "Inspect the exact message and existing run recovery choices".into();
         machine_checkable = false;
+    } else if entry.message.kind == "changes_requested"
+        && entry.message.envelope.is_none()
+        && now.duration_since(entry.message.created).as_secs() >= CHANGES_UNDELIVERED_SECS
+    {
+        // The worker is waiting on a change request no delivery pass has even attempted;
+        // a generic silent_turn would hide that the request never reached it.
+        kind = "changes_not_delivered";
+        reason = format!(
+            "Changes requested on {} ({id}) were never delivered to the worker: no delivery attempt has been made",
+            task.id
+        );
+        command = Some("corral sync".to_string());
+        description = format!(
+            "Run the delivery pass and inspect `corral inbox show {id}` for the blocked reason; do not post a duplicate"
+        );
+        resume = "Change request is observed, superseded, or its recipient ends";
     } else if incomplete(entry) {
         kind = "delivery_evidence_incomplete";
         reason =
