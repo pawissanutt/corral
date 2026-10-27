@@ -284,6 +284,13 @@ fn setup_checks_invalid_config_before_manifest_or_link_side_effects() {
     let error = super::super::setup_at(&ctx, &path).unwrap_err();
     // Then invalid configuration detection precedes every plugin side effect.
     assert!(format!("{error:#}").contains("keys must be a TOML table"));
+    assert!(
+        super::super::MANIFEST
+            .load(&ctx.store, "manifest")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!ctx.store.state_dir().join("tmp/herdr-plugin").exists());
     assert!(!ctx.store.state_dir().join("herdr-plugin").exists());
 }
 
