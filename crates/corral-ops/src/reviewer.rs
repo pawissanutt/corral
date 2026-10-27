@@ -78,15 +78,18 @@ fn launch_profile(
     let command =
         match crate::agent::hooks::review::command(ctx, task, run, &resolved, &herdr.pane_id) {
             Some(command) => command?,
-            None => render_template(
-                &resolved,
-                &[
+            None => {
+                let mut values = vec![
                     ("prompt_file", prompt_file.display().to_string()),
                     ("name", title.clone()),
                     ("task", task.id.clone()),
                     ("worktree", run.worktree.display().to_string()),
-                ],
-            )?,
+                ];
+                if let Some(notice) = crate::round_notice::latest_review(&saved) {
+                    values.push((crate::prompt::NOTICE_KEY, notice));
+                }
+                render_template(&resolved, &values)?
+            }
         };
     attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
     let mut child = String::new();
@@ -508,15 +511,16 @@ fn review_run_origin(
             .and_then(|r| r.review_runs.last())
             .context("review accounting child disappeared")?,
     )?;
-    std::fs::write(
-        &prompt_file,
-        review_prompt(
-            ctx,
-            &saved,
-            saved.current_run().context("review run disappeared")?,
-        )? + &packet_section,
-    )
-    .with_context(|| format!("writing {}", prompt_file.display()))?;
+    let mut prompt = review_prompt(
+        ctx,
+        &saved,
+        saved.current_run().context("review run disappeared")?,
+    )? + &packet_section;
+    if let Some(notice) = crate::round_notice::latest_review(&saved) {
+        prompt = format!("{notice}\n\n{prompt}");
+    }
+    std::fs::write(&prompt_file, prompt)
+        .with_context(|| format!("writing {}", prompt_file.display()))?;
     let launched = match &reviewer {
         Reviewer::Profile(_) | Reviewer::CrossVendor | Reviewer::Auto => {
             launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)

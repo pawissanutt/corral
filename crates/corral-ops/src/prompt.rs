@@ -411,6 +411,18 @@ pub fn render_command(
     run: &Run,
     prompt_file: &Path,
 ) -> Result<String> {
+    render_command_noticed(ctx, profile, task, run, prompt_file, None)
+}
+
+/// `render_command` whose `{prompt_ref}` message also carries a single-line new-round `notice`.
+pub(crate) fn render_command_noticed(
+    ctx: &Ctx,
+    profile: &str,
+    task: &Task,
+    run: &Run,
+    prompt_file: &Path,
+    notice: Option<&str>,
+) -> Result<String> {
     let choice = ProfileChoice {
         profile: Some(profile.to_string()),
         model: run.model.clone(),
@@ -422,15 +434,16 @@ pub fn render_command(
     };
     let resolved = crate::role_session::command(ctx, run, &resolved)?;
     let name = format!("{} {}", task.id, task.title);
-    render_template(
-        &resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", name),
-            ("task", task.id.clone()),
-            ("worktree", run.worktree.display().to_string()),
-        ],
-    )
+    let mut values = vec![
+        ("prompt_file", prompt_file.display().to_string()),
+        ("name", name),
+        ("task", task.id.clone()),
+        ("worktree", run.worktree.display().to_string()),
+    ];
+    if let Some(notice) = notice {
+        values.push((NOTICE_KEY, notice.to_string()));
+    }
+    render_template(&resolved, &values)
 }
 
 /// Task id the settings preview renders commands for.
@@ -507,11 +520,18 @@ pub(crate) fn render_template(
             .iter()
             .find(|(key, _)| *key == "prompt_file")
             .context("{prompt_ref} needs a prompt file")?;
-        out = out.replace(PROMPT_REF, &sh_quote(&pointer(Path::new(&file.1))));
+        let message = pointer(Path::new(&file.1));
+        let message = match values.iter().find(|(key, _)| *key == NOTICE_KEY) {
+            Some((_, notice)) => format!("{notice} {message}"),
+            None => message,
+        };
+        out = out.replace(PROMPT_REF, &sh_quote(&message));
     }
     Ok(out)
 }
 
+/// Template value naming a new-round notice that precedes the `{prompt_ref}` pointer message.
+pub(crate) const NOTICE_KEY: &str = "round_notice";
 const PROMPT_REF: &str = "{prompt_ref}";
 /// The pre-T-260 default: the whole prompt as one argument, which Linux caps at 128 KiB.
 const INLINE_PROMPT: &str = "\"$(cat '{prompt_file}')\"";

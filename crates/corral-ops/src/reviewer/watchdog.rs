@@ -158,6 +158,16 @@ pub(crate) fn reconcile_review_sampled_at(
     // The worker is finished: this idle stretch belongs to its pending reviewer.
     let since = idle.then(|| run.idle_since.filter(|at| *at >= review.at).unwrap_or(now));
     let elapsed = since.is_some_and(|at| now.duration_since(at) >= window);
+    let startup = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
+    );
+    // A reused conversation can answer a new round with its old "complete" state and go idle.
+    let silent = idle
+        && now.duration_since(review.at) >= startup
+        && run
+            .review_runs
+            .last()
+            .is_some_and(|child| child.outcome.is_none() && crate::round_notice::reused(child));
     let failure = run
         .blocked_excerpt
         .as_deref()
@@ -192,7 +202,11 @@ pub(crate) fn reconcile_review_sampled_at(
             review_notes_path(ctx, id, &run.id).display()
         )
     });
-    if since == run.idle_since && reason.is_none() {
+    let flagged = run
+        .review_runs
+        .last()
+        .is_some_and(|child| child.idle_no_report);
+    if since == run.idle_since && reason.is_none() && silent == flagged {
         return Ok(None);
     }
     let mut batch = None;
@@ -215,6 +229,7 @@ pub(crate) fn reconcile_review_sampled_at(
         parent.idle_since = since;
         if let Some(child) = parent.review_runs.last_mut() {
             child.idle_since = since;
+            child.idle_no_report = silent;
             child.agent_state = Some(
                 pane.map(|p| p.status.as_str())
                     .unwrap_or("gone")

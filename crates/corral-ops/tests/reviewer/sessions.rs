@@ -321,3 +321,205 @@ fn incompatible_reviewer_gets_one_explicit_new_session_and_diagnostic() {
         assert!(new.diagnostic.as_deref().unwrap().contains("incompatible"));
     }
 }
+
+fn last_user_message(session: &corral_core::RoleSession) -> String {
+    let transcript = std::fs::read_to_string(session.transcript.as_ref().unwrap()).unwrap();
+    let last: serde_json::Value = serde_json::from_str(transcript.lines().last().unwrap()).unwrap();
+    last["message"]["content"].as_str().unwrap().to_string()
+}
+
+fn second_review_round() -> (tempfile::TempDir, Ctx, String, corral_core::ReviewRecord) {
+    let (tmp, mut ctx, id, _) = task_in_review();
+    session_profile(&mut ctx);
+    let first = corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    let callback = corral_ops::review_callback_token(&first).unwrap();
+    corral_ops::verdict_bound(&ctx, &id, Verdict::Changes, "repair", Some(&callback)).unwrap();
+    ctx.store = Store::open(ctx.store.root()).unwrap();
+    let second = corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    (tmp, ctx, id, second)
+}
+
+#[test]
+fn reused_reviewer_message_names_the_round_attempt_and_candidate_and_retires_earlier_rounds() {
+    // Given a reviewer whose conversation already completed round 1.
+    let (_tmp, ctx, id, second) = second_review_round();
+
+    // When round 2 is delivered into the resumed conversation.
+    let task = ctx.store.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    let child = run.review_runs.last().unwrap();
+    let delivered = last_user_message(child.session.as_ref().unwrap());
+
+    // Then the delivered message itself identifies the round and says earlier rounds are finished.
+    let attempt = corral_ops::review_callback_token(&second).unwrap();
+    assert_eq!(run.review_runs.len(), 2);
+    assert!(delivered.contains("NEW REVIEW ROUND 2"), "{delivered}");
+    assert!(delivered.contains(&child.id), "{delivered}");
+    assert!(delivered.contains(&attempt), "{delivered}");
+    assert!(delivered.contains(&second.sha), "{delivered}");
+    assert!(
+        delivered.contains("Every earlier review round is finished"),
+        "{delivered}"
+    );
+    let prompt = ctx.store.prompts_dir().join(format!("{id}-R1-review.md"));
+    assert!(
+        std::fs::read_to_string(prompt)
+            .unwrap()
+            .starts_with("NEW REVIEW ROUND 2")
+    );
+}
+
+#[test]
+fn first_review_round_carries_no_new_round_notice() {
+    // Given a reviewer that starts a fresh conversation.
+    let (_tmp, mut ctx, id, _) = task_in_review();
+    session_profile(&mut ctx);
+    corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+
+    // When its first request is read back.
+    let task = ctx.store.get(&id).unwrap();
+    let session = task.current_run().unwrap().review_runs[0]
+        .session
+        .clone()
+        .unwrap();
+
+    // Then nothing claims earlier rounds were finished.
+    assert!(!last_user_message(&session).contains("NEW REVIEW ROUND"));
+}
+
+#[test]
+fn reused_reviewer_that_ends_its_turn_without_a_verdict_raises_attention_within_one_sync() {
+    use super::watchdog::{after, pane};
+    use corral_herdr::AgentStatus;
+    // Given a resumed reviewer that answers the new round with its old "complete" state and idles.
+    let (_tmp, ctx, id, second) = second_review_round();
+    let attempt = corral_ops::review_callback_token(&second).unwrap();
+    let flagged = |ctx: &Ctx| {
+        ctx.store
+            .get(&id)
+            .unwrap()
+            .current_run()
+            .unwrap()
+            .review_runs
+            .last()
+            .unwrap()
+            .idle_no_report
+    };
+    let startup = i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap();
+
+    // When sync samples its idle pane while the pane may still be starting, then after.
+    corral_ops::reconcile_review_at(&ctx, &id, after(second.at, 0), &pane(AgentStatus::Idle))
+        .unwrap();
+    assert!(!flagged(&ctx));
+    let now = after(second.at, startup);
+    assert!(
+        corral_ops::reconcile_review_at(&ctx, &id, now, &pane(AgentStatus::Idle))
+            .unwrap()
+            .is_none()
+    );
+
+    // Then the open review gets a specific condition naming its attempt.
+    assert!(flagged(&ctx));
+    assert_eq!(ctx.store.get(&id).unwrap().status, Status::Review);
+    let board = corral_ops::attention::board(&ctx, after(now, 1)).unwrap();
+    let row = board.tasks.iter().find(|row| row.task == id).unwrap();
+    let condition = row
+        .assessment
+        .conditions
+        .iter()
+        .find(|condition| condition.kind == "review_turn_without_verdict")
+        .unwrap();
+    let child = ctx
+        .store
+        .get(&id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .review_runs[1]
+        .id
+        .clone();
+    assert!(condition.reason.contains(&child), "{}", condition.reason);
+    assert!(condition.reason.contains(&attempt), "{}", condition.reason);
+    assert!(
+        !row.assessment
+            .conditions
+            .iter()
+            .any(|c| c.kind == "silent_turn")
+    );
+
+    // And the flag clears once the reviewer works again.
+    corral_ops::reconcile_review_at(&ctx, &id, after(now, 2), &pane(AgentStatus::Working)).unwrap();
+    assert!(!flagged(&ctx));
+}
+
+#[test]
+fn first_round_idle_reviewer_is_not_flagged_as_a_silent_reused_turn() {
+    use super::watchdog::{after, pane};
+    use corral_herdr::AgentStatus;
+    // Given a first-round reviewer that is idle past the startup grace.
+    let (_tmp, mut ctx, id, _) = task_in_review();
+    session_profile(&mut ctx);
+    let first = corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+
+    // When sync samples it.
+    corral_ops::reconcile_review_at(&ctx, &id, after(first.at, 60), &pane(AgentStatus::Idle))
+        .unwrap();
+
+    // Then the reused-session condition does not apply to it.
+    let task = ctx.store.get(&id).unwrap();
+    assert!(!task.current_run().unwrap().review_runs[0].idle_no_report);
+}
+
+#[test]
+fn reused_worker_changes_round_message_names_the_round_and_retires_earlier_rounds() {
+    // Given a worker whose live conversation is reused for a changes round.
+    let (_tmp, ctx, id, _) = session_candidate();
+
+    // When the owner requests changes.
+    corral_ops::request_changes(&ctx, &id, "fix the widget").unwrap();
+
+    // Then the delivered request says earlier rounds are finished and names the run.
+    let events = ctx.store.events().unwrap();
+    let delivered = events
+        .iter()
+        .rev()
+        .find(|event| event.kind == "changes_requested")
+        .unwrap()
+        .detail["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(delivered.starts_with("NEW CHANGES ROUND:"), "{delivered}");
+    assert!(delivered.contains(&format!("{id} run R1")), "{delivered}");
+    assert!(
+        delivered.contains("Every earlier round is finished"),
+        "{delivered}"
+    );
+    assert!(delivered.ends_with("fix the widget"), "{delivered}");
+}
+
+#[test]
+fn restarted_worker_pointer_message_carries_the_changes_round_notice() {
+    // Given a finished worker whose process exited back to its pane shell.
+    let (_tmp, ctx, id, _) = session_candidate();
+    let receipt = ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{id}-R1.exited"));
+    std::fs::write(receipt, "0\n").unwrap();
+    ctx.store.get(&id).unwrap();
+
+    // When changes resume its recorded conversation.
+    corral_ops::request_changes(&ctx, &id, "continue with the finding").unwrap();
+
+    // Then the message handed to the resumed process, not only its prompt file, is a new-round notice.
+    let task = ctx.store.get(&id).unwrap();
+    let session = task.current_run().unwrap().session.clone().unwrap();
+    let delivered = last_user_message(&session);
+    assert!(delivered.starts_with("NEW CHANGES ROUND:"), "{delivered}");
+    assert!(
+        delivered.contains("Every earlier round is finished"),
+        "{delivered}"
+    );
+}

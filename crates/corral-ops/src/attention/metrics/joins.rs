@@ -15,6 +15,7 @@ fn join(event: &Event) -> Option<(&'static [&'static str], String)> {
         "escalation",
         "agent_lost",
         "silent_turn",
+        "review_turn_without_verdict",
         "stuck_process",
         "unexpected_stall",
     ];
