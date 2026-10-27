@@ -67,8 +67,12 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
         })).unwrap()),
     });
     store.save_config().unwrap();
-    std::fs::create_dir_all(store.prompts_dir()).unwrap();
-    std::fs::write(store.prompts_dir().join("run.md"), "{{id}}\n{{body}}\n").unwrap();
+    std::fs::create_dir_all(store.dir().join("prompts")).unwrap();
+    std::fs::write(
+        store.dir().join("prompts").join("run.md"),
+        "{{id}}\n{{body}}\n",
+    )
+    .unwrap();
     let engine = tmp.path().join("engine");
     std::fs::create_dir(&engine).unwrap();
     let bin = engine.join("herdr");
@@ -136,7 +140,11 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
         .unwrap()
         .implementer;
     assert_eq!(reserved, task.dispatch_plan.as_ref().unwrap().route);
-    std::fs::write(ctx.store.prompts_dir().join("run.md"), "NEW_TEMPLATE").unwrap();
+    std::fs::write(
+        ctx.store.dir().join("prompts").join("run.md"),
+        "NEW_TEMPLATE",
+    )
+    .unwrap();
     assert_eq!(
         corral_ops::render_command(&ctx, &run.agent, &task, &run, &prompt).unwrap(),
         command
@@ -157,15 +165,15 @@ fn execution_snapshot_survives_binding_changes_deletion_and_launch_resume() {
     ctx.store.config.profiles.remove("worker");
     ctx.store.config.harnesses.remove("frozen");
     ctx.store.save_config().unwrap();
-    std::fs::remove_file(ctx.store.prompts_dir().join("run.md")).unwrap();
+    std::fs::remove_file(ctx.store.dir().join("prompts").join("run.md")).unwrap();
     ctx.store = Store::open(tmp.path()).unwrap();
     std::fs::remove_file(engine.join("fail")).unwrap();
     corral_ops::dispatch(&ctx, &id, &DispatchOpts::default()).unwrap();
     // Then the original command and run identity survive, including unset overrides.
     let receipt = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{id}-R1.exited"));
     let sent = std::fs::read_to_string(engine.join("command")).unwrap();
@@ -204,7 +212,7 @@ fn legacy_execution_keeps_current_profile_rendering_and_launch_validation() {
         .unwrap();
     let task = ctx.store.get(&task.id).unwrap();
     let run = task.current_run().unwrap();
-    let prompt = ctx.store.prompts_dir().join("legacy.md");
+    let prompt = ctx.store.dir().join("prompts").join("legacy.md");
     let original = corral_ops::render_command(&ctx, &run.agent, &task, run, &prompt).unwrap();
     // When legacy bindings change and are later deleted.
     ctx.store.config.profiles.get_mut("worker").unwrap().args = vec!["--legacy-current".into()];
@@ -229,7 +237,7 @@ fn execution_snapshot_preserves_unknown_model_effort_and_vendor() {
     ctx.store.save_config().unwrap();
     let task = reserve(&ctx, &id, &engine);
     let run = task.current_run().unwrap();
-    let prompt = ctx.store.prompts_dir().join("prompt.md");
+    let prompt = ctx.store.dir().join("prompts").join("prompt.md");
     let command = corral_ops::render_command(&ctx, &run.agent, &task, run, &prompt).unwrap();
     // When the profile gains explicit settings for future runs.
     let profile = ctx.store.config.profiles.get_mut("worker").unwrap();

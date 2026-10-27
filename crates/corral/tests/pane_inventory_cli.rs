@@ -219,7 +219,7 @@ impl Fixture {
     }
 
     fn state_snapshot(&self) -> BTreeMap<PathBuf, Vec<u8>> {
-        std::fs::read_dir(self.ctx.store.state_dir())
+        std::fs::read_dir(self.ctx.store.dir().join("state"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.is_file())
@@ -405,7 +405,8 @@ fn assert_foreign_session(legacy: bool) {
         !fixture
             .ctx
             .store
-            .state_dir()
+            .dir()
+            .join("state")
             .join("pane-liveness.json")
             .exists()
     );
@@ -520,7 +521,14 @@ fn same_session_hook_confirms_gone_only_after_two_misses() {
         }),
         "tasks={} first={first:?} second={second:?} observations={:?}",
         fixture.snapshot(),
-        std::fs::read_to_string(fixture.ctx.store.state_dir().join("pane-liveness.json"))
+        std::fs::read_to_string(
+            fixture
+                .ctx
+                .store
+                .dir()
+                .join("state")
+                .join("pane-liveness.json")
+        )
     );
     let events = fixture.ctx.store.events().unwrap();
     assert_eq!(events.iter().filter(|e| e.kind == "needs_me").count(), 3);
@@ -646,10 +654,16 @@ fn bound_legacy_corral_and_default_sessions_still_confirm_gone() {
             first.status.success() && first.stderr.is_empty(),
             "{first:?}"
         );
-        let first_liveness =
-            std::fs::read_to_string(fixture.ctx.store.state_dir().join("pane-liveness.json"));
+        let first_liveness = std::fs::read_to_string(
+            fixture
+                .ctx
+                .store
+                .dir()
+                .join("state")
+                .join("pane-liveness.json"),
+        );
         let first_resources =
-            std::fs::read_to_string(fixture.ctx.store.state_dir().join("resources.json"));
+            std::fs::read_to_string(fixture.ctx.store.dir().join("state").join("resources.json"));
         assert!(
             fixture
                 .ctx
@@ -676,8 +690,15 @@ fn bound_legacy_corral_and_default_sessions_still_confirm_gone() {
                 .all(|t| t.status == Status::NeedsMe),
             "{original}: tasks={} first_liveness={first_liveness:?} first_resources={first_resources:?} second_liveness={:?} second_resources={:?} calls={:?} first={first:?} second={second:?}",
             fixture.snapshot(),
-            std::fs::read_to_string(fixture.ctx.store.state_dir().join("pane-liveness.json")),
-            std::fs::read_to_string(fixture.ctx.store.state_dir().join("resources.json")),
+            std::fs::read_to_string(
+                fixture
+                    .ctx
+                    .store
+                    .dir()
+                    .join("state")
+                    .join("pane-liveness.json")
+            ),
+            std::fs::read_to_string(fixture.ctx.store.dir().join("state").join("resources.json")),
             std::fs::read_to_string(fixture.ctx.store.root().join("calls"))
         );
         let events = fixture.ctx.store.events().unwrap();

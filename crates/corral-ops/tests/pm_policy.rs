@@ -113,7 +113,10 @@ impl Fx {
     }
 
     fn saved(&self) -> Value {
-        parse_policy(&std::fs::read_to_string(self.ctx.store.prompts_dir().join("pm.md")).unwrap())
+        parse_policy(
+            &std::fs::read_to_string(self.ctx.store.scratch_path("pm").unwrap().join("pm.md"))
+                .unwrap(),
+        )
     }
 
     fn receipt(&self, pane: &str) -> Value {
@@ -164,7 +167,9 @@ fn live_reuse_saves_and_submits_current_scoped_policy_without_events() {
         .store
         .create("future", Some("app"), Status::Ready, "not delegated")
         .unwrap();
-    std::fs::write(fx.ctx.store.prompts_dir().join("pm.md"), "obsolete").unwrap();
+    let stale = fx.ctx.store.scratch_path("pm").unwrap().join("pm.md");
+    std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    std::fs::write(stale, "obsolete").unwrap();
     // When opening the existing PM.
     assert_eq!(open_pm(&fx.ctx).unwrap(), "pm:p1");
     // Then saved instructions and actual transport agree on exact finite authority.
@@ -503,15 +508,22 @@ fn restart_uses_canonical_pm_and_policy_despite_conflicting_legacy_files() {
         .unwrap();
     assert_eq!(pm.doc["doc_version"], 1);
     assert_eq!(policy.doc["doc_version"], 1);
-    assert!(!fx.ctx.store.state_dir().join("pm.json").exists());
-    assert!(!fx.ctx.store.state_dir().join("pm-policy.json").exists());
+    assert!(!fx.ctx.store.dir().join("state").join("pm.json").exists());
+    assert!(
+        !fx.ctx
+            .store
+            .dir()
+            .join("state")
+            .join("pm-policy.json")
+            .exists()
+    );
     std::fs::write(
-        fx.ctx.store.state_dir().join("pm.json"),
+        fx.ctx.store.dir().join("state").join("pm.json"),
         r#"{"pane_id":"legacy:p9"}"#,
     )
     .unwrap();
     std::fs::write(
-        fx.ctx.store.state_dir().join("pm-policy.json"),
+        fx.ctx.store.dir().join("state").join("pm-policy.json"),
         r#"{"panes":{}}"#,
     )
     .unwrap();
@@ -548,12 +560,12 @@ fn legacy_pm_and_policy_files_do_not_supply_missing_records() {
     // Given legacy-only state claiming an existing PM.
     let fx = Fx::new();
     std::fs::write(
-        fx.ctx.store.state_dir().join("pm.json"),
+        fx.ctx.store.dir().join("state").join("pm.json"),
         r#"{"pane_id":"legacy:p9"}"#,
     )
     .unwrap();
     std::fs::write(
-        fx.ctx.store.state_dir().join("pm-policy.json"),
+        fx.ctx.store.dir().join("state").join("pm-policy.json"),
         "invalid legacy policy",
     )
     .unwrap();

@@ -46,7 +46,7 @@ fn reviewer_fallback_is_a_new_attempt_that_keeps_independence() {
     let first = run.review_runs[0].clone();
     assert_eq!(first.model.as_deref(), Some("anthropic/rv-claude-fixture"));
     let sha = run.review.as_ref().unwrap().sha.clone();
-    let notes = corral_ops::review_notes_path(&fx.ctx, &fx.id, &run.id);
+    let notes = corral_ops::review_notes_path(&fx.ctx, &fx.id, &run.id).unwrap();
     std::fs::write(&notes, "Partial: looks fine so far").unwrap();
     // When the reviewer's quota is exhausted mid-review.
     fx.fail_turn(&first, "r1.jsonl", "quota exceeded for model rv-claude", 10);

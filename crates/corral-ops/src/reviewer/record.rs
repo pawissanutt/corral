@@ -77,7 +77,7 @@ pub(super) fn record_verdict(
     task: &Task,
     run: &Run,
     mut record: ReviewRecord,
-    (verdict, notes): (Verdict, String),
+    (verdict, notes, evidence): (Verdict, String, &Evidence),
     ended: Timestamp,
     report: Option<&effects::Report<'_>>,
 ) -> Result<Recorded> {
@@ -87,8 +87,7 @@ pub(super) fn record_verdict(
     }
     let tmp = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_tmp()?
         .join(format!("{}-{}-review", task.id, run.id));
     std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
     let file = tmp.join("review-notes.md");
@@ -112,6 +111,7 @@ pub(super) fn record_verdict(
         );
     }
     snapshot?;
+    let staged = evidence.stage(ctx, &task.id)?;
     record.verdict = Some(verdict);
     record.notes = Some(notes);
     record.at = ended;
@@ -124,7 +124,7 @@ pub(super) fn record_verdict(
     // observed between the recheck below and the verdict's commit.
     let child = bound_child(ctx, task, &run.id)?;
     let _answers = child.as_ref().map(|(inbox, _)| inbox.lock()).transpose()?;
-    ctx.store.update(&task.id, |t| {
+    let updated = ctx.store.update(&task.id, |t| {
         if let Some(report) = report {
             let home = effects::Home::of(report.origin);
             effects::recheck(&ctx.store, t, report.origin, &home)?;
@@ -182,8 +182,24 @@ pub(super) fn record_verdict(
                 json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
             )?;
         }
-        Ok(())
-    })?;
+        staged.attach(ctx, t, &run.id)
+    });
+    if let Err(error) = updated {
+        staged.release(ctx)?;
+        return Err(error);
+    }
+    drop(staged);
+    if let Some(child) = run.review_runs.last() {
+        let key = dir_attempt(run.review.as_ref(), &child.id);
+        let attempt = crate::scratch_reclaim::Attempt::Review {
+            task: &task.id,
+            run: &run.id,
+            child: &key,
+        };
+        if let Err(error) = attempt.close(ctx) {
+            crate::messages::report(Some(&task.id), "scratch", format!("{error:#}"));
+        }
+    }
     if report.is_some() {
         return Ok((record, receipt));
     }

@@ -148,9 +148,9 @@ fn run_contract_gate_commands_execute_with_project_environment() {
         ]
         .into(),
     );
-    std::fs::create_dir_all(ctx.store.prompts_dir()).unwrap();
+    std::fs::create_dir_all(ctx.store.dir().join("prompts")).unwrap();
     std::fs::write(
-        ctx.store.prompts_dir().join("run.md"),
+        ctx.store.dir().join("prompts").join("run.md"),
         "{{gate}}\nEND_GATE\n",
     )
     .unwrap();
@@ -218,7 +218,7 @@ fn contract_falls_back_to_the_gate_quoted_in_agents_md() {
 fn project_and_harness_templates_override_the_builtin() {
     let (tmp, mut ctx) = workspace();
     let task = task(&ctx);
-    let prompts = ctx.store.prompts_dir();
+    let prompts = ctx.store.dir().join("prompts");
     std::fs::create_dir_all(&prompts).unwrap();
     std::fs::write(
         prompts.join("run.md"),

@@ -23,7 +23,10 @@ pub use checkpoint::{
     CheckpointProgress, PlanCheckpoint, plan_checkpoint, plan_checkpoint_automatic,
 };
 pub(crate) use review::reconcile_exit;
-pub use review::{AggregateVerdict, plan_aggregate_review, plan_aggregate_verdict};
+pub use review::{
+    AggregateVerdict, plan_aggregate_review, plan_aggregate_verdict,
+    plan_aggregate_verdict_with_evidence,
+};
 
 /// Trackers have no coding runs, so their snapshots use the store's run-less label.
 const TRACKER_ARTIFACT_RUN: &str = "R0";

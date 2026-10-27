@@ -160,8 +160,10 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
 }
 
 pub(crate) fn fence(corral: &Path) -> Result<Option<String>> {
-    Ok(read_optional(&corral.join("state").join("schema-version"))?
-        .map(|text| text.trim().to_owned()))
+    Ok(
+        read_optional(&corral.join("state").join("schema-version"))? // path-guard: allow (migration fence)
+            .map(|text| text.trim().to_owned()),
+    )
 }
 
 fn journal(corral: &Path) -> Result<Option<(String, Option<String>)>> {
@@ -313,7 +315,7 @@ pub(crate) fn init(corral: &Path) -> Result<Arc<Db>> {
 }
 
 fn write_fence(corral: &Path) -> Result<()> {
-    let state = corral.join("state");
+    let state = corral.join("state"); // path-guard: allow (migration fence)
     fs::create_dir_all(&state).with_context(|| format!("creating {}", state.display()))?;
     let path = state.join("schema-version");
     if fence(corral)?.as_deref() == Some(FENCE) {

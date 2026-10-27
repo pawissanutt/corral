@@ -399,7 +399,7 @@ fn herdr_dispatch_sync_reply_jump_retry() {
         assert_eq!(run.worktree, tmp.path().join("app/.worktrees/T-001"));
         assert!(run.worktree.join("README.md").exists());
         assert!(dispatch_prompt(&ctx.store, "T-001", "R1").is_file());
-        assert!(!ctx.store.prompts_dir().join("T-001-R1.md").exists());
+        assert!(!ctx.store.dir().join("prompts").join("T-001-R1.md").exists());
         let mut signal = [0; 16];
         let received = ready.recv(&mut signal).unwrap();
         assert_eq!(&signal[..received], b"READY");

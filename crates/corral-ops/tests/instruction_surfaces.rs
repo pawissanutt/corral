@@ -371,15 +371,14 @@ impl Fx {
         corral_ops::done(&self.ctx, &self.id, SUMMARY).unwrap();
     }
 
+    /// The newest file ending in `suffix` in the current review attempt's scratch directory.
     fn prompts_matching(&self, suffix: &str) -> String {
-        let prefix = format!("{}-", self.id);
-        let mut found: Vec<PathBuf> = std::fs::read_dir(self.ctx.store.prompts_dir())
+        let notes = corral_ops::review_notes_path(&self.ctx, &self.id, "R1").unwrap();
+        let suffix = suffix.trim_start_matches('-');
+        let mut found: Vec<PathBuf> = std::fs::read_dir(notes.parent().unwrap())
             .unwrap()
             .map(|e| e.unwrap().path())
-            .filter(|p| {
-                let name = p.file_name().unwrap().to_string_lossy();
-                name.starts_with(&prefix) && name.ends_with(suffix)
-            })
+            .filter(|p| p.file_name().unwrap().to_string_lossy().ends_with(suffix))
             .collect();
         found.sort();
         let path = found

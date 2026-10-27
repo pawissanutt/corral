@@ -102,8 +102,8 @@ impl PostLandOperation {
     }
 }
 
-fn directory(ctx: &Ctx) -> PathBuf {
-    ctx.store.state_dir().join("tmp").join("post-land")
+fn directory(ctx: &Ctx) -> Result<PathBuf> {
+    Ok(ctx.store.scratch_tmp()?.join("post-land"))
 }
 
 pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
@@ -351,8 +351,9 @@ fn publish(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
     }
     let bytes = serde_json::to_vec_pretty(op)?;
     let receipt_digest = digest(op)?;
-    fs::create_dir_all(directory(ctx)).context("creating operations evidence directory")?;
-    let file = directory(ctx).join(format!("{}-operations.md", op.key));
+    let dir = directory(ctx)?;
+    fs::create_dir_all(&dir).context("creating operations evidence directory")?;
+    let file = dir.join(format!("{}-operations.md", op.key));
     let report = format!(
         "# Post-land operations: {}\n\nLanded: {}\nLanded SHA: `{}`\nOperational readiness: {}\nPolicy digest: `{}`\nReceipt digest: `{}`\nCoalescing: none\n\n```json\n{}\n```\n",
         op.project,

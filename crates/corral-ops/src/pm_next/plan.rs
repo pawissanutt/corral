@@ -131,7 +131,7 @@ pub(super) fn observation(ctx: &Ctx, task: &Task) -> Result<Option<PmObservation
             approval_ready,
             notes_file: ctx
                 .store
-                .state_dir()
+                .scratch_tmp()?
                 .join(format!("{}-{}-owner-plan-notes.md", task.id, selected.id))
                 .display()
                 .to_string(),

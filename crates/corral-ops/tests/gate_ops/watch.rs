@@ -111,8 +111,8 @@ fn legacy_durations_and_reversed_timestamps_do_not_break_gate_collection() {
         let attempt = load(&ctx, &id).unwrap().gates.remove(0);
         let metadata = ctx
             .store
-            .state_dir()
-            .join("watch")
+            .scratch_path("watch")
+            .unwrap()
             .join(&id)
             .join(format!("{}-{}.json", attempt.run, attempt.attempt));
         for path in [metadata, attempt.log.with_extension("command-0.json")] {

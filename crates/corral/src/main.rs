@@ -410,6 +410,10 @@ pub enum Cmd {
         /// Bind this verdict to the reviewer's assigned gate attempt
         #[arg(long)]
         attempt: Option<String>,
+        /// Promote this file (in the attempt's scratch directory or the reviewed worktree) as
+        /// evidence with the verdict; repeatable, within `[storage] review_evidence_max`
+        #[arg(long = "evidence", value_name = "PATH")]
+        evidence: Vec<PathBuf>,
         /// With `escalate`: ask corral to supersede this routine attempt with one stronger review
         #[arg(long, requires = "attempt")]
         stronger: bool,

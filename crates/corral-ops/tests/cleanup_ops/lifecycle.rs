@@ -73,8 +73,8 @@ fn finished_review_capture_is_not_polled_again_after_landing() {
     let capture = fx
         .ctx
         .store
-        .state_dir()
-        .join("review-watch")
+        .scratch_path("review-watch")
+        .unwrap()
         .join(&fx.id)
         .join("R1-review1.json");
     let before = std::fs::read(&capture).unwrap();

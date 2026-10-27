@@ -33,7 +33,7 @@ fn native_runtime_probe_matches_process_identity_and_monotonic_clock() {
 fn native_plugin_manifest_advertises_current_version_and_supported_platforms() {
     // Given a private store and no engine binary or engine config.
     let root = tempfile::tempdir().unwrap();
-    let _store = corral_core::Store::init(root.path()).unwrap();
+    let store = corral_core::Store::init(root.path()).unwrap();
     let config = root.path().join("engine-config.toml");
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
     for key in [
@@ -58,8 +58,10 @@ fn native_plugin_manifest_advertises_current_version_and_supported_platforms() {
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let text = std::fs::read_to_string(
-        root.path()
-            .join(".corral/state/tmp/herdr-plugin/herdr-plugin.toml"),
+        store
+            .scratch_path("tmp")
+            .unwrap()
+            .join("herdr-plugin/herdr-plugin.toml"),
     )
     .unwrap();
     let manifest: toml::Value = toml::from_str(&text).unwrap();

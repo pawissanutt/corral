@@ -14,12 +14,12 @@ use crate::Ctx;
 /// This is a nonauthoritative shell notification, not lifecycle storage. Sync
 /// reconciles it into the canonical task/run (or PM) records before ending the
 /// attempt. Failure excerpts remain evidence, handled separately by `record`.
-pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("tmp")
+pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> Result<PathBuf> {
+    Ok(ctx
+        .store
+        .scratch_path("tmp")?
         .join("launch-exits")
-        .join(format!("{task}-{attempt}.exited"))
+        .join(format!("{task}-{attempt}.exited")))
 }
 
 #[cfg(test)]
@@ -31,10 +31,11 @@ mod tests;
 /// The command is one opaque argument to its own shell, so a trailing `;`, `&` or comment, a
 /// syntax error, `exec`, `exit`, `set -e` or a fish pane shell cannot skip the receipt
 /// writer; only the generic display is left unarmed.
-pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
+pub(crate) fn arm(ctx: &Ctx, command: &str, receipt: &Path) -> Result<String> {
     if is_display(command) {
         return Ok(command.to_string());
     }
+    ctx.store.scratch_tmp()?;
     let dir = receipt
         .parent()
         .context("launch receipt has no directory")?;
@@ -80,6 +81,12 @@ pub(crate) fn exited(receipt: &Path) -> bool {
     receipt.is_file()
 }
 
+/// Whether attempt `attempt` of `task` left its receipt. Without a valid scratch root no launch
+/// could arm one, so none has.
+pub(crate) fn exited_for(ctx: &Ctx, task: &str, attempt: &str) -> bool {
+    receipt(ctx, task, attempt).is_ok_and(|receipt| exited(&receipt))
+}
+
 /// Why the attempt ended: the shell's last lines carry the error.
 pub(crate) fn reason(ctx: &Ctx, what: &str, pane: Option<&str>) -> String {
     let capture = match pane.map(|p| ctx.herdr.pane_read_if_present(p, 80)) {
@@ -96,7 +103,7 @@ pub(crate) fn reason(ctx: &Ctx, what: &str, pane: Option<&str>) -> String {
 
 /// Keep the reason as a run artifact so it survives the pane.
 pub(crate) fn record(ctx: &Ctx, task: &str, run: &str, title: &str, reason: &str) -> Result<()> {
-    let dir = ctx.store.state_dir().join("tmp").join("launch-exits");
+    let dir = ctx.store.scratch_tmp()?.join("launch-exits");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = dir.join(format!(
         "{task}-{run}-{}.log",
@@ -129,7 +136,7 @@ pub(crate) fn plan_review(ctx: &Ctx, task: &Task) -> Result<Option<crate::Change
         return Ok(None);
     };
     let attempt = format!("{}-{}", plan.id, review.id);
-    if !exited(&receipt(ctx, &task.id, &attempt)) {
+    if !exited_for(ctx, &task.id, &attempt) {
         return Ok(None);
     }
     let pane = review.herdr.as_ref().map(|h| h.pane_id.as_str());

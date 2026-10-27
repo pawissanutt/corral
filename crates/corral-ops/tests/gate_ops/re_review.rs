@@ -11,7 +11,8 @@ fn packet(fx: &Fx, id: &str) -> Value {
     let path = fx
         .ctx
         .store
-        .prompts_dir()
+        .scratch_path(&format!("reviews/{id}-{attempt}"))
+        .unwrap()
         .join(format!("{id}-{}-{attempt}-review-packet.json", run.id));
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }

@@ -228,7 +228,14 @@ fn launch_boundary_and_retry_budget_survive_restart_without_file_authority() {
             1
         );
     }
-    assert!(!restarted.store.state_dir().join("provider-stall").exists());
+    assert!(
+        !restarted
+            .store
+            .dir()
+            .join("state")
+            .join("provider-stall")
+            .exists()
+    );
 }
 
 #[test]

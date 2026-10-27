@@ -98,7 +98,7 @@ fn held_reviewed_plan_cannot_publish_children() {
     // Given independent approval of a plan with exactly confirmed child scopes.
     let mut fx = Fx::new();
     let parent = fx.task("held plan publication", Status::Ready);
-    let source = fx.ctx.store.state_dir().join("held-plan.md");
+    let source = fx.ctx.store.dir().join("state").join("held-plan.md");
     std::fs::write(
         &source,
         "---\ngoal: Ship finite work\nnon_goals: []\ndecisions: []\naffected_paths: [first.txt, second.txt]\ncontracts: []\ndependencies:\n  - task: First\n    write_scope: [first.txt]\n    depends_on: []\n  - task: Second\n    write_scope: [second.txt]\n    depends_on: [First]\nacceptance: [{scenario: finite, expected: verified}]\nverification: [check]\nowner_decisions: []\n---\n",

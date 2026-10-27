@@ -37,7 +37,11 @@ fn same_head_input_change_reports_actual_field_and_both_digests() {
     let ws = init_ws();
     let (store, _, _) = review_task(&ws, Some(started_review("opus-rev")));
     let before = identity(&ws.root);
-    std::fs::write(store.prompts_dir().join("review.md"), "fixture override").unwrap();
+    std::fs::write(
+        store.dir().join("prompts").join("review.md"),
+        "fixture override",
+    )
+    .unwrap();
     let after = identity(&ws.root);
     // When a prompt input changes without moving HEAD.
     let fields = stale_fields(&ws.root);

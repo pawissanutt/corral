@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use anyhow::bail;
 use anyhow::{Context, Result};
+use anyhow::{bail, ensure};
 use corral_core::{AutopilotState, GateRecord, GateResult, ReviewRecord, Run, Status, Verdict};
 use corral_ops::{ApproveStrategy, Ctx};
 use corral_tui::Mode;
@@ -133,7 +133,7 @@ fn verdict(
     verdict: &str,
     notes: Option<String>,
     notes_file: Option<PathBuf>,
-    attempt: Option<&str>,
+    (attempt, evidence): (Option<&str>, &[PathBuf]),
     stronger: bool,
 ) -> Result<()> {
     let verdict = Verdict::parse(verdict)
@@ -149,12 +149,13 @@ fn verdict(
         if verdict != Verdict::Escalate {
             bail!("--stronger is only valid with escalate");
         }
+        ensure!(evidence.is_empty(), "--stronger takes no --evidence");
         let attempt = attempt.context("--stronger requires --attempt")?;
         let outcome = corral_ops::request_stronger_review(ctx, id, attempt, &notes)?;
         println!("{}", serde_json::to_string(&outcome)?);
         return Ok(());
     }
-    let record = corral_ops::verdict_bound(ctx, id, verdict, &notes, attempt)?;
+    let record = corral_ops::verdict_with_evidence(ctx, id, verdict, &notes, attempt, evidence)?;
     let task = ctx.store.get(id)?;
     println!("{} review: {}", task.id, review_line(&record));
     Ok(())
@@ -584,6 +585,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             notes,
             notes_file,
             attempt,
+            evidence,
             stronger,
         } => verdict(
             &open(&root)?,
@@ -591,7 +593,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             &v,
             notes,
             notes_file,
-            attempt.as_deref(),
+            (attempt.as_deref(), &evidence),
             stronger,
         ),
         Cmd::Artifact { cmd } => crate::artifact_cmd::run(&open(&root)?, cmd),

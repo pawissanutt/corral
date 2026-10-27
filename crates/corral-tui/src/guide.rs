@@ -314,8 +314,8 @@ mod persistence_tests {
         // Given a fresh workspace with only a legacy tour marker.
         let dir = tempfile::tempdir().unwrap();
         let store = corral_core::Store::init(dir.path()).unwrap();
-        std::fs::create_dir_all(store.state_dir()).unwrap();
-        let legacy = store.state_dir().join("tour-seen");
+        std::fs::create_dir_all(store.dir().join("state")).unwrap();
+        let legacy = store.dir().join("state").join("tour-seen");
         std::fs::write(&legacy, "legacy").unwrap();
         let ctx = Ctx::from_store(store);
         assert!(!tour_seen(&ctx));

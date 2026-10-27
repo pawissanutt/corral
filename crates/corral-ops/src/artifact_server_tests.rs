@@ -201,7 +201,13 @@ fn requests_outside_recorded_artifacts_or_without_the_token_are_refused() {
         b"<p>hi</p>",
         None,
     );
-    let run_dir = s.ctx.store.artifacts_dir(&task.id, "R0");
+    let run_dir = s
+        .ctx
+        .store
+        .dir()
+        .join("artifacts")
+        .join(&task.id)
+        .join("R0");
     std::fs::write(run_dir.join("secret.txt"), b"nope").unwrap();
     let tok = &s.info.token;
     let good = artifact_url_path(&a).unwrap();
@@ -361,14 +367,16 @@ fn registration_survives_reopen_without_legacy_control_files() {
     assert!(
         !s.ctx
             .store
-            .state_dir()
+            .dir()
+            .join("state")
             .join("artifact-server.json")
             .exists()
     );
     assert!(
         !s.ctx
             .store
-            .state_dir()
+            .dir()
+            .join("state")
             .join("artifact-server.lock")
             .exists()
     );
@@ -452,7 +460,11 @@ fn stale_registration_is_replaced_and_failed_ready_cleans_up() {
 fn invalid_registration_is_refused_and_legacy_state_is_not_a_fallback() {
     let root = tempfile::tempdir().unwrap();
     let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(root.path()).unwrap());
-    std::fs::write(ctx.store.state_dir().join("artifact-server.json"), "{}").unwrap();
+    std::fs::write(
+        ctx.store.dir().join("state").join("artifact-server.json"),
+        "{}",
+    )
+    .unwrap();
     assert_eq!(read_state(&ctx).unwrap(), None);
     for doc in [
         serde_json::json!({"doc_version": 2, "value": {"port": 0, "token": "secret", "pid": 0}}),
@@ -540,7 +552,13 @@ fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() 
         .create("Escape dir", None, Status::Done, "")
         .unwrap();
     let dir_art = add(&s, &other.id, &root.join("b/dir.html"), b"<p>dir</p>", None);
-    let run_dir = s.ctx.store.artifacts_dir(&other.id, "R0");
+    let run_dir = s
+        .ctx
+        .store
+        .dir()
+        .join("artifacts")
+        .join(&other.id)
+        .join("R0");
     let outside_dir = root.join("outside-run");
     std::fs::rename(&run_dir, &outside_dir).unwrap();
     #[cfg(unix)]

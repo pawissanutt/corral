@@ -175,7 +175,14 @@ fn availability_record_survives_restart_and_keeps_semantic_validation() {
             .doc["doc_version"],
         1
     );
-    assert!(!restarted.store.state_dir().join("availability").exists());
+    assert!(
+        !restarted
+            .store
+            .dir()
+            .join("state")
+            .join("availability")
+            .exists()
+    );
 
     // A decodable record that revisits a candidate must still fail semantic validation.
     episode.attempts.push(episode.attempts[0].clone());

@@ -113,7 +113,12 @@ impl Journey {
     }
 
     fn prompt(&self, label: &str) -> Value {
-        let bytes = std::fs::read(self.root.path().join(".corral/prompts/pm.md")).unwrap();
+        let prompt = corral_core::Store::open_unobserved(self.root.path())
+            .unwrap()
+            .scratch_path("pm")
+            .unwrap()
+            .join("pm.md");
+        let bytes = std::fs::read(prompt).unwrap();
         self.save(&format!("{label}-prompt.md"), &bytes);
         parse_policy(std::str::from_utf8(&bytes).unwrap())
     }

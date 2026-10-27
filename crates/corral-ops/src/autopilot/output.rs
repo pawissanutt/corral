@@ -105,11 +105,11 @@ impl Pilot<'_> {
         text: &str,
         title: &str,
     ) -> Result<corral_core::Artifact> {
-        let tmp = self.ctx.store.state_dir().join("tmp").join(format!(
-            "{}-{}-autopilot",
-            self.id(),
-            self.run.id
-        ));
+        let tmp =
+            self.ctx
+                .store
+                .scratch_tmp()?
+                .join(format!("{}-{}-autopilot", self.id(), self.run.id));
         std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
         let file = tmp.join(name);
         let added = std::fs::write(&file, text)

@@ -220,8 +220,9 @@ fn setup_links_manifest_and_returns_diff_using_only_explicit_temp_paths() {
     // Then linking succeeded, the manifest exists, and diff is returned to the caller.
     assert!(
         ctx.store
-            .state_dir()
-            .join("tmp/herdr-plugin/herdr-plugin.toml")
+            .scratch_path("tmp")
+            .unwrap()
+            .join("herdr-plugin/herdr-plugin.toml")
             .is_file()
     );
     assert!(present_at(&path).unwrap());
@@ -238,14 +239,15 @@ fn setup_links_manifest_and_returns_diff_using_only_explicit_temp_paths() {
 fn setup_does_not_relink_when_manifest_unchanged_and_plugin_enabled() {
     // Given an unchanged manifest and enabled plugin; any link call would fail.
     let temp = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(temp.path()).unwrap();
     let plugins = serde_json::json!({"result": {"plugins": [{
         "plugin_id": "corral", "enabled": true,
-        "manifest_path": temp.path().join(".corral/state/tmp/herdr-plugin/herdr-plugin.toml"),
+        "manifest_path": super::super::manifest_path(&store).unwrap(),
     }]}});
     let bin = fake_herdr(temp.path(), Some(plugins), false);
     let ctx = corral_ops::Ctx {
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
-        store: corral_core::Store::init(temp.path()).unwrap(),
+        store,
         herdr: corral_herdr::Herdr::with_bin(bin, None),
     };
     let (dir, _) = super::super::write_manifest(&ctx).unwrap();
@@ -290,8 +292,14 @@ fn setup_checks_invalid_config_before_manifest_or_link_side_effects() {
             .unwrap()
             .is_none()
     );
-    assert!(!ctx.store.state_dir().join("tmp/herdr-plugin").exists());
-    assert!(!ctx.store.state_dir().join("herdr-plugin").exists());
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join("tmp/herdr-plugin")
+            .exists()
+    );
+    assert!(!ctx.store.dir().join("state").join("herdr-plugin").exists());
 }
 
 #[cfg(unix)]

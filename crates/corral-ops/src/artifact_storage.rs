@@ -389,7 +389,7 @@ fn open_beneath_artifacts(ctx: &Ctx, snapshot: &str) -> Result<fs::File> {
     let rel = snapshot
         .strip_prefix("artifacts/")
         .with_context(|| format!("snapshot {snapshot} is not under artifacts/"))?;
-    let root = ctx.store.dir().join("artifacts");
+    let root = snapshot_root(ctx.store.dir());
     let dir = rustix::fs::open(
         &root,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
@@ -409,8 +409,7 @@ fn open_beneath_artifacts(ctx: &Ctx, snapshot: &str) -> Result<fs::File> {
 
 #[cfg(not(target_os = "linux"))]
 fn open_beneath_artifacts(ctx: &Ctx, snapshot: &str) -> Result<fs::File> {
-    let root =
-        fs::canonicalize(ctx.store.dir().join("artifacts")).context("resolving artifacts")?;
+    let root = fs::canonicalize(snapshot_root(ctx.store.dir())).context("resolving artifacts")?;
     let path = ctx.store.dir().join(snapshot);
     let mut check = root.clone();
     for part in Path::new(
@@ -684,6 +683,16 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
 }
 
 /// Writes the legacy copy at the artifact's stored path (see the module comment).
+/// The legacy snapshot mirror `<.corral>/artifacts`, kept in place until `migrate --finalize`.
+pub(crate) fn snapshot_root(store_dir: &Path) -> PathBuf {
+    store_dir.join("artifacts") // path-guard: allow (legacy snapshot mirror until finalize)
+}
+
+/// The mirrored snapshots of `task`'s run `run` (not created).
+pub(crate) fn snapshot_dir(store_dir: &Path, task: &str, run: &str) -> PathBuf {
+    snapshot_root(store_dir).join(task).join(run)
+}
+
 pub(crate) fn mirror(ctx: &Ctx, a: &Artifact, bytes: &[u8]) -> Result<()> {
     replace(&ctx.store.dir().join(&a.path), bytes)
 }

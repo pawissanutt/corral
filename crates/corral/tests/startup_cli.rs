@@ -31,7 +31,7 @@ if [ "$1" = "--session" ]; then shift 2; fi
 case "$1 $2" in
   "plugin list")
     if [ -e "$dir/linked" ]; then
-      printf '{"result":{"plugins":[{"plugin_id":"corral","enabled":true,"manifest_path":"%s/.corral/state/tmp/herdr-plugin/herdr-plugin.toml"}]}}\n' "$FAKE_ROOT"
+      printf '{"result":{"plugins":[{"plugin_id":"corral","enabled":true,"manifest_path":"%s"}]}}\n' "$FAKE_MANIFEST"
     else printf '%s\n' '{"result":{"plugins":[]}}'; fi ;;
   "plugin link")
     if [ "${FAKE_PLUGIN_FAIL:-}" = 1 ]; then
@@ -138,6 +138,14 @@ impl Sandbox {
             .current_dir(&self.root)
             .env("HOME", &self.home)
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
+            .env("XDG_CACHE_HOME", self.home.join(".cache"))
+            .env(
+                "FAKE_MANIFEST",
+                self.home
+                    .join(".cache/corral")
+                    .join(corral_core::storage_roots::workspace_id(&self.root))
+                    .join("scratch/tmp/herdr-plugin/herdr-plugin.toml"),
+            )
             .env("PATH", &self.bin)
             .env("HERDR_BIN_PATH", self.bin.join("herdr"))
             .env("FAKE_ROOT", &self.root)

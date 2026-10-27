@@ -126,7 +126,7 @@ pub fn edit(ctx: &Ctx, id: &str, owner_ok: bool) -> Result<()> {
     let revision = ctx.store.head(id)?.rev;
     let before = ctx.store.get(id)?;
     let spec = corral_core::spec_revision(&before)?;
-    let dir = ctx.store.state_dir().join("tmp");
+    let dir = ctx.store.scratch_tmp()?;
     let path = dir.join(format!("edit-{}.md", before.id));
     let _lock = ctx
         .store

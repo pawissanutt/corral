@@ -14,6 +14,7 @@ use serde_json::json;
 use super::{capture, current, evidence_failures, fresh_candidate, gate};
 use crate::Ctx;
 use crate::review_contracts::Selected;
+use crate::scratch_reclaim::Attempt;
 use crate::verification::digest;
 
 const PM: &str = "pm";
@@ -195,16 +196,21 @@ fn check_inputs(
     fresh_candidate(ctx, tracker, attempt)
 }
 
-fn files(ctx: &Ctx, plan: &str, review: &str) -> (PathBuf, PathBuf) {
-    (
-        ctx.store
-            .prompts_dir()
-            .join(format!("{plan}-{review}-aggregate-review.md")),
-        ctx.store
-            .state_dir()
-            .join("reviews")
-            .join(format!("{plan}-{review}-aggregate-notes.md")),
-    )
+/// The prompt and notes of aggregate review `review`, in its registered scratch directory.
+fn files(ctx: &Ctx, plan: &str, attempt: &str, review: &str) -> Result<(PathBuf, PathBuf)> {
+    let dir = attempt_dir(plan, attempt, review).open(ctx)?;
+    Ok((
+        dir.join(format!("{plan}-{review}-aggregate-review.md")),
+        dir.join(format!("{plan}-{review}-aggregate-notes.md")),
+    ))
+}
+
+fn attempt_dir<'a>(plan: &'a str, attempt: &'a str, review: &'a str) -> Attempt<'a> {
+    Attempt::Aggregate {
+        task: plan,
+        attempt,
+        review,
+    }
 }
 
 fn quote(path: &Path) -> String {
@@ -291,6 +297,8 @@ fn prompt(
     );
     text.push_str(&crate::review_contracts::contract_section(&review.route));
     text.push_str(&crate::comments::owner_comments(tracker));
+    let dir = attempt_dir(&tracker.id, &attempt.id, &review.id).dir(ctx)?;
+    text.push_str(&crate::scratch_reclaim::prompt_section(ctx, &dir));
     Ok(text)
 }
 
@@ -380,10 +388,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         at: None,
         abandoned: None,
     };
-    let (prompt_file, notes) = files(ctx, id, &review.id);
-    for dir in [prompt_file.parent(), notes.parent()].into_iter().flatten() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    }
+    let (prompt_file, notes) = files(ctx, id, &chosen.id, &review.id)?;
     std::fs::write(
         &prompt_file,
         prompt(ctx, &tracker, &chosen, &review, &cwd, &notes)?,
@@ -548,8 +553,8 @@ fn launch(
                 ("worktree", cwd.display().to_string()),
             ],
         )?;
-        let receipt = crate::launch_exit::receipt(ctx, &tracker.id, &review.id);
-        let command = crate::launch_exit::arm(&command, &receipt)?;
+        let receipt = crate::launch_exit::receipt(ctx, &tracker.id, &review.id)?;
+        let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
     }
     Ok(herdr)
@@ -574,7 +579,7 @@ pub(crate) fn reconcile_exit(ctx: &Ctx, plan: &Task) -> Result<()> {
             return Ok(());
         }
         "The PM exited or was replaced before recording this aggregate verdict.".to_string()
-    } else if crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &plan.id, &review.id)) {
+    } else if crate::launch_exit::exited_for(ctx, &plan.id, &review.id) {
         crate::launch_exit::reason(ctx, "The aggregate reviewer", Some(pane))
     } else {
         return Ok(());
@@ -613,6 +618,17 @@ pub fn plan_aggregate_verdict(
     ctx: &Ctx,
     id: &str,
     input: &AggregateVerdict<'_>,
+) -> Result<AggregateReview> {
+    plan_aggregate_verdict_with_evidence(ctx, id, input, &[])
+}
+
+/// [`plan_aggregate_verdict`] that also promotes `evidence` (`--evidence PATH`) inside the
+/// verdict's update; a refused set records no verdict.
+pub fn plan_aggregate_verdict_with_evidence(
+    ctx: &Ctx,
+    id: &str,
+    input: &AggregateVerdict<'_>,
+    evidence: &[PathBuf],
 ) -> Result<AggregateReview> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
     ctx.store.check_runtime()?;
@@ -653,10 +669,18 @@ pub fn plan_aggregate_verdict(
         .context("stale aggregate verdict: no aggregate reviewer is configured")?;
     bound(&attempt, &review, &configured).context("stale aggregate verdict")?;
     check_inputs(ctx, &store, &tracker, &attempt).context("stale aggregate verdict")?;
+    let dir = attempt_dir(id, &attempt.id, &review.id).dir(ctx)?;
+    let repo = capture::repo(&store, &tracker)?;
+    let cwd = if attempt.code {
+        repo.join(".worktrees").join(format!("{id}-verify"))
+    } else {
+        repo
+    };
+    let evidence =
+        crate::reviewer::Evidence::check(ctx, evidence, &[dir.as_path(), cwd.as_path()])?;
     let tmp = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_tmp()?
         .join(format!("{id}-{}-aggregate-review", review.id));
     std::fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
     let file = tmp.join("aggregate-review-notes.md");
@@ -679,7 +703,9 @@ pub fn plan_aggregate_verdict(
         );
     }
     snapshot?;
+    let staged = evidence.stage(ctx, id)?;
     let saved = ctx.store.update(id, |task| {
+        let target = crate::reviewer::current_target(task);
         ensure!(
             current(task, &attempt.id).is_ok_and(|stored| stored.evidence == attempt.evidence),
             "stale aggregate verdict: attempt changed while recording"
@@ -698,8 +724,19 @@ pub fn plan_aggregate_verdict(
             "aggregate_verdict",
             json!({"attempt": attempt.id, "review": review.id, "reviewer": review.reviewer, "verdict": input.verdict.as_str()}),
         )?;
-        Ok(())
-    })?;
+        staged.attach(ctx, task, &target)
+    });
+    let saved = match saved {
+        Ok(saved) => saved,
+        Err(error) => {
+            staged.release(ctx)?;
+            return Err(error);
+        }
+    };
+    drop(staged);
+    if let Err(error) = attempt_dir(id, &attempt.id, &review.id).close(ctx) {
+        crate::messages::report(Some(id), "scratch", format!("{error:#}"));
+    }
     let recorded = saved
         .aggregate_attempts
         .last()

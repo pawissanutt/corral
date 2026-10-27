@@ -7,7 +7,7 @@ use corral_core::{AutoStage, AutopilotState, Run, RunOutcome, Status, Task};
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::{finish_review, review_notes_path};
+use super::{finish_review, notes_of};
 use crate::cleanup::{Cleanup, cleanup};
 use crate::{Change, Ctx};
 
@@ -19,7 +19,7 @@ pub(crate) fn continue_review(
     reason: &str,
     now: Timestamp,
 ) -> Result<Vec<Change>> {
-    let notes = review_notes_path(ctx, &task.id, &run.id);
+    let notes = notes_of(ctx, &task.id, run)?;
     let kept = notes.with_file_name(format!("{}-{}-interrupted-notes.md", task.id, child.id));
     if notes.is_file() {
         std::fs::rename(&notes, &kept)

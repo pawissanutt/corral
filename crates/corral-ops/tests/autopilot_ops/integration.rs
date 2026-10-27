@@ -224,7 +224,12 @@ fn conflict_packet_has_complete_landed_identities_paths_and_exact_sloc() {
 fn clean_packet_is_attached_before_gate_and_reviewer_launches() {
     // Given a gate that consumes the machine-readable packet from the artifact directory.
     let mut fx = configured();
-    let integration = fx.ctx.store.state_dir().join("tmp").join("integration");
+    let integration = fx
+        .ctx
+        .store
+        .scratch_path("tmp")
+        .unwrap()
+        .join("integration");
     let command = format!(
         "test -n \"$(find '{}' -name '*.json' -print -quit)\"",
         integration.display()

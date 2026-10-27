@@ -172,7 +172,7 @@ fn recovery_round_trip_and_ordinary_updates_preserve_the_complete_chain() {
     task.runs = serde_json::from_value(task_json["runs"].clone()).unwrap();
     store.save(&task).unwrap();
     let original = store.get(&task.id).unwrap();
-    let artifact = store.artifacts_dir("T-001", "R1");
+    let artifact = store.dir().join("artifacts").join("T-001").join("R1");
     fs::create_dir_all(&artifact).unwrap();
     fs::write(artifact.join("gate.log"), "FAIL 1\n").unwrap();
     fs::write(artifact.join("plan.md"), "Original plan bytes\n").unwrap();
@@ -253,7 +253,7 @@ fn future_store_fence_refuses_open_and_writes_without_task_effects() {
     let store = Store::init(tmp.path()).unwrap();
     let task = store.create("Future", None, Status::NeedsMe, "").unwrap();
     let before = store.fixture_task_text(&task.id).unwrap().into_bytes();
-    fs::write(store.state_dir().join("schema-version"), "5\n").unwrap();
+    fs::write(store.dir().join("state").join("schema-version"), "5\n").unwrap();
     // When / Then
     let refused = Store::open_unobserved(tmp.path()).unwrap_err();
     assert!(format!("{refused:#}").contains("schema 5"), "{refused:#}");
@@ -263,7 +263,7 @@ fn future_store_fence_refuses_open_and_writes_without_task_effects() {
         before
     );
     assert_eq!(
-        fs::read_to_string(store.state_dir().join("schema-version")).unwrap(),
+        fs::read_to_string(store.dir().join("state").join("schema-version")).unwrap(),
         "5\n"
     );
 }

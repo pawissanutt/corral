@@ -284,7 +284,7 @@ pub fn inspect(
             None => match &store {
                 Some(store) => plugin::installed(store).and_then(|installed| {
                     if installed {
-                        herdr.plugin_linked(&plugin::manifest_path(store))
+                        herdr.plugin_linked(&plugin::manifest_path(store)?)
                     } else {
                         Ok(false)
                     }

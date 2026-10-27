@@ -407,11 +407,9 @@ fn review(fx: &Fx, id: &str, tier: &str, verdict: Verdict, request: &str) -> Rev
     let run = fx.run(id);
     let pending = run.review.as_ref().expect("no review launched");
     assert_eq!(pending.verdict, None, "the review already has a verdict");
-    let path = fx
-        .ctx
-        .store
-        .prompts_dir()
-        .join(format!("{id}-{}-review.md", run.id));
+    let path = corral_ops::review_notes_path(&fx.ctx, id, &run.id)
+        .unwrap()
+        .with_file_name("review.md");
     let prompt = std::fs::read_to_string(path).unwrap();
     let contract = section(&prompt, REVIEW_SECTION);
     assert_eq!(parsed_tier(contract), tier, "{contract}");

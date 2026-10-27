@@ -4,7 +4,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_core::{Artifact, ArtifactKind};
 
 use crate::Ctx;
@@ -74,18 +74,15 @@ pub fn excerpt(ctx: &Ctx, a: &Artifact) -> Option<String> {
     Some(line.chars().take(80).collect())
 }
 
-fn reviewed_path(ctx: &Ctx) -> std::path::PathBuf {
-    ctx.store
-        .dir()
-        .join("state")
-        .join("reviewed-artifacts.json")
-}
+const REVIEWED: corral_core::records::RecordArea<BTreeSet<String>> =
+    corral_core::records::RecordArea::new("reviewed-artifacts");
 
 /// Snapshot paths the reviewer has marked reviewed.
 pub fn reviewed_set(ctx: &Ctx) -> BTreeSet<String> {
-    std::fs::read_to_string(reviewed_path(ctx))
+    REVIEWED
+        .load(&ctx.store, "set")
         .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
+        .flatten()
         .unwrap_or_default()
 }
 
@@ -96,14 +93,7 @@ pub fn toggle_reviewed(ctx: &Ctx, a: &Artifact) -> Result<bool> {
     if !now {
         set.remove(&a.path);
     }
-    let path = reviewed_path(ctx);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string(&set)?)
-        .with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("writing {}", path.display()))?;
+    REVIEWED.save(&ctx.store, "set", &set)?;
     Ok(now)
 }
 

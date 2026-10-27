@@ -111,7 +111,7 @@ fn planner(ctx: &Ctx, task: &Task) -> Task {
                     pane_id: "w:p".into(),
                     socket: Some(ctx.herdr.socket_path()?),
                 }),
-                output_dir: ctx.store.state_dir().join("planner"),
+                output_dir: ctx.store.dir().join("state").join("planner"),
                 submitted: None,
                 rounds: 0,
                 state: PlanRunState::Planning,

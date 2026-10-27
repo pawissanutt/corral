@@ -18,9 +18,9 @@ fn member(fx: &Fx) -> String {
     let ctx = &fx.ctx;
     let source = ctx.store.root().join("plan.md");
     // The built-in run template still names the full gate until worker-pm-tier-instructions.
-    std::fs::create_dir_all(ctx.store.prompts_dir()).unwrap();
+    std::fs::create_dir_all(ctx.store.dir().join("prompts")).unwrap();
     std::fs::write(
-        ctx.store.prompts_dir().join("run.md"),
+        ctx.store.dir().join("prompts").join("run.md"),
         "{{id}} {{title}}\n{{body}}\nRun the gate below once after the final rebase.\n{{gate}}\n",
     )
     .unwrap();
@@ -99,10 +99,9 @@ fn member(fx: &Fx) -> String {
 fn prompt(fx: &Fx, id: &str) -> String {
     let run = fx.ctx.store.get(id).unwrap().current_run().unwrap().clone();
     std::fs::read_to_string(
-        fx.ctx
-            .store
-            .prompts_dir()
-            .join(format!("{id}-{}-review.md", run.id)),
+        corral_ops::review_notes_path(&fx.ctx, id, &run.id)
+            .unwrap()
+            .with_file_name("review.md"),
     )
     .unwrap()
 }
@@ -198,7 +197,7 @@ fn quick_member_review_carries_one_gate_contract_and_needs_only_its_own_tier() {
 
     // When an override template without {{gate}} renders the next review.
     std::fs::write(
-        fx.ctx.store.prompts_dir().join("review.md"),
+        fx.ctx.store.dir().join("prompts").join("review.md"),
         "# Custom review {{id}}\n\nJudge the change.\n",
     )
     .unwrap();
@@ -232,7 +231,7 @@ fn tiered(config: &mut corral_core::Config) {
 }
 
 fn clean_run_template(fx: &Fx) {
-    let dir = fx.ctx.store.prompts_dir();
+    let dir = fx.ctx.store.dir().join("prompts");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("run.md"),

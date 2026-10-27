@@ -385,7 +385,13 @@ fn detects_fake_harnesses_degrades_and_caches() {
     assert!(cached_harness_report(&ctx).is_none());
     let rebuilt = harness_report(&ctx, false).expect("rebuild");
     assert_eq!(rebuilt.harnesses, fresh.harnesses);
-    assert!(!ctx.store.state_dir().join(HARNESS_CACHE_FILE).exists());
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join(HARNESS_CACHE_FILE)
+            .exists()
+    );
 
     let mut moved = ctx.clone();
     moved.store.config.harnesses.insert(

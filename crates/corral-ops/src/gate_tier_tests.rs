@@ -781,9 +781,9 @@ fn autopilot_dispatch_reports_a_template_conflict_once_and_creates_no_run() {
         },
     );
     store.save_config().unwrap();
-    std::fs::create_dir_all(fx.ctx.store.prompts_dir()).unwrap();
+    std::fs::create_dir_all(fx.ctx.store.dir().join("prompts")).unwrap();
     std::fs::write(
-        fx.ctx.store.prompts_dir().join("run.md"),
+        fx.ctx.store.dir().join("prompts").join("run.md"),
         "{{id}}\nRun the full gate before done.\n",
     )
     .unwrap();

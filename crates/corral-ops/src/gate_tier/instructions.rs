@@ -171,7 +171,7 @@ fn template_source(ctx: &Ctx, harness: &str) -> (&'static str, String) {
             ctx.store.root().join(path).display().to_string(),
         );
     }
-    let file = ctx.store.prompts_dir().join("run.md");
+    let file = ctx.store.template_override("run.md");
     let path = if file.is_file() {
         file.display().to_string()
     } else {

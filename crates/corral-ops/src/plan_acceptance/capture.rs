@@ -182,7 +182,7 @@ pub(super) fn prompt_inputs(store: &Store) -> Result<Vec<(PathBuf, Option<String
     ["review.md", "run.md"]
         .into_iter()
         .map(|name| {
-            let path = store.prompts_dir().join(name);
+            let path = store.template_override(name);
             match std::fs::read(&path) {
                 Ok(bytes) => Ok((path, Some(digest(&bytes)))),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((path, None)),

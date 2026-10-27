@@ -388,7 +388,8 @@ fn owner_verdict_options_execute_on_the_exact_isolated_plan_with_notes() {
         let card = cli(tmp.path(), &["pm", "next", "--json"]);
         let notes = ctx
             .store
-            .state_dir()
+            .scratch_path("tmp")
+            .unwrap()
             .join(format!("{id}-P3-owner-plan-notes.md"));
         let choice = card["options"]
             .as_array()

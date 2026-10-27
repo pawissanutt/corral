@@ -644,9 +644,11 @@ fn plugin_install_print_writes_manifest() {
         out.contains("prefix+k") && out.contains("corral.board"),
         "{out}"
     );
-    let manifest = ws
-        .root
-        .join(".corral/state/tmp/herdr-plugin/herdr-plugin.toml");
+    let manifest = corral_core::Store::open_unobserved(&ws.root)
+        .unwrap()
+        .scratch_path("tmp")
+        .unwrap()
+        .join("herdr-plugin/herdr-plugin.toml");
     let text = std::fs::read_to_string(&manifest).expect("manifest exists");
     let v: toml::Value = toml::from_str(&text).expect("valid toml");
     assert_eq!(v["id"].as_str(), Some("corral"));

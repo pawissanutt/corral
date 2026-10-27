@@ -140,7 +140,7 @@ fn idle_timeout_survives_restart_without_autopilot_and_surfaces_saved_notes() {
     ctx.store.config.review.autopilot = Some(false);
     ctx.store.save_config().unwrap();
     let now = started(&ctx, &id);
-    let notes = corral_ops::review_notes_path(&ctx, &id, "R1");
+    let notes = corral_ops::review_notes_path(&ctx, &id, "R1").unwrap();
     std::fs::write(&notes, "Finished reviewing; callback did not arrive.\n").unwrap();
     let panes = pane(AgentStatus::Idle);
 
@@ -360,6 +360,7 @@ fn closed_reviewer_escalates_with_notes_location() {
     assert!(
         change.note.contains(
             &corral_ops::review_notes_path(&ctx, &id, "R1")
+                .unwrap()
                 .display()
                 .to_string()
         )
@@ -444,7 +445,7 @@ fn recent_omo_activity_clears_false_herdr_idle_stretch_without_sleeping() {
 fn refused_stale_verdict_cannot_leave_an_idle_reviewer_hanging() {
     let (_tmp, ctx, id, worktree) = task_in_review();
     let now = started(&ctx, &id);
-    let notes = corral_ops::review_notes_path(&ctx, &id, "R1");
+    let notes = corral_ops::review_notes_path(&ctx, &id, "R1").unwrap();
     std::fs::write(&notes, "Review findings retained before failed verdict.\n").unwrap();
     std::fs::write(worktree.join("spin.txt"), "changed candidate\n").unwrap();
     corral_git::commit_all(&worktree, "Move candidate after review").unwrap();

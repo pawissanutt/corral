@@ -22,6 +22,7 @@ fn command(root: &Path, args: &[&str]) -> Command {
         .env("HOME", root)
         .env("XDG_CONFIG_HOME", root.join("config"))
         .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
         .arg("--root")
         .arg(root)
         .args(args)
@@ -30,6 +31,13 @@ fn command(root: &Path, args: &[&str]) -> Command {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     command
+}
+
+/// The scratch spool the CLI stages edit drafts in (`XDG_CACHE_HOME` is `<root>/cache`).
+fn scratch_tmp(root: &Path) -> std::path::PathBuf {
+    root.join("cache/corral")
+        .join(corral_core::storage_roots::workspace_id(root))
+        .join("scratch/tmp")
 }
 
 fn invoke(root: &Path, args: &[&str]) -> Output {
@@ -134,7 +142,7 @@ fn edit_refuses_a_task_changed_meanwhile_and_keeps_the_edited_text() {
         stderr.contains("task changed while editor was open"),
         "{stderr}"
     );
-    let kept = dir.path().join(".corral/state/tmp/edit-T-001.md");
+    let kept = scratch_tmp(dir.path()).join("edit-T-001.md");
     assert!(stderr.contains(&kept.display().to_string()), "{stderr}");
     assert!(
         std::fs::read_to_string(&kept)
@@ -174,7 +182,7 @@ fn edit_resumes_failed_editor_draft_after_restart_without_scratch() {
         .output()
         .unwrap();
     assert!(!out.status.success(), "{out:?}");
-    std::fs::remove_file(dir.path().join(".corral/state/tmp/edit-T-001.md")).unwrap();
+    std::fs::remove_file(scratch_tmp(dir.path()).join("edit-T-001.md")).unwrap();
     let script = editor(dir.path(), "exit 0");
 
     // When another CLI process resumes the edit with no scratch copy.
@@ -208,7 +216,7 @@ fn edit_preserves_stale_draft_and_starts_fresh_after_the_task_changes() {
     assert!(!out.status.success(), "{out:?}");
     let retained = store.record_row("edit-drafts", &task.id).unwrap().unwrap();
     success(dir.path(), &["comment", &task.id, "meanwhile"]);
-    std::fs::remove_file(dir.path().join(".corral/state/tmp/edit-T-001.md")).unwrap();
+    std::fs::remove_file(scratch_tmp(dir.path()).join("edit-T-001.md")).unwrap();
 
     // When a new process edits the current task rather than applying the stale copy.
     let out = command(dir.path(), &["edit", &task.id])

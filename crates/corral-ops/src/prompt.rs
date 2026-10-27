@@ -329,7 +329,7 @@ fn harness_template(ctx: &Ctx, harness: Option<&str>) -> Result<String> {
         return std::fs::read_to_string(&file)
             .with_context(|| format!("reading harness prompt template {}", file.display()));
     }
-    let file = ctx.store.prompts_dir().join("run.md");
+    let file = ctx.store.template_override("run.md");
     match std::fs::read_to_string(&file) {
         Ok(t) => Ok(t),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(RUN_TEMPLATE.to_string()),
@@ -543,7 +543,7 @@ pub fn preview_command(ctx: &Ctx, config: &Config, profile: &str) -> Result<Stri
     let worktree = repo.join(".worktrees").join(PREVIEW_TASK);
     let prompt_file = ctx
         .store
-        .prompts_dir()
+        .scratch_path("prompts")?
         .join(format!("{PREVIEW_TASK}-R1.md"));
     render_template(
         &resolved,

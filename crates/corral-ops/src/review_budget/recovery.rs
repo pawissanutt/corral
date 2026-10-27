@@ -105,10 +105,9 @@ impl ReviewLaunch<'_> {
                     .review_runs
                     .last()
                     .context("prepared reviewer child missing")?;
-                let prompt = ctx
-                    .store
-                    .prompts_dir()
-                    .join(format!("{}-{}-review.md", task.id, run.id));
+                let key = crate::reviewer::dir_attempt(child.review.as_ref(), &child.id);
+                let prompt =
+                    crate::reviewer::review_dir(ctx, &task.id, &run.id, &key)?.join("review.md");
                 ensure!(prompt.is_file(), "prepared review prompt missing");
                 let profile = ctx.store.config.resolve_profile(
                     &ProfileChoice {
@@ -130,8 +129,9 @@ impl ReviewLaunch<'_> {
                 )?;
                 let attempt = format!("{}-{}", run.id, child.id);
                 crate::launch_exit::arm(
+                    ctx,
                     &command,
-                    &crate::launch_exit::receipt(ctx, &task.id, &attempt),
+                    &crate::launch_exit::receipt(ctx, &task.id, &attempt)?,
                 )?
             }
         };

@@ -1285,6 +1285,7 @@ Options:
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
       --review <REVIEW>          
       --notes-file <NOTES_FILE>  
+      --evidence <PATH>          Promote this file (in the attempt's scratch directory or the reviewed worktree) as evidence with the verdict; repeatable, within `[storage] review_evidence_max`
       --json                     
   -h, --help                     Print help
 ```
@@ -1390,6 +1391,7 @@ Options:
       --attempt <ATTEMPT>        Omit only for an explicit manual owner verdict
       --owner                    Explicitly accept or reject as the owner, after independent review
       --notes-file <NOTES_FILE>  
+      --evidence <PATH>          Promote this file (in the attempt's scratch directory or the reviewed worktree) as evidence with the verdict; repeatable, within `[storage] review_evidence_max`
       --json                     
   -h, --help                     Print help
 ```
@@ -2369,6 +2371,7 @@ Options:
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
       --notes-file <NOTES_FILE>  Read the review notes from this file
       --attempt <ATTEMPT>        Bind this verdict to the reviewer's assigned gate attempt
+      --evidence <PATH>          Promote this file (in the attempt's scratch directory or the reviewed worktree) as evidence with the verdict; repeatable, within `[storage] review_evidence_max`
       --stronger                 With `escalate`: ask corral to supersede this routine attempt with one stronger review
   -h, --help                     Print help
 ```

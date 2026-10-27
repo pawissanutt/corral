@@ -218,7 +218,13 @@ fn suggest_card_is_ranked_closed_and_read_only() {
     assert_eq!(first.options.last().unwrap().id, "wait");
     assert_eq!(ctx.store.list().unwrap(), tasks);
     assert_eq!(ctx.store.events().unwrap(), events);
-    assert!(!ctx.store.state_dir().join("resources.json").exists());
+    assert!(
+        !ctx.store
+            .dir()
+            .join("state")
+            .join("resources.json")
+            .exists()
+    );
     assert_eq!(
         serde_json::from_str::<PmActionKind>("\"idea_promotion\"").unwrap(),
         PmActionKind::IdeaPromotion
@@ -583,7 +589,7 @@ fn isolated_pass_artifact_yields_flake_bug_without_waiving_gate() {
         .unwrap()
         .base_sha
         .clone();
-    let file = ctx.store.state_dir().join("alone.json");
+    let file = ctx.store.dir().join("state").join("alone.json");
     std::fs::write(
         &file,
         json!({
@@ -628,7 +634,7 @@ fn compressed_isolated_result_is_decoded_before_hash_and_json_checks() {
     })
     .to_string()
     .into_bytes();
-    let file = ctx.store.state_dir().join("compressed-alone.json");
+    let file = ctx.store.dir().join("state").join("compressed-alone.json");
     std::fs::write(&file, &bytes).unwrap();
     let artifact = corral_ops::add_artifact(
         &ctx,

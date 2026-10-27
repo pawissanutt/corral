@@ -43,7 +43,7 @@ fn agent_pm_reads_are_snapshot_consistent_and_clear_deletes_the_record() {
     assert_eq!(pm_state::load(&snapshot).unwrap(), Some(first));
     assert_eq!(pm_state::load(&store).unwrap(), None);
     assert!(store.record_row("agent-pm", "current").unwrap().is_none());
-    assert!(!store.state_dir().join("agent-pm.json").exists());
+    assert!(!store.dir().join("state").join("agent-pm.json").exists());
 }
 
 #[test]

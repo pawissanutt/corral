@@ -462,7 +462,8 @@ fn legacy_unversioned_pass_is_never_consulted() {
     let (_tmp, ctx, id, _) = running_task(&["false"]);
     let legacy = ctx
         .store
-        .state_dir()
+        .dir()
+        .join("state")
         .join("gates")
         .join(format!("{id}-R1.json"));
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -607,7 +608,8 @@ fn new_gate_can_replace_a_running_legacy_attempt_without_collecting_its_pass() {
         .unwrap();
     let legacy = ctx
         .store
-        .state_dir()
+        .dir()
+        .join("state")
         .join("gates")
         .join(format!("{id}-R1.json"));
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
@@ -692,12 +694,16 @@ fn inherited_attempt_cannot_start_or_forge_completion() {
 #[test]
 fn runtime_skew_refuses_gate_start_before_creating_gate_files() {
     let (_tmp, ctx, id, _) = running_task(&["true"]);
-    std::fs::write(ctx.store.state_dir().join("schema-version"), "999\n").unwrap();
+    std::fs::write(
+        ctx.store.dir().join("state").join("schema-version"),
+        "999\n",
+    )
+    .unwrap();
 
     let error = corral_ops::gate_start(&ctx, &id).unwrap_err();
 
     assert_eq!(error.to_string(), corral_core::UPDATE_NOTICE);
-    assert!(!ctx.store.state_dir().join("gates").exists());
+    assert!(!ctx.store.dir().join("state").join("gates").exists());
     let events = ctx.store.events().unwrap();
     assert_eq!(events.last().unwrap().kind, "version_skew");
     assert!(!events.iter().any(|event| event.kind == "gate_started"));
@@ -709,7 +715,11 @@ fn runtime_skew_refuses_collecting_an_owned_result() {
     corral_ops::gate_start(&ctx, &id).unwrap();
     let task = ctx.store.get(&id).unwrap();
     let before = ctx.store.get(&task.id).unwrap();
-    std::fs::write(ctx.store.state_dir().join("schema-version"), "999\n").unwrap();
+    std::fs::write(
+        ctx.store.dir().join("state").join("schema-version"),
+        "999\n",
+    )
+    .unwrap();
 
     let error = corral_ops::gate_collect(&ctx, &id).unwrap_err();
 

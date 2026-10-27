@@ -2,14 +2,14 @@ use super::*;
 
 const DEFAULT_TEMPLATE: &str = include_str!("../../assets/review.md");
 
-/// The review prompt for the task's run, as markdown: `.corral/prompts/review.md` when present, else the
+/// The review prompt for the task's run, as markdown: the `review.md` template override when present, else the
 /// built-in template. Placeholders: {{id}} {{title}} {{run}} {{branch}} {{base}} {{worktree}} {{spec}}
 /// {{summary}} {{gate}} {{diff_cmd}} {{artifacts}} {{agents_md}} {{notes_file}} {{verdict_cmd}}.
 /// A routed review always appends its versioned contract, even under a custom template, and a
 /// tiered run's review always appends one authoritative Gate contract (review) section.
 pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let gate_contract = crate::review_packet::gate_contract(ctx, task, run)?;
-    let override_file = ctx.store.prompts_dir().join("review.md");
+    let override_file = ctx.store.template_override("review.md");
     let template = match std::fs::read_to_string(&override_file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => DEFAULT_TEMPLATE.to_string(),
@@ -57,9 +57,7 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ),
         (
             "notes_file",
-            review_notes_path(ctx, &task.id, &run.id)
-                .display()
-                .to_string(),
+            notes_of(ctx, &task.id, run)?.display().to_string(),
         ),
         ("verdict_cmd", {
             let attempt = run

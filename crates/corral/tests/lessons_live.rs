@@ -222,8 +222,9 @@ fn isolated_distillation_apply_dispatch_and_review_share_exact_lessons() {
         &mut log,
     );
     let review_path = store
-        .prompts_dir()
-        .join(format!("{task}-{}-review.md", run.id));
+        .scratch_path(&format!("reviews/{task}-{}-review1", run.id))
+        .unwrap()
+        .join("review.md");
     let review_prompt = std::fs::read_to_string(&review_path).unwrap();
     // Then both actual launch files and the exposure CLI retain the same evidence-bound lesson.
     assert_eq!(packet(&dispatch_prompt), proposal.lessons);

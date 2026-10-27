@@ -46,7 +46,11 @@ pub(crate) fn dispatch(
     let mut plan = crate::queue::resolve_plan(ctx, task, opts)?;
     crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let id = format!("D{}", task.plan_runs.len() + 1);
-    let output_dir = ctx.store.state_dir().join("plans").join(&task.id).join(&id);
+    let output_dir = crate::scratch_reclaim::Attempt::Planner {
+        task: &task.id,
+        run: &id,
+    }
+    .open(ctx)?;
     let resolved = ctx.store.config.resolve_route(&plan.route)?;
     let _ownership = ctx
         .store
@@ -214,6 +218,10 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         text.push_str(&format!("\n## Required plan changes\n\n{notes}\n"));
     }
     text.push_str(&crate::comments::owner_comments(task));
+    text.push_str(&crate::scratch_reclaim::prompt_section(
+        ctx,
+        &run.output_dir,
+    ));
     crate::prompt::append_working_instructions(&mut text, run.execution.as_ref());
     std::fs::write(&prompt_file, text).context("writing planning contract")?;
     let command = render_command(ctx, task, run, repo, &prompt_file)?;

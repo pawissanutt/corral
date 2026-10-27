@@ -747,7 +747,7 @@ fn finished_worker_can_refresh_checkpoint_without_repeating_completion() {
 fn custom_prompt_cannot_remove_canonical_task_contract() {
     // Given a harness template that omits the task body entirely.
     let f = Fixture::new();
-    std::fs::write(f.ctx.store.prompts_dir().join("run.md"), "custom").unwrap();
+    std::fs::write(f.ctx.store.dir().join("prompts").join("run.md"), "custom").unwrap();
     let task = f.task();
     // When a fresh worker receives its missing-checkpoint packet.
     let packet = f.packet();

@@ -16,7 +16,7 @@ fn manual_approval_rejects_runtime_skew_before_git_side_effects() {
         fx.commit_on_main("other.txt", "main moved\n", "main advanced");
         let base = git(&fx.app, &["rev-parse", "HEAD"]);
         std::fs::write(
-            fx.ctx.store.state_dir().join("schema-version"),
+            fx.ctx.store.dir().join("state").join("schema-version"),
             (corral_core::STORE_SCHEMA_VERSION + 1).to_string(),
         )
         .unwrap();

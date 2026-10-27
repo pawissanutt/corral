@@ -24,7 +24,7 @@ fn inherited_workspace_and_gate_identity_cannot_change_sentinel_store() {
     store
         .log_event(None, "sentinel", serde_json::json!({"untouched":true}))
         .unwrap();
-    let gates = store.state_dir().join("gates");
+    let gates = store.dir().join("state").join("gates");
     std::fs::create_dir(&gates).unwrap();
     std::fs::write(gates.join("sentinel.json"), "sentinel result\n").unwrap();
     std::fs::write(gates.join("sentinel.log"), "sentinel log\n").unwrap();

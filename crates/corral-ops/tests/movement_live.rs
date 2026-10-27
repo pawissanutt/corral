@@ -208,7 +208,8 @@ finally:
     let queue = serde_json::to_string(&receipt).unwrap();
     assert!(
         !ctx.store
-            .state_dir()
+            .dir()
+            .join("state")
             .join(format!("main-movement-{}.json", task.id))
             .exists()
     );

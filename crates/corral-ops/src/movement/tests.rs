@@ -480,7 +480,8 @@ fn canonical_send_intent_survives_callback_refusal_and_restart_without_replay() 
         assert!(
             !restarted
                 .store
-                .state_dir()
+                .dir()
+                .join("state")
                 .join(format!("main-movement-{}.json", fx.task.id))
                 .exists()
         );

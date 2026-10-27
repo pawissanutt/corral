@@ -8,7 +8,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use super::{finish_review, review_notes_path};
+use super::{finish_review, notes_of};
 use crate::cleanup::{Cleanup, cleanup};
 use crate::{Change, Ctx};
 
@@ -185,11 +185,12 @@ pub(crate) fn reconcile_review_sampled_at(
     } else {
         None
     };
+    let notes = notes_of(ctx, id, run)?;
     let reason = problem.map(|problem| {
         format!(
             "the reviewer ({}) {problem}; saved notes: {}",
             review.reviewer,
-            review_notes_path(ctx, id, &run.id).display()
+            notes.display()
         )
     });
     if since == run.idle_since && reason.is_none() {
@@ -247,7 +248,7 @@ pub(crate) fn reconcile_review_sampled_at(
                 "review_escalated",
                 json!({
                     "run": run.id, "reason": reason,
-                    "notes": review_notes_path(ctx, id, &run.id),
+                    "notes": notes,
                 }),
             )?;
         }

@@ -107,7 +107,7 @@ pub(crate) fn snapshot_hashes(
     earliest: Timestamp,
     refs: &[String],
 ) -> Result<Vec<String>> {
-    let allowed = ctx.store.artifacts_dir(&task.id, run);
+    let allowed = crate::artifact_storage::snapshot_dir(ctx.store.dir(), &task.id, run);
     let allowed = allowed
         .canonicalize()
         .context("missing artifact snapshot directory")?;
@@ -116,7 +116,7 @@ pub(crate) fn snapshot_hashes(
         .dir()
         .canonicalize()
         .context("resolving store directory")?;
-    if allowed != root.join("artifacts").join(&task.id).join(run) {
+    if allowed != crate::artifact_storage::snapshot_dir(&root, &task.id, run) {
         bail!("artifact_directory_escape");
     }
     let mut hashes = Vec::new();

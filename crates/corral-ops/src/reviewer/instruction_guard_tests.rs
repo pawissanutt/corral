@@ -159,13 +159,13 @@ fn fixture(rules: GateRules) -> Fx {
 
 impl Fx {
     fn template(&self, text: &str) {
-        let dir = self.ctx.store.prompts_dir();
+        let dir = self.ctx.store.dir().join("prompts");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("review.md"), text).unwrap();
     }
 
     fn clear_template(&self) {
-        std::fs::remove_file(self.ctx.store.prompts_dir().join("review.md")).unwrap();
+        std::fs::remove_file(self.ctx.store.dir().join("prompts").join("review.md")).unwrap();
     }
 
     fn instructions(&mut self, profile: &str, text: &str) {
@@ -223,10 +223,9 @@ impl Fx {
     }
 
     fn prompt_file(&self) -> PathBuf {
-        self.ctx
-            .store
-            .prompts_dir()
-            .join(format!("{}-R1-review.md", self.id))
+        crate::reviewer::review_dir(&self.ctx, &self.id, "R1", "R1-review1")
+            .unwrap()
+            .join("review.md")
     }
 
     /// The conflict, with nothing started: no pane, review record, child, reservation,
@@ -448,7 +447,7 @@ fn restored_launch_is_refused_before_resume_and_its_preparation_is_retained() {
             Ok(())
         })
         .unwrap();
-    std::fs::create_dir_all(fx.ctx.store.prompts_dir()).unwrap();
+    std::fs::create_dir_all(fx.prompt_file().parent().unwrap()).unwrap();
     std::fs::write(fx.prompt_file(), "prepared").unwrap();
     std::fs::write(fx.tmp.path().join("w1:prepared"), "").unwrap();
     drop(launch);
@@ -509,10 +508,8 @@ fn legacy_run_keeps_todays_review_gate_text_and_is_never_refused() {
     );
     assert!(!prompt.contains("## Gate contract"), "{prompt}");
     let child = run.review_runs.last().unwrap();
-    let packet = fx
-        .ctx
-        .store
-        .prompts_dir()
+    let packet = crate::reviewer::review_dir(&fx.ctx, &fx.id, "R1", &child.id)
+        .unwrap()
         .join(format!("{}-R1-{}-review-packet.json", fx.id, child.id));
     let packet: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(packet).unwrap()).unwrap();

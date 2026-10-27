@@ -251,8 +251,7 @@ pub fn lessons_distill(ctx: &Ctx, project: &str, profile: Option<&str>) -> Resul
     // A materialized copy is evidence input, never the request's authority.
     let path = ctx
         .store
-        .state_dir()
-        .join("tmp")
+        .scratch_tmp()?
         .join("lessons")
         .join(format!("{}.json", task.id));
     std::fs::create_dir_all(path.parent().context("request has no directory")?)

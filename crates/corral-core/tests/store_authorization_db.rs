@@ -149,7 +149,13 @@ fn send_observes_one_authorization_with_marker_events_and_records() {
             )
             .is_err()
     );
-    assert!(!store.state_dir().join("action-authorizations").exists());
+    assert!(
+        !store
+            .dir()
+            .join("state")
+            .join("action-authorizations")
+            .exists()
+    );
 }
 
 #[test]

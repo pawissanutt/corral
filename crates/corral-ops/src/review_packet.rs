@@ -264,13 +264,25 @@ pub struct Finding {
     pub notes: String,
 }
 
-fn paths(ctx: &Ctx, task: &Task, run: &Run, attempt: &str) -> (PathBuf, PathBuf) {
-    let dir = ctx.store.prompts_dir();
+/// The packet and diff of review attempt `attempt`, in the scratch directory of its callback
+/// attempt (`route`).
+fn paths(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    (attempt, route): (&str, &ReviewRoute),
+) -> Result<(PathBuf, PathBuf)> {
+    let key = route
+        .callback
+        .clone()
+        .or_else(|| route.attempt.clone())
+        .unwrap_or_else(|| attempt.to_owned());
+    let dir = crate::reviewer::review_dir(ctx, &task.id, &run.id, &key)?;
     let stem = format!("{}-{}-{attempt}", task.id, run.id);
-    (
+    Ok((
         dir.join(format!("{stem}-review-packet.json")),
         dir.join(format!("{stem}-review.diff")),
-    )
+    ))
 }
 
 pub(crate) fn evidence_gaps(
@@ -374,7 +386,9 @@ pub(crate) fn evidence_gaps(
 
 /// Reviewer screens, transcripts and notes describe reviews, not the candidate under review.
 fn reviewer_side(ctx: &Ctx, artifact: &corral_core::Artifact) -> bool {
-    std::path::Path::new(&artifact.source).starts_with(ctx.store.state_dir().join("review-watch"))
+    ctx.store
+        .scratch_path(crate::watch::REVIEW_WATCH)
+        .is_ok_and(|watch| std::path::Path::new(&artifact.source).starts_with(watch))
         || (artifact.kind == ArtifactKind::Report && artifact.title.starts_with("Review ("))
 }
 
@@ -411,7 +425,7 @@ pub(crate) fn build(
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let diff = corral_git::diff_text(&run.worktree, &base)?;
     let changed_paths = crate::review_contracts::changed_paths(run)?;
-    let (_, diff_file) = paths(ctx, task, run, attempt);
+    let (_, diff_file) = paths(ctx, task, run, (attempt, route))?;
     let gate = match &run.gate {
         Some(g) => Some(GateEvidence {
             authority: "corral_gate_receipt",
@@ -523,8 +537,7 @@ pub(crate) fn write(
     route: &ReviewRoute,
 ) -> Result<(String, String)> {
     let (packet, diff) = build(ctx, task, run, attempt, record, route)?;
-    let (packet_file, diff_file) = paths(ctx, task, run, attempt);
-    std::fs::create_dir_all(ctx.store.prompts_dir()).context("creating prompt directory")?;
+    let (packet_file, diff_file) = paths(ctx, task, run, (attempt, route))?;
     std::fs::write(&diff_file, diff).with_context(|| format!("writing {}", diff_file.display()))?;
     let json = serde_json::to_string_pretty(&packet)?;
     std::fs::write(&packet_file, &json)

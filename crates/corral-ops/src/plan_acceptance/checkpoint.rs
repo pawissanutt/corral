@@ -427,8 +427,10 @@ fn prepare_fix(store: &Store, tracker: &Task, attempt: &PlanCheckpoint) -> Resul
         head = attempt.head,
     );
     let path = store
-        .state_dir()
-        .join("plan-checkpoints")
+        .scratch_spool(
+            corral_core::backend::ScratchKind::TmpStaging,
+            "plan-checkpoints",
+        )?
         .join(format!("{}-{}-fix.md", tracker.id, attempt.id));
     let dir = path.parent().context("fix spec has no directory")?;
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;

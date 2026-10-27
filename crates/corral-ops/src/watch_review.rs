@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use corral_core::backend::ScratchKind;
 use corral_core::{Artifact, ArtifactKind, ReviewRecord, Run, Status, Task, Verdict};
 use serde::{Deserialize, Serialize};
 
@@ -36,16 +37,19 @@ struct Capture {
     incomplete: bool,
 }
 
-fn path(ctx: &Ctx, task: &str, child: &str) -> PathBuf {
-    ctx.store
-        .state_dir()
-        .join("review-watch")
+fn path(ctx: &Ctx, task: &str, child: &str) -> Result<PathBuf> {
+    Ok(ctx
+        .store
+        .scratch_spool(ScratchKind::ReviewWatchLog, REVIEW_WATCH)?
         .join(task)
-        .join(format!("{child}.json"))
+        .join(format!("{child}.json")))
 }
 
+/// The spool holding reviewer monitor captures and live logs.
+pub(crate) const REVIEW_WATCH: &str = "review-watch";
+
 fn read(ctx: &Ctx, task: &str, child: &str) -> Result<Capture> {
-    let path = path(ctx, task, child);
+    let path = path(ctx, task, child)?;
     match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes).context("parsing reviewer monitor"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Capture::default()),
@@ -59,7 +63,7 @@ pub(crate) fn start_review(ctx: &Ctx, task: &Task, child: &Run) -> Result<()> {
         ..Default::default()
     };
     crate::artifact_storage::replace(
-        &path(ctx, &task.id, &child.id),
+        &path(ctx, &task.id, &child.id)?,
         &serde_json::to_vec(&capture)?,
     )
 }
@@ -114,7 +118,8 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
         }
         let mut window = child.clone();
         window.ended.get_or_insert_with(jiff::Timestamp::now);
-        let notes = crate::review_notes_path(ctx, &task.id, &run.id);
+        let key = crate::reviewer::dir_attempt(child.review.as_ref(), &child.id);
+        let notes = crate::reviewer::review_dir(ctx, &task.id, &run.id, &key)?.join("notes.md");
         if let Ok(notes) = std::fs::read_to_string(notes)
             && !notes.trim().is_empty()
         {
@@ -168,7 +173,7 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
         }
         capture.captured_at = Some(jiff::Timestamp::now());
         crate::artifact_storage::replace(
-            &path(ctx, &task.id, &child.id),
+            &path(ctx, &task.id, &child.id)?,
             &serde_json::to_vec(&capture)?,
         )?;
         Ok(true)
@@ -183,7 +188,7 @@ fn snapshot(
     (kind, bytes): (&str, &[u8]),
     named: bool,
 ) -> Result<String> {
-    let file = path(ctx, &task.id, &child.id).with_extension(format!("{kind}.log"));
+    let file = path(ctx, &task.id, &child.id)?.with_extension(format!("{kind}.log"));
     crate::artifact_storage::replace(&file, bytes)?;
     let (log, title) = (
         Some(ArtifactKind::Log),
@@ -228,7 +233,7 @@ pub(crate) fn load(ctx: &Ctx, task: &Task, owned: bool) -> Result<Vec<ReviewerAt
                             .interrupted_at
                             .get_or_insert_with(jiff::Timestamp::now);
                         crate::artifact_storage::replace(
-                            &path(ctx, &task.id, &child.id),
+                            &path(ctx, &task.id, &child.id)?,
                             &serde_json::to_vec(&capture)?,
                         )?;
                     }

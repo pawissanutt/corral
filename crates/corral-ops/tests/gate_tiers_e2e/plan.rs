@@ -354,13 +354,44 @@ fn accept_passing(p: &PlanFx, attempt: &corral_core::AggregateAttempt, main: &st
     .unwrap();
     corral_ops::plan_evidence(&p.fx.ctx, &p.tracker, &observation).unwrap();
     let review = corral_ops::plan_aggregate_review(&p.fx.ctx, &p.tracker, &attempt.id).unwrap();
+    // The aggregate reviewer's prompt names its registered scratch directory and budget.
+    let dir =
+        p.fx.ctx
+            .store
+            .scratch_path(&format!("aggregate-reviews/{}-{}", p.tracker, review.id))
+            .unwrap();
+    let prompt = std::fs::read_to_string(
+        dir.join(format!("{}-{}-aggregate-review.md", p.tracker, review.id)),
+    )
+    .unwrap();
+    assert!(prompt.contains(&dir.display().to_string()) && prompt.contains("64MiB"));
     let verdict = AggregateVerdict {
         attempt: &attempt.id,
         review: &review.id,
         verdict: Verdict::Approve,
         notes: "The combined candidate passed the full tier.",
     };
-    corral_ops::plan_aggregate_verdict(&p.fx.ctx, &p.tracker, &verdict).unwrap();
+    // Evidence outside the attempt directory and the reviewed checkout records no verdict.
+    let outside = p.fx.ctx.store.dir().join("corral.toml");
+    let verdicts = p.fx.events(&p.tracker, "aggregate_verdict").len();
+    let refused = corral_ops::plan_aggregate_verdict_with_evidence(
+        &p.fx.ctx,
+        &p.tracker,
+        &verdict,
+        &[outside],
+    );
+    assert!(refused.is_err());
+    assert_eq!(p.fx.events(&p.tracker, "aggregate_verdict").len(), verdicts);
+    let shot = dir.join("combined.txt");
+    std::fs::write(&shot, "all included").unwrap();
+    corral_ops::plan_aggregate_verdict_with_evidence(&p.fx.ctx, &p.tracker, &verdict, &[shot])
+        .unwrap();
+    assert!(
+        p.fx.task(&p.tracker)
+            .artifacts
+            .iter()
+            .any(|a| a.title == "Evidence: combined.txt")
+    );
     let accepted = corral_ops::plan_accept(&p.fx.ctx, &p.tracker, &attempt.id, false).unwrap();
 
     assert_eq!(accepted.before.as_deref(), Some(main));

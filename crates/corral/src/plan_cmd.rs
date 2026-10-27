@@ -55,6 +55,10 @@ pub enum PlanCmd {
         review: String,
         #[arg(long)]
         notes_file: PathBuf,
+        /// Promote this file (in the attempt's scratch directory or the reviewed worktree) as
+        /// evidence with the verdict; repeatable, within `[storage] review_evidence_max`
+        #[arg(long = "evidence", value_name = "PATH")]
+        evidence: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -111,6 +115,10 @@ pub enum PlanCmd {
         owner: bool,
         #[arg(long)]
         notes_file: PathBuf,
+        /// Promote this file (in the attempt's scratch directory or the reviewed worktree) as
+        /// evidence with the verdict; repeatable, within `[storage] review_evidence_max`
+        #[arg(long = "evidence", value_name = "PATH")]
+        evidence: Vec<PathBuf>,
         #[arg(long)]
         json: bool,
     },
@@ -322,6 +330,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             attempt,
             review,
             notes_file,
+            evidence,
             json,
         } => {
             let notes = std::fs::read_to_string(&notes_file)
@@ -329,7 +338,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             let Some(verdict) = Verdict::parse(&verdict) else {
                 bail!("invalid aggregate verdict");
             };
-            let record = corral_ops::plan_aggregate_verdict(
+            let record = corral_ops::plan_aggregate_verdict_with_evidence(
                 ctx,
                 &id,
                 &corral_ops::AggregateVerdict {
@@ -338,6 +347,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     verdict,
                     notes: &notes,
                 },
+                &evidence,
             )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&record)?);
@@ -455,6 +465,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             attempt,
             owner,
             notes_file,
+            evidence,
             json,
         } => {
             if !owner && attempt.is_none() {
@@ -465,7 +476,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             let Some(verdict) = Verdict::parse(&verdict) else {
                 bail!("invalid plan verdict");
             };
-            let record = corral_ops::plan_verdict(
+            let record = corral_ops::plan_verdict_with_evidence(
                 ctx,
                 &id,
                 &PlanVerdict {
@@ -474,6 +485,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     verdict,
                     notes: &notes,
                 },
+                &evidence,
             )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&record)?);

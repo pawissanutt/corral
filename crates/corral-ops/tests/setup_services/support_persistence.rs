@@ -77,7 +77,13 @@ fn corrupted_support_facts_cannot_publish_an_approved_mapping() {
     assert!(result.is_err());
     assert_eq!(store.profile_setup().unwrap(), record);
     assert_eq!(fs::read(store.config_path()).unwrap(), before);
-    assert!(!store.state_dir().join("profile-setup-intent.json").exists());
+    assert!(
+        !store
+            .dir()
+            .join("state")
+            .join("profile-setup-intent.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -88,7 +94,7 @@ fn proposal_support_roundtrips_after_restart_without_file_authority() {
     let key = input.proposal.digest().unwrap();
     let area = corral_core::records::RecordArea::<SetupProposalInput>::new("profile-proposals");
     // A conflicting legacy file must never participate in reconciliation.
-    let legacy = store.state_dir().join("profile-proposals");
+    let legacy = store.dir().join("state").join("profile-proposals");
     fs::create_dir_all(&legacy).unwrap();
     fs::write(legacy.join(format!("{key}.json")), "invalid legacy input").unwrap();
 

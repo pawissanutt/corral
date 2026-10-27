@@ -96,7 +96,7 @@ fn tour_shows_on_first_open_only_and_reopens_from_help() {
             .unwrap()
             .is_some()
     );
-    assert!(!fx.ctx.store.state_dir().join("tour-seen").exists());
+    assert!(!fx.ctx.store.dir().join("state").join("tour-seen").exists());
     // Then the next board open does not show it again.
     let mut again = fx.app(Mode::Board);
     again.start_tour_if_new();
