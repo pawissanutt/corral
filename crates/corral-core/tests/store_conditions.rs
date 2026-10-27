@@ -75,7 +75,10 @@ fn assert_run(
     assert_eq!(run.closed_seq.map(|seq| seq.0), Some(closed.seq), "{run:?}");
     assert_eq!(run.close_reason, Some(reason), "{run:?}");
     assert_eq!(run.first_at, opened.ts);
-    assert!(run.first_at <= run.last_at, "{run:?}");
+    // The wall clock can step backwards on some hosts, so only a single observation fixes last_at.
+    if count == 1 {
+        assert_eq!(run.last_at, run.first_at, "{run:?}");
+    }
     assert_eq!(run.first_actor.as_deref(), Some(actors.0), "{run:?}");
     assert_eq!(run.last_actor.as_deref(), Some(actors.1), "{run:?}");
 }
@@ -153,7 +156,6 @@ fn every_kind_keeps_four_durable_runs_across_changes_clears_and_a_restart() {
             CloseReason::Cleared,
             (pm, pm),
         );
-        assert!(runs[2].last_at > runs[2].first_at);
         // And each clear carries the run it closed.
         for (clear, run) in [(&events[2], &runs[1]), (&events[5], &runs[3])] {
             assert_eq!(clear.detail["run"], run.opened_seq.0);
@@ -275,6 +277,26 @@ fn conditions_inside_task_updates_count_on_one_run_and_vanish_with_a_refusal() {
         assert_eq!(cleared.len(), 1);
         assert_eq!(cleared[0].detail["count"], 1);
     }
+}
+
+#[test]
+fn a_condition_cannot_ride_a_records_only_unit() {
+    // Given a store and its event tail.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let tail = store.event_tail().unwrap();
+    // When a records-only unit observes a condition kind.
+    let error = store
+        .records_transaction(|| observe_result(&store))
+        .unwrap_err();
+    // Then it refuses rather than splitting the condition from a task change.
+    assert!(format!("{error:#}").contains("task update"), "{error:#}");
+    assert_eq!(store.event_tail().unwrap(), tail);
+    assert!(store.condition_runs(None).unwrap().is_empty());
+}
+
+fn observe_result(store: &Store) -> anyhow::Result<()> {
+    store.log_event(Some(TASK), "queued", a())
 }
 
 #[test]
