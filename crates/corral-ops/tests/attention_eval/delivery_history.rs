@@ -56,7 +56,7 @@ fn measured_entries(fx: &Fx, recipient: &Recipient, expected: usize) {
     ];
     let before = counters.map(count);
     assert_eq!(inbox.owner_entries(&state).unwrap().len(), expected);
-    // Five receipt/terminal probes plus the exact retry-claim probe; no history decoding.
+    // Five keyed receipt/terminal probes per entry; the retry claim is mirrored in the failed slot.
     assert_eq!(
         counters
             .map(count)
@@ -64,7 +64,7 @@ fn measured_entries(fx: &Fx, recipient: &Recipient, expected: usize) {
             .zip(before)
             .map(|(after, before)| after - before)
             .collect::<Vec<_>>(),
-        vec![u64::try_from(expected).unwrap() * 6, 0, 0, 0]
+        vec![u64::try_from(expected).unwrap() * 5, 0, 0, 0]
     );
 }
 
