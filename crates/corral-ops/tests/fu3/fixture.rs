@@ -124,6 +124,16 @@ impl Fixture {
                             "run":"R-current","source":diff,"sha256":"0".repeat(64),"bytes":92
                         }))?);
                     }
+                    if t.id != idea.id {
+                        // As with coding runs, both sizes need a fixed current plan run
+                        // and at least one earlier run represented in the summary.
+                        t.plan_runs.push(serde_json::from_value(json!({
+                            "id":"P-current","profile":"generic","harness":"generic",
+                            "spec_revision":"historic","started":NOW,"ended":NOW,
+                            "output_dir":store.root().join("plan-output"),
+                            "rounds":0,"state":"cancelled"
+                        }))?);
+                    }
                     Ok(())
                 })
                 .unwrap();
@@ -135,6 +145,15 @@ impl Fixture {
                         json!({"history":index}),
                     )
                     .unwrap();
+            }
+            if task.id == idea.id || task.id == active.id {
+                // PM evidence shows the newest three events of an open task. Keep that
+                // current input full and identical while the earlier telemetry grows.
+                for index in 0..3 {
+                    store
+                        .log_event(Some(&task.id), "fixture_recent", json!({"current": index}))
+                        .unwrap();
+                }
             }
         }
         let lesson = Lesson {
@@ -152,6 +171,7 @@ impl Fixture {
             last_seen: NOW.parse().unwrap(),
         };
         store.save_lessons("app", &[lesson]).unwrap();
+        pin_task_times(&store);
         let tasks = store.list().unwrap();
         let idea = store.get(&idea.id).unwrap();
         let active = store.get(&active.id).unwrap();
@@ -260,6 +280,15 @@ pub fn run(id: String, worktree: PathBuf) -> Run {
     .unwrap()
 }
 
+pub fn pin_task_times(store: &Store) {
+    // Timestamp::now() can serialize with different fractional-second widths.
+    for mut task in store.list().unwrap() {
+        task.created = NOW.parse().unwrap();
+        task.updated = NOW.parse().unwrap();
+        store.fixture_put_task(&task).unwrap();
+    }
+}
+
 fn size(value: &serde_json::Value) -> u64 {
     u64::try_from(serde_json::to_vec(value).unwrap().len()).unwrap()
 }
@@ -295,6 +324,12 @@ pub fn path_stats(path: &std::path::Path) -> u64 {
 
 pub fn measure<T>(call: impl FnOnce() -> T) -> (T, WorkSnapshot) {
     let _hot = HotScope::enter();
+    measure_evaluation(call)
+}
+
+/// PM entries prepare cold derivations before entering their own production HotScope.
+/// Capture that evaluation without moving its preparation into a test-owned hot scope.
+pub fn measure_evaluation<T>(call: impl FnOnce() -> T) -> (T, WorkSnapshot) {
     let before = work::snapshot();
     before.check_identity().unwrap();
     let value = call();
@@ -337,18 +372,26 @@ pub fn assert_sample(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, bound:
 }
 
 pub fn assert_growth(base: &WorkSnapshot, grown: &WorkSnapshot) {
+    base.check_identity().unwrap();
+    grown.check_identity().unwrap();
     for counter in Counter::ALL {
         let left = base.cells(counter);
         let right = grown.cells(counter);
-        assert_eq!(left.unattributed, right.unattributed, "{counter:?}");
+        assert_eq!(base.get(counter), grown.get(counter), "{counter:?}");
         assert_eq!(left.own_record, right.own_record, "{counter:?}");
         assert_eq!(left.emitted, right.emitted, "{counter:?}");
         assert_eq!(
             i128::from(right.total) - i128::from(left.total),
-            i128::from(right.followup_sum()) - i128::from(left.followup_sum()),
+            (i128::from(right.own_record) - i128::from(left.own_record))
+                + (i128::from(right.emitted) - i128::from(left.emitted))
+                + (i128::from(right.followup_sum()) - i128::from(left.followup_sum())),
             "{counter:?}"
         );
     }
+    assert_eq!(
+        base.unattributed_byte_remainder(),
+        grown.unattributed_byte_remainder()
+    );
     assert_eq!(base.unattributed_hydrations(), 0);
     assert_eq!(grown.unattributed_hydrations(), 0);
 }

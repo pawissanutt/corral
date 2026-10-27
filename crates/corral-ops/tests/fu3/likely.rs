@@ -90,7 +90,14 @@ fn assert_likely(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, similar: b
             },
             ..fixture.ctx.clone()
         };
-        let (signals, cells) = measure(|| lesson_signals(&ctx, "app").unwrap());
+        // PM prepares this pass before its hot scope; the worker's unbound call
+        // includes the public reader's preparation inside the likely-files scope.
+        let call = || lesson_signals(&ctx, "app").unwrap();
+        let (signals, cells) = if bound {
+            measure_evaluation(call)
+        } else {
+            measure(call)
+        };
         assert!(signals.iter().any(|s| s.category == "touched_files"));
         cells
     } else {
@@ -119,113 +126,122 @@ fn assert_likely(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, similar: b
 #[test]
 fn pm_next_reaches_both_likely_files_calls_and_the_resource_walk() {
     for similar in [false, true] {
-        for scale in [1, 10] {
-            // Given one eligible Idea, one active task and dissimilar or similar terminal growth.
-            let fixture = Fixture::new(scale, similar, false);
-            // Enrichment has no saved lessons; this evaluation reaches exactly the two
-            // shortlist inference calls, rather than a third selected-task preview.
-            fixture.ctx.store.save_lessons("app", &[]).unwrap();
-            let expected_files = legacy_files(&fixture.ctx, &fixture.idea);
-            assert_eq!(
-                legacy_files(&fixture.ctx, &fixture.active),
-                Vec::<String>::new()
-            );
-            assert_eq!(
-                expected_files,
-                if similar {
-                    vec!["src/copper.rs".to_owned()]
-                } else {
-                    vec![]
-                }
-            );
-            let expected_shortlist = legacy_shortlist(&fixture, expected_files);
-            // When PM next takes the ordinary promotion branch.
-            let ((state, action), cells) = measure(|| {
-                let state =
-                    corral_ops::resources::observe(&fixture.ctx, NOW.parse().unwrap()).unwrap();
-                (state, pm_next(&fixture.ctx).unwrap())
-            });
-            // Then inventory and branch preconditions hold before the counters are read.
-            fixture.state_preconditions(&state);
-            assert_eq!(action.kind, PmActionKind::IdeaPromotion);
-            assert_eq!(action.shortlist, expected_shortlist);
-            assert_eq!(
-                action.shortlist[0].compared_tasks,
-                vec![fixture.active.id.clone()]
-            );
-            assert_eq!(fixture.probe.samples(), 2);
-            // Observe uses a live store, while PM next binds all component reads to one view.
-            assert_eq!(cells.followup_calls(FU, "sample"), 2);
-            let hydrated = fixture.hydration_work();
-            assert_eq!(
-                cells.followup_hydrations(FU, "sample"),
-                2 * hydrated.full_task_hydrations()
-            );
-            assert_eq!(
-                cells.followup_rows(FU, "sample"),
-                2 * Counter::DECODES
-                    .iter()
-                    .map(|c| hydrated.total(*c))
-                    .sum::<u64>()
-            );
-            assert_eq!(
-                cells.followup_doc_bytes(FU, "sample"),
-                2 * hydrated.decoded_doc_bytes()
-            );
-            assert_eq!(cells.followup_views(FU, "sample"), 1);
-            assert_eq!(
-                cells.followup_stats(FU, "sample"),
-                2 * fixture.sample_stats()
-            );
-            assert_eq!(cells.followup_processes(FU, "sample"), 0);
-            assert_likely(&cells, &fixture, 2, similar, true);
-        }
+        let variants = [1, 10].map(|scale| shortlist_variant(scale, similar));
+        assert_growth(&variants[0], &variants[1]);
     }
+}
+
+pub(super) fn shortlist_variant(scale: usize, similar: bool) -> WorkSnapshot {
+    // Given one eligible Idea, one active task and dissimilar or similar terminal growth.
+    let fixture = Fixture::new(scale, similar, false);
+    // Enrichment has no saved lessons; this evaluation reaches exactly the two
+    // shortlist inference calls, rather than a third selected-task preview.
+    fixture.ctx.store.save_lessons("app", &[]).unwrap();
+    let expected_files = legacy_files(&fixture.ctx, &fixture.idea);
+    assert_eq!(
+        legacy_files(&fixture.ctx, &fixture.active),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        expected_files,
+        if similar {
+            vec!["src/copper.rs".to_owned()]
+        } else {
+            vec![]
+        }
+    );
+    let expected_shortlist = legacy_shortlist(&fixture, expected_files);
+    // When PM next takes the ordinary promotion branch.
+    let ((state, action), cells) = measure_evaluation(|| {
+        // Start admission with the same absent latch at both sizes, before observe
+        // persists host PSI and the history-dependent volume inventory.
+        let action = pm_next(&fixture.ctx).unwrap();
+        let (state, _) =
+            measure(|| corral_ops::resources::observe(&fixture.ctx, NOW.parse().unwrap()).unwrap());
+        (state, action)
+    });
+    // Then inventory and branch preconditions hold before the counters are read.
+    fixture.state_preconditions(&state);
+    assert_eq!(action.kind, PmActionKind::IdeaPromotion);
+    assert_eq!(action.shortlist, expected_shortlist);
+    assert_eq!(
+        action.shortlist[0].compared_tasks,
+        vec![fixture.active.id.clone()]
+    );
+    assert_eq!(fixture.probe.samples(), 2);
+    // Observe uses a live store, while PM next binds all component reads to one view.
+    assert_eq!(cells.followup_calls(FU, "sample"), 2);
+    let hydrated = fixture.hydration_work();
+    assert_eq!(
+        cells.followup_hydrations(FU, "sample"),
+        2 * hydrated.full_task_hydrations()
+    );
+    assert_eq!(
+        cells.followup_rows(FU, "sample"),
+        2 * Counter::DECODES
+            .iter()
+            .map(|c| hydrated.total(*c))
+            .sum::<u64>()
+    );
+    assert_eq!(
+        cells.followup_doc_bytes(FU, "sample"),
+        2 * hydrated.decoded_doc_bytes()
+    );
+    assert_eq!(cells.followup_views(FU, "sample"), 1);
+    assert_eq!(
+        cells.followup_stats(FU, "sample"),
+        2 * fixture.sample_stats()
+    );
+    assert_eq!(cells.followup_processes(FU, "sample"), 0);
+    assert_likely(&cells, &fixture, 2, similar, true);
+    cells
 }
 
 #[test]
 fn worker_prompt_attributes_the_lesson_filter_and_preserves_selected_files() {
     for similar in [false, true] {
-        let variants = [1, 10].map(|scale| {
-            // Given a project task with a saved path-scoped lesson and cold history.
-            let fixture = Fixture::new(scale, similar, false);
-            let files = legacy_files(&fixture.ctx, &fixture.idea);
-            let lessons = fixture.ctx.store.lessons("app").unwrap();
-            let launch = run(
-                "R-new".into(),
-                fixture.ctx.store.root().join("absent-launch"),
-            );
-            let expected = corral_core::match_lessons(
-                &lessons,
-                &fixture.idea,
-                Some("generic"),
-                Some("generic"),
-                &files,
-                fixture.ctx.store.config.lessons.top,
-                NOW.parse().unwrap(),
-            );
-            // When the public worker-launch prompt builder runs.
-            let ((state, prompt), cells) = measure(|| {
-                let state = corral_ops::resources::read_status(&fixture.ctx).unwrap();
-                let prompt = task_prompt(&fixture.ctx, &fixture.idea, &launch).unwrap();
-                (state, prompt)
-            });
-            // Then compare the machine-readable payload, not pinned prompt prose.
-            fixture.state_preconditions(&state);
-            let selected: Vec<Lesson> = prompt
-                .split("<corral-lessons>\n")
-                .nth(1)
-                .map(|text| {
-                    serde_json::from_str(text.split("\n</corral-lessons>").next().unwrap()).unwrap()
-                })
-                .unwrap_or_default();
-            assert_eq!(selected, expected);
-            assert_eq!(fixture.probe.samples(), 1);
-            assert_sample(&cells, &fixture, 1, false);
-            assert_likely(&cells, &fixture, 1, similar, false);
-            assert_eq!(cells.unattributed_hydrations(), 0);
-            cells
-        });
+        let variants = [1, 10].map(|scale| worker_variant(scale, similar));
         assert_growth(&variants[0], &variants[1]);
     }
+}
+
+pub(super) fn worker_variant(scale: usize, similar: bool) -> WorkSnapshot {
+    // Given a project task with a saved path-scoped lesson and cold history.
+    let fixture = Fixture::new(scale, similar, false);
+    let files = legacy_files(&fixture.ctx, &fixture.idea);
+    let lessons = fixture.ctx.store.lessons("app").unwrap();
+    let launch = run(
+        "R-new".into(),
+        fixture.ctx.store.root().join("absent-launch"),
+    );
+    let expected = corral_core::match_lessons(
+        &lessons,
+        &fixture.idea,
+        Some("generic"),
+        Some("generic"),
+        &files,
+        fixture.ctx.store.config.lessons.top,
+        NOW.parse().unwrap(),
+    );
+    // When the public worker-launch prompt builder runs.
+    let ((state, prompt), cells) = measure(|| {
+        let state = corral_ops::resources::read_status(&fixture.ctx).unwrap();
+        let prompt = task_prompt(&fixture.ctx, &fixture.idea, &launch).unwrap();
+        (state, prompt)
+    });
+    // Then compare the machine-readable payload, not pinned prompt prose.
+    fixture.state_preconditions(&state);
+    let selected: Vec<Lesson> = prompt
+        .split("<corral-lessons>\n")
+        .nth(1)
+        .map(|text| {
+            serde_json::from_str(text.split("\n</corral-lessons>").next().unwrap()).unwrap()
+        })
+        .unwrap_or_default();
+    assert_eq!(selected, expected);
+    assert_eq!(fixture.probe.samples(), 1);
+    assert_sample(&cells, &fixture, 1, false);
+    assert_likely(&cells, &fixture, 1, similar, false);
+    assert_eq!(cells.unattributed_hydrations(), 0);
+    cells
 }
