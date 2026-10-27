@@ -134,7 +134,15 @@ impl Tx<'_> {
         self.scopes.insert(scope);
     }
 
-    pub(super) fn append_event(&mut self, mut event: NewEvent) -> Applied<EventSeq> {
+    pub(super) fn append_event(&mut self, event: NewEvent) -> Applied<EventSeq> {
+        self.insert_event(event, false)
+    }
+
+    pub(super) fn insert_event(
+        &mut self,
+        mut event: NewEvent,
+        malformed: bool,
+    ) -> Applied<EventSeq> {
         event.run = event
             .detail
             .get("run")
@@ -146,10 +154,17 @@ impl Tx<'_> {
             task: event.task.clone(),
             kind: event.kind.clone(),
         });
+        if !malformed && let Some((sha, row)) = super::super::lesson_approvals::attribution(&event)
+        {
+            Arc::make_mut(&mut self.state.lesson_approvals)
+                .entry(sha.to_owned())
+                .or_default()
+                .insert(row);
+        }
         Arc::make_mut(&mut self.state.events).push(Arc::new(StoredEvent {
             seq,
             event,
-            malformed: false,
+            malformed,
         }));
         self.hit("event")?;
         self.set_refs(RefOwner::Event(seq), refs)?;
@@ -254,6 +269,9 @@ impl Tx<'_> {
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
         self.invalidate_accepted_proof(num, row.part, &row.key, Some(&row))?;
         if row.part == TaskPart::Artifact {
+            Arc::make_mut(&mut self.state.lesson_artifacts)
+                .put(num, &row.key, Some(&row.doc))
+                .map_err(ApplyError::Io)?;
             let old = self
                 .row(num, row.part, &row.key)
                 .map(|r| super::super::query::artifact_reviews::kept_path(&r.doc))
@@ -301,6 +319,11 @@ impl Tx<'_> {
 
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
         self.invalidate_accepted_proof(num, part, key, None)?;
+        if part == TaskPart::Artifact {
+            Arc::make_mut(&mut self.state.lesson_artifacts)
+                .put(num, key, None)
+                .map_err(ApplyError::Io)?;
+        }
         if part == TaskPart::Artifact
             && let Some(row) = self.row(num, part, key)
             && let Some(path) = super::super::query::artifact_reviews::kept_path(&row.doc)

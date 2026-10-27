@@ -116,7 +116,8 @@ impl SqliteBackend {
                     "DELETE FROM conditions;
                  DELETE FROM condition_runs;
                  DELETE FROM blob_refs WHERE owner_kind = 'event';
-                 DELETE FROM events;",
+                 DELETE FROM events;
+                 DELETE FROM lesson_approvals;",
                 )
                 .context("clear fixture events and their references")?;
         }

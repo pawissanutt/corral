@@ -278,6 +278,34 @@ impl ReadView for FakeView {
         }
         self.page(headers.into_iter(), &page)
     }
+    fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError> {
+        self.fresh()?;
+        let Some(task) = self.state.tasks.get(&num) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .state
+            .lesson_artifacts
+            .keys(num)
+            .take(limit as usize)
+            .filter_map(|key| {
+                task.rows
+                    .get(&(TaskPart::Artifact, key.to_owned()))
+                    .cloned()
+            })
+            .collect())
+    }
+    fn lesson_approvals(&self, sha: &str) -> Result<Vec<LessonApproval>, ViewError> {
+        self.fresh()?;
+        Ok(self
+            .state
+            .lesson_approvals
+            .get(sha)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect())
+    }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
         let ordered: Box<dyn Iterator<Item = &std::sync::Arc<StoredEvent>> + '_> = if q.newest_first

@@ -46,6 +46,8 @@ conformance!(
     row_queries,
     head_form_rows,
     head_documents_and_columns,
+    lesson_artifact_projection,
+    lesson_approval_projection,
 );
 
 #[test]

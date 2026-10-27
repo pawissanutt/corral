@@ -546,7 +546,7 @@ pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
         store: ctx.store.read_only_snapshot()?,
         ..ctx.clone()
     };
-    crate::lesson_rows::prepare(ctx)?;
+    crate::lesson_rows::prepare_signals(ctx, project)?;
     let _hot = corral_core::work::HotScope::enter();
     corral_core::work::record(corral_core::work::Work::LessonSignalScan, 1);
     crate::lesson_rows::signals(ctx, project)

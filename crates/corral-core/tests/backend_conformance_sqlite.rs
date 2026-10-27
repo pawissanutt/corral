@@ -70,6 +70,8 @@ conformance!(
     row_queries,
     head_form_rows,
     head_documents_and_columns,
+    lesson_artifact_projection,
+    lesson_approval_projection,
 );
 
 #[test]
@@ -147,6 +149,8 @@ fn expected_schema() -> Result<Vec<(String, String, Option<String>)>> {
     conn.execute_batch(SECTION_11)?;
     conn.execute_batch(BACKEND_TABLES)?;
     conn.execute_batch(corral_core::sqlite::ARTIFACT_REVIEW_TABLES)?;
+    conn.execute_batch(corral_core::sqlite::LESSON_APPROVAL_TABLES)?;
+    conn.execute_batch(corral_core::sqlite::LESSON_ARTIFACT_TABLES)?;
     schema_of(&conn)
 }
 

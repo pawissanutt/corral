@@ -718,14 +718,7 @@ impl Tx<'_> {
             self.insert_task(head, task.rows)?;
         }
         for imported in op.events {
-            self.append_event(imported.event)?;
-            if imported.malformed {
-                let events = Arc::make_mut(&mut self.state.events);
-                if let Some(last) = events.last_mut() {
-                    Arc::make_mut(last).malformed = true;
-                }
-                self.hit("import malformed flag")?;
-            }
+            self.insert_event(imported.event, imported.malformed)?;
         }
         for record in op.records {
             self.put_record(&RecordWrite {

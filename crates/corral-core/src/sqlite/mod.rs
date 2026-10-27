@@ -16,6 +16,8 @@ mod codec;
 mod fixture;
 pub mod fs;
 pub mod guard;
+mod lesson_approvals;
+mod lesson_artifacts;
 mod load;
 mod plans;
 mod row_indexes;
@@ -36,6 +38,8 @@ use rusqlite::{Connection, TransactionBehavior, params};
 
 pub use artifact_reviews::TABLES as ARTIFACT_REVIEW_TABLES;
 pub use fs::{FilesystemProbe, is_refused_filesystem, statfs_probe};
+pub use lesson_approvals::TABLES as LESSON_APPROVAL_TABLES;
+pub use lesson_artifacts::TABLES as LESSON_ARTIFACT_TABLES;
 pub use schema::{BACKEND_TABLES, SCHEMA_VERSION, SECTION_11};
 
 use crate::backend::*;
@@ -209,6 +213,8 @@ impl SqliteBackend {
         schema::init(&mut writer, &workspace_id)?;
         artifact_reviews::init(&mut writer)?;
         accepted_proof::init(&mut writer)?;
+        lesson_artifacts::init(&mut writer)?;
+        lesson_approvals::init(&mut writer)?;
         Ok(Self {
             path: path.to_owned(),
             options,

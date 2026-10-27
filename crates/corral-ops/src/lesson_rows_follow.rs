@@ -22,15 +22,7 @@ const SCHEDULE_KINDS: [&str; 10] = [
     "plan_failed",
 ];
 
-pub(super) fn prepare_locked(ctx: &Ctx) -> Result<()> {
-    // Preparing a frozen pass more than once is common (CLI -> workset -> readers).
-    // Memoization belongs to that pass, never to the long-lived caller.
-    ctx.store
-        .pass_derived("lesson-rows-prepared-v4", || prepare_view(ctx))
-        .map(|_| ())
-}
-
-fn prepare_view(ctx: &Ctx) -> Result<()> {
+pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<Prepared> {
     let root = root(ctx)?;
     let path = root.join("cursor.json");
     let ctx = Ctx {
@@ -42,7 +34,7 @@ fn prepare_view(ctx: &Ctx) -> Result<()> {
     let previous: Option<Cursor> = read(&path)?;
     let delta = previous
         .as_ref()
-        .filter(|c| c.version == 4 && c.change <= seq && c.config == config)
+        .filter(|c| c.version == 5 && c.change <= seq && c.config == config)
         .map(|c| changes(&ctx.store, c.change))
         .transpose()?
         .flatten();
@@ -53,7 +45,7 @@ fn prepare_view(ctx: &Ctx) -> Result<()> {
         previous.unwrap_or_default()
     };
     if !rebuild && cursor.change == seq {
-        return Ok(());
+        return Prepared::capture(&root, selected);
     }
     // The marker is removed before any keyed writes. An interrupted update is recovered
     // by a cold rebuild rather than replaying non-idempotent counter increments.
@@ -199,8 +191,9 @@ fn prepare_view(ctx: &Ctx) -> Result<()> {
     }
     cursor.change = seq;
     cursor.config = config;
-    cursor.version = 4;
-    save(&path, &cursor)
+    cursor.version = 5;
+    save(&path, &cursor)?;
+    Prepared::capture(&root, selected)
 }
 
 fn affect(root: &Path, event: &Event, affected: &mut BTreeSet<String>) -> Result<()> {

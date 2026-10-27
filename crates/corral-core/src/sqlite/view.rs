@@ -403,6 +403,12 @@ impl ReadView for SqliteView {
         );
         self.page(&page, &sql, args, load::header)
     }
+    fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError> {
+        super::lesson_artifacts::read(self.fresh()?, num, limit).or_view()
+    }
+    fn lesson_approvals(&self, sha: &str) -> Result<Vec<LessonApproval>, ViewError> {
+        super::lesson_approvals::read(self.fresh()?, sha).or_view()
+    }
 
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
         let kinds: BTreeSet<_> = q.kinds.iter().collect();

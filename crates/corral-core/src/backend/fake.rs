@@ -65,6 +65,8 @@ struct State {
     usage_totals: Table<(String, String), Value>,
     pane_owners: Table<String, u64>,
     artifact_reviews: Arc<super::query::artifact_reviews::Reviews>,
+    lesson_artifacts: Arc<super::lesson_artifacts::Artifacts>,
+    lesson_approvals: Table<String, BTreeSet<LessonApproval>>,
 }
 
 struct Shared {

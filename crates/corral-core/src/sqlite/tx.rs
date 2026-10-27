@@ -233,6 +233,9 @@ impl Tx<'_> {
                 i64::from(malformed),
             ],
         )?;
+        if !malformed {
+            super::lesson_approvals::put(self.db, &event).or_io()?;
+        }
         self.hit("event")?;
         self.set_refs(Owner::Event(seq), refs)?;
         self.events.push(seq);
@@ -417,6 +420,7 @@ impl Tx<'_> {
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
         self.invalidate_accepted_proof(num, row.part, &row.key, Some(&row))?;
         if row.part == TaskPart::Artifact {
+            super::lesson_artifacts::put(self.db, num, &row.key, Some(&row.doc)).or_io()?;
             super::artifact_reviews::put(self.db, num, &row.key, Some(&row.doc)).or_io()?;
         }
         if row.part == TaskPart::PaneRef {
@@ -470,6 +474,7 @@ impl Tx<'_> {
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
         self.invalidate_accepted_proof(num, part, key, None)?;
         if part == TaskPart::Artifact {
+            super::lesson_artifacts::put(self.db, num, key, None).or_io()?;
             super::artifact_reviews::put(self.db, num, key, None).or_io()?;
         }
         let socket = if part == TaskPart::PaneRef {
