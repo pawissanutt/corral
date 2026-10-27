@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use corral_core::attention::{NoticeClaim, NoticeOutcome};
+use corral_core::attention::NoticeClaim;
 use corral_core::{Event, Task};
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
@@ -105,7 +105,10 @@ pub struct Notifications {
     /// Distinct covered claim IDs across all physical batches.
     pub claims: u64,
     pub batches: u64,
+    /// Batches claimed before the window that cover a condition in it; never charged to
+    /// the window's calls or budget.
     pub carry_in: u64,
+    pub carry_in_calls: [u64; 2],
     pub success: u64,
     pub failure: u64,
     pub outcome_unknown: u64,
@@ -145,6 +148,8 @@ pub struct Actions {
     pub by_condition: BTreeMap<String, u64>,
 }
 
+type Timed = BTreeMap<String, Option<Timestamp>>;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ConditionRow {
     pub task: String,
@@ -157,19 +162,23 @@ pub struct ConditionRow {
     pub resolved_at: Option<Timestamp>,
     pub carry_in: bool,
     pub handled: u64,
+    /// Wake facts timed inside the window; `lifetime_wakes` counts the condition's whole history.
     pub wakes: u64,
+    pub lifetime_wakes: u64,
     pub owner_levels: u64,
     pub owner_claim: Option<String>,
+    /// The condition's run when its key or open record identifies one; otherwise unknown.
+    pub run: Option<String>,
     #[serde(skip)]
     opened_pos: Option<usize>,
     #[serde(skip)]
     resolved_pos: Option<usize>,
     #[serde(skip)]
-    wake_ids: BTreeSet<String>,
+    wake_ids: Timed,
     #[serde(skip)]
-    owner_ids: BTreeSet<String>,
+    owner_ids: Timed,
     #[serde(skip)]
-    handled_ids: BTreeSet<String>,
+    handled_ids: Timed,
 }
 
 /// Read the retained facts and records for `window`. An explicit, read-only command path.
@@ -178,7 +187,23 @@ pub struct ConditionRow {
 /// Returns store, event-log or producer-record read errors.
 pub fn stats(ctx: &Ctx, window: Window) -> Result<Stats> {
     let tasks = ctx.store.list_shared()?;
-    let events = ctx.store.events_shared()?;
+    // The PM push reader's cursors identify each receipt's source event exactly.
+    let (mut events, mut cursors) = (Vec::new(), Vec::new());
+    let path = ctx.store.dir().join("events.jsonl");
+    if path.exists() {
+        let mut reader = corral_core::EventReader::from_offset(&path, 0)?;
+        loop {
+            let before = reader.read_position();
+            match reader.next_event()? {
+                Some((event, cursor)) => {
+                    events.push(event);
+                    cursors.push(cursor.offset);
+                }
+                None if reader.read_position() == before => break,
+                None => {}
+            }
+        }
+    }
     let mut claims: Vec<NoticeClaim> = tasks
         .iter()
         .flat_map(|task| task.attention.notice_outbox.iter().cloned())
@@ -190,26 +215,24 @@ pub fn stats(ctx: &Ctx, window: Window) -> Result<Stats> {
             .filter_map(|op| op.notice),
     );
     let dir = ctx.store.state_dir().join("availability");
+    let mut ids = Vec::new();
     match std::fs::read_dir(&dir) {
         Ok(entries) => {
-            let mut ids = Vec::new();
             for entry in entries {
                 let path = entry.context("reading availability entry")?.path();
-                if path.extension().is_some_and(|ext| ext == "json")
-                    && let Some(id) = path.file_stem().and_then(|stem| stem.to_str())
-                {
-                    ids.push(id.to_owned());
+                if path.extension().is_some_and(|ext| ext == "json") {
+                    ids.extend(path.file_stem().and_then(|s| s.to_str()).map(String::from));
                 }
-            }
-            ids.sort();
-            for id in ids {
-                claims.extend(crate::availability::notice(ctx, &id)?);
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).with_context(|| format!("listing {}", dir.display())),
     }
-    Ok(compute(&tasks, &events, &claims, window))
+    ids.sort();
+    for id in ids {
+        claims.extend(crate::availability::notice(ctx, &id)?);
+    }
+    Ok(compute_logged(&tasks, &events, &cursors, &claims, window))
 }
 
 /// One deduplicated fact: its first position in the log, or after the log when only pending.
@@ -220,44 +243,26 @@ struct Fact {
 }
 
 fn facts(tasks: &[Task], events: &[Event], claims: &[NoticeClaim]) -> Vec<Fact> {
-    let mut seen = BTreeSet::new();
-    let mut out = Vec::new();
-    for (pos, event) in events.iter().enumerate() {
-        if let Some(id) = event.detail["fact_id"].as_str()
-            && seen.insert(id.to_owned())
-        {
-            out.push(Fact {
-                pos,
-                kind: event.kind.clone(),
-                detail: event.detail.clone(),
-            });
-        }
-    }
+    let appended = events.iter().enumerate().filter_map(|(pos, event)| {
+        let id = event.detail["fact_id"].as_str()?;
+        Some((pos, id.to_owned(), event.kind.clone(), event.detail.clone()))
+    });
     // Retained, not yet appended facts are durable too; they sort after every appended event.
-    let mut pos = events.len();
-    let mut pending = |id: &str, kind: &str, detail: &Value| {
-        if seen.insert(id.to_owned()) {
-            let mut detail = detail.clone();
+    let ledgers = tasks.iter().flat_map(|task| &task.attention.outbox);
+    let ledgers = ledgers.map(|f| (f.fact_id.clone(), f.kind.clone(), f.detail.clone()));
+    let notices = claims.iter().flat_map(|claim| &claim.pending);
+    let notices = notices.map(|f| (f.fact_id.clone(), f.kind.clone(), f.detail.clone()));
+    let pending = (ledgers.chain(notices).enumerate())
+        .map(|(index, (id, kind, detail))| (events.len() + index, id, kind, detail));
+    let mut seen = BTreeSet::new();
+    appended
+        .chain(pending)
+        .filter(|(_, id, ..)| seen.insert(id.clone()))
+        .map(|(pos, id, kind, mut detail)| {
             detail["fact_id"] = json!(id);
-            out.push(Fact {
-                pos,
-                kind: kind.into(),
-                detail,
-            });
-            pos += 1;
-        }
-    };
-    for task in tasks {
-        for fact in &task.attention.outbox {
-            pending(&fact.fact_id, &fact.kind, &fact.detail);
-        }
-    }
-    for claim in claims {
-        for fact in &claim.pending {
-            pending(&fact.fact_id, &fact.kind, &fact.detail);
-        }
-    }
-    out
+            Fact { pos, kind, detail }
+        })
+        .collect()
 }
 
 fn time(value: &Value) -> Option<Timestamp> {
@@ -268,10 +273,13 @@ fn within(at: Option<Timestamp>, window: Window) -> bool {
     at.is_some_and(|at| window.start <= at && at <= window.end)
 }
 
-/// Events without a canonical detail time are selected by append time from the window start;
-/// they cannot postdate the read, and fixture clocks may run behind the wall clock.
-fn appended(event: &Event, window: Window) -> bool {
-    event.ts >= window.start
+/// An event's canonical detail time when it records one, otherwise its append time.
+fn when(event: &Event) -> Timestamp {
+    time(&event.detail["at"]).unwrap_or(event.ts)
+}
+
+fn counted(ids: &Timed, window: Window) -> u64 {
+    ids.values().filter(|at| within(**at, window)).count() as u64
 }
 
 fn secs(later: Timestamp, earlier: Timestamp) -> i64 {
@@ -352,48 +360,44 @@ fn conditions(tasks: &[Task], facts: &[Fact]) -> BTreeMap<String, ConditionRow> 
             .as_str()
             .unwrap_or_default()
             .to_owned();
+        let lifecycle = matches!(
+            fact.kind.as_str(),
+            "attention_opened" | "attention_overdue" | "attention_handled" | "attention_resolved"
+        );
+        let Some(row) = lifecycle
+            .then(|| condition(&mut rows, &fact.detail))
+            .flatten()
+        else {
+            continue;
+        };
         match fact.kind.as_str() {
             "attention_opened" => {
-                let Some(row) = condition(&mut rows, &fact.detail) else {
-                    continue;
-                };
                 fill(row, &fact.detail);
                 row.opened_pos = row.opened_pos.or(Some(fact.pos));
                 if let Some(live) = fact.detail.get("pm_live") {
                     row.pm_live_at_open = row.pm_live_at_open.or(live.as_bool());
                 }
                 if fact.detail["wake"] == true {
-                    row.wake_ids.insert(id);
+                    row.wake_ids.insert(id, time(&fact.detail["opened_at"]));
                 }
             }
             "attention_overdue" => {
-                let Some(row) = condition(&mut rows, &fact.detail) else {
-                    continue;
-                };
                 fill(row, &fact.detail);
+                let at = time(&fact.detail["at"]);
                 match fact.detail["level"].as_str() {
-                    Some("owner") => {
-                        row.owner_ids.insert(id);
-                    }
-                    Some(_) if fact.detail["wake"] == true => {
-                        row.wake_ids.insert(id);
-                    }
-                    _ => {}
-                }
+                    Some("owner") => row.owner_ids.insert(id, at),
+                    Some(_) if fact.detail["wake"] == true => row.wake_ids.insert(id, at),
+                    _ => None,
+                };
             }
             "attention_handled" => {
-                let Some(row) = condition(&mut rows, &fact.detail) else {
-                    continue;
-                };
-                row.handled_ids.insert(id);
-                if let Some(at) = time(&fact.detail["handling"]["at"]) {
+                let at = time(&fact.detail["handling"]["at"]);
+                row.handled_ids.insert(id, at);
+                if let Some(at) = at {
                     earliest(&mut row.first_handled_at, at);
                 }
             }
             "attention_resolved" => {
-                let Some(row) = condition(&mut rows, &fact.detail) else {
-                    continue;
-                };
                 row.resolved_pos = row.resolved_pos.or(Some(fact.pos));
                 merge(row, &fact.detail);
             }
@@ -404,21 +408,42 @@ fn conditions(tasks: &[Task], facts: &[Fact]) -> BTreeMap<String, ConditionRow> 
         for (key, record) in &task.attention.records {
             let row = rows.entry(key.0.clone()).or_default();
             row.task.clone_from(&task.id);
+            if record.resolved_at.is_none() {
+                row.run = task.current_run().map(|run| run.id.clone());
+            }
             if let Ok(record) = serde_json::to_value(record) {
                 merge(row, &record);
             }
         }
     }
-    for row in rows.values_mut() {
-        row.wakes = row.wake_ids.len() as u64;
-        row.owner_levels = row.owner_ids.len() as u64;
-        row.handled = row.handled_ids.len() as u64;
+    for (key, row) in &mut rows {
+        // Run-scoped kinds embed their run as the first anchor field.
+        let anchor = key.splitn(3, '/').nth(2).unwrap_or_default();
+        if matches!(
+            row.kind.as_str(),
+            "agent_lost" | "silent_turn" | "stuck_process"
+        ) {
+            row.run = anchor.split(':').next().map(Into::into);
+        }
+        row.lifetime_wakes = row.wake_ids.len() as u64;
     }
     rows
 }
 
 /// Compute every metric from already-loaded inputs. Pure: no clock, store or transport.
+/// Without log cursors, raw pushes cannot be resolved to their source events.
 pub fn compute(tasks: &[Task], events: &[Event], claims: &[NoticeClaim], window: Window) -> Stats {
+    compute_logged(tasks, events, &[], claims, window)
+}
+
+/// As [`compute`], with each event's reader cursor offset, parallel to `events`.
+pub fn compute_logged(
+    tasks: &[Task],
+    events: &[Event],
+    cursors: &[u64],
+    claims: &[NoticeClaim],
+    window: Window,
+) -> Stats {
     let facts = facts(tasks, events, claims);
     let mut rows = conditions(tasks, &facts);
     rows.retain(|_, row| {
@@ -473,26 +498,27 @@ pub fn compute(tasks: &[Task], events: &[Event], claims: &[NoticeClaim], window:
                 }
             }
         }
+        row.wakes = counted(&row.wake_ids, window);
+        row.owner_levels = counted(&row.owner_ids, window);
+        row.handled = counted(&row.handled_ids, window);
         stats.wakes.attention_levels += row.wakes;
-        stats.wakes.max_levels_per_condition = stats.wakes.max_levels_per_condition.max(row.wakes);
+        stats.wakes.max_levels_per_condition =
+            stats.wakes.max_levels_per_condition.max(row.lifetime_wakes);
     }
     stats.handling = latency(handling.0, handling.1);
     stats.handling_pm_absent = latency(absent.0, absent.1);
     stats.resolution = latency(resolution.0, resolution.1);
     stats.backlog = backlog(&rows, window);
-    wakes(&mut stats.wakes, events, &facts, &rows, window);
+    wakes(&mut stats.wakes, events, cursors, &facts, &rows, window);
     stats.notifications = notifications(&facts, claims, &rows, window);
     stats.actions = actions(events, &facts, &rows, window);
-    stats.lost_review_rounds = events
-        .iter()
-        .filter(|event| {
-            event.kind == "autopilot"
-                && event.detail["to"] == "escalated"
-                && appended(event, window)
-                && event.detail["reason"]
-                    .as_str()
-                    .is_some_and(|reason| reason.starts_with(INFRA_PREFIX))
-        })
+    let infra = |event: &&Event| {
+        event.kind == "autopilot"
+            && event.detail["to"] == "escalated"
+            && within(Some(when(event)), window)
+            && (event.detail["reason"].as_str()).is_some_and(|r| r.starts_with(INFRA_PREFIX))
+    };
+    stats.lost_review_rounds = (events.iter().filter(infra))
         .map(|event| {
             event.detail["released_review_runs"]
                 .as_array()
@@ -502,30 +528,16 @@ pub fn compute(tasks: &[Task], events: &[Event], claims: &[NoticeClaim], window:
     stats.conditions = rows;
     stats
 }
-
 fn backlog(rows: &BTreeMap<String, ConditionRow>, window: Window) -> Backlog {
-    let intervals: Vec<_> = rows
-        .values()
+    let intervals: Vec<_> = (rows.values())
         .filter(|row| row.responsible.as_deref() == Some("pm"))
         .filter_map(|row| Some((row.since.or(row.opened_at)?, row.resolved_at)))
         .collect();
-    let sample = |at: Timestamp| {
-        let mut ages: Vec<_> = intervals
-            .iter()
-            .filter(|(since, resolved)| *since <= at && resolved.is_none_or(|end| at < end))
-            .map(|(since, _)| secs(at, *since))
-            .collect();
-        ages.sort_unstable();
-        ages
-    };
-    let mut out = Backlog::default();
     let mut points = Vec::new();
     // Hourly points carry no information before the earliest PM-responsible interval opens.
     if let Some(first) = intervals.iter().map(|(since, _)| *since).min() {
         let skip = secs(first, window.start) / HOUR;
-        let mut at = window
-            .start
-            .checked_add(SignedDuration::from_secs((skip + 1) * HOUR));
+        let mut at = (window.start).checked_add(SignedDuration::from_secs((skip + 1) * HOUR));
         while let Ok(point) = at
             && point < window.end
         {
@@ -534,19 +546,25 @@ fn backlog(rows: &BTreeMap<String, ConditionRow>, window: Window) -> Backlog {
         }
     }
     points.push(window.end);
-    for (index, point) in points.iter().enumerate() {
-        let ages = sample(*point);
+    let mut out = Backlog::default();
+    for point in points {
+        let mut ages: Vec<_> = (intervals.iter())
+            .filter(|(since, resolved)| *since <= point && resolved.is_none_or(|end| point < end))
+            .map(|(since, _)| secs(point, *since))
+            .collect();
+        ages.sort_unstable();
+        let (p50, p95, max) = (
+            percentile(&ages, 50),
+            percentile(&ages, 95),
+            ages.last().copied(),
+        );
         out.samples += 1;
         out.peak_open = out.peak_open.max(ages.len() as u64);
-        out.peak_p50_secs = out.peak_p50_secs.max(percentile(&ages, 50));
-        out.peak_p95_secs = out.peak_p95_secs.max(percentile(&ages, 95));
-        out.peak_max_secs = out.peak_max_secs.max(ages.last().copied());
-        if index + 1 == points.len() {
-            out.end_open = ages.len() as u64;
-            out.end_p50_secs = percentile(&ages, 50);
-            out.end_p95_secs = percentile(&ages, 95);
-            out.end_max_secs = ages.last().copied();
-        }
+        out.peak_p50_secs = out.peak_p50_secs.max(p50);
+        out.peak_p95_secs = out.peak_p95_secs.max(p95);
+        out.peak_max_secs = out.peak_max_secs.max(max);
+        (out.end_open, out.end_p50_secs, out.end_p95_secs) = (ages.len() as u64, p50, p95);
+        out.end_max_secs = max;
     }
     out
 }
@@ -554,6 +572,7 @@ fn backlog(rows: &BTreeMap<String, ConditionRow>, window: Window) -> Backlog {
 fn wakes(
     out: &mut Wakes,
     events: &[Event],
+    cursors: &[u64],
     facts: &[Fact],
     rows: &BTreeMap<String, ConditionRow>,
     window: Window,
@@ -573,7 +592,7 @@ fn wakes(
     for event in events {
         if event.kind != "pm_event_delivery"
             || event.detail["submitted"] != true
-            || !appended(event, window)
+            || !within(Some(when(event)), window)
         {
             continue;
         }
@@ -589,16 +608,24 @@ fn wakes(
         }
         out.raw_push.submitted += 1;
         *out.raw_push.by_kind.entry(kind.into()).or_default() += 1;
-        let prefix = match kind {
-            "question_opened" => "question_",
-            "needs_me" => "needs_me",
-            _ => continue,
+        // A receipt names its source event by reader cursor; only that event's identity joins.
+        let source = event.detail["cursor"]["offset"]
+            .as_u64()
+            .and_then(|offset| cursors.iter().position(|end| *end == offset))
+            .and_then(|index| events.get(index))
+            .filter(|source| source.kind == "question_opened");
+        let Some(question) = source.and_then(|source| {
+            Some(format!(
+                "/{}@{}",
+                source.detail["key"].as_str()?,
+                source.detail["revision"].as_u64()?
+            ))
+        }) else {
+            continue;
         };
         let matches: Vec<_> = rows
             .iter()
-            .filter(|(_, row)| {
-                Some(row.task.as_str()) == event.task.as_deref() && row.kind.starts_with(prefix)
-            })
+            .filter(|(key, row)| row.kind.starts_with("question_") && key.ends_with(&question))
             .map(|(key, _)| key)
             .collect();
         match matches.as_slice() {
@@ -617,9 +644,7 @@ struct Batch {
     coverage: Vec<Value>,
     exempt: bool,
     outcome: Option<String>,
-    retained: bool,
 }
-
 fn absorb(batches: &mut BTreeMap<String, Batch>, detail: &Value) -> Option<String> {
     let id = detail["batch_id"].as_str()?.to_owned();
     let batch = batches.entry(id.clone()).or_default();
@@ -634,6 +659,9 @@ fn absorb(batches: &mut BTreeMap<String, Batch>, detail: &Value) -> Option<Strin
         batch.coverage = detail["coverage"].as_array().cloned().unwrap_or_default();
     }
     batch.exempt |= detail["exemption_basis"] == "owner_responsible_entry";
+    if let Some(kind) = detail["outcome"]["kind"].as_str() {
+        batch.outcome.get_or_insert(kind.into());
+    }
     Some(id)
 }
 
@@ -644,51 +672,47 @@ fn notifications(
     window: Window,
 ) -> Notifications {
     let mut batches = BTreeMap::<String, Batch>::new();
-    let mut outcomes = Vec::new();
-    for fact in facts {
-        match fact.kind.as_str() {
-            "notification_claimed" => {
-                absorb(&mut batches, &fact.detail);
-            }
-            "owner_notified" | "owner_notify_failed" | "notification_not_invoked" => {
-                if let Some(id) = absorb(&mut batches, &fact.detail) {
-                    outcomes.push((id, fact.kind.clone()));
-                }
-            }
-            _ => {}
-        }
-    }
-    for claim in claims {
-        let Ok(detail) = serde_json::to_value(claim) else {
-            continue;
-        };
-        if let Some(id) = absorb(&mut batches, &detail) {
-            let batch = batches.entry(id.clone()).or_default();
-            batch.retained = true;
-            let kind = match &claim.outcome {
-                Some(NoticeOutcome::Notified { .. }) => "owner_notified",
-                Some(NoticeOutcome::Failed { .. }) => "owner_notify_failed",
-                Some(NoticeOutcome::NotInvoked { .. }) => "notification_not_invoked",
-                None => continue,
-            };
-            outcomes.push((id, kind.into()));
-        }
-    }
-    for (id, kind) in outcomes {
-        if let Some(batch) = batches.get_mut(&id) {
-            batch.outcome.get_or_insert(kind);
-        }
+    let claimed = claims
+        .iter()
+        .filter_map(|claim| serde_json::to_value(claim).ok());
+    for detail in facts
+        .iter()
+        .filter(|fact| {
+            fact.kind.starts_with("notification_") || fact.kind.starts_with("owner_noti")
+        })
+        .map(|fact| fact.detail.clone())
+        .chain(claimed)
+    {
+        absorb(&mut batches, &detail);
     }
     let mut out = Notifications::default();
     let mut claim_ids = BTreeSet::new();
-    for batch in batches.values() {
-        let in_window = within(batch.claimed_at, window);
-        let carry = batch.retained && batch.claimed_at.is_some_and(|at| at < window.start);
-        if !in_window && !carry {
+    for (id, batch) in &batches {
+        let (success, failure, unknown, skipped) = match batch.outcome.as_deref() {
+            Some("notified") => (1, 0, 0, 0),
+            Some("failed") => (0, 1, 0, 0),
+            Some(_) => (0, 0, 0, 1),
+            None => (0, 0, 1, 0),
+        };
+        // Membership is a property of the lifecycle facts, never of record retention.
+        let linked = rows
+            .values()
+            .any(|row| row.owner_claim.as_ref() == Some(id))
+            || batch.coverage.iter().any(|edge| {
+                edge["condition_key"]
+                    .as_str()
+                    .is_some_and(|key| rows.contains_key(key))
+            });
+        if batch.claimed_at.is_some_and(|at| at < window.start) && linked {
+            out.carry_in += 1;
+            out.carry_in_calls[0] += success + failure;
+            out.carry_in_calls[1] += success + failure + unknown;
+            continue;
+        }
+        if !within(batch.claimed_at, window) {
             continue;
         }
         out.batches += 1;
-        out.carry_in += u64::from(carry);
         claim_ids.extend(batch.claim_ids.iter().cloned());
         out.coverage_edges += batch.coverage.len() as u64;
         out.outside_ladder += u64::from(batch.coverage.is_empty());
@@ -699,25 +723,21 @@ fn notifications(
         let producer = out.by_producer.entry(batch.producer.clone()).or_default();
         producer.batches += 1;
         producer.claims += batch.claim_ids.len() as u64;
-        let (success, failure, unknown, skipped) = match batch.outcome.as_deref() {
-            Some("owner_notified") => (1, 0, 0, 0),
-            Some("owner_notify_failed") => (0, 1, 0, 0),
-            Some(_) => (0, 0, 0, 1),
-            None => (0, 0, 1, 0),
-        };
         producer.success += success;
         producer.failure += failure;
         producer.outcome_unknown += unknown;
         producer.certainly_not_invoked += skipped;
-        out.success += success;
-        out.failure += failure;
-        out.outcome_unknown += unknown;
-        out.certainly_not_invoked += skipped;
         if !batch.exempt {
             out.budget_batches += 1;
             out.budget_calls[0] += success + failure;
             out.budget_calls[1] += success + failure + unknown;
         }
+    }
+    for producer in out.by_producer.values() {
+        out.success += producer.success;
+        out.failure += producer.failure;
+        out.outcome_unknown += producer.outcome_unknown;
+        out.certainly_not_invoked += producer.certainly_not_invoked;
     }
     out.claims = claim_ids.len() as u64;
     out.calls = [
@@ -734,131 +754,9 @@ fn notifications(
     out
 }
 
-/// The join identity an action event offers, and the condition-kind family it may attach to.
-fn join(event: &Event) -> Option<(&'static [&'static str], String)> {
-    const DELIVERY: &[&str] = &["delivery_"];
-    const RUN: &[&str] = &[
-        "delivery_",
-        "infra_escalation",
-        "escalation",
-        "agent_lost",
-        "silent_turn",
-        "stuck_process",
-        "unexpected_stall",
-    ];
-    let detail = &event.detail;
-    let field = |name: &str| detail[name].as_str().map(String::from);
-    Some(match event.kind.as_str() {
-        "message_retried" => (DELIVERY, format!("message:{}", field("from")?)),
-        "question_answered" => (&["question_"], format!("question:{}", field("key")?)),
-        "unparked" => (&["park_"], format!("park:{}", detail["revision"])),
-        "parked" => (&["park_"], format!("park:{}", detail["park"]["revision"])),
-        "message_posted" => (DELIVERY, format!("recipient:{}", field("key")?)),
-        "replied" | "changes_requested" => (
-            RUN,
-            format!("{}:{}", event.kind, field("run").unwrap_or_default()),
-        ),
-        "dispatched" | "resumed" | "automation_resumed" | "gate_started" => (
-            &RUN[1..],
-            format!("{}:{}", event.kind, field("run").unwrap_or_default()),
-        ),
-        "moved" => (&["unexpected_stall"], "status".into()),
-        _ => return None,
-    })
-}
-
-fn candidate(key: &str, row: &ConditionRow, family: &[&str], identity: &str) -> bool {
-    if !family.iter().any(|prefix| row.kind.starts_with(prefix)) {
-        return false;
-    }
-    match identity.split_once(':') {
-        Some(("message", id)) => {
-            key.ends_with(&format!("/{id}")) || key.contains(&format!("/{id}@"))
-        }
-        Some(("question", id)) => {
-            key.contains(&format!("/{id}@")) || key.ends_with(&format!("/{id}"))
-        }
-        Some(("park", revision)) => key.ends_with(&format!("/{revision}")),
-        Some(("recipient", recipient)) => key.contains(&format!("/{recipient}#")),
-        _ => true,
-    }
-}
-
-fn actions(
-    events: &[Event],
-    facts: &[Fact],
-    rows: &BTreeMap<String, ConditionRow>,
-    window: Window,
-) -> Actions {
-    let mut out = Actions::default();
-    let mut prior = BTreeMap::<(String, String, String), bool>::new();
-    let open_at = |row: &ConditionRow, pos: usize, ts: Timestamp| {
-        let opened = row
-            .opened_pos
-            .map_or_else(|| row.since.is_some_and(|since| since <= ts), |at| at < pos);
-        opened && row.resolved_pos.is_none_or(|at| at > pos)
-    };
-    let retried: BTreeSet<_> = events
-        .iter()
-        .filter(|event| event.kind == "message_retried")
-        .filter_map(|event| event.detail["to"].as_str())
-        .collect();
-    for (pos, event) in events.iter().enumerate() {
-        let retry_post = event.kind == "message_posted"
-            && event.detail["id"]
-                .as_str()
-                .is_some_and(|id| retried.contains(id));
-        if !appended(event, window) || retry_post {
-            continue;
-        }
-        let Some((family, identity)) = join(event) else {
-            continue;
-        };
-        let matches: Vec<_> = rows
-            .iter()
-            .filter(|(key, row)| {
-                Some(row.task.as_str()) == event.task.as_deref()
-                    && open_at(row, pos, event.ts)
-                    && candidate(key, row, family, &identity)
-            })
-            .collect();
-        let [(key, row)] = matches.as_slice() else {
-            if matches.is_empty() {
-                out.unattributed += 1;
-            } else {
-                out.ambiguous += 1;
-            }
-            continue;
-        };
-        out.attributed += 1;
-        *out.by_condition.entry((*key).clone()).or_default() += 1;
-        let owner =
-            matches!(event.actor, Some(corral_core::Actor::Owner)) || event.detail["by"] == "owner";
-        out.owner_rescues += u64::from(owner && row.responsible.as_deref() == Some("pm"));
-        let failed = event.detail["submitted"] == false;
-        let slot = ((*key).clone(), event.kind.clone(), identity.clone());
-        match prior.insert(slot, failed) {
-            Some(true) => out.after_terminal += 1,
-            Some(false) => out.duplicates += 1,
-            None => {}
-        }
-    }
-    for fact in facts.iter().filter(|fact| fact.kind == "attention_handled") {
-        let owner = fact.detail["handling"]["by"] == "owner";
-        let pm = fact.detail["key"]
-            .as_str()
-            .and_then(|key| rows.get(key))
-            .is_some_and(|row| row.responsible.as_deref() == Some("pm"));
-        out.owner_rescues +=
-            u64::from(owner && pm && within(time(&fact.detail["handling"]["at"]), window));
-    }
-    out
-}
+mod joins;
+use joins::actions;
 
 #[cfg(test)]
 #[path = "metrics_tests.rs"]
 mod tests;
-
-#[cfg(all(test, unix))]
-#[path = "../../tests/attention_eval/crashes.rs"]
-mod eval_crashes;

@@ -120,7 +120,8 @@ fn published(claim: &NoticeClaim) -> Vec<Event> {
     let detail = |claim: &NoticeClaim| {
         json!({"batch_id": claim.batch_id, "producer": claim.producer, "source": claim.source,
             "claimed_at": claim.claimed_at, "claim_ids": claim.claim_ids,
-            "coverage": claim.coverage, "exemption_basis": claim.exemption_basis})
+            "coverage": claim.coverage, "exemption_basis": claim.exemption_basis,
+            "outcome": claim.outcome})
     };
     let mut detail_claimed = detail(claim);
     detail_claimed["fact_id"] = json!(format!("{}/claimed", claim.batch_id));
@@ -292,30 +293,34 @@ fn retained_ledger_facts_and_records_merge_with_appended_facts_by_identity() {
     assert_eq!(stats.handling.censored, 1);
 }
 
+fn at(mut event: Event, seconds: i64) -> Event {
+    event.ts = t(seconds);
+    event
+}
+
 #[test]
-fn action_joins_count_duplicates_terminal_repeats_and_ambiguity() {
-    // Given two open delivery conditions and one open question on one task.
+fn action_joins_require_exact_question_revision_and_message_identities() {
+    // Given two open delivery conditions and one open revision-2 question on one task.
     let first = "T-001/delivery_failed/T-001_R1#1";
     let second = "T-001/delivery_failed/T-001_R1#2";
-    let question = "T-001/question_open/T-001/R1/Q1@1";
+    let question = "T-001/question_open/T-001/R1/Q1@2";
     let mut events = vec![
         opened(first, "pm", 0, json!(true)),
         opened(second, "pm", 0, json!(true)),
         opened(question, "pm", 0, json!(true)),
     ];
-    // When the PM answers twice while unresolved, retries one message, replies after a
-    // failed reply, and posts a fresh message.
+    // When answers arrive for revisions 1 and 2, one message is retried by ID, and a fresh
+    // owner post reaches the recipient.
+    let answer = |revision: u64| {
+        event(
+            "question_answered",
+            Some("T-001"),
+            json!({"key": "T-001/R1/Q1", "revision": revision}),
+        )
+    };
     events.extend([
-        event(
-            "question_answered",
-            Some("T-001"),
-            json!({"key": "T-001/R1/Q1"}),
-        ),
-        event(
-            "question_answered",
-            Some("T-001"),
-            json!({"key": "T-001/R1/Q1"}),
-        ),
+        answer(1),
+        answer(2),
         event(
             "message_posted",
             Some("T-001"),
@@ -334,28 +339,200 @@ fn action_joins_count_duplicates_terminal_repeats_and_ambiguity() {
         resolved(question, 60),
     ]);
     let stats = compute(&[], &events, &[], window(0, 60));
-    // Then each identity join is exact and the fresh post is ambiguous.
+    // Then only the matching revision and message join; the fresh post is ambiguous.
     let a = &stats.actions;
-    assert_eq!(a.by_condition.get(question), Some(&2));
+    assert_eq!(a.by_condition.get(question), Some(&1));
     assert_eq!(a.by_condition.get(first), Some(&1));
     assert_eq!(a.by_condition.get(second), None);
-    assert_eq!((a.attributed, a.ambiguous, a.duplicates), (3, 1, 1));
+    assert_eq!((a.attributed, a.ambiguous, a.unattributed), (2, 1, 1));
     assert_eq!(
         a.owner_rescues, 0,
         "an ambiguous owner post rescues nothing"
     );
-    let stall = vec![
-        opened("T-001/unexpected_stall/a", "pm", 0, json!(true)),
-        event(
-            "replied",
-            Some("T-001"),
-            json!({"run": "R1", "submitted": false}),
-        ),
-        event("replied", Some("T-001"), json!({"run": "R1"})),
+}
+
+#[test]
+fn run_level_joins_match_the_condition_run_and_include_review_reruns() {
+    // Given a lost R1 agent on one task.
+    let lost = "T-001/agent_lost/R1:2099-01-01T00:00:00Z";
+    let run = |kind: &str, run: &str| event(kind, Some("T-001"), json!({"run": run}));
+    let events = vec![
+        opened(lost, "pm", 0, json!(true)),
+        run("replied", "R2"),
+        run("review_started", "R1"),
+        run("dispatched", "R2"),
     ];
-    let stats = compute(&[], &stall, &[], window(0, 60));
+    // When actions name R2 and R1, then only the R1 review rerun joins.
+    let stats = compute(&[], &events, &[], window(0, 60));
+    assert_eq!(stats.conditions[lost].run.as_deref(), Some("R1"));
+    assert_eq!(stats.actions.by_condition.get(lost), Some(&1));
     assert_eq!(
-        (stats.actions.after_terminal, stats.actions.duplicates),
-        (1, 0)
+        (stats.actions.attributed, stats.actions.unattributed),
+        (1, 2)
     );
 }
+
+#[test]
+fn repeats_are_duplicates_only_while_the_earlier_effect_is_outstanding() {
+    // Given an R1 condition and production-shaped inbox change requests to that run.
+    let lost = "T-001/agent_lost/R1:2099-01-01T00:00:00Z";
+    let change = |seq: u64| {
+        event(
+            "changes_requested",
+            Some("T-001"),
+            json!({"message": format!("T-001_R1#{seq}"), "submitted": false, "via": "inbox"}),
+        )
+    };
+    let case = |between: Option<Event>| {
+        let mut events = vec![opened(lost, "pm", 0, json!(true)), change(1)];
+        events.extend(between);
+        events.push(change(2));
+        compute(&[], &events, &[], window(0, 60)).actions
+    };
+    // When nothing settles the first request, then the repeat is a duplicate.
+    let outstanding = case(None);
+    assert_eq!((outstanding.duplicates, outstanding.after_terminal), (1, 0));
+    // When the first was observed, then the repeat is a legitimate new action.
+    let observed = case(Some(event(
+        "message_observed",
+        Some("T-001"),
+        json!({"id": "T-001_R1#1"}),
+    )));
+    assert_eq!((observed.duplicates, observed.after_terminal), (0, 0));
+    // When the first failed terminally, then the repeat is reported after-terminal.
+    let failed = case(Some(event(
+        "message_failed",
+        Some("T-001"),
+        json!({"key": "T-001_R1", "seq": 1, "reason": "rejected"}),
+    )));
+    assert_eq!((failed.duplicates, failed.after_terminal), (0, 1));
+}
+
+#[test]
+fn window_activity_respects_both_bounds_while_history_rebuilds_carry_in() {
+    // Given a carried-in PM condition announced at 0 and re-woken at 900, then activity
+    // after the window ends.
+    let lost = "T-001/agent_lost/R1:2099-01-01T00:00:00Z";
+    let events = vec![
+        opened(lost, "pm", 0, json!(true)),
+        event(
+            "attention_overdue",
+            Some("T-001"),
+            json!({"key": lost, "level": "rewake", "wake": true, "at": t(900),
+                "fact_id": format!("{lost}/attention_overdue/rewake")}),
+        ),
+        at(event("replied", Some("T-001"), json!({"run": "R1"})), 8000),
+        at(
+            event(
+                "pm_event_delivery",
+                Some("T-001"),
+                json!({"submitted": true, "event_kind": "needs_me", "cursor": {"offset": 1}}),
+            ),
+            8000,
+        ),
+        event(
+            "question_answered",
+            Some("T-001"),
+            json!({"key": "Q", "revision": 1, "at": t(9000)}),
+        ),
+    ];
+    // When the 3600..7200 window is read.
+    let stats = compute(&[], &events, &[], window(3600, 7200));
+    // Then the condition and its lifetime wakes remain, but no window activity is counted.
+    let row = &stats.conditions[lost];
+    assert!(row.carry_in);
+    assert_eq!((row.wakes, row.lifetime_wakes), (0, 2));
+    assert_eq!(stats.wakes.attention_levels, 0);
+    assert_eq!(stats.wakes.max_levels_per_condition, 2);
+    assert_eq!(stats.wakes.raw_push.submitted, 0);
+    assert_eq!(stats.actions.attributed + stats.actions.unattributed, 0);
+}
+
+#[test]
+fn carry_in_batches_count_identically_whether_retained_or_pruned() {
+    // Given a condition open across the window and three batches claimed before it.
+    let key = "T-001/agent_lost/R1:x";
+    let outcomes = [
+        Some(NoticeOutcome::Notified { at: t(100) }),
+        Some(NoticeOutcome::Failed {
+            at: t(100),
+            error: "transport".into(),
+        }),
+        None,
+    ];
+    let claims: Vec<_> = (outcomes.into_iter().enumerate())
+        .map(|(index, outcome)| {
+            let mut claim = claim("attention_ladder", index, outcome);
+            claim.coverage = vec![NoticeCoverage::Exact {
+                condition_key: key.into(),
+            }];
+            claim
+        })
+        .collect();
+    let mut events = vec![opened(key, "pm", 0, json!(true)), resolved(key, 5000)];
+    events.extend(claims.iter().flat_map(published));
+    // When stats read the window before and after the claim records are pruned.
+    let retained = compute(&[], &events, &claims, window(3600, 7200)).notifications;
+    let pruned = compute(&[], &events, &[], window(3600, 7200)).notifications;
+    // Then both report the same carry-in batches, none charged to the window's calls.
+    assert_eq!(retained, pruned);
+    assert_eq!((pruned.carry_in, pruned.carry_in_calls), (3, [2, 3]));
+    assert_eq!(
+        (pruned.batches, pruned.calls, pruned.budget_calls),
+        (0, [0, 0], [0, 0])
+    );
+}
+
+#[test]
+fn raw_question_pushes_resolve_their_source_event_by_cursor() {
+    // Given two open questions on one task and a push receipt for the second's opening.
+    let one = "T-001/question_open/T-001/R1/Q1@1";
+    let two = "T-001/question_open/T-001/R1/Q2@1";
+    let opening = event(
+        "question_opened",
+        Some("T-001"),
+        json!({"key": "T-001/R1/Q2", "revision": 1}),
+    );
+    let receipt = |offset: u64| {
+        event(
+            "pm_event_delivery",
+            Some("T-001"),
+            json!({"submitted": true, "event_kind": "question_opened", "pane": "pm:p1",
+                "cursor": {"offset": offset}}),
+        )
+    };
+    let events = vec![
+        opened(one, "pm", 0, json!(true)),
+        opening,
+        opened(two, "pm", 0, json!(true)),
+        receipt(200),
+        resolved(two, 30),
+        receipt(200),
+    ];
+    // When the receipt, and a delayed replay of it, name the source's cursor.
+    let stats = compute_logged(
+        &[],
+        &events,
+        &[10, 200, 300, 400, 500, 600],
+        &[],
+        window(0, 60),
+    );
+    // Then only that question is attributed, once, with the replay deduplicated.
+    let raw = &stats.wakes.raw_push;
+    assert_eq!(raw.attributed.get(two), Some(&1));
+    assert_eq!(raw.attributed.get(one), None);
+    assert_eq!((raw.submitted, raw.replayed, raw.ambiguous), (1, 1, 0));
+    // When cursors are unavailable, then nothing is attributed by task alone.
+    let blind = compute(&[], &events, &[], window(0, 60));
+    assert!(blind.wakes.raw_push.attributed.is_empty());
+}
+
+#[cfg(unix)]
+#[path = "../../tests/attention_eval/crashes.rs"]
+mod eval_crashes;
+#[cfg(unix)]
+#[path = "../../tests/attention_eval/producers.rs"]
+mod eval_producers;
+#[cfg(unix)]
+#[path = "../../tests/attention_eval/retire.rs"]
+mod eval_retire;

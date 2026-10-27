@@ -4,12 +4,14 @@ use corral_ops::attention::metrics::{self, Window};
 
 use crate::git_fixture::{GitFx, at, reviewing};
 
-fn stats(fx: &GitFx, end: i64) -> metrics::Stats {
+/// Autopilot events carry the real append time, which follows this fixture's fixed clock, so
+/// the window ends at a fixed later instant to include them.
+fn stats(fx: &GitFx) -> metrics::Stats {
     metrics::stats(
         &fx.ctx,
         Window {
             start: at(-3600),
-            end: at(end),
+            end: "2027-01-01T00:00:00Z".parse().unwrap(),
         },
     )
     .unwrap()
@@ -44,7 +46,7 @@ fn s8_short_and_long_index_lock_lose_no_round_and_hold_once_only_past_the_bound(
         assert_eq!(fx.events("review_started"), 1, "{held_for}");
         assert_eq!(fx.events("infra_hold"), holds, "{held_for}");
         assert_eq!(fx.notifications(), holds, "{held_for}");
-        let stats = stats(&fx, held_for + 2);
+        let stats = stats(&fx);
         assert_eq!(stats.lost_review_rounds, 0);
         let infra = stats.notifications.by_producer.get("infra_hold");
         assert_eq!(infra.map_or(0, |p| p.batches), holds as u64, "{held_for}");
@@ -91,7 +93,7 @@ fn s13_t318_lock_at_224309z_holds_at_the_bound_instead_of_escalating() {
     assert_eq!(fx.task().rounds, rounds);
     assert_eq!(fx.events("review_started"), 1);
     assert_eq!(fx.notifications(), 1);
-    let stats = stats(&fx, 6061);
+    let stats = stats(&fx);
     assert_eq!(stats.lost_review_rounds, 0);
     let infra = &stats.notifications.by_producer["infra_hold"];
     assert_eq!((infra.batches, infra.success), (1, 1));
@@ -119,7 +121,7 @@ fn s16_abandoned_merge_marker_is_an_operation_with_one_notice_and_is_untouched()
     assert_eq!(std::fs::read(&marker).unwrap(), bytes);
     assert_eq!(fx.events("infra_hold"), 1);
     assert_eq!(fx.notifications(), 1);
-    let stats = stats(&fx, 900);
+    let stats = stats(&fx);
     assert_eq!(stats.notifications.by_producer["infra_hold"].batches, 1);
     assert_eq!(stats.lost_review_rounds, 0);
     crate::support::invariants(&stats);
