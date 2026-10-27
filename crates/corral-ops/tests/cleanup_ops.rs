@@ -21,6 +21,8 @@ use serde_json::json;
 mod failure;
 #[path = "cleanup_ops/lifecycle.rs"]
 mod lifecycle;
+#[path = "cleanup_ops/report_notes.rs"]
+mod report_notes;
 #[path = "cleanup_ops/worktree.rs"]
 mod worktree;
 

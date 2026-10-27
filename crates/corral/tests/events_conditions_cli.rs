@@ -309,7 +309,7 @@ fn find_verdict(value: &Value) -> Option<&Value> {
 }
 
 #[test]
-fn twenty_kib_verdict_notes_are_a_blob_ref_that_every_report_reads_back() {
+fn twenty_kib_verdict_notes_are_a_blob_ref_that_log_and_review_sprint_read_back() {
     // Given a review whose verdict notes are 20 KiB.
     let fx = Fixture::new();
     let task = fx
@@ -338,19 +338,16 @@ fn twenty_kib_verdict_notes_are_a_blob_ref_that_every_report_reads_back() {
         notes.split_whitespace().collect::<Vec<_>>().join(" ")
     );
 
-    // When log, review-sprint, digest and stats read the history.
+    // When the CLI log and review-sprint read the history (digest and stats are checked on a
+    // real verdict in corral-ops' cleanup_ops tests).
     let log = fx.lines(&["log", &task.id, "--json"]);
     let sprint: Value = serde_json::from_str(&fx.ok(&["review-sprint", "--json"])).unwrap();
-    let digest: Value = serde_json::from_str(&fx.ok(&["digest", "--json"])).unwrap();
-    let stats: Value = serde_json::from_str(&fx.ok(&["stats", "--json"])).unwrap();
 
-    // Then each equals what the rows and the blob give.
+    // Then both show the text the blob holds.
     let entry = log.iter().find(|e| e["kind"] == "verdict").unwrap();
     assert_eq!(entry["summary"], expected_summary);
     assert_eq!(entry["event"]["detail"]["notes"], reference);
     let change = find_verdict(&sprint).expect("sprint lists the sent-back verdict");
     assert_eq!(change["reason"], notes);
     assert_eq!(change["verdict"], "changes");
-    assert!(!digest.to_string().contains(reference));
-    assert!(!stats.to_string().contains("blob:sha256:"));
 }
