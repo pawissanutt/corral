@@ -63,6 +63,7 @@ struct State {
     status_counts: Table<(String, String), u64>,
     usage_totals: Table<(String, String), Value>,
     pane_owners: Table<String, u64>,
+    artifact_reviews: Arc<super::query::artifact_reviews::Reviews>,
 }
 
 struct Shared {

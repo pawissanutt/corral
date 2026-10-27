@@ -23,6 +23,16 @@ impl Tx<'_> {
             .into());
         }
         let owner = RefOwner::Record(write.area.clone(), write.key.clone());
+        if write.area == "reviewed-artifacts" && write.key == "set" {
+            let paths = write
+                .doc
+                .as_ref()
+                .map(|doc| serde_json::from_value(doc.clone()))
+                .transpose()
+                .map_err(|e| ApplyError::Io(e.into()))?
+                .unwrap_or_default();
+            Arc::make_mut(&mut self.state.artifact_reviews).replace(paths);
+        }
         let records = Arc::make_mut(&mut self.state.records);
         let refs = match &write.doc {
             Some(doc) => {

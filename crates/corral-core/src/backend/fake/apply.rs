@@ -252,6 +252,23 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        if row.part == TaskPart::Artifact {
+            let old = self
+                .row(num, row.part, &row.key)
+                .map(|r| super::super::query::artifact_reviews::kept_path(&r.doc))
+                .transpose()
+                .map_err(ApplyError::Io)?
+                .flatten();
+            let new = super::super::query::artifact_reviews::kept_path(&row.doc)
+                .map_err(ApplyError::Io)?;
+            let reviews = Arc::make_mut(&mut self.state.artifact_reviews);
+            if let Some(path) = old {
+                reviews.remove(num, &row.key, &path);
+            }
+            if let Some(path) = new {
+                reviews.insert(num, &row.key, path);
+            }
+        }
         if row.part == TaskPart::PaneRef {
             let before = self
                 .row(num, row.part, &row.key)
@@ -282,6 +299,13 @@ impl Tx<'_> {
     }
 
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        if part == TaskPart::Artifact
+            && let Some(row) = self.row(num, part, key)
+            && let Some(path) = super::super::query::artifact_reviews::kept_path(&row.doc)
+                .map_err(ApplyError::Io)?
+        {
+            Arc::make_mut(&mut self.state.artifact_reviews).remove(num, key, &path);
+        }
         let socket = if part == TaskPart::PaneRef {
             self.row(num, part, key)
                 .and_then(pane_socket)

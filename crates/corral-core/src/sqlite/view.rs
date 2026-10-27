@@ -254,6 +254,14 @@ impl ReadView for SqliteView {
     fn heads(&self, q: &HeadQuery, page: PageReq) -> Result<Page<TaskHeadDoc>, ViewError> {
         let cols = load::HEAD_COLUMNS;
         match q {
+            HeadQuery::ProjectUpdated { project } => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks WHERE project = ? ORDER BY updated DESC, id DESC"
+                ),
+                vec![Sql::Text(project.clone())],
+                head_query,
+            ),
             HeadQuery::Open { project: None } => self.page(
                 &page,
                 &format!(
@@ -517,6 +525,12 @@ impl ReadView for SqliteView {
     fn aggregates(&self, names: &[AggregateName]) -> Result<Aggregates, ViewError> {
         let db = self.fresh()?;
         let mut out = Aggregates::default();
+        for name in names {
+            if let AggregateName::ArtifactReviewed(task) = name {
+                out.artifact_reviewed
+                    .insert(*task, super::artifact_reviews::count(db, *task).or_view()?);
+            }
+        }
         if names.contains(&AggregateName::StatusCounts) {
             out.status_counts = load::status_counts(db).or_view()?;
         }

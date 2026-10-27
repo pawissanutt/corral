@@ -51,6 +51,8 @@ pub struct HistorySummary {
     pub artifacts: u64,
     #[serde(with = "crate::container_facts::fixed")]
     pub kept_artifacts: u64,
+    /// Artifacts registered to the current coding run, not its accumulated row collection.
+    pub current_artifacts: crate::container_facts::ArtifactFacts,
     #[serde(with = "crate::container_facts::fixed")]
     pub scope_revisions: u64,
     #[serde(with = "crate::container_facts::fixed")]
@@ -121,6 +123,11 @@ impl HistorySummary {
             member_gate_revisions: task.member_gates.values().map(|g| n(g.history.len())).sum(),
             ..HistorySummary::default()
         };
+        if let Some(run) = task.current_run() {
+            for artifact in task.artifacts.iter().filter(|a| a.run == run.id) {
+                summary.current_artifacts.fold(artifact);
+            }
+        }
         for (seq, run) in history(&task.runs).iter().enumerate() {
             summary.fold_run(seq + 1, run);
         }

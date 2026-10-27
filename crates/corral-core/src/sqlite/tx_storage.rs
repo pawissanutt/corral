@@ -52,6 +52,9 @@ impl Tx<'_> {
                 Default::default()
             }
         };
+        if write.area == "reviewed-artifacts" && write.key == "set" {
+            super::artifact_reviews::replace(self.db, write.doc.as_ref()).or_io()?;
+        }
         self.scope(ChangeScope::Record {
             area: write.area.clone(),
             key: write.key.clone(),

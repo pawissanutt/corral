@@ -153,6 +153,16 @@ impl ReadView for FakeView {
     fn heads(&self, q: &HeadQuery, page: PageReq) -> Result<Page<TaskHeadDoc>, ViewError> {
         let heads = self.state.tasks.values().map(|task| &task.head);
         match q {
+            HeadQuery::ProjectUpdated { project } => {
+                let mut found: Vec<_> = heads
+                    .filter(|head| head.header.fields.project.as_ref() == Some(project))
+                    .collect();
+                found.sort_by(|a, b| {
+                    (b.header.fields.updated, &b.header.id)
+                        .cmp(&(a.header.fields.updated, &a.header.id))
+                });
+                self.page(found.into_iter().cloned(), &page)
+            }
             HeadQuery::Open { project } => self.page(
                 heads
                     .filter(|head| head.header.is_open())
@@ -330,6 +340,12 @@ impl ReadView for FakeView {
     fn aggregates(&self, names: &[AggregateName]) -> Result<Aggregates, ViewError> {
         self.fresh()?;
         let mut out = Aggregates::default();
+        for name in names {
+            if let AggregateName::ArtifactReviewed(task) = name {
+                out.artifact_reviewed
+                    .insert(*task, self.state.artifact_reviews.count(*task));
+            }
+        }
         if names.contains(&AggregateName::StatusCounts) {
             out.status_counts = self.status_counts();
         }

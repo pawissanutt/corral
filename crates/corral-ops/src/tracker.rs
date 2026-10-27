@@ -3,6 +3,10 @@ use anyhow::{Context, Result, bail, ensure};
 use corral_core::{ApprovedScope, PlanAcceptance, PlanDeliveryTarget, Status, Store, Task};
 use serde::Serialize;
 use serde_json::json;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Mutex, OnceLock};
+
+use corral_core::backend::{ChangeScope, ChangeSeq, FeedError};
 
 use crate::{Change, Ctx};
 
@@ -23,7 +27,7 @@ pub enum PlanWorkState {
 }
 
 /// Counts always retain every required member, including dropped work.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct PlanWorkCounts {
     pub accepted: usize,
     pub running: usize,
@@ -33,7 +37,7 @@ pub struct PlanWorkCounts {
 }
 
 /// One normal task and its current readiness, not a separate scheduler entry.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanWork {
     pub task: String,
     pub title: String,
@@ -45,7 +49,7 @@ pub struct PlanWork {
 }
 
 /// Mapping is coverage only, never evidence that an aggregate scenario passed.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanCoverage {
     pub acceptance: PlanAcceptance,
     pub tasks: Vec<String>,
@@ -67,6 +71,84 @@ pub struct PlanProgress {
     pub aggregate: Option<crate::AggregateProgress>,
 }
 
+#[derive(Clone)]
+struct Projection {
+    tracker: Task,
+    counts: PlanWorkCounts,
+    work: Vec<PlanWork>,
+    coverage: Vec<PlanCoverage>,
+    unmapped_criteria: Vec<PlanAcceptance>,
+    scopes: BTreeSet<String>,
+    qualification: Vec<(usize, Task)>,
+}
+
+struct Derived {
+    seq: ChangeSeq,
+    projection: Projection,
+}
+
+/// Process-local values contain only the tracker and its reachable work, not board history.
+/// Feed reads use the caller's pinned view, including when it predates the cached cursor.
+fn projection(ctx: &Ctx, id: &str) -> Result<(Projection, bool)> {
+    type Key = (std::path::PathBuf, String);
+    static DERIVED: OnceLock<Mutex<BTreeMap<Key, Derived>>> = OnceLock::new();
+    let mut cache = DERIVED
+        .get_or_init(Mutex::default)
+        .lock()
+        .map_err(|error| anyhow::anyhow!("locking tracker progress: {error}"))?;
+    let view = ctx.store.view()?;
+    view.ensure_fresh()?;
+    let seq = view.seq();
+    let key = (ctx.store.cache_root()?, Store::normalize_id(id)?);
+    if let Some(previous) = cache.get_mut(&key)
+        && previous.seq <= seq
+    {
+        let mut cursor = previous.seq;
+        let mut changed = false;
+        while cursor < seq {
+            let page = match view.changes(cursor, 256) {
+                Ok(page) => page,
+                Err(FeedError::Gap { .. }) => {
+                    changed = true;
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            };
+            for entry in &page.entries {
+                changed |= entry.scopes.iter().any(|scope| match scope {
+                    ChangeScope::Task { num, .. } => previous
+                        .projection
+                        .scopes
+                        .contains(&format!("T-{:03}", num.0)),
+                    _ => false,
+                });
+            }
+            if changed || !page.more {
+                break;
+            }
+            cursor = page
+                .entries
+                .last()
+                .context("empty tracker change page")?
+                .seq;
+        }
+        if !changed {
+            previous.seq = seq;
+            return Ok((previous.projection.clone(), true));
+        }
+    }
+    // A missing cache, feed gap or older snapshot recovers from the complete head computation.
+    let projection = compute(ctx, id)?;
+    cache.insert(
+        key,
+        Derived {
+            seq,
+            projection: projection.clone(),
+        },
+    );
+    Ok((projection, false))
+}
+
 /// Read one coherent board snapshot without reconciling or accepting the Plan.
 ///
 /// # Errors
@@ -76,14 +158,71 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
         .store
         .try_lock("dispatch")?
         .context("board is being updated; retry Plan progress")?;
-    let store = Store::open_unobserved(ctx.store.root())?.read_only_snapshot()?;
-    let tracker = store.head(id)?.to_shell_task()?;
-    ensure!(tracker.tracker, "{} is not a tracker Plan", tracker.id);
+    let store = if ctx.store.is_snapshot() {
+        ctx.store.clone()
+    } else {
+        // Live callers historically refresh config as well as task data.
+        Store::open_unobserved(ctx.store.root())?.read_only_snapshot()?
+    };
     let fresh = Ctx {
-        store: store.clone(),
+        store,
         ..ctx.clone()
     };
+    let (mut projection, cached) = projection(&fresh, id)?;
+    if cached {
+        // Git ancestry, target journals and resource admission are live inputs, not task
+        // scopes. Refresh only qualification, retaining the task/coverage derivation.
+        for (index, child) in &projection.qualification {
+            let prerequisites = target::prerequisites(&fresh.store, &projection.tracker, child)?;
+            let (state, reason) = work_state(&fresh, child, &prerequisites)?;
+            let work = &mut projection.work[*index];
+            *work_count(&mut projection.counts, work.state) -= 1;
+            *work_count(&mut projection.counts, state) += 1;
+            work.prerequisites = prerequisites;
+            work.state = state;
+            work.reason = reason;
+        }
+    }
+    let Projection {
+        tracker,
+        counts,
+        work,
+        coverage,
+        unmapped_criteria,
+        ..
+    } = projection;
+    // These inputs include Git refs, artifact bytes and checkpoint records, independent of
+    // task scopes. Do not memoize acceptance readiness on the task-only feed cursor.
+    let aggregate = crate::plan_acceptance::progress(&fresh, &tracker);
+    Ok(PlanProgress {
+        task: tracker.id,
+        status: tracker.status,
+        approved_scope: tracker.approved_scope,
+        scope_revision: tracker.approved_scope_revision,
+        counts,
+        work,
+        coverage,
+        unmapped_criteria,
+        aggregate,
+    })
+}
+
+fn compute(fresh: &Ctx, id: &str) -> Result<Projection> {
+    let store = &fresh.store;
+    let tracker = store.head(id)?.to_shell_task()?;
+    ensure!(tracker.tracker, "{} is not a tracker Plan", tracker.id);
+    let mut scopes = BTreeSet::from([tracker.id.clone()]);
+    scopes.extend(tracker.parent.iter().cloned());
+    if let Some((design, _)) = tracker
+        .approved_scope
+        .as_ref()
+        .and_then(|scope| scope.approved_design.as_deref())
+        .and_then(|link| link.split_once('@'))
+    {
+        scopes.insert(design.into());
+    }
     let mut work = Vec::new();
+    let mut qualification = Vec::new();
     let mut counts = PlanWorkCounts::default();
     let mut coverage: Vec<_> = tracker
         .approved_scope
@@ -97,56 +236,34 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
     let mut seen = std::collections::BTreeSet::new();
     for id in &tracker.children {
         ensure!(seen.insert(id), "duplicate Plan member {id}");
-        let child = store
+        let child_head = store
             .head(id)
-            .and_then(|head| head.to_shell_task())
             .with_context(|| format!("{}: missing Plan member {id}", tracker.id))?;
+        let child = child_head.to_shell_task()?;
         if tracker.approved_scope.is_some() {
             ensure!(
-                store.execution_plan(&child)?.as_ref().map(|plan| &plan.id) == Some(&tracker.id),
+                store
+                    .execution_plan_head(&child_head)?
+                    .as_ref()
+                    .map(|plan| &plan.id)
+                    == Some(&tracker.id),
                 "{id}: execution Plan membership changed"
             );
         }
         // Validate the complete reachable graph even for accepted or dropped work.
-        crate::queue::dependency_check(&store, &child)?;
-        let prerequisites = target::prerequisites(&store, &tracker, &child)?;
-        let (state, reason) = match child.status {
-            Status::Done => (PlanWorkState::Accepted, None),
-            Status::Running => (PlanWorkState::Running, None),
-            Status::Review => (PlanWorkState::Review, None),
-            Status::Dropped => (
-                PlanWorkState::Missing,
-                Some("required work was dropped; approved scope is unchanged".into()),
-            ),
-            Status::NeedsMe => (PlanWorkState::Waiting, Some("owner input required".into())),
-            Status::Idea | Status::Backlog | Status::Ready => {
-                match crate::operating::queued_origin(&store, &child) {
-                    Err(error) => (PlanWorkState::Missing, Some(format!("{error:#}"))),
-                    Ok(_) => {
-                        let reason = prerequisites
-                            .iter()
-                            .find(|dependency| !dependency.satisfied)
-                            .and_then(|dependency| dependency.reason.clone())
-                            .or(crate::queue::blocked_reason(&fresh, &store, &child, false)?);
-                        (
-                            PlanWorkState::Waiting,
-                            Some(reason.unwrap_or_else(|| "ready for authorized dispatch".into())),
-                        )
-                    }
-                }
-            }
-        };
-        match state {
-            PlanWorkState::Accepted => counts.accepted += 1,
-            PlanWorkState::Running => counts.running += 1,
-            PlanWorkState::Review => counts.review += 1,
-            PlanWorkState::Waiting => counts.waiting += 1,
-            PlanWorkState::Missing => counts.missing += 1,
-        }
+        crate::queue::dependency_check(store, &child)?;
+        let prerequisites = target::prerequisites(store, &tracker, &child)?;
+        let (state, reason) = work_state(fresh, &child, &prerequisites)?;
+        *work_count(&mut counts, state) += 1;
         for mapping in &mut coverage {
-            if maps_acceptance(&store, &tracker, &child, &mapping.acceptance)? {
+            if maps_acceptance(store, &tracker, &child, &mapping.acceptance)? {
                 mapping.tasks.push(child.id.clone());
             }
+        }
+        if !child.depends_on.is_empty()
+            || matches!(child.status, Status::Idea | Status::Backlog | Status::Ready)
+        {
+            qualification.push((work.len(), child.clone()));
         }
         let run = child.current_run().map(|run| run.id.clone());
         work.push(PlanWork {
@@ -164,17 +281,67 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
         .filter(|mapping| mapping.tasks.is_empty())
         .map(|mapping| mapping.acceptance.clone())
         .collect();
-    let aggregate = crate::plan_acceptance::progress(&fresh, &tracker);
-    Ok(PlanProgress {
-        task: tracker.id,
-        status: tracker.status,
-        approved_scope: tracker.approved_scope,
-        scope_revision: tracker.approved_scope_revision,
+    let mut pending = tracker.children.clone();
+    let mut visited = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if visited.insert(id.clone()) {
+            let head = store.head(&id)?;
+            scopes.insert(id);
+            scopes.extend(head.parent.iter().cloned());
+            pending.extend(head.depends_on.iter().cloned());
+        }
+    }
+    Ok(Projection {
+        tracker,
         counts,
         work,
         coverage,
         unmapped_criteria,
-        aggregate,
+        scopes,
+        qualification,
+    })
+}
+
+fn work_count(counts: &mut PlanWorkCounts, state: PlanWorkState) -> &mut usize {
+    match state {
+        PlanWorkState::Accepted => &mut counts.accepted,
+        PlanWorkState::Running => &mut counts.running,
+        PlanWorkState::Review => &mut counts.review,
+        PlanWorkState::Waiting => &mut counts.waiting,
+        PlanWorkState::Missing => &mut counts.missing,
+    }
+}
+
+fn work_state(
+    ctx: &Ctx,
+    child: &Task,
+    prerequisites: &[PlanPrerequisite],
+) -> Result<(PlanWorkState, Option<String>)> {
+    Ok(match child.status {
+        Status::Done => (PlanWorkState::Accepted, None),
+        Status::Running => (PlanWorkState::Running, None),
+        Status::Review => (PlanWorkState::Review, None),
+        Status::Dropped => (
+            PlanWorkState::Missing,
+            Some("required work was dropped; approved scope is unchanged".into()),
+        ),
+        Status::NeedsMe => (PlanWorkState::Waiting, Some("owner input required".into())),
+        Status::Idea | Status::Backlog | Status::Ready => {
+            match crate::operating::queued_origin(&ctx.store, child) {
+                Err(error) => (PlanWorkState::Missing, Some(format!("{error:#}"))),
+                Ok(_) => {
+                    let reason = prerequisites
+                        .iter()
+                        .find(|dependency| !dependency.satisfied)
+                        .and_then(|dependency| dependency.reason.clone())
+                        .or(crate::queue::blocked_reason(ctx, &ctx.store, child, false)?);
+                    (
+                        PlanWorkState::Waiting,
+                        Some(reason.unwrap_or_else(|| "ready for authorized dispatch".into())),
+                    )
+                }
+            }
+        }
     })
 }
 

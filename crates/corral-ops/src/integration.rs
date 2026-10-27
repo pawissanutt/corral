@@ -184,6 +184,12 @@ impl IntegrationPacket {
         mut conflict_paths: Vec<String>,
         git_details: Option<String>,
     ) -> Result<Self> {
+        let ctx = &Ctx {
+            store: ctx.store.read_only_snapshot()?,
+            ..ctx.clone()
+        };
+        crate::approvals::prepare(ctx)?;
+        let _hot = corral_core::work::HotScope::enter();
         let repo = &run.worktree;
         let memo = git_memo(ctx);
         let merge_base = memo.merge_base(repo, &key.base, &key.head)?;
@@ -352,7 +358,7 @@ fn approvals(ctx: &Ctx, candidate: &Task) -> Result<BTreeMap<String, Vec<LandedT
 mod derived_rows_tests {
     use super::*;
     use corral_core::Store;
-    use corral_core::work::{self, Counter, HotScope};
+    use corral_core::work::{self, Counter};
     use serde_json::json;
     use std::path::Path;
 
@@ -462,7 +468,6 @@ mod derived_rows_tests {
         assert_eq!(packet.dispatch_history.len(), 1);
         assert_eq!(packet.dispatch_history[0].tasks.len(), 2);
         let measure = || {
-            let _scope = HotScope::enter();
             let before = work::snapshot();
             let result =
                 IntegrationPacket::build(&ctx, &task, &run, &policy, key.clone(), vec![], None)
@@ -517,5 +522,24 @@ mod derived_rows_tests {
             packet.dispatch_history[0].tasks[0].title.as_deref(),
             Some("Renamed")
         );
+        // A newly appended approval of a selected SHA changes attribution, not just the
+        // cursor. The production packet boundary must consume it without manual preparation.
+        ctx.store
+            .log_event(
+                Some(&landed.id),
+                "approved",
+                json!({"sha":base,"strategy":"rebase","run":"R4"}),
+            )
+            .unwrap();
+        let updated = measure().0;
+        let oracle = approvals(&ctx, &task).unwrap();
+        for commit in updated
+            .dispatch_history
+            .iter()
+            .chain(&updated.missing_from_candidate)
+        {
+            assert_eq!(commit.tasks, oracle[&commit.sha]);
+        }
+        assert_ne!(updated, packet);
     }
 }

@@ -9,6 +9,7 @@
 //! pinned when it opens; a WAL reader blocks no writer, and dropping the view releases its
 //! snapshot so a checkpoint can complete.
 
+mod artifact_reviews;
 mod check;
 mod codec;
 mod fixture;
@@ -16,6 +17,7 @@ pub mod fs;
 pub mod guard;
 mod load;
 mod plans;
+mod row_indexes;
 mod schema;
 mod tx;
 mod tx_blobs;
@@ -203,6 +205,7 @@ impl SqliteBackend {
         );
         let workspace_id = BlobHash::of(seed.as_bytes()).as_str()[..32].to_owned();
         schema::init(&mut writer, &workspace_id)?;
+        artifact_reviews::init(&mut writer)?;
         Ok(Self {
             path: path.to_owned(),
             options,
@@ -306,7 +309,13 @@ impl SqliteBackend {
                 |row| Ok((load::text(row, 0)?, load::opt_text(row, 1)?)),
             )?
             .with_context(|| format!("task {} does not exist", num.0))?;
-            for table in ["task_row_index", "task_rows", "task_edges"] {
+            for table in [
+                "task_row_index",
+                "task_rows",
+                "task_edges",
+                "artifact_keep_paths",
+                "artifact_review_counts",
+            ] {
                 tx.execute(
                     &format!("DELETE FROM {table} WHERE task = ?1"),
                     params![task],

@@ -351,7 +351,12 @@ fn meta_lines(
                     spans.push(Span::raw(" "));
                     spans.push(Span::styled(del, Style::new().fg(theme::RED)));
                 }
-                let n = t.artifacts.iter().filter(|a| a.run == r.id).count();
+                let n = extra.head.map_or_else(
+                    || t.artifacts.iter().filter(|a| a.run == r.id).count(),
+                    |head| {
+                        usize::try_from(head.summary.current_artifacts.count).unwrap_or(usize::MAX)
+                    },
+                );
                 spans.push(sep());
                 spans.push(Span::styled(format!("◆ {n} art"), dim));
             }

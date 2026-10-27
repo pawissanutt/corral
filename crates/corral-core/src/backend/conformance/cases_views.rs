@@ -70,6 +70,25 @@ fn head_queries(make: MakeFixture<'_>) -> Result<()> {
         made.push(id);
     }
     let view = fx.backend.view()?;
+    let query = HeadQuery::ProjectUpdated {
+        project: "corral".to_owned(),
+    };
+    let latest = view.heads(&query, PageReq::first(2))?;
+    ensure!(
+        ids(&latest.items) == [made[4].clone(), made[0].clone()] && latest.next.is_some(),
+        "project updated first page"
+    );
+    let latest = all_pages(|page| view.heads(&query, page))?;
+    ensure!(
+        ids(&latest)
+            == [
+                made[4].clone(),
+                made[0].clone(),
+                made[3].clone(),
+                made[1].clone()
+            ],
+        "project updated order and descending id ties"
+    );
     let after = ago(now, 5)?;
     let created = all_pages(|page| {
         view.heads(

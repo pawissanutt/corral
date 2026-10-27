@@ -4,7 +4,7 @@ use corral_core::{PlanDeliveryTarget, Status, Store, Task};
 use serde::Serialize;
 
 /// Acceptance and inclusion are separate facts about a prerequisite.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlanPrerequisite {
     pub task: String,
     pub status: Status,
@@ -162,10 +162,13 @@ pub(super) fn prerequisites(
 }
 
 pub(crate) fn target_blocker(store: &Store, task: &Task) -> Result<Option<String>> {
-    let Some(plan) = store.execution_plan(task)? else {
+    let Some(plan) = store.execution_plan_head(&store.head(&task.id)?)? else {
         return Ok(None);
     };
-    crate::plan_target::check_dispatch_target(store, task)?;
+    let plan = plan.to_shell_task()?;
+    // Membership already proved the shared project and target. Reuse the resolved
+    // tracker so the target helper does not resolve (and hydrate) its parent again.
+    crate::plan_target::check_dispatch_target(store, &plan)?;
     let prerequisites = prerequisites(store, &plan, task)?;
     let reason = prerequisites
         .iter()
@@ -221,7 +224,8 @@ fn base_reason(
 }
 
 pub(crate) fn check_dispatch_base(store: &Store, task: &Task, base: &str, sha: &str) -> Result<()> {
-    if let Some(plan) = store.execution_plan(task)? {
+    if let Some(plan) = store.execution_plan_head(&store.head(&task.id)?)? {
+        let plan = plan.to_shell_task()?;
         if let Some(reason) =
             base_reason(store, &plan, &prerequisites(store, &plan, task)?, base, sha)?
         {

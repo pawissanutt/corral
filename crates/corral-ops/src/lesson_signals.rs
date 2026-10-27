@@ -542,6 +542,12 @@ fn run_signals(
 /// # Errors
 /// Returns store, regular-file I/O, gzip decoding or subprocess setup failures.
 pub fn lesson_signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
+    let ctx = &Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
+    crate::lesson_rows::prepare(ctx)?;
+    let _hot = corral_core::work::HotScope::enter();
     corral_core::work::record(corral_core::work::Work::LessonSignalScan, 1);
     crate::lesson_rows::signals(ctx, project)
 }

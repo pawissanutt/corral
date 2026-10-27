@@ -123,38 +123,10 @@ pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String
     let now = Timestamp::now();
     let mut rows = Vec::new();
     for head in heads {
-        let artifacts = if columns
-            .iter()
-            .any(|c| matches!(c.as_str(), "artifacts" | "lines"))
-        {
-            head.current_run
-                .as_ref()
-                .map(|r| head.artifacts_of(&r.id))
-                .transpose()?
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
         rows.push(
             columns
                 .iter()
-                .map(|name| match name.as_str() {
-                    "id" => head.id.clone(),
-                    "status" => head.status.label().to_owned(),
-                    "project" => head.project.clone().unwrap_or_else(|| "-".into()),
-                    "title" => head.title.clone(),
-                    field => CardField::parse(field)
-                        .and_then(|f| {
-                            f.text_head_with(
-                                head,
-                                &artifacts,
-                                &|id| done.contains(id),
-                                now,
-                                pinned.contains(&head.id),
-                            )
-                        })
-                        .unwrap_or_else(|| "-".into()),
-                })
+                .map(|name| head_cell(name, head, &done, &pinned, now))
                 .collect::<Vec<_>>(),
         );
     }
@@ -179,4 +151,134 @@ pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String
         );
     }
     Ok(())
+}
+
+fn head_cell(
+    name: &str,
+    head: &corral_core::TaskHead,
+    done: &BTreeSet<String>,
+    pinned: &BTreeSet<String>,
+    now: Timestamp,
+) -> String {
+    match name {
+        "id" => head.id.clone(),
+        "status" => head.status.label().to_owned(),
+        "project" => head.project.clone().unwrap_or_else(|| "-".into()),
+        "title" => head.title.clone(),
+        field => CardField::parse(field)
+            .and_then(|f| {
+                f.text_head_with(
+                    head,
+                    &[],
+                    &|id| done.contains(id),
+                    now,
+                    pinned.contains(&head.id),
+                )
+            })
+            .unwrap_or_else(|| "-".into()),
+    }
+}
+
+#[cfg(test)]
+mod artifact_facts_list {
+    use super::*;
+    use clap::{CommandFactory, FromArgMatches};
+    use corral_core::work::{self, Counter, HotScope};
+    use corral_core::{Artifact, Status, Store};
+
+    #[test]
+    fn open_list_artifact_columns_are_constant_under_current_and_reviewed_history_growth() {
+        let mut reports = Vec::new();
+        for factor in [1, 10] {
+            // Given a current run's growing artifacts and reviewed terminal history.
+            let root = tempfile::tempdir().unwrap();
+            let store = Store::init(root.path()).unwrap();
+            let mut task = store.create("Active", None, Status::Running, "").unwrap();
+            let now: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+            task.created = now;
+            task.updated = now;
+            let run: corral_core::Run = serde_json::from_value(serde_json::json!({
+                "id": "R1", "agent": "worker", "worktree": "/tmp/list-artifact-test",
+                "branch": "topic", "base": "main", "base_sha": "0".repeat(40), "started": now
+            }))
+            .unwrap();
+            task.runs.push(run);
+            let artifact = |run: &str, path: String, kind: &str, title: &str| -> Artifact {
+                serde_json::from_value(serde_json::json!({
+                    "run": run, "path": path, "kind": kind, "title": title,
+                    "source": "/tmp/x", "sha256": "0".repeat(64), "bytes": 1, "added": now
+                }))
+                .unwrap()
+            };
+            for n in 0..4 * factor {
+                task.artifacts.push(artifact(
+                    "R1",
+                    format!("artifacts/{}/R1/{n:04}", task.id),
+                    "log",
+                    "Log",
+                ));
+            }
+            task.artifacts.push(artifact(
+                "R1",
+                "artifacts/final.diff".into(),
+                "diff",
+                "Final diff +12 -3",
+            ));
+            store.fixture_put_task(&task).unwrap();
+            let mut marks = BTreeSet::new();
+            for n in 0..4 * factor {
+                let mut old = store.create("Old", None, Status::Dropped, "").unwrap();
+                let path = format!("artifacts/{}/R0/{n:04}", old.id);
+                marks.insert(path.clone());
+                old.artifacts.push(artifact("R0", path, "report", "Report"));
+                store.fixture_put_task(&old).unwrap();
+            }
+            store
+                .save_record("reviewed-artifacts", "set", &marks)
+                .unwrap();
+            let ctx = Ctx {
+                store,
+                herdr: corral_herdr::Herdr::with_bin(root.path().join("unused-herdr"), None),
+                resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+            };
+            let columns = ["id", "artifacts", "lines"].map(str::to_owned);
+            let before = work::snapshot();
+            // When the actual open-list command evaluates artifact columns.
+            {
+                let _hot = HotScope::enter();
+                let matches = crate::Cli::command()
+                    .try_get_matches_from([
+                        "corral",
+                        "--root",
+                        root.path().to_str().unwrap(),
+                        "list",
+                        "--columns",
+                        "id,artifacts,lines",
+                    ])
+                    .unwrap();
+                let cli = crate::Cli::from_arg_matches(&matches).unwrap();
+                crate::cmds::run(cli, &matches).unwrap();
+            }
+            // Then every command cell equals the full-task oracle, with identical work.
+            let report = work::snapshot().since(&before);
+            assert_eq!(report.unattributed_hydrations(), 0);
+            report.check_identity().unwrap();
+            reports.push(report);
+            let head = ctx.store.head(&task.id).unwrap();
+            let empty = BTreeSet::new();
+            for column in &columns {
+                assert_eq!(
+                    head_cell(column, &head, &empty, &empty, now),
+                    cell(column, &task, &[], &empty, now)
+                );
+            }
+        }
+        for counter in Counter::ALL {
+            assert_eq!(
+                reports[0].get(counter),
+                reports[1].get(counter),
+                "{counter:?}"
+            );
+        }
+    }
 }
