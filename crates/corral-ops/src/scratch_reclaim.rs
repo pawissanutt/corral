@@ -10,10 +10,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use corral_core::backend::{ScratchKind, ScratchRow, ScratchState};
+use corral_core::records::RecordArea;
 use corral_core::scratch::AttemptScratch;
 use corral_core::{PlanRunState, Status};
 use corral_herdr::AgentStatus;
 use jiff::{SignedDuration, Timestamp};
+use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
@@ -264,10 +266,12 @@ fn state(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> R
         },
         Attempt::Planner { run, .. } => match head.last_plan_run.as_ref() {
             Some(current) if current.id == run => State {
+                // A failed run that already submitted has nothing left to write; the planner
+                // failure path closes a run that failed while planning once its evidence is in.
                 ended: matches!(
                     current.state,
                     PlanRunState::Approved | PlanRunState::Cancelled
-                ),
+                ) || (current.state == PlanRunState::Failed && current.submitted.is_some()),
                 pane: pane(current.herdr.clone()),
             },
             Some(current) if ordinal(&current.id) > ordinal(run) => State {
@@ -362,7 +366,7 @@ pub fn reclaim_scratch_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
     }
     for row in ctx.store.scratch_rows_in(&[ScratchState::Reclaiming])? {
         if row.owner.as_deref() == Some(OWNER)
-            && let Err(error) = ctx.store.reclaim_scratch_entry(&row.id, OWNER)
+            && let Err(error) = resume(ctx, &row, now)
         {
             report(&row, &error);
         }
@@ -381,39 +385,96 @@ pub fn reclaim_scratch_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
     Ok(())
 }
 
-/// Closes an ended attempt's directory, or warns once when an active one outgrew its budget.
+/// The steering message owed to an attempt that crossed `review_scratch_warn`. It is recorded
+/// before the once-only warning event and kept until a send to the attempt's pane succeeds, so a
+/// missing pane, a refused send or a restart never loses it.
+#[derive(Serialize, Deserialize)]
+struct OwedWarning {
+    message: String,
+    delivered: bool,
+}
+
+const WARNINGS: RecordArea<OwedWarning> = RecordArea::new("scratch-warnings");
+
+/// Closes an ended attempt's directory; for an active one, warns once when it outgrew its budget
+/// and delivers the owed steering message once its pane accepts it.
 fn review_open(ctx: &Ctx, row: &ScratchRow, attempt: Attempt<'_>, now: Timestamp) -> Result<()> {
     let state = state(ctx, row, attempt, now)?;
     if state.ended {
         return attempt.close(ctx);
     }
-    if row.warned.is_some() {
-        return Ok(());
+    let mut owed = WARNINGS.load(&ctx.store, &row.id)?;
+    if row.warned.is_none() {
+        let limit = ctx.store.config.storage.review_scratch_warn_bytes()?;
+        let dir = attempt.dir(ctx)?;
+        let bytes = usage(&dir)?;
+        if bytes >= limit {
+            if owed.is_none() {
+                let warning = OwedWarning {
+                    message: format!(
+                        "corral: your scratch directory {} holds {bytes} bytes, over \
+                         review_scratch_warn ({}). Remove files you no longer need; attach only \
+                         the evidence your verdict needs.",
+                        dir.display(),
+                        ctx.store.config.storage.review_scratch_warn,
+                    ),
+                    delivered: false,
+                };
+                WARNINGS.save(&ctx.store, &row.id, &warning)?;
+                owed = Some(warning);
+            }
+            ctx.store.warn_scratch(&row.id, bytes)?;
+        }
     }
-    let limit = ctx.store.config.storage.review_scratch_warn_bytes()?;
-    let dir = attempt.dir(ctx)?;
-    let bytes = usage(&dir)?;
-    if bytes < limit || !ctx.store.warn_scratch(&row.id, bytes)? {
-        return Ok(());
-    }
-    let Some(pane) = state.pane else {
+    let (Some(warning), Some(pane)) = (owed.filter(|w| !w.delivered), state.pane) else {
         return Ok(());
     };
-    let message = format!(
-        "corral: your scratch directory {} holds {bytes} bytes, over review_scratch_warn ({}). \
-         Remove files you no longer need; attach only the evidence your verdict needs.",
-        dir.display(),
-        ctx.store.config.storage.review_scratch_warn,
+    let delivery = ctx.herdr.agent_prompt(&pane, &warning.message)?;
+    anyhow::ensure!(
+        delivery.submitted,
+        "steering message to pane {pane} was not submitted; retrying next pass: {}",
+        delivery.error.as_deref().unwrap_or("unconfirmed")
     );
-    ctx.herdr.agent_prompt(&pane, &message).map(drop)
+    WARNINGS.save(
+        &ctx.store,
+        &row.id,
+        &OwedWarning {
+            delivered: true,
+            ..warning
+        },
+    )
+}
+
+/// The pane of the attempt owning registration `row`, if it recorded one.
+fn pane_of(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<Option<String>> {
+    match Attempt::of(row) {
+        Some(attempt) => Ok(state(ctx, row, attempt, now)?.pane),
+        None => Ok(None),
+    }
+}
+
+/// Completes a reclaim an earlier pass began and never recorded. A directory still present is
+/// checked like any other first: while something uses it the reclaim stays pending (a begun
+/// reclaim cannot be deferred) and the next pass checks again.
+fn resume(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<()> {
+    let dir = ctx.store.scratch_path(&row.path)?;
+    if let Some(reason) = in_use(ctx, pane_of(ctx, row, now)?.as_deref(), &dir)? {
+        crate::messages::report(
+            row.task.as_deref(),
+            "scratch",
+            format!(
+                "scratch {} resumes reclaiming once unused: {reason}",
+                row.id
+            ),
+        );
+        return Ok(());
+    }
+    ctx.store.reclaim_scratch_entry(&row.id, OWNER).map(drop)
 }
 
 fn reclaim(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<()> {
     let dir = ctx.store.scratch_path(&row.path)?;
-    let pane = match Attempt::of(row) {
-        Some(attempt) => state(ctx, row, attempt, now)?.pane,
-        None => None,
-    };
+    let pane = pane_of(ctx, row, now)?;
     let Some(reason) = in_use(ctx, pane.as_deref(), &dir)? else {
         ctx.store.reclaim_scratch_entry(&row.id, OWNER)?;
         return Ok(());
