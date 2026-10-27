@@ -282,6 +282,8 @@ fn finder_does_not_keep_old_results_when_overflow_content_cannot_be_read() {
     type_query(&mut view, &fx, "app");
     assert!(!view.matches.is_empty());
     std::fs::remove_file(fx.ctx.store.dir().join(&artifact.path)).unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+    std::fs::remove_file(fx.ctx.store.blob_store().unwrap().path_of(&hash)).unwrap();
 
     // When another key requires content that is no longer available.
     let action = view.on_key(key(KeyCode::Char('z')), &fx.ctx);
