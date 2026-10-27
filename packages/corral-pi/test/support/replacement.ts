@@ -12,6 +12,25 @@ import { connect } from "./bridge-client.ts";
 import { within } from "./wait.ts";
 import { ok } from "./workspace.ts";
 
+/** Retries `attempt` until it yields a value; the loop stops at the deadline instead of outliving it. */
+async function until<T>(what: string, ms: number, attempt: () => Promise<T | undefined> | T | undefined): Promise<T> {
+  let stopped = false;
+  const loop = (async () => {
+    while (!stopped) {
+      const found = await attempt();
+      if (found !== undefined) return found;
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    throw new Error(`stopped waiting for ${what}`);
+  })();
+  try {
+    return await within(loop, ms, what);
+  } finally {
+    stopped = true;
+    loop.catch(() => undefined);
+  }
+}
+
 /**
  * The owner types `/new` into a live host's pane; resolves with the host's refusal event once the
  * bridge reports it, and checks the pane shows the refusal.
@@ -23,23 +42,20 @@ export async function ownerNewIsRefused(pane: string, generationDir: string, gen
   const request = async (command: string, args: Record<string, unknown>) =>
     (await client.request({ version: 1, id: `owner-new-${id++}`, ctl_cap: cap, generation, command, args })).result ?? {};
   try {
-    while ((await request("get_state", {})).interactive !== true) { /* the pane is not InteractiveMode's yet */ }
+    await until("the pane to run InteractiveMode", 60_000,
+      async () => (await request("get_state", {})).interactive === true ? true : undefined);
     let seq = (await request("events_since", { seq: Number.MAX_SAFE_INTEGER })).last as number;
     ok(["herdr", "--session", "corral-test", "pane", "send-text", pane, "/new"]);
     ok(["herdr", "--session", "corral-test", "pane", "send-keys", pane, "enter"]);
-    const refused = await within((async () => {
-      for (;;) {
-        const page = await request("events_since", { seq }) as { events: BridgeEvent[]; next: number };
-        const found = page.events.find((event) => event.kind === "session_replacement_refused");
-        if (found) return found;
-        seq = page.next;
-      }
-    })(), 60_000, "the host to refuse the owner's /new");
-    // The notice renders after the event; read the pane until it shows, yielding between reads.
-    await within((async () => {
-      while (!ok(["herdr", "--session", "corral-test", "pane", "read", pane]).replace(/\s+/g, " ")
-        .includes("corral: a new session is refused")) await new Promise((resolve) => setImmediate(resolve));
-    })(), 60_000, "the pane to show the refusal");
+    const refused = await until("the host to refuse the owner's /new", 60_000, async () => {
+      const page = await request("events_since", { seq }) as { events: BridgeEvent[]; next: number };
+      seq = page.next;
+      return page.events.find((event) => event.kind === "session_replacement_refused");
+    });
+    // The notice renders after the event, so the pane is read until it shows.
+    await until("the pane to show the refusal", 60_000, () =>
+      ok(["herdr", "--session", "corral-test", "pane", "read", pane]).replace(/\s+/g, " ")
+        .includes("corral: a new session is refused") ? true : undefined);
     return refused;
   } finally {
     client.close();
@@ -64,14 +80,17 @@ export async function expectReplacementsRefused(host: HostSession, events: Event
     const foreign = join(scratch, "foreign.jsonl");
     writeFileSync(foreign, `${JSON.stringify({ type: "session", version: 3, id: "foreign", timestamp: new Date(0).toISOString(),
       cwd: host.session.sessionManager.getCwd() })}\n`);
-    const results = [
-      await host.runtime.newSession(),
-      await host.runtime.switchSession(foreign),
-      await host.runtime.fork(user.id),
-      await host.runtime.fork(leaf, { position: "at" }),
-      await host.runtime.importFromJsonl(foreign),
+    const attempts: [string, () => Promise<{ cancelled: boolean }>][] = [
+      ["newSession", () => host.runtime.newSession()],
+      ["switchSession", () => host.runtime.switchSession(foreign)],
+      ["fork before", () => host.runtime.fork(user.id)],
+      ["fork at", () => host.runtime.fork(leaf, { position: "at" })],
+      ["importFromJsonl", () => host.runtime.importFromJsonl(foreign)],
     ];
-    expect(results.map((result) => result.cancelled)).toEqual([true, true, true, true, true]);
+    for (const [name, attempt] of attempts) {
+      expect([name, (await attempt()).cancelled]).toEqual([name, true]);
+      expect([name, host.session.sessionFile]).toEqual([name, boundFile]);
+    }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
