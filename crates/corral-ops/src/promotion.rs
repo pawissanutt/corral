@@ -291,6 +291,37 @@ fn scopes_overlap(a: &str, b: &str) -> bool {
     false
 }
 
+fn segments_overlap(a: &str, b: &str) -> bool {
+    let a: Vec<_> = a.chars().collect();
+    let b: Vec<_> = b.chars().collect();
+    let mut pending = vec![(0, 0)];
+    let mut seen = HashSet::new();
+    while let Some((i, j)) = pending.pop() {
+        if !seen.insert((i, j)) {
+            continue;
+        }
+        let (left, right) = (a.get(i), b.get(j));
+        if left.is_none() && right.is_none() {
+            return true;
+        }
+        if left == Some(&'*') {
+            pending.push((i + 1, j));
+        }
+        if right == Some(&'*') {
+            pending.push((i, j + 1));
+        }
+        if let (Some(left), Some(right)) = (left, right)
+            && (*left == '*' || *right == '*' || left == right)
+        {
+            pending.push((
+                i + usize::from(*left != '*'),
+                j + usize::from(*right != '*'),
+            ));
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod derived_rows_tests {
     use super::*;
@@ -334,35 +365,4 @@ mod derived_rows_tests {
             assert_eq!(base.get(counter), grown.get(counter), "{counter:?}");
         }
     }
-}
-
-fn segments_overlap(a: &str, b: &str) -> bool {
-    let a: Vec<_> = a.chars().collect();
-    let b: Vec<_> = b.chars().collect();
-    let mut pending = vec![(0, 0)];
-    let mut seen = HashSet::new();
-    while let Some((i, j)) = pending.pop() {
-        if !seen.insert((i, j)) {
-            continue;
-        }
-        let (left, right) = (a.get(i), b.get(j));
-        if left.is_none() && right.is_none() {
-            return true;
-        }
-        if left == Some(&'*') {
-            pending.push((i + 1, j));
-        }
-        if right == Some(&'*') {
-            pending.push((i, j + 1));
-        }
-        if let (Some(left), Some(right)) = (left, right)
-            && (*left == '*' || *right == '*' || left == right)
-        {
-            pending.push((
-                i + usize::from(*left != '*'),
-                j + usize::from(*right != '*'),
-            ));
-        }
-    }
-    false
 }
