@@ -19,6 +19,10 @@ pub enum ExportCmd {
         /// Export events strictly after this sequence (0 exports all events)
         #[arg(long, default_value_t = 0)]
         since: u64,
+        /// After the events, one `{"condition_run": ...}` line per condition run that is open
+        /// or opened or closed after `--since`, in opened order
+        #[arg(long)]
+        with_conditions: bool,
         /// Emit one stored Event JSON object per line
         #[arg(long, required = true)]
         json: bool,
@@ -28,18 +32,23 @@ pub enum ExportCmd {
 pub fn run(ctx: &Ctx, cmd: ExportCmd) -> Result<()> {
     match cmd {
         ExportCmd::Tasks { dir } => tasks(ctx, &dir),
-        ExportCmd::Events { since, json: _ } => events(&ctx.store, since, &mut io::stdout().lock()),
+        ExportCmd::Events {
+            since,
+            with_conditions,
+            json: _,
+        } => events(&ctx.store, since, with_conditions, &mut io::stdout().lock()),
     }
 }
 
-fn events(store: &Store, mut after: u64, out: &mut impl Write) -> Result<()> {
+fn events(store: &Store, since: u64, with_conditions: bool, out: &mut impl Write) -> Result<()> {
     let snapshot = store.read_only_snapshot()?;
+    let mut after = since;
     loop {
         let page = snapshot
             .events_page(None, &[], None, after, 1000)
             .context("reading stored events for export")?;
         if page.is_empty() {
-            return Ok(());
+            break;
         }
         for event in page {
             serde_json::to_writer(&mut *out, &event).context("writing event JSON")?;
@@ -47,6 +56,21 @@ fn events(store: &Store, mut after: u64, out: &mut impl Write) -> Result<()> {
             after = event.seq;
         }
     }
+    if !with_conditions {
+        return Ok(());
+    }
+    let changed = |seq: Option<u64>| seq.is_none_or(|seq| seq > since);
+    for run in snapshot
+        .condition_runs(None)
+        .context("reading condition runs for export")?
+    {
+        if run.opened_seq.0 > since || changed(run.closed_seq.map(|seq| seq.0)) {
+            serde_json::to_writer(&mut *out, &serde_json::json!({ "condition_run": run }))
+                .context("writing condition run JSON")?;
+            writeln!(out).context("writing condition run JSON line")?;
+        }
+    }
+    Ok(())
 }
 
 fn tasks(ctx: &Ctx, dir: &std::path::Path) -> Result<()> {

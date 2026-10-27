@@ -112,7 +112,12 @@ pub fn review_sprint(ctx: &Ctx, since: Option<&str>, mark: bool) -> Result<Sprin
         .try_lock("sprint-review")?
         .context("another sprint review is in progress")?;
     let snapshot_at = Timestamp::now();
-    let events = ctx.store.events_shared()?;
+    let events = ctx
+        .store
+        .events_shared()?
+        .iter()
+        .map(|event| crate::timeline::with_blob_notes(&ctx.store, event))
+        .collect::<Result<Vec<_>>>()?;
     let since = match since {
         None | Some("last") => events
             .iter()

@@ -2,7 +2,10 @@
 
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use anyhow::Result;
+use corral_core::backend::{CloseReason, ConditionRun};
 use corral_core::{Actor, Event, Store};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -35,6 +38,32 @@ pub struct Wait {
     pub open: bool,
 }
 
+/// The condition run an event opened, as of read time: an open run's count can still grow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repeats {
+    pub count: u64,
+    pub first_at: Timestamp,
+    pub last_at: Timestamp,
+    pub last_actor: Option<String>,
+    pub last_via: Option<String>,
+    pub closed_seq: Option<u64>,
+    pub close_reason: Option<CloseReason>,
+}
+
+impl From<ConditionRun> for Repeats {
+    fn from(run: ConditionRun) -> Self {
+        Self {
+            count: run.count,
+            first_at: run.first_at,
+            last_at: run.last_at,
+            last_actor: run.last_actor,
+            last_via: run.last_via,
+            closed_seq: run.closed_seq.map(|seq| seq.0),
+            close_reason: run.close_reason,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineEntry {
     pub at: Timestamp,
@@ -52,6 +81,9 @@ pub struct TimelineEntry {
     /// Opening endpoint when this event also has a resolution in `wait`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_wait: Option<Wait>,
+    /// The condition run this event opened (plan T-253 section 9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeats: Option<Repeats>,
     pub event: Event,
 }
 
@@ -95,7 +127,7 @@ impl TimelineEntry {
     }
 }
 
-/// Query one task's events, oldest first, retaining append order for equal timestamps.
+/// Query one task's events in sequence order, each condition event with its run's repeats.
 ///
 /// # Errors
 /// Returns an error for an invalid task id or an unreadable event log.
@@ -105,10 +137,16 @@ pub fn timeline(
     filter: TimelineFilter,
 ) -> Result<Vec<TimelineEntry>> {
     let id = Store::normalize_id(task_id)?;
-    let mut entries: Vec<_> = store
+    let snapshot = store.read_only_snapshot()?;
+    let mut runs: BTreeMap<u64, ConditionRun> = snapshot
+        .condition_runs(Some(&id))?
+        .into_iter()
+        .map(|run| (run.opened_seq.0, run))
+        .collect();
+    let mut entries: Vec<_> = snapshot
         .events_for(&id)?
         .into_iter()
-        .map(|event| {
+        .map(|event| -> Result<TimelineEntry> {
             let actor = event
                 .actor
                 .map(|actor| match actor {
@@ -127,25 +165,41 @@ pub fn timeline(
                         .flatten()
                 })
                 .map(str::to_owned);
-            TimelineEntry {
+            Ok(TimelineEntry {
                 at: event.ts,
                 kind: event.kind.clone(),
                 class: classify(&event.kind),
                 actor,
                 via: event.via.clone(),
                 run: event.detail["run"].as_str().map(str::to_owned),
-                summary: summarize(&event),
+                summary: summarize(&with_blob_notes(&snapshot, &event)?),
                 wait: None,
                 additional_waits: Vec::new(),
                 opened_wait: None,
+                repeats: runs.remove(&event.seq).map(Repeats::from),
                 event,
-            }
+            })
         })
-        .collect();
-    entries.sort_by_key(|entry| entry.at);
+        .collect::<Result<_>>()?;
+    entries.sort_by_key(|entry| entry.event.seq);
     pair_waits(&mut entries, Timestamp::now());
     entries.retain(|entry| filter == TimelineFilter::All || entry.class != EntryClass::Noise);
     Ok(entries)
+}
+
+/// The event with slim verdict notes (a `BlobRef`) replaced by their stored text.
+pub(crate) fn with_blob_notes(store: &Store, event: &Event) -> Result<Event> {
+    let mut event = event.clone();
+    if let Some(notes) = event.detail.get_mut("notes")
+        && notes
+            .as_str()
+            .is_some_and(|text| text.parse::<corral_core::blob_ref::BlobRef>().is_ok())
+    {
+        *notes = store
+            .resolve_text(notes)?
+            .map_or(Value::Null, Value::String);
+    }
+    Ok(event)
 }
 
 fn opens_wait(event: &Event) -> bool {
@@ -337,6 +391,12 @@ fn summarize(event: &Event) -> String {
         "queued" | "dequeued" | "blocked" | "escalated" | "replied" | "changes_requested"
         | "discarded" | "idle_no_report" => reason.to_owned(),
         "progress_updated" => format!("revision {}", d["revision"]),
+        kind if kind
+            .strip_suffix("_cleared")
+            .is_some_and(corral_core::is_condition_kind) =>
+        {
+            format!("cleared after {} observation(s)", d["count"])
+        }
         kind if kind.starts_with("checkpoint_") => {
             format!("{kind} revision {}", d["revision"])
         }

@@ -11,7 +11,11 @@ fn fixture_filters_orders_attributes_and_round_trips() {
 
     let entries = timeline(&store, "123", TimelineFilter::Relevant).unwrap();
     assert_eq!(entries.len(), 13);
-    assert!(entries.windows(2).all(|pair| pair[0].at <= pair[1].at));
+    assert!(
+        entries
+            .windows(2)
+            .all(|pair| pair[0].event.seq < pair[1].event.seq)
+    );
     assert!(entries.iter().all(|entry| {
         entry.event.task.as_deref() == Some("T-123")
             && entry.class != EntryClass::Noise
@@ -30,8 +34,10 @@ fn fixture_filters_orders_attributes_and_round_trips() {
     let needs_me = entries.iter().find(|e| e.kind == "needs_me").unwrap();
     assert_eq!(needs_me.run.as_deref(), Some("R1"));
     assert_eq!(needs_me.via.as_deref(), Some("run:R1"));
-    assert!(entries[0].via.is_none());
-    assert_eq!(entries[1].summary, "body (+6 lines), title");
+    let created = entries.iter().find(|e| e.kind == "created").unwrap();
+    assert!(created.via.is_none());
+    let edited = entries.iter().find(|e| e.kind == "edited").unwrap();
+    assert_eq!(edited.summary, "body (+6 lines), title");
     let gate = entries.iter().find(|e| e.kind == "gate").unwrap();
     assert_eq!(gate.class, EntryClass::Review);
     assert_eq!(gate.summary, "pass");
