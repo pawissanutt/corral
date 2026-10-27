@@ -12,7 +12,7 @@ fn fixture() -> (tempfile::TempDir, Store) {
     (root, store)
 }
 
-fn post<'a>(inbox: &'a Inbox<'a>, body: &str) -> Message {
+pub(super) fn post<'a>(inbox: &'a Inbox<'a>, body: &str) -> Message {
     inbox
         .post(Post {
             kind: "owner_reply",
@@ -78,7 +78,7 @@ fn events(store: &Store, kind: &str) -> usize {
 }
 
 /// Refuses with `code` and changes nothing: no sequence, message or retried event.
-fn refuses(inbox: &Inbox<'_>, seq: u64, code: &str) {
+pub(super) fn refuses(inbox: &Inbox<'_>, seq: u64, code: &str) {
     let state = inbox.state().unwrap();
     let messages = inbox.messages().unwrap();
     let error = format!("{:#}", inbox.retry(seq).unwrap_err());
@@ -92,7 +92,7 @@ fn refuses(inbox: &Inbox<'_>, seq: u64, code: &str) {
     assert_eq!(events(inbox.store, "message_retried"), 0);
 }
 
-fn succeeds(inbox: &Inbox<'_>, original: &Message) {
+pub(super) fn succeeds(inbox: &Inbox<'_>, original: &Message) {
     let retried = inbox.retry(original.seq).unwrap();
     assert_ne!(retried.id, original.id);
     assert_eq!(retried.recipient, original.recipient);
@@ -306,7 +306,7 @@ fn unavailable_terminal_recovery_refuses_before_any_repair_or_write() {
     }
 }
 
-fn publication_fixture(task_recipient: bool) -> (tempfile::TempDir, Store, Recipient) {
+pub(super) fn publication_fixture(task_recipient: bool) -> (tempfile::TempDir, Store, Recipient) {
     let (root, store) = fixture();
     let recipient = if task_recipient {
         let task = store
@@ -370,52 +370,6 @@ fn retry_retains_exact_replacement_when_publication_announcement_fails() {
         refuses(&inbox, original.seq, "already_retried");
         assert_eq!(inbox.messages().unwrap(), vec![original, replacement]);
     }
-}
-
-#[test]
-fn mirrored_retry_claim_is_read_within_five_probes_and_survives_observation() {
-    // Given a retry whose replacement identity committed but whose body could not publish.
-    let (_root, store, recipient) = publication_fixture(true);
-    let inbox = Inbox::new(&store, recipient).unwrap();
-    let original = post(&inbox, "reserved replacement");
-    inbox
-        .mark_terminal(original.seq, TerminalState::Cancelled, "fixture", "test")
-        .unwrap();
-    fs::create_dir(inbox.message_path(2)).unwrap();
-    assert!(inbox.retry(original.seq).is_err());
-    fs::remove_dir(inbox.message_path(2)).unwrap();
-    let owner_read = |inbox: &Inbox<'_>| {
-        let state = inbox.state().unwrap();
-        let reads = crate::work::count(crate::work::Work::InboxRecordRead);
-        let entries = inbox.owner_entries(&state).unwrap();
-        let used = crate::work::count(crate::work::Work::InboxRecordRead) - reads;
-        (entries.into_iter().next().unwrap(), used)
-    };
-    // When the bounded owner read runs (two retained entries), then the exact claim and
-    // successor are visible at five probes each.
-    let (entry, used) = owner_read(&inbox);
-    assert_eq!(used, 10);
-    assert!(entry.retry_claimed_at.is_some());
-    assert_eq!(entry.retry_successor, Some(format!("{}#2", inbox.key())));
-    // And a later observation keeps the claim, as the marker file does.
-    inbox
-        .record_receipt(
-            original.seq,
-            ReceiptLevel::Observed,
-            &Receipt {
-                envelope: None,
-                binding: None,
-                observed_at: "2026-10-25T00:00:00Z".parse().unwrap(),
-                via: "fixture".into(),
-                detail: json!({}),
-            },
-        )
-        .unwrap();
-    let (entry, used) = owner_read(&inbox);
-    assert_eq!(used, 10);
-    assert!(entry.observed.is_some() && entry.terminal.is_none());
-    assert!(entry.retry_claimed_at.is_some());
-    assert!(inbox.record_path(original.seq, "retried").exists());
 }
 
 #[test]

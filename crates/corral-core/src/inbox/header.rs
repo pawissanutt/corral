@@ -48,6 +48,11 @@ pub struct OwnerMessage {
     pub delivery: Option<DeliveryHeader>,
     #[serde(default)]
     pub retry_evidence: RetryEvidence,
+    /// The failed-slot mirror is authoritative for this entry's retry claim. Entries written
+    /// before the mirror existed read `false` until bounded maintenance backfills them, so an
+    /// absent mirror is never mistaken for an absent claim.
+    #[serde(default)]
+    pub claim_mirrored: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +199,7 @@ impl OwnerEntry {
     /// Bounded evidence eligibility; callers additionally check live recipient and capacity.
     pub fn retry_eligible(&self) -> bool {
         !self.publication_gap
+            && self.message.claim_mirrored
             && self.retry_claimed_at.is_none()
             && self.retry_successor.is_none()
             && self.observed.is_none()
@@ -454,7 +460,24 @@ impl Inbox<'_> {
                 &proof,
             )?;
         }
-        state.owner_header = Some(header);
+        let header = state.owner_header.insert(header);
+        // Bounded by owner capacity; never on the hot read.
+        for entry in header.iter_mut() {
+            self.backfill_claim(entry)?;
+        }
+        Ok(())
+    }
+
+    /// Mirror a pre-existing authoritative `retried` claim into the bounded representation.
+    /// Caller holds the inbox lock.
+    pub(super) fn backfill_claim(&self, entry: &mut OwnerMessage) -> Result<()> {
+        if entry.claim_mirrored {
+            return Ok(());
+        }
+        if let Some(claim) = read_optional::<Value>(&self.record_path(entry.seq, "retried"))? {
+            self.mirror_retry_claim(entry.seq, Some(&claim))?;
+        }
+        entry.claim_mirrored = true;
         Ok(())
     }
 
@@ -635,6 +658,7 @@ impl Inbox<'_> {
                     },
                     ..Default::default()
                 },
+                claim_mirrored: true,
             });
         }
     }
@@ -684,7 +708,7 @@ impl Inbox<'_> {
                                 if header.len() == OWNER_CAPACITY {
                                     break;
                                 }
-                                header.insert(OwnerMessage {
+                                let mut identity = OwnerMessage {
                                     seq: message.seq,
                                     kind: message.kind,
                                     created: message.created,
@@ -698,7 +722,10 @@ impl Inbox<'_> {
                                         },
                                         ..Default::default()
                                     },
-                                });
+                                    claim_mirrored: false,
+                                };
+                                self.backfill_claim(&mut identity)?;
+                                header.insert(identity);
                             }
                         }
                     }

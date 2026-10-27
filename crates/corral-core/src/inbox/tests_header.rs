@@ -794,6 +794,7 @@ fn full_owner_header_serialization_has_a_measured_fixed_bound() {
             },
             pending: Some(reference),
         },
+        claim_mirrored: true,
     };
     let header = OwnerHeader {
         entries: vec![entry.clone(); 8],
