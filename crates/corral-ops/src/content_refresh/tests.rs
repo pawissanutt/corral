@@ -61,10 +61,16 @@ impl Fixture {
         self.save();
     }
 
+    /// Refreshes by following the change feed: the changed documents update without a
+    /// snapshot over every task.
     fn rebuilds(&self) {
         let before = SNAPSHOTS.get();
         self.refresh();
-        assert_eq!(SNAPSHOTS.get(), before + 1, "refresh must invoke snapshot");
+        assert_eq!(
+            SNAPSHOTS.get(),
+            before,
+            "refresh must follow the feed, not snapshot"
+        );
     }
 
     fn cached(&self, token: &str) -> bool {
@@ -174,8 +180,9 @@ fn removed_artifact_is_dropped_at_the_next_rebuild_not_by_a_file_scan() {
     f.refresh();
     assert_eq!(SNAPSHOTS.get(), before);
 
-    // Then the next rebuild drops the text rather than reusing it by its original SHA.
-    f.ctx.store.log_event(None, "probe", json!({})).unwrap();
+    // Then the task's next change drops the text rather than reusing it by its original SHA.
+    f.tasks[0].body = "changed".into();
+    f.save();
     f.rebuilds();
     assert!(!f.cached("artifactprobe"));
     assert!(!f.searchable("artifactprobe"));

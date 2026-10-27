@@ -140,6 +140,7 @@ fn add_artifact_inner(
         .with_context(|| format!("artifact {} has no file name", path.display()))?;
     let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let id = corral_core::Store::normalize_id(id)?;
+    ctx.store.head(&id)?;
     // The blob and this task's reference to it commit first; attaching then only adds rows.
     let created = crate::artifact_storage::store_blob(ctx, &id, &sha, &bytes)?;
     let attached = attach(
@@ -153,16 +154,45 @@ fn add_artifact_inner(
         title,
         origin,
     );
-    if let Err(error) = &attached
-        && created
-        && let Err(cleanup) = ctx.store.delete_record(
-            crate::artifact_storage::ARTIFACT_BLOBS,
-            &crate::artifact_storage::blob_key(&id, &sha),
-        )
+    let (artifact, receipt) = match attached {
+        Ok(attached) => attached,
+        Err(error) => {
+            // Only a reference no committed live artifact holds may go.
+            if created && let Err(cleanup) = drop_unheld_reference(ctx, &id, &sha) {
+                return Err(
+                    cleanup.context(format!("dropping the blob reference after: {error:#}"))
+                );
+            }
+            return Err(error);
+        }
+    };
+    // The index is a rebuildable cache: failing to update it never undoes the attachment.
+    if origin.is_none()
+        && let Err(error) = crate::content_index::index_artifact(ctx, &id, &artifact)
     {
-        return Err(cleanup.context(format!("dropping the blob reference after: {error:#}")));
+        crate::messages::report(
+            Some(&id),
+            "search index",
+            format!("indexing {}: {error:#}", artifact.path),
+        );
     }
-    attached
+    Ok((artifact, receipt))
+}
+
+fn drop_unheld_reference(ctx: &Ctx, id: &str, sha: &str) -> Result<()> {
+    let held = ctx
+        .store
+        .get(id)?
+        .artifacts
+        .iter()
+        .any(|a| a.sha256 == sha && a.purged_at.is_none());
+    if !held {
+        ctx.store.delete_record(
+            crate::artifact_storage::ARTIFACT_BLOBS,
+            &crate::artifact_storage::blob_key(id, sha),
+        )?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -261,9 +291,6 @@ fn attach(
         Ok(())
     })?;
     let (artifact, _) = result.context("artifact update produced no result")?;
-    if origin.is_none() {
-        crate::content_index::index_artifact(ctx, id, &artifact)?;
-    }
     Ok((artifact, receipt))
 }
 

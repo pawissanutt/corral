@@ -39,13 +39,12 @@ fn artifact_replacement_reextracts_only_the_changed_document() {
         "replacementprobe",
     )
     .unwrap();
-    f.ctx
-        .store
-        .log_event(None, "probe", json!({"text": "incrementalprobe"}))
-        .unwrap();
+    f.tasks[0].artifacts[1].tier_override = Some(corral_core::ArtifactTier::Keep);
+    f.save();
     let before = ARTIFACT_EXTRACTIONS.get();
 
-    // When a rebuild compares file metadata without changing the first artifact's declared SHA.
+    // When the task changes and the feed re-derives its documents, comparing file metadata
+    // without the first artifact's declared SHA changing.
     f.refresh();
 
     // Then only the changed document is extracted, keeping the other cached text.

@@ -48,6 +48,21 @@ fn blob_reader(ctx: &Ctx, a: &Artifact) -> Result<Option<Box<dyn Read + Send>>> 
     }
 }
 
+/// Whether the artifact's bytes can be read: its legacy copy, or else its live blob file.
+pub(crate) fn content_available(ctx: &Ctx, a: &Artifact) -> Result<bool> {
+    if ctx.store.dir().join(&a.path).exists() {
+        return Ok(true);
+    }
+    let Ok(hash) = corral_core::blob_ref::BlobHash::parse(&a.sha256) else {
+        return Ok(false);
+    };
+    let live = ctx
+        .store
+        .blob_row(&hash)?
+        .is_some_and(|row| row.state == corral_core::backend::BlobState::Live);
+    Ok(live && ctx.store.blob_store()?.path_of(&hash).is_file())
+}
+
 /// The legacy copy is missing (not replaced by something else, which stays an error).
 fn absent(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -362,8 +377,7 @@ pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
         let siblings: Vec<Artifact> = if report {
             let task = task_of(&a.path).context("artifact path names no task")?;
             ctx.store
-                .get(task)?
-                .artifacts
+                .artifact_rows(task, Some(&a.run))?
                 .into_iter()
                 .filter(|s| s.purged_at.is_none() && Path::new(&s.path).parent() == parent)
                 .collect()
@@ -451,17 +465,24 @@ fn stored_path(ctx: &Ctx, reference: &str) -> Result<Option<String>> {
     Ok(relative.filter(|p| task_of(p).is_some()))
 }
 
+/// The run segment of an `artifacts/<task>/<run>/<file>` path.
+fn run_of(path: &str) -> Option<&str> {
+    path.strip_prefix("artifacts/")?.split('/').nth(1)
+}
+
 /// Resolves a pin number, stable task:run:file reference, or exact stored/absolute snapshot path.
 /// Purged artifacts remain resolvable even though their content file is gone. Only the named
-/// task is read.
+/// task's artifact rows are read (one run's, unless a pin follows the latest), never the task.
 pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
     if let Some(path) = stored_path(ctx, reference)?
-        && let Some(task) = task_of(&path)
-        && let Ok(task) = Store::normalize_id(task)
-        && let Ok(task) = ctx.store.get(&task)
-        && let Some(a) = task.artifacts.iter().find(|a| a.path == path)
+        && let (Some(task), Some(run)) = (task_of(&path), run_of(&path))
+        && let Some(a) = ctx
+            .store
+            .artifact_rows(task, Some(run))?
+            .into_iter()
+            .find(|a| a.path == path)
     {
-        return Ok(a.clone());
+        return Ok(a);
     }
     let pins = ctx.store.pins()?;
     let pin = reference
@@ -473,38 +494,32 @@ pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
     let PinRef::Artifact { task, run, file } = PinRef::parse(reference)? else {
         bail!("expected an artifact reference (task:run:file)");
     };
-    let task = ctx.store.get(&task).context("artifact task not found")?;
-    if let Some(pin) = pin
-        && let PinTarget::Artifact { artifact, .. } =
-            corral_core::resolve_pin(pin, std::slice::from_ref(&task), ctx.store.dir())
-    {
-        return Ok(artifact);
-    }
-    let exact = task
-        .artifacts
+    let task = Store::normalize_id(&task)?;
+    ctx.store.head(&task).context("artifact task not found")?;
+    let in_run = ctx.store.artifact_rows(&task, Some(&run))?;
+    let exact = in_run
         .iter()
-        .find(|a| a.run == run && corral_core::snapshot_name(a) == file);
+        .find(|a| corral_core::snapshot_name(a) == file);
     let a = exact
         .or_else(|| {
-            task.artifacts.iter().rev().find(|a| {
+            in_run.iter().rev().find(|a| {
                 let name = corral_core::snapshot_name(a);
-                a.run == run
-                    && name
-                        .get(..8)
-                        .is_some_and(|s| s.chars().all(|c| c.is_ascii_hexdigit()))
+                name.get(..8)
+                    .is_some_and(|s| s.chars().all(|c| c.is_ascii_hexdigit()))
                     && name.get(8..9) == Some("-")
                     && name.get(9..) == Some(file.as_str())
             })
         })
         .context("artifact reference not found")?;
     if pin.is_some_and(|p| p.follow == Some(corral_core::Follow::Latest)) {
-        return Ok(task
-            .artifacts
-            .iter()
+        // Artifacts append under the task lock; the newest same-title or same-source one wins.
+        return Ok(ctx
+            .store
+            .artifact_rows(&task, None)?
+            .into_iter()
             .rev()
             .find(|other| other.title == a.title || other.source == a.source)
-            .unwrap_or(a)
-            .clone());
+            .unwrap_or_else(|| a.clone()));
     }
     Ok(a.clone())
 }
