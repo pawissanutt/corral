@@ -154,9 +154,11 @@ fn pm_presentation_and_owner_answer_use_separate_persisted_operations() {
 fn concurrent_presentation_preserves_an_owner_answer_across_reopening() {
     // Given a presenter fenced before its board lock, when another CLI answers,
     // then the exact answer survives presentation and the question stays resolved.
+    let temp = tempfile::tempdir().unwrap();
     let output = Command::new("python3")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/pm_support/presentation_race.py"))
         .arg(env!("CARGO_BIN_EXE_corral"))
+        .arg(temp.path())
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -165,6 +167,19 @@ fn concurrent_presentation_preserves_an_owner_answer_across_reopening() {
         "stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let result: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
+    let decision = result["decision"].as_str().unwrap();
+    let records = corral_core::Store::open_unobserved(temp.path())
+        .unwrap()
+        .record::<serde_json::Value>("pm-decisions", "state")
+        .unwrap()
+        .unwrap();
+    assert_eq!(records["doc_version"], 1);
+    assert_eq!(
+        records["value"]["records"][decision]["answer"], "Keep this task held",
+        "presentation erased the owner answer"
     );
 }
 
