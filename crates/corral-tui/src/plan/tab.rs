@@ -35,9 +35,12 @@ pub(crate) struct PlanTab {
     /// The latest plan's stored snapshot; loaded on first draw, reset on refresh.
     snapshot: Option<Result<String, String>>,
     sheet: Option<Sheet>,
+    human_first: bool,
+    details: bool,
+    revision: Option<String>,
 }
 
-fn markdown_list(out: &mut String, title: &str, items: &[String]) {
+pub(super) fn markdown_list(out: &mut String, title: &str, items: &[String]) {
     if items.is_empty() {
         return;
     }
@@ -47,7 +50,7 @@ fn markdown_list(out: &mut String, title: &str, items: &[String]) {
     }
 }
 
-fn acceptance_text(a: &PlanAcceptance) -> String {
+pub(super) fn acceptance_text(a: &PlanAcceptance) -> String {
     let id = a
         .criterion
         .as_deref()
@@ -62,6 +65,12 @@ fn snapshot_markdown(d: &PlanDocument, text: &str) -> String {
     markdown_list(&mut out, "Non-goals", &d.non_goals);
     markdown_list(&mut out, "Decisions", &d.decisions);
     markdown_list(&mut out, "Owner decisions", &d.owner_decisions);
+    out.push_str(&implementation_markdown(d, text));
+    out
+}
+
+fn implementation_markdown(d: &PlanDocument, text: &str) -> String {
+    let mut out = String::new();
     let paths: Vec<String> = d.affected_paths.iter().map(|p| format!("`{p}`")).collect();
     markdown_list(&mut out, "Affected paths", &paths);
     markdown_list(&mut out, "Contracts", &d.contracts);
@@ -135,6 +144,11 @@ impl PlanTab {
     }
 
     pub(crate) fn refresh(&mut self, ctx: &Ctx, task: &Task) {
+        let revision = task.plans.last().map(|p| p.id.clone());
+        if revision != self.revision {
+            self.details = false;
+        }
+        self.revision = revision;
         let config = Some(&ctx.store.config);
         self.enabled = task.tracker || plan_first(task, config);
         self.stage = stage(task, config);
@@ -149,7 +163,15 @@ impl PlanTab {
             })
             .collect();
         self.sel = self.sel.min(self.children.len().saturating_sub(1));
+        self.human_first = task
+            .plans
+            .last()
+            .is_some_and(|p| p.document.human_review.is_some());
         self.snapshot = None;
+    }
+
+    pub(crate) fn showing_details(&self) -> bool {
+        self.details
     }
 
     fn decidable(&self) -> bool {
@@ -166,6 +188,26 @@ impl PlanTab {
 
     /// Buttons above the tab content while a decision is due or children exist; returns the content area.
     pub(crate) fn toolbar(&self, f: &mut Frame, area: Rect, hits: &mut HitMap) -> Rect {
+        let area = if self.human_first {
+            let [bar, rest] =
+                Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+            let button = if self.details {
+                ("o Review overview", KeyCode::Char('o'))
+            } else {
+                ("i Implementation details", KeyCode::Char('i'))
+            };
+            hit::buttons(
+                f,
+                hits,
+                bar.x,
+                bar.y,
+                bar.right(),
+                &[(button.0, hit::press(button.1))],
+            );
+            rest
+        } else {
+            area
+        };
         let mut buttons = Vec::new();
         if let Some(offer) = self.offer {
             buttons.push((review::label(offer), hit::press(review::KEY)));
@@ -174,7 +216,7 @@ impl PlanTab {
             buttons.push(("Approve plan", hit::press(KeyCode::Char('a'))));
             buttons.push(("Request changes", hit::press(KeyCode::Char('c'))));
         }
-        if !self.children.is_empty() {
+        if !self.children.is_empty() && (!self.human_first || self.details) {
             buttons.push(("Open child", hit::press(KeyCode::Enter)));
         }
         if buttons.is_empty() {
@@ -250,6 +292,23 @@ impl PlanTab {
                 "a approve · c request changes: recorded as your owner decision",
                 Style::new().fg(theme::YELLOW),
             ));
+        }
+        if self.human_first && !self.details {
+            if let Some(p) = plan {
+                if let Some(previous) = task.plans.iter().rev().nth(1) {
+                    out.extend(render::render(
+                        &Format::Markdown,
+                        &super::overview::revision_markdown(&previous.document, &p.document),
+                        width,
+                    ));
+                }
+                out.extend(render::render(
+                    &Format::Markdown,
+                    &super::overview::markdown(&p.document),
+                    width,
+                ));
+            }
+            return out;
         }
         out.push(Line::default());
         out.push(Line::styled(
@@ -389,7 +448,11 @@ impl PlanTab {
                 });
             match snapshot {
                 Ok(text) => {
-                    let md = snapshot_markdown(&p.document, text);
+                    let md = if self.human_first {
+                        implementation_markdown(&p.document, text)
+                    } else {
+                        snapshot_markdown(&p.document, text)
+                    };
                     out.extend(render::render(&Format::Markdown, &md, width));
                 }
                 Err(e) => out.push(Line::styled(
@@ -402,6 +465,9 @@ impl PlanTab {
     }
 
     pub(crate) fn hits(&self, hits: &mut HitMap, area: Rect, offset: usize) {
+        if self.human_first && !self.details {
+            return;
+        }
         let n = self.children.len();
         hit::rows(hits, area, Z_CHILD, self.first_child, n, offset);
     }
@@ -445,6 +511,10 @@ impl PlanTab {
         }
         let last = self.children.len().saturating_sub(1);
         match key.code {
+            KeyCode::Char('i' | 'o') if self.human_first => {
+                self.details = key.code == KeyCode::Char('i');
+                Some(Action::None)
+            }
             KeyCode::Char(c @ ('a' | 'c')) if self.decidable() => {
                 let kind = if c == 'a' {
                     Kind::Approve
@@ -461,15 +531,21 @@ impl PlanTab {
                     )),
                 })
             }
-            KeyCode::Char('j') | KeyCode::Down if !self.children.is_empty() => {
+            KeyCode::Char('j') | KeyCode::Down
+                if !self.children.is_empty() && (!self.human_first || self.details) =>
+            {
                 self.sel = (self.sel + 1).min(last);
                 Some(Action::None)
             }
-            KeyCode::Char('k') | KeyCode::Up if !self.children.is_empty() => {
+            KeyCode::Char('k') | KeyCode::Up
+                if !self.children.is_empty() && (!self.human_first || self.details) =>
+            {
                 self.sel = self.sel.saturating_sub(1);
                 Some(Action::None)
             }
-            KeyCode::Enter if !self.children.is_empty() => Some(self.open_child()),
+            KeyCode::Enter if !self.children.is_empty() && (!self.human_first || self.details) => {
+                Some(self.open_child())
+            }
             _ => None,
         }
     }
@@ -509,10 +585,17 @@ impl PlanTab {
         if on_tab && self.decidable() {
             h.extend([("a", "approve plan"), ("c", "request changes")]);
         }
-        if on_tab && !self.children.is_empty() {
+        if on_tab && !self.children.is_empty() && (!self.human_first || self.details) {
             h.extend([("j/k", "child"), ("⏎", "open child")]);
         }
         if on_tab {
+            if self.human_first {
+                h.push(if self.details {
+                    ("o", "review overview")
+                } else {
+                    ("i", "implementation details")
+                });
+            }
             h.push(("pgup/pgdn", "scroll"));
         }
         (!h.is_empty()).then_some(h)

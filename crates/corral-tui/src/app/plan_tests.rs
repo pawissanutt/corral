@@ -123,3 +123,28 @@ fn mouse_request_changes_and_strip_reach_the_plan_from_any_tab() {
     assert_eq!(app.stack.len(), 3);
     assert!(render(&mut app).contains("Revisions"));
 }
+
+#[test]
+fn mouse_alone_switches_between_human_overview_and_implementation() {
+    // Given a human-first plan open in the real application view stack.
+    let mut fx = seeded();
+    let id = planning(&mut fx);
+    let text = crate::plan::overview_tests::human_plan();
+    let document = corral_core::PlanDocument::parse(&text).unwrap();
+    crate::plan::tests::reviewing_text(&fx, &id, &text);
+    awaiting(&fx, &id);
+    let mut app = fx.app(Mode::Board);
+    app.apply(Action::OpenPlan(id));
+    let initial = render(&mut app);
+    assert!(initial.contains(&document.human_review.as_ref().unwrap().problem));
+    assert!(!initial.contains(&document.affected_paths[0]));
+    // When the implementation button is clicked.
+    click(&mut app, find_any(&initial, "[i Implementation details]"));
+    let details = render(&mut app);
+    // Then the detail mode has a clickable return control, which restores the overview.
+    assert!(details.contains("[o Review overview]"));
+    click(&mut app, find_any(&details, "[o Review overview]"));
+    let returned = render(&mut app);
+    assert!(returned.contains(&document.human_review.as_ref().unwrap().problem));
+    assert!(!returned.contains(&document.affected_paths[0]));
+}

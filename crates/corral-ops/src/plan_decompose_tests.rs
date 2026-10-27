@@ -54,6 +54,7 @@ fn fixture(scopes: Vec<PlanScope>) -> (tempfile::TempDir, Ctx, String) {
                 spec_revision: "accepted-before-projection".into(),
                 document: PlanDocument {
                     delivery_target: None,
+                    human_review: None,
                     goal: "Ship feature".into(),
                     non_goals: vec!["Unrelated changes".into()],
                     decisions: vec!["Keep interfaces stable".into()],

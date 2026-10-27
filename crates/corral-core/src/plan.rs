@@ -14,6 +14,9 @@ use crate::{Artifact, HerdrRef, Verdict};
 pub struct PlanDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_target: Option<PlanDeliveryTarget>,
+    /// Presence opts into the human-review format's structural requirements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub human_review: Option<PlanOverview>,
     pub goal: String,
     pub non_goals: Vec<String>,
     pub decisions: Vec<String>,
@@ -23,6 +26,19 @@ pub struct PlanDocument {
     pub acceptance: Vec<PlanAcceptance>,
     pub verification: Vec<String>,
     pub owner_decisions: Vec<String>,
+}
+
+/// Human-facing context; goal, exclusions, choices and acceptance stay canonical
+/// in the corresponding [`PlanDocument`] fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanOverview {
+    /// The problem this plan addresses.
+    pub problem: String,
+    /// Included changes, stated as outcomes rather than implementation steps.
+    pub changes: Vec<String>,
+    /// Existing behavior retained; an explicit "None" is valid.
+    pub retained: Vec<String>,
 }
 
 /// A task's write scope and prerequisites within a plan.
@@ -124,9 +140,33 @@ impl PlanDocument {
             !document.goal.trim().is_empty(),
             "plan goal must not be blank"
         );
+        if let Some(overview) = &document.human_review {
+            ensure!(
+                !overview.problem.trim().is_empty(),
+                "human_review.problem must not be blank"
+            );
+            for (name, entries) in [
+                ("human_review.changes", &overview.changes),
+                ("human_review.retained", &overview.retained),
+            ] {
+                ensure!(!entries.is_empty(), "{name} must not be empty");
+                ensure!(
+                    entries.iter().all(|entry| !entry.trim().is_empty()),
+                    "{name} must not contain blank entries"
+                );
+            }
+        }
         for (name, entries, required) in [
-            ("non_goals", &document.non_goals, false),
-            ("decisions", &document.decisions, false),
+            (
+                "non_goals",
+                &document.non_goals,
+                document.human_review.is_some(),
+            ),
+            (
+                "decisions",
+                &document.decisions,
+                document.human_review.is_some(),
+            ),
             ("affected_paths", &document.affected_paths, true),
             ("contracts", &document.contracts, false),
             ("verification", &document.verification, true),
