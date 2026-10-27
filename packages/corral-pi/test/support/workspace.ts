@@ -103,7 +103,8 @@ export class EventFollower {
 
   private inode: number;
 
-  constructor(private readonly path: string) {
+  constructor(private readonly path: string,
+    private readonly readChunk: (fd: number, buffer: Buffer, offset: number, length: number, position: number) => number = readSync) {
     const stat = statSync(path);
     this.offset = stat.size;
     this.inode = stat.ino;
@@ -129,13 +130,18 @@ export class EventFollower {
     if (size === this.offset) return;
     const buffer = Buffer.alloc(size - this.offset);
     const fd = openSync(this.path, "r");
+    let read = 0;
     try {
-      readSync(fd, buffer, 0, buffer.length, this.offset);
+      while (read < buffer.length) {
+        const count = this.readChunk(fd, buffer, read, buffer.length - read, this.offset + read);
+        if (count === 0) break;
+        read += count;
+      }
     } finally {
       closeSync(fd);
     }
-    this.offset = size;
-    let bytes = Buffer.concat([this.carry, buffer]);
+    this.offset += read;
+    let bytes = Buffer.concat([this.carry, buffer.subarray(0, read)]);
     const lines: string[] = [];
     for (let end = bytes.indexOf(0x0a); end !== -1; end = bytes.indexOf(0x0a)) {
       lines.push(bytes.subarray(0, end).toString("utf8"));
