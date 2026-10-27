@@ -110,11 +110,16 @@ fn send_changes(
     if let Some(expected) = expected {
         expected.check(&ctx.store.get(&task.id)?)?;
     }
-    let notice = crate::round_notice::reused_session(&continuation.session)
-        .then(|| crate::round_notice::changes(&task, previous, round));
+    let changes_round = (continuation.session.policy != corral_core::SessionPolicy::Fresh)
+        .then(|| crate::round_notice::next_round(previous, Timestamp::now()));
+    let notice = changes_round
+        .as_ref()
+        .map(|next| crate::round_notice::changes(&task, previous, next, round));
     let text = &match &notice {
-        Some(notice) => format!("{notice}\n\n{text}"),
-        None => text.to_string(),
+        Some(notice) if !crate::round_notice::has_changes_notice(text) => {
+            format!("{notice} {text}")
+        }
+        _ => text.to_string(),
     };
     let restarted = continuation.prepare_legacy(ctx, &task, text, notice.as_deref())?;
     // Reopening Review reserves shared capacity before contacting the composer.
@@ -144,6 +149,9 @@ fn send_changes(
         }
         run.pending_reply = Some(text.to_string());
         run.session = Some(continuation.session.clone());
+        if let Some(round) = &changes_round {
+            run.changes_round = Some(round.clone());
+        }
         if let Some(restarted) = &restarted {
             run.herdr = Some(restarted.herdr.clone());
         }
@@ -243,6 +251,7 @@ fn send_changes(
                 run.outcome = previous.outcome;
                 run.ended = previous.ended;
                 run.summary = previous.summary.clone();
+                run.changes_round = previous.changes_round.clone();
                 current.status = task.status;
                 return Ok(true);
             }
@@ -264,6 +273,9 @@ fn send_changes(
             }
             if let Some(run) = current.current_run_mut() {
                 crate::reviewer::supersede_review(ctx, run, Timestamp::now());
+                run.seen_working = false;
+                run.idle_since = None;
+                run.idle_no_report = false;
             }
             mark(current);
             Ok(())

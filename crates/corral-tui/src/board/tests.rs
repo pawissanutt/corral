@@ -105,6 +105,7 @@ pub(crate) fn run(id: &str, agent: &str) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        changes_round: None,
         review: None,
         review_runs: Vec::new(),
         usage: None,

@@ -393,6 +393,14 @@ fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
         prompts.contains("round 1 of 2") && prompts.contains("`test -f fixed.txt`"),
         "{prompts}"
     );
+    let round = run.changes_round.as_ref().unwrap();
+    assert_eq!(round.n, 1);
+    assert!(
+        prompts.contains("NEW CHANGES ROUND 1 (autopilot round 1):")
+            && prompts.contains(&round.sha)
+            && prompts.contains("Every earlier round is finished"),
+        "{prompts}"
+    );
     let request = fx.artifact_text("Autopilot changes (round 1)");
     assert!(
         request.contains("$ test -f fixed.txt") && request.contains("corral gate: fail"),

@@ -462,13 +462,24 @@ fn reconcile(
                 _ => (task.status, ""),
             }
         };
+    // A conversation reopened for changes can answer with its old "complete" state and idle
+    // before any sync samples it working; that silent turn is a report gap once startup is over.
+    let startup_grace = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
+    );
+    let silent_round = !seen_working
+        && run
+            .changes_round
+            .as_ref()
+            .is_some_and(|round| now.duration_since(round.at) >= startup_grace);
     // A healthy pi-native binding classifies its turns causally; idleness is not a report gap.
     let (idle_since, idle_no_report) =
         if to != Status::Running || working || waiting || agent_healthy {
             (None, false)
-        } else if looks_idle && seen_working {
+        } else if looks_idle && (seen_working || silent_round) {
             let since = run.idle_since.unwrap_or(now);
-            let flagged = run.idle_no_report || now.duration_since(since) >= idle_after;
+            let flagged =
+                run.idle_no_report || silent_round || now.duration_since(since) >= idle_after;
             (Some(since), flagged)
         } else {
             (run.idle_since, run.idle_no_report)

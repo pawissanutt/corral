@@ -2,7 +2,7 @@
 //! earlier rounds' todo lists and verdicts, so a bare "read the prompt file" request can look
 //! like a repeat of work that is already done. Each notice is one line (it travels inside a
 //! quoted shell argument) and names the round, the attempt and, for reviews, the candidate.
-use corral_core::{RoleSession, Run, SessionAction, Task};
+use corral_core::{ChangesRound, RoleSession, Run, SessionAction, Task};
 
 pub(crate) fn reused_session(session: &RoleSession) -> bool {
     matches!(
@@ -50,16 +50,65 @@ pub(crate) fn latest_review(task: &Task) -> Option<String> {
     ))
 }
 
-/// The notice for a worker whose conversation is reused for another changes round. `round` is
-/// the autopilot's round number; an owner-requested round has none.
-pub(crate) fn changes(task: &Task, run: &Run, round: Option<u32>) -> String {
-    let round = round.map_or_else(String::new, |round| format!(" {round}"));
+/// The round a changes request reopens: one past the run's previous round, bound to the review
+/// attempt that returned the changes and the candidate they apply to.
+pub(crate) fn next_round(run: &Run, at: jiff::Timestamp) -> ChangesRound {
+    let record = run.review.as_ref();
+    ChangesRound {
+        n: run.changes_round.as_ref().map_or(1, |round| round.n + 1),
+        at,
+        attempt: record
+            .and(run.review_runs.last())
+            .map(|child| child.id.clone()),
+        callback: record.and_then(crate::reviewer::review_callback_token),
+        sha: record
+            .map(|record| record.sha.clone())
+            .or_else(|| crate::gate::worktree_head(run))
+            .unwrap_or_else(|| "unknown".into()),
+    }
+}
+
+fn round_identity(round: &ChangesRound) -> String {
+    let review = match (&round.attempt, &round.callback) {
+        (Some(attempt), Some(callback)) => {
+            format!("review attempt {attempt} (attempt/callback ID {callback})")
+        }
+        _ => "an owner request without a review attempt".to_string(),
+    };
     format!(
-        "NEW CHANGES ROUND{round}: {task_id} run {run_id} was returned from review with changes \
-         requested. Every earlier round is finished; its todo list, `corral done` report and \
-         \"complete\" state are superseded and this request is not a repeat. Address the findings, \
-         rebase, run your gate and report with `corral done` again.",
+        "changes round {} from {review} against candidate {}",
+        round.n, round.sha
+    )
+}
+
+/// The notice for a worker whose conversation continues for another changes round. `auto` is
+/// the autopilot's round number when it, not the owner, asked.
+pub(crate) fn changes(task: &Task, run: &Run, round: &ChangesRound, auto: Option<u32>) -> String {
+    let by = auto.map_or_else(String::new, |auto| format!(" (autopilot round {auto})"));
+    format!(
+        "NEW CHANGES ROUND {n}{by}: {task_id} run {run_id} was returned from review with changes \
+         requested; this is {identity}. Every earlier round is finished; its todo list, \
+         `corral done` report and \"complete\" state are superseded and this request is not a \
+         repeat. Address the findings, rebase, run your gate and report with `corral done` \
+         again.",
+        n = round.n,
         task_id = task.id,
         run_id = run.id,
+        identity = round_identity(round),
     )
+}
+
+/// Whether `text` already opens with a changes-round notice, as a resent pending request does.
+pub(crate) fn has_changes_notice(text: &str) -> bool {
+    text.starts_with("NEW CHANGES ROUND ")
+}
+
+/// The attention reason for a worker that answered a changes round without reporting.
+pub(crate) fn worker_silent_reason(run: &Run) -> Option<String> {
+    let round = run.changes_round.as_ref()?;
+    Some(format!(
+        "Run {} ended a turn without a report in {}",
+        run.id,
+        round_identity(round)
+    ))
 }
