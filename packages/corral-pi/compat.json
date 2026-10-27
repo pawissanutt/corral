@@ -35,5 +35,9 @@
   "provider": {
     "id": "openai-codex",
     "model_route": "openai-codex-responses"
-  }
+  },
+  "providers": [
+    "openai",
+    "anthropic"
+  ]
 }

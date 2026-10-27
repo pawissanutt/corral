@@ -7,7 +7,7 @@ use corral_core::{Run, Task};
 use super::consulted;
 use crate::Ctx;
 use crate::agent::BindTarget;
-use crate::agent::launch::{HostSpec, prepare};
+use crate::agent::launch::{HostSpec, host_provider, prepare};
 
 pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     consulted("launch");
@@ -15,6 +15,10 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let spec = HostSpec {
         cwd: run.worktree.clone(),
         model: run.model.clone().context("a pi-native run needs a model")?,
+        provider: run
+            .model
+            .as_deref()
+            .and_then(|model| host_provider(run.vendor.as_deref(), model)),
         effort: run.effort.clone(),
         prompt_file: Some(
             ctx.store

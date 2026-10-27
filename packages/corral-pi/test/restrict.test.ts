@@ -63,3 +63,39 @@ test("the environment turns off upstream startup network and telemetry", () => {
   restrictEnvironment(env);
   expect(env).toEqual({ PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0" });
 });
+
+test("an Anthropic profile reaches only the Anthropic messages and token-refresh endpoints (T-479)", async () => {
+  const sent: string[] = [];
+  const guard = guardedFetch(async (input) => {
+    sent.push(String(input));
+    return new Response("{}");
+  }, undefined, "anthropic");
+  const allowed = [
+    "https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/messages?beta=true",
+    "https://platform.claude.com/v1/oauth/token",
+  ];
+  for (const url of allowed) await guard.fetch(url, { method: "POST", body: "{}" });
+  expect(sent).toEqual(allowed);
+  const refused = [
+    () => guard.fetch("https://api.anthropic.com/v1/messages"),
+    () => guard.fetch("https://api.anthropic.com/v1/messages?beta=false", { method: "POST" }),
+    () => guard.fetch("https://api.anthropic.com/v1/models", { method: "POST" }),
+    () => guard.fetch("https://api.anthropic.com/v1/messages/count_tokens", { method: "POST" }),
+    () => guard.fetch("https://claude.ai/oauth/authorize", { method: "POST" }),
+    () => guard.fetch(PROVIDER_API, { method: "POST" }),
+    () => guard.fetch(TOKEN_REFRESH, { method: "POST" }),
+  ];
+  for (const attempt of refused) await expect(attempt()).rejects.toThrow(/^network_refused: /);
+  expect(guard.ledger().allowed).toBe(3);
+  expect(guard.ledger().refused).toBe(refused.length);
+  expect(sent).toHaveLength(3);
+});
+
+test("an OpenAI profile cannot reach any Anthropic endpoint", async () => {
+  const guard = guardedFetch(async () => new Response("{}"));
+  for (const url of ["https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/messages?beta=true",
+    "https://platform.claude.com/v1/oauth/token"]) {
+    await expect(guard.fetch(url, { method: "POST" })).rejects.toThrow(/^network_refused: /);
+  }
+  expect([guard.ledger().allowed, guard.ledger().refused]).toEqual([0, 3]);
+});

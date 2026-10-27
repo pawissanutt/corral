@@ -117,9 +117,10 @@ pub fn install(start: &Path, args: &InstallArgs) -> Result<()> {
     super::install::install(start, args)
 }
 
-/// One interactive owner login into the corral-owned Pi auth directory (OD8).
-pub fn login(start: &Path) -> Result<()> {
-    super::credentials::login(start)
+/// One interactive owner login into the corral-owned Pi auth directory (OD8): `provider`, or
+/// the one the owner picks on a terminal.
+pub fn login(start: &Path, provider: Option<&str>) -> Result<()> {
+    super::credentials::login(start, provider)
 }
 
 pub fn doctor(ctx: &Ctx, json: bool) -> Result<()> {

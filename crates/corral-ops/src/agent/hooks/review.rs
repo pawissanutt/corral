@@ -79,6 +79,10 @@ fn pi_command(ctx: &Ctx, task: &Task, parent: &Run, pane: &str) -> Result<String
             .model
             .clone()
             .context("a pi-native reviewer needs a model")?,
+        provider: child
+            .model
+            .as_deref()
+            .and_then(|model| crate::agent::launch::host_provider(child.vendor.as_deref(), model)),
         effort: child.effort.clone(),
         prompt_file: Some(review_prompt_file(ctx, &task.id, &run.id)),
     };

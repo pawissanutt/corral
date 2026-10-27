@@ -752,7 +752,7 @@ fn owner_input_typed_during_a_bridge_turn_makes_it_owner_engaged_with_no_nudge()
 }
 
 #[test]
-fn a_pi_native_dispatch_refuses_unlisted_vendors_and_vendors_the_shipped_host_lacks() {
+fn a_pi_native_dispatch_refuses_unlisted_vendors_and_runs_both_shipped_providers() {
     let w = worker(false);
     let mut ctx = ctx_at(w.ctx().store.root());
     let package = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packages/corral-pi");
@@ -778,11 +778,7 @@ fn a_pi_native_dispatch_refuses_unlisted_vendors_and_vendors_the_shipped_host_la
         |name| crate::agent::hooks::preflight::check(&ctx, AgentRole::Worker, &resolve(name));
     let refused = format!("{:#}", check("mistral").unwrap_err());
     assert!(refused.starts_with("vendor_refused"), "{refused}");
-    // Anthropic is allowlisted, but the shipped host's compat.json declares no such provider.
-    let unsupported = format!("{:#}", check("anthropic").unwrap_err());
-    assert!(
-        unsupported.starts_with("pi-native preflight refused: provider_unsupported_by_host"),
-        "{unsupported}"
-    );
+    // The shipped host declares both providers (T-479), so an Anthropic profile passes too.
+    check("anthropic").unwrap();
     check("openai").unwrap();
 }

@@ -3,6 +3,7 @@
 import { closeSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
+import { type ProviderId, isProviderId } from "../auth/providers.ts";
 import { ROLES, type HostIdentity, type Role } from "../roles/types.ts";
 
 export const LAUNCH_VERSION = 1;
@@ -27,6 +28,7 @@ export interface HostConfig {
   readonly resumeSession?: string;
   readonly freshSession?: boolean;
   readonly model: string;
+  readonly provider?: ProviderId;
   readonly effort?: string;
   readonly promptFile?: string;
 }
@@ -86,6 +88,8 @@ export function parseLaunchMessage(text: string): HostConfig {
     bindNonce: field(secretFields, "bind_nonce", SECRET),
   };
   if (parsed.hostCap === parsed.ctlCap) throw new LaunchMessageInvalid("host_cap and ctl_cap must differ");
+  const provider = message.provider === undefined || message.provider === null ? undefined : message.provider;
+  if (provider !== undefined && !isProviderId(provider)) throw new LaunchMessageInvalid("provider is unknown");
   if (message.fresh_session !== undefined && typeof message.fresh_session !== "boolean") {
     throw new LaunchMessageInvalid("fresh_session must be a boolean");
   }
@@ -111,6 +115,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
     freshSession: message.fresh_session === true,
     model: field(message, "model", TOKEN, 128),
+    ...(provider ? { provider } : {}),
     effort: optional(message, "effort", TOKEN),
     promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),
   };

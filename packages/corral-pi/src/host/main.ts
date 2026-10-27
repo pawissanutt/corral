@@ -28,10 +28,11 @@ async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
   restrictEnvironment(process.env);
   checkRuntime(config.assets, readCompat(config.assets));
-  const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role));
+  const provider = config.provider ?? "openai-codex";
+  const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
-  const send = modules.auth.transport?.(authContext()) ?? globalThis.fetch.bind(globalThis);
-  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }));
+  const send = modules.auth.transport?.(authContext(provider)) ?? globalThis.fetch.bind(globalThis);
+  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
   process.chdir(config.cwd);
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
     sessionId: () => host?.sessionId() ?? "",
   });
   host = await HostSession.create({
-    sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model,
+    sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider,
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     modules, client, events, network,

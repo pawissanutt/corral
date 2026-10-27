@@ -92,6 +92,10 @@ describe("corral agent login output", () => {
     expect(loginDiagnostic(new Error("something {\"access_token\":\"x\"}"))).toBe(
       "OpenAI login failed at the OAuth flow; response content is not shown");
     expect(loginDiagnostic("not an error")).toBe("OpenAI login failed at the OAuth flow; response content is not shown");
+    expect(loginDiagnostic(new Error("Token exchange request failed. url=https://platform.claude.com/v1/oauth/token; " +
+      "details=Error: HTTP request failed. status=401; body=SYNTHETIC-BODY-SECRET"), "anthropic")).toBe(
+      "Anthropic login failed at the token exchange (HTTP 401); response content is not shown");
+    expect(loginDiagnostic(new Error("OAuth state mismatch"), "anthropic")).toBe("OAuth state mismatch");
     expect(redactNotice("Exchanged eyJhbGciOiJub25lIn0.eyJzdWIiOiJ4In0.sig for a token")).toBe("Exchanged <redacted> for a token");
     expect(redactNotice("x".repeat(500))).toBe("<redacted>");
     expect(redactNotice("ab ".repeat(200))).toHaveLength(240);

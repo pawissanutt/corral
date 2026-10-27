@@ -232,6 +232,7 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
     };
     let spec = HostSpec {
         cwd: run.worktree.clone(),
+        provider: super::launch::host_provider(run.vendor.as_deref(), &model),
         model,
         effort: run.effort.clone(),
         prompt_file: Some(prompt),

@@ -8,8 +8,9 @@ import type {
   AgentSession, AgentSessionRuntime, CreateAgentSessionRuntimeFactory, ExtensionAPI, SessionManager, ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
-import type { OpenAICodexResponsesOptions, StreamFunction } from "@earendil-works/pi-ai";
+import type { StreamFunction } from "@earendil-works/pi-ai";
 
+import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
@@ -18,7 +19,7 @@ import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import type { LoadedModules } from "./modules.ts";
-import { type GuardedFetch, PROVIDER_API, TOKEN_REFRESH, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
+import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -26,6 +27,8 @@ export interface HostSessionOptions {
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
+  /** The bound profile's provider; absent means OpenAI Codex, the only pre-T-479 route. */
+  readonly provider?: ProviderId;
   readonly effort?: string;
   readonly promptFile?: string;
   readonly modules: LoadedModules;
@@ -49,8 +52,8 @@ function bounded(value: Record<string, unknown> | null): Record<string, unknown>
   return size > STATE_SECTION_MAX_BYTES ? { omitted: "state_too_large", bytes: size } : value;
 }
 
-export function authContext(): AuthContext {
-  return { provider: "openai-codex", apiEndpoint: PROVIDER_API, refreshEndpoint: TOKEN_REFRESH };
+export function authContext(provider: ProviderId = "openai-codex"): AuthContext {
+  return { provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
 }
 
 function providerErrorClass(message: string): string {
@@ -81,7 +84,10 @@ export class HostSession {
   private sessionsCreated = 0;
   private interactive = false;
 
+  readonly provider: ProviderId;
+
   private constructor(private readonly options: HostSessionOptions) {
+    this.provider = options.provider ?? "openai-codex";
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, model: options.model,
       ...(options.effort ? { effort: options.effort } : {}),
@@ -101,21 +107,22 @@ export class HostSession {
   static async create(options: HostSessionOptions): Promise<HostSession> {
     const host = new HostSession(options);
     const { sdk } = options;
+    const route = PROVIDERS[host.provider];
     const models = await sdk.ModelRuntime.create({
-      credentials: options.modules.auth.credentials(authContext()),
+      credentials: options.modules.auth.credentials(authContext(route.id)),
       modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
     });
-    const provider = models.getProvider("openai-codex");
-    const model = models.getModel("openai-codex", options.model);
-    if (!provider || !model) throw new Error(`model_unavailable: openai-codex/${options.model}`);
+    const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
+    const provider = models.getProvider(route.id);
+    const model = models.getModel(route.id, modelId);
+    if (!provider || !model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
     const fetch = options.network.fetch as typeof globalThis.fetch;
-    const streamCodex = provider.stream.bind(provider) as StreamFunction<"openai-codex-responses", OpenAICodexResponsesOptions>;
+    const stream = provider.stream.bind(provider) as StreamFunction;
     models.registerNativeProvider({
       ...provider,
       stream(current, context, streamOptions) {
-        if (current.api !== "openai-codex-responses") throw new Error("provider_api_not_allowed");
-        const codexOptions = streamOptions as OpenAICodexResponsesOptions | undefined;
-        return streamCodex({ ...current, api: "openai-codex-responses" }, context, { ...codexOptions, fetch });
+        if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
+        return stream(current, context, { ...streamOptions, fetch });
       },
       streamSimple: (current, context, streamOptions) => provider.streamSimple(current, context, { ...streamOptions, fetch }),
     });
@@ -373,7 +380,7 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       settings: restrictedSettings(),
-      network: { allowed_destinations: [PROVIDER_API, TOKEN_REFRESH], ...this.options.network.ledger() },
+      network: { allowed_destinations: [...hostDestinations(this.provider)], ...this.options.network.ledger() },
       corral_calls: { ...this.stats },
       delivery: bounded(this.options.modules.delivery.state?.() ?? null),
       auth: bounded(this.options.modules.auth.state?.() ?? null),

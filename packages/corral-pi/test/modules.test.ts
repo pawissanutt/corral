@@ -82,3 +82,18 @@ test("a module of the wrong shape or role is refused, and roles are a closed set
   expect(error instanceof ModuleInvalid).toBeTrue();
   expect(() => modulePaths("../../etc" as Role)).toThrow(/unknown role/);
 });
+
+test("an auth module that does not serve the bound provider is credentials_unavailable (T-479)", async () => {
+  const dir = install();
+  let error: unknown;
+  try {
+    await loadModules(dir, "worker", "anthropic");
+  } catch (caught) {
+    error = caught;
+  }
+  expect((error as ModuleUnavailable).code).toBe("credentials_unavailable");
+  expect((error as ModuleUnavailable).message).toContain("for provider anthropic");
+  expect((await loadModules(dir, "worker", "openai-codex")).auth.provider).toBe("openai-codex");
+  const shipped = await import("../src/auth/index.ts");
+  expect(shipped.default.providers).toEqual(["openai-codex", "anthropic"]);
+});

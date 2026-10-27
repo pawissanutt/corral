@@ -68,6 +68,9 @@ pub struct Bootstrap {
     #[serde(default)]
     pub fresh_session: bool,
     pub model: String,
+    /// The Pi provider whose credential the host loads; absent means `openai-codex`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,8 +180,17 @@ pub fn command(recipient: &Recipient) -> Result<String> {
 pub struct HostSpec {
     pub cwd: PathBuf,
     pub model: String,
+    pub provider: Option<String>,
     pub effort: Option<String>,
     pub prompt_file: Option<PathBuf>,
+}
+
+/// The Pi provider a host bound to `vendor` (else the model's inferred vendor) runs on.
+pub fn host_provider(vendor: Option<&str>, model: &str) -> Option<String> {
+    let vendor = vendor
+        .map(str::to_owned)
+        .or_else(|| corral_core::infer_vendor(model))?;
+    super::credentials::provider_for_vendor(&vendor).map(|p| p.id.to_owned())
 }
 
 /// The dispatch half: opens generation n+1 of `target` in `pane`, writes its one-shot bootstrap
@@ -294,6 +306,7 @@ pub fn prepare(ctx: &Ctx, target: &BindTarget, pane: &str, spec: &HostSpec) -> R
         resume_session,
         fresh_session,
         model: spec.model.clone(),
+        provider: spec.provider.clone(),
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
     };
@@ -661,7 +674,8 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "runtime_dir": ready.generation_dir, "session_dir": bootstrap.session_dir,
         "resume_session": bootstrap.resume_session,
         "fresh_session": bootstrap.fresh_session,
-        "model": bootstrap.model, "effort": bootstrap.effort, "prompt_file": bootstrap.prompt_file,
+        "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
+        "prompt_file": bootstrap.prompt_file,
     });
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {
