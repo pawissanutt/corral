@@ -22,6 +22,8 @@ pub const OWNER: &str = "host-install";
 /// The pre-T-479 shared credential file; it only ever held the OpenAI Codex login.
 pub const AUTH_FILE: &str = "auth.json";
 pub const LOGIN_ENTRY: &str = "src/auth/login.ts";
+/// Present only in assets whose login honors `--provider` (T-479).
+pub const PROVIDERS_ENTRY: &str = "src/auth/providers.ts";
 
 /// A subscription OAuth provider pi-native can log in (`src/auth/providers.ts` lists the same).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +162,14 @@ pub fn login_assets(explicit: Option<PathBuf>, root: &Path) -> Result<PathBuf> {
     if !assets.join(LOGIN_ENTRY).is_file() {
         bail!(
             "credentials_unavailable: {} has no {LOGIN_ENTRY} (owner {OWNER})",
+            assets.display()
+        );
+    }
+    // Assets from before T-479 ignore `--provider` and always log in OpenAI Codex.
+    if !assets.join(PROVIDERS_ENTRY).is_file() {
+        bail!(
+            "assets_outdated: {} predates per-provider login and would ignore --provider; run \
+             `corral agent install` first",
             assets.display()
         );
     }
@@ -460,6 +470,11 @@ mod tests {
             "{refused}"
         );
         std::fs::remove_file(fixture.join("fixture.json")).unwrap();
+        let outdated = login_assets(Some(fixture.clone()), tmp.path())
+            .unwrap_err()
+            .to_string();
+        assert!(outdated.starts_with("assets_outdated"), "{outdated}");
+        std::fs::write(fixture.join(PROVIDERS_ENTRY), "").unwrap();
         assert_eq!(
             login_assets(Some(fixture.clone()), tmp.path()).unwrap(),
             fixture
