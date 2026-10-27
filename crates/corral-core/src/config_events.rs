@@ -428,6 +428,17 @@ impl Store {
         )
     }
 
+    /// Turbo widens only an existing matching grant: it drops owner-only acceptance and round limits.
+    pub fn turbo_operating_policy(&self, on: bool) -> Result<Config> {
+        let _board = self.lock("dispatch")?;
+        self.edit_config_layer_locked(
+            ConfigLayer::Workspace,
+            ConfigSource::Cli,
+            ApprovalPublication::RevokeBeforeConfig,
+            |doc| doc.set_str("automation.turbo", if on { "true" } else { "false" }),
+        )
+    }
+
     /// Invalid edits are logged once per content revision across processes and reported through
     /// the terminal owner's sink. The previous effective config remains installed.
     pub fn reload_config_if_changed(&mut self) -> Result<bool> {

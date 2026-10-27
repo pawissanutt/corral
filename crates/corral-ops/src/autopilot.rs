@@ -645,7 +645,7 @@ impl Pilot<'_> {
         }
         let round = self.task.rounds + 1;
         let max = self.policy.max_rounds;
-        if round > max {
+        if round > max && !self.ctx.store.config.automation.turbo {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
         }
         crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Repair)?;
