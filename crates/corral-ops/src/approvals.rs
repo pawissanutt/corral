@@ -1,34 +1,21 @@
-//! Approval attribution follows only `Events(approved)`. Rebuilding after cache loss or a
-//! feed gap is a preparation step; callers can run [`prepare`] before opening a hot scope.
+//! Approval attribution comes from committed SHA-keyed facts on the evaluation's view.
 //! Rows contain event facts, not task titles/projects: those are point-read on the packet's
 //! view, so renaming or moving a task never leaves stale attribution in a cached row.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use corral_core::backend::{ChangeScope, ChangeSeq, EventQuery, FeedError, PageReq, StoredEvent};
 use corral_core::{Event, Store};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::Ctx;
 use crate::integration::LandedTask;
 
 #[path = "approvals_numbers.rs"]
 pub(crate) mod numbers;
-
-#[derive(Default, Serialize, Deserialize)]
-struct Cursor {
-    #[serde(default)]
-    version: u32,
-    #[serde(with = "numbers::sequence")]
-    change: ChangeSeq,
-    #[serde(with = "numbers::number")]
-    event: u64,
-    #[serde(default, with = "numbers::number")]
-    recomputations: u64,
-}
 
 /// Serialize derivation updates, including cache replacement. Store locks live outside
 /// cache_root, so deletion of the rebuildable cache does not replace a held lock.
@@ -135,102 +122,21 @@ pub(crate) fn events(store: &Store, query: &EventQuery) -> Result<Vec<Event>> {
     }
 }
 
-fn row_path(root: &Path, sha: &str) -> PathBuf {
-    root.join(format!(
-        "{}.json",
-        crate::verification::digest(sha.as_bytes())
-    ))
-}
-
-/// Bring the approval rows to the caller's pinned view. Only new approved events are decoded
-/// after the first call; resource/condition writes merely advance the feed cursor.
+/// Validate the evaluation view. Attribution is maintained when events are committed;
+/// existing databases initialize that projection at backend open, before HotScope.
 pub fn prepare(ctx: &Ctx) -> Result<()> {
-    let _lock = lock(&ctx.store, "approval-rows")?;
     ctx.store
-        .pass_derived("approval-rows-prepared-v2", || prepare_locked(ctx))
-        .map(|_| ())
-}
-
-fn prepare_locked(ctx: &Ctx) -> Result<()> {
-    let root = ctx.store.cache_root()?.join("approval-rows-v1");
-    let path = root.join("cursor.json");
-    let store = ctx.store.read_only_snapshot()?;
-    let seq = store.view()?.seq();
-    let previous: Option<Cursor> = read(&path)?;
-    let delta = previous
-        .as_ref()
-        .filter(|c| c.version == 2 && c.change <= seq)
-        .map(|c| changes(&store, c.change))
-        .transpose()?
-        .flatten();
-    let rebuild = previous.is_none() || delta.is_none();
-    let mut cursor = if rebuild {
-        Cursor::default()
-    } else {
-        previous.unwrap_or_default()
-    };
-    if !rebuild && cursor.change == seq {
-        return Ok(());
-    }
-    let relevant = rebuild
-        || delta.as_ref().is_some_and(|scopes| {
-            scopes.iter().any(
-                |scope| matches!(scope, ChangeScope::Events { kind, .. } if kind == "approved"),
-            )
-        });
-    if relevant {
-        if rebuild && root.exists() {
-            fs::remove_dir_all(&root).context("rebuilding approval rows")?;
-        }
-        let new_events = events(
-            &store,
-            &EventQuery {
-                kinds: vec!["approved".into()],
-                after: Some(corral_core::backend::EventSeq(cursor.event)),
-                valid_only: true,
-                ..EventQuery::default()
-            },
-        )?;
-        let mut changed: BTreeMap<String, Vec<LandedTask>> = BTreeMap::new();
-        for event in new_events {
-            cursor.event = cursor.event.max(event.seq);
-            if event.detail["strategy"].as_str() == Some("keep_branch") {
-                continue;
-            }
-            let (Some(id), Some(sha)) = (event.task, event.detail["sha"].as_str()) else {
-                continue;
-            };
-            let rows = match changed.entry(sha.to_owned()) {
-                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(read(&row_path(&root, sha))?.unwrap_or_default())
-                }
-            };
-            let row = LandedTask {
-                id,
-                title: None,
-                run: event.detail["run"].as_str().map(str::to_owned),
-                approved_sha: sha.to_owned(),
-            };
-            if !rows.contains(&row) {
-                rows.push(row);
-            }
-        }
-        for (sha, rows) in changed {
-            save(&row_path(&root, &sha), &rows)?;
-            cursor.recomputations += 1;
-        }
-    }
-    cursor.change = seq;
-    cursor.version = 2;
-    save(&path, &cursor)
+        .view()?
+        .ensure_fresh()
+        .context("checking approval view")
 }
 
 #[cfg(test)]
 pub(crate) fn recomputations(ctx: &Ctx) -> Result<u64> {
-    let cursor: Option<Cursor> =
-        read(&ctx.store.cache_root()?.join("approval-rows-v1/cursor.json"))?;
-    Ok(cursor.map_or(0, |cursor| cursor.recomputations))
+    // The maintained projection changes only on approved events, not record writes.
+    Ok(u64::try_from(
+        ctx.store.events_of(None, &["approved"])?.len(),
+    )?)
 }
 
 pub(crate) fn lookup(
@@ -238,11 +144,24 @@ pub(crate) fn lookup(
     project: &Option<String>,
     shas: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<LandedTask>>> {
-    let _lock = lock(&ctx.store, "approval-rows")?;
-    let root = ctx.store.cache_root()?.join("approval-rows-v1");
+    let view = ctx.store.view()?;
     let mut out = BTreeMap::new();
     for sha in shas {
-        let mut rows: Vec<LandedTask> = read(&row_path(&root, sha))?.unwrap_or_default();
+        let facts = view.lesson_approvals(sha)?;
+        corral_core::work::decoded(
+            corral_core::work::Counter::RecordDecodes,
+            u64::try_from(serde_json::to_vec(&facts)?.len())?,
+            corral_core::work::Subject::Plain,
+        );
+        let mut rows = facts
+            .into_iter()
+            .map(|fact| LandedTask {
+                id: fact.task,
+                title: None,
+                run: fact.run,
+                approved_sha: sha.clone(),
+            })
+            .collect::<Vec<_>>();
         let ids = rows
             .iter()
             .map(|row| row.id.clone())

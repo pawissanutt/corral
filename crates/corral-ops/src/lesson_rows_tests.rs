@@ -4,6 +4,13 @@ use corral_core::{Artifact, ArtifactKind, Project, Store};
 use jiff::Timestamp;
 use serde_json::json;
 
+#[path = "lesson_rows_artifact_tests.rs"]
+mod artifacts;
+#[path = "lesson_rows_overlap_tests.rs"]
+mod overlap;
+#[path = "lesson_rows_preparation_tests.rs"]
+mod preparation;
+
 fn ts(second: i64) -> Timestamp {
     Timestamp::from_second(1_790_812_800 + second).unwrap()
 }

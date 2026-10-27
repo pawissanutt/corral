@@ -9,6 +9,8 @@
 pub mod conformance;
 mod error;
 pub mod fake;
+pub(crate) mod lesson_approvals;
+pub(crate) mod lesson_artifacts;
 mod operation;
 mod query;
 mod rows;
@@ -21,6 +23,7 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 
 pub use error::{ApplyError, Conflict, FeedError, ViewError};
+pub use lesson_approvals::LessonApproval;
 pub use operation::*;
 pub use query::*;
 pub use rows::*;
@@ -64,6 +67,10 @@ pub trait ReadView {
         q: &RowQuery,
         page: PageReq,
     ) -> Result<Page<HistoryRow>, ViewError>;
+    /// Eligible lesson artifacts in `(added DESC, path DESC)` order, bounded before decode.
+    fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError>;
+    /// Attribution facts for one selected SHA, committed in this view.
+    fn lesson_approvals(&self, sha: &str) -> Result<Vec<LessonApproval>, ViewError>;
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError>;
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError>;
     fn conditions(

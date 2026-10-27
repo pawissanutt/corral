@@ -9,6 +9,7 @@ mod cases_rows;
 mod cases_storage;
 mod cases_tasks;
 mod cases_views;
+mod lesson_rows;
 mod samples;
 
 use std::sync::Arc;
@@ -102,6 +103,7 @@ pub fn cases() -> Vec<Case> {
     all.extend(cases_blobs::cases());
     all.extend(cases_storage::cases());
     all.extend(cases_views::cases());
+    all.extend(lesson_rows::cases());
     all
 }
 

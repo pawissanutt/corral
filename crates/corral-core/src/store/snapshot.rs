@@ -135,6 +135,12 @@ impl ReadView for SharedView {
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         self.view().tasks(q, page)
     }
+    fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError> {
+        self.view().lesson_artifacts(num, limit)
+    }
+    fn lesson_approvals(&self, sha: &str) -> Result<Vec<LessonApproval>, ViewError> {
+        self.view().lesson_approvals(sha)
+    }
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
         self.view().events(q, page)
     }

@@ -181,10 +181,12 @@ fn measured(ctx: &Ctx) -> (Value, WorkSnapshot) {
     counts.check_identity().unwrap();
     assert_eq!(counts.unattributed_hydrations(), 0);
     assert_eq!(workset.next.kind, PmActionKind::LessonsDistill);
-    assert!(
-        counts.get(Counter::RecordDecodes) > 0,
-        "must read a derived scheduling row: {counts:?}"
+    assert_eq!(
+        counts.get(Counter::RecordDecodes),
+        0,
+        "prepared scheduling values must not reopen shared rows: {counts:?}"
     );
+    assert_eq!(counts.get(Counter::EventDecodes), 0);
     assert_eq!(
         counts.get(Counter::ViewsOpened),
         0,
@@ -247,20 +249,18 @@ fn production_pm_recovers_and_follows_mutations_without_history_sized_hot_work()
     for ctx in [&base, &grown] {
         let seq = ctx.store.view().unwrap().seq().0;
         let event = ctx.store.event_tail().unwrap();
-        for area in ["lesson-rows-v1", "approval-rows-v1"] {
-            std::fs::write(
-                ctx.store
-                    .cache_root()
-                    .unwrap()
-                    .join(area)
-                    .join("cursor.json"),
-                serde_json::to_vec(&json!({
-                    "change":seq,"event":event,"config":"legacy","recomputations":0
-                }))
-                .unwrap(),
-            )
-            .unwrap();
-        }
+        // Approval attribution is now maintained in the committed backend, not this cache.
+        std::fs::write(
+            ctx.store
+                .cache_root()
+                .unwrap()
+                .join("lesson-rows-v1/cursor.json"),
+            serde_json::to_vec(&json!({
+                "change":seq,"event":event,"config":"legacy","recomputations":0
+            }))
+            .unwrap(),
+        )
+        .unwrap();
     }
     let (upgraded, upgraded_counts) = measured(&base);
     let (grown_upgraded, grown_upgraded_counts) = measured(&grown);

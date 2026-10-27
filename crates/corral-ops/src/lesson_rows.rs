@@ -2,8 +2,9 @@
 //! entering HotScope; readers on a pinned evaluation only read their project's output.
 //! Task metadata and scheduling counters are keyed by task, never one board-sized document.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use corral_core::backend::{ChangeSeq, PageReq, RowQuery, TaskPart};
@@ -58,12 +59,36 @@ struct Cursor {
 }
 
 /// Constant-size scheduling output, using the baseline's request append-order rule.
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct DueRow {
     pub requested: Option<Event>,
     pub landings: usize,
     pub failures: usize,
     pub has_history: bool,
+}
+
+#[derive(Default)]
+struct Prepared {
+    signals: BTreeMap<String, Vec<LessonSignal>>,
+    due: BTreeMap<String, DueRow>,
+}
+
+impl Prepared {
+    /// Capture both outputs while the preparation lock still protects their generation.
+    fn capture(root: &Path, projects: &BTreeSet<String>) -> Result<Self> {
+        let mut rows = Self::default();
+        for project in projects {
+            rows.signals.insert(
+                project.clone(),
+                read(&root.join(format!("signals-{}.json", key(project))))?.unwrap_or_default(),
+            );
+            rows.due.insert(
+                project.clone(),
+                read(&root.join(format!("due-{}.json", key(project))))?.unwrap_or_default(),
+            );
+        }
+        Ok(rows)
+    }
 }
 
 fn key(value: &str) -> String {
@@ -82,7 +107,8 @@ fn project_path(root: &Path, project: &str) -> PathBuf {
     root.join("projects").join(format!("{}.json", key(project)))
 }
 
-/// Acquisition is bounded before decoding: the newest 32 run and artifact keys.
+/// Acquisition is bounded before decoding: the newest 32 runs and baseline-ordered
+/// eligible artifacts. Excluded kinds never consume the artifact limit.
 fn source(ctx: &Ctx, head: &TaskHead) -> Result<Source> {
     let mut task = head.to_shell_task()?;
     let view = ctx.store.view()?;
@@ -107,14 +133,7 @@ fn source(ctx: &Ctx, head: &TaskHead) -> Result<Source> {
         task.runs.push(run);
     }
     task.artifacts.clear();
-    for row in view
-        .rows(
-            head.num,
-            &RowQuery::part(TaskPart::Artifact).newest_first(),
-            PageReq::first(32),
-        )?
-        .items
-    {
+    for row in view.lesson_artifacts(head.num, 32)? {
         corral_core::work::decoded(
             corral_core::work::Counter::HistoryRowDecodes,
             u64::try_from(serde_json::to_vec(&row.doc)?.len())?,
@@ -122,24 +141,36 @@ fn source(ctx: &Ctx, head: &TaskHead) -> Result<Source> {
         );
         let artifact: corral_core::Artifact =
             serde_json::from_value(row.doc).context("decoding lesson artifact")?;
-        if matches!(
-            artifact.kind,
-            corral_core::ArtifactKind::Log
-                | corral_core::ArtifactKind::Summary
-                | corral_core::ArtifactKind::Report
-                | corral_core::ArtifactKind::Diff
-                | corral_core::ArtifactKind::Evidence
-        ) {
-            task.artifacts.push(artifact);
-        }
+        task.artifacts.push(artifact);
     }
     Ok(Source { task, usage })
 }
 
 /// Initialize/recover and follow relevant changes before opening an evaluation's HotScope.
 pub fn prepare(ctx: &Ctx) -> Result<()> {
-    let _lock = lock(&ctx.store, "lesson-rows")?;
-    follow::prepare_locked(ctx)
+    prepared(ctx).map(|_| ())
+}
+
+fn prepared(ctx: &Ctx) -> Result<Arc<Prepared>> {
+    ctx.store.pass_derived("lesson-rows-prepared-v5", || {
+        let _lock = lock(&ctx.store, "lesson-rows")?;
+        follow::prepare_locked(ctx, &ctx.store.config.projects.keys().cloned().collect())
+    })
+}
+
+/// Explicit previews can name unconfigured projects. Capture only that selected output,
+/// before HotScope, rather than carrying every historical project in each evaluation.
+pub(crate) fn prepare_signals(ctx: &Ctx, project: &str) -> Result<Arc<Vec<LessonSignal>>> {
+    ctx.store
+        .pass_derived(&format!("lesson-signals-v3:{project}"), || {
+            let rows = prepared(ctx)?;
+            if let Some(signals) = rows.signals.get(project) {
+                return Ok(signals.clone());
+            }
+            let _lock = lock(&ctx.store, "lesson-rows")?;
+            let mut rows = follow::prepare_locked(ctx, &[project.to_owned()].into())?;
+            Ok(rows.signals.remove(project).unwrap_or_default())
+        })
 }
 
 /// Prepare both derivations at production evaluation boundaries.
@@ -187,20 +218,11 @@ pub(crate) fn landed_files(ctx: &Ctx, project: &str, event: &Event) -> Result<Ve
 }
 
 pub(crate) fn signals(ctx: &Ctx, project: &str) -> Result<Vec<LessonSignal>> {
-    let _lock = lock(&ctx.store, "lesson-rows")?;
-    ctx.store
-        .pass_derived(&format!("lesson-signals-v2:{project}"), || {
-            Ok(
-                read(&root(ctx)?.join(format!("signals-{}.json", key(project))))?
-                    .unwrap_or_default(),
-            )
-        })
-        .map(|rows: std::sync::Arc<Vec<LessonSignal>>| rows.as_ref().clone())
+    Ok(prepare_signals(ctx, project)?.as_ref().clone())
 }
 
 pub(crate) fn due(ctx: &Ctx, project: &str) -> Result<DueRow> {
-    let _lock = lock(&ctx.store, "lesson-rows")?;
-    Ok(read(&root(ctx)?.join(format!("due-{}.json", key(project))))?.unwrap_or_default())
+    Ok(prepared(ctx)?.due.get(project).cloned().unwrap_or_default())
 }
 
 /// Announcement identity is independent of the length of the announcement event stream.
