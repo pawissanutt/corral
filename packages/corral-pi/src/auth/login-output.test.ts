@@ -9,7 +9,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loginDiagnostic, redactNotice } from "./login.ts";
+import { EventEmitter } from "node:events";
+
+import { loginDiagnostic, pickKeys, pickOption, redactNotice } from "./login.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SECRETS = ["SYNTHETIC-ACCESS-SECRET", "SYNTHETIC-REFRESH-SECRET", "SYNTHETIC-BODY-SECRET"];
@@ -63,6 +65,45 @@ async function runLogin(scenario: Scenario): Promise<{ code: number | null; outp
   child.stdin.destroy();
   return { code, output, dir };
 }
+
+describe("corral agent login method picker", () => {
+  const METHODS = [{ id: "browser", label: "Browser login (default)" }, { id: "device", label: "Device code login (headless)" }];
+
+  function drive(chunks: string[]): { picked: Promise<string>; screen: () => string; raw: boolean[] } {
+    const input = Object.assign(new EventEmitter(), {
+      raw: [] as boolean[],
+      setRawMode(raw: boolean) { this.raw.push(raw); },
+      resume() {}, pause() {},
+    });
+    let screen = "";
+    const picked = pickOption("Select OpenAI Codex login method:", METHODS, input, { write: (t: string) => (screen += t) });
+    for (const chunk of chunks) input.emit("data", Buffer.from(chunk));
+    return { picked, screen: () => screen, raw: input.raw };
+  }
+
+  test("arrow down then Enter picks device code, redraws the cursor and restores the terminal", async () => {
+    const run = drive(["\x1b[B", "\r"]);
+    expect(await run.picked).toBe("device");
+    const last = run.screen().split("\x1b[J").at(-1) ?? "";
+    expect(last).toContain("> Device code login (headless)");
+    expect(last).toContain("  Browser login (default)");
+    expect(run.raw).toEqual([true, false]);
+  });
+
+  test("Enter keeps the default, digits pick directly and moves stay in bounds", async () => {
+    expect(await drive(["\r"]).picked).toBe("browser");
+    expect(await drive(["2"]).picked).toBe("device");
+    expect(await drive(["jjjj\r"]).picked).toBe("device");
+    expect(await drive(["\x1bOB\x1b[A\r"]).picked).toBe("browser");
+  });
+
+  test("q, a lone Esc and Ctrl-C cancel the login", async () => {
+    for (const keys of ["q", "\x1b", "\x03"]) {
+      await expect(drive([keys]).picked).rejects.toThrow("Login cancelled");
+    }
+    expect(pickKeys("x\x1b[C9")).toEqual([8]);
+  });
+});
 
 describe("corral agent login output", () => {
   test("a token response missing fields fails without printing either token", async () => {
