@@ -322,6 +322,31 @@ that threshold is false. Other diagnostic thresholds are true; they do not
 override incompleteness, prior counterpart reuse, solution exposure or the
 different operational question/silent-ending detection surfaces.
 
+## Fourth pair: native arm captured, OmO arm running
+
+T-246 native T-005/R1 was approved after two independent reviews at
+2026-10-26T23:59:39.010704739Z on repaired candidate
+`d5f2478b692be71ea1a06334b7bf7bd821ae9f0f`. Review 1 reproduced a genuine
+text-budget-boundary search-score mismatch (16016 incremental versus 8016
+canonical). The same generation repaired it, added deterministic result-parity
+coverage and passed a new quick gate; review 2 approved. No replacement ran.
+
+The captured native-only totals are 5,876,021 worker-plus-review tokens,
+USD 1.3702244 API-equivalent, two reviews, two passing quick gates, 569.988 gate
+seconds and 2,137.091 wall seconds. Recorded rescues, Needs me, PM/owner answers
+and classified silent endings are zero. The raw turn table separately records
+an initial provider overload; zero classified silent endings does not erase
+that error or establish equal instrumentation between hosts.
+
+Review-2 admission was temporarily refused by pane reconciliation and machine
+load. Refused launches allocated no review. The configured policy was retained;
+launch succeeded after canonical resource admission recovered.
+
+The approved native raw window was captured before discard; its branch is
+retained. Matched OmO T-011/R1 is now worker 10/12 from the same frozen base,
+with the same independent-implementation instruction. This single approved arm
+is not a fourth completed paired result or an aggregate verdict.
+
 Pass bar, in aggregate: Pi has no more Needs me or silent endings than OmO,
 review rounds are within +1, API-equivalent cost is within 1.25x, and gate pass
 rate is no lower. No default switch follows automatically from any outcome.
