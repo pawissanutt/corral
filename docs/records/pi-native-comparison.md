@@ -1,6 +1,6 @@
 # Pi-native worker comparison: incomplete cohort
 
-T-313 / T-252@P5, 2026-10-27. **Four pairs reached independent approval; the fourth pair is reopened after a failed full landing gate. The six-pair comparison is incomplete.**
+T-313 / T-252@P5, 2026-10-27. **Four pairs are independently approved and privately landed; the final large pair is running. The six-pair comparison is incomplete.**
 There is no measured pass/fail verdict, and no host default has changed.
 The PM is not evaluated; both comparison arms must retain the OmO PM.
 
@@ -387,6 +387,32 @@ This is a worker gate, not a landing claim. Independent review round 2 is
 running on that exact candidate; no replacement worker or fourth review was
 allocated. Initial four-pair metrics remain historical until its new approval
 and capture.
+
+Review 2 approved the repaired candidate at 2026-10-27T01:24:53.128964145Z.
+Corral then landed that same candidate on private p05 main, reusing the current
+full PASS `2454544-1793063604693014138`; no extra landing gate ran.
+
+Recapture exposed an offline endpoint bug: measurement selected the first
+approval, rejecting the second independent review as missing. A deterministic
+regression reproduced the error; selecting the latest approval now includes the
+repair, both failed full gates and both reviews. All 32 tests and strict
+typecheck pass. Production diagnostics are clean; the test-file LSP timed out
+while the compiler passed. Experimental binary/configuration remain unchanged.
+
+Final T-246 OmO totals are 30,039,350 worker-plus-review tokens,
+USD 5.5772088 API-equivalent, two reviews, two passes from four gate attempts,
+1,418.133 gate seconds and 5,003.466 wall seconds. Needs me, PM/owner answers
+and classified silent endings remain zero. The rescue metric records two
+canonical audit events for the delivery intervention, not two new workers.
+The earlier first-approval numbers are retained above only as history.
+
+The updated four-pair report still exits 2 with `not_evaluated`, no pair
+invalidations and no budget stop. OmO/native totals are 90,266,765 / 35,565,018
+tokens, USD 15.7644052 / 6.5714664 API-equivalent, five/six reviews and gate
+pass rates 5/9 and 6/7. The diagnostic review threshold is true again; Needs me
+remains false. These are not a complete-cohort verdict or a causal host claim.
+Worker 11/12 is now OmO T-006/R1 for the final large T-180 pair, in its frozen
+OmO-first order. Only its matched native worker 12 remains available.
 
 The full landing gate is separate from the initial approval-window metrics
 above. Those metrics are now a historical checkpoint, not a final measurement

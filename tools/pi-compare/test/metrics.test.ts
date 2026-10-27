@@ -107,6 +107,35 @@ describe("raw metrics", () => {
     // Then wall time to approval is not fabricated.
     expect(action).toThrow("approval_missing");
   });
+
+  test("includes repair work through the latest approval after a failed landing", () => {
+    // Given an approved run reopened by a failed landing and approved again.
+    const run = selectedRun(show, "R1");
+    const child = run.review_runs[0];
+    if (!child) throw new TypeError("fixture reviewer missing");
+    const repaired = { ...run, review_runs: [...run.review_runs, { ...child, id: "R1-review2" }] };
+    const later = (kind: string, second: number, detail: Readonly<Record<string, unknown>>): Event => ({
+      ts: new Date(Date.parse(run.started) + second * 1000).toISOString(),
+      task: show.id, kind, detail: { run: run.id, ...detail },
+    });
+    const input = [...events,
+      later("gate_started", 65, { identity: { attempt: "landing" }, tier: "full" }),
+      later("gate", 75, { identity: { attempt: "landing" }, result: "fail" }),
+      later("changes_requested", 76, {}),
+      later("gate_started", 80, { identity: { attempt: "repair" }, tier: "full" }),
+      later("gate", 90, { identity: { attempt: "repair" }, result: "pass" }),
+      { ...later("commented", 95, { comment: { text: '{"comparison_rescue":"pane_input"}' } }), actor: "pm" },
+      later("verdict", 120, { verdict: "approve", reviewer: "independent" }),
+    ];
+    // When the repaired run is measured, the first approval is not the endpoint.
+    const actual = measure(show, repaired, input);
+    expect(actual.approved_at).toBe(later("verdict", 120, {}).ts);
+    expect(actual.wall_seconds).toBe(120);
+    expect(actual.review_rounds).toBe(2);
+    expect(actual.gate_count).toBe(3);
+    expect(actual.gates_passed).toBe(2);
+    expect(actual.rescues).toBe(2);
+  });
 });
 
 describe("canonical event surfaces", () => {

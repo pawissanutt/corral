@@ -39,7 +39,7 @@ export function measure(show: Show, run: Run, input: readonly Event[]) {
   const dispatched = events.find((event) => event.kind === "dispatched"
     && text(event.detail, "run") === run.id);
   if (!dispatched) throw new ComparisonError("dispatch_missing", `${show.id}/${run.id}`);
-  const approval = events.find((event) => event.kind === "verdict"
+  const approval = events.findLast((event) => event.kind === "verdict"
     && event.detail["verdict"] === "approve");
   if (!approval || run.review?.verdict !== "approve") {
     throw new ComparisonError("approval_missing", `${show.id}/${run.id}`);
