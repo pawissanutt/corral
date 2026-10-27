@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use corral_core::records::RecordArea;
-use corral_core::{Status, Task};
+use corral_core::{Status, Store, Task};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -37,6 +37,30 @@ struct TaskSize {
 
 fn read(ctx: &Ctx) -> Result<Option<Alert>> {
     ALERTS.load(&ctx.store, "state")
+}
+
+fn clear_alert(store: &Store, now: Timestamp) -> Result<()> {
+    store.records_transaction(|| {
+        ALERTS.delete(store, "state")?;
+        store.log_event(None, "resources_cleared", json!({"at": now}))
+    })
+}
+
+fn publish_alert(
+    store: &Store,
+    alert: &Alert,
+    state: &ResourceState,
+    sizes: &[TaskSize],
+    now: Timestamp,
+) -> Result<()> {
+    store.records_transaction(|| {
+        ALERTS.save(store, "state", alert)?;
+        store.log_event(
+            alert.attention.as_ref().map(|a| a.task.as_str()),
+            "escalated",
+            json!({"source": "resources", "reason": alert.message, "snapshot": state.snapshot, "largest_worktrees": sizes, "at": now}),
+        )
+    })
 }
 
 /// Keep the attention card visible even if herdr still reports its agent as working.
@@ -74,6 +98,7 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
                 if let Some(run) = task.current_run_mut() {
                     run.blocked_excerpt = attention.previous_excerpt.clone();
                 }
+                clear_alert(&ctx.store, now)?;
                 Ok(true)
             })?;
             if written.is_some() {
@@ -84,11 +109,10 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
                     note: "machine memory/disk pressure cleared".into(),
                     stage: None,
                 });
+                return Ok(changes);
             }
         }
-        ALERTS.delete(&ctx.store, "state")?;
-        ctx.store
-            .log_event(None, "resources_cleared", json!({"at": now}))?;
+        clear_alert(&ctx.store, now)?;
         return Ok(changes);
     }
     if previous.is_some() {
@@ -153,30 +177,14 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         .into_iter()
         // Waiting work keeps its admission identity; existing owner questions stay untouched.
         .find(|task| task.status == Status::Running)
-        .map(|task| {
-            let attention = Attention {
-                task: task.id.clone(),
-                run: task.current_run().map(|run| run.id.clone()),
-                from: task.status,
-                previous_excerpt: task
-                    .current_run()
-                    .and_then(|run| run.blocked_excerpt.clone()),
-            };
-            ctx.store.update(&task.id, |current| {
-                if current.status != task.status
-                    || current.current_run().map(|r| &r.id) != attention.run.as_ref()
-                {
-                    anyhow::bail!("task changed while raising resource alert; retry next sync");
-                }
-                current.status = Status::NeedsMe;
-                if let Some(run) = current.current_run_mut() {
-                    run.blocked_excerpt = Some(message.clone());
-                }
-                Ok(())
-            })?;
-            Ok::<_, anyhow::Error>(attention)
-        })
-        .transpose()?;
+        .map(|task| Attention {
+            task: task.id.clone(),
+            run: task.current_run().map(|run| run.id.clone()),
+            from: task.status,
+            previous_excerpt: task
+                .current_run()
+                .and_then(|run| run.blocked_excerpt.clone()),
+        });
     let changes = attention
         .as_ref()
         .map(|attention| Change {
@@ -189,12 +197,22 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         .into_iter()
         .collect();
     let alert = Alert { attention, message };
-    ALERTS.save(&ctx.store, "state", &alert)?;
-    ctx.store.log_event(
-        alert.attention.as_ref().map(|a| a.task.as_str()),
-        "escalated",
-        json!({"source": "resources", "reason": alert.message, "snapshot": state.snapshot, "largest_worktrees": sizes, "at": now}),
-    )?;
+    if let Some(attention) = &alert.attention {
+        ctx.store.update(&attention.task, |current| {
+            if current.status != attention.from
+                || current.current_run().map(|r| &r.id) != attention.run.as_ref()
+            {
+                anyhow::bail!("task changed while raising resource alert; retry next sync");
+            }
+            current.status = Status::NeedsMe;
+            if let Some(run) = current.current_run_mut() {
+                run.blocked_excerpt = Some(alert.message.clone());
+            }
+            publish_alert(&ctx.store, &alert, state, &sizes, now)
+        })?;
+    } else {
+        publish_alert(&ctx.store, &alert, state, &sizes, now)?;
+    }
     if let Err(error) = ctx
         .herdr
         .notify("Machine resources need you", &alert.message, true)

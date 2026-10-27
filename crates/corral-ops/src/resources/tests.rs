@@ -182,3 +182,59 @@ fn malformed_resource_records_fail_instead_of_resetting_hysteresis() {
     // When reading the admission latch, then malformed state is not treated as missing.
     assert!(read_status(&ctx).is_err());
 }
+
+#[test]
+fn alert_raise_and_recovery_commit_task_record_and_event_together() {
+    use corral_core::Status;
+
+    for initial in [Status::Running, Status::Ready] {
+        let (_tmp, mut ctx) = fixture();
+        ctx.herdr = corral_herdr::Herdr::with_bin(ctx.store.root().join("unused-herdr"), None);
+        let task = ctx.store.create("Pressure", None, initial, "").unwrap();
+        let now: Timestamp = "2026-10-15T00:00:00Z".parse().unwrap();
+        let severe = sample(&mut ctx, 0.1, 99, 200);
+        let before = ctx.store.view().unwrap().seq();
+
+        // A task attention transition, its record and its event publish once.
+        let changes = crate::resource_escalation::reconcile(&ctx, &severe, now).unwrap();
+        assert_eq!(ctx.store.view().unwrap().seq().0, before.0 + 1);
+        assert_eq!(changes.len(), usize::from(initial == Status::Running));
+        assert_eq!(
+            ctx.store.get(&task.id).unwrap().status,
+            if initial == Status::Running {
+                Status::NeedsMe
+            } else {
+                initial
+            }
+        );
+        assert!(
+            ctx.store
+                .record_row("resource-alert", "state")
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(ctx.store.events_of(None, &["escalated"]).unwrap().len(), 1);
+
+        let healthy = sample(&mut ctx, 0.1, 110, 110);
+        let before = ctx.store.view().unwrap().seq();
+
+        // Recovery publishes the restoration, record removal and event together too.
+        let changes = crate::resource_escalation::reconcile(&ctx, &healthy, now).unwrap();
+        assert_eq!(ctx.store.view().unwrap().seq().0, before.0 + 1);
+        assert_eq!(changes.len(), usize::from(initial == Status::Running));
+        assert_eq!(ctx.store.get(&task.id).unwrap().status, initial);
+        assert!(
+            ctx.store
+                .record_row("resource-alert", "state")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            ctx.store
+                .events_of(None, &["resources_cleared"])
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
