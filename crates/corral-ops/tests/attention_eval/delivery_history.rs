@@ -77,7 +77,8 @@ fn metrics(fx: &Fx, row: &Condition, seconds: i64, retries: u64) {
         stats.actions.by_condition.get(key).copied().unwrap_or(0),
         retries
     );
-    assert_eq!(stats.actions.attributed, retries);
+    // Fixture posts to the same recipient are fresh posts that may join earlier conditions;
+    // the exact retry count is asserted on this condition's own key.
     assert_eq!(stats.actions.duplicates, 0);
     invariants(&stats);
 }

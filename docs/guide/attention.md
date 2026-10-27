@@ -211,17 +211,23 @@ exempt owner-responsible entry batches; outside-ladder producers (empty coverage
 remain counted.
 
 Actions attach to a condition only through an exact identity: the message ID of
-`message_retried`; the recipient key of a fresh post that is not a retry's successor;
-the question key and revision of `question_answered`; the park revision; or the run of
-`replied`, `changes_requested`, `dispatched`, `resumed`, `automation_resumed`,
-`gate_started` and `review_started`. A run joins conditions whose key or open record names
-that run, and delivery conditions of that run's recipient. An action whose identity is
-missing or unknown is `unattributed`, never attached by task alone. An action matching
-several open conditions is `ambiguous` and attributed to none. A repeat through the same
-condition and identity is a `duplicate` while the earlier action's message is neither
-observed nor terminal; after a terminal message state it is `after_terminal`, and after
-an observation it is an ordinary new action. Raw question pushes resolve their source
-event through the receipt's reader cursor and join that question key and revision only.
+`message_retried`; the recipient key of a fresh post; the question key and revision of
+`question_answered`; the park revision; or the run of `replied`, `changes_requested`,
+`dispatched`, `resumed`, `automation_resumed`, `gate_started` and `review_started`. A
+condition's run comes from its key (`agent_lost`, `silent_turn`, `stuck_process`), its
+recipient key (`delivery_*`), or otherwise the task's retained run that had started by the
+condition's canonical `since`, so resolution, pruning and newer runs do not change it. One
+message effect is one action: a post named by a retry, reply or change request is not counted
+again, and an action never responds to the condition about its own message. A condition is
+open for an action when the action's canonical time (its detail `at`, else its append time)
+lies within the condition's `since` through `resolved_at`, both inclusive; publication order
+plays no part. An action whose identity is missing or unknown is `unattributed`, never attached
+by task alone. An action matching several open conditions is `ambiguous`. A repeat through the
+same condition and identity is a `duplicate` while the earlier action's message is neither
+observed nor terminal, judged from history before the window too; after a terminal message
+state it is `after_terminal`. Only actions inside the window are charged. A raw question push
+resolves its source event through the receipt's reader cursor and joins only the question
+condition of that key and revision that was open at the source event's time.
 Lost review rounds sum `released_review_runs` of escalations whose reason begins
 `integration preflight error`.
 

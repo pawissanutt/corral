@@ -527,6 +527,250 @@ fn raw_question_pushes_resolve_their_source_event_by_cursor() {
     assert!(blind.wakes.raw_push.attributed.is_empty());
 }
 
+fn runs(id: &str, started: &[(&str, i64)]) -> Task {
+    let mut task = task();
+    task.id = id.into();
+    for (run, at) in started {
+        task.runs.push(
+            serde_json::from_value(json!({"id": run, "agent": "fixture", "worktree": "/w",
+                "branch": "b", "base": "main", "base_sha": "abc", "started": t(*at)}))
+            .unwrap(),
+        );
+    }
+    task
+}
+
+#[test]
+fn escalation_and_stall_runs_survive_resolution_pruning_and_newer_runs() {
+    for kind in ["escalation", "infra_escalation", "unexpected_stall"] {
+        // Given an R1 condition since 100, an R1 review rerun at 200 and its resolution.
+        let key = format!("T-001/{kind}/{}", t(100));
+        let review = at(
+            event("review_started", Some("T-001"), json!({"run": "R1"})),
+            200,
+        );
+        let opening = || {
+            let mut opening = opened(&key, "pm", 100, json!(true));
+            opening.detail["since"] = json!(t(100));
+            opening
+        };
+        let resolved = resolved(&key, 300);
+        for (case, tasks, events) in [
+            (
+                "open",
+                vec![runs("T-001", &[("R1", 0)])],
+                vec![opening(), review.clone()],
+            ),
+            (
+                "pruned",
+                vec![runs("T-001", &[("R1", 0)])],
+                vec![opening(), review.clone(), resolved.clone()],
+            ),
+            (
+                "newer run",
+                vec![runs("T-001", &[("R1", 0), ("R2", 400)])],
+                vec![opening(), review.clone(), resolved.clone()],
+            ),
+        ] {
+            // When the read sees only canonical task runs and lifecycle facts.
+            let stats = compute(&tasks, &events, &[], window(0, 500));
+            // Then the historical run R1 still joins exactly that action.
+            assert_eq!(
+                stats.conditions[&key].run.as_deref(),
+                Some("R1"),
+                "{kind} {case}"
+            );
+            assert_eq!(
+                stats.actions.by_condition.get(&key),
+                Some(&1),
+                "{kind} {case}"
+            );
+        }
+        // And an R2 action never joins the R1 condition.
+        let r2 = at(
+            event("review_started", Some("T-001"), json!({"run": "R2"})),
+            200,
+        );
+        let tasks = [runs("T-001", &[("R1", 0), ("R2", 400)])];
+        let stats = compute(&tasks, &[opening(), r2], &[], window(0, 500));
+        assert_eq!(stats.actions.attributed, 0, "{kind}");
+    }
+}
+
+fn change(seq: u64, seconds: i64) -> Event {
+    at(
+        event(
+            "changes_requested",
+            Some("T-001"),
+            json!({"message": format!("T-001_R1#{seq}"), "submitted": false}),
+        ),
+        seconds,
+    )
+}
+
+#[test]
+fn prior_effects_before_the_window_still_decide_in_window_repeats() {
+    // Given an R1 condition opened at -100 and an unsettled request just before the window.
+    let lost = "T-001/agent_lost/R1:x";
+    let base = || vec![opened(lost, "pm", -100, json!(true)), change(1, -1)];
+    let settle = |kind: &str, detail: Value| at(event(kind, Some("T-001"), detail), -1);
+    for (case, between, duplicates, terminal) in [
+        ("outstanding", None, 1, 0),
+        (
+            "observed",
+            Some(settle("message_observed", json!({"id": "T-001_R1#1"}))),
+            0,
+            0,
+        ),
+        (
+            "terminal",
+            Some(settle(
+                "message_failed",
+                json!({"key": "T-001_R1", "seq": 1}),
+            )),
+            0,
+            1,
+        ),
+    ] {
+        let mut events = base();
+        events.extend(between);
+        events.push(change(2, 1));
+        // When the 0..100 window holds only the repeat.
+        let actions = compute(&[], &events, &[], window(0, 100)).actions;
+        // Then only the repeat is charged, judged against the earlier effect.
+        assert_eq!(actions.attributed, 1, "{case}");
+        assert_eq!(
+            (actions.duplicates, actions.after_terminal),
+            (duplicates, terminal),
+            "{case}"
+        );
+    }
+    // And the window bounds are inclusive at both ends.
+    let mut edges = vec![opened(lost, "pm", -100, json!(true))];
+    edges.extend([change(1, 0), change(2, 100), change(3, 101)]);
+    let actions = compute(&[], &edges, &[], window(0, 100)).actions;
+    assert_eq!((actions.attributed, actions.duplicates), (2, 1));
+}
+
+#[test]
+fn a_post_and_the_reply_naming_it_are_one_action() {
+    // Given an open delivery condition and production-shaped post+reply pairs.
+    let delivery = "T-001/delivery_failed/T-001_R1#1";
+    let reply = |seq: u64| {
+        [
+            event(
+                "message_posted",
+                Some("T-001"),
+                json!({"id": format!("T-001_R1#{seq}"), "key": "T-001_R1", "seq": seq}),
+            ),
+            owner(
+                "replied",
+                "T-001",
+                json!({"run": "R1", "message": format!("T-001_R1#{seq}"), "submitted": false}),
+            ),
+        ]
+    };
+    let mut events = vec![opened(delivery, "pm", 0, json!(true))];
+    events.extend(reply(2));
+    // When one reply is read, then it counts once.
+    let one = compute(&[], &events, &[], window(0, 60)).actions;
+    assert_eq!((one.attributed, one.owner_rescues), (1, 1));
+    // When a second reply follows while the first is unobserved, then two actions, one duplicate.
+    events.extend(reply(3));
+    let two = compute(&[], &events, &[], window(0, 60)).actions;
+    assert_eq!(
+        (two.attributed, two.duplicates, two.owner_rescues),
+        (2, 1, 2)
+    );
+}
+
+#[test]
+fn membership_follows_canonical_times_not_publication_order() {
+    // Given an answer canonically at 60 whose condition's opening (since 0) is published later.
+    let question = "T-001/question_open/T-001/R1/Q1@1";
+    let answer = |at: i64| {
+        event(
+            "question_answered",
+            Some("T-001"),
+            json!({"key": "T-001/R1/Q1", "revision": 1, "at": t(at)}),
+        )
+    };
+    let delayed = vec![
+        answer(60),
+        opened(question, "pm", 0, json!(true)),
+        resolved(question, 100),
+    ];
+    // When the opening was delayed by a crash, or is still only pending in the ledger.
+    let published = compute(&[], &delayed, &[], window(0, 200)).actions;
+    let mut pending = task();
+    pending.id = "T-001".into();
+    pending.attention.records.insert(
+        ConditionKey(question.into()),
+        AttentionRecord {
+            kind: "question_open".into(),
+            responsible: Responsible::Pm,
+            since: t(0),
+            since_source: SinceSource::Canonical,
+            first_recorded: t(0),
+            opened_at: t(0),
+            pm_live_at_open: Some(true),
+            levels: Default::default(),
+            handling: None,
+            first_handled_at: None,
+            resolved_at: None,
+        },
+    );
+    let unpublished = compute(&[pending], &[answer(60)], &[], window(0, 200)).actions;
+    // Then the answer joins either way; an answer before since never joins.
+    assert_eq!(published.by_condition.get(question), Some(&1));
+    assert_eq!(unpublished.by_condition.get(question), Some(&1));
+    let mut early = vec![opened(question, "pm", 100, json!(true))];
+    early[0].detail["since"] = json!(t(100));
+    early.push(answer(50));
+    let early = compute(&[], &early, &[], window(0, 200)).actions;
+    assert_eq!((early.attributed, early.unattributed), (0, 1));
+}
+
+#[test]
+fn a_raw_push_joins_the_condition_its_source_event_announced() {
+    // Given Q1@1 opened at 0, then escalated at 50 and unattended at 80.
+    let suffix = "T-001/R1/Q1@1";
+    let open = format!("T-001/question_open/{suffix}");
+    let escalated = format!("T-001/question_escalated/{suffix}");
+    let unattended = format!("T-001/question_unattended/{suffix}");
+    let source = event(
+        "question_opened",
+        Some("T-001"),
+        json!({"key": "T-001/R1/Q1", "revision": 1, "at": t(0)}),
+    );
+    let receipt = || {
+        event(
+            "pm_event_delivery",
+            Some("T-001"),
+            json!({"submitted": true, "event_kind": "question_opened", "pane": "pm:p1",
+                "cursor": {"offset": 20}}),
+        )
+    };
+    let events = vec![
+        opened(&open, "pm", 0, json!(true)),
+        source,
+        resolved(&open, 50),
+        opened(&escalated, "pm", 50, json!(true)),
+        opened(&unattended, "pm", 80, json!(true)),
+        receipt(),
+        receipt(),
+    ];
+    // When the delayed receipt and its replay are read with their cursors.
+    let cursors = [10, 20, 30, 40, 50, 60, 70];
+    let raw = compute_logged(&[], &events, &cursors, &[], window(0, 100))
+        .wakes
+        .raw_push;
+    // Then only the opening condition is attributed, once; nothing is ambiguous.
+    assert_eq!(raw.attributed.get(&open), Some(&1));
+    assert_eq!(raw.attributed.len(), 1);
+    assert_eq!((raw.submitted, raw.replayed, raw.ambiguous), (1, 1, 0));
+}
+
 #[cfg(unix)]
 #[path = "../../tests/attention_eval/crashes.rs"]
 mod eval_crashes;

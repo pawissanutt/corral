@@ -60,29 +60,34 @@ The ones the scenarios rely on:
 - **Actions** join only through an exact identity; a missing identity is
   `unattributed`, never attached by task alone:
   - `message_retried.from` joins its message's `delivery_*` condition.
-  - A `message_posted` that is not a retry's successor joins by recipient key.
+  - A fresh `message_posted` joins by recipient key. A post named by a retry
+    (`to`), reply or change request (`message`) is the same action as that
+    event, not another one.
   - `question_answered` joins by question key **and** revision.
   - `parked`/`unparked` join by park revision.
   - `replied`, `changes_requested`, `dispatched`, `resumed`,
     `automation_resumed`, `gate_started` and `review_started` join by run. The
     run comes from `detail.run` or, for inbox actions, the message ID's
     recipient. A condition's run comes from its key (`agent_lost`,
-    `silent_turn`, `stuck_process`), from the task's current run while its
-    record is open, or from its recipient key (`delivery_*`). Otherwise the run
-    is unknown and nothing joins.
+    `silent_turn`, `stuck_process`), its recipient key (`delivery_*`), or the
+    task's retained run that had started by the condition's canonical `since`.
+    This holds after resolution and pruning and when newer runs exist.
   - `moved` joins `unexpected_stall`.
-  - A condition counts as open at an action when its opening fact precedes the
-    action in the log and its resolution, if any, follows it.
+  - An action never responds to the condition about its own effect message.
+  - A condition is open at an action when the action's canonical time (detail
+    `at`, else append time) lies within `since`..`resolved_at`, both inclusive.
+    Publication order and delayed or pending facts play no part.
   - An action that matches more than one open condition is `ambiguous`.
   - **Duplicate:** another action on the same condition and identity, whatever
     the event kind, while the earlier action's effect message is neither
     `message_observed` nor terminal (`message_<state>` for its key and seq).
-    Actions without an effect message settle immediately.
+    Earlier actions before the window seed this; only in-window actions are
+    charged. Actions without an effect message settle immediately.
   - **After terminal:** such a repeat after the effect message turned terminal.
 - **Raw pushes:** a submitted `pm_event_delivery` is deduplicated by pane,
-  cursor and kind. It is attributed only through its source event, which is
-  found by the receipt's reader cursor; a `question_opened` source joins that
-  question key and revision.
+  cursor and kind. It is attributed only through its source event, found by the
+  receipt's reader cursor. A `question_opened` source joins only that question
+  key and revision's condition that was open at the source event's time.
 - **Owner rescues:** attributed owner-actor actions on PM-responsible
   conditions, plus owner `attend` on them.
 - **Lost review rounds:** the sum of `released_review_runs` lengths on
@@ -121,7 +126,7 @@ seconds from the fixture start.
 | S17 | 20 question conditions opened in one live-PM pass, resolved by the next | 20 opened and 20 resolved facts; records pruned; population 20, resolved 20, pm_available 20; handling observed 20; resolution observed 20; `attention_due` 1; attention levels 20; batches 0; backlog end open 0 |
 | S18 | engine offline and notify failing across the owner bound | owner claimed 1800; calls 1; no `agent_lost`; failure 1; calls [1,1] |
 | S19 | kill barriers: single-claim matrix, A/B/C, and every production producer | see the three tables below |
-| S20 | two rejected messages; retry the first by ID, then a fresh post | first condition joined 1, second none; attributed 1; ambiguous 1; duplicates 0 |
+| S20 | two rejected messages on one run; retry the first by ID, then a fresh post | first condition joined 2 (the second setup post, a fresh post on that recipient while the first condition is canonically open, plus the exact-ID retry); second none; attributed 2; fresh reply ambiguous 1; duplicates 0 |
 | S21 | all four recipients (run, review run, planner, plan review), each through owning sync passes and stats | see the S21 section below |
 
 ### S19 single-claim matrix (one batch, one covered claim)
@@ -246,7 +251,29 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
   calls [0,0].
 - **Raw push cursors:** with two open questions, a receipt naming the second's
   `question_opened` cursor attributes only that question; its delayed replay is
-  deduplicated; without cursors nothing is attributed.
+  deduplicated; without cursors nothing is attributed. After the same revision
+  goes open -> escalated (50) -> unattended (80), a delayed receipt and its
+  replay attribute only `question_open`, once, with nothing ambiguous.
+- **Historical runs:** for `escalation`, `infra_escalation` and
+  `unexpected_stall` since 100 with an R1 `review_started` at 200, the action
+  joins with the record open, after resolution and pruning, and after an R2
+  started at 400. An R2 action never joins.
+- **Cross-window priors:** with an R1 condition opened at -100 and a change
+  request at -1, a repeat at +1 in window 0..100 is attributed 1 and counts as
+  a duplicate when outstanding, as nothing after `message_observed`, and as
+  after-terminal after `message_failed`. Actions at 0 and 100 are charged and
+  one at 101 is not.
+- **One action per message:** a production-shaped `message_posted` plus
+  owner `replied` counts as 1 action and 1 rescue; two such pairs give 2
+  actions, 1 duplicate and 2 rescues.
+- **Canonical membership:** an answer canonically at 60 joins its question
+  whether the opening (since 0) is published after it or is still pending in
+  the ledger; an answer at 50 before a since of 100 stays unattributed.
+- **Real event streams** (`eval_retire`): two real `corral reply` calls on a
+  run with a definitive delivery failure log a post and a reply each. They give
+  2 actions on that condition and 1 duplicate. A real `request_changes` on an
+  ended run whose escalated stage derives an `unexpected_stall` joins that
+  condition once, through its historically recovered run R1.
 
 ### Wake budget fixtures
 
@@ -272,9 +299,10 @@ condition's kind and `since`, exact-key action attribution, and duplicates 0.
 - **S12's** reopening runs inside a real delivery pass through the public
   `DeliveryAdapter::send` seam, not a cfg(test) hook. The unfenced control
   writes the cancellation that the pre-fence stale retire would have written.
-- **Run-level joins** cover resolved escalation and stall conditions only when
-  their run was recorded (by key, or an open record at read time). Otherwise
-  their run-level actions are reported as unattributed.
+- **Clock domains in fixtures:** production stamps actions with the process
+  clock while scenario conditions use fixed fixture times. Attribution
+  scenarios therefore use conditions whose canonical `since` precedes those
+  stamps, for example message creation times or a fixed 2020 stage.
 - **Hot-read budget:** measured at 6 keyed probes per owner entry, against the
   design's five; follow-up T-471.
 - **Layout:** the action-attribution joins live in `attention/metrics/joins.rs`,
