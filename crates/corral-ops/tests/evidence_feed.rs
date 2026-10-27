@@ -347,7 +347,8 @@ fn run(id: &str, started: &str, ended: bool, summary: Option<&str>) -> corral_co
 
 /// Counters of the public refresh and of sync's changed-stamp route on a board of `grow`
 /// terminal tasks, and of a current-run scalar change and a current-run summary change on a
-/// task holding `grow` ended runs, comments and artifacts.
+/// task holding `grow` comments and artifacts. Its two ended runs stay fixed: a run change
+/// re-derives the task's run documents from their rows (per-row change records are a follow-up).
 fn feed_steps(grow: usize) -> (Vec<Counted>, bool) {
     let tmp = tempfile::tempdir().unwrap();
     Store::init(tmp.path()).unwrap();
@@ -388,12 +389,12 @@ fn feed_steps(grow: usize) -> (Vec<Counted>, bool) {
     }
     ctx.store
         .update(&active, |t| {
-            for i in 0..grow {
+            for i in 0..2 {
                 let id = format!("R{}", i + 1);
                 t.runs
                     .push(run(&id, "2026-01-01T00:00:00Z", true, Some("old summary")));
             }
-            let current = format!("R{}", grow + 1);
+            let current = "R3".to_string();
             t.runs
                 .push(run(&current, "2026-01-02T00:00:00Z", false, None));
             Ok(())
@@ -444,4 +445,82 @@ fn public_refresh_and_current_run_changes_do_work_independent_of_history() {
             .all(|(c, n)| *n == 0 || *c == Counter::ViewsOpened)
     );
     assert!(small_found && large_found);
+}
+
+/// The indexed text of document `reference`, if the persisted index holds it.
+fn indexed(ctx: &Ctx, reference: &str) -> Option<String> {
+    let path = ctx.store.cache_root().unwrap().join("content-search.json");
+    let cache: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    cache["documents"][reference]["text"]
+        .as_str()
+        .map(str::to_string)
+}
+
+#[test]
+fn a_run_demoted_after_its_change_keeps_its_indexed_text_like_a_rebuild() {
+    for same_write in [false, true] {
+        // Given an indexed task whose current run R1 has no summary.
+        let tmp = tempfile::tempdir().unwrap();
+        Store::init(tmp.path()).unwrap();
+        let ctx = ctx(tmp.path());
+        let id = ctx
+            .store
+            .create("Demoted", None, Status::Running, "body")
+            .unwrap()
+            .id;
+        ctx.store
+            .update(&id, |t| {
+                t.runs.push(run("R1", "2026-01-01T00:00:00Z", false, None));
+                Ok(())
+            })
+            .unwrap();
+        refresh_search_index(&ctx).unwrap();
+        // When R1 gets its final summary and R2 starts, in separate commits or in one write.
+        let finish = |t: &mut corral_core::Task| {
+            let r1 = t.runs.last_mut().unwrap();
+            r1.summary = Some("finalsummarytoken".into());
+            r1.ended = Some("2026-01-01T01:00:00Z".parse().unwrap());
+        };
+        let start = |t: &mut corral_core::Task| {
+            t.runs.push(run("R2", "2026-01-02T00:00:00Z", false, None));
+        };
+        if same_write {
+            ctx.store
+                .update(&id, |t| {
+                    finish(t);
+                    start(t);
+                    Ok(())
+                })
+                .unwrap();
+        } else {
+            ctx.store
+                .update(&id, |t| {
+                    finish(t);
+                    Ok(())
+                })
+                .unwrap();
+            ctx.store
+                .update(&id, |t| {
+                    start(t);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        refresh_search_index(&ctx).unwrap();
+        refresh_search_index(&ctx).unwrap();
+        // Then the followed index holds R1's final summary, as a canonical rebuild does.
+        let reference = format!("{id}:R1:summary");
+        let followed = indexed(&ctx, &reference);
+        let reindex = ContentSearch {
+            reindex: true,
+            ..Default::default()
+        };
+        search_content(&ctx, "x", &reindex).unwrap();
+        assert_eq!(
+            followed,
+            indexed(&ctx, &reference),
+            "same write: {same_write}"
+        );
+        assert_eq!(followed.as_deref(), Some("finalsummarytoken"));
+    }
 }
