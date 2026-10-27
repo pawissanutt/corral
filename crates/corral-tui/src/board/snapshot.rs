@@ -26,8 +26,13 @@ pub struct BoardSnapshot {
 impl BoardSnapshot {
     pub(crate) fn load(ctx: &Ctx) -> Result<Self> {
         let live_ctx = ctx.clone();
+        // Count the frame's view, but leave cold derivation preparation outside HotScope.
+        let store = {
+            let _hot = corral_core::work::HotScope::enter();
+            ctx.store.read_only_snapshot()?
+        };
         let ctx = &Ctx {
-            store: ctx.store.read_only_snapshot()?,
+            store,
             ..ctx.clone()
         };
         corral_ops::lesson_rows::prepare_evaluation(ctx)?;

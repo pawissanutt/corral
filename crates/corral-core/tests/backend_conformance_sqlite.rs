@@ -9,6 +9,8 @@ mod backend {
 mod blob_ref {
     pub use corral_core::blob_ref::*;
 }
+#[path = "sqlite_support/artifact_facts.rs"]
+mod artifact_facts;
 mod sqlite_support;
 
 use std::io::Write;
@@ -144,6 +146,7 @@ fn expected_schema() -> Result<Vec<(String, String, Option<String>)>> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(SECTION_11)?;
     conn.execute_batch(BACKEND_TABLES)?;
+    conn.execute_batch(corral_core::sqlite::ARTIFACT_REVIEW_TABLES)?;
     schema_of(&conn)
 }
 

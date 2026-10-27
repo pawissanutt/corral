@@ -54,9 +54,8 @@ fn artifact_growth_keeps_production_frame_and_pm_work_constant_and_cards_equal_f
             reviewed.insert(path);
         }
         old_count = 4 * factor;
-        fx.ctx
-            .store
-            .save_record("reviewed-artifacts", "set", &reviewed)
+        corral_core::records::RecordArea::new("reviewed-artifacts")
+            .save(&fx.ctx.store, "set", &reviewed)
             .unwrap();
         let full = fx.ctx.store.get("T-006").unwrap();
         let before = work::snapshot();

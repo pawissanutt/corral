@@ -3,6 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::TaskNum;
 
+pub(crate) fn paths(doc: &serde_json::Value) -> anyhow::Result<BTreeSet<String>> {
+    crate::records::RecordArea::new("reviewed-artifacts").decode_document(doc.clone())
+}
+
 pub(crate) fn kept_path(doc: &serde_json::Value) -> anyhow::Result<Option<String>> {
     // The low-level blob promotion contract uses ArtifactRow, not a facade registration.
     if doc.get("path").is_none() {

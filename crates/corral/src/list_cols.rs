@@ -183,7 +183,7 @@ fn head_cell(
 mod artifact_facts_list {
     use super::*;
     use clap::{CommandFactory, FromArgMatches};
-    use corral_core::work::{self, Counter, HotScope};
+    use corral_core::work::{self, Counter};
     use corral_core::{Artifact, Status, Store};
 
     #[test]
@@ -233,8 +233,8 @@ mod artifact_facts_list {
                 old.artifacts.push(artifact("R0", path, "report", "Report"));
                 store.fixture_put_task(&old).unwrap();
             }
-            store
-                .save_record("reviewed-artifacts", "set", &marks)
+            corral_core::records::RecordArea::new("reviewed-artifacts")
+                .save(&store, "set", &marks)
                 .unwrap();
             let ctx = Ctx {
                 store,
@@ -243,9 +243,9 @@ mod artifact_facts_list {
             };
             let columns = ["id", "artifacts", "lines"].map(str::to_owned);
             let before = work::snapshot();
-            // When the actual open-list command evaluates artifact columns.
+            // When the actual open-list command evaluates artifact columns. Its production
+            // HotScope excludes CLI attribution's deferred FU-2 worktree discovery.
             {
-                let _hot = HotScope::enter();
                 let matches = crate::Cli::command()
                     .try_get_matches_from([
                         "corral",
