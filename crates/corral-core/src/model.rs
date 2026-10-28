@@ -217,6 +217,8 @@ pub enum GateResult {
     Running,
     Pass,
     Fail,
+    /// Commands passed, but verification inputs changed. Never authorizes completion.
+    Stale,
 }
 
 impl GateResult {
@@ -225,6 +227,7 @@ impl GateResult {
             GateResult::Running => "running",
             GateResult::Pass => "pass",
             GateResult::Fail => "fail",
+            GateResult::Stale => "stale",
         }
     }
 }
@@ -243,10 +246,10 @@ pub struct GateRecord {
     /// a synthetic Fail receipt: gate_collect remains the result authority.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub process_lost: bool,
-    /// The first command that failed (Fail only).
+    /// The first failed command, invalid receipt reason, or changed-input diagnostics (Stale).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_cmd: Option<String>,
-    /// Start time while Running, finish time once Pass/Fail.
+    /// Start time while Running, finish time once Pass/Fail/Stale.
     pub at: jiff::Timestamp,
     /// Worktree HEAD the gate ran on; a result is only valid while HEAD still equals it.
     pub sha: String,

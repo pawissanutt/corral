@@ -194,8 +194,9 @@ pub(super) fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
     let mut text = match g.result {
         GateResult::Running => format!("Gate still running at {sha}."),
         GateResult::Pass => format!("Gate passed at {sha} ({})", g.at),
-        GateResult::Fail => format!(
-            "Gate FAILED at {sha} ({}): `{}`",
+        GateResult::Fail | GateResult::Stale => format!(
+            "Gate {} at {sha} ({}): `{}`",
+            g.result.as_str(),
             g.at,
             g.failed_cmd.as_deref().unwrap_or("?")
         ),

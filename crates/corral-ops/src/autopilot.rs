@@ -262,7 +262,9 @@ impl Pilot<'_> {
         }
         // A gate that passed (or is running) on this exact commit stands; a failed one is re-run.
         let reuse = match &self.run.gate {
-            Some(g) if g.result != GateResult::Fail => self.gate_stands(g)?,
+            Some(g) if !matches!(g.result, GateResult::Fail | GateResult::Stale) => {
+                self.gate_stands(g)?
+            }
             _ => false,
         };
         if !reuse && let GateNow::Replayed(step) = self.start_gate(&head)? {
@@ -354,7 +356,7 @@ impl Pilot<'_> {
         }
         Ok(match gate.result {
             GateResult::Pass => GateNow::Pass,
-            GateResult::Fail => GateNow::Fail(Box::new(gate)),
+            GateResult::Fail | GateResult::Stale => GateNow::Fail(Box::new(gate)),
             GateResult::Running => GateNow::Pending,
         })
     }

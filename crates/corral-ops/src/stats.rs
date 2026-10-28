@@ -328,7 +328,7 @@ pub(crate) fn collect_stats(
             {
                 match gate.result {
                     GateResult::Pass => gates += 1,
-                    GateResult::Fail => {
+                    GateResult::Fail | GateResult::Stale => {
                         gates += 1;
                         failures += 1;
                     }

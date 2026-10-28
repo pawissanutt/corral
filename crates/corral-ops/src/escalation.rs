@@ -18,7 +18,7 @@ fn failures(task: &Task) -> u32 {
             let failed = run
                 .gate
                 .as_ref()
-                .is_some_and(|g| g.result == GateResult::Fail)
+                .is_some_and(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))
                 || run
                     .review
                     .as_ref()

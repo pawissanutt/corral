@@ -128,6 +128,13 @@ fn done_inner(
     }
     let run = current_run(&task)?;
     refuse_open_questions(&task, &run.id)?;
+    if run
+        .gate
+        .as_ref()
+        .is_some_and(|g| g.result == GateResult::Stale)
+    {
+        bail!("gate_stale: rebase onto current main and run the gate once on the new base");
+    }
     if let Some(report) = report {
         report.check_gate_ref(ctx, &task)?;
     }
@@ -399,7 +406,10 @@ pub(crate) fn landing_gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<b
 
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.
 fn quick_approval_on_full_fail(run: &Run) -> Option<&str> {
-    let gate = run.gate.as_ref().filter(|g| g.result == GateResult::Fail)?;
+    let gate = run
+        .gate
+        .as_ref()
+        .filter(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))?;
     gate.identity.as_ref().filter(|i| i.gate_tier.is_none())?;
     let review = run.review.as_ref()?;
     let binding = review.identity.as_ref()?.gate_tier.as_deref()?;
@@ -475,6 +485,15 @@ pub fn approve(
         .with_context(|| {
             format!("approval already in progress; run `corral approve {id}` after it finishes")
         })?;
+    if ctx
+        .store
+        .get(id)?
+        .current_run()
+        .and_then(|r| r.gate.as_ref())
+        .is_some_and(|g| g.result == GateResult::Stale)
+    {
+        bail!("gate_stale: rebase onto current main and run the gate once on the new base");
+    }
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
@@ -510,6 +529,13 @@ pub(crate) fn approve_landed(
             task.id,
             task.status.label()
         );
+    }
+    if run
+        .gate
+        .as_ref()
+        .is_some_and(|g| g.result == GateResult::Stale)
+    {
+        bail!("gate_stale: rebase onto current main and run the gate once on the new base");
     }
     let checkout = target
         .as_ref()

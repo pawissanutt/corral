@@ -203,7 +203,7 @@ fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
     }
     match attempt.record.result {
         GateResult::Pass => attempt.state = ProgressState::Passed,
-        GateResult::Fail => attempt.state = ProgressState::Failed,
+        GateResult::Fail | GateResult::Stale => attempt.state = ProgressState::Failed,
         GateResult::Running => {
             if attempt.record.process_lost || gate.is_none() {
                 if matches!(

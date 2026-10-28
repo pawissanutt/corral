@@ -84,6 +84,9 @@ fn running_task(gate: &[&str]) -> (tempfile::TempDir, Ctx, String, PathBuf) {
     (tmp, ctx, task.id, worktree)
 }
 
+#[path = "gate_ops/stale.rs"]
+mod stale;
+
 fn gate_log(ctx: &Ctx, id: &str) -> (String, String) {
     let task = ctx.store.get(id).unwrap();
     let a = task
@@ -336,7 +339,7 @@ fn changing_project_environment_invalidates_existing_gate_receipts() {
     let record = corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
 
     // Then policy identity invalidates the former pass without another command.
-    assert_eq!(record.result, GateResult::Fail);
+    assert_eq!(record.result, GateResult::Stale);
     assert!(record.failed_cmd.unwrap().starts_with("stale_result:"));
 }
 
@@ -400,8 +403,8 @@ fn same_head_policy_edit_invalidates_previous_pass() {
     let collected = corral_ops::gate_collect(&ctx, &id).unwrap().unwrap();
     // Then the old PASS cannot stand for the new policy.
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), first.sha);
-    assert_eq!(collected.result, GateResult::Fail);
-    assert!(collected.failed_cmd.unwrap().starts_with("stale_result:"));
+    assert_eq!(collected.result, GateResult::Stale);
+    assert!(collected.failed_cmd.unwrap().contains("policy_digest"));
 }
 
 #[test]
@@ -425,8 +428,8 @@ fn stale_result_file_cannot_complete_a_new_attempt() {
         first.identity.unwrap().attempt,
         result.identity.unwrap().attempt
     );
-    assert_eq!(result.result, GateResult::Fail);
-    assert!(result.failed_cmd.unwrap().starts_with("stale_result:"));
+    assert_eq!(result.result, GateResult::Stale);
+    assert!(result.failed_cmd.unwrap().contains("attempt"));
 }
 
 #[test]
@@ -440,8 +443,11 @@ fn changed_task_criterion_invalidates_inflight_result() {
         })
         .unwrap();
     let result = corral_ops::gate_wait(&ctx, &id).unwrap();
-    assert_eq!(result.result, GateResult::Fail);
-    assert!(result.failed_cmd.unwrap().starts_with("stale_result:"));
+    assert_eq!(result.result, GateResult::Stale);
+    let detail = result.failed_cmd.unwrap();
+    assert!(detail.contains("spec_digest"));
+    assert!(detail.contains("rebase") && detail.contains("once"));
+    assert_eq!(serde_json::to_value(result.result).unwrap(), "stale");
 }
 
 #[test]
