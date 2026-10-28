@@ -198,6 +198,8 @@ fn clean_listed(
     // pane -> (owner index, ledger rows naming it)
     let mut owned: BTreeMap<String, (usize, Vec<corral_core::CleanupPane>)> = BTreeMap::new();
     let mut workspaces: BTreeMap<String, usize> = BTreeMap::new();
+    // Workspace debts name no pane: each stays with its own owner, outside the pane map.
+    let mut debts: Vec<(usize, corral_core::CleanupPane)> = Vec::new();
     for (i, (task, head)) in owners.iter().enumerate() {
         // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
         if crate::agent::hooks::task_is_pi_native(task)
@@ -231,6 +233,10 @@ fn clean_listed(
             {
                 workspaces.insert(workspace.clone(), i);
             }
+            if pane.pane.is_empty() {
+                debts.push((i, pane));
+                continue;
+            }
             owned
                 .entry(pane.pane.clone())
                 .or_insert_with(|| (i, Vec::new()))
@@ -238,7 +244,7 @@ fn clean_listed(
                 .push(pane);
         }
     }
-    if owned.is_empty() && workspaces.is_empty() {
+    if owned.is_empty() && workspaces.is_empty() && debts.is_empty() {
         return Ok(warnings);
     }
     let listed = ctx.herdr.pane_list()?;
@@ -249,7 +255,10 @@ fn clean_listed(
         .unwrap_or_default();
     // Rows whose pane this pass closed or found absent. A Round release leaves the row's
     // workspace owed to a Task cleanup; a Task cleanup keeps a row whose workspace stays open.
-    let mut done: Vec<(usize, corral_core::CleanupPane)> = Vec::new();
+    let mut done: Vec<(usize, corral_core::CleanupPane)> = debts
+        .into_iter()
+        .filter(|(_, r)| r.socket.is_empty() || r.socket == socket)
+        .collect();
     for (pane, (i, rows)) in &owned {
         let (task, _) = owners[*i];
         match listed.iter().find(|p| &p.pane_id == pane) {

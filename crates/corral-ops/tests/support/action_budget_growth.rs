@@ -171,7 +171,7 @@ pub(super) fn land_grown(store: &Store, id: &str) {
 }
 
 /// The growth [`grow`] claims is really there: every history family of `id` reaches `scale`.
-pub(super) fn grown_by(store: &Store, id: &str, scale: usize, acted: bool) {
+pub(super) fn grown_by(store: &Store, id: &str, scale: usize, acted: bool, children: bool) {
     let task = store.get(id).unwrap();
     let historic: Vec<&Run> = task.runs.iter().filter(|r| r.id.starts_with('H')).collect();
     let nested = |f: fn(&Run) -> usize| historic.iter().map(|r| f(r)).sum::<usize>();
@@ -195,15 +195,167 @@ pub(super) fn grown_by(store: &Store, id: &str, scale: usize, acted: bool) {
             assert!(count >= scale, "{id}: {family} {count} < {scale}");
         }
     }
-    if let Some(run) = task.current_run().filter(|run| run.outcome.is_none()) {
-        let entries = run.usage.as_ref().map_or(0, |u| u.entries.len());
-        assert!(entries >= scale, "{id}: current usage entries");
+    // The current container itself grew, wherever it is a real run.
+    if let Some(run) = task.runs.last().filter(|run| !run.id.starts_with('H')) {
+        let usage = |r: &Run| r.usage.as_ref().map_or(0, |u| u.entries.len());
+        let grown: Vec<&Run> = run
+            .review_runs
+            .iter()
+            .filter(|c| c.id.contains("-review-h"))
+            .collect();
+        let mut families = vec![
+            ("current usage entries", usage(run)),
+            ("current switches", run.switches.len().saturating_sub(1)),
+            ("current applied effects", run.inbox.effects_applied.len()),
+            ("earlier-binding cursors", run.inbox.observe_cursors.len()),
+        ];
+        if children {
+            families.push(("current review children", grown.len()));
+            families.push((
+                "current children's usage",
+                grown.iter().map(|c| usage(c)).sum(),
+            ));
+            // A child's pane is on its run's session: a run without a pane has none.
+            families.push((
+                "current children's panes",
+                if run.herdr.is_some() {
+                    grown.iter().filter(|c| c.herdr.is_some()).count()
+                } else {
+                    scale
+                },
+            ));
+        }
+        if run.checkpoints.is_empty() {
+            families.push(("current final waits", run.obligations.waits.len()));
+            families.push((
+                "current answered decisions",
+                run.obligations.decisions.len(),
+            ));
+        } else {
+            families.push(("older checkpoints", run.checkpoints.len() - 1));
+        }
+        for (family, count) in families {
+            assert!(
+                count >= scale,
+                "{id} {}: {family} {count} < {scale}",
+                run.id
+            );
+        }
     }
+}
+
+/// Zero-token, unpriced usage: the totals stay as they were.
+fn zero_usage(scale: usize) -> Vec<corral_core::UsageEntry> {
+    (0..scale)
+        .map(|i| corral_core::UsageEntry {
+            at: Some(fixture::now()),
+            latency_ms: Some(1),
+            model: Some(format!("historic-{i:03}")),
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            reported_usd: None,
+            estimated_usd: None,
+            price_source: None,
+            unpriced_tokens: 0,
+        })
+        .collect()
+}
+
+/// Nested history of a current coding container that keeps its legal state and read facts:
+/// older incompatible checkpoints behind the newest (the last record stays newest), usage,
+/// finished review children with their own usage and closed pane before any current child,
+/// switches before the last, applied inbox effects below the next sequence, and cursors of
+/// earlier session bindings. Final waits and decisions go only on a run without a checkpoint:
+/// a checkpointed run's obligations must equal its newest checkpoint's frozen ones
+/// (`resume::checkpoint_current`), and growing both is the emitted variant.
+fn grow_current(run: &mut Run, scale: usize, root: &FsPath, children: bool) {
+    if let Some(newest) = run.checkpoints.pop() {
+        run.checkpoints
+            .extend((0..scale).map(|_| checkpoint_record(&run.id, 0, &Default::default())));
+        run.checkpoints.push(newest);
+    } else {
+        for i in 0..scale {
+            let (wait, decision) = final_obligations(&run.id, i);
+            run.obligations.waits.push(wait);
+            run.obligations.decisions.push(decision);
+        }
+    }
+    run.usage
+        .get_or_insert_with(Default::default)
+        .entries
+        .extend(zero_usage(scale));
+    // A reviewer's pane is on the store's bound herdr session, as the run's own pane is.
+    let socket = serde_json::to_value(&run.herdr).unwrap()["socket"].clone();
+    let grown = (0..scale).map(|i| {
+        let mut child = bare_historic(i, root);
+        child.id = format!("{}-review-h{i:03}", run.id);
+        child.outcome = Some(corral_core::RunOutcome::Done);
+        child
+            .usage
+            .get_or_insert_with(Default::default)
+            .entries
+            .extend(zero_usage(1));
+        if !socket.is_null() {
+            child.herdr = Some(
+                serde_json::from_value(json!({
+                    "workspace_id": format!("historic-w{i:03}"),
+                    "pane_id": format!("historic-w{i:03}:p1"),
+                    "socket": socket,
+                }))
+                .unwrap(),
+            );
+        }
+        child
+    });
+    if children {
+        run.review_runs.splice(0..0, grown.collect::<Vec<_>>());
+    }
+    let last = run.switches.pop();
+    run.switches
+        .extend((0..scale).map(|i| corral_core::ProfileSwitch {
+            from: format!("historic-{i}"),
+            to: format!("historic-{}", i + 1),
+            reason: "earlier switch".into(),
+        }));
+    run.switches.extend(last.or_else(|| {
+        Some(corral_core::ProfileSwitch {
+            from: "historic-last".into(),
+            to: run.profile.clone().unwrap_or_default(),
+            reason: "earlier switch".into(),
+        })
+    }));
+    let next = run.inbox.next_seq.max(1);
+    run.inbox.effects_applied.extend(next..next + scale as u64);
+    run.inbox.next_seq = next + scale as u64;
+    run.inbox
+        .observe_cursors
+        .extend((0..scale).map(|i| corral_core::inbox::SessionCursor {
+            adapter: "historic".into(),
+            binding: corral_core::inbox::SessionBinding {
+                session: format!("historic-session-{i:03}"),
+                endpoint: None,
+                transcript: None,
+            },
+            cursor: corral_core::inbox::ObserveCursor {
+                offset: 64,
+                last_complete_line: 1,
+                coverage: Default::default(),
+            },
+        }));
 }
 
 /// `scale` of every history family on task `id`. The acted task gets earlier coding runs only
 /// beside its own (its actions decide on whether it has run); every other task gets them always.
-pub(super) fn grow(store: &Store, root: &FsPath, id: &str, scale: usize, acted: bool) {
+pub(super) fn grow(
+    store: &Store,
+    root: &FsPath,
+    id: &str,
+    scale: usize,
+    acted: bool,
+    children: bool,
+) {
     store
         .update(id, |t| {
             if !acted || !t.runs.is_empty() {
@@ -271,46 +423,27 @@ pub(super) fn grow(store: &Store, root: &FsPath, id: &str, scale: usize, acted: 
                     attempt.reviews.splice(0..0, reviews.collect::<Vec<_>>());
                 }
             }
-            // The current container's usage entries.
-            if let Some(run) = t.runs.last_mut().filter(|run| run.outcome.is_none()) {
-                let usage = run.usage.get_or_insert_with(Default::default);
-                usage
-                    .entries
-                    .extend((0..scale).map(|i| corral_core::UsageEntry {
-                        at: Some(fixture::now()),
-                        latency_ms: Some(1),
-                        model: Some(format!("historic-{i:03}")),
-                        input: 1,
-                        output: 1,
-                        cache_read: 0,
-                        cache_write: 0,
-                        reported_usd: None,
-                        estimated_usd: None,
-                        price_source: None,
-                        unpriced_tokens: 2,
-                    }));
-            }
-            // Nested history goes before the current child and the last switch, which stay.
-            if let Some(run) = t.runs.last_mut().filter(|run| !run.review_runs.is_empty()) {
-                let children = (0..scale).map(|i| {
-                    let mut child = bare_historic(i, root);
-                    child.id = format!("{}-review-h{i:03}", run.id);
-                    child.outcome = Some(corral_core::RunOutcome::Done);
-                    child
-                });
-                run.review_runs.splice(0..0, children.collect::<Vec<_>>());
-            }
-            if let Some(run) = t.runs.last_mut().filter(|run| !run.switches.is_empty()) {
-                let switches = (0..scale).map(|i| corral_core::ProfileSwitch {
-                    from: format!("historic-{i}"),
-                    to: format!("historic-{}", i + 1),
-                    reason: "earlier switch".into(),
-                });
-                run.switches.splice(0..0, switches.collect::<Vec<_>>());
+            if let Some(run) = t.runs.last_mut().filter(|run| !run.id.starts_with('H')) {
+                grow_current(run, scale, root, children);
             }
             Ok(())
         })
         .unwrap();
+    // A cleanup released the finished children's panes long ago.
+    let keys: Vec<String> = store
+        .head(id)
+        .unwrap()
+        .unreleased_panes(false)
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.pane.starts_with("historic-"))
+        .map(|row| row.key)
+        .collect();
+    if !keys.is_empty() {
+        store
+            .update_head(id, |h| h.release_panes(&keys, &[]))
+            .unwrap();
+    }
     // Scope amendments: a plain update may not write them.
     let mut task = store.get(id).unwrap();
     let first = u64::try_from(task.approved_scope_history.len()).unwrap();
@@ -382,7 +515,7 @@ pub(super) fn emit(store: &Store, id: &str, scale: usize, kind: Kind) {
                     }
                 }
                 let frozen = run.obligations.clone();
-                let revision = run.checkpoints.len() as u64 + 1;
+                let revision = run.checkpoints.last().map_or(0, |c| c.checkpoint.revision) + 1;
                 let mut record = checkpoint_record(&run.id, revision, &frozen);
                 // Named like a saved checkpoint, so the head's newest meta keeps its size.
                 record.artifact = format!(

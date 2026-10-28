@@ -171,11 +171,14 @@ fn interrupted_automatic_publication_recovers_without_scope_history_or_board_rea
         }
         measured.push(recovery);
     }
-    // And recovery decodes no more documents of any class as the scope history and the board
-    // grow. Its byte totals vary by a few bytes between identical runs (an unpinned stamp of
-    // this fixture's store); exact byte accounting is the action budget's.
+    // And recovery decodes no more documents or bytes as the scope history and the board grow.
     let (small, large) = (&measured[0], &measured[1]);
     for counter in Counter::DECODES {
         assert_eq!(small.get(counter), large.get(counter), "{counter:?}");
     }
+    assert_eq!(
+        small.unattributed_byte_remainder(),
+        large.unattributed_byte_remainder(),
+        "bytes"
+    );
 }
