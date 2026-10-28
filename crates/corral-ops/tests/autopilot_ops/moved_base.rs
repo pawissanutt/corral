@@ -123,36 +123,13 @@ fn an_approval_across_a_conflicting_landing_is_never_carried() {
 }
 
 #[test]
-fn an_approval_after_sync_recorded_a_packet_for_the_moved_main_is_carried() {
-    // Given a review whose sync recorded an integration packet for the moved main (T-522).
-    let (fx, reviewed) = reviewing_then_main_moves("unrelated.txt", "other task\n");
+fn a_packet_refusal_after_main_moved_relaunches_the_review_without_a_round() {
+    // Given a review whose sync recorded an integration packet for the moved main (T-522),
+    // so the reviewer's approval is refused only on its packet; the candidate is unchanged.
+    let (fx, _) = reviewing_then_main_moves("unrelated.txt", "other task\n");
     let packets = integration_packets(&fx);
     assert_eq!(fx.sync().status, Status::Review, "{}", fx.reason());
     assert_eq!(integration_packets(&fx), packets + 1);
-
-    // When the reviewer's callback approves, it is recorded against the reviewed base.
-    reviewer_callback(&fx, Verdict::Approve, "Looks right.").unwrap();
-    let review = fx.run().review.unwrap();
-    assert_eq!(review.verdict, Some(Verdict::Approve));
-    assert_eq!(review.identity.unwrap().integration_base, reviewed);
-
-    // Then autopilot re-gates and lands it without Needs me or a review round.
-    let task = fx.sync();
-    assert_eq!(task.status, Status::Done, "{}", fx.reason());
-    assert_eq!(task.rounds, 0);
-    assert_eq!(fx.events("review_escalated"), 0);
-    assert_eq!(fx.events("verdict_carried"), 1);
-    assert_eq!(fx.events("review_started"), 1);
-}
-
-#[test]
-fn a_packet_refusal_after_main_moved_relaunches_the_review_without_a_round() {
-    // Given a review refused only on its packet after main moved, candidate unchanged.
-    let (fx, _) = reviewing_then_main_moves("unrelated.txt", "other task\n");
-    fx.sync();
-    let late = fx.bin_dir.join("late-evidence.md");
-    std::fs::write(&late, "late evidence\n").unwrap();
-    corral_ops::add_artifact(&fx.ctx, &fx.id, &late, None, Some("Late evidence")).unwrap();
     let error = reviewer_callback(&fx, Verdict::Approve, "Looks right.").unwrap_err();
     assert!(format!("{error:#}").contains("packet_digest"), "{error:#}");
     let head = fx.run().review.unwrap().sha;
@@ -175,6 +152,11 @@ fn a_packet_refusal_after_main_moved_relaunches_the_review_without_a_round() {
         "the relaunch reviews the candidate on the moved main"
     );
     assert!(review.sha == head || fx.events("candidate_rebased") == 1);
+    assert_eq!(fx.events("verdict_carried"), 0);
+
+    // Nothing lands until the fresh reviewer gives its verdict.
+    assert_eq!(fx.sync().status, Status::Review, "{}", fx.reason());
+    assert_eq!(fx.events("review_started"), 2);
 
     // And the fresh review's approval lands it.
     reviewer_callback(&fx, Verdict::Approve, "Looks right.").unwrap();
