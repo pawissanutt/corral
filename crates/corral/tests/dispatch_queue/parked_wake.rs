@@ -349,7 +349,10 @@ fn wait_args<'a>(id: &'a str, since: &'a str, timeout: &'a str) -> Vec<&'a str> 
 fn slot_wait_command_sees_a_grant_logged_before_or_after_it_starts() {
     // Given two woken runs queued behind B, which holds the only slot.
     let f = Fixture::new();
-    let now = Timestamp::now();
+    // Event envelopes use wall time, and --since filters those envelopes rather than
+    // the injected sync time. Keep the fixture lifetime safely in the past so the
+    // synthetic receipt (+1s) cannot move --since ahead of the actual grant event.
+    let now: Timestamp = "2020-01-01T00:00:00Z".parse().unwrap();
     let a = running(&f, "app");
     park(
         &f,
