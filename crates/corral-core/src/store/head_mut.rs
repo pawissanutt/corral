@@ -51,6 +51,8 @@ pub struct TaskHeadMut {
     pub(crate) originals: std::cell::RefCell<BTreeMap<(TaskPart, String), HistoryRow>>,
     /// Set when this mutation appends a scope revision, which changes the contract digest.
     pub(crate) scope_history_changed: bool,
+    /// The head fields and scope revision count the contract revision was last settled for.
+    pub(crate) contract_settled: Option<(TaskHeadFields, u64)>,
 }
 
 impl Deref for TaskHeadMut {
@@ -250,6 +252,7 @@ impl TaskHeadMut {
             history_edit: false,
             originals: std::cell::RefCell::default(),
             scope_history_changed: false,
+            contract_settled: None,
         }
     }
 

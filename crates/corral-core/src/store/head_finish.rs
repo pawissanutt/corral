@@ -19,11 +19,7 @@ impl TaskHeadMut {
     /// The rows this mutation writes: queued child rows, demoted containers, and every current
     /// container whose stored document changes.
     pub(crate) fn finish(mut self) -> Result<(TaskHead, Vec<RowWrite>, bool)> {
-        self.adjust_projections()?;
-        if self.usage_dirty {
-            self.recompute_usage()?;
-        }
-        self.settle_contract_revision()?;
+        self.sync()?;
         let mut writes: BTreeMap<(TaskPart, String), Option<HistoryRow>> =
             std::mem::take(&mut self.rows);
         // A queued row of a demoted container is an edit made after its demotion, so it wins.
@@ -147,6 +143,22 @@ impl TaskHeadMut {
 
     /// Recomputes the summary's operating-contract revision when a contract input or the scope
     /// history changed; only then is the scope history read.
+    /// Brings every derived fact up to date with the edits so far: projection facts and pane
+    /// rows, the current run's usage totals and the contract revision.
+    pub(crate) fn sync(&mut self) -> Result<()> {
+        self.adjust_projections()?;
+        if self.usage_dirty {
+            self.recompute_usage()?;
+            self.usage_dirty = false;
+        }
+        let settled = (self.head.task.clone(), self.head.summary.scope_revisions);
+        if self.contract_settled.as_ref() != Some(&settled) {
+            self.settle_contract_revision()?;
+            self.contract_settled = Some(settled);
+        }
+        Ok(())
+    }
+
     fn settle_contract_revision(&mut self) -> Result<()> {
         use crate::operating::operating_contract_revision;
         let mut after = super::head_api::shell_task(&self.head.task)?;
@@ -154,6 +166,8 @@ impl TaskHeadMut {
         if !self.scope_history_changed
             && operating_contract_revision(&before)? == operating_contract_revision(&after)?
         {
+            self.head.summary.operating_contract_revision =
+                self.base.summary.operating_contract_revision.clone();
             return Ok(());
         }
         if self.head.summary.scope_revisions > 0 {
@@ -440,7 +454,7 @@ impl TaskHeadMut {
 type Key = (TaskPart, String);
 
 /// The rows of a head's current containers and children, as `finish` stores them.
-fn projection_rows(head: &TaskHead) -> Result<Vec<HistoryRow>> {
+pub(super) fn projection_rows(head: &TaskHead) -> Result<Vec<HistoryRow>> {
     let mut rows = Vec::new();
     if let (Some(run), Some(n)) = (&head.current_run, head.seqs.run) {
         rows.push(run_row(n, SELF, run, true)?);

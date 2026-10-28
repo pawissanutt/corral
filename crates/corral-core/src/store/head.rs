@@ -13,7 +13,9 @@ use super::assemble::head_object;
 use super::codec::{FACTS, SELF, child_key, cursor_token, seq};
 use super::read::{doc_bytes, run_seq_of};
 use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead, TaskHeadFields};
-use crate::backend::{HistoryRow, PageReq, ReadView, RowQuery, TaskHeadDoc, TaskNum, TaskPart};
+use crate::backend::{
+    HistoryRow, Page, PageReq, ReadView, RowQuery, TaskHeadDoc, TaskNum, TaskPart,
+};
 use crate::inbox::{Recipient, SessionCursor};
 use crate::work::{self, Counter, Subject};
 use crate::{
@@ -125,9 +127,22 @@ pub(crate) fn read_rows(
     limit: u32,
     counter: Counter,
 ) -> Result<Vec<HistoryRow>> {
-    let rows = view.rows(num, q, PageReq::first(limit))?.items;
+    Ok(read_page(view, num, task, runs, q, PageReq::first(limit), counter)?.items)
+}
+
+/// One page of [`read_rows`], each row counted as one decode.
+pub(crate) fn read_page(
+    view: &dyn ReadView,
+    num: TaskNum,
+    task: &str,
+    runs: &dyn Fn(&str) -> Option<String>,
+    q: &RowQuery,
+    page: PageReq,
+    counter: Counter,
+) -> Result<Page<HistoryRow>> {
+    let page = view.rows(num, q, page)?;
     if work::in_hot_scope() {
-        for row in &rows {
+        for row in &page.items {
             // A checkpoint payload is keyed by digest: only a caller naming its run claims it.
             let payload = (row.part == TaskPart::CheckpointPayload).then_some("");
             let run = run_seq_of(row).or(payload).and_then(runs);
@@ -138,7 +153,7 @@ pub(crate) fn read_rows(
             work::decoded(counter, doc_bytes(&row.doc), subject);
         }
     }
-    Ok(rows)
+    Ok(page)
 }
 
 fn one(rows: Vec<HistoryRow>) -> Option<HistoryRow> {
@@ -273,20 +288,22 @@ impl TaskHead {
         counter: Counter,
     ) -> Result<Vec<HistoryRow>> {
         let view = self.pinned()?;
-        let overlay = self.overlay.as_ref().filter(|o| o.touches(q.part));
-        let rows = read_rows(
-            view.as_ref(),
-            self.num,
-            &self.task.id,
-            &|seq| self.known_run(seq),
-            q,
-            if overlay.is_some() { u32::MAX } else { limit },
-            counter,
-        )?;
-        Ok(match overlay {
-            Some(overlay) => overlay.apply(q, rows, limit),
-            None => rows,
-        })
+        let known = |seq: &str| self.known_run(seq);
+        let read = |page| {
+            read_page(
+                view.as_ref(),
+                self.num,
+                &self.task.id,
+                &known,
+                q,
+                page,
+                counter,
+            )
+        };
+        match self.overlay.as_ref().filter(|o| o.touches(q.part)) {
+            Some(overlay) => overlay.read(q, limit, read),
+            None => Ok(read(PageReq::first(limit))?.items),
+        }
     }
 
     /// [`Self::query`] of rows that all belong to run `run`, checkpoint payloads included.
@@ -312,7 +329,7 @@ impl TaskHead {
     /// `stored` (every stored row matching `q`) with this head's overlay applied.
     pub(crate) fn overlaid_rows(&self, q: &RowQuery, stored: Vec<HistoryRow>) -> Vec<HistoryRow> {
         match self.overlay.as_ref().filter(|o| o.touches(q.part)) {
-            Some(overlay) => overlay.apply(q, stored, u32::MAX),
+            Some(overlay) => overlay.apply(q, stored, "", u32::MAX),
             None => stored,
         }
     }
@@ -686,11 +703,7 @@ impl TaskHead {
 
     /// The checkpoint metadata of `run`, newest first, read one row at a time as consumed.
     pub fn checkpoint_metas_newest_first(&self, run: &str) -> Result<CheckpointMetas<'_>> {
-        Ok(CheckpointMetas {
-            head: self,
-            owner: self.run_owner(run)?,
-            after: None,
-        })
+        Ok(CheckpointMetas::of_owner(self, self.run_owner(run)?))
     }
 
     /// The canonical checkpoint `ordinal` (1-based) of `run`: its meta row and one payload.
@@ -829,12 +842,19 @@ pub struct CheckpointMetas<'a> {
     after: Option<String>,
 }
 
-impl Iterator for CheckpointMetas<'_> {
-    type Item = Result<CheckpointMeta>;
+impl<'a> CheckpointMetas<'a> {
+    pub(super) fn of_owner(head: &'a TaskHead, owner: Option<String>) -> Self {
+        Self {
+            head,
+            owner,
+            after: None,
+        }
+    }
 
-    fn next(&mut self) -> Option<Self::Item> {
+    /// The next stored row, read and counted as one decode.
+    pub(super) fn next_row(&mut self) -> Option<Result<HistoryRow>> {
         let owner = self.owner.clone()?;
-        let mut q = RowQuery::under(TaskPart::RunCheckpoint, owner).newest_first();
+        let q = RowQuery::under(TaskPart::RunCheckpoint, owner).newest_first();
         let view = match self.head.pinned() {
             Ok(view) => view,
             Err(error) => return Some(Err(error)),
@@ -843,9 +863,7 @@ impl Iterator for CheckpointMetas<'_> {
             after: self.after.clone(),
             limit: 1,
         };
-        let result = view.rows(self.head.num, &q, page);
-        q.index = None;
-        let page = match result {
+        let page = match view.rows(self.head.num, &q, page) {
             Ok(page) => page,
             Err(error) => return Some(Err(error.into())),
         };
@@ -863,6 +881,15 @@ impl Iterator for CheckpointMetas<'_> {
             None => Subject::Plain,
         };
         work::decoded(Counter::NestedRowDecodes, doc_bytes(&row.doc), subject);
-        Some(serde_json::from_value(row.doc).map_err(Into::into))
+        Some(Ok(row))
+    }
+}
+
+impl Iterator for CheckpointMetas<'_> {
+    type Item = Result<CheckpointMeta>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let row = self.next_row()?;
+        Some(row.and_then(|row| Ok(serde_json::from_value(row.doc)?)))
     }
 }

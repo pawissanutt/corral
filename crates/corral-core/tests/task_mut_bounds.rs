@@ -344,6 +344,67 @@ fn an_excluded_finding_row_is_never_returned_by_the_backend() {
     }
 }
 
+#[test]
+fn a_mutable_head_never_reads_the_excluded_finding_it_also_rewrote() {
+    let (_dir, base) = store_support::store();
+    let returned = Arc::new(Mutex::new(Vec::new()));
+    let store = base.with_backend(Box::new(Counting {
+        inner: fake(),
+        returned: Arc::clone(&returned),
+    }));
+    let full = findings_task(&store);
+    let run = full.runs.last().unwrap().id.clone();
+    let current = full
+        .runs
+        .last()
+        .unwrap()
+        .review_runs
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let excluded_key = corral_core::task_findings(&full)
+        .into_iter()
+        .find(|(_, f)| f.source == FindingSource::Review && f.attempt == current)
+        .map(|(key, _)| key)
+        .unwrap();
+    let mut expected = full.clone();
+    TaskMut::edit_review_child(&mut expected, &run, &current, |c| {
+        c.review.as_mut().unwrap().notes = Some("rewritten".into());
+        Ok(())
+    })
+    .unwrap();
+    let want = expected
+        .emitted_findings(FindingSource::Review, Some(&current))
+        .unwrap();
+    store
+        .update_head(&full.id, |head| {
+            TaskMut::edit_review_child(head, &run, &current, |c| {
+                c.review.as_mut().unwrap().notes = Some("rewritten".into());
+                Ok(())
+            })?;
+            returned.lock().unwrap().clear();
+            let (found, delta) = measure(|| {
+                TaskRef::emitted_findings(head, FindingSource::Review, Some(&current)).unwrap()
+            });
+            assert_eq!(found, want);
+            let reads = returned.lock().unwrap().clone();
+            let finding_reads: Vec<&String> = reads
+                .iter()
+                .filter(|(part, _)| *part == TaskPart::Finding)
+                .map(|(_, key)| key)
+                .collect();
+            assert!(
+                !finding_reads.contains(&&excluded_key),
+                "{excluded_key} was read"
+            );
+            assert_eq!(finding_reads.len(), found.len());
+            assert_eq!(delta.emitted_rows(), found.len() as u64);
+            Ok(())
+        })
+        .unwrap();
+}
+
 fn wait_record(run: &str, n: usize) -> corral_core::WaitRecord {
     serde_json::from_value(wait(run, n, false)).unwrap()
 }

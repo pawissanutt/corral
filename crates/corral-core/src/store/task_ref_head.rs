@@ -13,7 +13,6 @@ use crate::agent::{
     AgentGeneration, AgentQuestion, AgentReport, AgentTurn, ContainerRef, RequestReceipt,
     WakeSubscription,
 };
-use crate::backend::TaskPart;
 use crate::inbox::{Recipient, SessionBinding, SessionCursor};
 use crate::{
     AggregateReview, Artifact, Checkpoint, CheckpointMeta, DecisionRecord, EmittedFinding,
@@ -209,21 +208,6 @@ impl TaskHead {
     fn reads(&self) -> Result<Cow<'_, TaskHead>> {
         Ok(Cow::Borrowed(self))
     }
-
-    /// Every checkpoint meta of `run`, newest first, through this head's overlay.
-    fn checkpoint_metas_overlaid(&self, run: &str) -> Result<Vec<CheckpointMeta>> {
-        let Some(owner) = self.run_owner(run)? else {
-            return Ok(Vec::new());
-        };
-        self.query(
-            &crate::backend::RowQuery::under(TaskPart::RunCheckpoint, owner).newest_first(),
-            u32::MAX,
-            crate::work::Counter::NestedRowDecodes,
-        )?
-        .into_iter()
-        .map(|row| Ok(serde_json::from_value(row.doc)?))
-        .collect()
-    }
 }
 
 impl TaskHeadMut {
@@ -319,8 +303,7 @@ impl TaskRef for TaskHeadMut {
         if !self.has_pending_writes() {
             return Ok(Box::new(self.head.checkpoint_metas_newest_first(run)?));
         }
-        let metas = self.overlaid()?.checkpoint_metas_overlaid(run)?;
-        Ok(Box::new(metas.into_iter().map(Ok)))
+        Ok(Box::new(self.checkpoint_metas_overlaid(run)?))
     }
 }
 
