@@ -36,7 +36,13 @@ fn rebase_supersedes_preparation_and_next_automatic_gate_launches() {
     rebase_candidate(&fx);
 
     // Agent requests must not adopt the old attempt before admission retires it.
-    let adopted = crate::review_budget::retained_attempt(&fx.ctx, &id, "R1").unwrap();
+    let adopted = crate::review_budget::adoptable_attempt(&fx.ctx, &id, "R1").unwrap();
+    assert_eq!(
+        crate::review_budget::retained_attempt(&fx.ctx, &id, "R1")
+            .unwrap()
+            .as_deref(),
+        Some(old.authorization.as_ref().unwrap().action.attempt.as_str())
+    );
     crate::gate::gate_start_automatic(&fx.ctx, &id).unwrap();
     assert!(adopted.is_none());
     let task = fx.ctx.store.get(&id).unwrap();
