@@ -100,8 +100,10 @@ Anthropic profiles run on your Claude Pro/Max subscription through the official 
 (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json` and `compat.json`). Pi keeps the
 conversation and runs every tool; each model call starts one SDK `query()`, which spawns the real
 Claude Code engine from the SDK's platform package (for example
-`@anthropic-ai/claude-agent-sdk-linux-x64`). Claude Code receives the conversation as one user
-message and the corral login's access token as `CLAUDE_CODE_OAUTH_TOKEN` in its environment, and
+`@anthropic-ai/claude-agent-sdk-linux-x64`). Claude Code keeps its own `claude_code` system prompt,
+with only corral's role contract and working directory appended (Pi's harness sections are left
+out, since Anthropic bills a request that presents a third-party harness as extra usage). It
+receives the conversation as one user message and the corral login's access token as `CLAUDE_CODE_OAUTH_TOKEN` in its environment, and
 nothing else: every `ANTHROPIC_*` and other `CLAUDE_CODE_*` variable is removed, and its config
 directory is a private `claude-code/` directory under the host's runtime directory, so it never
 reads `~/.claude`. Claude Code only plans: its tool calls stream back to Pi, while a
