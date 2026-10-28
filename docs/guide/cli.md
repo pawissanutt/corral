@@ -1624,10 +1624,12 @@ Arguments:
   <MEMBER>   
 
 Options:
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --to <TO>      The tracker Plan that receives the member
-      --json         
-  -h, --help         Print help
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --to <TO>                The tracker Plan that receives the member
+      --gate-file <GATE_FILE>  Gate YAML recorded as the member's gate in the target (required by designed integration Plans)
+      --reason <REASON>        
+      --json                   
+  -h, --help                   Print help
 ```
 
 ### `corral plan policy`

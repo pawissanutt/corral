@@ -3,8 +3,9 @@
 //! the old contract are refused afterwards; the caller decides which member states may be stranded.
 use anyhow::{Context, Result, bail, ensure};
 
+use super::member_gate::next_record;
 use super::{ScopeWrite, Store};
-use crate::{Status, Task};
+use crate::{ScopeGate, Status, Task};
 
 impl Store {
     /// Make `member` a required member of `tracker`, keeping a decomposed Plan's design children
@@ -99,7 +100,8 @@ impl Store {
     }
 
     /// Move `member` from tracker `source` to tracker `target`, keeping each decomposed Plan's
-    /// design children equal to its tracker's and carrying the owner's member-gate record. Both
+    /// design children equal to its tracker's. The target records `owner_gate` (gate, reason) as
+    /// the owner's next member-gate record after the source's, else carries the source's record. Both
     /// trackers advance `membership_revision`, so proof bound to an earlier membership stays stale
     /// even when a later change restores the same member list. `validate` checks the fresh source,
     /// target and member under the board lock and must not write. Writes go member, target design,
@@ -107,14 +109,15 @@ impl Store {
     /// crash completes the move once. Returns the saved source and target.
     ///
     /// # Errors
-    /// Rejects non-trackers, a member the source does not own, a target that already owns it,
-    /// trackers or parents as members, another project, an incomplete decomposition publication,
-    /// a failed validation and persistence failures.
+    /// Rejects non-trackers, a member the source does not own, the source's last member, a target
+    /// that already owns it, trackers or parents as members, another project, an incomplete
+    /// decomposition publication, a failed validation and persistence failures.
     pub fn move_plan_member(
         &self,
         source: &str,
         member: &str,
         target: &str,
+        owner_gate: Option<(&ScopeGate, &str)>,
         validate: impl FnOnce(&Store, &Task, &Task, &Task) -> Result<()>,
     ) -> Result<(Task, Task)> {
         let _board = self.lock("dispatch")?;
@@ -135,6 +138,11 @@ impl Store {
         ensure!(
             from.children.contains(&member),
             "{member} is not a member of {}",
+            from.id
+        );
+        ensure!(
+            from.children.len() > 1,
+            "{member} is the last member of {}; a Plan needs at least one required member",
             from.id
         );
         let task = fresh.get(&member)?;
@@ -176,8 +184,13 @@ impl Store {
             let mut plan = to;
             plan.children.push(member.clone());
             plan.membership_revision = next_revision(plan.membership_revision)?;
-            if let Some(record) = from.member_gates.get(&member) {
-                plan.member_gates.insert(member.clone(), record.clone());
+            let previous = from.member_gates.get(&member);
+            let record = match owner_gate {
+                Some((gate, reason)) => Some(next_record(previous, gate, reason, "owner")?),
+                None => previous.cloned(),
+            };
+            if let Some(record) = record {
+                plan.member_gates.insert(member.clone(), record);
             }
             fresh.save_task(&plan, ScopeWrite::MemberGate)?
         };
@@ -200,6 +213,7 @@ impl Store {
                 "from_children": from.children, "to_children": to.children,
                 "from_membership_revision": from.membership_revision,
                 "to_membership_revision": to.membership_revision,
+                "to_member_gate_revision": to.member_gates.get(&member).map(|r| r.revision),
             }),
         )?;
         Ok((from, to))

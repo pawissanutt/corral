@@ -62,7 +62,7 @@ fn moving_a_held_member_updates_both_plans_and_stales_the_earlier_attempt() {
     let (later, later_member) = later_plan(&f);
 
     // When the owner moves the held member to the second Plan.
-    let moved = plan_move_member_from(&f.ctx, &f.plan, &held, &later, &owner(&f)).unwrap();
+    let moved = plan_move_member_from(&f.ctx, &f.plan, &held, &later, None, &owner(&f)).unwrap();
 
     // Then both Plans record the new membership and the task keeps its ID, hold and dependency.
     assert_eq!(moved.from_children, f.members);
@@ -112,7 +112,7 @@ fn refused_moves_write_nothing_and_an_interrupted_move_completes_once() {
     let (later, _) = later_plan(&f);
     let before = (f.plan(), f.ctx.store.get(&later).unwrap());
     let to_later = |member: &str, entry: &OwnerEntry| {
-        plan_move_member_from(&f.ctx, &f.plan, member, &later, entry)
+        plan_move_member_from(&f.ctx, &f.plan, member, &later, None, entry)
     };
 
     // When the started member, an agent or PM author, a non-member or the same Plan is named.
@@ -132,10 +132,21 @@ fn refused_moves_write_nothing_and_an_interrupted_move_completes_once() {
         &later,
         &held,
         &f.plan,
+        None,
         &owner(&f),
     ));
     assert!(error.contains("is not a member of"), "{error}");
-    assert!(plan_move_member_from(&f.ctx, &f.plan, &held, &f.plan, &owner(&f)).is_err());
+    assert!(plan_move_member_from(&f.ctx, &f.plan, &held, &f.plan, None, &owner(&f)).is_err());
+    let later_member = before.1.children[0].clone();
+    let error = message(plan_move_member_from(
+        &f.ctx,
+        &later,
+        &later_member,
+        &f.plan,
+        None,
+        &owner(&f),
+    ));
+    assert!(error.contains("last member"), "{error}");
 
     // Then nothing is written.
     assert_eq!((f.plan(), f.ctx.store.get(&later).unwrap()), before);

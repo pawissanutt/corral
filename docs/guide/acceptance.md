@@ -387,10 +387,25 @@ corral plan verify T-010
 
 `plan move-member` is owner-only, with the same entry rules as
 `plan add-member`. The member must be unstarted (Idea, Backlog or Ready with no
-runs). Neither Plan may be Done, Dropped or accepted, and no member of either
-Plan may be Running, Needs me or in Review. The task keeps its ID, holds,
-dependencies and criteria, and the owner's member gate for it moves to the
-target Plan. A decomposed Plan's design follows its tracker. The move logs one
+runs), and it cannot be the source Plan's last member. Neither Plan may be Done,
+Dropped or accepted, and no member of either Plan may be Running, Needs me or in
+Review. The task keeps its ID, holds, dependencies and criteria, and the owner's
+member gate for it moves to the target Plan. A decomposed Plan's design follows
+its tracker.
+
+Members of a designed integration Plan take their gates from its decomposition
+publication, which never bound a moved member. Moving a member without an owner
+member gate into such a Plan is refused before anything is written; pass the
+gate the target records for it instead:
+
+```bash
+corral plan move-member T-010 T-021 --to T-030 --gate-file gate.yaml --reason "held until T-025 lands"
+```
+
+The gate file has the same shape as for `plan member-gate`, and its tier must be
+defined for the project. A gate file replaces a carried record as its next
+revision, keeping the earlier one in its history. Main-delivery targets refuse a
+gate file, because their members have no member gates. The move logs one
 `plan_member_moved` event on the source Plan, and rerunning the same command
 finishes a move a crash interrupted.
 
