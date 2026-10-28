@@ -87,6 +87,39 @@ test("a follower observes a child commit while the parent waits synchronously", 
   }
 });
 
+test("a follower observes each commit a writer makes as soon as the previous wait resolves", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
+  const path = join(root, "events.jsonl");
+  writeFileSync(path, "");
+  const follower = new EventFollower(path);
+  // A long-lived writer process commits one generation's agent_bound per line it reads.
+  const writer = spawn(process.execPath, ["-e", `
+    const fs = require("node:fs");
+    require("node:readline").createInterface({ input: process.stdin }).on("line", (generation) =>
+      fs.appendFileSync(process.argv[1], JSON.stringify({ kind: "agent_bound", detail: { generation: Number(generation) } }) + "\\n"));`,
+  path], { stdio: ["pipe", "ignore", "inherit"] });
+  const exited = new Promise<number | null>((resolve, reject) => {
+    writer.once("error", reject);
+    writer.once("exit", resolve);
+  });
+  try {
+    for (let generation = 1; generation <= 6; generation++) {
+      // Given a waiter, when the writer commits in the continuation of the previous resolution and
+      // nothing else writes, then that commit alone resolves it. Bun's fs.watch dropped such commits.
+      const bound = follower.next((entry) =>
+        entry.kind === "agent_bound" && entry.detail?.generation === generation, 1000, `generation ${generation}`);
+      writer.stdin?.write(`${generation}\n`);
+      expect(await bound).toEqual({ kind: "agent_bound", detail: { generation } });
+    }
+    expect(follower.malformed).toBe(0);
+  } finally {
+    writer.stdin?.end();
+    await exited;
+    follower.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a follower drains short reads without requiring another file write", async () => {
   const root = mkdtempSync(join(tmpdir(), "corral-follower-"));
   const path = join(root, "events.jsonl");
