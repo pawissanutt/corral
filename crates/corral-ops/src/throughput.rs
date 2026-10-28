@@ -136,7 +136,7 @@ pub(crate) fn collect_mode_throughput(
 /// Refresh usage timing, then rate every mode in the dispatch cohort selected by `since`.
 pub fn mode_throughput(store: &Store, since: Option<Timestamp>) -> Result<Vec<ModeThroughput>> {
     crate::usage::collect_missing(store, since)?;
-    collect_mode_throughput(&store.list()?, since, Timestamp::now())
+    collect_mode_throughput(&store.list()?, since, corral_core::clock::now())
 }
 
 /// Linear-interpolation percentile (the "R-7" definition) of an ascending slice, `pct` in 0..=100.

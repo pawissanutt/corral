@@ -47,7 +47,8 @@ pub(super) fn stage(
     tracker.dispatch_hold = false;
     tracker.review_reservation = None;
     tracker.review_wait = None;
-    tracker.created = jiff::Timestamp::now();
+    super::publication::clear_inherited(&mut tracker);
+    tracker.created = corral_core::clock::now();
     tracker.updated = tracker.created;
     for child in children {
         child.parent = Some(tracker.id.clone());
@@ -83,7 +84,7 @@ pub(super) fn upgrade(journal: &mut Journal, parent: &Task) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn check(journal: &Journal, parent: &Task) -> Result<()> {
+pub(super) fn check(journal: &Journal, parent: &str) -> Result<()> {
     let Some(text) = &journal.tracker else {
         // Validate historical receipts before upgrading an unfinished publication.
         return Ok(());
@@ -97,7 +98,7 @@ pub(super) fn check(journal: &Journal, parent: &Task) -> Result<()> {
     ensure!(
         tracker.tracker
             && tracker.status == Status::Backlog
-            && tracker.parent.as_ref() == Some(&parent.id)
+            && tracker.parent.as_deref() == Some(parent)
             && tracker.source_digest.as_ref() == Some(&journal.artifact_sha256)
             && tracker.approved_scope
                 == Some(ApprovedScope {

@@ -132,8 +132,19 @@ pub enum RowWrite {
 }
 
 impl RowWrite {
-    /// Whether this write touches a non-current container row (`ChangeScope::Task::history`).
-    pub fn container_history(&self) -> bool {
+    /// Whether this write edits a container's history (`ChangeScope::Task::history`), given
+    /// the row it replaces: a non-current container row added, rewritten or deleted. A current
+    /// container written as non-current (a demotion) keeps its content and is not one.
+    /// Whether this write demotes a current container row, given the row it replaces.
+    pub fn container_demotion(&self, stored: Option<&HistoryRow>) -> bool {
+        matches!(self, RowWrite::Put(row) if matches!(
+            row.part,
+            TaskPart::Run | TaskPart::ReviewRun | TaskPart::Plan | TaskPart::PlanReview
+        ) && !row.current
+            && stored.is_some_and(|old| old.current))
+    }
+
+    pub fn container_history(&self, stored: Option<&HistoryRow>) -> bool {
         let container = |part: TaskPart| {
             matches!(
                 part,
@@ -141,8 +152,14 @@ impl RowWrite {
             )
         };
         match self {
-            RowWrite::Put(row) => container(row.part) && !row.current,
-            RowWrite::Delete { part, .. } => container(*part),
+            RowWrite::Put(row) => {
+                container(row.part)
+                    && !row.current
+                    && stored.is_none_or(|old| !old.current && old.doc != row.doc)
+            }
+            RowWrite::Delete { part, .. } => {
+                container(*part) && stored.is_some_and(|old| !old.current)
+            }
         }
     }
 }

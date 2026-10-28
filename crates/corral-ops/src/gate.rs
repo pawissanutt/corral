@@ -253,10 +253,12 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
     }
     let label: String = format!("{} {label}", task.id).chars().take(40).collect();
     let created = ctx.herdr.workspace_create(&run.worktree, &label, false)?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "run_workspace_created",
-        json!({ "run": run.id, "workspace": created.workspace_id, "pane": created.pane_id }),
+    crate::cleanup::record_run_workspace(
+        ctx,
+        &task.id,
+        &run.id,
+        &created.pane_id,
+        &created.workspace_id,
     )?;
     Ok(HerdrRef {
         workspace_id: created.workspace_id,
@@ -387,7 +389,7 @@ fn gate_start_origin(
         format!(
             "{}-{}",
             std::process::id(),
-            Timestamp::now().as_nanosecond()
+            jiff::Timestamp::now().as_nanosecond()
         )
     });
     let origin = crate::gate_tier::origin_step(&run, &contract);
@@ -811,7 +813,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
                             inventory.panes.iter().any(|p| p.pane_id == id)
                         })
                     }),
-                    at: Timestamp::now(),
+                    at: corral_core::clock::now(),
                     ticket: listed.as_ref().map(|inventory| inventory.ticket),
                     count_miss: true,
                 },

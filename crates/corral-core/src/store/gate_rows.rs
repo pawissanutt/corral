@@ -7,7 +7,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use jiff::Timestamp;
 use serde_json::Value;
 
 use super::Store;
@@ -59,7 +58,7 @@ impl GateOutcome {
             log: self.log,
             result_doc: self.result_doc,
             context: None,
-            ended: Timestamp::now(),
+            ended: crate::clock::now(),
             close_scratch: self.close_scratch,
         }
     }
@@ -227,7 +226,7 @@ impl Store {
         let Some(row) = area.row(id)? else {
             return Ok(ScratchReclaim::Skipped);
         };
-        let now = Timestamp::now();
+        let now = crate::clock::now();
         let due = match row.state {
             ScratchState::Closed => true,
             ScratchState::Deferred => row.next_check_at.is_none_or(|at| at <= now),

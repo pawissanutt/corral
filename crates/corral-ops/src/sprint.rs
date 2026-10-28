@@ -111,7 +111,7 @@ pub fn review_sprint(ctx: &Ctx, since: Option<&str>, mark: bool) -> Result<Sprin
         .store
         .try_lock("sprint-review")?
         .context("another sprint review is in progress")?;
-    let snapshot_at = Timestamp::now();
+    let snapshot_at = corral_core::clock::now();
     let events = ctx
         .store
         .events_shared()?

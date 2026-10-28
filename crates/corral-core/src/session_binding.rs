@@ -219,7 +219,7 @@ impl Store {
         let binding = HerdrSessionBinding {
             socket: socket.to_path_buf(),
             launch_evidence: launch_evidence.into(),
-            bound_at: Timestamp::now(),
+            bound_at: crate::clock::now(),
         };
         self.bind_session_record(&binding)
     }

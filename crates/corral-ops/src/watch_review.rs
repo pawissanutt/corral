@@ -171,7 +171,7 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
                 }
             }
         }
-        capture.captured_at = Some(jiff::Timestamp::now());
+        capture.captured_at = Some(corral_core::clock::now());
         crate::artifact_storage::replace(
             &path(ctx, &task.id, &child.id)?,
             &serde_json::to_vec(&capture)?,

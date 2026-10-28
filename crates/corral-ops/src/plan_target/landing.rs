@@ -183,7 +183,7 @@ impl Target {
                     && run.base_sha == receipt.dispatch_base,
                 "prepared task run or target changed"
             );
-            let now = Timestamp::now();
+            let now = corral_core::clock::now();
             crate::reviewer::supersede_review(ctx, run, now);
             run.ended.get_or_insert(now);
             run.outcome = Some(RunOutcome::Done);

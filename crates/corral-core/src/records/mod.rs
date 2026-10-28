@@ -2,7 +2,6 @@
 //! callback-local writes; writes join the task's unit of work when one is open.
 
 use anyhow::{Context, Result};
-use jiff::Timestamp;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::Store;
@@ -101,7 +100,7 @@ impl Store {
             key: key.to_owned(),
             expected: before.map(|row| row.version),
             doc: Some(doc),
-            updated: Timestamp::now(),
+            updated: crate::clock::now(),
         }])
     }
 
@@ -120,7 +119,7 @@ impl Store {
             key: key.to_owned(),
             expected: None,
             doc: Some(serde_json::to_value(value).context("encoding record")?),
-            updated: Timestamp::now(),
+            updated: crate::clock::now(),
         };
         self.insert_record_write(write)
     }
@@ -138,7 +137,7 @@ impl Store {
             key: key.to_owned(),
             expected: Some(before.version),
             doc: None,
-            updated: Timestamp::now(),
+            updated: crate::clock::now(),
         }])
     }
 }

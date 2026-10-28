@@ -158,6 +158,8 @@ fn fresh_candidate<T: corral_core::TaskRef + ?Sized>(
     tracker: &T,
     attempt: &AggregateAttempt,
 ) -> Result<()> {
+    ctx.store
+        .submission_effect_barrier("aggregate_candidate_capture");
     let candidate = capture::capture(
         ctx,
         &ctx.store.reopen()?,

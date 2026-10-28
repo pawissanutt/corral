@@ -182,7 +182,7 @@ pub fn timeline(
         })
         .collect::<Result<_>>()?;
     entries.sort_by_key(|entry| entry.event.seq);
-    pair_waits(&mut entries, Timestamp::now());
+    pair_waits(&mut entries, corral_core::clock::now());
     entries.retain(|entry| filter == TimelineFilter::All || entry.class != EntryClass::Noise);
     Ok(entries)
 }

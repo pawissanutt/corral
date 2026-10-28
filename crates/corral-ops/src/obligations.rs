@@ -291,7 +291,7 @@ pub(crate) fn answer_reply(
     decision: &str,
     answer: &str,
 ) -> Result<Task> {
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     answer_reply_with(
         ctx,
         id,
@@ -316,7 +316,7 @@ pub(crate) fn answer_reply_with(ctx: &Ctx, id: &str, receipt: &ResumeReceipt) ->
         id,
         ResumeTarget::Decision(&receipt.id),
         receipt.clone(),
-        Timestamp::now(),
+        corral_core::clock::now(),
     )
 }
 

@@ -5,7 +5,6 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use corral_core::query::{Query, SearchContext};
 use corral_core::{PinRef, Store, Task};
-use jiff::Timestamp;
 
 /// A store snapshot; typing a query does not reread tasks or events.
 pub struct SearchData {
@@ -76,7 +75,7 @@ impl SearchData {
 
 /// Search every task with the shared language, returning tasks in relevance order.
 pub fn search_tasks(store: &Store, input: &str) -> Result<Vec<Task>> {
-    let query = Query::parse(input, Timestamp::now())?;
+    let query = Query::parse(input, corral_core::clock::now())?;
     let data = SearchData::load(store)?;
     Ok(data
         .ranked(&query)

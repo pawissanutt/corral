@@ -8,7 +8,6 @@ use corral_core::{
     AggregateAttempt, AggregateReview, ArtifactKind, GateResult, HerdrRef, ResolvedProfile,
     ReviewRoute, Reviewer, Store, Task, TaskHead, TaskRef as _, Verdict,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use super::{capture, current, current_head, evidence_failures, fresh_candidate, gate};
@@ -180,7 +179,7 @@ fn check_inputs(
     tracker: &Task,
     attempt: &AggregateAttempt,
 ) -> Result<()> {
-    check_inputs_with(store, tracker, attempt, || {
+    let _landing = check_inputs_with(store, tracker, attempt, || {
         evidence_failures(ctx, tracker, attempt)
     })?;
     fresh_candidate(ctx, tracker, attempt)
@@ -195,7 +194,7 @@ fn check_inputs_head(
     tracker: &Task,
     attempt: &AggregateAttempt,
 ) -> Result<()> {
-    check_inputs_with(store, tracker, attempt, || {
+    let _landing = check_inputs_with(store, tracker, attempt, || {
         super::evidence_failures_head(ctx, head, attempt)
     })?;
     fresh_candidate(ctx, head, attempt)
@@ -206,7 +205,7 @@ fn check_inputs_with(
     tracker: &Task,
     attempt: &AggregateAttempt,
     evidence: impl FnOnce() -> Vec<String>,
-) -> Result<()> {
+) -> Result<std::fs::File> {
     ensure!(
         attempt
             .gate
@@ -220,8 +219,8 @@ fn check_inputs_with(
         "aggregate evidence is invalid: {}",
         failures.join("; ")
     );
-    let _landing = corral_git::landing_lock(&capture::repo(store, tracker)?)?;
-    Ok(())
+    // The caller holds this guard through the candidate capture.
+    corral_git::landing_lock(&capture::repo(store, tracker)?)
 }
 
 /// The prompt and notes of aggregate review `review`, in its registered scratch directory.
@@ -427,7 +426,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         route: Box::new(selected.route.clone()),
         identity: chosen.identity.clone(),
         evidence_digest: evidence_digest(&chosen)?,
-        requested: Timestamp::now(),
+        requested: corral_core::clock::now(),
         herdr: None,
         verdict: None,
         notes: None,
@@ -445,6 +444,8 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).context("clearing replaced aggregate review notes"),
     }
+    ctx.store
+        .submission_effect_barrier("aggregate_review_observed");
     let mut superseded = Vec::new();
     ctx.store.update_head(id, |task| {
         // The attempt projection compares its review facts too, so a review child edited and
@@ -762,7 +763,7 @@ pub fn plan_aggregate_verdict_with_evidence(
         );
         stored.verdict = Some(input.verdict);
         stored.notes = Some(input.notes.into());
-        stored.at = Some(Timestamp::now());
+        stored.at = Some(corral_core::clock::now());
         ctx.store.log_event(
             Some(id),
             "aggregate_verdict",

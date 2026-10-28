@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 
 use crate::hook_process::HookChild;
@@ -144,7 +143,7 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
     env.insert("CORRAL_HOOK_TOKEN".into(), token.clone());
     op.hooks[i].attempts.push(HookAttempt {
         number,
-        started: Timestamp::now(),
+        started: corral_core::clock::now(),
         finished: None,
         token,
         pid: None,
@@ -199,7 +198,7 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
                 .attempts
                 .last_mut()
                 .context("missing attempt")?
-                .finished = Some(Timestamp::now());
+                .finished = Some(corral_core::clock::now());
             return Err(error).with_context(|| format!("spawning hook {:?}", hook.argv));
         }
     };
@@ -216,7 +215,7 @@ pub(crate) fn execute(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result
         attempt.signal = status.signal();
     }
     attempt.timed_out = timed_out;
-    attempt.finished = Some(Timestamp::now());
+    attempt.finished = Some(corral_core::clock::now());
     if !status.success() || timed_out {
         bail!(
             "hook {:?} failed: {status}, timeout={timed_out}; log {}",

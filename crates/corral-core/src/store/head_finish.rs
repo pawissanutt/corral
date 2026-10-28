@@ -197,8 +197,15 @@ impl TaskHeadMut {
             .map(|row| ((row.part, row.key.clone()), row))
             .collect();
         let mut stored: BTreeMap<Key, Option<HistoryRow>> = BTreeMap::new();
-        for key in writes.keys() {
-            stored.insert(key.clone(), self.stored_row(&base_rows, key)?);
+        for (key, write) in &writes {
+            // A checkpoint payload is keyed by its content digest: a stored one is identical to
+            // the one put, so a put never reads it to compare. A delete still does.
+            let row = if key.0 == TaskPart::CheckpointPayload && write.is_some() {
+                None
+            } else {
+                self.stored_row(&base_rows, key)?
+            };
+            stored.insert(key.clone(), row);
         }
         // Settle leaves before their parents: a review child's obligations_rev is part of
         // the document guarded by its run's children_rev, not an independent witness.
@@ -246,6 +253,39 @@ impl TaskHeadMut {
             stored.insert(key.clone(), old);
             writes.insert(key, row);
         }
+        // The cleanup ledger gains each pane a written container names and keeps every row it
+        // already has, released or not.
+        // Only panes a written row names anew are looked up: its stored version's panes are
+        // already in the ledger.
+        let mut derived: Vec<HistoryRow> = Vec::new();
+        for (key, row) in &writes {
+            let Some(row) = row else { continue };
+            let known: std::collections::BTreeSet<String> = stored
+                .get(key)
+                .cloned()
+                .flatten()
+                .map(|old| super::cleanup_panes::ledger_of(&old))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| r.key)
+                .collect();
+            derived.extend(
+                super::cleanup_panes::ledger_of(row)
+                    .into_iter()
+                    .filter(|r| !known.contains(&r.key)),
+            );
+        }
+        for row in derived {
+            let key = (row.part, row.key.clone());
+            if writes.contains_key(&key) {
+                continue;
+            }
+            let old = self.stored_row(&base_rows, &key)?;
+            if old.is_none() {
+                stored.insert(key.clone(), None);
+                writes.insert(key, Some(row));
+            }
+        }
         let mut rows = Vec::with_capacity(writes.len());
         let mut history_edit = false;
         for (key, row) in writes {
@@ -254,7 +294,8 @@ impl TaskHeadMut {
                 (Some(row), Some(old)) if row == old => {}
                 (None, None) => {}
                 (row, old) => {
-                    history_edit |= old.as_ref().is_some_and(|old| !old.current);
+                    history_edit |= key.0 != TaskPart::CleanupPane
+                        && old.as_ref().is_some_and(|old| !old.current);
                     rows.push(match row {
                         Some(row) => RowWrite::Put(row),
                         None => RowWrite::Delete {

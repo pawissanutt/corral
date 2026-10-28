@@ -254,7 +254,7 @@ pub fn plan_cancel(ctx: &Ctx, id: &str) -> Result<Task> {
             .filter(|r| r.id == run.id && r.started == run.started)
             .context("planner changed during cancellation")?;
         current.state = PlanRunState::Cancelled;
-        current.ended = Some(Timestamp::now());
+        current.ended = Some(corral_core::clock::now());
         current.pending_reply = Some("Plan run cancelled.".into());
         t.queued = false;
         t.dispatch_plan = None;

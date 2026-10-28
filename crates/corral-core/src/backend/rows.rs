@@ -133,6 +133,10 @@ pub enum TaskPart {
     PmReceipt,
     /// One superseded revision of a member gate.
     MemberGateHistory,
+    /// One pane the task's records named that cleanup closes (a run's own pane, gate and
+    /// reviewer panes, a plan reviewer's pane; never the PM's), kept after its record is
+    /// replaced. `open` until cleanup confirms the pane closed or absent.
+    CleanupPane,
 }
 
 /// One history or child row. `current` marks the row a head carries; `open` marks a row that
@@ -419,11 +423,15 @@ pub enum ChangeScope {
     Task {
         num: TaskNum,
         parts: Vec<TaskPart>,
-        /// Whether a non-current row of a container family (run, review child, plan, plan
-        /// review) was written or deleted: a demotion or a history edit. Without it, only the
-        /// current containers changed.
+        /// Whether a container family's history (run, review child, plan, plan review) was
+        /// edited: a non-current row added, rewritten or deleted. A demotion keeps the demoted
+        /// container's content and is not a history edit.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         history: bool,
+        /// Whether a current container row was written as non-current: a demotion, whose
+        /// container keeps its content but leaves the head.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        demoted: bool,
     },
     /// Records, claims (`claims`), leases (`leases`), authorizations (`authorizations`) and
     /// the session binding (`session`).

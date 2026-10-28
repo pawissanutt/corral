@@ -6,7 +6,6 @@ use corral_core::Task;
 use corral_core::inbox::{
     Inbox, Message, MessageBinding, Receipt, ReceiptLevel, Recipient, TerminalState,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -184,7 +183,7 @@ fn answer(
             &Receipt {
                 envelope: None,
                 binding: None,
-                observed_at: Timestamp::now(),
+                observed_at: corral_core::clock::now(),
                 via: "omo_question".into(),
                 detail: json!({"request": message.binding.question_request}),
             },

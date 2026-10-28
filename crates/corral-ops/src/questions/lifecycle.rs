@@ -17,7 +17,7 @@ use crate::Ctx;
 /// child becomes cancelled with the closure reason, and the container's undelivered Pi-native
 /// messages are cancelled `recipient_closed`. Returns the keys cancelled by this call.
 pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     let mut cancelled = Vec::new();
     let mut closed = Vec::new();
     ctx.store.try_update(task_id, |task| {

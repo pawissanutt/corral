@@ -150,7 +150,7 @@ pub fn move_task_with_decision(
             && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
             && review.sha != corral_git::rev_sha(&run.worktree, "HEAD")?
         {
-            crate::reviewer::supersede_review(ctx, run, jiff::Timestamp::now());
+            crate::reviewer::supersede_review(ctx, run, corral_core::clock::now());
             run.autopilot = None;
         }
         let action = if from != to && to == Status::Dropped {

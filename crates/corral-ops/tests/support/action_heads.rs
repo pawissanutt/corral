@@ -16,7 +16,7 @@ fn measure<T>(call: impl FnOnce() -> T) -> (T, WorkSnapshot, u64) {
     (value, delta, git)
 }
 
-fn checkpoint(fx: &Fx, id: &str) {
+pub(super) fn checkpoint(fx: &Fx, id: &str) {
     let packet = crate::progress_readback(&fx.ctx, id).unwrap();
     crate::save_checkpoint(
         &fx.ctx,
@@ -147,7 +147,7 @@ fn resume_packet_head_equals_the_full_packet_and_reads_only_scanned_metas() {
     }
 }
 
-fn waits(fx: &Fx, id: &str, n: usize) {
+pub(super) fn waits(fx: &Fx, id: &str, n: usize) {
     for i in 0..n {
         crate::register_wait(
             &fx.ctx,
@@ -247,48 +247,69 @@ fn applied_lessons_read_one_event_of_their_run() {
     assert_eq!(a.get(Counter::EventDecodes), 1);
 }
 
+/// Installs a barrier that, the first time `point` fires, edits the attempt's current review's
+/// notes and, when `back`, edits them back (A->B->A). Returns the store without the barrier.
+fn edit_review_once(
+    fx: &mut Fx,
+    id: &str,
+    attempt: &str,
+    point: &'static str,
+    back: bool,
+) -> corral_core::Store {
+    let review = fx
+        .ctx
+        .store
+        .head(id)
+        .unwrap()
+        .last_aggregate_attempt
+        .unwrap()
+        .current_review
+        .unwrap();
+    let plain = fx.ctx.store.clone();
+    let edits = plain.clone();
+    let fired = Mutex::new(false);
+    let (task, attempt) = (id.to_owned(), attempt.to_owned());
+    fx.ctx.store = fx.ctx.store.with_submission_barrier(Arc::new(move |at| {
+        if at != point || std::mem::replace(&mut *fired.lock().unwrap(), true) {
+            return;
+        }
+        let notes = [Some("edited".to_owned()), review.notes.clone()];
+        for notes in notes.into_iter().take(if back { 2 } else { 1 }) {
+            edits
+                .update_head(&task, |t| {
+                    t.edit_aggregate_review(&attempt, &review.id, |r| {
+                        r.notes = notes;
+                        Ok(())
+                    })
+                })
+                .unwrap();
+        }
+    }));
+    plain
+}
+
+/// The kinds of `id`'s events after the first `after`.
+fn event_kinds(fx: &Fx, id: &str, after: usize) -> Vec<String> {
+    let events = fx.ctx.store.events().unwrap();
+    let mine = events.iter().filter(|e| e.task.as_deref() == Some(id));
+    mine.skip(after).map(|e| e.kind.clone()).collect()
+}
+
 /// A completed aggregate review edited and edited back (A->B->A) between the attempt read and
-/// the acceptance guard refuses the acceptance as a genuine edit does, and the next attempt
-/// accepts in both cases.
+/// the acceptance guard refuses exactly as a genuine edit does: the same error, refused
+/// authorization, events, records, main and status; and the next pass lands in both cases.
 #[test]
 fn aggregate_acceptance_refuses_an_edited_back_review_as_a_genuine_change() {
     for code in [false, true] {
+        let mut observed = Vec::new();
         for back in [true, false] {
             let (mut fx, id, attempt, _) = aggregate::scenario(code, true);
             let repo = fx.ctx.store.project_path("app").unwrap();
             let main = fixture::git(&repo, &["rev-parse", "main"]);
             let status = fx.ctx.store.head(&id).unwrap().status;
-            let review = fx
-                .ctx
-                .store
-                .head(&id)
-                .unwrap()
-                .last_aggregate_attempt
-                .unwrap()
-                .current_review
-                .unwrap();
-            let plain = fx.ctx.store.clone();
-            let edited = Arc::new(Mutex::new(false));
-            let once = edited.clone();
-            let (task, attempt_id) = (id.clone(), attempt.clone());
-            fx.ctx.store = fx.ctx.store.with_submission_barrier(Arc::new(move |point| {
-                if point != "submission_entered"
-                    || std::mem::replace(&mut *once.lock().unwrap(), true)
-                {
-                    return;
-                }
-                let notes = [Some("edited".to_owned()), review.notes.clone()];
-                for notes in notes.into_iter().take(if back { 2 } else { 1 }) {
-                    plain
-                        .update_head(&task, |t| {
-                            t.edit_aggregate_review(&attempt_id, &review.id, |r| {
-                                r.notes = notes;
-                                Ok(())
-                            })
-                        })
-                        .unwrap();
-                }
-            }));
+            let events = event_kinds(&fx, &id, 0).len();
+            let records = authorizations(&fx.ctx, &id, OperatingActionKind::AcceptAggregate).len();
+            let plain = edit_review_once(&mut fx, &id, &attempt, "submission_entered", back);
             let refused = crate::plan_accept(&fx.ctx, &id, &attempt, true).unwrap_err();
             assert!(crate::operating::refused(&refused), "{refused:#}");
             assert!(
@@ -298,16 +319,115 @@ fn aggregate_acceptance_refuses_an_edited_back_review_as_a_genuine_change() {
                 "{refused:#}"
             );
             assert_eq!(fixture::git(&repo, &["rev-parse", "main"]), main);
-            let record = authorizations(&fx.ctx, &id, OperatingActionKind::AcceptAggregate)
-                .pop()
-                .unwrap();
-            assert!(matches!(
-                record.disposition,
-                SubmissionDisposition::AuthorizationRefused { .. }
-            ));
             assert_eq!(fx.ctx.store.head(&id).unwrap().status, status);
+            let mut all = authorizations(&fx.ctx, &id, OperatingActionKind::AcceptAggregate);
+            let record = all.pop().unwrap();
+            let SubmissionDisposition::AuthorizationRefused { reason, .. } = record.disposition
+            else {
+                panic!("not refused: {:?}", record.disposition);
+            };
+            observed.push((
+                refused.to_string(),
+                reason,
+                all.len() + 1 - records,
+                event_kinds(&fx, &id, events),
+            ));
+            fx.ctx.store = plain;
             let accepted = crate::plan_accept(&fx.ctx, &id, &attempt, true).unwrap();
             assert_eq!(accepted.state, corral_core::AggregateLandingState::Landed);
         }
+        assert_eq!(
+            observed[0], observed[1],
+            "code={code}: edit-back differs from an edit"
+        );
+    }
+}
+
+/// Review launch: a review edited and edited back between the attempt read and the launch
+/// guard refuses as a genuine edit does, with no review pushed, no event and no pane, and the
+/// next pass launches the next review.
+#[test]
+fn aggregate_review_launch_refuses_an_edited_back_review_as_a_genuine_change() {
+    for code in [false, true] {
+        let mut observed = Vec::new();
+        for back in [true, false] {
+            let (mut fx, id, attempt, _) = aggregate::scenario(code, false);
+            let before = fx
+                .ctx
+                .store
+                .head(&id)
+                .unwrap()
+                .last_aggregate_attempt
+                .unwrap();
+            let events = event_kinds(&fx, &id, 0).len();
+            let plain = edit_review_once(&mut fx, &id, &attempt, "aggregate_review_observed", back);
+            let refused = crate::plan_aggregate_review(&fx.ctx, &id, &attempt).unwrap_err();
+            assert!(
+                refused
+                    .to_string()
+                    .contains("aggregate attempt changed; retry"),
+                "{refused:#}"
+            );
+            let after = fx
+                .ctx
+                .store
+                .head(&id)
+                .unwrap()
+                .last_aggregate_attempt
+                .unwrap();
+            assert_eq!(
+                after.facts.children, before.facts.children,
+                "a review was pushed"
+            );
+            let current = after.current_review.as_ref().unwrap();
+            assert_eq!(current.id, before.current_review.as_ref().unwrap().id);
+            assert!(current.herdr == before.current_review.as_ref().unwrap().herdr);
+            observed.push((refused.to_string(), event_kinds(&fx, &id, events)));
+            fx.ctx.store = plain;
+            let next = crate::plan_aggregate_review(&fx.ctx, &id, &attempt).unwrap();
+            assert_eq!(next.id, format!("{attempt}-R{}", before.facts.children + 1));
+            assert!(next.herdr.is_some(), "the next pass launches its pane");
+        }
+        assert_eq!(
+            observed[0], observed[1],
+            "code={code}: edit-back differs from an edit"
+        );
+        assert!(
+            observed[0].1.is_empty(),
+            "a refused launch logged {:?}",
+            observed[0].1
+        );
+    }
+}
+
+/// Both aggregate freshness wrappers (review launch and the verdict callback) capture the
+/// candidate while holding the landing lock: a cooperating landing cannot move the target
+/// between the capture and the check.
+#[test]
+fn aggregate_candidate_capture_runs_under_the_landing_lock() {
+    for code in [false, true] {
+        let (mut fx, id, attempt, _) = aggregate::scenario(code, false);
+        let repo = fx.ctx.store.project_path("app").unwrap();
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let seen = held.clone();
+        fx.ctx.store = fx.ctx.store.with_submission_barrier(Arc::new(move |point| {
+            if point == "aggregate_candidate_capture" {
+                let free = corral_git::try_landing_lock(&repo).unwrap().is_some();
+                seen.lock().unwrap().push(!free);
+            }
+        }));
+        let review = crate::plan_aggregate_review(&fx.ctx, &id, &attempt).unwrap();
+        crate::plan_aggregate_verdict(
+            &fx.ctx,
+            &id,
+            &crate::AggregateVerdict {
+                attempt: &attempt,
+                review: &review.id,
+                verdict: corral_core::Verdict::Approve,
+                notes: "verified",
+            },
+        )
+        .unwrap();
+        assert_eq!(*held.lock().unwrap(), [true, true], "code={code}");
     }
 }

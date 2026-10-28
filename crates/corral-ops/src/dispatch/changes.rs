@@ -251,7 +251,7 @@ fn send_changes(
             {
                 bail!("run changed after posting changes");
             }
-            crate::reviewer::supersede_review_head(current, Timestamp::now())?;
+            crate::reviewer::supersede_review_head(current, corral_core::clock::now())?;
             mark(current);
             Ok(())
         })?;
@@ -277,7 +277,7 @@ fn send_changes(
         {
             bail!("run changed after submitting changes");
         }
-        crate::reviewer::supersede_review_head(current, Timestamp::now())?;
+        crate::reviewer::supersede_review_head(current, corral_core::clock::now())?;
         if let Some(run) = current.current_run_mut() {
             if run.pending_reply.as_deref() == Some(text) {
                 run.pending_reply = None;

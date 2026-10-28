@@ -9,7 +9,6 @@ use corral_core::agent::{
     RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths, pm_state,
     rejections,
 };
-use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use super::admission::{self, Admitted};
@@ -61,7 +60,7 @@ fn append(
         bytes <= RESULT_MAX_BYTES,
         "receipt result of {bytes} bytes exceeds {RESULT_MAX_BYTES}"
     );
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     let receipt = RequestReceipt {
         version: AGENT_RECORD_VERSION,
         request_id: origin.request_id.clone(),

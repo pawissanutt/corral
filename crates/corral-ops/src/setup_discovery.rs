@@ -49,7 +49,7 @@ pub struct CandidateObservation {
 /// Only existing harness probes run here. Listing a model proves neither authentication
 /// nor execution, and cannot identify an exact connection or settings.
 pub fn setup_discover(config: &Config) -> SetupDiscovery {
-    sanitized_discovery(Timestamp::now(), crate::detect_harnesses(config))
+    sanitized_discovery(corral_core::clock::now(), crate::detect_harnesses(config))
 }
 
 fn sanitized_discovery(

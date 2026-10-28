@@ -278,6 +278,7 @@ impl Store {
             mut rows,
         } = split(record)?;
         carry_revisions(&old, &mut rows);
+        super::cleanup_panes::carry_ledger(&old, &mut rows);
         let head = &stored.doc.head;
         let mut same_fields = fields.clone();
         if !exact {

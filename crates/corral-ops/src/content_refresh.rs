@@ -242,11 +242,13 @@ fn changes_after(
                         num,
                         parts,
                         history,
+                        demoted,
                     } => {
                         let id = corral_core::Store::normalize_id(&num.0.to_string())?;
                         let task = delta.tasks.entry(id).or_default();
                         task.parts.extend(parts.iter().copied());
                         task.history |= history;
+                        task.demoted |= demoted;
                     }
                     ChangeScope::Artifact { task } => {
                         let task = delta.tasks.entry(task.clone()).or_default();

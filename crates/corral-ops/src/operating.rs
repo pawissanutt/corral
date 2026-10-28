@@ -4,7 +4,6 @@ use corral_core::{
     ActionAuthorization, OperatingActionIdentity, OperatingActionKind, OperatingOrigin, Store,
     SubmissionOutcome, Task, TaskHeadMut, TaskRef,
 };
-use jiff::Timestamp;
 
 use crate::Ctx;
 
@@ -145,10 +144,10 @@ pub(crate) fn authorize(
                 action.run,
                 action.kind,
                 action.attempt,
-                Timestamp::now()
+                corral_core::clock::now()
             ),
             confirmed_by: "owner".into(),
-            confirmed_at: Timestamp::now(),
+            confirmed_at: corral_core::clock::now(),
         },
         Origin::Automatic => {
             require(

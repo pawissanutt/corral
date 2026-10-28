@@ -201,7 +201,7 @@ pub fn fire_wake(store: &Store, due: &DueWake, message_id: Option<String>) -> Re
             due.reason
         );
         wake.state = WakeState::Fired;
-        wake.fired_at = Some(Timestamp::now());
+        wake.fired_at = Some(corral_core::clock::now());
         wake.message_id = message_id;
         Ok(true)
     })?;
@@ -404,7 +404,7 @@ pub(crate) fn settle(
             agent::container_state_mut(task, &container).context("gate binding disappeared")?;
         let stored = agent.receipts.iter_mut().find(|r| r.request_id == request);
         let stored = stored.context("gate receipt disappeared")?;
-        let now = Timestamp::now();
+        let now = corral_core::clock::now();
         if stored.result != result {
             let source = if by_executor {
                 "executor"
@@ -446,6 +446,6 @@ pub(crate) fn evidence(
         state: result["outcome"].as_str().unwrap_or_default().into(),
         source: source.into(),
         detail,
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
     });
 }

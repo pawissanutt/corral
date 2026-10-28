@@ -129,7 +129,7 @@ pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
                     && snapshot.ended.is_none()
                 {
                     snapshot.review = Some(review.clone());
-                    snapshot.ended = Some(Timestamp::now());
+                    snapshot.ended = Some(corral_core::clock::now());
                     crate::usage::collect(snapshot, &ctx.store);
                 }
             }
@@ -303,7 +303,7 @@ impl<'a> ReviewLaunch<'a> {
                                 present: pane.is_some_and(|id| {
                                     inventory.panes.iter().any(|p| p.pane_id == id)
                                 }),
-                                at: Timestamp::now(),
+                                at: corral_core::clock::now(),
                                 ticket: Some(inventory.ticket),
                                 count_miss: false,
                             },

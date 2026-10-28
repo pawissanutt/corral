@@ -103,7 +103,7 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
                         .iter_mut()
                         .find(|child| Some(&child.id) == pending.review_run.as_ref())
                     {
-                        child.ended = Some(jiff::Timestamp::now());
+                        child.ended = Some(corral_core::clock::now());
                     }
                 }
                 Kind::Gate | Kind::Reviewer => {}

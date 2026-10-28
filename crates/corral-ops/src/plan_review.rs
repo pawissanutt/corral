@@ -4,7 +4,6 @@ use corral_core::{
     OperatingActionKind, OperatingMode, PlanApproval, PlanRecord, PlanReview, PlanRunState, Task,
     TaskMut as _, TaskRef as _, Verdict,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{Ctx, plan};
@@ -27,7 +26,7 @@ pub(crate) fn terminalize_pending(plan: &mut PlanRecord, reason: &str) {
         review.verdict = Some(Verdict::Escalate);
         review.notes = Some(reason.into());
         review.pending_reply = None;
-        review.at = Timestamp::now();
+        review.at = corral_core::clock::now();
     }
 }
 
@@ -217,7 +216,7 @@ pub fn plan_verdict_with_evidence(
         }
         let p = current(task, input.plan)?;
         p.approval = accepted.then(|| PlanApproval {
-            by: reviewer.clone(), at: Timestamp::now(), policy_digest: digest.clone(),
+            by: reviewer.clone(), at: corral_core::clock::now(), policy_digest: digest.clone(),
             authorization: None,
         });
         match input.attempt {
@@ -225,7 +224,7 @@ pub fn plan_verdict_with_evidence(
                 let review = p.reviews.last_mut().context("plan review missing")?;
                 review.verdict = Some(verdict);
                 review.notes = Some(notes);
-                review.at = Timestamp::now();
+                review.at = corral_core::clock::now();
             }
             None => {
                 terminalize_pending(p, "Superseded by an owner decision.");
@@ -237,7 +236,7 @@ pub fn plan_verdict_with_evidence(
                 policy_digest: digest,
                 verdict: Some(verdict),
                 notes: Some(notes),
-                at: Timestamp::now(),
+                at: corral_core::clock::now(),
                 herdr: None,
                 pending_reply: None,
                 route: None,
@@ -425,7 +424,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 )?
                 .approval = Some(PlanApproval {
                 by,
-                at: Timestamp::now(),
+                at: corral_core::clock::now(),
                 policy_digest: digest,
                 authorization: Some(authorization.id.clone()),
             });

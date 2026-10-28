@@ -1,7 +1,6 @@
 //! Queue intent and a reserved launch are separate one-action identities.
 use anyhow::{Result, ensure};
 use corral_core::{ActionAuthorization, OperatingActionIdentity, OperatingActionKind};
-use jiff::Timestamp;
 
 use super::{Origin, authorize, is_automatic};
 use crate::Ctx;
@@ -69,7 +68,7 @@ pub(crate) fn authorize_start(
             action.attempt = format!(
                 "start-{}-{}",
                 std::process::id(),
-                Timestamp::now().as_nanosecond()
+                jiff::Timestamp::now().as_nanosecond()
             );
             authorize(ctx, action, origin)?
         };

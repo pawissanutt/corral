@@ -183,7 +183,7 @@ pub fn collect_digest(
 
 /// Generate and pin a digest for the last N h/d/w (default CLI window: 1d).
 pub fn digest(ctx: &Ctx, since: &str) -> Result<DigestReport> {
-    digest_at(ctx, since, Timestamp::now())
+    digest_at(ctx, since, corral_core::clock::now())
 }
 
 /// Explicit clock for deterministic callers.

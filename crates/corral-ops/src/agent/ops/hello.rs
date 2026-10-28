@@ -4,7 +4,6 @@ use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::agent::{GenerationBound, HostHealth, ReceiptEffect, paths};
-use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -88,7 +87,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         pid: payload.pid,
         start_time: payload.start_time,
         request_id: envelope.request_id.clone(),
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
     };
     let key = container.key();
     receipts::commit(ctx, &admitted, move |state, _| {

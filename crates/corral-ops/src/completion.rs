@@ -572,7 +572,7 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         required_checks: Vec::new(),
         evidence_keys: Vec::new(),
         failures: Vec::new(),
-        checked: Timestamp::now(),
+        checked: corral_core::clock::now(),
     };
     let Some(run) = task.current_run() else {
         audit.failures.push("no_current_run".into());

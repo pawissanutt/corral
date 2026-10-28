@@ -785,3 +785,6 @@ fn changed_child_contract_invalidates_the_exact_publication_binding() {
     // Then the original scope label is not permission for the widened contract.
     assert!(scoped_child(&ctx.store, &ctx.store.get(child).unwrap()).is_err());
 }
+
+#[path = "plan_decompose_heads_tests.rs"]
+mod heads;

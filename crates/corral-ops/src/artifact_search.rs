@@ -2,7 +2,6 @@
 use anyhow::{Context, Result};
 use corral_core::Task;
 use corral_core::query::{Query, SearchContext};
-use jiff::Timestamp;
 
 use crate::content_index::{self, Snapshot, Source};
 use crate::{ArtifactRow, Ctx};
@@ -68,7 +67,7 @@ impl ArtifactSearch {
             let negative = term.starts_with('-');
             let escaped = term.replace('\\', "\\\\").replace('"', "\\\"");
             let input = format!("\"{}{escaped}\"", if negative { "-" } else { "" });
-            let query = Query::parse(&input, Timestamp::now())?;
+            let query = Query::parse(&input, corral_core::clock::now())?;
             let found = crate::content_scan::search_record(
                 ctx,
                 record,

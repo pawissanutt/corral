@@ -8,7 +8,6 @@ use corral_core::agent::{
     RequestReceipt, paths, pm_state,
 };
 use corral_core::{Store, Task};
-use jiff::Timestamp;
 use serde_json::json;
 
 use super::call::{RejectCode, Rejection};
@@ -331,7 +330,7 @@ fn next_generation(state: &mut AgentRunState, nonce_digest: &str, pane: &str) ->
         "{} already opened {GENERATIONS_MAX} generations",
         state.binding.role.as_str()
     );
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     let n = state.generations.iter().map(|g| g.n).max().unwrap_or(0) + 1;
     for older in state.generations.iter_mut().filter(|g| g.fenced.is_none()) {
         older.fenced = Some(GenerationFence {
@@ -441,7 +440,7 @@ fn fence(state: &mut AgentRunState, generation: u32, reason: &str) -> Result<boo
     }
     entry.fenced = Some(GenerationFence {
         reason: reason.into(),
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
     });
     if current {
         state.binding.health = HostHealth::Fenced;

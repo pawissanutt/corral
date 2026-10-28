@@ -580,9 +580,16 @@ impl Store {
     /// # Errors
     /// Returns read errors.
     pub fn pane_owners(&self, token: &str) -> Result<Vec<String>> {
-        Ok(self
-            .view()?
-            .token_owners(crate::backend::TaskPart::PaneRef, token, 64)?
+        let view = self.view()?;
+        let mut owners = std::collections::BTreeSet::new();
+        // Pane references, and the cleanup ledger's panes their records no longer name.
+        for part in [
+            crate::backend::TaskPart::PaneRef,
+            crate::backend::TaskPart::CleanupPane,
+        ] {
+            owners.extend(view.token_owners(part, token, 64)?);
+        }
+        Ok(owners
             .into_iter()
             .map(|num| format!("T-{:03}", num.0))
             .collect())

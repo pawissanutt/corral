@@ -11,7 +11,6 @@ use corral_core::agent::{
     pm_state,
 };
 use corral_core::{Store, Task, Verdict};
-use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use super::admission;
@@ -151,7 +150,7 @@ fn new_receipt(
         bytes <= RESULT_MAX_BYTES,
         "receipt result of {bytes} bytes exceeds {RESULT_MAX_BYTES}"
     );
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     Ok(RequestReceipt {
         version: AGENT_RECORD_VERSION,
         request_id: origin.request_id.clone(),
@@ -429,7 +428,7 @@ fn run_effect(
             if task.current_run().map(|r| r.id.as_str()) != run {
                 return Ok(false);
             }
-            crate::obligations_sync::reconcile_one(ctx, task_id, Timestamp::now(), None)?;
+            crate::obligations_sync::reconcile_one(ctx, task_id, corral_core::clock::now(), None)?;
             Ok(true)
         }
         "effect:done_audit" => match named.map(|r| (r, &r.completion.audit)) {
@@ -505,7 +504,7 @@ fn subscribe(
         kind,
         target: target.into(),
         state: at,
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         fired_at: None,
         message_id: None,
     });
@@ -771,7 +770,7 @@ fn pm_write(
         crate::review_budget::evidence(stored, &to.1, source, None);
         (stored.state, stored.result) = to;
         stored.executor = None;
-        let now = Timestamp::now();
+        let now = corral_core::clock::now();
         stored.committed_at = (stored.state == ReceiptState::Committed).then_some(now);
         Ok((stored.clone(), true))
     })
