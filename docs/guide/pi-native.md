@@ -491,13 +491,22 @@ resumes the PM's host in its saved pane, retaining its project scope and durable
    |---|---|
    | corral tool, committed | `result`, with the stored result |
    | corral tool, rejected (a gate refused at submission included) | `rejected`, with its code and reason |
-   | `corral_gate` prepared and never submitted | `prepared`: the next `corral_gate` adopts the attempt and starts it once |
+   | `corral_gate` prepared and never submitted | `prepared`: the next `corral_gate` adopts the attempt if its candidate still matches; otherwise admission archives it and prepares a new attempt |
    | corral tool whose executor still ran after `drain_secs` | `in_progress`; one `recovery_update` message reports its final class once it settles |
    | corral tool, uncertain (an unconfirmed gate start, a legacy pane reply) | `outcome_unknown`, with the evidence |
    | single-phase corral tool with no receipt | `not_committed`, naming idempotent effects it may have made first (a `commit_all` commit, content-addressed blobs) |
    | two-phase corral tool (gate, capture, reply) with no reservation, or abandoned before it started | `not_executed` |
    | `edit`, `write`, `bash` | `outcome_unknown`; for bash, processes it started may still run |
    | `read`, `grep`, `find`, `ls` and the LSP tools | `interrupted_no_effect` |
+
+   A definitely unsubmitted gate or reviewer preparation whose candidate changed (for
+   example, after a rebase) is superseded on the next admission. Its complete preparation
+   is attached as evidence before the replay pointer is removed, and
+   `review_preparation_superseded` records the old authorization and artifact. Matching
+   preparations still require their original operating origin. Uncertain or submitted
+   launches are never disposed merely because the candidate changed. Retained preparations
+   hold neither process capacity nor finishing priority over other tasks' changes/dispatch;
+   they must first be re-admitted.
 
    When an edit, write or bash call is among them, corral attaches `git status --porcelain=v2`
    and `git diff --stat` of the worktree as an evidence artifact titled

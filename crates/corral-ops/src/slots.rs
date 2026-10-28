@@ -236,6 +236,11 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
             Some(ReviewWork::Gate | ReviewWork::Reviewer) => {}
             None => continue,
         }
+        if let Some(kind) = work
+            && crate::review_budget::retained_preparation(store, &task.id, &run.id, kind)?
+        {
+            continue;
+        }
         if capacity_reason(store, &task, 0)?.is_none() {
             return Ok(Some(format!("waiting for finishing work on {}", task.id)));
         }
