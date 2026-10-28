@@ -100,7 +100,9 @@ export async function openBare(options: BareOptions, loadSdk: () => Promise<type
   const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
   const model = models.getModel(route.id, modelId);
   if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-  restrictProvider(models, route.id, network.fetch as typeof globalThis.fetch);
+  // The same model lanes as the bound host: Anthropic runs through the Claude Agent SDK lane (T-493).
+  restrictProvider(models, route.id, network.fetch as typeof globalThis.fetch,
+    { configDir: join(agentDir, "claude-code"), cwd: options.cwd });
   const thinkingLevel = options.effort && THINKING.has(options.effort)
     ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
   const tools = [...UPSTREAM_TOOLS];
