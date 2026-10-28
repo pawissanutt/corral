@@ -22,6 +22,8 @@ mod action_budget_checks;
 mod action_budget_fixture;
 #[path = "../tests/support/action_budget_growth.rs"]
 mod action_budget_growth;
+#[path = "../tests/support/action_budget_prompts.rs"]
+mod action_budget_prompts;
 #[path = "../tests/support/action_heads.rs"]
 mod action_heads;
 #[path = "../tests/support/submission_aggregate.rs"]

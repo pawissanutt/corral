@@ -47,7 +47,7 @@ fn flatten(delta: &WorkSnapshot, herdr: u64, git: u64) -> Cells {
 
 /// Ordinal-derived identifiers (task, run, plan, attempt and child numbers) and content
 /// digests differ by size; every other character of an output, digits included, must not.
-fn normalize(output: &str) -> String {
+pub(super) fn normalize(output: &str) -> String {
     let output = &mask_counter(&mask_times(output), "\"next_seq\":");
     // A delivered message's sequence number and id suffix: ordinals of the inbox's counter.
     let output = &mask_counter(output, "\"seq\":");
@@ -307,6 +307,8 @@ pub(super) struct Measured {
     after: Option<Walk>,
     /// The emitted (rows, bytes) each prompt section reads on this store.
     sections: BTreeMap<String, (u64, u64)>,
+    /// Each emitted section's expected rendering, from the full task's stored rows.
+    references: BTreeMap<String, String>,
     pub(super) failures: Vec<String>,
 }
 
@@ -390,6 +392,7 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     let samples = bench.probe.take();
     let live = bench.probe.take_live();
     let (after, after_volumes) = walk(bench);
+    m.references = super::action_budget_prompts::references(bench, kind);
     let effects = submitted(bench, kind) - effects;
     m.failures.extend(effect_failures(
         kind,
@@ -518,55 +521,10 @@ pub(super) fn own(cells: &Cells) -> (u64, u64) {
     (rows, get(cells, "decoded_doc_bytes.own_record"))
 }
 
-/// Base against one larger variant: every unattributed cell and output equal; the emitted
-/// cells equal on grown and grown by exactly the shown sections' added rows and bytes on
-/// emitted; own-record cells equal.
-/// An emitted store's prompts add its emitted sections and change nothing else: the base
-/// output's lines appear in order, and each emitted text the kind's prompts show is present.
-fn emitted_output_failures(kind: Kind, grew: &[&str], base: &str, emitted: &str) -> Vec<String> {
-    let mut failures = Vec::new();
-    let (base, base_packets) = cut_packets(base);
-    let (emitted, emitted_packets) = cut_packets(emitted);
-    if sections(kind).iter().any(|(s, _)| *s == "resume") {
-        failures.extend(packet_failures(&base_packets, &emitted_packets));
-    }
-    let mut lines = emitted.lines();
-    let mut added = Vec::new();
-    for want in base.lines() {
-        loop {
-            match lines.next() {
-                Some(line) if line == want => break,
-                // An empty list or object the emitted rows fill.
-                _ if matches!(want.trim(), "[]" | "{}") && emitted.contains("Finding on") => break,
-                Some(line) => added.push(line),
-                None => {
-                    failures.push(format!("emitted output lost a base line: {want:.240}"));
-                    return failures;
-                }
-            }
-        }
-    }
-    added.extend(lines);
-    for (section, _) in sections(kind).iter().filter(|(s, _)| grew.contains(s)) {
-        let marker = match *section {
-            "comments" => "Owner note",
-            "plan_findings" => "Finding on",
-            // The worker's resume packet, checked by `packet_failures`.
-            _ => continue,
-        };
-        if !added.iter().any(|line| line.contains(marker)) {
-            failures.push(format!(
-                "emitted prompt lacks its {section} section ({marker:?})"
-            ));
-        }
-    }
-    failures
-}
-
 const PACKET: &str = "## Portable resume contract";
 
 /// The output without its resume-contract sections, and each section's JSON packet.
-fn cut_packets(output: &str) -> (String, Vec<serde_json::Value>) {
+pub(super) fn cut_packets(output: &str) -> (String, Vec<serde_json::Value>) {
     let (mut rest, mut packets, mut inside, mut block) = (Vec::new(), Vec::new(), false, None);
     for line in output.lines() {
         if line == PACKET {
@@ -620,7 +578,10 @@ fn json_diff(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &mut
 }
 
 /// The emitted packet adds the emitted obligations and changes nothing else.
-fn packet_failures(base: &[serde_json::Value], emitted: &[serde_json::Value]) -> Vec<String> {
+pub(super) fn packet_failures(
+    base: &[serde_json::Value],
+    emitted: &[serde_json::Value],
+) -> Vec<String> {
     if base.is_empty() || base.len() != emitted.len() || base.iter().any(|p| p.is_null()) {
         return vec![format!(
             "resume packets: {} at base, {} emitted (or unparsed)",
@@ -663,16 +624,17 @@ fn compare(kind: Kind, base: &Measured, other: &Measured, variant: Variant) -> V
     }
     if variant == Variant::Emitted {
         // The sections whose emitted rows this store really added.
+        // The sections whose emitted rows this store really added.
         let grew: Vec<&str> = sections(kind)
             .iter()
             .map(|(s, _)| *s)
             .filter(|s| other.sections[*s].0 > base.sections[*s].0)
             .collect();
-        failures.extend(emitted_output_failures(
+        failures.extend(super::action_budget_prompts::emitted_output_failures(
             kind,
             &grew,
-            &base.output,
-            &other.output,
+            (&base.output, &base.references),
+            (&other.output, &other.references),
         ));
     } else if base.output != other.output {
         let (b, o) = base
