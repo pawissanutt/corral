@@ -3,6 +3,8 @@
 //   --version                 prints the pinned Pi and the embedded Bun versions;
 //   --write-install <dir>     writes compat.json and the role assets beside the installed binary;
 //   login ...                 runs `corral agent login`'s OAuth flow (src/auth/login.ts);
+//   models --provider <id>... prints Pi's offline model catalog for harness detection
+//                             (src/auth/models.ts);
 //   anything else             runs the host (src/host/main.ts) with the bundled role, delivery and
 //                             auth modules instead of the fixed-path loader.
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -56,6 +58,8 @@ if (command === "--version") {
   writeInstall(operand);
 } else if (command === "login") {
   (await import("../auth/login.ts")).runLogin(process.argv);
+} else if (command === "models") {
+  (await import("../auth/models.ts")).runModels(process.argv);
 } else {
   await runHost();
 }
