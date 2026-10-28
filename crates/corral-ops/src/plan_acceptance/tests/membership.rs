@@ -43,6 +43,134 @@ fn held_member(f: &Fixture) -> String {
     id
 }
 
+fn history(f: &Fixture, id: &str) {
+    f.ctx
+        .store
+        .update(id, |task| {
+            task.runs = serde_json::from_value(json!([
+                {"id":"R1", "agent":"fixture", "worktree":"/unused", "branch":"old",
+                 "base":"main", "base_sha":"base", "started":"2026-10-19T00:00:00Z",
+                 "ended":"2026-10-19T01:00:00Z", "outcome":"abandoned"},
+                {"id":"R2", "agent":"fixture", "worktree":"/unused", "branch":"parked",
+                 "base":"main", "base_sha":"base", "started":"2026-10-19T02:00:00Z"}
+            ]))
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn held_abandoned_and_parked_runs_move_unchanged() {
+    let f = Fixture::new(Delivery::Main, &["true"]);
+    let held = held_member(&f);
+    history(&f, &held);
+    let (later, _) = later_plan(&f);
+    let before = f.ctx.store.get(&held).unwrap();
+    plan_move_member_from(&f.ctx, &f.plan, &held, &later, None, &owner(&f)).unwrap();
+    let after = f.ctx.store.get(&held).unwrap();
+    assert_eq!(after.runs, before.runs);
+    assert_eq!(after.parent.as_deref(), Some(later.as_str()));
+    assert!(after.dispatch_hold);
+    assert_eq!(after.status, Status::Backlog);
+    assert_eq!(f.plan().membership_revision, 1);
+    assert_eq!(f.ctx.store.get(&later).unwrap().membership_revision, 1);
+}
+
+#[test]
+fn live_or_landed_history_refuses_without_writes() {
+    for case in [
+        "running",
+        "needs_me",
+        "review",
+        "gate",
+        "open_review",
+        "landed",
+        "integrated",
+        "queued",
+    ] {
+        let f = Fixture::new(Delivery::Main, &["true"]);
+        let held = held_member(&f);
+        history(&f, &held);
+        let (later, _) = later_plan(&f);
+        f.ctx
+            .store
+            .update(&held, |task| {
+                match case {
+                    "running" => task.status = Status::Running,
+                    "needs_me" => task.status = Status::NeedsMe,
+                    "review" => task.status = Status::Review,
+                    "queued" => task.queued = true,
+                    "landed" => {
+                        task.landed = Some(corral_core::LandingReceipt {
+                            run: "R1".into(),
+                            sha: "sha".into(),
+                        })
+                    }
+                    "gate" => {
+                        task.runs[0].gate = Some(
+                            serde_json::from_value(json!({
+                                "result":"running", "at":"2026-10-19T00:00:00Z", "sha":"sha"
+                            }))
+                            .unwrap(),
+                        )
+                    }
+                    "open_review" => {
+                        task.runs[0].review = Some(
+                            serde_json::from_value(json!({
+                                "reviewer":"owner", "at":"2026-10-19T00:00:00Z", "sha":"sha"
+                            }))
+                            .unwrap(),
+                        )
+                    }
+                    _ => (),
+                }
+                Ok(())
+            })
+            .unwrap();
+        if case == "integrated" {
+            f.ctx
+                .store
+                .log_event(
+                    Some(&held),
+                    "approved",
+                    json!({"run":"R1", "strategy":"fast_forward", "sha":"sha"}),
+                )
+                .unwrap();
+        }
+        let before = (
+            f.plan(),
+            f.ctx.store.get(&later).unwrap(),
+            f.ctx.store.get(&held).unwrap(),
+        );
+        let error = message(plan_move_member_from(
+            &f.ctx,
+            &f.plan,
+            &held,
+            &later,
+            None,
+            &owner(&f),
+        ));
+        if case != "queued" {
+            let run = if matches!(case, "running" | "needs_me" | "review") {
+                "R2"
+            } else {
+                "R1"
+            };
+            assert!(error.contains(run), "{case}: {error}");
+        }
+        assert_eq!(
+            (
+                f.plan(),
+                f.ctx.store.get(&later).unwrap(),
+                f.ctx.store.get(&held).unwrap()
+            ),
+            before
+        );
+        assert_eq!(moved_events(&f), 0);
+    }
+}
+
 fn moved_events(f: &Fixture) -> usize {
     let events = f.ctx.store.events().unwrap();
     events
@@ -117,7 +245,7 @@ fn refused_moves_write_nothing_and_an_interrupted_move_completes_once() {
 
     // When the started member, an agent or PM author, a non-member or the same Plan is named.
     let error = message(to_later(&started, &owner(&f)));
-    assert!(error.contains("must be unstarted"), "{error}");
+    assert!(error.contains("R1") && error.contains("landed"), "{error}");
     for (agent, pm) in [(true, false), (false, true)] {
         let entry = OwnerEntry {
             agent,
