@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     ActionAuthorization, OperatingActionIdentity, OperatingActionKind, OperatingOrigin, Store,
-    SubmissionOutcome, Task,
+    SubmissionOutcome, Task, TaskHeadMut, TaskRef,
 };
 use jiff::Timestamp;
 
@@ -32,11 +32,16 @@ impl std::fmt::Display for AuthorizationRefused {
 impl std::error::Error for AuthorizationRefused {}
 
 /// Read strict current bytes, not the caller's last successfully loaded configuration.
-pub(crate) fn require(store: &Store, task: &Task, kind: OperatingActionKind) -> Result<()> {
+pub(crate) fn require<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    kind: OperatingActionKind,
+) -> Result<()> {
     let effective = store.effective_operating_policy()?;
+    let id = task.id();
     let reasons = effective
         .tasks
-        .get(&task.id)
+        .get(id)
         .and_then(|policy| policy.refusals.get(&kind))
         .cloned()
         .unwrap_or_else(|| {
@@ -47,17 +52,17 @@ pub(crate) fn require(store: &Store, task: &Task, kind: OperatingActionKind) -> 
             }
         });
     ensure!(
-        effective.allows(&task.id, kind),
-        "automatic {kind:?} is not authorized for {}: {}",
-        task.id,
+        effective.allows(id, kind),
+        "automatic {kind:?} is not authorized for {id}: {}",
         reasons.join("; ")
     );
-    if let Some(run) = task.current_run() {
+    if let Some(run) = task.current_run_head()? {
         ensure!(
             run.pending_reply.is_none() && run.stuck.is_none(),
             "unresolved delivery or process recovery requires owner disposition"
         );
-        if crate::omo::is_omo(run) {
+        // `omo::is_omo` over the run's projection.
+        if run.harness.as_deref().unwrap_or(&run.agent) == "omo" {
             let ctx = Ctx::from_store(store.clone());
             ensure!(
                 crate::pm_questions::pending_at(&ctx, &run.worktree)?.is_none(),
@@ -190,6 +195,29 @@ pub(crate) fn submit<R>(
                 require(store, task, authorization.action.kind)?;
             }
             prepare(store, task)
+        },
+        send,
+    )? {
+        SubmissionOutcome::Submitted(result) => Ok(result),
+        SubmissionOutcome::AuthorizationRefused(reason) => Err(AuthorizationRefused(reason).into()),
+    }
+}
+
+/// [`submit`] with `prepare` mutating the acted task's head: the same protocol and checks.
+pub(crate) fn submit_head<R>(
+    ctx: &Ctx,
+    authorization: &ActionAuthorization,
+    prepare: impl FnOnce(&Store, &mut TaskHeadMut) -> Result<()>,
+    send: impl FnOnce() -> Result<R>,
+) -> Result<R> {
+    match ctx.store.submit_operating_action_head(
+        authorization,
+        &authorization.action,
+        |store, head| {
+            if matches!(authorization.origin, OperatingOrigin::Automatic { .. }) {
+                require(store, &*head, authorization.action.kind)?;
+            }
+            prepare(store, head)
         },
         send,
     )? {

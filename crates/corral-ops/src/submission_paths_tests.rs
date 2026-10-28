@@ -10,7 +10,7 @@ use corral_core::{
     backend::{ChangeSeq, OpKind, PageReq, StorageQuery, StorageRow},
 };
 
-mod fixture {
+pub(crate) mod fixture {
     use crate as corral_ops;
     include!("../tests/operating_launch/fixture.rs");
 }

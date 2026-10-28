@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use corral_core::{Run, Status, Store, Task};
+use corral_core::{Run, Status, Store, Task, TaskRef};
 
 use crate::{Ctx, review_budget::ReviewLaunch, verification};
 
@@ -43,6 +43,51 @@ pub(crate) fn current_assessment(
     task: &Task,
     parent: &Run,
 ) -> Result<()> {
+    assess(ctx, store, task, parent, |at| {
+        Ok(parent
+            .review_runs
+            .iter()
+            .rev()
+            .find(|child| child.review.as_ref().is_some_and(|r| r.at == at))
+            .and_then(|child| child.vendor.clone()))
+    })
+}
+
+/// [`current_assessment`] over a task form: the current run comes from the shell of the
+/// head fields and current containers, the reviewing child by its review time.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the head-form chain lands before T-253's action children convert its callers"
+    )
+)]
+pub(crate) fn current_assessment_ref<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    store: &Store,
+    task: &T,
+    parent: &str,
+) -> Result<()> {
+    let shell = task.shell_task()?;
+    let run = shell
+        .runs
+        .last()
+        .filter(|run| run.id == parent)
+        .context("review parent changed before submission")?;
+    assess(ctx, store, &shell, run, |at| {
+        Ok(task
+            .review_child_by_review_at(parent, at)?
+            .and_then(|child| child.vendor))
+    })
+}
+
+fn assess(
+    ctx: &Ctx,
+    store: &Store,
+    task: &Task,
+    parent: &Run,
+    vendor_at: impl FnOnce(jiff::Timestamp) -> Result<Option<String>>,
+) -> Result<()> {
     let record = parent
         .review
         .as_ref()
@@ -79,12 +124,88 @@ pub(crate) fn current_assessment(
         parent.vendor.as_deref(),
     )?;
     // An availability fallback reviews on its own model; check the family that actually ran.
-    let actual = parent
-        .review_runs
-        .iter()
-        .rev()
-        .find(|child| child.review.as_ref().is_some_and(|r| r.at == record.at))
-        .and_then(|child| child.vendor.clone())
-        .or(resolved.vendor);
+    let actual = vendor_at(record.at)?.or(resolved.vendor);
     policy.check_reviewer_family(parent.vendor.as_deref(), actual.as_deref())
+}
+
+#[cfg(all(test, unix))]
+mod assessment_tests {
+    use corral_core::Status;
+
+    use crate::submission_paths_tests::fixture;
+
+    /// `current_assessment` and its task-form counterpart on the same reviewer state.
+    fn assessments(fallback: bool, stale: bool) -> (Result<(), String>, Result<(), String>) {
+        let fx = fixture::Fx::new();
+        let id = fx.task("assessment", Status::Ready).id;
+        fx.start(&id);
+        fx.done(&id, "candidate.txt");
+        crate::gate_start(&fx.ctx, &id).unwrap();
+        assert!(crate::gate_collect(&fx.ctx, &id).unwrap().is_some());
+        let task = fx.ctx.store.get(&id).unwrap();
+        let run = task.current_run().unwrap();
+        let gate = run.gate.as_ref().unwrap().identity.as_ref().unwrap();
+        let candidate = crate::verification::identity(&fx.ctx, &task, run, gate).unwrap();
+        fx.ctx
+            .store
+            .update(&id, |task| {
+                let run = task.current_run_mut().unwrap();
+                let digest = if stale {
+                    "stale".to_owned()
+                } else {
+                    crate::verification::evidence_digest(run)?
+                };
+                let review = corral_core::ReviewRecord {
+                    route: None,
+                    identity: Some(candidate.clone()),
+                    evidence_digest: Some(digest),
+                    verdict: None,
+                    process_lost: false,
+                    reviewer: "rev".into(),
+                    notes: None,
+                    sha: candidate.head.clone(),
+                    at: fixture::now(),
+                    pane: None,
+                };
+                let mut child = run.clone();
+                child.id = "R1-review1".into();
+                child.agent = "rev".into();
+                child.review = Some(review.clone());
+                child.review_runs.clear();
+                run.review = Some(review);
+                if fallback {
+                    let mut second = child.clone();
+                    second.id = "R1-review2".into();
+                    second.vendor = Some("other-vendor".into());
+                    run.review_runs.push(child);
+                    run.review_runs.push(second);
+                } else {
+                    run.review_runs.push(child);
+                }
+                Ok(())
+            })
+            .unwrap();
+        let store = &fx.ctx.store;
+        let task = store.get(&id).unwrap();
+        let run = task.current_run().unwrap();
+        let full =
+            super::current_assessment(&fx.ctx, store, &task, run).map_err(|e| format!("{e:#}"));
+        let head = store.head(&id).unwrap();
+        let headed = super::current_assessment_ref(&fx.ctx, store, &head, &run.id)
+            .map_err(|e| format!("{e:#}"));
+        (full, headed)
+    }
+
+    #[test]
+    fn current_assessment_task_form_equals_the_full_form() {
+        let mut outcomes = std::collections::BTreeSet::new();
+        for fallback in [false, true] {
+            for stale in [false, true] {
+                let (full, headed) = assessments(fallback, stale);
+                assert_eq!(full, headed, "fallback={fallback} stale={stale}");
+                outcomes.insert(full.is_ok());
+            }
+        }
+        assert!(outcomes.contains(&false), "no variant refused");
+    }
 }
