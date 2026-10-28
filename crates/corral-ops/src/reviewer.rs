@@ -25,6 +25,8 @@ const PM: &str = "pm";
 mod watchdog;
 pub use watchdog::reconcile_review_at;
 pub(crate) use watchdog::reconcile_review_sampled_at;
+#[cfg(test)]
+pub(crate) use watchdog::{Observation, commit_observation};
 mod callback;
 mod fallback;
 pub(crate) use fallback::continue_review;
@@ -470,6 +472,7 @@ fn review_run_origin(
             review_runs: Vec::new(),
             usage: None,
             usage_note: None,
+            usage_pending: false,
             autopilot: None,
             gate_rules: corral_core::GateRules::Legacy,
             promotion_origin: None,

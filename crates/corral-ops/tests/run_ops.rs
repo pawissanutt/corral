@@ -103,6 +103,7 @@ fn sample_run(worktree: PathBuf) -> Run {
         review_runs: Vec::new(),
         usage: None,
         usage_note: None,
+        usage_pending: false,
         autopilot: None,
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,

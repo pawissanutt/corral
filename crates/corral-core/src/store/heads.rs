@@ -171,6 +171,8 @@ pub struct RunHead {
     pub usage: Option<UsageTotals>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_note: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub usage_pending: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr_idle_since: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

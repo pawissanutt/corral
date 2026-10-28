@@ -138,12 +138,7 @@ pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
 }
 
 /// [`finish`] on the current run of a head: the reviewer snapshot is its current child.
-fn finish_head(
-    ctx: &Ctx,
-    task: &mut corral_core::TaskHeadMut,
-    run: &str,
-    kind: Kind,
-) -> Result<()> {
+fn finish_head(task: &mut corral_core::TaskHeadMut, kind: Kind, now: Timestamp) -> Result<()> {
     let current = task.current_run_mut().context("no current run")?;
     match kind {
         Kind::Gate => {
@@ -164,12 +159,16 @@ fn finish_head(
                 .as_deref()
                 .is_some_and(|child| child.ended.is_none())
             {
-                task.edit_current_review_child(run, |snapshot| {
-                    snapshot.review = Some(review);
-                    snapshot.ended = Some(Timestamp::now());
-                    crate::usage::collect(snapshot, &ctx.store);
-                    Ok(())
-                })?;
+                // The finish is the child's projection; the next usage refresh collects its
+                // usage (`usage_pending`), so no nested row of its history is read here.
+                if let Some(child) = task
+                    .current_run_mut()
+                    .and_then(|r| r.current_child.as_deref_mut())
+                {
+                    child.review = Some(review);
+                    child.ended = Some(now);
+                    child.usage_pending = true;
+                }
             }
         }
     }
@@ -585,11 +584,6 @@ pub(crate) fn reconcile(
                     )?
                 {
                     let mut release_reason = None;
-                    // Finishing a reviewer collects the child's usage from its own rows, as the
-                    // usage refresh does; the scope spans the edit and its commit.
-                    let _own = (kind == Kind::Reviewer).then(|| {
-                        corral_core::work::own_records("review_budget_finish", &task.id, &run.id)
-                    });
                     ctx.store.try_update_head(&task.id, |task| {
                         if !crate::session_scope::owns_head(ctx, task.head())? {
                             return Ok(false);
@@ -602,7 +596,7 @@ pub(crate) fn reconcile(
                         {
                             return Ok(false);
                         }
-                        finish_head(ctx, task, &run.id, kind)?;
+                        finish_head(task, kind, ctx.store.now())?;
                         let reason = if exited {
                             crate::launch_exit::reason(ctx, "The reviewer", pane)
                         } else {

@@ -127,6 +127,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 review_runs: Vec::new(),
                 usage: None,
                 usage_note: None,
+                usage_pending: false,
                 autopilot: None,
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,

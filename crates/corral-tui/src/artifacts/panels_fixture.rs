@@ -128,6 +128,7 @@ pub(crate) fn fixture() -> Fixture {
         review_runs: Vec::new(),
         usage: None,
         usage_note: None,
+        usage_pending: false,
         autopilot: None,
         stuck: None,
         pending_reply: None,

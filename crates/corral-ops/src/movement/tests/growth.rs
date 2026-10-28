@@ -54,3 +54,32 @@ fn a_steady_tick_reads_no_approval_accumulated_during_the_run() {
     assert!(state.pending.is_empty() && state.notices.is_empty());
     assert!(fx.sent().is_empty());
 }
+
+#[test]
+fn a_later_positioned_earlier_approval_does_not_hide_a_landing_from_a_new_run() {
+    // Given a relevant landing after the run started, then, later in the event sequence, an
+    // approval stamped before the run started.
+    let fx = Fx::new();
+    fx.worker_change("file.rs");
+    let landing = fx.land("file.rs", "fn landed() {}\n");
+    let earlier = corral_core::Event {
+        seq: 0,
+        ts: fx.now - SignedDuration::from_hours(24),
+        task: Some("T-999".into()),
+        kind: "approved".into(),
+        actor: None,
+        via: None,
+        detail: json!({"project": "app", "base": "main", "run": "R1", "sha": "f".repeat(40),
+                       "previous_sha": "e".repeat(40), "strategy": "fast_forward"}),
+    };
+    fx.ctx
+        .store
+        .fixture_append_events(&(serde_json::to_string(&earlier).unwrap() + "\n"))
+        .unwrap();
+    // When the run's first tick reads its window.
+    fx.tick(0);
+    // Then the landing is observed for the run.
+    let state = fx.state();
+    assert!(state.seen.contains(&landing.sha), "{:?}", state.seen);
+    assert_eq!(state.pending.len(), 1);
+}

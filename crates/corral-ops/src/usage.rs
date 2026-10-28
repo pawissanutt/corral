@@ -111,7 +111,8 @@ fn refresh_current(store: &Store, head: &TaskHead) -> Result<()> {
     }
     for review in &mut measured.review_runs {
         if review.ended.is_none()
-            && let Some(end) = first_verdict_from(store, &head.id, &run.id, review.started)?
+            && let Some(end) =
+                first_verdict_from(store, &head.id, &run.id, &review.id, review.started)?
         {
             review.ended = Some(end);
             let previous = review.usage.clone();
@@ -147,24 +148,53 @@ fn refresh_current(store: &Store, head: &TaskHead) -> Result<()> {
     Ok(())
 }
 
-/// The time of the run's first verdict event at or after `from` (an owner action may finish a
-/// review without a harness verdict): the run's verdict events newest first, back to the first
-/// one before `from`, so the run's earlier verdicts are never re-read. Events are appended in
-/// time order, so the oldest one read is the first in sequence order.
+/// The earliest verdict time at or after a review child's start, kept with the event position
+/// through which the run's verdict events were observed.
+#[derive(Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+struct VerdictWatch {
+    #[serde(default, with = "crate::settling::padded")]
+    after: Option<u64>,
+    first: Option<Timestamp>,
+}
+
+const VERDICTS: corral_core::records::RecordArea<VerdictWatch> =
+    corral_core::records::RecordArea::new("usage-verdicts");
+
+/// The earliest time of the run's verdict events at or after `from` (an owner action may finish
+/// a review without a harness verdict), as the full selection over every verdict event of the
+/// run takes it, whatever order their times have. Each call reads only the verdict events
+/// appended after the child's kept position; the first one reads the run's earlier ones once.
 fn first_verdict_from(
     store: &Store,
     task: &str,
     run: &str,
+    review: &str,
     from: Timestamp,
 ) -> Result<Option<Timestamp>> {
     #[cfg(test)]
     EVENT_READS.set(EVENT_READS.get() + 1);
-    Ok(store
-        .events_newest(Some(task), &VERDICT_KINDS, Some(run), |event| {
-            event.ts >= from
-        })?
-        .last()
-        .map(|event| event.ts))
+    let key = format!("{task}/{run}/{review}");
+    let saved = VERDICTS.load(store, &key)?.unwrap_or_default();
+    let mut watch = VerdictWatch {
+        after: saved.after,
+        first: saved.first,
+    };
+    let mut after = saved.after.unwrap_or(0);
+    loop {
+        let page = store.events_of_run(Some(task), &VERDICT_KINDS, Some(run), after, 64)?;
+        let Some(last) = page.last() else {
+            break;
+        };
+        after = last.seq;
+        watch.after = Some(after);
+        for event in page.iter().filter(|event| event.ts >= from) {
+            watch.first = Some(watch.first.map_or(event.ts, |first| first.min(event.ts)));
+        }
+    }
+    if watch != saved {
+        VERDICTS.save(store, &key, &watch)?;
+    }
+    Ok(watch.first)
 }
 
 fn refresh_runs(
@@ -295,6 +325,18 @@ fn backfill_reviews(run: &mut Run, store: &Store, task_id: &str, events: &[Event
 }
 
 fn refresh_run(run: &mut Run, store: &Store) {
+    if run.usage_pending {
+        // The collection a finished reviewer's usage was owed: its result as-is, as at finish.
+        collect(run, store);
+        run.usage_pending = false;
+        if let Some(usage) = &mut run.usage {
+            usage.reprice(&store.config, run.model.as_deref());
+        }
+        for review in &mut run.review_runs {
+            refresh_run(review, store);
+        }
+        return;
+    }
     let reread = run.ended.is_none()
         || run.usage.as_ref().is_none_or(|u| u.entries.is_empty())
         || run
