@@ -32,6 +32,15 @@ Inspect files in {{worktree}} as needed; read-only commands and test runs are fi
 
 {{agents_md}}
 
+## Load testing: container only
+
+Never generate intentional load on the shared host: no host CPU/memory burners,
+spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to
+load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND`
+(one Podman container, maximum 4 CPUs, removed on exit/interrupt). If unavailable,
+report the blocked check; never fall back to host load. See `docs/guide/load-sandbox.md`.
+This does not authorize an extra gate or a different tier. Keep the worktree unchanged.
+
 ## What to check
 
 - Every acceptance criterion is met, with evidence (tests, command output, artifacts).

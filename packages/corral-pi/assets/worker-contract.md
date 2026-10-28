@@ -5,6 +5,16 @@ corral bound this session to that run; you never choose or change the task, run 
 Your first message names the prompt file and carries this run's gate section. That prompt is
 your task, and the gate section in that message is the only gate instruction.
 
+## Load testing: container only
+
+Never generate intentional load on the shared host: no host CPU/memory burners,
+spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to
+load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND`.
+It confines the test and burners to one Podman container (maximum 4 CPUs) and removes
+it on exit or interrupt. If unavailable, report the blocked check; never fall back
+to host load. See `docs/guide/load-sandbox.md`. This does not authorize an extra gate
+or a different tier.
+
 ## Tools
 
 You have the upstream tools read, edit, write, bash, grep, find and ls, and these corral tools.

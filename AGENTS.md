@@ -36,6 +36,22 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
 - The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its temporary-fixture regression checks with `python3 scripts/test_gate.py`.
 - The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
 
+### Load testing: container only
+
+Never generate intentional CPU/memory load on the shared host: no host burners,
+spin loops, `stress-ng`, or parallel stress harnesses. The **only allowed way to
+load-test** (workers, reviewers, and gates alike) is `scripts/load-sandbox.sh`:
+
+```bash
+scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- cargo test -p corral-core
+```
+
+It runs the command and optional burners in one Podman container (default 2 CPUs,
+hard maximum 4; default 2g memory and 256 PIDs), then forcibly removes it on success,
+failure, or interruption. Never fall back to host load if Podman/cgroups are unavailable;
+report the blocked check instead. This does not authorize an extra gate or change its tier.
+See [load sandbox](docs/guide/load-sandbox.md) for image prerequisites and smoke checks.
+
 ## herdr in tests
 
 Pane ownership and legacy migration are specified in `docs/session-ownership.md`.
