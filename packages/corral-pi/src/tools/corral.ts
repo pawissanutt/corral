@@ -56,7 +56,7 @@ export interface CorralReceipt {
   readonly version: number;
   readonly request_id: string | null;
   readonly op: string;
-  readonly state: "committed" | "rejected" | "reserved" | "uncertain" | "abandoned";
+  readonly state: "committed" | "rejected" | "reserved" | "queued" | "uncertain" | "abandoned";
   readonly result: unknown;
   readonly replayed?: boolean;
   readonly [key: string]: unknown;

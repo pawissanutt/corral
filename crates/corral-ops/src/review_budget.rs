@@ -29,6 +29,17 @@ impl std::fmt::Display for CapacityWait {
 }
 impl std::error::Error for CapacityWait {}
 
+/// Temporary launch serialization, not a refusal of the candidate.
+#[derive(Debug)]
+pub(crate) struct LaunchBusy(pub &'static str);
+
+impl std::fmt::Display for LaunchBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+impl std::error::Error for LaunchBusy {}
+
 impl CapacityWait {
     pub(crate) fn persist(&self, ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
         ctx.store.update(id, |task| {
@@ -221,10 +232,9 @@ impl<'a> ReviewLaunch<'a> {
         let requested = ctx.store.get(id)?;
         corral_core::Park::require_unparked(&requested)?;
         let id = requested.id.as_str();
-        let lock = ctx
-            .store
-            .try_lock("review-budget")?
-            .context("another review launch is in progress; try again")?;
+        let lock = ctx.store.try_lock("review-budget")?.ok_or(LaunchBusy(
+            "another review launch is in progress; try again",
+        ))?;
         crate::session_scope::check_launch(ctx)?;
         let path = journal(ctx);
         match std::fs::read(&path) {
@@ -360,10 +370,9 @@ impl<'a> ReviewLaunch<'a> {
                 refused_request: None,
             }
         };
-        let ownership = ctx
-            .store
-            .try_lock("session-ownership")?
-            .context("pane inventory is being reconciled; retry review launch")?;
+        let ownership = ctx.store.try_lock("session-ownership")?.ok_or(LaunchBusy(
+            "pane inventory is being reconciled; retry review launch",
+        ))?;
         let (_, waiting) = ctx.store.dispatch_update(id, |store, current| {
             corral_core::Park::require_unparked(current)?;
             crate::operating::require_origin(
@@ -407,9 +416,13 @@ impl<'a> ReviewLaunch<'a> {
                     .as_ref()
                     .is_some_and(|g| g.holds_slot() && g.identity.is_none()),
             });
+            let sharing = kind == Kind::Gate && crate::slots::gate_shares_dispatch_slot(current);
             if counted
-                && let Some(reason) =
-                    crate::slots::capacity_reason(store, current, usize::from(replacing))?
+                && let Some(reason) = crate::slots::capacity_reason(
+                    store,
+                    current,
+                    usize::from(replacing || sharing),
+                )?
             {
                 return Ok(Some(reason));
             }
@@ -495,7 +508,7 @@ mod recovery;
 #[cfg(test)]
 pub(crate) use attempt::{AttemptState, attempt_state};
 pub use attempt::{DueWake, due_gate_wakes, fire_wake, own_attempt};
-pub(crate) use attempt::{evidence, retained_attempt, settle};
+pub(crate) use attempt::{bounded, evidence, retained_attempt, settle};
 
 /// Release completed/gone review processes even when review autopilot is disabled.
 pub(crate) fn reconcile(

@@ -153,6 +153,12 @@ pub fn due_gate_wakes(task: &Task, now: Timestamp, uncertain_after: Duration) ->
                     Some(gate.result.as_str().to_owned())
                 }
                 _ if receipt.is_some_and(|r| {
+                    r.state == ReceiptState::Rejected && r.result["queued"] == true
+                }) =>
+                {
+                    Some("not_started".to_owned())
+                }
+                _ if receipt.is_some_and(|r| {
                     r.state == ReceiptState::Uncertain
                         && now.duration_since(r.at).unsigned_abs() >= uncertain_after
                 }) =>
@@ -295,9 +301,42 @@ pub(crate) fn gate_receipt(
     let run = receipt.identity.run.as_deref().unwrap_or_default();
     let started = json!({"outcome": "started", "attempt": attempt, "adopted": adopted});
     let ran = || crate::gate::attempt_started(ctx, &task.id, run, &attempt);
-    use ReceiptState::{Abandoned, Committed, Rejected, Reserved, Uncertain};
+    use ReceiptState::{Abandoned, Committed, Queued, Rejected, Reserved, Uncertain};
     let armed = Some(WakeState::Armed);
     let cancelled = Some(WakeState::Cancelled);
+    let queued = receipt.state == Queued;
+    if queued
+        && live.is_err()
+        && matches!(
+            evidence,
+            AttemptState::Absent | AttemptState::Prepared { .. }
+        )
+    {
+        return Ok((
+            Abandoned,
+            json!({"outcome": "not_started", "binding": binding}),
+            cancelled,
+        ));
+    }
+    if queued
+        && matches!(
+            evidence,
+            AttemptState::Absent | AttemptState::Prepared { .. }
+        )
+    {
+        return Ok(match error {
+            Some(reason) => (
+                Rejected,
+                json!({"outcome": "not_started", "queued": true, "binding": binding, "reason": bounded(reason)}),
+                armed,
+            ),
+            None => (
+                Queued,
+                receipt.result.clone(),
+                Some(WakeState::PendingStart),
+            ),
+        });
+    }
     Ok(match evidence {
         AttemptState::Submitted => (Committed, started, armed),
         AttemptState::Submitting | AttemptState::Uncertain { .. } if ran() => {
@@ -317,9 +356,9 @@ pub(crate) fn gate_receipt(
             Rejected,
             json!({
                 "outcome": "submission_refused", "attempt": attempt, "binding": binding,
-                "code": refusal_code(&reason, &receipt.request_id), "reason": bounded(&reason),
+                "code": refusal_code(&reason, &receipt.request_id), "reason": bounded(&reason), "queued": queued,
             }),
-            cancelled,
+            if queued { armed } else { cancelled },
         ),
         AttemptState::Prepared { prior_refusal } => match &live {
             Err(r) if matches!(r.code, RefusalCode::AgentFenced | RefusalCode::RunEnded) => (
@@ -389,7 +428,7 @@ pub(crate) fn settle(
             .cloned()
             .context("gate receipt disappeared")?;
         let open = match current.state {
-            ReceiptState::Reserved => current.executor.as_ref() == seen,
+            ReceiptState::Reserved | ReceiptState::Queued => current.executor.as_ref() == seen,
             ReceiptState::Uncertain => true,
             _ => false,
         };
@@ -425,6 +464,9 @@ pub(crate) fn settle(
         let settled = stored.clone();
         if let Some(wake) = wake {
             set_wake(agent, &request, wake);
+        }
+        if current.state == ReceiptState::Queued && state != ReceiptState::Queued {
+            task.review_wait = None;
         }
         out = Some(settled);
         Ok(true)

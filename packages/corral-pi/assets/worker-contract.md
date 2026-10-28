@@ -45,6 +45,9 @@ Commit, rebase onto the run's base, then call `corral_gate` once for the round. 
 depends on its answer:
 
 - `started`: a gate runs. End your turn; corral wakes you with the gate's result.
+- `queued`: corral is waiting for gate capacity or launch admission. End your turn without
+  sleeping or retrying; corral starts the gate and wakes you with its result. If admission
+  becomes permanently invalid, it wakes you with `not_started` and the reason to resolve.
 - `uncertain`: corral could not confirm the start. End your turn; corral wakes you with the
   gate's result, or with `gate_start_uncertain` if the start is still unconfirmed in time.
 - `rejected`: no gate started and no wake will come. Read its `code` and `reason`, fix the cause
@@ -59,6 +62,6 @@ audited task) before `corral_done`. Its summary is this run's activity, then a l
 
 ## Ending a turn
 
-Every turn ends in one of four ways: `corral_done`, a pending question, a started or uncertain
+Every turn ends in one of four ways: `corral_done`, a pending question, a queued, started or uncertain
 gate or a declared wait that corral will wake you for, or more work. A turn that ends without any of these gets one automatic reminder per
 host; the next one goes to the owner as Needs me. Typing in this pane is the owner's own turn.

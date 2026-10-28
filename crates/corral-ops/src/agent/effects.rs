@@ -17,7 +17,6 @@ use serde_json::{Value, json};
 use super::admission;
 use super::call::{CallResponse, RejectCode, Rejection};
 use crate::Ctx;
-use crate::review_budget::GateRequest;
 pub use crate::review_budget::{DueWake, due_gate_wakes, fire_wake, own_attempt};
 
 /// Test-only crash and race points, a no-op in shipped builds. In-process tests install the
@@ -630,6 +629,13 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
             found = Some(stored.clone());
             return Ok(false);
         }
+        if let Some(queued) = state.receipts.iter().find(|r| {
+            r.op == "gate" && r.state == ReceiptState::Queued
+                && r.identity.generation == origin.identity.generation
+        }) {
+            return Err(reject(RejectCode::BadRequest,
+                format!("gate_queued: request {} already awaits admission; end your turn and wait for its result", queued.request_id)));
+        }
         admission::recheck_task(task, &origin.binding)?;
         let result =
             json!({"outcome": "reserved", "attempt": attempt, "adopted": retained.is_some()});
@@ -654,7 +660,7 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     })?;
     let Some(stored) = found else {
         failpoint("gate_reserved_before_authorization");
-        return execute(ctx, origin, me, false);
+        return super::gate_queue::execute(ctx, origin, me, false);
     };
     let (settled, idle) = match stored.state {
         ReceiptState::Reserved => match &stored.executor {
@@ -672,42 +678,9 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     };
     let seen = settled.executor.as_ref();
     if idle && settled.state == ReceiptState::Reserved && take_over(ctx, origin, seen, &me)? {
-        return execute(ctx, origin, me, true);
+        return super::gate_queue::execute(ctx, origin, me, true);
     }
     super::receipts::respond(ctx, &container, settled, true)
-}
-
-fn execute(
-    ctx: &Ctx,
-    origin: &RequestOrigin,
-    me: Executor,
-    replayed: bool,
-) -> Result<CallResponse> {
-    let (task_id, _) = worker(&origin.binding.container)?;
-    let request = GateRequest {
-        request_id: origin.request_id.clone(),
-        attempt: own_attempt(&origin.request_id),
-        binding: origin.binding.clone(),
-    };
-    let outcome = crate::gate::gate_start_request(ctx, &task_id, request);
-    let error = match &outcome {
-        Ok(_) => {
-            failpoint("gate_started_before_receipt");
-            None
-        }
-        Err(error) => {
-            failpoint("gate_refused_before_receipt");
-            Some(format!("{error:#}"))
-        }
-    };
-    let task = ctx.store.get(&task_id)?;
-    let current = agent::container_state(&task, &origin.binding.container)
-        .and_then(|s| s.receipt(&origin.request_id))
-        .cloned()
-        .context("gate reservation disappeared")?;
-    let settled = crate::review_budget::settle(ctx, &current, Some(&me), true, error)?;
-    failpoint("gate_receipt_before_ack");
-    super::receipts::respond(ctx, &origin.binding.container, settled, replayed)
 }
 
 /// Sync and resume: settles one task's gate reservations whose executor is verified gone and
@@ -740,12 +713,14 @@ pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
     for home in homes {
         for receipt in receipts(&task, &home).to_vec() {
             let mut receipt = match (receipt.op.as_str(), receipt.state) {
-                ("gate", ReceiptState::Reserved) => match &receipt.executor {
-                    Some(running) if !executor_gone(running)? => receipt,
-                    seen => {
-                        crate::review_budget::settle(ctx, &receipt, seen.as_ref(), false, None)?
+                ("gate", ReceiptState::Reserved | ReceiptState::Queued) => {
+                    match &receipt.executor {
+                        Some(running) if !executor_gone(running)? => receipt,
+                        seen => {
+                            crate::review_budget::settle(ctx, &receipt, seen.as_ref(), false, None)?
+                        }
                     }
-                },
+                }
                 ("gate", ReceiptState::Uncertain) => {
                     crate::review_budget::settle(ctx, &receipt, None, false, None)?
                 }

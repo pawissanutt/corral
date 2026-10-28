@@ -329,10 +329,12 @@ fn gate_start_origin(
     {
         bail!("cannot start a nested gate from inside a gate attempt");
     }
-    let lock = ctx
-        .store
-        .try_lock(&format!("gate-{id}"))?
-        .context("another gate start is in progress")?;
+    let lock =
+        ctx.store
+            .try_lock(&format!("gate-{id}"))?
+            .ok_or(crate::review_budget::LaunchBusy(
+                "another gate start is in progress",
+            ))?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;

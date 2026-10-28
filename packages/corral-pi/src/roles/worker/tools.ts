@@ -57,7 +57,9 @@ export const gateTool: CorralToolSpec = {
   description: "Start the run's one receipted gate on the committed, rebased tree, exactly once per round. "
     + "started: a gate runs; end your turn and corral wakes you with its result and the gate_ref corral_done "
     + "carries. uncertain: corral could not confirm the start; end your turn and corral wakes you with the "
-    + "result or gate_start_uncertain. rejected: no gate started and no wake will come; read the code and "
+    + "result or gate_start_uncertain. queued: admission is pending; end your turn without sleeping or "
+    + "retrying. corral starts the gate when capacity permits and wakes you with its result or not_started. "
+    + "rejected: no gate started and no wake will come; read the code and "
     + "reason, fix the cause (for example commit or rebase) and call corral_gate again, or ask with corral_ask.",
   op: "gate",
   parameters: Type.Object({}),

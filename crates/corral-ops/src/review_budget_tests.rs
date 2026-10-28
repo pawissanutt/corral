@@ -15,6 +15,9 @@ use serde_json::json;
 #[path = "review_budget/replay_tests.rs"]
 mod replay;
 
+#[path = "slots_tests.rs"]
+mod slots;
+
 fn reconcile(
     ctx: &Ctx,
     panes: &std::collections::HashMap<String, corral_herdr::PaneInfo>,
