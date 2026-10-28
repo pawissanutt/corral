@@ -430,11 +430,14 @@ pub(crate) fn validate_scope(
     Ok(())
 }
 
-pub(crate) fn check_action(task: &Task, action: &str) -> Result<()> {
-    if task.tracker {
+pub(crate) fn check_action<T: corral_core::TaskFieldsRef + ?Sized>(
+    task: &T,
+    action: &str,
+) -> Result<()> {
+    if *task.tracker() {
         bail!(
             "{} is a tracker; cannot {action}; dispatch its child tasks instead",
-            task.id
+            task.id()
         );
     }
     Ok(())

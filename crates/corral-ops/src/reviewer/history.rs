@@ -34,3 +34,36 @@ pub(crate) fn supersede_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
     parent.idle_since = None;
     parent.blocked_excerpt = None;
 }
+
+/// [`supersede_review`] on a head's current run: the review snapshot is its current child,
+/// whose usage the next usage refresh collects (`usage_pending`), as
+/// `review_budget::finish_head` leaves it; no earlier child is read.
+pub(crate) fn supersede_review_head(
+    task: &mut corral_core::TaskHeadMut,
+    ended: Timestamp,
+) -> anyhow::Result<()> {
+    let Some(parent) = task.current_run_mut() else {
+        return Ok(());
+    };
+    if parent.review.as_ref().is_none_or(|r| r.verdict.is_some()) {
+        return Ok(());
+    }
+    let record = parent.review.take();
+    if let Some(snapshot) = parent.current_child.as_deref_mut() {
+        if let Some(mut record) = record {
+            if record.notes.is_none() {
+                record.notes = snapshot.review.as_ref().and_then(|r| r.notes.clone());
+            }
+            snapshot.review = Some(record);
+        }
+        if snapshot.ended.is_none() {
+            snapshot.ended = Some(ended);
+            snapshot.usage_pending = true;
+        }
+        snapshot.outcome = Some(RunOutcome::Superseded);
+        snapshot.pending_reply = None;
+    }
+    parent.idle_since = None;
+    parent.blocked_excerpt = None;
+    Ok(())
+}

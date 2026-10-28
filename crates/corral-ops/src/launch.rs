@@ -1,23 +1,29 @@
 //! Durable launch phases. Holding launch-<task> excludes competing launch/recovery.
 use anyhow::{Context, Result, bail};
-use corral_core::{HerdrRef, LaunchStage, OperatingActionKind, RunOutcome, Status, Task};
+use corral_core::{
+    HerdrRef, LaunchStage, OperatingActionKind, Run, RunHead, RunOutcome, Status, Task, TaskHead,
+    TaskRef as _,
+};
 use jiff::Timestamp;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{Ctx, DispatchOutcome};
 
-fn label(ctx: &Ctx, task: &Task) -> Result<String> {
-    let run = task.current_run().context("launch has no run")?;
+fn label(ctx: &Ctx, task: &str, run: &str) -> String {
     let hash = format!(
         "{:x}",
         Sha256::digest(ctx.store.root().as_os_str().as_encoded_bytes())
     );
-    Ok(format!("corral:{}:{}:{}", &hash[..12], task.id, run.id))
+    format!("corral:{}:{task}:{run}", &hash[..12])
 }
 
-fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<Task> {
-    ctx.store.update(id, |t| {
+fn current_run(head: &TaskHead) -> Result<&RunHead> {
+    head.current_run.as_deref().context("launch has no run")
+}
+
+fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<TaskHead> {
+    ctx.store.update_head(id, |t| {
         t.launch
             .as_mut()
             .context("launch reservation disappeared")?
@@ -27,7 +33,11 @@ fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<Task> {
 }
 
 /// Reclaim a failed launch only after its old owner released the kernel lock.
-pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
+pub(crate) fn resume(
+    ctx: &Ctx,
+    task: &TaskHead,
+    force_resources: bool,
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let claim = task.launch.as_ref().context("no launch to resume")?;
     // Submission cannot be replayed safely: IPC may have succeeded before the receipt.
     if claim.stage == LaunchStage::Submitting {
@@ -36,7 +46,7 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
     // Recovery uses the original claim, never the authority of the command that reopened it.
     let Some(mut authorization) = claim.authorization.clone() else {
         let error = crate::operating::missing_provenance(&task.id);
-        release(ctx, task, &error)?;
+        release(ctx, &task.id, &error)?;
         return Err(error);
     };
     if crate::operating::is_automatic(&authorization)
@@ -49,19 +59,21 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
         )?;
     }
     let reclaimed = validate_execution(ctx, task).and_then(|()| {
-        ctx.store.dispatch_update(&task.id, |store, current| {
-            crate::queue::check_snapshot(ctx, store, task, current)?;
-            let mut reason = crate::queue::blocked_reason(ctx, store, current, force_resources)?;
-            if reason.is_none() && crate::dispatch_policy::automatic_launch(store, current)? {
+        ctx.store.dispatch_update_head(&task.id, |store, current| {
+            crate::queue::check_snapshot_head(ctx, store, task, current.head())?;
+            let shell = current.shell_task()?;
+            let mut reason = crate::queue::blocked_reason(ctx, store, &shell, force_resources)?;
+            if reason.is_none() && crate::dispatch_policy::automatic_launch(store, &shell)? {
                 reason = match crate::operating::require(
                     store,
-                    current,
+                    &*current,
                     OperatingActionKind::Dispatch,
                 ) {
-                    Ok(()) => crate::dispatch_policy::automatic_capacity_reason(store, current)?,
+                    Ok(()) => crate::dispatch_policy::automatic_capacity_reason(store, &shell)?,
                     Err(error) => Some(format!("{error:#}")),
                 };
             }
+            let run = current.head().current_run.as_ref().map(|r| r.id.clone());
             let launch = current.launch.as_mut().context("launch disappeared")?;
             launch.authorization = Some(authorization);
             launch.reserved = reason.is_none();
@@ -70,7 +82,7 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
                 store.log_event(
                     Some(&current.id),
                     "dispatch_claimed",
-                    json!({"run": current.current_run().map(|r| &r.id), "recovered": true}),
+                    json!({"run": run, "recovered": true}),
                 )?;
             }
             Ok(reason)
@@ -79,19 +91,25 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
     let (task, reason) = match reclaimed {
         Ok(result) => result,
         Err(error) => {
-            release(ctx, task, &error)?;
+            release(ctx, &task.id, &error)?;
             return Err(error);
         }
     };
     if let Some(reason) = reason {
-        return Ok(DispatchOutcome::Queued { task, reason });
+        return Ok(DispatchOutcome::Queued {
+            task: Box::new(task),
+            reason,
+        });
     }
     launch(ctx, &task, force_resources)
 }
 
-fn validate_execution(ctx: &Ctx, task: &Task) -> Result<()> {
-    let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
-    let run = task.current_run().context("launch run missing")?;
+fn validate_execution<T: corral_core::TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
+    let plan = task
+        .dispatch_plan()
+        .as_ref()
+        .context("launch plan missing")?;
+    let run = task.current_run_head()?.context("launch run missing")?;
     let Some(snapshot) = &run.execution else {
         return crate::queue::validate_plan(ctx, plan);
     };
@@ -112,11 +130,15 @@ fn validate_execution(ctx: &Ctx, task: &Task) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn launch(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
+pub(crate) fn launch(
+    ctx: &Ctx,
+    task: &TaskHead,
+    force_resources: bool,
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
     match advance(ctx, task, force_resources) {
         Ok(outcome) => Ok(outcome),
         Err(error) => {
-            let current = ctx.store.get(&task.id)?;
+            let current = ctx.store.head(&task.id)?;
             if current
                 .launch
                 .as_ref()
@@ -128,37 +150,44 @@ pub(crate) fn launch(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
                     "dispatch submission uncertain; attached run retained, not replayed",
                 ));
             }
-            release(ctx, &current, &error)?;
+            release(ctx, &current.id, &error)?;
             Err(error)
         }
     }
 }
 
-fn release(ctx: &Ctx, task: &Task, error: &anyhow::Error) -> Result<()> {
-    ctx.store.update(&task.id, |t| {
+fn release(ctx: &Ctx, id: &str, error: &anyhow::Error) -> Result<()> {
+    ctx.store.update_head(id, |t| {
         if let Some(claim) = &mut t.launch {
             claim.reserved = false;
             claim.error = Some(format!("{error:#}"));
         }
+        let run = t.head().current_run.as_ref().map(|r| r.id.clone());
         ctx.store.log_event(
             Some(&t.id),
             "dispatch_released",
-            json!({"run": t.current_run().map(|r| &r.id), "error": format!("{error:#}")}),
+            json!({"run": run, "error": format!("{error:#}")}),
         )?;
         Ok(())
     })?;
     Ok(())
 }
 
-fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
+fn advance(
+    ctx: &Ctx,
+    task: &TaskHead,
+    force_resources: bool,
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
     crate::session_scope::check_launch(ctx)?;
-    let mut task = ctx.store.get(&task.id)?;
+    let mut task = Box::new(ctx.store.head(&task.id)?);
     let claim = task.launch.as_ref().context("launch missing")?;
     let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
-    crate::dispatch::check_plan(ctx, &task, &plan.route, claim.approved_plan.as_ref())?;
-    let run = task.current_run().context("launch has no run")?.clone();
-    crate::plan_target::validate_run(&ctx.store, &task, &run)?;
-    crate::tracker::check_dispatch_base(&ctx.store, &task, &run.base, &run.base_sha)?;
+    crate::dispatch::check_plan(ctx, &*task, &plan.route, claim.approved_plan.as_ref())?;
+    // The target and base checks read head fields and the current run's scalars only.
+    let shell = task.shell_task()?;
+    let run = shell.current_run().context("launch has no run")?.clone();
+    crate::plan_target::validate_run(&ctx.store, &shell, &run)?;
+    crate::tracker::check_dispatch_base(&ctx.store, &shell, &run.base, &run.base_sha)?;
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Reserved {
         // Recheck inside the durable claim, including recovery. A refusal flows
         // through launch's release path before any worktree or pane is created.
@@ -175,14 +204,14 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
         } else {
             corral_git::worktree_add(&repo, &run.worktree, &run.branch, &run.base_sha)?;
         }
-        task = phase(ctx, &task.id, LaunchStage::Worktree)?;
+        *task = phase(ctx, &task.id, LaunchStage::Worktree)?;
     }
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Worktree {
         prepare_prompt(ctx, &task)?;
-        task = phase(ctx, &task.id, LaunchStage::CreatingPane)?;
+        *task = phase(ctx, &task.id, LaunchStage::CreatingPane)?;
     }
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::CreatingPane {
-        let label = label(ctx, &task)?;
+        let label = label(ctx, &task.id, &current_run(&task)?.id);
         // The durable label is set by workspace_create itself, before its reply.
         let matching: Vec<_> = ctx
             .herdr
@@ -220,22 +249,25 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
             }
             _ => bail!("multiple workspaces match the launch identity; refusing another launch"),
         };
-        task = ctx.store.update(&task.id, |t| {
+        *task = ctx.store.update_head(&task.id, |t| {
             t.current_run_mut().context("launch run missing")?.herdr = Some(herdr);
             t.launch.as_mut().context("launch missing")?.stage = LaunchStage::Pane;
             Ok(())
         })?;
     }
-    let run = task.current_run().context("launch run missing")?;
+    // The new run's own record is bounded: at most two restored checkpoints and its switches.
+    let run = task.current_run_record()?.context("launch run missing")?;
+    let mut view = task.shell_task()?;
+    view.runs = vec![run.clone()];
     let pane = &run.herdr.as_ref().context("launch pane missing")?.pane_id;
     let name = format!("{} {}", task.id, task.title);
     ctx.herdr
         .pane_report_metadata(pane, &name, &[("task", &task.id), ("run", &run.id)])?;
     let prompt = crate::prompt::run_prompt_file(ctx, &task.id, &run.id)?;
-    let command = if crate::agent::hooks::run_is_pi_native(run) {
-        crate::agent::hooks::launch::worker_command(ctx, &task, run)?
+    let command = if crate::agent::hooks::run_is_pi_native(&run) {
+        crate::agent::hooks::launch::worker_command(ctx, &view, &run)?
     } else {
-        crate::render_command(ctx, &run.agent, &task, run, &prompt)?
+        crate::render_command(ctx, &run.agent, &view, &run, &prompt)?
     };
     let command = crate::launch_exit::arm(
         ctx,
@@ -257,12 +289,14 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
             && authorization.action.kind == OperatingActionKind::Dispatch,
         "coding authorization does not match its launch claim"
     );
-    crate::operating::submit(
+    crate::operating::submit_head(
         ctx,
         &authorization,
         |store, current| {
             let current_run = current
-                .current_run()
+                .head()
+                .current_run
+                .as_ref()
                 .filter(|current| {
                     current.id == run_id
                         && current.branch == run.branch
@@ -289,19 +323,21 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
             };
             let plan = current
                 .dispatch_plan
-                .as_ref()
+                .clone()
                 .context("launch plan missing")?;
-            validate_execution(&fresh, current)?;
-            crate::plan_target::validate_run(store, current, current_run)?;
+            validate_execution(&fresh, &*current)?;
+            let shell = current.shell_task()?;
+            let shell_run = shell.current_run().context("launch run missing")?;
+            crate::plan_target::validate_run(store, &shell, shell_run)?;
             crate::tracker::check_dispatch_base(
                 store,
-                current,
-                &current_run.base,
-                &current_run.base_sha,
+                &shell,
+                &shell_run.base,
+                &shell_run.base_sha,
             )?;
             crate::dispatch::check_plan(
                 &fresh,
-                current,
+                &*current,
                 &plan.route,
                 current
                     .launch
@@ -309,13 +345,13 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
                     .and_then(|claim| claim.approved_plan.as_ref()),
             )?;
             if let Some(reason) =
-                crate::queue::capacity_reason(&fresh, store, current, force_resources)?
+                crate::queue::capacity_reason(&fresh, store, &shell, force_resources)?
             {
                 bail!("{reason}");
             }
             if crate::operating::is_automatic(&authorization)
                 && let Some(reason) =
-                    crate::dispatch_policy::automatic_capacity_reason(store, current)?
+                    crate::dispatch_policy::automatic_capacity_reason(store, &shell)?
             {
                 bail!("{reason}");
             }
@@ -326,32 +362,37 @@ fn advance(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutc
         },
         || ctx.herdr.pane_run(&pane, &command),
     )?;
-    task = ctx.store.get(&task.id)?;
+    let task = ctx.store.head(&task.id)?;
     crate::provider_session::record_launch(ctx, &task.id, &run_id, launched_at);
     finish(ctx, &task, false)
 }
 
-fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
+fn finish(ctx: &Ctx, task: &TaskHead, uncertain: bool) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let approved_plan = task
         .launch
         .as_ref()
         .and_then(|claim| claim.approved_plan.clone());
-    let run = task.current_run().context("launch run missing")?;
+    // The new run's own record: its switches are announced below.
+    let run = task.current_run_record()?.context("launch run missing")?;
     let pane = run
         .herdr
         .as_ref()
         .context("launch pane missing")?
         .pane_id
         .clone();
-    let task = ctx.store.update(&task.id, |t| {
-        if t.current_run().is_none_or(|r| r.id != run.id) {
+    let task = ctx.store.update_head(&task.id, |t| {
+        if t.head().current_run.as_ref().is_none_or(|r| r.id != run.id) {
             bail!("run changed while finishing launch");
         }
         if !uncertain
-            && let Some(current) = t.current_run_mut().filter(|r| r.outcome.is_none())
+            && t
+                .head()
+                .current_run
+                .as_ref()
+                .is_some_and(|r| r.outcome.is_none())
         {
             // Worktree preparation and terminal launch do not consume startup grace.
-            current.started = corral_core::clock::now();
+            t.restart_current_run(corral_core::clock::now())?;
         }
         if uncertain && t.status == Status::Running {
             t.status = Status::NeedsMe;
@@ -363,7 +404,7 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
         t.queued = false;
         t.dispatch_plan = None;
         if !uncertain {
-            crate::lessons::record_exposure(ctx, t, run)?;
+            crate::lessons::record_exposure(ctx, &*t, &run.id)?;
         }
         ctx.store.log_event(
             Some(&t.id),
@@ -403,7 +444,7 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
         Ok(())
     })?;
     Ok(DispatchOutcome::Started {
-        task,
+        task: Box::new(task),
         run_id: run.id.clone(),
         pane_id: pane,
     })
@@ -415,7 +456,11 @@ pub(crate) fn cancel(ctx: &Ctx, task: &Task) -> Result<()> {
     if claim.stage == LaunchStage::Submitting {
         bail!("submission may be active; recover it before dequeuing");
     }
-    let identity = label(ctx, task)?;
+    let identity = label(
+        ctx,
+        &task.id,
+        &task.current_run().context("launch has no run")?.id,
+    );
     for (workspace, name) in ctx.herdr.workspace_list()? {
         if name == identity {
             for pane in ctx
@@ -444,23 +489,37 @@ pub(crate) fn cancel(ctx: &Ctx, task: &Task) -> Result<()> {
     Ok(())
 }
 
-fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
-    let mut run = task.current_run().context("launch has no run")?.clone();
-    let mut source = task.clone();
-    source.runs.pop();
-    crate::resume::restore_progress(ctx, &source, &mut run)?;
-    ctx.store.update(&task.id, |task| {
-        let current = task
+fn prepare_prompt(ctx: &Ctx, task: &TaskHead) -> Result<()> {
+    let mut run = task.current_run_record()?.context("launch has no run")?;
+    // The source task of the resume packet: the head without the new run, whose current run is
+    // the run before it. Both packets of one launch read `task`'s view, taken before the
+    // restoration below, as one pre-update clone did.
+    let source = task.previous_run_head()?;
+    let mut previous = task.shell_task()?;
+    previous.runs = source
+        .as_ref()
+        .map(|run| -> Result<Run> { Ok(serde_json::from_value(serde_json::to_value(run)?)?) })
+        .transpose()?
+        .into_iter()
+        .collect();
+    crate::resume::restore_progress_head(ctx, task, &previous, source.as_ref(), &mut run)?;
+    ctx.store.update_head(&task.id, |head| {
+        let current = head
             .current_run_mut()
             .filter(|r| r.id == run.id)
             .context("launch run changed during progress restoration")?;
         current.progress = run.progress.clone();
-        current.checkpoints = run.checkpoints.clone();
+        // A launch interrupted after this write restores the same records again: keep them.
+        if current.facts.checkpoints == 0 {
+            head.restore_checkpoints(&run.id, run.checkpoints.clone())?;
+        }
         Ok(())
     })?;
     crate::dispatch::install_skill(ctx, &task.id, run.harness.as_deref().unwrap_or(&run.agent))?;
-    crate::lessons::record_lessons(ctx, task, &run)?;
-    let mut prompt = crate::task_prompt(ctx, &source, &run)?;
+    let mut fields = task.shell_task()?;
+    fields.runs = vec![run.clone()];
+    crate::lessons::record_lessons(ctx, &fields, &run)?;
+    let mut prompt = crate::prompt::task_prompt_head(ctx, task, &previous, source.as_ref(), &run)?;
     if let Some(plan) = task
         .launch
         .as_ref()
@@ -478,7 +537,7 @@ fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
             }))?,
         ));
     }
-    if let Some(previous) = task.runs.iter().rev().nth(1)
+    if let Some(previous) = source.as_ref()
         && previous.outcome == Some(RunOutcome::Superseded)
     {
         if let Some(state) = &run.autopilot

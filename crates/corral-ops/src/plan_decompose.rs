@@ -4,12 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, ensure};
 use corral_core::records::RecordArea;
 use corral_core::{
-    OperatingActionKind, PlanAcceptance, PlanDocument, ScopedTask, Status, Store, Task,
+    OperatingActionKind, PlanAcceptance, PlanDocument, ScopedTask, Status, Store, Task, TaskRef,
     operating_contract_revision,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
+
+mod self_projection;
 
 #[cfg(test)]
 #[path = "plan_decompose_tests.rs"]
@@ -52,10 +54,13 @@ struct ChildScope {
 }
 
 /// Automatic acceptance cannot promise implementation scopes the owner never included.
-pub(crate) fn check_scopes(store: &Store, task: &Task, plan_id: &str) -> Result<()> {
+pub(crate) fn check_scopes<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    plan_id: &str,
+) -> Result<()> {
     let plan = task
-        .plans
-        .last()
+        .last_plan_head()?
         .filter(|plan| plan.id == plan_id)
         .context("scoped plan is no longer current")?;
     if plan.document.dependencies.is_empty() {
@@ -68,7 +73,7 @@ pub(crate) fn check_scopes(store: &Store, task: &Task, plan_id: &str) -> Result<
         .plans
         .iter()
         .find(|grant| {
-            grant.task == task.id
+            grant.task == *task.id()
                 && grant.revision == plan_id
                 && grant.artifact_sha256 == plan.artifact.sha256
         })
@@ -102,31 +107,38 @@ pub(crate) fn scoped_child(store: &Store, task: &Task) -> Result<Option<ScopedTa
 }
 
 /// Check replacement legality under the task lock, before final acceptance.
-pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Result<()> {
-    let backlink = format!("{}@{plan_id}", task.id);
-    let Some(previous) = task.plan.as_ref().filter(|link| *link != &backlink) else {
+pub(crate) fn check_attachment<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    plan_id: &str,
+) -> Result<()> {
+    let backlink = format!("{}@{plan_id}", task.id());
+    let Some(previous) = task.plan().as_ref().filter(|link| *link != &backlink) else {
         return Ok(());
     };
+    let own = previous
+        .strip_prefix(&format!("{}@", task.id()))
+        .map(|revision| task.has_plan(revision))
+        .transpose()?;
     ensure!(
-        task.plans
-            .iter()
-            .any(|plan| previous == &format!("{}@{}", task.id, plan.id)),
+        own == Some(true),
         "task already belongs to another approved plan"
     );
     ensure!(
-        task.runs.is_empty() && task.launch.is_none(),
+        task.runs_len()? == 0 && task.launch().is_none(),
         "cannot replace a plan after implementation admission"
     );
     ensure!(
-        task.children.is_empty(),
+        task.children().is_empty(),
         "cannot replace a plan after child publication has started"
     );
-    if let Some(publication) = PUBLICATIONS.load(store, &task.id)? {
+    if let Some(publication) = PUBLICATIONS.load(store, task.id())? {
         if publication.backlink == backlink {
             // Publication writes the replacement journal before its children,
             // but keeps the original parent attachment until all writes finish.
-            // The source contract includes that exact attachment.
-            check_publication_identity(&publication, task, plan_id)?;
+            // The source contract includes that exact attachment. Only an interrupted
+            // publication reaches this recovery check, which reads the full task.
+            check_publication_identity(&publication, &store.get(task.id())?, plan_id)?;
         } else {
             ensure!(
                 publication.backlink == *previous
@@ -137,7 +149,7 @@ pub(crate) fn check_attachment(store: &Store, task: &Task, plan_id: &str) -> Res
         }
     }
     ensure!(
-        !matches!(task.status, Status::Done | Status::Dropped),
+        !matches!(task.status(), Status::Done | Status::Dropped),
         "cannot replace a terminal task's plan"
     );
     Ok(())
@@ -235,6 +247,18 @@ fn apply_with_origin(
     plan_id: &str,
     origin: crate::operating::Origin,
 ) -> Result<()> {
+    // A plan of at most one scope projects onto its own task, read and written as a head; a
+    // multi-scope publication clones its children from the full parent.
+    if ctx
+        .store
+        .head(id)?
+        .last_plan
+        .as_ref()
+        .filter(|plan| plan.id == plan_id)
+        .is_some_and(|plan| plan.document.dependencies.len() <= 1)
+    {
+        return self_projection::apply(ctx, id, plan_id, origin);
+    }
     ctx.store.dispatch_update(id, |store, parent| {
         crate::operating::require_origin(store, parent, OperatingActionKind::AcceptPlan, origin)?;
         ensure!(
@@ -353,7 +377,6 @@ fn apply_with_origin(
             parent.runs.is_empty() && parent.launch.is_none(),
             "cannot decompose a task with implementation runs or a launch"
         );
-        let board = store.list()?;
         // Existing prerequisites are inherited by every child. Validate their
         // entire reachable graph, not just names directly listed by the parent.
         let _waiting = crate::queue::dependency_check(store, parent)?;
@@ -399,7 +422,7 @@ fn apply_with_origin(
         // An interruption can leave reserved-but-unwritten IDs available to the
         // normal allocator. Remap only those collisions before publishing again.
         tracker_plan::upgrade(&mut journal, parent)?;
-        remap_collisions(store, &board, &mut journal)?;
+        remap_collisions(store, &mut journal)?;
         // A collision changes both task IDs and dependency contracts. Bind only
         // the final rendered children, never the originally reserved numbers.
         let staged = journal
@@ -686,7 +709,7 @@ fn body(document: &PlanDocument, acceptance: &[PlanAcceptance], backlink: &str) 
     body
 }
 
-fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Result<()> {
+fn remap_collisions(store: &Store, journal: &mut Journal) -> Result<()> {
     let mut tasks = journal
         .children
         .iter()
@@ -703,15 +726,16 @@ fn remap_collisions(store: &Store, board: &[Task], journal: &mut Journal) -> Res
     let mut replacements = BTreeMap::new();
     let reserved = reserved_numbers(store)?;
     for task in &tasks {
-        if let Some(existing) = board.iter().find(|t| t.id == task.id) {
+        // Each staged ID is looked up by key: only the tasks it may collide with are read.
+        if let Some(existing) = store.head_if_exists(&task.id)? {
             if (task.tracker && existing.tracker && existing.parent == task.parent)
                 || existing.plan.as_ref() == Some(&journal.backlink)
             {
-                let contract = operating_contract_revision(existing)?;
+                let contract = existing.contract_revision()?;
                 let staged_contract = operating_contract_revision(task)?;
                 ensure!(
                     existing.status == Status::Backlog
-                        && existing.runs.is_empty()
+                        && existing.runs_len()? == 0
                         && existing.launch.is_none()
                         && !existing.queued
                         && (contract == staged_contract

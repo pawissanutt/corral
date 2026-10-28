@@ -4,12 +4,13 @@ use std::path::Path;
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     AGGREGATE_RUN, AggregateAcceptance, AggregateAttempt, AggregateLandingState, AggregateStrategy,
-    OperatingActionKind, PlanDeliveryTarget, Status, Store, Task,
+    OperatingActionKind, PlanDeliveryTarget, Status, Store, Task, TaskHead, TaskMut as _,
+    TaskRef as _,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::{capture, current, ensure_fresh, evidence_failures, gate, scenario_failures};
+use super::{capture, current_head, ensure_fresh, evidence_failures_head, gate, scenario_failures};
 use crate::Ctx;
 use crate::operating::Origin;
 
@@ -28,7 +29,11 @@ pub fn plan_accept(
     automatic: bool,
 ) -> Result<AggregateAcceptance> {
     ctx.store.check_runtime()?;
-    let tracker = ctx.store.get(id)?;
+    let _action =
+        automatic.then(|| corral_core::work::action(id, OperatingActionKind::AcceptAggregate));
+    // The tracker is read as a head: the current attempt is its projection with its current
+    // review, and the acceptance reads nothing older.
+    let tracker = ctx.store.head(id)?.shell_task()?;
     ensure!(
         tracker.plan_acceptance_required(),
         "{} is not a tracker Plan with approved acceptance criteria",
@@ -39,10 +44,12 @@ pub fn plan_accept(
     if let Some(done) = recover(ctx, id, attempt, &repo)? {
         return Ok(done);
     }
-    let tracker = ctx.store.get(id)?;
-    let chosen = current(&tracker, attempt)?.clone();
+    let tracker_head = ctx.store.head(id)?;
+    let tracker = tracker_head.shell_task()?;
+    let chosen_head = current_head(&tracker_head, attempt)?.clone();
+    let chosen = current_attempt(&tracker, attempt)?.clone();
     let store = ctx.store.reopen()?;
-    check(ctx, &store, &tracker, &chosen, automatic)?;
+    check(ctx, &store, &tracker_head, &tracker, &chosen, automatic)?;
     let main = corral_git::rev_sha(&repo, "refs/heads/main")?;
     let head = chosen.identity.head.clone();
     let strategy = match (&chosen.target, chosen.code) {
@@ -67,7 +74,7 @@ pub fn plan_accept(
         let candidate = capture::capture(
             ctx,
             &store,
-            &tracker,
+            &tracker_head,
             &chosen.id,
             Some(&chosen.identity.environment),
         )?;
@@ -108,7 +115,7 @@ pub fn plan_accept(
         after: chosen.code.then(|| head.clone()),
         state: AggregateLandingState::Prepared,
     };
-    let submitted = crate::operating::submit(
+    let submitted = crate::operating::submit_head(
         ctx,
         &authorization,
         |store, task| {
@@ -116,13 +123,15 @@ pub fn plan_accept(
                 store: store.clone(),
                 ..ctx.clone()
             };
+            // The attempt projection compares its review facts too, so a review child edited
+            // and edited back (A->B->A) refuses as a genuine change does.
             ensure!(
-                current(task, &chosen.id)? == &chosen,
+                current_head(task.head(), &chosen.id)? == &chosen_head,
                 "aggregate attempt changed before acceptance"
             );
-            check(&fresh, store, task, &chosen, automatic)?;
-            task.aggregate_attempts
-                .last_mut()
+            let shell = task.shell_task()?;
+            check(&fresh, store, task.head(), &shell, &chosen, automatic)?;
+            task.last_aggregate_attempt_mut()
                 .context("aggregate attempt missing")?
                 .acceptance = Some(prepared.clone());
             Ok(())
@@ -149,10 +158,17 @@ pub fn plan_accept(
     }
 }
 
+/// The current attempt of a head's shell: its projection with only the current review.
+fn current_attempt<'a>(tracker: &'a Task, attempt: &str) -> Result<&'a AggregateAttempt> {
+    super::current(tracker, attempt)
+}
+
 /// Every proof the attempt needs, recomputed against the current board, Git and policy.
+/// `tracker` is `head`'s shell, `attempt` its current attempt.
 fn check(
     ctx: &Ctx,
     store: &Store,
+    head: &TaskHead,
     tracker: &Task,
     attempt: &AggregateAttempt,
     automatic: bool,
@@ -166,7 +182,7 @@ fn check(
     let candidate = capture::capture(
         ctx,
         store,
-        tracker,
+        head,
         &attempt.id,
         Some(&attempt.identity.environment),
     )?;
@@ -184,7 +200,7 @@ fn check(
         );
     }
     let mut failures = scenario_failures(tracker, attempt);
-    failures.extend(evidence_failures(ctx, tracker, attempt));
+    failures.extend(evidence_failures_head(ctx, head, attempt));
     ensure!(
         failures.is_empty(),
         "aggregate scenarios are not all passing: {}",
@@ -196,8 +212,14 @@ fn check(
 
 /// Resolve a previous transaction before starting another. Never merges a second time.
 fn recover(ctx: &Ctx, id: &str, attempt: &str, repo: &Path) -> Result<Option<AggregateAcceptance>> {
-    let tracker = ctx.store.get(id)?;
-    let Some(accepted) = tracker.aggregate_acceptance() else {
+    // Only the current attempt can carry an acceptance: verification refuses a new attempt
+    // once one exists, and a release clears it.
+    let tracker = ctx.store.head(id)?;
+    let Some(accepted) = tracker
+        .last_aggregate_attempt
+        .as_ref()
+        .filter(|attempt| attempt.acceptance.is_some())
+    else {
         return Ok(None);
     };
     let acceptance = accepted.acceptance.clone().context("acceptance missing")?;
@@ -227,43 +249,41 @@ fn recover(ctx: &Ctx, id: &str, attempt: &str, repo: &Path) -> Result<Option<Agg
 }
 
 fn release(ctx: &Ctx, id: &str, attempt: &str) -> Result<()> {
-    ctx.store.update(id, |task| {
-        let stored = task
-            .aggregate_attempts
-            .iter_mut()
-            .find(|stored| stored.id == attempt)
-            .context("aggregate attempt missing")?;
-        if stored
-            .acceptance
-            .as_ref()
-            .is_some_and(|acceptance| acceptance.state == AggregateLandingState::Prepared)
-        {
-            stored.acceptance = None;
-        }
-        Ok(())
+    ctx.store.update_head(id, |task| {
+        task.edit_aggregate_attempt(attempt, |stored| {
+            if stored
+                .acceptance
+                .as_ref()
+                .is_some_and(|acceptance| acceptance.state == AggregateLandingState::Prepared)
+            {
+                stored.acceptance = None;
+            }
+            Ok(())
+        })
+        .context("aggregate attempt missing")
     })?;
     Ok(())
 }
 
 fn finalize(ctx: &Ctx, id: &str, attempt: &str, after: &str) -> Result<AggregateAcceptance> {
     let mut landed = None;
-    ctx.store.update(id, |task| {
-        let stored = task
-            .aggregate_attempts
-            .iter_mut()
-            .find(|stored| stored.id == attempt)
-            .context("aggregate attempt missing")?;
-        let code = stored.code;
-        let acceptance = stored
-            .acceptance
-            .as_mut()
-            .context("prepared acceptance missing")?;
-        acceptance.state = AggregateLandingState::Landed;
-        if code {
-            acceptance.after = Some(after.into());
-        }
-        let detail = json!({"attempt": attempt, "strategy": acceptance.strategy, "before": acceptance.before, "after": acceptance.after, "automatic": acceptance.automatic, "authorization": acceptance.authorization, "identity": stored.identity});
-        landed = Some(acceptance.clone());
+    ctx.store.update_head(id, |task| {
+        let mut detail = serde_json::Value::Null;
+        task.edit_aggregate_attempt(attempt, |stored| {
+            let code = stored.code;
+            let acceptance = stored
+                .acceptance
+                .as_mut()
+                .context("prepared acceptance missing")?;
+            acceptance.state = AggregateLandingState::Landed;
+            if code {
+                acceptance.after = Some(after.into());
+            }
+            detail = json!({"attempt": attempt, "strategy": acceptance.strategy, "before": acceptance.before, "after": acceptance.after, "automatic": acceptance.automatic, "authorization": acceptance.authorization, "identity": stored.identity});
+            landed = Some(acceptance.clone());
+            Ok(())
+        })
+        .context("aggregate attempt missing")?;
         task.status = Status::Done;
         task.queued = false;
         task.dispatch_plan = None;

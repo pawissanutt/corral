@@ -382,7 +382,7 @@ fn automatic_inbox_request_commits_reopening_and_message_in_one_submission() {
         crate::dispatch::auto_request_changes(&ctx, &task.id, "repair", 1, state(), &key).unwrap();
     // Then the reopened run and its durable message exist together; nothing was pasted.
     assert_eq!(saved.status, Status::Running);
-    assert_eq!(saved.current_run().unwrap().outcome, None);
+    assert_eq!(saved.current_run.as_ref().unwrap().outcome, None);
     let inbox = corral_core::inbox::Inbox::new(
         &ctx.store,
         corral_core::inbox::Recipient::Run {

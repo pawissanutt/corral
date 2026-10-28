@@ -85,7 +85,8 @@ impl Store {
         let _board = self.lock("dispatch")?;
         let _task = self.lock(&action.task)?;
         let config = self.operating_config()?;
-        let task = self.get(&action.task)?;
+        // The member identity and policy checks read head fields and the contract revision.
+        let task = self.head(&action.task)?;
         let mut authorization = ActionAuthorization {
             id: String::new(),
             workspace: self.root().to_owned(),

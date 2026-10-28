@@ -39,19 +39,19 @@ impl Prepared {
     }
 
     pub fn suspend(&self, ctx: &Ctx, task: &str) -> Result<()> {
-        ctx.store.update(task, |task| {
+        ctx.store.update_head(task, |task| {
             self.save(ctx, &task.id)?;
-            let Some(plan) = task.plans.last_mut().filter(|p| p.id == self.plan) else {
+            let Some(plan) = task.head().last_plan.as_ref().filter(|p| p.id == self.plan) else {
                 return Ok(());
             };
             // A refusal is not a verdict. Keep the pending attempt in this durable
             // journal and restore it unchanged when it can reserve capacity again.
             if plan
-                .reviews
-                .last()
+                .current_review
+                .as_ref()
                 .is_some_and(|r| r.id == self.review.id && r.verdict.is_none())
             {
-                plan.reviews.pop();
+                task.pop_current_plan_review(&self.plan)?;
             }
             Ok(())
         })?;
@@ -67,8 +67,8 @@ pub(crate) fn retains(ctx: &Ctx, task: &str, plan: &str, review: &str) -> Result
 }
 
 pub(super) fn load(ctx: &Ctx, task: &str) -> Result<Option<Prepared>> {
-    let current = ctx.store.get(task)?;
-    let Some(plan) = current.plans.last() else {
+    let current = ctx.store.head(task)?;
+    let Some(plan) = current.last_plan.as_ref() else {
         return Ok(None);
     };
     load_for(ctx, task, &plan.id)

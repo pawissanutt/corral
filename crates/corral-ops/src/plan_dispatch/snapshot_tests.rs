@@ -99,7 +99,8 @@ fn planner_launch_consumes_persisted_snapshot_after_profile_deletion() {
     ctx.store.save_config().unwrap();
     ctx.store = Store::open(tmp.path()).unwrap();
     let task = ctx.store.get(&task.id).unwrap();
-    let (launched, _) = launch(&ctx, &task, &repo, claim).unwrap();
+    let (launched, _) = launch(&ctx, &ctx.store.head(&task.id).unwrap(), &repo, claim).unwrap();
+    let launched = ctx.store.get(&launched.id).unwrap();
     // Then the actual submitted command, instructions, and identity use only the snapshot.
     assert_eq!(
         std::fs::read_to_string(engine.join("launch-command"))

@@ -120,14 +120,24 @@ pub fn comment_request(
 
 /// Appended independently of custom templates so owner context is never omitted.
 pub(crate) fn owner_comments(task: &Task) -> String {
-    if task.comments.is_empty() {
+    section(task, &task.comments)
+}
+
+/// [`owner_comments`] of a head: exactly the emitted comment rows are read. `task` is the
+/// head's shell, which names the durable source.
+pub(crate) fn owner_comments_head(head: &corral_core::TaskHead, task: &Task) -> Result<String> {
+    Ok(section(task, &head.emitted_comments()?))
+}
+
+fn section(task: &Task, comments: &[TaskComment]) -> String {
+    if comments.is_empty() {
         return String::new();
     }
     let mut text = format!(
         "\n## Owner comments\n\nDurable source: `{}`\n",
         task.durable_source()
     );
-    for comment in &task.comments {
+    for comment in comments {
         text.push_str(&format!(
             "\n### {} · {}\n\n{}\n",
             comment.author.as_str(),

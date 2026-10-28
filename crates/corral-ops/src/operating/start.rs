@@ -41,7 +41,7 @@ pub(crate) fn authorize_start(
     queued: bool,
 ) -> Result<ActionAuthorization> {
     let previous = load_start(ctx, &action)?;
-    let task = ctx.store.get(&action.task)?;
+    let task = ctx.store.head(&action.task)?;
     // The reference is historical. Only the queue plan saved with the task
     // keeps an owner start active; withdrawal clears it under the board lock.
     let previous = previous.filter(|approval| {

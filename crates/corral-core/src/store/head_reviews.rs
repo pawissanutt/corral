@@ -91,7 +91,7 @@ impl TaskHeadMut {
         for pane in &panes {
             self.put(super::head_mut::pane_row(pane));
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -161,7 +161,7 @@ impl TaskHeadMut {
             plan_head.current_review = Some(serde_json::from_value(new_doc)?);
         }
         self.write_panes(&before_panes, &after_panes);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -212,7 +212,7 @@ impl TaskHeadMut {
         for pane in panes {
             self.delete(TaskPart::PaneRef, pane.key());
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -300,7 +300,7 @@ impl TaskHeadMut {
         for pane in &panes {
             self.put(super::head_mut::pane_row(pane));
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -357,7 +357,7 @@ impl TaskHeadMut {
             self.put(new);
         }
         self.write_panes(&before_panes, &after_panes);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 

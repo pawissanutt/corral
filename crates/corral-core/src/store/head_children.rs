@@ -251,7 +251,7 @@ impl TaskHeadMut {
         for pane in &panes {
             self.put(super::head_mut::pane_row(pane));
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -324,7 +324,7 @@ impl TaskHeadMut {
         if usage_changed {
             self.usage_dirty = true;
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -800,7 +800,7 @@ impl TaskHeadMut {
             child.facts.usage_total = full.total_usage().map(UsageTotals::of);
             child.facts.cost = CostTotals::of_run(full);
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 }

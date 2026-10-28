@@ -325,6 +325,13 @@ pub struct AgentHostHead {
     pub binding: AgentBinding,
 }
 
+impl PlanRunHead {
+    /// [`crate::PlanRun::holds_slot`] of the projection.
+    pub fn holds_slot(&self) -> bool {
+        self.ended.is_none() && matches!(self.state, PlanRunState::Planning | PlanRunState::Changes)
+    }
+}
+
 impl Default for InboxHead {
     fn default() -> Self {
         Self {

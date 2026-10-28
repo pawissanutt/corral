@@ -20,6 +20,7 @@ mod fixture;
 mod gate_rows;
 mod head;
 mod head_api;
+mod head_checkpoints;
 mod head_child_edit;
 mod head_children;
 mod head_edit;

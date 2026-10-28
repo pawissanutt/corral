@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use corral_core::{DispatchPlan, OperatingActionKind, Store, Task};
+use corral_core::{DispatchPlan, OperatingActionKind, Store, TaskRef};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -13,7 +13,11 @@ pub(crate) enum Admission {
 }
 
 impl Admission {
-    pub(crate) fn origin(&self, store: &Store, task: &Task) -> Result<crate::operating::Origin> {
+    pub(crate) fn origin<T: TaskRef + ?Sized>(
+        &self,
+        store: &Store,
+        task: &T,
+    ) -> Result<crate::operating::Origin> {
         match self {
             Self::Manual => Ok(crate::operating::Origin::Owner),
             Self::Queued { .. } => crate::operating::queued_origin(store, task),
@@ -21,17 +25,21 @@ impl Admission {
         }
     }
 
-    pub(crate) fn plan_requested(&self, task: &Task, opts: &DispatchOpts) -> bool {
+    pub(crate) fn plan_requested<T: TaskRef + ?Sized>(
+        &self,
+        task: &T,
+        opts: &DispatchOpts,
+    ) -> bool {
         opts.plan
             || matches!(self, Self::Queued { .. }) && crate::queue::queued_plan_requested(task)
     }
 
     /// Recheck admission against the store inside the atomic dispatch claim.
-    pub(crate) fn reason(
+    pub(crate) fn reason<T: TaskRef + ?Sized>(
         &self,
         ctx: &Ctx,
         store: &Store,
-        task: &Task,
+        task: &T,
         opts: &DispatchOpts,
     ) -> Result<Option<String>> {
         let origin = self.origin(store, task)?;
@@ -45,8 +53,10 @@ impl Admission {
             },
             origin,
         )?;
+        // The plan, capacity and slot checks read head fields and current containers only.
+        let shell = task.shell_task()?;
         if !self.plan_requested(task, opts)
-            && let Some(reason) = crate::queue::pending_plan_reason(task)?
+            && let Some(reason) = crate::queue::pending_plan_reason(&shell)?
         {
             return Ok(Some(reason));
         }
@@ -56,11 +66,11 @@ impl Admission {
             None
         };
         if reason.is_none() {
-            reason = crate::queue::capacity_reason(ctx, store, task, opts.force_resources)?;
+            reason = crate::queue::capacity_reason(ctx, store, &shell, opts.force_resources)?;
         }
         if reason.is_none() && !matches!(self, Self::Manual) {
-            if task.dispatch_hold {
-                bail!("{} was dequeued; automatic dispatch is held", task.id);
+            if *task.dispatch_hold() {
+                bail!("{} was dequeued; automatic dispatch is held", task.id());
             }
             if let Self::Automatic { inputs, .. } = self {
                 let authorized = match inputs["source"].as_str() {
@@ -72,25 +82,25 @@ impl Admission {
                 if !authorized {
                     bail!(
                         "{} is no longer authorized by automatic dispatch policy",
-                        task.id
+                        task.id()
                     );
                 }
             }
             if origin == crate::operating::Origin::Automatic {
-                reason = crate::dispatch_policy::automatic_capacity_reason(store, task)?;
+                reason = crate::dispatch_policy::automatic_capacity_reason(store, &shell)?;
             } else {
-                reason = crate::dispatch_policy::queued_capacity_reason(store, task)?;
+                reason = crate::dispatch_policy::queued_capacity_reason(store, &shell)?;
             }
         }
         Ok(reason)
     }
 
     /// Record automatic policy inputs as part of the successful atomic claim.
-    pub(crate) fn audit(
+    pub(crate) fn audit<T: TaskRef + ?Sized>(
         &self,
         ctx: &Ctx,
         store: &Store,
-        task: &Task,
+        task: &T,
         plan: &DispatchPlan,
         run_id: &str,
     ) -> Result<()> {
@@ -98,8 +108,8 @@ impl Admission {
             Self::Manual => return Ok(()),
             Self::Queued { rank, at } => json!({
                 "source":"ready", "reason":"authorized Ready queue admission",
-                "rank":rank, "at":at, "priority":task.priority, "created":task.created,
-                "eligibility":{"status":"ready","depends_on_done":task.depends_on},
+                "rank":rank, "at":at, "priority":task.priority(), "created":task.created(),
+                "eligibility":{"status":"ready","depends_on_done":task.depends_on()},
             }),
             Self::Automatic { inputs, at } => {
                 let mut detail = inputs.clone();
@@ -115,6 +125,6 @@ impl Admission {
         })?);
         detail["review_headroom"] = json!(store.config.limits.review);
         detail["route"] = json!(plan.route);
-        store.log_event(Some(&task.id), "dispatch_policy", detail)
+        store.log_event(Some(task.id()), "dispatch_policy", detail)
     }
 }

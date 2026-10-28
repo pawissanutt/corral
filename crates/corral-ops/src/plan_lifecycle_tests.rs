@@ -221,8 +221,9 @@ fn cancelled_planner_rejects_stale_automatic_progression() {
         // Given a pilot snapshot taken before owner cancellation.
         let (_tmp, ctx, id, _) = fixture();
         review(&ctx, &id, verdict);
-        let stale = ctx.store.get(&id).unwrap();
+        let stale = ctx.store.head(&id).unwrap();
         let cancelled = crate::plan_cancel(&ctx, &id).unwrap();
+        let cancelled_head = ctx.store.head(&cancelled.id).unwrap();
         // When automatic actions consume that stale observation.
         advance(&ctx, &stale.id, Timestamp::now()).unwrap();
         escalate(&ctx, &stale, "Stale observation").unwrap();
@@ -238,7 +239,7 @@ fn cancelled_planner_rejects_stale_automatic_progression() {
         assert!(
             !crate::plan_dispatch::revise(
                 &ctx,
-                &cancelled,
+                &cancelled_head,
                 "Revise",
                 crate::operating::Origin::Automatic
             )
@@ -284,7 +285,7 @@ fn cancelled_planner_requires_explicit_replacement_dispatch_when_ready() {
     assert!(
         crate::plan_dispatch::dispatch(
             &ctx,
-            &ready,
+            &ctx.store.head(&ready.id).unwrap(),
             &crate::DispatchOpts::default(),
             &crate::dispatch::Admission::Manual,
         )
@@ -292,7 +293,7 @@ fn cancelled_planner_requires_explicit_replacement_dispatch_when_ready() {
     );
     let outcome = crate::plan_dispatch::dispatch(
         &ctx,
-        &ready,
+        &ctx.store.head(&ready.id).unwrap(),
         &crate::DispatchOpts {
             plan: true,
             ..Default::default()

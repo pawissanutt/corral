@@ -102,18 +102,16 @@ pub(crate) fn automatic_launch(store: &Store, task: &Task) -> Result<bool> {
     Ok(crate::operating::is_automatic(authorization))
 }
 
+/// The newest dispatch-policy event of the launch's run, read through the (task, kind, run)
+/// index: earlier runs' events are not read.
 fn automatic_launch_event(store: &Store, task: &Task) -> Result<Option<Event>> {
-    Ok(store
-        .events_of(Some(&task.id), &["dispatch_policy"])?
-        .iter()
-        .rev()
-        .find(|event| {
-            event.kind == "dispatch_policy"
-                && event.task.as_deref() == Some(task.id.as_str())
-                && event.detail["action"] == "dispatch"
-                && event.detail["run"].as_str() == task.current_run().map(|run| run.id.as_str())
-        })
-        .cloned())
+    let run = task.current_run().map(|run| run.id.as_str());
+    store.last_event_where(Some(&task.id), &["dispatch_policy"], run, |event| {
+        event.kind == "dispatch_policy"
+            && event.task.as_deref() == Some(task.id.as_str())
+            && event.detail["action"] == "dispatch"
+            && event.detail["run"].as_str() == run
+    })
 }
 fn day(now: Timestamp) -> String {
     now.to_zoned(jiff::tz::TimeZone::UTC).date().to_string()

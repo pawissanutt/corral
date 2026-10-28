@@ -90,7 +90,7 @@ fn dispatch_snapshot_survives_owner_edits_and_reviewer_uses_same_data() {
     let run = run(&ctx);
     // When launch records its exposure, then the owner replaces the rule.
     record_lessons(&ctx, &task, &run).unwrap();
-    record_exposure(&ctx, &task, &run).unwrap();
+    record_exposure(&ctx, &task, &run.id).unwrap();
     ctx.store.save_lessons("app", &[lesson("L-new")]).unwrap();
     record_lessons(&ctx, &task, &run).unwrap();
     // Then both generated prompts carry identical machine-readable historical data.

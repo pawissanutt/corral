@@ -108,17 +108,19 @@ pub(crate) fn kick(ctx: &Ctx, recipient: &Recipient) -> Result<DeliveryStatus, S
 
 /// The registered adapter when the recipient is a pi-native run or review child.
 fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn DeliveryAdapter>> {
-    let task = ctx.store.get(recipient.task()?).ok()?;
+    // The run or review child is read by key: its projection names its harness and host.
+    let task = ctx.store.head(recipient.task()?).ok()?;
     let run = match recipient {
-        Recipient::Run { run, .. } => task.runs.iter().find(|r| r.id == *run),
-        Recipient::ReviewRun { run, review, .. } => task
-            .runs
-            .iter()
-            .find(|r| r.id == *run)
-            .and_then(|r| r.review_runs.iter().find(|c| c.id == *review)),
+        Recipient::Run { run, .. } => task.run_head(run).ok()?,
+        Recipient::ReviewRun { run, review, .. } => task.review_child(run, review).ok()?,
         Recipient::PlanRun { .. } | Recipient::PlanReview { .. } | Recipient::Pm => None,
     }?;
-    super::adapters::pi_native(run)
+    (run.agent_host.is_some()
+        || run
+            .harness
+            .as_deref()
+            .is_some_and(corral_core::is_pi_native))
+    .then(crate::agent::hooks::delivery::adapter)
 }
 
 pub(crate) fn kick_with(

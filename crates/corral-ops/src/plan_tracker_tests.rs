@@ -238,7 +238,7 @@ fn interrupted_remap_receipt_accepts_only_exact_earlier_tracker_contract() {
         let old_tracker = ctx.store.get("T-004").unwrap();
         // When the next remap receipt is durable but the tracker rewrite hasn't happened.
         let mut receipt = journal(&ctx, &id);
-        remap_collisions(&ctx.store, &ctx.store.list().unwrap(), &mut receipt).unwrap();
+        remap_collisions(&ctx.store, &mut receipt).unwrap();
         for (scope, text) in receipt.document.dependencies.iter().zip(&receipt.children) {
             let child = Store::parse_task_markdown(text).unwrap();
             let binding = receipt.scopes.get_mut(&scope.task).unwrap();

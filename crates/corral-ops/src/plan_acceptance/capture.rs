@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     AGGREGATE_RUN, AggregateMember, CandidateIdentity, PlanDeliveryTarget, RunOutcome, Status,
-    Store, Task, VERIFICATION_ENV, operating_contract_revision,
+    Store, Task, TaskRef, VERIFICATION_ENV,
 };
 
 use crate::Ctx;
@@ -40,10 +40,10 @@ pub(super) fn repo(store: &Store, tracker: &Task) -> Result<PathBuf> {
 
 /// Capture the candidate from fresh board, Git and policy state. `environment` replays a
 /// recorded attempt; None captures the verifier's own. Caller holds landing_lock.
-pub(super) fn capture(
+pub(super) fn capture<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     store: &Store,
-    tracker: &Task,
+    tracker: &T,
     attempt: &str,
     environment: Option<&[(String, Option<String>)]>,
 ) -> Result<Candidate> {
@@ -52,7 +52,7 @@ pub(super) fn capture(
 
 /// Read-only readiness uses maintained artifact facts, never an artifact history scan.
 /// Full byte/SHA validation remains mandatory for every real attempt and acceptance.
-pub(super) fn readiness(ctx: &Ctx, store: &Store, tracker: &Task) -> Result<()> {
+pub(super) fn readiness<T: TaskRef + ?Sized>(ctx: &Ctx, store: &Store, tracker: &T) -> Result<()> {
     capture_with(ctx, store, tracker, "readiness", None, Proof::Readiness).map(|_| ())
 }
 
@@ -62,14 +62,17 @@ enum Proof {
     Readiness,
 }
 
-fn capture_with(
+fn capture_with<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     store: &Store,
-    tracker: &Task,
+    source: &T,
     attempt: &str,
     environment: Option<&[(String, Option<String>)]>,
     proof: Proof,
 ) -> Result<Candidate> {
+    // The candidate reads the tracker's own fields and its contract revision, never its
+    // history; members are read as heads.
+    let tracker = &source.shell_task()?;
     ensure!(
         tracker.plan_acceptance_required(),
         "{} is not a tracker Plan with approved acceptance criteria",
@@ -147,7 +150,7 @@ fn capture_with(
         integration_base,
         dispatch_base,
         spec_digest: digest(&serde_json::to_vec(&(
-            operating_contract_revision(tracker)?,
+            source.contract_revision()?,
             contracts,
         ))?),
         policy_digest: digest(&serde_json::to_vec(&(
@@ -333,7 +336,7 @@ fn member(
     Ok(Ok(AggregateMember {
         task: child.id.clone(),
         run: run.id.clone(),
-        contract_revision: operating_contract_revision(&child)?,
+        contract_revision: child_head.contract_revision()?,
         receipt_sha: sha.into(),
         code,
         artifacts,
