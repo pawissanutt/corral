@@ -56,6 +56,10 @@ struct Cursor {
     config: String,
     #[serde(with = "crate::approvals::numbers::number")]
     recomputations: u64,
+    #[serde(default, with = "crate::approvals::numbers::number")]
+    window_after: u64,
+    #[serde(default, with = "crate::approvals::numbers::number")]
+    window_bytes: u64,
 }
 
 /// Constant-size scheduling output, using the baseline's request append-order rule.
