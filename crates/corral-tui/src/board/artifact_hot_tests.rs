@@ -122,6 +122,9 @@ fn artifact_growth_keeps_production_frame_and_pm_work_constant_and_cards_equal_f
                 assert_eq!(head_lines, full_lines, "{density:?}, {width}");
             }
         }
+        // The fixture writes artifacts without publication, so the first evaluation after each
+        // rewrite runs the one-time load-check checkpoint recovery. Measure the steady pass.
+        corral_ops::pm_next(&fx.ctx).unwrap();
         let before = work::snapshot();
         let samples = probe.samples();
         let action;
