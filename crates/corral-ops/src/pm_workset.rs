@@ -258,6 +258,7 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
     };
     crate::lesson_rows::prepare(ctx)?;
     crate::approvals::prepare(ctx)?;
+    crate::pm_next::observe::prepare(ctx)?;
     let _hot = corral_core::work::HotScope::enter();
     let heads = crate::pm_next::heads::inputs(ctx)?;
     let policy = ctx.store.effective_operating_policy()?;

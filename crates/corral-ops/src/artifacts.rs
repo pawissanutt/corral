@@ -246,6 +246,7 @@ fn attach(
             }
             let existing = existing.clone();
             crate::artifact_storage::record_keys(ctx, t, index, false)?;
+            crate::pm_next::observe::load_checks::published(ctx, t, index, false)?;
             if let Some(origin) = origin {
                 receipt = Some(artifact_receipt(t, origin, &existing, revived)?);
             }
@@ -290,6 +291,7 @@ fn attach(
         }
         t.artifacts.push(artifact.clone());
         crate::artifact_storage::record_keys(ctx, t, t.artifacts.len() - 1, true)?;
+        crate::pm_next::observe::load_checks::published(ctx, t, t.artifacts.len() - 1, true)?;
         if let Some(origin) = origin {
             receipt = Some(artifact_receipt(t, origin, &artifact, true)?);
             effects::failpoint("swept_before_commit");

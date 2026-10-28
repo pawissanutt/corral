@@ -7,6 +7,10 @@ use serde::Deserialize;
 use super::PmObservation;
 use crate::{Ctx, verification};
 
+#[path = "observe_load_checks.rs"]
+pub(crate) mod load_checks;
+pub(crate) use load_checks::prepare;
+
 /// Structured reviewer evidence; arbitrary review prose never authorizes acceptance.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -476,47 +480,7 @@ fn landing_blocker(
 }
 
 fn load_check(ctx: &Ctx, task: &Task, run: &Run, head: &str) -> Result<Option<PmObservation>> {
-    let task_head = ctx.store.head(&task.id)?;
-    let mut page = corral_core::backend::PageReq::first(1);
-    loop {
-        let found =
-            task_head.artifacts_by_title(&run.id, "PM isolated test result", page.clone())?;
-        for artifact in &found.items {
-            let path = ctx.store.dir().join(&artifact.path);
-            let bytes = crate::artifact_read(ctx, artifact)?;
-            if verification::digest(&bytes) != artifact.sha256 {
-                bail!("test observation artifact hash changed: {}", path.display());
-            }
-            let check: LoadCheck = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            if check.version != 1
-                || check.task != task.id
-                || check.run != run.id
-                || check.head != head
-            {
-                continue;
-            }
-            if check.under_load_exit != 0 {
-                return Ok(Some(PmObservation::LoadFailure {
-                    task: task.id.clone(),
-                    command: check.command,
-                    alone_passed: check.alone_exit.map(|exit| exit == 0),
-                    evidence: format!(
-                        "{}: load exit {}; alone exit {:?}; log {}",
-                        path.display(),
-                        check.under_load_exit,
-                        check.alone_exit,
-                        check.log
-                    ),
-                }));
-            }
-        }
-        match found.next {
-            Some(after) => page.after = Some(after),
-            None => break,
-        }
-    }
-    Ok(None)
+    load_checks::load(ctx, &task.id, &run.id, head)
 }
 
 fn range_diff(run: &Run, old_base: &str, old_head: &str, base: &str, head: &str) -> Result<String> {
@@ -555,124 +519,5 @@ fn identical_range_diff(diff: &str) -> bool {
 }
 
 #[cfg(test)]
-mod artifact_tests {
-    use super::*;
-    use corral_core::work::{self, Counter, HotScope};
-    use corral_core::{Artifact, Store};
-
-    fn full_oracle(ctx: &Ctx, task: &Task, run: &Run, head: &str) -> Result<Option<PmObservation>> {
-        for artifact in task
-            .artifacts
-            .iter()
-            .rev()
-            .filter(|a| a.run == run.id && a.title == "PM isolated test result")
-        {
-            let bytes = crate::artifact_read(ctx, artifact)?;
-            let check: LoadCheck = serde_json::from_slice(&bytes)?;
-            if check.version == 1
-                && check.task == task.id
-                && check.run == run.id
-                && check.head == head
-                && check.under_load_exit != 0
-            {
-                return Ok(Some(PmObservation::LoadFailure {
-                    task: task.id.clone(),
-                    command: check.command,
-                    alone_passed: check.alone_exit.map(|exit| exit == 0),
-                    evidence: format!(
-                        "{}: load exit {}; alone exit {:?}; log {}",
-                        ctx.store.dir().join(&artifact.path).display(),
-                        check.under_load_exit,
-                        check.alone_exit,
-                        check.log
-                    ),
-                }));
-            }
-        }
-        Ok(None)
-    }
-
-    #[test]
-    fn keyed_load_checks_equal_full_scan_and_ignore_unrelated_current_run_growth() {
-        let mut reports = Vec::new();
-        for factor in [1, 10] {
-            // Given a failure, a later success, and a still newer check for another head.
-            let root = tempfile::tempdir().unwrap();
-            let store = Store::init(root.path()).unwrap();
-            let mut task = store.create("Load", None, Status::Review, "").unwrap();
-            let now = "2026-01-01T00:00:00Z";
-            task.created = now.parse().unwrap();
-            task.updated = now.parse().unwrap();
-            let run: Run = serde_json::from_value(serde_json::json!({
-                "id": "R1", "agent": "worker", "worktree": "/tmp/load-check-test",
-                "branch": "topic", "base": "main", "base_sha": "0".repeat(40), "started": now
-            }))
-            .unwrap();
-            task.runs.push(run.clone());
-            for (n, (head, exit)) in [("candidate", 1), ("candidate", 0), ("different", 1)]
-                .into_iter()
-                .enumerate()
-            {
-                let bytes = serde_json::to_vec(&serde_json::json!({
-                    "version": 1, "task": task.id, "run": "R1", "head": head,
-                    "command": "cargo test", "under_load_exit": exit, "alone_exit": 0,
-                    "log": "test.log"
-                }))
-                .unwrap();
-                let path = format!("artifacts/{}/R1/check-{n}.json", task.id);
-                let target = store.dir().join(&path);
-                std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-                std::fs::write(&target, &bytes).unwrap();
-                task.artifacts.push(
-                    serde_json::from_value::<Artifact>(serde_json::json!({
-                        "run": "R1", "kind": "report", "title": "PM isolated test result",
-                        "path": path, "source": "/tmp/check.json",
-                        "sha256": verification::digest(&bytes), "bytes": bytes.len(), "added": now
-                    }))
-                    .unwrap(),
-                );
-            }
-            for n in 0..4 * factor {
-                task.artifacts.push(
-                    serde_json::from_value(serde_json::json!({
-                        "run": "R1", "kind": "log", "title": "Unrelated",
-                        "path": format!("artifacts/{}/R1/noise-{n:04}", task.id),
-                        "source": "/tmp/noise", "sha256": "0".repeat(64), "bytes": 1, "added": now
-                    }))
-                    .unwrap(),
-                );
-            }
-            store.fixture_put_task(&task).unwrap();
-            let ctx = Ctx {
-                store,
-                herdr: corral_herdr::Herdr::with_bin(root.path().join("unused-herdr"), None),
-                resource_probe: crate::resources::FixedResourceProbe::arc(),
-            };
-            let oracle = full_oracle(&ctx, &task, &run, "candidate").unwrap();
-            assert!(oracle.is_some());
-            let before = work::snapshot();
-            // When the production selector uses title-keyed newest-first pages.
-            let selected;
-            {
-                let _hot = HotScope::enter();
-                selected = load_check(&ctx, &task, &run, "candidate").unwrap();
-            }
-            // Then successes and other heads do not hide the earlier failure.
-            assert_eq!(
-                serde_json::to_value(selected).unwrap(),
-                serde_json::to_value(oracle).unwrap()
-            );
-            let report = work::snapshot().since(&before);
-            assert_eq!(report.unattributed_hydrations(), 0);
-            report.check_identity().unwrap();
-            reports.push(report);
-        }
-        for counter in Counter::ALL {
-            assert_eq!(
-                reports[0].get(counter),
-                reports[1].get(counter),
-                "{counter:?}"
-            );
-        }
-    }
-}
+#[path = "observe_load_check_tests.rs"]
+mod artifact_tests;
