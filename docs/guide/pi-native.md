@@ -54,7 +54,8 @@ the role, delivery and auth modules, and never autoloads `.env` or `bunfig.toml`
 `assets/<digest>/` holding that executable plus the `compat.json` and role files it writes
 (`corral-pi-host --write-install`); the digest covers all of them, so a replaced executable
 is refused like any other changed asset. A compiled installation needs no Bun: dispatch,
-login (`corral-pi-host login`) and recovery run the executable directly, and `corral agent
+login (`corral-pi-host login`), model listing (`corral-pi-host models`, which feeds
+`corral harness list` and the settings model picker) and recovery run the executable directly, and `corral agent
 doctor` reports its Bun as embedded. Anthropic profiles in a compiled host use the `claude`
 CLI on PATH, because the per-platform Claude Code binary the SDK ships is not bundled.
 

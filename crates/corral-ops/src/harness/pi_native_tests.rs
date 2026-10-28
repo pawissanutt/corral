@@ -1,6 +1,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use super::*;
+use crate::agent::bridge::assets::HOST_BINARY;
 use crate::agent::install::tests::package;
 
 const LISTING: &str = r#"{"models":[
@@ -108,4 +109,56 @@ fn degrades_to_free_text_naming_the_fix() {
     assert!(!tmp.path().join("bin/listing-argv").exists());
     // Without Bun nothing can list:
     assert!(note(&root, None).contains("no executable `bun`"));
+}
+
+/// A stand-in compiled `corral-pi-host`: `--version` and `--write-install` like
+/// src/host/compiled.ts, and `models` answering with `LISTING` and recording its argv.
+fn listing_host(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("listing.json"), LISTING).unwrap();
+    let source = dir.join("host.sh");
+    std::fs::write(
+        &source,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n--version) echo 'corral-pi-host pi 1.3.0 bun 1.4.2' ;;\n\
+             --write-install) cp '{compat}' \"$2/compat.json\" ;;\n\
+             models) echo \"$*\" > {dir}/listing-argv; cat {dir}/listing.json ;;\n\
+             *) exit 9 ;;\nesac\n",
+            compat = package().join("compat.json").display(),
+            dir = dir.display()
+        ),
+    )
+    .unwrap();
+    let host = dir.join(HOST_BINARY);
+    let installed = std::process::Command::new("install")
+        .args(["-m", "0755"])
+        .arg(&source)
+        .arg(&host)
+        .status()
+        .unwrap();
+    assert!(installed.success());
+    host
+}
+
+#[test]
+fn a_compiled_installation_lists_through_its_host_without_bun() {
+    // Given a compiled installation, no Bun anywhere, and only OpenAI logged in:
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("data");
+    let host = listing_host(&tmp.path().join("release"));
+    let record = install::install_compiled(&host, &root).unwrap();
+    login(&root, "openai-codex");
+
+    // When pi-native is detected:
+    let info = detect_with(&config(), Some(root), None);
+
+    // Then the installed host listed the openai-codex models through its `models` mode:
+    assert_eq!(info.model_source, ModelSource::Listed, "{:?}", info.notes);
+    assert_eq!(
+        info.models,
+        vec!["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"]
+    );
+    assert_eq!(info.path, Some(record.path.join(HOST_BINARY)));
+    let argv = std::fs::read_to_string(tmp.path().join("release/listing-argv")).unwrap();
+    assert_eq!(argv.trim(), "models --provider openai-codex");
 }

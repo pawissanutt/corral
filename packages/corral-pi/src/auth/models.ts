@@ -1,6 +1,7 @@
 // Harness detection (`corral harness list`, the settings model picker and routing checks) runs
 // this entry point with the providers whose corral-owned login `corral agent doctor` sees:
-// `bun --no-env-file src/auth/models.ts --provider openai-codex [--provider anthropic]`. It prints
+// `bun --no-env-file src/auth/models.ts --provider openai-codex [--provider anthropic]`, or
+// `corral-pi-host models --provider ...` for a compiled installation. It prints
 // Pi's built-in catalog for those providers as `{"models":[{"selector","provider","id"}]}`, where
 // `selector` is the provider-qualified ID a profile names. It never reads a credential, refreshes
 // a token or reaches the network.
@@ -37,14 +38,14 @@ export async function listModels(providers: readonly ProviderId[]): Promise<List
     .map((model) => ({ selector: `${provider}/${model.id}`, provider, id: model.id })));
 }
 
-if (import.meta.main) {
+export function runModels(argv: readonly string[]): void {
   process.env.PI_OFFLINE = "1";
   process.env.PI_TELEMETRY = "0";
   process.env.PI_SKIP_VERSION_CHECK = "1";
   globalThis.fetch = (async () => {
     throw new Error("network_refused: model listing is offline");
   }) as unknown as typeof globalThis.fetch;
-  const providers = process.argv.flatMap((arg, index) => process.argv[index - 1] === "--provider" ? [arg] : []);
+  const providers = argv.flatMap((arg, index) => argv[index - 1] === "--provider" ? [arg] : []);
   const unknown = providers.find((provider) => !isProviderId(provider));
   if (providers.length === 0 || unknown !== undefined) {
     process.stderr.write(`corral agent models failed: ${unknown === undefined ? "no --provider given"
@@ -59,3 +60,5 @@ if (import.meta.main) {
     process.exit(1);
   });
 }
+
+if (import.meta.main) runModels(process.argv);

@@ -1,5 +1,6 @@
 //! pi-native model discovery: the installed host lists Pi's built-in catalog through
-//! `bun --no-env-file <assets>/src/auth/models.ts --provider <id>...`, for the providers whose
+//! `bun --no-env-file <assets>/src/auth/models.ts --provider <id>...` (a compiled installation:
+//! `<assets>/corral-pi-host models --provider <id>...`, no Bun needed), for the providers whose
 //! corral-owned login `corral agent doctor` sees (file metadata only) and that the host and the
 //! vendor allowlist accept. No credential is read, no token refreshed and no network reached.
 //! Anything missing degrades to free-text entry with a note naming the fix.
@@ -12,7 +13,7 @@ use corral_core::{Config, PI_NATIVE_HARNESS};
 use super::{
     HarnessInfo, MODELS_TIMEOUT, ModelSource, apply_efforts, parse_omp_models, run_capture,
 };
-use crate::agent::bridge::assets::find_bun;
+use crate::agent::bridge::assets::{HOST_BINARY, compiled_host, find_bun};
 use crate::agent::credentials;
 use crate::agent::hooks::preflight;
 use crate::agent::install;
@@ -66,15 +67,33 @@ fn list(
         }
         Err(error) => return Err(format!("{error:#}; run `corral agent install`")),
     };
-    let entry = dir.join(MODELS_ENTRY);
-    if !entry.is_file() {
-        return Err(format!(
-            "{} predates model listing (no {MODELS_ENTRY}); run `corral agent install`",
-            dir.display()
-        ));
-    }
-    let bun = bun.ok_or("no executable `bun` on PATH")?;
-    info.path = Some(bun.clone());
+    let (program, mut args, shown) = match compiled_host(&dir) {
+        Some(host) => (
+            host,
+            vec!["models".to_owned()],
+            format!("{HOST_BINARY} models"),
+        ),
+        None => {
+            let entry = dir.join(MODELS_ENTRY);
+            if !entry.is_file() {
+                return Err(format!(
+                    "{} predates model listing (no {MODELS_ENTRY}); run `corral agent install`",
+                    dir.display()
+                ));
+            }
+            let entry = entry
+                .to_str()
+                .ok_or_else(|| format!("{} is not a UTF-8 path", entry.display()))?
+                .to_owned();
+            let bun = bun.ok_or("no executable `bun` on PATH")?;
+            (
+                bun,
+                vec!["--no-env-file".to_owned(), entry],
+                MODELS_ENTRY.to_owned(),
+            )
+        }
+    };
+    info.path = Some(program.clone());
     info.version = install::compat_pi_version(&dir).ok();
     let root = root.ok_or("no data directory for pi-native credentials")?;
     let vendors = preflight::host_vendors(&dir);
@@ -90,18 +109,12 @@ fn list(
     if providers.is_empty() {
         return Err("no pi-native provider is logged in; run `corral agent login`".into());
     }
-    let entry = entry
-        .to_str()
-        .ok_or_else(|| format!("{} is not a UTF-8 path", entry.display()))?;
-    let mut args = vec!["--no-env-file", entry];
     for provider in &providers {
-        args.extend(["--provider", provider]);
+        args.extend(["--provider".to_owned(), (*provider).to_owned()]);
     }
-    let shown = format!(
-        "{MODELS_ENTRY} --provider {}",
-        providers.join(" --provider ")
-    );
-    let mut models = run_capture(&bun, &args, MODELS_TIMEOUT)
+    let shown = format!("{shown} --provider {}", providers.join(" --provider "));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut models = run_capture(&program, &args, MODELS_TIMEOUT)
         .and_then(|out| parse_omp_models(&out))
         .map_err(|error| format!("{shown}: {error:#}"))?;
     models.retain(|model| {
