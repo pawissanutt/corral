@@ -75,6 +75,9 @@ pub struct Bootstrap {
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<PathBuf>,
+    /// `[agent] ui` at dispatch; absent in older bootstraps, which means rich.
+    #[serde(default)]
+    pub ui: corral_core::AgentUi,
 }
 
 impl std::fmt::Debug for Bootstrap {
@@ -309,6 +312,7 @@ pub fn prepare(ctx: &Ctx, target: &BindTarget, pane: &str, spec: &HostSpec) -> R
         provider: spec.provider.clone(),
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
+        ui: ctx.store.config.agent.ui,
     };
     let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
     let path = write_bootstrap(&dir, &bootstrap)?;
@@ -675,7 +679,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "resume_session": bootstrap.resume_session,
         "fresh_session": bootstrap.fresh_session,
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
-        "prompt_file": bootstrap.prompt_file,
+        "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
     });
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {
