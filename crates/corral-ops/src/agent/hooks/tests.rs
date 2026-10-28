@@ -177,6 +177,7 @@ fn refusal(error: anyhow::Error) -> String {
 
 #[test]
 fn preflight_names_the_missing_piece_and_its_owner() {
+    let _data_root = ts::private_data_root();
     // Given a pi-native profile and an asset directory filled in one step at a time:
     let mut fx = fx();
     pi_profile(&mut fx, "openai");
@@ -274,6 +275,7 @@ fn preflight_names_the_missing_piece_and_its_owner() {
 
 #[test]
 fn dispatch_and_pm_open_refuse_before_any_worktree_or_pane() {
+    let _data_root = ts::private_data_root();
     // Given a pi-native profile with no installed assets, a Ready task in a real project, and a
     // terminal engine that does not exist (any pane or workspace call would fail differently):
     let mut fx = fx();

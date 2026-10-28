@@ -11,6 +11,59 @@ use serde_json::{Value, json};
 use super::*;
 use crate::Ctx;
 
+thread_local! {
+    static DATA_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn data_root_override() -> Option<PathBuf> {
+    DATA_ROOT.with_borrow(Clone::clone)
+}
+
+/// A private managed-install root for this test thread, restored even on panic.
+/// Unlike changing HOME/XDG_DATA_HOME, this cannot affect concurrently running tests.
+pub(crate) struct PrivateDataRoot {
+    _tmp: tempfile::TempDir,
+    previous: Option<PathBuf>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+pub(crate) fn private_data_root() -> PrivateDataRoot {
+    let tmp = tempfile::tempdir().unwrap();
+    let previous = DATA_ROOT.replace(Some(tmp.path().to_path_buf()));
+    PrivateDataRoot {
+        _tmp: tmp,
+        previous,
+        _thread: std::marker::PhantomData,
+    }
+}
+
+impl Drop for PrivateDataRoot {
+    fn drop(&mut self) {
+        DATA_ROOT.set(self.previous.take());
+    }
+}
+
+#[test]
+fn private_data_roots_are_thread_local_and_restore_after_unwinding() {
+    assert!(data_root_override().is_none());
+    let _outer = private_data_root();
+    let root = super::install::data_root().unwrap();
+    assert!(root.is_dir());
+    std::thread::spawn(|| assert!(data_root_override().is_none()))
+        .join()
+        .unwrap();
+    let panic = std::panic::catch_unwind(|| {
+        let _inner = private_data_root();
+        assert_ne!(super::install::data_root().unwrap(), root);
+        panic!("exercise cleanup");
+    });
+    assert!(panic.is_err());
+    assert_eq!(super::install::data_root().unwrap(), root);
+    drop(_outer);
+    assert!(data_root_override().is_none());
+    assert!(!root.exists());
+}
+
 pub(crate) struct Fx {
     pub(crate) _tmp: tempfile::TempDir,
     pub(crate) ctx: Ctx,

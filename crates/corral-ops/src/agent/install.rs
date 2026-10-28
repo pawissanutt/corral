@@ -43,6 +43,10 @@ pub struct InstallRecord {
 /// `$XDG_DATA_HOME/corral/pi-native` (an absolute XDG_DATA_HOME only), else
 /// `$HOME/.local/share/corral/pi-native`; `src/auth/paths.ts` resolves the same directory.
 pub fn data_root() -> Result<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = super::test_support::data_root_override() {
+        return Ok(root);
+    }
     data_root_from(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
 }
 
