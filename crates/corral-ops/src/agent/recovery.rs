@@ -254,10 +254,8 @@ pub(crate) fn recover(
     ensure!(n > 0, "{} has no generation to resume", container.key());
     // Refuse unavailable assets, profiles or scope without stopping or fencing the old host.
     let pm_profile = if matches!(container, ContainerRef::Pm) {
-        let resolved = match adopt {
-            Some((_, resolved)) => resolved.clone(),
-            None => super::hooks::pm::profile(ctx)?,
-        };
+        let resolved =
+            adopt.map_or_else(|| super::hooks::pm::profile(ctx), |(_, r)| Ok(r.clone()))?;
         ensure!(
             super::hooks::pm::project(ctx)? == state.binding.project,
             "out_of_scope: the approved PM project differs from the existing binding"
@@ -280,12 +278,7 @@ pub(crate) fn recover(
     }
     let host = bound_host(&state);
     let alive = host.as_ref().map(gone).transpose()? == Some(false);
-    ensure!(
-        !adopted || alive,
-        "pane_adopted: {} is the owner's own pane adopted by `corral pi` and its host is gone; \
-         corral never types into it. Run `corral pi` in that pane, or `corral pm`",
-        plan.pane
-    );
+    super::pi::refuse_dead_adopted(adopted, alive, &plan.pane)?;
     let mut replaced = false;
     if let Some(host) = host.as_ref().filter(|_| alive) {
         ensure!(
