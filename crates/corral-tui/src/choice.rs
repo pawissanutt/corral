@@ -68,6 +68,7 @@ pub(crate) fn run_title(r: &Run) -> String {
 struct ProfileDefaults {
     harness: String,
     model: Option<String>,
+    vendor: Option<String>,
     effort: Option<String>,
     takes_model: bool,
     takes_effort: bool,
@@ -90,13 +91,14 @@ fn profile_defaults(cfg: &Config, profile: &str) -> ProfileDefaults {
         .resolve_profile(&choice, None, None)
         .err()
         .map(|e| format!("{e:#}"));
-    let (harness, model, effort) = match cfg.profiles.get(profile) {
+    let (harness, model, vendor, effort) = match cfg.profiles.get(profile) {
         Some(p) => (
             p.harness.clone(),
             p.model.clone(),
+            p.vendor.clone(),
             p.effort.as_deref().map(normalize),
         ),
-        None => (profile.to_string(), None, None),
+        None => (profile.to_string(), None, None, None),
     };
     let flags = cfg.harness(&harness).ok().map(|(_, f)| f);
     ProfileDefaults {
@@ -105,6 +107,7 @@ fn profile_defaults(cfg: &Config, profile: &str) -> ProfileDefaults {
         efforts: flags.map(|f| f.efforts).unwrap_or_default(),
         harness,
         model,
+        vendor,
         effort,
         error,
     }
@@ -305,7 +308,14 @@ impl RunChoice {
         match &self.report {
             Some(Ok(r)) => r
                 .get(&self.base.harness)
-                .map(|h| h.models.clone())
+                .map(|h| {
+                    corral_ops::models_for_profile(
+                        &self.base.harness,
+                        self.base.vendor.as_deref(),
+                        self.base.model.as_deref(),
+                        &h.models,
+                    )
+                })
                 .unwrap_or_default(),
             _ => Vec::new(),
         }

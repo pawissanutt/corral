@@ -162,3 +162,57 @@ fn a_compiled_installation_lists_through_its_host_without_bun() {
     let argv = std::fs::read_to_string(tmp.path().join("release/listing-argv")).unwrap();
     assert_eq!(argv.trim(), "models --provider openai-codex");
 }
+
+#[test]
+fn a_profile_sees_and_accepts_only_its_own_providers_models() {
+    // Given a catalog listing both providers' models:
+    let models: Vec<String> = ["openai-codex/gpt-6.1-sol", "anthropic/claude-opus-5-5"]
+        .map(String::from)
+        .to_vec();
+    let scoped = |vendor, model| models_for_profile("pi-native", vendor, model, &models);
+    // Then each profile sees only its provider, from its vendor or else its model:
+    assert_eq!(scoped(Some("openai"), None), ["openai-codex/gpt-6.1-sol"]);
+    assert_eq!(
+        scoped(None, Some("claude-opus-5-5")),
+        ["anthropic/claude-opus-5-5"]
+    );
+    assert_eq!(scoped(None, None), models, "no provider: the whole list");
+    assert_eq!(
+        models_for_profile("omo", Some("openai"), None, &models),
+        models
+    );
+    // And a bare id is looked up qualified by the bound provider, a qualified one as is:
+    assert_eq!(
+        catalog_selector("pi-native", Some("openai"), "gpt-6.1-sol"),
+        "openai-codex/gpt-6.1-sol"
+    );
+    assert_eq!(
+        catalog_selector("pi-native", None, "claude-opus-5-5"),
+        "anthropic/claude-opus-5-5"
+    );
+    assert_eq!(
+        catalog_selector("omo", Some("openai"), "gpt-6.1-sol"),
+        "gpt-6.1-sol"
+    );
+    // And another provider's selector is foreign to a profile bound elsewhere:
+    assert!(foreign_selector(
+        "pi-native",
+        Some("openai"),
+        "anthropic/claude-opus-5-5"
+    ));
+    assert!(foreign_selector(
+        "pi-native",
+        Some("anthropic"),
+        "openai-codex/gpt-6.1-sol"
+    ));
+    assert!(!foreign_selector(
+        "pi-native",
+        Some("openai"),
+        "openai-codex/gpt-6.1-sol"
+    ));
+    assert!(!foreign_selector(
+        "pi-native",
+        None,
+        "anthropic/claude-opus-5-5"
+    ));
+}

@@ -26,8 +26,8 @@ impl SettingsView {
                 Ok(r) => {
                     self.report = Some(r);
                     self.report_error = None;
-                    if let Some(h) = self.picker.as_ref().map(|p| p.harness.clone()) {
-                        let (models, note) = self.model_source(&h);
+                    if let Some(name) = self.picker.as_ref().map(|p| p.profile.clone()) {
+                        let (models, note) = self.model_source(&name);
                         if let Some(p) = &mut self.picker {
                             p.update(models, note);
                         }
@@ -144,7 +144,7 @@ impl SettingsView {
         let Some(p) = self.draft.profiles.get(&name) else {
             return;
         };
-        let (models, note) = self.model_source(&p.harness);
+        let (models, note) = self.model_source(&name);
         self.picker = Some(Picker::new(
             name,
             p.harness.clone(),
@@ -154,13 +154,29 @@ impl SettingsView {
         ));
     }
 
-    /// The picker's model list for `harness` and the note explaining where it came from.
-    fn model_source(&self, harness: &str) -> (Vec<String>, String) {
-        let info = self.report.as_ref().and_then(|r| r.get(harness));
-        let models = info.map(|i| i.models.clone()).unwrap_or_default();
+    /// The picker's model list for profile `name` (its harness's models that the profile can run)
+    /// and the note explaining where it came from.
+    fn model_source(&self, name: &str) -> (Vec<String>, String) {
+        let Some(profile) = self.draft.profiles.get(name) else {
+            return (Vec::new(), "type any model name".to_string());
+        };
+        let info = self.report.as_ref().and_then(|r| r.get(&profile.harness));
+        let models = info
+            .map(|i| {
+                corral_ops::models_for_profile(
+                    &profile.harness,
+                    profile.vendor.as_deref(),
+                    profile.model.as_deref(),
+                    &i.models,
+                )
+            })
+            .unwrap_or_default();
         let note = match info {
             None if self.loader.is_some() => "detecting models… type any model name".to_string(),
             None => "not detected; type any model name".to_string(),
+            Some(i) if models.is_empty() && !i.models.is_empty() => {
+                "no models listed for this profile's provider; type any model name".to_string()
+            }
             Some(i) if models.is_empty() => match i.notes.first() {
                 Some(n) => format!("no model list ({n}); type any model name"),
                 None => "no model list; type any model name".to_string(),
