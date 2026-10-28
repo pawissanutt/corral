@@ -190,7 +190,7 @@ impl TaskHeadMut {
                 .any(|row| row.doc.get("payload_digest").and_then(Value::as_str) == Some(digest)))
     }
 
-    fn adjust_child(facts: &mut ContainerFacts, child: &RunHead, sign: i64) {
+    pub(super) fn adjust_child(facts: &mut ContainerFacts, child: &RunHead, sign: i64) {
         facts.open_children = facts
             .open_children
             .saturating_add_signed(sign * i64::from(child.ended.is_none()));

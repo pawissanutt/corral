@@ -23,6 +23,57 @@
 //! }
 //! ```
 //!
+//! Mutation callbacks receive projections, so they cannot reach nested history either:
+//!
+//! ```
+//! fn edit(task: &mut impl corral_core::TaskMut) -> anyhow::Result<()> {
+//!     task.edit_review_child("R1", "R1-review1", |c| {
+//!         c.summary = Some("edited".into());
+//!         Ok(())
+//!     })?;
+//!     task.edit_plan_review("P1", "P1-PR1", |r| {
+//!         r.notes = Some("edited".into());
+//!         Ok(())
+//!     })
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn leak(task: &mut impl corral_core::TaskMut) {
+//!     let _ = task.edit_review_child("R1", "R1-review1", |c| {
+//!         let _ = c.checkpoints.len();
+//!         Ok(())
+//!     });
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn leak(task: &mut impl corral_core::TaskMut) {
+//!     let _ = task.edit_review_child("R1", "R1-review1", |c| {
+//!         let _ = c.usage.as_ref().map(|u| u.entries.len());
+//!         Ok(())
+//!     });
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn leak(task: &mut impl corral_core::TaskMut) {
+//!     let _ = task.edit_plan_review("P1", "P1-PR1", |r| {
+//!         let _ = r.inbox.effects_applied.len();
+//!         Ok(())
+//!     });
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn leak(task: &mut impl corral_core::TaskMut) {
+//!     let _ = task.edit_run("R1", |r| {
+//!         let _ = r.review_runs.len();
+//!         Ok(())
+//!     });
+//! }
+//! ```
+//!
 //! ```compile_fail
 //! fn leak(task: &impl corral_core::TaskRef) { let _ = task.runs(); }
 //! ```
@@ -69,7 +120,10 @@ use anyhow::Result;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{AgentGeneration, AgentTurn, ContainerRef};
+use crate::agent::{
+    AgentGeneration, AgentQuestion, AgentReport, AgentTurn, ContainerRef, RequestReceipt,
+    WakeSubscription,
+};
 use crate::inbox::{Recipient, SessionBinding, SessionCursor};
 use crate::{
     AggregateAttempt, AggregateReview, ApprovedScopeRevision, Artifact, AttemptHead, Checkpoint,
@@ -367,6 +421,33 @@ pub trait TaskRef: TaskFieldsRef {
         seq: u64,
     ) -> Result<Option<AgentTurn>>;
 
+    /// The native receipt of request `request_id` among `container`'s agent records.
+    fn agent_receipt(
+        &self,
+        container: &ContainerRef,
+        request_id: &str,
+    ) -> Result<Option<RequestReceipt>>;
+    /// The native question `key` of `container`.
+    fn agent_question(&self, container: &ContainerRef, key: &str) -> Result<Option<AgentQuestion>>;
+    /// The questions of `container` still waiting for an answer.
+    fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>>;
+    /// The wake subscription of request `request_id` of `container`.
+    fn agent_wake(
+        &self,
+        container: &ContainerRef,
+        request_id: &str,
+    ) -> Result<Option<WakeSubscription>>;
+    /// The armed or pending-start wakes of `container`.
+    fn active_agent_wakes(&self, container: &ContainerRef) -> Result<Vec<WakeSubscription>>;
+    /// Every report of `container`: its own records, for resume and output only.
+    fn agent_reports(&self, container: &ContainerRef) -> Result<Vec<AgentReport>>;
+    /// The receipt of a Pi-native PM operation `request_id` that targeted this task.
+    fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>>;
+    /// The current gate of plan member `member`.
+    fn member_gate(&self, member: &str) -> Result<Option<crate::MemberGateHead>>;
+    /// The superseded revisions of `member`'s gate, oldest first: its own records.
+    fn member_gate_history(&self, member: &str) -> Result<Vec<crate::MemberGateRecord>>;
+
     fn open_review_children(&self, run: &str) -> Result<Vec<RunHead>>;
     fn pending_plan_reviews(&self, plan: &str) -> Result<Vec<PlanReviewHead>>;
     fn pending_aggregate_reviews(&self, attempt: &str) -> Result<Vec<AggregateReview>>;
@@ -431,18 +512,20 @@ pub trait TaskMut: TaskRef {
     ) -> Result<R>;
 
     fn push_review_child(&mut self, run: &str, child: Run) -> Result<()>;
+    /// Edits review child `id` of the current run as its projection; its nested rows stay.
     fn edit_review_child(
         &mut self,
         run: &str,
         id: &str,
-        edit: impl FnOnce(&mut Run) -> Result<()>,
+        edit: impl FnOnce(&mut RunHead) -> Result<()>,
     ) -> Result<()>;
     fn push_plan_review(&mut self, plan: &str, review: PlanReview) -> Result<()>;
+    /// Edits review `id` of the current plan as its projection; its inbox history stays.
     fn edit_plan_review(
         &mut self,
         plan: &str,
         id: &str,
-        edit: impl FnOnce(&mut PlanReview) -> Result<()>,
+        edit: impl FnOnce(&mut PlanReviewHead) -> Result<()>,
     ) -> Result<()>;
     fn pop_current_plan_review(&mut self, plan: &str) -> Result<()>;
     fn terminalize_pending_plan_reviews(&mut self, plan: &str, reason: &str) -> Result<()>;

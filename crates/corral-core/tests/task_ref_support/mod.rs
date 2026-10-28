@@ -26,7 +26,44 @@ pub fn backends() -> Vec<(&'static str, tempfile::TempDir, Store)> {
 
 pub const CALLBACK: &str = "gate:callback";
 
+pub fn receipt(request: &str, at_s: i64) -> serde_json::Value {
+    json!({"version": 1, "request_id": request, "op": "event", "payload_sha256": "0".repeat(64),
+           "identity": {"store": "s", "project": "app", "role": "worker", "task": "T-001",
+                        "run": "R0001", "session_id": "s", "generation": 1},
+           "state": "committed", "result": {"kind": "turn_started"}, "at": at(at_s)})
+}
+
+fn question(container: &str, n: usize, state: &str) -> serde_json::Value {
+    json!({"version": 1, "key": format!("{container}/Q{n}"), "revision": 1,
+           "asked": {"request_id": format!("q-{n}"), "payload_sha256": "0".repeat(64),
+                     "session_id": "s", "generation": 1, "at": at(20)},
+           "kind": "clarification", "blocking": false, "text": format!("question {n}"),
+           "state": state,
+           "wake": {"route": "none", "key": format!("qwake:{container}/Q{n}:1"), "state": "pending"}})
+}
+
+fn wake(n: usize, state: &str) -> serde_json::Value {
+    json!({"key": format!("wake-{n}"), "request_id": format!("w-{n}"), "kind": "wait",
+           "target": format!("W{n:04}"), "state": state, "at": at(30)})
+}
+
+fn report(n: usize) -> serde_json::Value {
+    json!({"version": 1, "kind": "done", "request_id": format!("r-{n}"), "generation": 1,
+           "at": at(40)})
+}
+
 pub fn agent_state(role: &str, generation: u32, fenced: bool, callback: bool) -> AgentRunState {
+    agent_state_with(role, generation, fenced, callback, "T-001/R", 2)
+}
+
+pub fn agent_state_with(
+    role: &str,
+    generation: u32,
+    fenced: bool,
+    callback: bool,
+    container: &str,
+    records: usize,
+) -> AgentRunState {
     let generations: Vec<_> = (1..=generation)
         .map(|n| {
             let fence = (fenced && n == generation).then(|| json!({"reason": "lost", "at": at(5)}));
@@ -40,14 +77,30 @@ pub fn agent_state(role: &str, generation: u32, fenced: bool, callback: bool) ->
                    "started": at(10), "ended": if seq == 1 { json!(at(11)) } else { json!(null) }})
         })
         .collect();
+    let states = ["open", "answered", "escalated", "withdrawn"];
+    let wake_states = ["armed", "fired", "pending_start", "cancelled"];
     serde_json::from_value(json!({
         "version": 1,
         "binding": {"role": role, "store": "s", "project": "app", "generation": generation,
                     "health": "healthy", "callback": if callback { json!(CALLBACK) } else { json!(null) }},
         "generations": generations,
         "turns": turns,
+        "receipts": (0..records).map(|n| receipt(&format!("rq-{n}"), n as i64)).collect::<Vec<_>>(),
+        "questions": (0..records).map(|n| question(container, n, states[n % 4])).collect::<Vec<_>>(),
+        "wakes": (0..records).map(|n| wake(n, wake_states[n % 4])).collect::<Vec<_>>(),
+        "reports": (0..records).map(report).collect::<Vec<_>>(),
     }))
     .unwrap()
+}
+
+fn member_gate(revision: u64, history: u64) -> serde_json::Value {
+    let entry = |r: u64| {
+        json!({"revision": r, "gate": {"tier": "quick"}, "reason": format!("rev {r}"),
+               "by": "owner", "at": at(r as i64)})
+    };
+    let mut gate = entry(revision);
+    gate["history"] = (0..history).map(entry).collect::<Vec<_>>().into();
+    gate
 }
 
 fn findings(task: &mut Task, rng: &mut Rng) {
@@ -135,6 +188,15 @@ pub fn random_task(store: &Store, rng: &mut Rng) -> Task {
                 rng.below(3) != 0,
             )));
         }
+    }
+    task.agent_pm_receipts = (0..rng.below(3))
+        .map(|n| serde_json::from_value(receipt(&format!("pm-{n}"), n as i64)).unwrap())
+        .collect();
+    for (member, history) in [("T-090", rng.below(3) as u64), ("T-091", 0)] {
+        task.member_gates.insert(
+            member.into(),
+            serde_json::from_value(member_gate(history + 1, history)).unwrap(),
+        );
     }
     store.fixture_put_task(&task).unwrap();
     store.get(&task.id).unwrap()

@@ -26,7 +26,11 @@ fn container_ordinal(key: &str) -> Result<usize> {
         .with_context(|| format!("row key {key:?} has no container ordinal"))
 }
 
-fn finding_of(part: TaskPart, row: &HistoryRow, owner: &str) -> Result<Option<EmittedFinding>> {
+pub(super) fn finding_of(
+    part: TaskPart,
+    row: &HistoryRow,
+    owner: &str,
+) -> Result<Option<EmittedFinding>> {
     Ok(match part {
         TaskPart::ReviewRun => {
             let (child, _): (RunHead, _) = projection(&row.doc)?;
@@ -88,7 +92,7 @@ impl TaskHeadMut {
 
     /// The id of the coding run or plan at ordinal `s`, read by key only when this mutation
     /// does not hold it.
-    fn container_id(
+    pub(super) fn container_id(
         &self,
         part: TaskPart,
         s: usize,

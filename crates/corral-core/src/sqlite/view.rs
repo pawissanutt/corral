@@ -377,11 +377,25 @@ impl ReadView for SqliteView {
         q: &RowQuery,
         page: PageReq,
     ) -> Result<Page<HistoryRow>, ViewError> {
+        self.rows_except(num, q, "", page)
+    }
+
+    fn rows_except(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        except: &str,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError> {
         let mut filters = vec!["r.task = ?".to_owned(), "r.part = ?".to_owned()];
         let mut args: Vec<Sql> = vec![
             Sql::Integer(int(num.0).or_view()?),
             Sql::Text(name(&q.part).or_view()?),
         ];
+        if !except.is_empty() {
+            filters.push("r.key <> ?".to_owned());
+            args.push(Sql::Text(except.to_owned()));
+        }
         if let Some(key) = &q.key {
             filters.push("r.key = ?".to_owned());
             args.push(Sql::Text(key.clone()));

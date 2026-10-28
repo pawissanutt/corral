@@ -20,7 +20,7 @@ use crate::{AggregateReview, ContainerFacts, PlanReview};
 type RowMap = BTreeMap<(TaskPart, String), HistoryRow>;
 
 impl TaskHeadMut {
-    fn current_plan_seq(&self, plan: &str) -> Result<usize> {
+    pub(super) fn current_plan_seq(&self, plan: &str) -> Result<usize> {
         match (&self.head.last_plan, self.head.seqs.plan) {
             (Some(current), Some(seq)) if current.id == plan => Ok(seq),
             _ => bail!(
@@ -228,7 +228,7 @@ impl TaskHeadMut {
             .map(|row| Ok(serde_json::from_value::<PlanReviewHead>(row.doc)?.id))
             .collect::<Result<_>>()?;
         for id in pending {
-            self.edit_plan_review(plan, &id, |review| {
+            self.edit_plan_review_head(plan, &id, |review| {
                 review.verdict = Some(crate::Verdict::Escalate);
                 review.notes = Some(reason.into());
                 review.pending_reply = None;

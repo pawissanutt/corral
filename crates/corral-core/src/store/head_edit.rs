@@ -11,7 +11,7 @@ use super::head_mut::{
 use super::task_mut_task::{
     check_attempt_edit, check_plan_edit, check_plan_run_edit, check_run_edit,
 };
-use super::{AttemptHead, PlanHead, PlanRunHead, RunHead};
+use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead};
 use crate::backend::{HistoryRow, RowQuery, TaskPart};
 use crate::container_facts::herdr_panes;
 use crate::inbox::{Recipient, SessionCursor};
@@ -249,9 +249,9 @@ impl TaskMut for TaskHeadMut {
         &mut self,
         run: &str,
         id: &str,
-        edit: impl FnOnce(&mut Run) -> Result<()>,
+        edit: impl FnOnce(&mut RunHead) -> Result<()>,
     ) -> Result<()> {
-        TaskHeadMut::edit_review_child(self, run, id, edit)
+        self.edit_review_child_head(run, id, edit)
     }
 
     fn push_plan_review(&mut self, plan: &str, review: PlanReview) -> Result<()> {
@@ -262,9 +262,9 @@ impl TaskMut for TaskHeadMut {
         &mut self,
         plan: &str,
         id: &str,
-        edit: impl FnOnce(&mut PlanReview) -> Result<()>,
+        edit: impl FnOnce(&mut PlanReviewHead) -> Result<()>,
     ) -> Result<()> {
-        TaskHeadMut::edit_plan_review(self, plan, id, edit)
+        self.edit_plan_review_head(plan, id, edit)
     }
 
     fn pop_current_plan_review(&mut self, plan: &str) -> Result<()> {

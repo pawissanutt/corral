@@ -507,6 +507,58 @@ fn same_inbox_and_agent_reads(full: &Task, head: &TaskHead) {
                 assert!(delta.get(Counter::NestedRowDecodes) <= count(&got) + resolve);
             }
         }
+        for n in 0..=3 {
+            let request = format!("rq-{n}");
+            let expected = full.agent_receipt(&container, &request).unwrap();
+            let (got, delta) = measure(|| head.agent_receipt(&container, &request).unwrap());
+            assert_eq!(expected, got, "agent_receipt {container:?} {n}");
+            assert!(delta.get(Counter::NestedRowDecodes) <= count(&got) + resolve);
+            let key = format!("T-001/R/Q{n}");
+            let expected = full.agent_question(&container, &key).unwrap();
+            let (got, delta) = measure(|| head.agent_question(&container, &key).unwrap());
+            assert_eq!(expected, got, "agent_question {container:?} {n}");
+            assert!(delta.get(Counter::NestedRowDecodes) <= count(&got) + resolve);
+            let request = format!("w-{n}");
+            let expected = full.agent_wake(&container, &request).unwrap();
+            let (got, delta) = measure(|| head.agent_wake(&container, &request).unwrap());
+            assert_eq!(expected, got, "agent_wake {container:?} {n}");
+            assert!(delta.get(Counter::NestedRowDecodes) <= count(&got) + resolve);
+        }
+        let expected = full.pending_agent_questions(&container).unwrap();
+        let (got, delta) = measure(|| head.pending_agent_questions(&container).unwrap());
+        assert_eq!(expected, got, "pending questions {container:?}");
+        assert!(delta.get(Counter::NestedRowDecodes) <= got.len() as u64 + resolve);
+        let expected = full.active_agent_wakes(&container).unwrap();
+        let (got, delta) = measure(|| head.active_agent_wakes(&container).unwrap());
+        assert_eq!(expected, got, "active wakes {container:?}");
+        assert!(delta.get(Counter::NestedRowDecodes) <= got.len() as u64 + resolve);
+        let expected = full.agent_reports(&container).unwrap();
+        let (got, delta) = measure(|| head.agent_reports(&container).unwrap());
+        assert_eq!(expected, got, "reports {container:?}");
+        assert!(delta.get(Counter::NestedRowDecodes) <= got.len() as u64 + resolve);
+    }
+    for n in 0..=3 {
+        let request = format!("pm-{n}");
+        keyed(
+            "pm_receipt",
+            || full.pm_receipt(&request).unwrap(),
+            || head.pm_receipt(&request).unwrap(),
+            1,
+            none,
+        );
+    }
+    for member in ["T-090", "T-091", "T-999"] {
+        assert_eq!(
+            full.member_gate(member).unwrap(),
+            head.member_gate(member).unwrap()
+        );
+        keyed(
+            "member_gate_history",
+            || full.member_gate_history(member).unwrap(),
+            || head.member_gate_history(member).unwrap(),
+            full.member_gates.get(member).map_or(0, |g| g.history.len()) as u64,
+            none,
+        );
     }
 }
 

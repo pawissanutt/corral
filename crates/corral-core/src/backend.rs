@@ -67,6 +67,14 @@ pub trait ReadView {
         q: &RowQuery,
         page: PageReq,
     ) -> Result<Page<HistoryRow>, ViewError>;
+    /// [`Self::rows`] without the row at key `except`, which the backend does not read.
+    fn rows_except(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        except: &str,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError>;
     /// Tasks holding a row of `part` that carries index `token`, by number: a cross-task
     /// lookup that decodes no row.
     fn token_owners(

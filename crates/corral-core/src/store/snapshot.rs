@@ -132,6 +132,15 @@ impl ReadView for SharedView {
     ) -> Result<Page<HistoryRow>, ViewError> {
         self.view().rows(num, q, page)
     }
+    fn rows_except(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        except: &str,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError> {
+        self.view().rows_except(num, q, except, page)
+    }
     fn token_owners(
         &self,
         part: TaskPart,

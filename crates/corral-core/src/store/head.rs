@@ -49,6 +49,7 @@ pub struct TaskHead {
     pub summary: HistorySummary,
     pub(crate) seqs: CurrentSeqs,
     pub(crate) view: Option<PinnedView>,
+    pub(crate) overlay: Option<Arc<super::head_overlay::Overlay>>,
 }
 
 impl std::fmt::Debug for TaskHead {
@@ -244,6 +245,7 @@ impl TaskHead {
             summary: serde_json::from_value(doc.summary)?,
             seqs,
             view: None,
+            overlay: None,
         }))
     }
 
@@ -271,15 +273,20 @@ impl TaskHead {
         counter: Counter,
     ) -> Result<Vec<HistoryRow>> {
         let view = self.pinned()?;
-        read_rows(
+        let overlay = self.overlay.as_ref().filter(|o| o.touches(q.part));
+        let rows = read_rows(
             view.as_ref(),
             self.num,
             &self.task.id,
             &|seq| self.known_run(seq),
             q,
-            limit,
+            if overlay.is_some() { u32::MAX } else { limit },
             counter,
-        )
+        )?;
+        Ok(match overlay {
+            Some(overlay) => overlay.apply(q, rows, limit),
+            None => rows,
+        })
     }
 
     /// [`Self::query`] of rows that all belong to run `run`, checkpoint payloads included.
@@ -290,7 +297,7 @@ impl TaskHead {
         run: &str,
     ) -> Result<Vec<HistoryRow>> {
         let view = self.pinned()?;
-        read_rows(
+        let rows = read_rows(
             view.as_ref(),
             self.num,
             &self.task.id,
@@ -298,7 +305,16 @@ impl TaskHead {
             q,
             u32::MAX,
             counter,
-        )
+        )?;
+        Ok(self.overlaid_rows(q, rows))
+    }
+
+    /// `stored` (every stored row matching `q`) with this head's overlay applied.
+    pub(crate) fn overlaid_rows(&self, q: &RowQuery, stored: Vec<HistoryRow>) -> Vec<HistoryRow> {
+        match self.overlay.as_ref().filter(|o| o.touches(q.part)) {
+            Some(overlay) => overlay.apply(q, stored, u32::MAX),
+            None => stored,
+        }
     }
 
     /// The seq of the coding run `run`: the current one without a read, else one keyed read.
@@ -569,7 +585,7 @@ impl TaskHead {
     }
 
     /// The owner prefix of a run's own nested rows (`<run>/000000/`).
-    fn run_owner(&self, run: &str) -> Result<Option<String>> {
+    pub(crate) fn run_owner(&self, run: &str) -> Result<Option<String>> {
         Ok(self
             .run_seq(run)?
             .map(|seq| format!("{}/", child_key(seq, SELF))))
@@ -645,36 +661,6 @@ impl TaskHead {
                 None,
                 true,
             )?)?,
-        })
-    }
-
-    /// Every wait and decision of `run` in order, for the resume packet only.
-    pub fn emitted_obligations(&self, run: &str) -> Result<RunObligations> {
-        let _emitted = work::emitted();
-        let Some(owner) = self.run_owner(run)? else {
-            return Ok(RunObligations::default());
-        };
-        let rows = |kind: &str| -> Result<Vec<HistoryRow>> {
-            let view = self.pinned()?;
-            let rows = view
-                .rows(
-                    self.num,
-                    &RowQuery::under(TaskPart::RunObligation, format!("{owner}{kind}")),
-                    PageReq::first(u32::MAX),
-                )?
-                .items;
-            for row in &rows {
-                work::decoded(
-                    Counter::NestedRowDecodes,
-                    doc_bytes(&row.doc),
-                    Subject::Emitted,
-                );
-            }
-            Ok(rows)
-        };
-        Ok(RunObligations {
-            waits: Self::decode(rows("wait/")?)?,
-            decisions: Self::decode(rows("decision/")?)?,
         })
     }
 
