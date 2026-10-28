@@ -116,6 +116,13 @@ pub(super) fn final_obligations(
 /// observe cursor. Nothing an action takes reads any of it.
 pub(super) fn historic_run(index: usize, worktree: &FsPath) -> Run {
     let mut run = bare_historic(index, worktree);
+    run.gate = Some(
+        serde_json::from_value(json!({
+            "result": "pass", "at": fixture::now(), "sha": "0".repeat(40),
+            "commands": [], "log_sha256": "0".repeat(64),
+        }))
+        .unwrap(),
+    );
     let mut child = bare_historic(index, worktree);
     child.id = format!("{}-review-1", run.id);
     child.outcome = Some(corral_core::RunOutcome::Done);
@@ -170,6 +177,22 @@ pub(super) fn land_grown(store: &Store, id: &str) {
         .unwrap();
 }
 
+/// A report of earlier run `run`: a real snapshot under the store's artifacts, its digest and
+/// size recorded as an attach would.
+fn historic_artifact(store: &Store, task: &str, run: &str) -> corral_core::Artifact {
+    let bytes = format!("Earlier report of {task} {run}\n");
+    let sha = crate::verification::digest(bytes.as_bytes());
+    let path = format!("artifacts/{task}/{run}/{}-report.md", &sha[..8]);
+    let file = store.dir().join(&path);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, &bytes).unwrap();
+    serde_json::from_value(json!({
+        "run": run, "kind": "report", "title": format!("Earlier report {run}"), "path": path,
+        "source": file, "sha256": sha, "bytes": bytes.len(), "added": fixture::now(),
+    }))
+    .unwrap()
+}
+
 /// The growth [`grow`] claims is really there: every history family of `id` reaches `scale`.
 pub(super) fn grown_by(store: &Store, id: &str, scale: usize, acted: bool, children: bool) {
     let task = store.get(id).unwrap();
@@ -191,6 +214,24 @@ pub(super) fn grown_by(store: &Store, id: &str, scale: usize, acted: bool, child
                 nested(|r| r.obligations.decisions.len()),
             ),
             ("applied effects", nested(|r| r.inbox.effects_applied.len())),
+            (
+                "passed gate records",
+                historic
+                    .iter()
+                    .filter(|r| {
+                        r.gate
+                            .as_ref()
+                            .is_some_and(|g| g.result == corral_core::GateResult::Pass)
+                    })
+                    .count(),
+            ),
+            (
+                "earlier artifacts",
+                task.artifacts
+                    .iter()
+                    .filter(|a| a.run.starts_with('H') && store.dir().join(&a.path).is_file())
+                    .count(),
+            ),
         ] {
             assert!(count >= scale, "{id}: {family} {count} < {scale}");
         }
@@ -360,7 +401,12 @@ pub(super) fn grow(
         .update(id, |t| {
             if !acted || !t.runs.is_empty() {
                 let earlier: Vec<Run> = (0..scale).map(|i| historic_run(i, root)).collect();
+                let artifacts: Vec<_> = earlier
+                    .iter()
+                    .map(|run| historic_artifact(store, &t.id, &run.id))
+                    .collect();
                 t.runs.splice(0..0, earlier);
+                t.artifacts.splice(0..0, artifacts);
             }
             if let Some(current) = t.plan_runs.last().cloned() {
                 let earlier = (0..scale).map(|i| {
