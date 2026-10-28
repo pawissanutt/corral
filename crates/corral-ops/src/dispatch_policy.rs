@@ -15,7 +15,8 @@ mod tests;
 fn available(store: &Store, tasks: &[Task], credit: usize) -> usize {
     let limits = &store.config.limits;
     let usage = SlotUsage::from_tasks(tasks, limits);
-    let finishing = usize::from(limits.count_gates) * usage.gates
+    // A gate sharing its worker's slot occupies neither the pool nor the finishing reserve.
+    let finishing = usize::from(limits.count_gates) * usage.slot_gates()
         + usize::from(limits.count_reviews) * usage.reviews
         + tasks
             .iter()
@@ -23,6 +24,7 @@ fn available(store: &Store, tasks: &[Task], credit: usize) -> usize {
                 t.review_reservation.is_some_and(|work| match work {
                     corral_core::ReviewWork::Gate => {
                         limits.count_gates
+                            && !crate::slots::gate_shares_dispatch_slot(t)
                             && !t
                                 .current_run()
                                 .is_some_and(|r| r.gate.as_ref().is_some_and(|g| g.holds_slot()))

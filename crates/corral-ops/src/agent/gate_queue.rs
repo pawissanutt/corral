@@ -108,10 +108,17 @@ pub(super) fn execute(
     super::receipts::respond(ctx, &origin.binding.container, settled, replayed)
 }
 
-/// Called after sync drops its shared pane-inventory lease, before admitting new work.
+#[cfg(test)]
 pub(crate) fn advance(ctx: &Ctx) -> Result<()> {
+    advance_tasks(ctx, &ctx.store.list()?)
+}
+
+/// Called after sync drops its shared pane-inventory lease, before admitting new work, with the
+/// board the pass already read: every claim below rechecks its task under the store lock, and a
+/// gate queued after that read is admitted on the next pass.
+pub(crate) fn advance_tasks(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<()> {
     let mut queued = Vec::new();
-    for task in ctx.store.list()? {
+    for task in tasks {
         for run in &task.runs {
             if let Some(state) = run.agent_host.as_deref() {
                 queued.extend(

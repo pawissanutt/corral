@@ -23,10 +23,16 @@ impl SlotUsage {
             + self.reservations
             + if self.count_reviews { self.reviews } else { 0 }
             + if self.count_gates {
-                self.gates.saturating_sub(self.shared_gates)
+                self.slot_gates()
             } else {
                 0
             }
+    }
+
+    /// Live gates that hold a slot of their own: every live gate except a current coding run's,
+    /// which shares its worker's slot.
+    pub fn slot_gates(&self) -> usize {
+        self.gates.saturating_sub(self.shared_gates)
     }
 
     pub fn from_tasks(tasks: &[Task], limits: &Limits) -> Self {

@@ -358,7 +358,8 @@ fn running_gates_use_reserved_headroom_instead_of_double_reserving_it() {
     }
     // When automatic capacity is calculated.
     let free = free_slots(&fx.ctx).unwrap();
-    // Then the live gate uses one of the two reserved finishing slots.
+    // Then the live gate shares its worker's slot, so it consumes neither the pool nor the
+    // two reserved finishing slots: 5 - 2 workers - 2 reserved.
     assert_eq!(free, 1);
 }
 
