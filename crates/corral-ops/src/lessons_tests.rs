@@ -1,6 +1,7 @@
 use super::*;
 use crate::{LessonProposal, LessonRequest};
 use corral_core::{LessonEvidence, LessonScope, Status, Store};
+use jiff::Timestamp;
 
 fn workspace() -> (tempfile::TempDir, Ctx) {
     let tmp = tempfile::tempdir().unwrap();

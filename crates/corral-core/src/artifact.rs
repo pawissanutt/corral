@@ -58,7 +58,7 @@ impl Store {
             key: key.to_owned(),
             expected: before.map(|row| row.version),
             doc: Some(doc(&put.blob)),
-            updated: jiff::Timestamp::now(),
+            updated: crate::clock::now(),
         };
         self.backend()
             .apply(Operation::PutRecords(PutRecords {
@@ -189,7 +189,7 @@ impl Store {
         let holder = ProcessIdentity::current()?.owner();
         let id = format!("read-{holder}-{}", NEXT.fetch_add(1, Ordering::Relaxed));
         let expires =
-            jiff::Timestamp::now().checked_add(jiff::SignedDuration::try_from(READ_LEASE)?)?;
+            crate::clock::now().checked_add(jiff::SignedDuration::try_from(READ_LEASE)?)?;
         let lease = |op| {
             self.backend()
                 .apply(Operation::Lease(op))
@@ -234,7 +234,7 @@ impl Store {
             attempt: Some(attempt.to_owned()),
             path: rel.to_owned(),
         };
-        ScratchArea::open(self.backend(), &layout)?.register(new, jiff::Timestamp::now())
+        ScratchArea::open(self.backend(), &layout)?.register(new, crate::clock::now())
     }
 
     /// The scratch registration `id`, in any state.
@@ -246,7 +246,7 @@ impl Store {
     /// Closes open scratch registration `id`, making it eligible for reclaim.
     pub fn close_scratch(&self, id: &str) -> Result<()> {
         let layout = self.storage_layout()?;
-        ScratchArea::open(self.backend(), &layout)?.close(id, jiff::Timestamp::now())
+        ScratchArea::open(self.backend(), &layout)?.close(id, crate::clock::now())
     }
 }
 

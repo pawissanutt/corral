@@ -371,7 +371,7 @@ impl TaskMut for Task {
                 review.verdict = Some(crate::Verdict::Escalate);
                 review.notes = Some(reason.into());
                 review.pending_reply = None;
-                review.at = jiff::Timestamp::now();
+                review.at = crate::clock::now();
             }
         }
         Ok(())

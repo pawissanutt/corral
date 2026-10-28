@@ -12,6 +12,7 @@ use crate::runtime::Executable;
 
 mod assemble;
 mod batch;
+mod cleanup_panes;
 pub mod codec;
 mod conditions;
 pub mod db;
@@ -44,6 +45,7 @@ mod task_mut_task;
 mod task_ref_head;
 pub(crate) mod task_ref_task;
 mod write;
+pub use cleanup_panes::CleanupPane;
 pub use codec::{spec_revision, task_panes};
 pub use conditions::{SLIM_TEXT_BYTES, is_condition_kind};
 pub use db::{store_holders, try_exclusive_store_gate};
@@ -121,6 +123,7 @@ impl Store {
             .pinned_now
             .get()
             .copied()
+            .or_else(crate::clock::pinned)
             .unwrap_or_else(jiff::Timestamp::now)
     }
 
@@ -651,7 +654,7 @@ impl Store {
                         key: key.to_owned(),
                         expected: before.map(|row| row.version),
                         doc: Some(doc),
-                        updated: jiff::Timestamp::now(),
+                        updated: crate::clock::now(),
                     }],
                     events: Vec::new(),
                     reservations: Vec::new(),

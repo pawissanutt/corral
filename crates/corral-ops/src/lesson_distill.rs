@@ -154,7 +154,7 @@ pub fn lessons_distill(ctx: &Ctx, project: &str, profile: Option<&str>) -> Resul
         .store
         .try_lock("lessons-distill")?
         .context("another lesson distillation operation is active")?;
-    if let Some(pending) = lessons_due(ctx, Timestamp::now())?
+    if let Some(pending) = lessons_due(ctx, corral_core::clock::now())?
         .into_iter()
         .find(|d| d.project == project)
         .and_then(|d| d.pending)

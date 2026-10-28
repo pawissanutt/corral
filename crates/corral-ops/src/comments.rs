@@ -1,7 +1,6 @@
 //! Append-only owner context and optional delivery through the durable reply path.
 use anyhow::{Context, Result, bail};
 use corral_core::{CommentAuthor, Status, Task, TaskComment};
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -30,7 +29,7 @@ pub fn comment(ctx: &Ctx, id: &str, text: &str, author: CommentAuthor, send: boo
     };
     let note = TaskComment {
         author,
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         text: text.to_string(),
     };
     let task = ctx.store.update(id, |task| {
@@ -95,7 +94,7 @@ pub fn comment_request(
     effects::swept(ctx, origin, home.clone(), || {
         let note = TaskComment {
             author: CommentAuthor::Pm,
-            at: Timestamp::now(),
+            at: corral_core::clock::now(),
             text: text.to_string(),
         };
         let mut receipt = None;

@@ -427,6 +427,7 @@ impl Tx<'_> {
             num,
             parts,
             history: true,
+            demoted: false,
         });
         Ok(())
     }
@@ -494,8 +495,14 @@ impl Tx<'_> {
         let old_fields = task.head.header.fields.clone();
         let mut parts = BTreeSet::new();
         let mut history = false;
+        let mut demoted = false;
         for write in change.rows.iter().cloned().chain(extra) {
-            history |= write.container_history();
+            let stored = match &write {
+                RowWrite::Put(row) => self.row(num, row.part, &row.key).cloned(),
+                RowWrite::Delete { part, key } => self.row(num, *part, key).cloned(),
+            };
+            history |= write.container_history(stored.as_ref());
+            demoted |= write.container_demotion(stored.as_ref());
             match write {
                 RowWrite::Put(row) => {
                     parts.insert(row.part);
@@ -525,6 +532,7 @@ impl Tx<'_> {
             num,
             parts: parts.into_iter().collect(),
             history,
+            demoted,
         });
         for event in &change.events {
             self.append_event(event.clone())?;

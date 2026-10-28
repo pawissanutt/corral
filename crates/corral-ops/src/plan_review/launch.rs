@@ -5,7 +5,6 @@ use corral_core::{
     HerdrRef, OperatingActionKind, PlanReview, PlanReviewHead, PlanRunState, ProfileChoice,
     TaskHeadMut, TaskMut as _, TaskRef as _, Verdict,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use super::{close_plan_review, next_plan_attempt, prepared};
@@ -117,7 +116,7 @@ pub(super) fn review_with_origin(
     }
     let plan_id = selected.id.clone();
     let previous = selected.clone();
-    let at = Timestamp::now();
+    let at = corral_core::clock::now();
     let attempt = retained.as_ref().map_or_else(
         || format!("PR{}", reviews + 1),
         |retained| retained.review.id.clone(),

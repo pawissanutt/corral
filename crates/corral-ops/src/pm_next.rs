@@ -592,7 +592,7 @@ pub(crate) fn enrich(ctx: &Ctx, mut action: PmAction, allow_lessons: bool) -> Re
             action.kind,
             PmActionKind::Wait | PmActionKind::IdeaPromotion | PmActionKind::Dispatch
         )
-        && let Some(due) = crate::lessons_due(ctx, jiff::Timestamp::now())?
+        && let Some(due) = crate::lessons_due(ctx, corral_core::clock::now())?
             .into_iter()
             .find(|d| d.pending.is_none() && !d.reasons.is_empty())
     {

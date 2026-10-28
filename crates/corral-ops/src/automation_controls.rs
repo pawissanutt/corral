@@ -82,7 +82,7 @@ pub fn automation_confirm(
         owner_digest == preview.id,
         "confirmation digest does not match the exact preview"
     );
-    let config = store.confirm_operating_policy(preview, "owner", jiff::Timestamp::now())?;
+    let config = store.confirm_operating_policy(preview, "owner", corral_core::clock::now())?;
     let _owner = store.attribute(corral_core::Actor::Owner);
     store
         .log_event(

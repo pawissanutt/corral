@@ -4,7 +4,6 @@
 //! the superseded reviewer's pane first; the requesting reviewer never launches it itself.
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{ReviewCapability, ReviewRecord, Run, RunOutcome, Status, Task, Verdict};
-use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::json;
 
@@ -129,7 +128,7 @@ pub fn request_stronger_review(
         if let Some(route) = review.route.as_mut() {
             route.stronger_request = Some(notes.trim().to_string());
         }
-        supersede_review(ctx, parent, Timestamp::now());
+        supersede_review(ctx, parent, corral_core::clock::now());
         let superseded = parent
             .review_runs
             .last()

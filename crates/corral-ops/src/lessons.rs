@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use corral_core::{Lesson, Run, Task};
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -44,7 +43,7 @@ pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Less
         harness,
         &files,
         ctx.store.config.lessons.top,
-        Timestamp::now(),
+        corral_core::clock::now(),
     ))
 }
 

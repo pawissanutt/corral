@@ -1,7 +1,6 @@
 //! Re-admit an exact never-submitted attempt, not a replacement gate or review child.
 use anyhow::{Context, Result, ensure};
 use corral_core::{OperatingOrigin, ProfileChoice};
-use jiff::Timestamp;
 use serde_json::json;
 
 use super::{Kind, Pending, ReviewLaunch, submission};
@@ -256,7 +255,7 @@ impl ReviewLaunch<'_> {
                     .review_runs
                     .last_mut()
                     .context("child missing")?;
-                child.started = Timestamp::now();
+                child.started = corral_core::clock::now();
                 child.pending_reply = None;
                 ctx.store
                     .log_event(Some(&task.id), "review_started", started)?;

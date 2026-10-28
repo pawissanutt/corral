@@ -4,7 +4,6 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use jiff::Timestamp;
 
 use super::Store;
 use crate::{Origin, Status, Task};
@@ -119,7 +118,7 @@ pub(super) fn draft_task(
     status: Status,
     body: &str,
 ) -> Task {
-    let now = Timestamp::now();
+    let now = crate::clock::now();
     Task {
         dashboard: None,
         origin: Some(if status == Status::Idea {

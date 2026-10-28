@@ -226,13 +226,13 @@ fn done_inner(
             }
         }
         if let Some(r) = t.current_run_mut() {
-            crate::reviewer::supersede_review(ctx, r, Timestamp::now());
+            crate::reviewer::supersede_review(ctx, r, corral_core::clock::now());
             r.autopilot = None;
             r.blocked_excerpt = None;
             r.idle_since = None;
             r.completion.audit = Some(audit.clone());
             r.summary = Some(summary.to_string());
-            r.ended = Some(Timestamp::now());
+            r.ended = Some(corral_core::clock::now());
             r.outcome = Some(RunOutcome::Done);
             crate::usage::collect(r, &ctx.store);
         }
@@ -520,7 +520,7 @@ pub(crate) fn approve_landed(
 ) -> Result<(String, String)> {
     ctx.store.check_runtime()?;
     // `approved` is logged after the merge; record when this approval began.
-    let started = Timestamp::now();
+    let started = corral_core::clock::now();
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
@@ -669,7 +669,7 @@ pub(crate) fn approve_landed(
         // A legacy/concurrent change request may have reopened the run. Landing
         // owns the terminal transition: never persist Done with a working run.
         let current = t.current_run_mut().context("run disappeared before finalization")?;
-        let now = Timestamp::now();
+        let now = corral_core::clock::now();
         crate::reviewer::supersede_review(ctx, current, now);
         current.ended.get_or_insert(now);
         current.outcome = Some(RunOutcome::Done);

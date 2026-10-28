@@ -306,7 +306,10 @@ fn review_run_origin(
                 .as_ref()
                 .and_then(|g| g.identity.as_ref())
                 .map(|i| i.attempt.as_str())
-                .unwrap_or(&format!("review-{}", Timestamp::now().as_nanosecond())),
+                .unwrap_or(&format!(
+                    "review-{}",
+                    jiff::Timestamp::now().as_nanosecond()
+                )),
         )?,
     };
     let selected = crate::review_contracts::implementation_route(
@@ -350,7 +353,7 @@ fn review_run_origin(
         reviewer: name.clone(),
         notes: None,
         sha: sha.clone(),
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         pane: None,
     };
     let review_id = launch
@@ -528,7 +531,7 @@ fn review_run_origin(
                     }
                 }
                 Err(_) => {
-                    finish_review(ctx, r, Timestamp::now());
+                    finish_review(ctx, r, corral_core::clock::now());
                     if r.review.as_ref().is_some_and(|r| r.verdict.is_none()) {
                         r.review = None;
                     }
@@ -764,7 +767,7 @@ fn verdict_inner(
         .as_ref()
         .and_then(|g| g.identity.as_ref())
         .map(|i| i.attempt.clone())
-        .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
+        .unwrap_or_else(|| format!("owner-{}", jiff::Timestamp::now().as_nanosecond()));
     let record = started.clone().unwrap_or(ReviewRecord {
         evidence_digest: Some(verification::evidence_digest(&run)?),
         identity: Some(verification::review_identity(ctx, &task, &run, &attempt)?),
@@ -773,7 +776,7 @@ fn verdict_inner(
         reviewer: OWNER.to_string(),
         notes: None,
         sha: head.clone(),
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         pane: None,
         route: None,
     });
@@ -834,7 +837,7 @@ fn verdict_inner(
             .as_ref()
             .and_then(|g| g.identity.as_ref())
             .map(|i| i.attempt.clone())
-            .unwrap_or_else(|| format!("owner-{}", Timestamp::now().as_nanosecond()));
+            .unwrap_or_else(|| format!("owner-{}", jiff::Timestamp::now().as_nanosecond()));
         record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
     }
     record_verdict(

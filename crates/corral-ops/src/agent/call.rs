@@ -381,7 +381,7 @@ impl CallResponse {
                         "version": AGENT_RECORD_VERSION, "request_id": request_id,
                         "op": AgentOp::ReceiptLookup.as_str(), "identity": identity,
                         "state": "committed", "stored": false, "result": {"found": false},
-                        "lookup": lookup, "at": jiff::Timestamp::now(),
+                        "lookup": lookup, "at": corral_core::clock::now(),
                     }),
                 }
             }
@@ -399,7 +399,7 @@ impl CallResponse {
                 json!({
                     "version": AGENT_RECORD_VERSION, "request_id": request_id, "op": op,
                     "identity": identity, "state": "rejected", "stored": false,
-                    "result": result, "at": jiff::Timestamp::now(),
+                    "result": result, "at": corral_core::clock::now(),
                 })
             }
         })
@@ -524,7 +524,7 @@ fn ask(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     };
     let origin = admitted.origin.clone();
     let response = receipts::commit(ctx, &admitted, |state, _| {
-        let now = jiff::Timestamp::now();
+        let now = corral_core::clock::now();
         let question = questions::open(state, &container, &origin, payload, route, now)?;
         Ok(Commit {
             result: json!({
@@ -557,7 +557,7 @@ fn withdraw(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             state,
             &container,
             &payload,
-            jiff::Timestamp::now(),
+            corral_core::clock::now(),
         )?;
         questions::settle_needs_me(task, &container);
         Ok(Commit {

@@ -6,7 +6,6 @@ use corral_core::{
     HerdrRef, OperatingActionKind, PlanRun, PlanRunState, ProfileChoice, Status,
     SubmissionDisposition, Task, TaskHead, TaskRef as _,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::dispatch::Admission;
@@ -171,8 +170,12 @@ pub(crate) fn dispatch(
                 return Err(error);
             }
             let claimed = claimed.shell_task()?;
-            if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())?
-            {
+            if crate::plan_lifecycle::fail(
+                ctx,
+                &claimed,
+                &format!("{error:#}"),
+                corral_core::clock::now(),
+            )? {
                 close_planner(ctx, &ctx.store.get(&task.id)?)?;
             }
             Err(error)
@@ -348,7 +351,7 @@ fn launch(
                         && run.rounds == claim.previous_round
                         && run.state != PlanRunState::Cancelled
                 }) {
-                    run.ended = Some(Timestamp::now());
+                    run.ended = Some(corral_core::clock::now());
                 }
                 Ok(())
             })?;
@@ -524,7 +527,7 @@ pub(crate) fn revise(
         run: run.id.clone(),
         // Each owner request is fresh consent, never a replay of an older bound action.
         attempt: if owner {
-            let nonce = Timestamp::now().as_nanosecond();
+            let nonce = jiff::Timestamp::now().as_nanosecond();
             format!("owner-revision-{round}-{}-{nonce}", std::process::id())
         } else {
             format!("revision-{round}")
@@ -609,7 +612,12 @@ pub(crate) fn revise(
             }
             return Err(error);
         }
-        if crate::plan_lifecycle::fail(ctx, &shell, &format!("{error:#}"), Timestamp::now())? {
+        if crate::plan_lifecycle::fail(
+            ctx,
+            &shell,
+            &format!("{error:#}"),
+            corral_core::clock::now(),
+        )? {
             close_planner(ctx, &ctx.store.get(&task.id)?)?;
         }
         return Err(error);

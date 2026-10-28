@@ -16,12 +16,18 @@ pub(crate) mod fixture {
 }
 #[path = "../tests/support/action_budget.rs"]
 mod action_budget;
+#[path = "../tests/support/action_budget_checks.rs"]
+mod action_budget_checks;
+#[path = "../tests/support/action_budget_fixture.rs"]
+mod action_budget_fixture;
 #[path = "../tests/support/action_heads.rs"]
 mod action_heads;
 #[path = "../tests/support/submission_aggregate.rs"]
 mod aggregate;
 #[path = "../tests/support/submission_path_crashes.rs"]
 mod crashes;
+#[path = "../tests/support/launch_resume.rs"]
+mod launch_resume;
 #[path = "../tests/support/submission_refusals.rs"]
 mod refusals;
 

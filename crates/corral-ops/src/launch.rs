@@ -4,7 +4,6 @@ use corral_core::{
     HerdrRef, LaunchStage, OperatingActionKind, Run, RunHead, RunOutcome, Status, Task, TaskHead,
     TaskRef as _,
 };
-use jiff::Timestamp;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -255,10 +254,9 @@ fn advance(
             Ok(())
         })?;
     }
-    // The new run's own record is bounded: at most two restored checkpoints and its switches.
-    let run = task.current_run_record()?.context("launch run missing")?;
-    let mut view = task.shell_task()?;
-    view.runs = vec![run.clone()];
+    // The command reads the run's scalars only: the projection, never its restored records.
+    let view = task.shell_task()?;
+    let run = view.current_run().context("launch run missing")?.clone();
     let pane = &run.herdr.as_ref().context("launch pane missing")?.pane_id;
     let name = format!("{} {}", task.id, task.title);
     ctx.herdr
@@ -372,8 +370,13 @@ fn finish(ctx: &Ctx, task: &TaskHead, uncertain: bool) -> Result<DispatchOutcome
         .launch
         .as_ref()
         .and_then(|claim| claim.approved_plan.clone());
-    // The new run's own record: its switches are announced below.
-    let run = task.current_run_record()?.context("launch run missing")?;
+    // The run's scalars and its own switches, announced below; never its restored records.
+    let run = task
+        .shell_task()?
+        .current_run()
+        .context("launch run missing")?
+        .clone();
+    let switches = task.current_run_switches()?;
     let pane = run
         .herdr
         .as_ref()
@@ -432,7 +435,7 @@ fn finish(ctx: &Ctx, task: &TaskHead, uncertain: bool) -> Result<DispatchOutcome
                 json!({"run": run.id, "reason": "dispatch submission uncertain; not replayed"}),
             )?;
         }
-        for switch in &run.switches {
+        for switch in &switches {
             ctx.store.log_event(
                 Some(&t.id),
                 "profile_switched",
@@ -476,7 +479,7 @@ pub(crate) fn cancel(ctx: &Ctx, task: &Task) -> Result<()> {
     ctx.store.update(&task.id, |t| {
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Abandoned);
-            run.ended = Some(Timestamp::now());
+            run.ended = Some(corral_core::clock::now());
         }
         t.launch = None;
         ctx.store.log_event(
@@ -490,7 +493,13 @@ pub(crate) fn cancel(ctx: &Ctx, task: &Task) -> Result<()> {
 }
 
 fn prepare_prompt(ctx: &Ctx, task: &TaskHead) -> Result<()> {
-    let mut run = task.current_run_record()?.context("launch has no run")?;
+    // The new run's scalars: the packet reads its identity, and its progress and restored
+    // checkpoints come from the source run (a recovered launch keeps the ones it wrote).
+    let mut run = task
+        .shell_task()?
+        .current_run()
+        .context("launch has no run")?
+        .clone();
     // The source task of the resume packet: the head without the new run, whose current run is
     // the run before it. Both packets of one launch read `task`'s view, taken before the
     // restoration below, as one pre-update clone did.

@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::{ArtifactKind, PlanRunState, Status, Task, Verdict};
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -107,7 +106,7 @@ pub(crate) fn record(ctx: &Ctx, task: &str, run: &str, title: &str, reason: &str
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let path = dir.join(format!(
         "{task}-{run}-{}.log",
-        Timestamp::now().as_millisecond()
+        corral_core::clock::now().as_millisecond()
     ));
     std::fs::write(&path, format!("{task} {run}: {reason}\n"))
         .with_context(|| format!("writing {}", path.display()))?;
@@ -158,7 +157,7 @@ pub(crate) fn plan_review(ctx: &Ctx, task: &Task) -> Result<Option<crate::Change
         r.verdict = Some(Verdict::Escalate);
         r.notes = Some(format!("Review launch failed: {reason}"));
         r.pending_reply = None;
-        r.at = Timestamp::now();
+        r.at = corral_core::clock::now();
         let run_id = p.run.clone();
         if let Some(run) = t
             .plan_runs

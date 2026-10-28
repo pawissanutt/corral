@@ -8,16 +8,11 @@ use serde_json::json;
 
 use crate::{Ctx, DispatchOpts};
 
+mod admission;
+pub(crate) use admission::enqueue_ready;
+
 /// Enqueue only: no Git or herdr side effects. Explicit enqueue authorizes a task.
 pub fn enqueue(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<Task> {
-    enqueue_with(ctx, id, opts, false)
-}
-
-pub(crate) fn enqueue_ready(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<Task> {
-    enqueue_with(ctx, id, opts, true)
-}
-
-fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Result<Task> {
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
@@ -49,19 +44,14 @@ fn enqueue_with(ctx: &Ctx, id: &str, opts: &DispatchOpts, admission: bool) -> Re
         crate::approved_plan(ctx, &task)?
     };
     let mut plan = resolve_plan(ctx, &task, opts)?;
-    if !admission {
-        let action = crate::operating::start_identity(&task, planning);
-        let authorization =
-            crate::operating::authorize_start(ctx, action, crate::operating::Origin::Owner, false)?;
-        plan.authorization = Some(authorization.id);
-    }
+    let action = crate::operating::start_identity(&task, planning);
+    let authorization =
+        crate::operating::authorize_start(ctx, action, crate::operating::Origin::Owner, false)?;
+    plan.authorization = Some(authorization.id);
     let (task, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
         check_snapshot(ctx, store, &task, current)?;
         if !planning {
             crate::dispatch::check_plan(ctx, current, &plan.route, approved.as_ref())?;
-        }
-        if admission && !authorized_ready(store, current) {
-            bail!("{} is not authorized Ready work", current.id);
         }
         if !matches!(
             current.status,

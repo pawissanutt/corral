@@ -230,9 +230,9 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             "eligibility": {"status": "backlog", "depends_on_done": task.depends_on},
             "reason": "auto_backlog: dependency-ready backlog, priority then oldest",
         });
-        // The admission compares its snapshot with the stored task as a whole.
-        let task = ctx.store.get(&task.id)?;
-        dispatch_one(ctx, &task, inputs, now, &mut changes)?;
+        // The admission compares its snapshot with the stored head as a whole.
+        let head = ctx.store.head(&task.id)?;
+        dispatch_one(ctx, &head, inputs, now, &mut changes)?;
     }
     // Recompute after each promotion: a newly running task may conflict with the next idea.
     let mut considered = std::collections::BTreeSet::new();
@@ -330,7 +330,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                     note: "automatically admitted promoted Idea to Ready".into(),
                     stage: None,
                 });
-                dispatch_one(ctx, &task, inputs, now, &mut changes)?;
+                dispatch_one(ctx, &ctx.store.head(&task.id)?, inputs, now, &mut changes)?;
             }
             Err(error) => report_failure(ctx, &task.id, &error)?,
         }
@@ -340,7 +340,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
 
 fn dispatch_one(
     ctx: &Ctx,
-    task: &Task,
+    task: &corral_core::TaskHead,
     inputs: serde_json::Value,
     now: Timestamp,
     changes: &mut Vec<Change>,
@@ -349,12 +349,12 @@ fn dispatch_one(
         if task.status == Status::Ready {
             return crate::dispatch::dispatch_automatic(ctx, &task.id, inputs, now);
         }
-        let (ready, ()) = ctx.store.dispatch_update(&task.id, |store, current| {
-            crate::queue::check_snapshot(ctx, store, task, current)?;
+        let (ready, ()) = ctx.store.dispatch_update_head(&task.id, |store, current| {
+            crate::queue::check_snapshot_head(ctx, store, task, current.head())?;
             crate::operating::require(
                 store,
-                current,
-                if crate::plan_dispatch::needed(ctx, current, &crate::DispatchOpts::default()) {
+                &*current,
+                if crate::plan_dispatch::needed(ctx, &*current, &crate::DispatchOpts::default()) {
                     OperatingActionKind::Plan
                 } else {
                     OperatingActionKind::Dispatch
@@ -364,13 +364,15 @@ fn dispatch_one(
                 store: store.clone(),
                 ..ctx.clone()
             };
+            // The admission checks read head fields and the current run's scalars only.
+            let shell = corral_core::TaskRef::shell_task(&*current)?;
             if current.status != Status::Backlog
                 || current.dispatch_hold
                 || !store
                     .config
                     .ready_project_allowed(current.project.as_deref())
-                || crate::queue::blocked_reason(&check_ctx, store, current, false)?.is_some()
-                || automatic_capacity_reason(store, current)?.is_some()
+                || crate::queue::blocked_reason(&check_ctx, store, &shell, false)?.is_some()
+                || automatic_capacity_reason(store, &shell)?.is_some()
             {
                 bail!("Backlog task no longer qualifies for automatic Ready admission");
             }
@@ -431,7 +433,7 @@ pub struct AutomaticDispatchStatus {
 }
 
 pub fn automatic_dispatch_status(ctx: &Ctx) -> Result<AutomaticDispatchStatus> {
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     Ok(AutomaticDispatchStatus {
         free_slots: free_slots(ctx)?,
         promotions_today: promotions_today(&dispatch_events_today(&ctx.store, now)?, now),

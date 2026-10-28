@@ -1,7 +1,6 @@
 //! Audited acknowledgement of a reply already delivered outside corral.
 use anyhow::{Context, Result, ensure};
 use corral_core::{CommentAuthor, ReceiptOutcome, ResumeDelivery, ResumeReceipt, Status, Task};
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -124,7 +123,7 @@ fn acknowledge(
             run.idle_since = None;
             run.idle_no_report = false;
             if let Some(decision) = run.obligations.decisions.iter_mut().find(|d| d.pending()) {
-                let now = Timestamp::now();
+                let now = corral_core::clock::now();
                 let receipt = ResumeReceipt {
                     version: 1,
                     id: decision.request.id.clone(),

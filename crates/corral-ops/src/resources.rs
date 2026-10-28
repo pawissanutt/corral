@@ -136,7 +136,7 @@ fn evaluate(ctx: &Ctx, now: Timestamp) -> Result<ResourceState> {
 }
 
 pub fn admission(ctx: &Ctx) -> Result<Option<String>> {
-    Ok(observe(ctx, Timestamp::now())?
+    Ok(observe(ctx, corral_core::clock::now())?
         .reason
         .map(|reason| format!("waiting: machine busy ({reason})")))
 }
@@ -147,7 +147,7 @@ pub fn status(ctx: &Ctx) -> Result<ResourceState> {
 
 /// Sample against the last persisted latch without mutating the store or creating locks.
 pub fn read_status(ctx: &Ctx) -> Result<ResourceState> {
-    evaluate(ctx, Timestamp::now())
+    evaluate(ctx, corral_core::clock::now())
 }
 
 pub fn read_admission(ctx: &Ctx) -> Result<Option<String>> {

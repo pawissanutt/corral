@@ -4,7 +4,6 @@ use corral_core::{
     AutoStage, AutopilotState, ProfileChoice, RetryPlan, RunOutcome, Status, TaskHead, TaskHeadMut,
     TaskRef as _,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use super::{Admission, DispatchOpts, DispatchOutcome, dispatch_with};
@@ -66,7 +65,7 @@ pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<Disp
                     stage: AutoStage::Changes,
                     reason: Some(text.to_string()),
                     sha: worktree_head(&run.worktree),
-                    at: Timestamp::now(),
+                    at: corral_core::clock::now(),
                 });
             }
         },
@@ -219,7 +218,7 @@ pub(super) fn retry_with(
         mark(t);
         if let Some(run) = t.current_run_mut() {
             run.outcome = Some(RunOutcome::Superseded);
-            run.ended = Some(Timestamp::now());
+            run.ended = Some(corral_core::clock::now());
             run.retry = Some(plan.clone());
             if run
                 .autopilot
@@ -247,7 +246,7 @@ pub(super) fn retry_with(
                         stage: AutoStage::Changes,
                         reason,
                         sha: worktree_head(&run.worktree),
-                        at: Timestamp::now(),
+                        at: corral_core::clock::now(),
                     });
                 }
             }
@@ -287,7 +286,7 @@ pub(super) fn retry_with(
             &opts,
             Admission::Automatic {
                 inputs,
-                at: Timestamp::now(),
+                at: corral_core::clock::now(),
             },
         )
     } else {

@@ -11,7 +11,6 @@ use corral_core::backend::{
 };
 use corral_core::blob_ref::BlobRef;
 use corral_core::{CandidateIdentity, GateOutcome, GateResult, ScratchReclaim, Store};
-use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::Ctx;
@@ -156,7 +155,7 @@ pub(crate) fn put_start(ctx: &Ctx, start: &Start<'_>) -> Result<Option<StagedSta
         failed_cmd: None,
         log: None,
         result_doc: None,
-        started: Timestamp::now(),
+        started: corral_core::clock::now(),
         ended: None,
     };
     reservations.extend(context.map(|put| put.reservation));

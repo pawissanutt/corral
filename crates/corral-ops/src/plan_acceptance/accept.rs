@@ -7,7 +7,6 @@ use corral_core::{
     OperatingActionKind, PlanDeliveryTarget, Status, Store, Task, TaskHead, TaskMut as _,
     TaskRef as _,
 };
-use jiff::Timestamp;
 use serde_json::json;
 
 use super::{capture, current_head, ensure_fresh, evidence_failures_head, gate, scenario_failures};
@@ -91,7 +90,7 @@ pub fn plan_accept(
         id,
         AGGREGATE_RUN,
         OperatingActionKind::AcceptAggregate,
-        &format!("{}-{}", chosen.id, Timestamp::now().as_nanosecond()),
+        &format!("{}-{}", chosen.id, jiff::Timestamp::now().as_nanosecond()),
     );
     action.candidate = Some(chosen.identity.clone());
     let origin = if automatic {
@@ -109,7 +108,7 @@ pub fn plan_accept(
             "owner"
         }
         .into(),
-        at: Timestamp::now(),
+        at: corral_core::clock::now(),
         strategy,
         before: chosen.code.then(|| main.clone()),
         after: chosen.code.then(|| head.clone()),

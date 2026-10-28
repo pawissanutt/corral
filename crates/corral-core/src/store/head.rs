@@ -603,9 +603,44 @@ impl TaskHead {
 
     /// The owner prefix of a run's own nested rows (`<run>/000000/`).
     pub(crate) fn run_owner(&self, run: &str) -> Result<Option<String>> {
-        Ok(self
-            .run_seq(run)?
-            .map(|seq| format!("{}/", child_key(seq, SELF))))
+        // A run id's ordinal is fixed within one pinned view: one lookup per view serves every
+        // keyed read of that run (a resume packet asks once per candidate). Entries hold the
+        // view weakly, so another store's or a dropped view's entry never matches.
+        type Entry = (
+            std::sync::Weak<Mutex<Box<dyn ReadView + Send>>>,
+            u64,
+            String,
+            Option<usize>,
+        );
+        thread_local! {
+            static OWNERS: std::cell::RefCell<Vec<Entry>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let view = self.view.as_ref().filter(|_| self.overlay.is_none());
+        let hit = view.and_then(|view| {
+            OWNERS.with(|owners| {
+                owners.borrow().iter().find_map(|(weak, num, id, seq)| {
+                    (*num == self.num.0
+                        && id == run
+                        && weak.upgrade().is_some_and(|live| Arc::ptr_eq(&live, view)))
+                    .then_some(*seq)
+                })
+            })
+        });
+        let seq = match hit {
+            Some(seq) => seq,
+            None => {
+                let seq = self.run_seq(run)?;
+                if let Some(view) = view {
+                    OWNERS.with(|owners| {
+                        let mut owners = owners.borrow_mut();
+                        owners.retain(|(weak, ..)| weak.strong_count() > 0);
+                        owners.push((Arc::downgrade(view), self.num.0, run.to_owned(), seq));
+                    });
+                }
+                seq
+            }
+        };
+        Ok(seq.map(|seq| format!("{}/", child_key(seq, SELF))))
     }
 
     fn obligation_rows(

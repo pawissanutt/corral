@@ -5,7 +5,6 @@ use corral_core::agent::{
     AgentTurn, ClosureReason, GenerationFence, HostHealth, ReceiptEffect, TURNS_MAX, TurnOrigin,
     TurnOriginKind,
 };
-use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -120,7 +119,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         class,
     } = payload;
     receipts::commit(ctx, &admitted, move |state, closure| {
-        let now = Timestamp::now();
+        let now = corral_core::clock::now();
         let index = state
             .turns
             .iter()

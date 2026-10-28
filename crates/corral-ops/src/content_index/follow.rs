@@ -30,9 +30,11 @@ use crate::artifact_storage::{ARTIFACT_KEYS, KeyDoc, task_of};
 #[derive(Debug, Default)]
 pub(crate) struct TaskDelta {
     pub parts: BTreeSet<TaskPart>,
-    /// A non-current container row was written since the cursor (a demotion or a history
-    /// edit); without one only the current containers' documents can have changed.
+    /// A container's history was edited since the cursor; without one only the current
+    /// containers' documents and a demoted one's can have changed.
     pub history: bool,
+    /// A current container was demoted since the cursor.
+    pub demoted: bool,
 }
 
 /// What changed after the index's cursor.
@@ -191,8 +193,26 @@ fn task(
     .iter()
     .any(|part| changed.parts.contains(part))
         && !changed.history
+        && !(changed.demoted
+            && (changed.parts.contains(&TaskPart::Plan)
+                || changed.parts.contains(&TaskPart::PlanReview)))
     {
         current_records(ident, &head, documents, records);
+        // A run demoted since the cursor keeps its last state: only it, the run before the
+        // current one, is re-derived with its children.
+        if changed.demoted
+            && let Some(previous) = corral_core::TaskRef::previous_run_head(&head)?
+        {
+            documents.remove(&format!("{id}:{}:summary", previous.id));
+            documents.remove(&format!("{id}:{}:review", previous.id));
+            run_records(ident, &previous, &previous.id, records);
+            for (i, child) in head.review_children(&previous.id)?.iter().enumerate() {
+                let key = format!("{}:reviewer:{i}", previous.id);
+                documents.remove(&format!("{id}:{key}:summary"));
+                documents.remove(&format!("{id}:{key}:review"));
+                run_records(ident, child, &key, records);
+            }
+        }
     } else if [
         TaskPart::Run,
         TaskPart::ReviewRun,

@@ -129,7 +129,7 @@ impl Store {
         task.approved_scope_history.push(ApprovedScopeRevision {
             revision: expected_revision,
             approved_scope: task.approved_scope.clone(),
-            superseded_at: jiff::Timestamp::now(),
+            superseded_at: crate::clock::now(),
         });
         task.approved_scope = Some(scope);
         task.approved_scope_revision = revision;

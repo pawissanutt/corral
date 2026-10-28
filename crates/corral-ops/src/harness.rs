@@ -98,7 +98,7 @@ pub fn harness_report(ctx: &Ctx, refresh: bool) -> Result<HarnessReport> {
     }
     let path = ctx.store.cache_root()?.join(HARNESS_CACHE_FILE);
     let report = HarnessReport {
-        detected_at: Timestamp::now(),
+        detected_at: corral_core::clock::now(),
         harnesses: detect_harnesses(config),
     };
     write_cache(&path, &report)?;

@@ -161,7 +161,7 @@ pub(crate) fn prepare(
         base_before: base_before.into(),
         landed_sha: sha.into(),
         policy_digest,
-        created: Timestamp::now(),
+        created: corral_core::clock::now(),
         landed: false,
         abandoned: false,
         notified: false,
@@ -260,7 +260,7 @@ fn reconcile_running(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result<
         op.hooks[i].reason =
             Some("reconciled from installed executable identity; exit unknown".into());
         if let Some(attempt) = op.hooks[i].attempts.last_mut() {
-            attempt.finished = Some(Timestamp::now());
+            attempt.finished = Some(corral_core::clock::now());
         }
     } else {
         op.hooks[i].state = HookState::Uncertain;
@@ -304,7 +304,7 @@ fn run_locked(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
             op.hooks[i].reason = Some(format!("{error:#}"));
             if let Some(attempt) = op.hooks[i].attempts.last_mut() {
                 if !interrupted {
-                    attempt.finished = Some(Timestamp::now());
+                    attempt.finished = Some(corral_core::clock::now());
                 }
                 attempt.error = Some(format!("{error:#}"));
             }

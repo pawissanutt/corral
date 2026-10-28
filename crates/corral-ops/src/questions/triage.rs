@@ -496,7 +496,7 @@ pub fn answer(
         Some(revision),
         &actor,
         by,
-        Timestamp::now(),
+        corral_core::clock::now(),
         |ctx, task, current, now| {
             validate_answer(current, &input)?;
             let superseding = matches!(
@@ -613,7 +613,7 @@ pub fn escalate(
         Some(revision),
         &actor,
         by,
-        Timestamp::now(),
+        corral_core::clock::now(),
         |_, _, current, now| {
             if let Some(note) = &note {
                 bounded(note, NOTE_MAX_BYTES, "note")?;
@@ -663,7 +663,7 @@ pub fn cancel(
         Some(revision),
         &actor,
         by,
-        Timestamp::now(),
+        corral_core::clock::now(),
         |_, _, current, now| {
             bounded(reason, NOTE_MAX_BYTES, "reason")?;
             if !current.state.pending() {
@@ -705,7 +705,7 @@ pub fn deadline(
         Some(revision),
         &actor,
         QuestionActor::Owner,
-        Timestamp::now(),
+        corral_core::clock::now(),
         |_, _, current, now| {
             bounded(instruction, ANSWER_TEXT_MAX_BYTES, "instruction")?;
             if !current.state.pending() {

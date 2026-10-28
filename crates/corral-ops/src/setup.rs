@@ -174,7 +174,7 @@ pub fn setup_propose(
     input: &SetupProposalInput,
     expected_revision: u64,
 ) -> Result<ProfileSetupRecord> {
-    setup_propose_at(store, input, expected_revision, Timestamp::now())
+    setup_propose_at(store, input, expected_revision, corral_core::clock::now())
 }
 
 /// [`setup_propose`] against an injected wall clock.
@@ -197,7 +197,7 @@ pub fn setup_propose_draft(
         &draft.input,
         Some(draft),
         expected_revision,
-        Timestamp::now(),
+        corral_core::clock::now(),
     )
 }
 

@@ -130,7 +130,7 @@ pub fn stats(store: &Store, by: StatsBy, since: Option<Timestamp>) -> Result<Vec
     crate::usage::collect_missing(store, since)?;
     let tasks = store.list()?;
     let events = store.events_shared()?;
-    let now = as_of(Timestamp::now(), &tasks, &events);
+    let now = as_of(corral_core::clock::now(), &tasks, &events);
     collect_stats(&tasks, &events, by, since, now)
 }
 

@@ -94,7 +94,7 @@ pub fn decide_idea(
         ctx.store.update(&into.id, |target| {
             let note = corral_core::TaskComment {
                 author: CommentAuthor::Pm,
-                at: jiff::Timestamp::now(),
+                at: corral_core::clock::now(),
                 text: format!(
                     "Merged idea {} (`{}`): {reason}",
                     task.id,

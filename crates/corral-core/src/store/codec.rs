@@ -309,6 +309,7 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
     for (key, finding) in crate::task_findings(task) {
         rows.put(super::head_keyed::finding_row(key, &finding)?);
     }
+    super::cleanup_panes::derive_ledger(&mut rows);
     Ok(Split {
         fields: task_fields(task)?,
         doc: head_doc(task)?,

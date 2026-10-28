@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 
 use super::RunHead;
 use super::assemble::{TaskRows, run_value};
-use super::codec::{Rows, SELF, seq, split_run};
+use super::codec::{Rows, SELF, child_key, seq, split_run};
 use super::head::{TaskHead, last_ordinal, projection};
 use super::head_mut::{TaskHeadMut, split_panes_of_run};
 use crate::Run;
@@ -72,6 +72,22 @@ fn assemble(s: usize, rows: &RowMap) -> Result<Run> {
 }
 
 impl TaskHead {
+    /// The current coding run's own profile switches (not its children's), keyed under that
+    /// run: a launch announces them without assembling the run.
+    ///
+    /// # Errors
+    /// Returns read or decode errors.
+    pub fn current_run_switches(&self) -> Result<Vec<crate::ProfileSwitch>> {
+        let (Some(s), Some(run)) = (self.seqs.run, self.current_run.as_ref()) else {
+            return Ok(Vec::new());
+        };
+        let q = RowQuery::under(TaskPart::RunSwitch, format!("{}/", child_key(s, SELF)));
+        self.query_for_run(&q, Counter::NestedRowDecodes, &run.id)?
+            .into_iter()
+            .map(|row| Ok(serde_json::from_value(row.doc)?))
+            .collect()
+    }
+
     /// The current coding run with its review children and all of their nested records, read
     /// from that run's rows only; `None` without a current run.
     ///

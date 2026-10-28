@@ -53,7 +53,7 @@ pub(crate) fn bind_review(
         return Ok(resolved);
     };
     let id = review_episode(&task.id, run, &profile);
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     let check =
         |candidate: &ResolvedProfile| crate::routing::known_model_unavailability(ctx, candidate);
     let mut episode = match load(ctx, &id)? {

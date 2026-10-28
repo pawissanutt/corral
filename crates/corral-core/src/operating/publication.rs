@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use super::{ScopedPlan, ScopedTask, digest};
 use crate::records::RecordArea;
-use crate::{Config, PlanDocument, Status, Store, Task, Verdict, operating_contract_revision};
+use crate::{Config, PlanDocument, Status, Store, Verdict, operating_contract_revision};
 
 #[derive(Deserialize)]
 struct Publication {
@@ -229,7 +229,10 @@ impl Store {
     }
 
     /// Publication evidence without widening or rewriting the original approval receipt.
-    pub fn published_operating_member(&self, task: &Task) -> Result<Option<ScopedTask>> {
+    pub fn published_operating_member<T: crate::TaskRef + ?Sized>(
+        &self,
+        task: &T,
+    ) -> Result<Option<ScopedTask>> {
         let config = self.operating_config()?;
         let effective = self.resolve_operating_policy(&config)?;
         ensure!(
@@ -237,14 +240,14 @@ impl Store {
             "no confirmed publication grant"
         );
         let (members, _) = self.operating_members(&config);
-        match members.get(&task.id) {
+        match members.get(task.id()) {
             Some(member) => {
                 ensure!(
                     &self.operating_member(&config, task)? == member,
                     "published member changed"
                 );
                 ensure!(
-                    !config.automation.scope.exclusions.contains(&task.id),
+                    !config.automation.scope.exclusions.contains(task.id()),
                     "published member excluded"
                 );
                 Ok(Some(member.clone()))

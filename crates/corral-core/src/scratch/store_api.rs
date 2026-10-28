@@ -55,7 +55,7 @@ impl Store {
                 path: name.to_owned(),
             };
             // A concurrent first use may have registered it in between.
-            if let Err(error) = area.register(new, Timestamp::now())
+            if let Err(error) = area.register(new, crate::clock::now())
                 && area.open_row(&id)?.is_none()
             {
                 return Err(error);
@@ -90,7 +90,7 @@ impl Store {
                 attempt: Some(new.attempt.to_owned()),
                 path: new.rel.to_owned(),
             },
-            Timestamp::now(),
+            crate::clock::now(),
         )
     }
 
@@ -101,7 +101,7 @@ impl Store {
         if area.open_row(id)?.is_none() {
             return Ok(false);
         }
-        area.close(id, Timestamp::now())?;
+        area.close(id, crate::clock::now())?;
         Ok(true)
     }
 
@@ -117,7 +117,7 @@ impl Store {
         let warn = Operation::Scratch(ScratchOp::Warn {
             id: id.into(),
             evidence_bytes: bytes,
-            at: Timestamp::now(),
+            at: crate::clock::now(),
         });
         match self.backend().apply(warn) {
             Ok(_) => Ok(true),
@@ -162,6 +162,6 @@ impl Store {
     /// `storage_reclaim_failed` event results, whether or not the directory was already gone.
     /// The caller has established that nothing uses the directory.
     pub fn reclaim_scratch_entry(&self, id: &str, owner: &str) -> Result<Reclaimed> {
-        self.scratch_area()?.reclaim(id, owner, Timestamp::now())
+        self.scratch_area()?.reclaim(id, owner, crate::clock::now())
     }
 }

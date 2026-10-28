@@ -119,6 +119,7 @@ fn a_full_update_writes_only_the_changed_run_row_and_a_no_op_writes_nothing() {
             num: TaskNum(1),
             parts: vec![TaskPart::Run],
             history: true,
+            demoted: false,
         }]
     );
     assert_eq!(

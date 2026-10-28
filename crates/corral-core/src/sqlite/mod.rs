@@ -375,6 +375,7 @@ impl SqliteBackend {
             num,
             parts: Vec::new(),
             history: false,
+            demoted: false,
         };
         tx.execute(
             "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, 'task', ?2)",

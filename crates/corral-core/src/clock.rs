@@ -47,9 +47,24 @@ impl MonotonicClock {
 
 static PROCESS: LazyLock<MonotonicClock> = LazyLock::new(|| MonotonicClock::new(Timestamp::now));
 
+thread_local! {
+    static PINNED: std::cell::Cell<Option<Timestamp>> = const { std::cell::Cell::new(None) };
+}
+
+/// Pins every stamp this thread takes through [`now`] and `Store::now` to `at`, or unpins with
+/// `None`: a budget fixture's records then serialize with one width at every size.
+#[doc(hidden)]
+pub fn pin_thread(at: Option<Timestamp>) {
+    PINNED.set(at);
+}
+
+pub(crate) fn pinned() -> Option<Timestamp> {
+    PINNED.get()
+}
+
 /// Process-wide strictly increasing wall clock for attempt-window stamps.
 pub fn now() -> Timestamp {
-    PROCESS.now()
+    pinned().unwrap_or_else(|| PROCESS.now())
 }
 
 #[cfg(test)]

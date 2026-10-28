@@ -108,7 +108,7 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         ),
         "search scope must be artifacts, specs, reviews or all"
     );
-    let now = Timestamp::now();
+    let now = corral_core::clock::now();
     let query = Query::parse(input, now)?;
     ensure!(
         query.content_terms().len() <= 64,

@@ -89,7 +89,7 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
                 }
                 run.submitted = Some(plan_id.clone());
                 run.state = PlanRunState::Submitted;
-                run.ended = Some(jiff::Timestamp::now());
+                run.ended = Some(corral_core::clock::now());
                 task.status = corral_core::Status::Review;
                 Some(run.id.clone())
             }
@@ -211,7 +211,7 @@ mod tests {
             vendor: Some("openai".into()),
             effort: None,
             spec_revision: plan_spec_revision(&task).unwrap(),
-            started: jiff::Timestamp::now(),
+            started: corral_core::clock::now(),
             ended: None,
             herdr: None,
             output_dir: "output".into(),

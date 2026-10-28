@@ -536,7 +536,7 @@ impl Store {
             .approval
             .as_ref()
             .and_then(|approval| projects::expiry(&policy.scope, approval))
-            .filter(|end| *end <= Timestamp::now());
+            .filter(|end| *end <= crate::clock::now());
         let valid = state.approval.as_ref().is_some_and(|approval| {
             policy.mode == OperatingMode::Autopilot
                 && expired.is_none()
