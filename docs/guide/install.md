@@ -5,7 +5,7 @@ and run the candidate's version probe before replacing an existing installation.
 Neither installation nor normal use needs Rust, Cargo, a C compiler, or
 administrator access.
 
-The examples below pin [v0.3.0](../releases/v0.3.0.md). Installers download
+The examples below pin [v0.4.0](../releases/v0.4.0.md). Installers download
 published release assets, not a tag alone; older releases may lack Windows
 packages. The release workflow publishes the five native packages below
 with SHA-256 sidecars and installer-proof records after validation.
@@ -20,8 +20,11 @@ with SHA-256 sidecars and installer-proof records after validation.
 | macOS | Apple silicon arm64 | `corral-aarch64-apple-darwin.tar.gz` |
 | Windows | x86_64 / AMD64 | `corral-x86_64-pc-windows-msvc.zip` |
 
-Each archive has an adjacent `<archive>.sha256` file. Linux packages use musl
-rather than requiring a particular glibc version. macOS packages target macOS
+Each archive has an adjacent `<archive>.sha256` file. From v0.4.0 the Linux and
+macOS archives also contain `corral-pi-host`, the compiled [Pi-native agent
+host](#optional-the-pi-native-agent-host); the Windows archive does not. Linux
+`corral` uses musl rather than requiring a particular glibc version;
+`corral-pi-host` is a glibc build (any mainstream distribution, not Alpine). macOS packages target macOS
 14 or later. Windows packages statically link the MSVC runtime and target 64-bit Windows
 10/11; the native smoke runner is Windows Server 2022. The x86_64 Windows
 package is not advertised as native ARM64 support: ARM64 and 32-bit Windows
@@ -149,11 +152,11 @@ pinned on subsequent invocations where that setting remains present. There
 is no automatic updater: re-run to update, or choose an older available tag
 to downgrade.
 
-Pin `v0.3.0` on Linux/macOS once its release assets are published:
+Pin `v0.4.0` on Linux/macOS once its release assets are published:
 
 ```sh
 curl -fsSLo install.sh https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh
-CORRAL_VERSION=v0.3.0 sh install.sh
+CORRAL_VERSION=v0.4.0 sh install.sh
 ```
 
 For a different destination, the variable applies to the installer process,
@@ -167,7 +170,7 @@ sh install.sh --dry-run
 On Windows, after downloading `install.ps1`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.3.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.4.0
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir "$HOME\bin"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
 ```
@@ -194,21 +197,35 @@ are not part of this release pipeline.
 ## Optional: the Pi-native agent host
 
 The [Pi-native host](pi-native.md) is opt-in and needs nothing above unless you configure a
-`pi-native` profile. It runs on Linux and macOS with a Bun inside the tested range its
-`compat.json` records (currently exactly 1.4.2), and it has its own install and login steps:
+`pi-native` profile. It runs on Linux and macOS.
+
+From a release (v0.4.0 and later) `install.sh` installs `corral-pi-host` beside `corral`
+and runs `corral agent install` for you. The host is one executable that embeds Bun and
+every dependency, so no Bun, checkout or network install is involved. Then log in once:
 
 ```sh
-corral agent install --from <corral checkout>/packages/corral-pi
-corral agent login
+corral agent login      # pick OpenAI (ChatGPT) or Anthropic (Claude Pro/Max)
 corral agent doctor
 ```
 
-`corral agent install` copies the package into
+`corral agent install` copies the host into
 `$XDG_DATA_HOME/corral/pi-native/assets/<digest>/` (`~/.local/share/...` without
-`XDG_DATA_HOME`), runs `bun install --frozen-lockfile` there and records the digest. A
-binary built from a checkout defaults `--from` to that checkout's `packages/corral-pi`.
-`corral agent login` is one interactive OpenAI (ChatGPT subscription) login into corral's
-own credential directory. Neither step touches `~/.codex` or another agent's store.
+`XDG_DATA_HOME`) with the `compat.json` and role files it writes there, and records the
+digest; re-run it after replacing `corral-pi-host` by hand. Anthropic profiles also need
+the `claude` CLI (Claude Code) on PATH.
+
+From a checkout (contributors, or a binary built with `cargo install`), the host runs from
+source on a Bun inside the tested range its `compat.json` records (currently exactly 1.4.2):
+
+```sh
+corral agent install --from <corral checkout>/packages/corral-pi
+```
+
+That copies the package and runs `bun install --frozen-lockfile` in the copy. A binary
+built from a checkout defaults `--from` to that checkout's `packages/corral-pi` when no
+`corral-pi-host` sits beside it. `scripts/build-pi-host.sh <out>` builds the release host
+locally. Neither install nor login touches `~/.codex`, `~/.claude` or another agent's
+store.
 
 ## Contributors
 
