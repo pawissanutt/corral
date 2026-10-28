@@ -155,13 +155,13 @@ pub(crate) fn reacquire(ctx: &Ctx, id: &str) -> Result<bool> {
 }
 
 /// Sync pass: woken runs re-acquire free slots in precedence order, before queued dispatch.
-pub(crate) fn reacquire_woken(ctx: &Ctx) -> Result<Vec<Change>> {
-    let mut woken: Vec<_> = ctx
-        .store
-        .list()?
-        .into_iter()
+/// Candidates come from the pass's task snapshot; each grant re-reads its task under the board
+/// lock, and runs woken later in the pass already tried to re-acquire where they woke.
+pub(crate) fn reacquire_woken(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Change>> {
+    let mut woken: Vec<_> = tasks
+        .iter()
         .filter_map(|t| {
-            let key = woken(&t).map(|s| (u8::from(!red_main(&t)), s.since))?;
+            let key = woken(t).map(|s| (u8::from(!red_main(t)), s.since))?;
             Some((key, t))
         })
         .collect();
