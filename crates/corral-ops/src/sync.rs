@@ -753,6 +753,9 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     crate::queue::sort_candidates(&mut queued);
     let mut changes = Vec::new();
     for (index, task) in queued.into_iter().enumerate() {
+        if crate::queue_drain::still_blocked(ctx, &task, index + 1, now) {
+            continue;
+        }
         let result = (|| {
             if !task.queued && task.launch.is_none() {
                 crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
@@ -774,6 +777,9 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                     "dispatch",
                     format!("dispatching queued {} failed: {err:#}", task.id),
                 );
+                if crate::queue_drain::contended(&err) {
+                    continue;
+                }
                 ctx.store.log_event(
                     Some(&task.id),
                     "dispatch_failed",
