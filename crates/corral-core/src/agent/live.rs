@@ -352,3 +352,136 @@ pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefu
 pub fn check_pm_live(pm: &AgentPm, generation: u32) -> Result<(), AgentRefusal> {
     generation_live(&pm.state, generation)
 }
+
+/// [`check_live`] over a [`crate::TaskRef`]: the same refusals, read from the current run's
+/// projection, the named review child and the agent's generation and turn by key. The outer
+/// result carries read errors, the inner one the refusal.
+///
+/// # Errors
+/// Returns read errors of the task form.
+pub fn check_live_ref<T: crate::TaskRef + ?Sized>(
+    task: &T,
+    binding: &RequestBinding,
+) -> anyhow::Result<Result<(), AgentRefusal>> {
+    let ended = |detail: &str| Ok(Err(AgentRefusal::new(RefusalCode::RunEnded, detail)));
+    let closed = |detail: String| Ok(Err(AgentRefusal::new(RefusalCode::ReviewClosed, detail)));
+    let (run_id, review) = match &binding.container {
+        ContainerRef::Worker { task: id, run } if id == task.id() => (run, None),
+        ContainerRef::Reviewer {
+            task: id,
+            run,
+            review,
+        } if id == task.id() => (run, Some(review)),
+        _ => return ended("the binding does not name this task"),
+    };
+    let status = *task.status();
+    let Some(parent) = task.current_run_head()?.filter(|r| r.id == *run_id) else {
+        return ended("the named run is no longer current or has ended");
+    };
+    if status == Status::Dropped
+        || matches!(
+            parent.outcome,
+            Some(RunOutcome::Discarded | RunOutcome::Superseded | RunOutcome::Abandoned)
+        )
+        || (parent.outcome == Some(RunOutcome::Done) && status == Status::Done)
+    {
+        return ended("the named run is no longer current or has ended");
+    }
+    let settles = |state: Option<&crate::AgentHostHead>| -> anyhow::Result<bool> {
+        let Some(seq) = binding.settles_turn else {
+            return Ok(false);
+        };
+        if state.is_none() {
+            return Ok(false);
+        }
+        Ok(task
+            .agent_turn(&binding.container, binding.generation, seq)?
+            .is_some_and(|t| t.started.is_some() && t.ended.is_none()))
+    };
+    let state = match review {
+        None => {
+            let open = parent.outcome.is_none() && status.holds_slot();
+            let settling = settles(parent.agent_host.as_deref())?
+                && parent.outcome == Some(RunOutcome::Done)
+                && status == Status::Review;
+            if !open && !settling {
+                return ended("the named run no longer accepts work");
+            }
+            parent.agent_host.clone()
+        }
+        Some(review) => {
+            let current = parent.current_child.as_deref().filter(|c| c.id == *review);
+            let last = current.is_some();
+            let child = match current {
+                Some(child) => Some(child.clone()),
+                None => task.review_child(run_id, review)?,
+            };
+            let settling = settles(child.as_ref().and_then(|c| c.agent_host.as_deref()))?;
+            let Some(child) = child else {
+                return closed(format!(
+                    "review child {}",
+                    ClosureReason::ReviewSuperseded.as_str()
+                ));
+            };
+            let active = parent.review.as_ref().filter(|_| last);
+            let records = || child.review.iter().chain(active);
+            let reason = if !settling && records().any(|r| r.verdict.is_some()) {
+                Some(ClosureReason::ReviewClosed)
+            } else if child.outcome == Some(RunOutcome::Superseded) {
+                Some(ClosureReason::ReviewSuperseded)
+            } else if child.outcome.is_some() || records().any(|r| r.process_lost) {
+                Some(ClosureReason::ReviewInterrupted)
+            } else if !last {
+                Some(ClosureReason::ReviewSuperseded)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return closed(format!("review child {}", reason.as_str()));
+            }
+            let hold = status == Status::NeedsMe
+                && parent
+                    .blocked_excerpt
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with(super::QUESTION_HOLD_PREFIX));
+            if status != Status::Review && !hold {
+                return closed("the task is no longer in Review".into());
+            }
+            let state = child.agent_host.clone();
+            if state.as_ref().and_then(|s| s.binding.callback.as_ref()) != binding.callback.as_ref()
+            {
+                return closed("the callback token does not match the bound attempt".into());
+            }
+            state
+        }
+    };
+    let Some(state) = state else {
+        return Ok(Err(AgentRefusal::new(
+            RefusalCode::AgentFenced,
+            "the container has no agent binding",
+        )));
+    };
+    let generation = binding.generation;
+    if state.binding.generation != generation {
+        return Ok(Err(AgentRefusal::new(
+            RefusalCode::AgentFenced,
+            format!(
+                "generation {generation} is not current (current {})",
+                state.binding.generation
+            ),
+        )));
+    }
+    Ok(
+        match task.agent_generation(&binding.container, generation)? {
+            None => Err(AgentRefusal::new(
+                RefusalCode::AgentFenced,
+                format!("generation {generation} was never opened"),
+            )),
+            Some(g) if g.fenced.is_some() => Err(AgentRefusal::new(
+                RefusalCode::AgentFenced,
+                format!("generation {generation} is fenced"),
+            )),
+            Some(_) => Ok(()),
+        },
+    )
+}

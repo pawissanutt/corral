@@ -273,6 +273,41 @@ impl HistorySummary {
         self.review_changes_unsuperseded += run.facts.changes_unsuperseded;
     }
 
+    /// Replaces a history run's contribution after a keyed edit that kept its id, ended,
+    /// usage and children; pane references are adjusted by the caller with the pane rows.
+    pub fn adjust_run_head(&mut self, before: &crate::RunHead, after: &crate::RunHead) {
+        let outcome = |run: &crate::RunHead| {
+            run.outcome
+                .and_then(|o| serde_json::to_value(o).ok())
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "active".to_owned())
+        };
+        let old = outcome(before);
+        if let Some(n) = self.runs_by_outcome.get_mut(&old) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.runs_by_outcome.remove(&old);
+            }
+        }
+        *self.runs_by_outcome.entry(outcome(after)).or_default() += 1;
+        self.failures = self.failures - u64::from(before.failures) + u64::from(after.failures);
+        let held_gate = |run: &crate::RunHead| {
+            u64::from(run.gate.as_ref().is_some_and(crate::GateRecord::holds_slot))
+        };
+        let held_review = |run: &crate::RunHead| {
+            u64::from(
+                run.review
+                    .as_ref()
+                    .is_some_and(crate::ReviewRecord::holds_slot),
+            )
+        };
+        self.held_gates = self.held_gates - held_gate(before) + held_gate(after);
+        self.held_reviews = self.held_reviews - held_review(before) + held_review(after);
+        if let Some(last) = self.last_ended_run.as_mut().filter(|l| l.id == after.id) {
+            last.outcome = after.outcome;
+        }
+    }
+
     pub fn fold_plan_run_head(&mut self, run: &crate::PlanRunHead) {
         self.plan_runs += 1;
         if let Some(ended) = run.ended

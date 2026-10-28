@@ -323,3 +323,52 @@ fn a_saved_reservation_is_published_with_its_transaction() {
     );
     assert_eq!(recipient.state_mut(&mut task).unwrap().next_seq, 2);
 }
+
+#[test]
+fn a_head_reservation_reserves_and_publishes_as_the_full_one_does() {
+    let mut observed = Vec::new();
+    for head in [false, true] {
+        let (_dir, store, recipient) = run_fixture();
+        let id = recipient.task().unwrap().to_owned();
+        let inbox = Inbox::new(&store, recipient.clone()).unwrap();
+        let _lock = inbox.lock().unwrap();
+        let mut reserved = None;
+        if head {
+            store
+                .update_head(&id, |h| {
+                    reserved = Some(inbox.reserve_in_head(h, post("together", Urgency::Wake))?);
+                    Ok(())
+                })
+                .unwrap();
+            let oversized = "x".repeat(MAX_PAYLOAD);
+            assert!(
+                store
+                    .update_head(&id, |h| inbox
+                        .reserve_in_head(h, post(&oversized, Urgency::Wake))
+                        .map(drop))
+                    .is_err()
+            );
+        } else {
+            store
+                .update(&id, |task| {
+                    reserved = Some(inbox.reserve_in(task, post("together", Urgency::Wake))?);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reserved = reserved.unwrap();
+        let messages = inbox.messages().unwrap();
+        let mut task = store.get(&id).unwrap();
+        let next = recipient.state_mut(&mut task).unwrap().next_seq;
+        observed.push((
+            reserved.id,
+            reserved.seq,
+            reserved.body,
+            messages.len(),
+            messages[0].id.clone(),
+            next,
+        ));
+    }
+    assert_eq!(observed[0], observed[1]);
+    assert_eq!(observed[1].5, 2);
+}

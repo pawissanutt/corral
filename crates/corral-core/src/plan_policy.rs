@@ -627,6 +627,122 @@ impl Store {
     }
 }
 
+/// The task an approval check reads: the shell of `task` with the current run's open
+/// decisions, the predecessor of an owner-accepted plan's current review and the planner run
+/// the current plan names, each read by key.
+///
+/// # Errors
+/// Returns read or conversion errors.
+pub fn approval_shell<T: crate::TaskRef + ?Sized>(task: &T) -> Result<Task> {
+    let mut shell = task.shell_task()?;
+    if let Some(run) = task.current_run_head()?
+        && run.facts.pending_decision.is_some()
+        && let Some(current) = shell.runs.last_mut()
+    {
+        current.obligations.decisions = task.open_obligations(&run.id)?.decisions;
+    }
+    let Some(plan) = task.last_plan_head()? else {
+        return Ok(shell);
+    };
+    if plan
+        .approval
+        .as_ref()
+        .is_some_and(|approval| approval.by == "owner")
+        && plan.facts.children >= 2
+        && let Some(previous) =
+            task.plan_review_at(&plan.id, usize::try_from(plan.facts.children - 1)?)?
+        && let Some(record) = shell.plans.last_mut()
+    {
+        record
+            .reviews
+            .insert(0, serde_json::from_value(serde_json::to_value(previous)?)?);
+    }
+    if let Some(id) = &plan.run
+        && !shell.plan_runs.iter().any(|run| &run.id == id)
+        && let Some(run) = task.plan_run_head(id)?
+    {
+        shell
+            .plan_runs
+            .insert(0, serde_json::from_value(serde_json::to_value(run)?)?);
+    }
+    Ok(shell)
+}
+
+/// [`revision_resolved`] over the current plan and its current review.
+///
+/// # Errors
+/// Returns read errors of the task form.
+pub fn revision_resolved_ref<T: crate::TaskRef + ?Sized>(task: &T) -> Result<bool> {
+    let Some(plan) = task.last_plan_head()? else {
+        return Ok(false);
+    };
+    let Some(review) = plan.current_review.as_ref().filter(|review| {
+        plan.approval.is_none()
+            && review.reviewer == "owner"
+            && review.verdict == Some(Verdict::Changes)
+    }) else {
+        return Ok(false);
+    };
+    let shell = approval_shell(task)?;
+    let record = shell.plans.last().context("plan missing")?;
+    Ok(decisions_resolved(
+        &shell,
+        record,
+        review.notes.as_deref().unwrap_or(""),
+    ))
+}
+
+/// [`validate_approval`] of the task's current plan, over [`approval_shell`].
+///
+/// # Errors
+/// Returns the approval refusals of [`validate_approval`] and read errors.
+pub fn validate_approval_ref<T: crate::TaskRef + ?Sized>(
+    store: &Store,
+    config: &Config,
+    task: &T,
+) -> Result<()> {
+    let shell = approval_shell(task)?;
+    let plan = shell.plans.last().context("plan missing")?;
+    validate_approval(store, config, &shell, plan)
+}
+
+impl Store {
+    /// The head form of [`Store::reconcile_plan_acceptance`]: the approval is read from the
+    /// head's current plan and the keyed rows [`approval_shell`] names.
+    ///
+    /// # Errors
+    /// Returns lookup, lock, validation or `check` errors.
+    pub fn reconcile_plan_acceptance_head(
+        &self,
+        id: &str,
+        check: impl FnOnce(&Store, &crate::TaskHead) -> Result<()>,
+    ) -> Result<()> {
+        let id = Self::normalize_id(id)?;
+        let _board = self.lock("dispatch")?;
+        let _task = self.lock(&id)?;
+        let mut fresh = self.clone();
+        fresh.config = self.operating_config()?;
+        let head = fresh.head(&id)?;
+        let task = approval_shell(&head)?;
+        let plan = task.plans.last().context("accepted plan missing")?;
+        let mut record = approval_submission(&fresh, &fresh.config, &task, plan)?
+            .context("local acceptance recovery requires an automatic approval")?;
+        match record.disposition {
+            crate::SubmissionDisposition::Prepared | crate::SubmissionDisposition::Submitting => {
+                fresh.validate_operating_action(&fresh.config, &head, &record.authorization)?;
+                check(&fresh, &head)?;
+                record.disposition = crate::SubmissionDisposition::Submitted;
+                fresh.save_authorized_submission(&record)
+            }
+            crate::SubmissionDisposition::Submitted => Ok(()),
+            crate::SubmissionDisposition::AuthorizationRefused { .. }
+            | crate::SubmissionDisposition::Uncertain { .. } => {
+                bail!("local acceptance receipt is not a recoverable write boundary")
+            }
+        }
+    }
+}
+
 /// Validate answers on a task's accepted plan or its published parent's exact revision.
 pub fn validate_owner_resolution(store: &Store, config: &Config, task: &Task) -> Result<()> {
     if let Some(plan) = task.plans.last() {

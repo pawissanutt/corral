@@ -306,6 +306,9 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
     for pane in task_panes(task) {
         rows.put(super::head_mut::pane_row(&pane));
     }
+    for (key, finding) in crate::task_findings(task) {
+        rows.put(super::head_keyed::finding_row(key, &finding)?);
+    }
     Ok(Split {
         fields: task_fields(task)?,
         doc: head_doc(task)?,
@@ -691,6 +694,20 @@ fn agent_flags(
         return (false, Vec::new());
     };
     match kind {
+        "generations" => (
+            false,
+            host.generations
+                .get(i)
+                .map(|g| vec![format!("gen:{}", g.n)])
+                .unwrap_or_default(),
+        ),
+        "turns" => (
+            false,
+            host.turns
+                .get(i)
+                .map(|t| vec![format!("turn:{}:{}", t.generation, t.seq)])
+                .unwrap_or_default(),
+        ),
         "receipts" => (
             false,
             host.receipts

@@ -34,25 +34,35 @@ impl Store {
         self.execution_plan_fields(&task.to_shell_task()?)
     }
 
-    pub(super) fn execution_plan_fields(&self, task: &Task) -> Result<Option<TaskHead>> {
+    pub(super) fn execution_plan_fields<T: crate::TaskRef + ?Sized>(
+        &self,
+        task: &T,
+    ) -> Result<Option<TaskHead>> {
         let owners = self
             .heads(&HeadQuery::EdgeTo {
                 kind: "child".into(),
-                other: task.id.clone(),
+                other: task.id().clone(),
             })?
             .into_iter()
             .filter(|plan| plan.tracker)
             .collect::<Vec<_>>();
-        let parent = task.parent.as_deref().map(|id| self.head(id)).transpose()?;
+        let parent = task
+            .parent()
+            .as_deref()
+            .map(|id| self.head(id))
+            .transpose()?;
         let Some(plan) = parent.filter(|plan| plan.tracker) else {
             ensure!(owners.is_empty(), "task has a nonreciprocal Plan owner");
             return Ok(None);
         };
         ensure!(
-            owners.len() == 1 && owners[0].id == plan.id && plan.children.contains(&task.id),
+            owners.len() == 1 && owners[0].id == plan.id && plan.children.contains(task.id()),
             "task must have exactly one reciprocal Plan owner"
         );
-        ensure!(task.project == plan.project, "Plan child project differs");
+        ensure!(
+            *task.project() == plan.project,
+            "Plan child project differs"
+        );
         if plan.approved_scope.is_none() {
             return Ok(None);
         }
