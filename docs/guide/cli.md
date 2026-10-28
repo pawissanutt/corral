@@ -201,6 +201,14 @@ Options:
 
 ### `corral mode turbo`
 
+Turbo disables autopilot's change-round limit for all tasks, including plan members;
+this is independent of gate tiers and review scope. `corral mode` shows whether it
+is enabled. Autopilot events retain `max_rounds` as the configured review-policy
+budget and report `effective_max_rounds` (null means unlimited) plus
+`round_limit_source`: `automation.turbo` when unlimited, otherwise
+`task_review_policy.max_rounds` (the resolved task/project/workspace policy).
+Turning turbo off restores the cap on the next sync; rounds already spent still count.
+
 ```text
 Land, accept plans and repair without owner stops or round limits until `--off`
 

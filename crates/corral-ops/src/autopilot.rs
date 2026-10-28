@@ -801,6 +801,16 @@ impl Pilot<'_> {
                 "to": to.as_str(),
                 "round": round,
                 "max_rounds": self.policy.max_rounds,
+                "effective_max_rounds": if self.config.automation.turbo {
+                    None
+                } else {
+                    Some(self.policy.max_rounds)
+                },
+                "round_limit_source": if self.config.automation.turbo {
+                    "automation.turbo"
+                } else {
+                    "task_review_policy.max_rounds"
+                },
                 "sha": sha,
                 "reason": reason,
                 "note": note,
