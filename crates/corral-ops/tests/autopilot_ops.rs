@@ -38,6 +38,8 @@ mod plan_targets;
 mod resources;
 #[path = "autopilot_ops/rework.rs"]
 mod rework;
+#[path = "autopilot_ops/round_limits.rs"]
+mod round_limits;
 #[path = "autopilot_ops/routing.rs"]
 mod routing;
 #[path = "autopilot_ops/send_back.rs"]
