@@ -53,6 +53,7 @@ impl Fixture {
             provider: None,
             effort: Some("high".into()),
             prompt_file: None,
+            adopt: false,
         }
     }
 

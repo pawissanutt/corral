@@ -18,7 +18,7 @@ use corral_core::{SessionAction, SessionPolicy, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::admission::{BindTarget, open_generation};
+use super::admission::{BindTarget, open_generation_with};
 use super::bridge::assets::{
     asset_digest, bun_version, compiled_host, find_bun, missing_modules, read_compat,
     version_satisfies,
@@ -187,6 +187,8 @@ pub struct HostSpec {
     pub provider: Option<String>,
     pub effort: Option<String>,
     pub prompt_file: Option<PathBuf>,
+    /// The PM launch adopts the owner's own pane (`corral pi`); recorded with the generation move.
+    pub adopt: bool,
 }
 
 /// The Pi provider a host bound to `vendor` (else the model's inferred vendor) runs on.
@@ -321,7 +323,7 @@ pub fn prepare_bootstrap(
             .to_path_buf();
         resume_session = Some(file);
     }
-    let grant = open_generation(&ctx.store, target, pane)?;
+    let grant = open_generation_with(&ctx.store, target, pane, spec.adopt)?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
         ContainerRef::Reviewer { task, run, review } => {

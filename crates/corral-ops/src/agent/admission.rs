@@ -370,6 +370,17 @@ fn binding(role: AgentRole, store: &str, project: &str, callback: Option<String>
 /// Opens generation n+1 of a container in `pane`, fencing every older generation in the same
 /// commit. Dispatch, review-run, pm open and resume call this before writing the bootstrap.
 pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result<GenerationGrant> {
+    open_generation_with(store, target, pane, false)
+}
+
+/// `open_generation`; with `adopt`, a PM's new pane is recorded as the owner's pane adopted by
+/// `corral pi` in the same commit that moves the PM there, so a refused launch changes nothing.
+pub fn open_generation_with(
+    store: &Store,
+    target: &BindTarget,
+    pane: &str,
+    adopt: bool,
+) -> Result<GenerationGrant> {
     let nonce = random_secret()?;
     let digest = paths::sha256_hex(nonce.as_bytes());
     let store_id = paths::store_id(store);
@@ -380,8 +391,10 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
                 let state = AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
                 AgentPm::new(pane.into(), state)
             });
-            // Only the pane `adopt_pm_pane` just recorded keeps an adoption across the move.
-            if pm.adopted_pane.as_deref() != Some(pane) {
+            // Adoption moves only with an adopting launch; another pane drops it, the same keeps it.
+            if adopt {
+                pm.adopted_pane = Some(pane.into());
+            } else if pm.pane != pane {
                 pm.adopted_pane = None;
             }
             pm.pane = pane.into();
@@ -432,21 +445,6 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
         container,
         generation,
         bind_nonce: nonce,
-    })
-}
-
-/// Records `pane` as the owner's own pane adopted by `corral pi`, before the generation that
-/// moves the PM there opens. It takes effect atomically with that move, because adoption holds
-/// only while it names the saved PM pane; a fresh store gets an unbound generation-0 PM record.
-pub fn adopt_pm_pane(store: &Store, project: &str, pane: &str) -> Result<()> {
-    let store_id = paths::store_id(store);
-    pm_state::update(store, |pm| {
-        let pm = pm.get_or_insert_with(|| {
-            let state = AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
-            AgentPm::new(pane.into(), state)
-        });
-        pm.adopted_pane = Some(pane.into());
-        Ok(((), true))
     })
 }
 

@@ -139,6 +139,66 @@ fn a_dead_pm_is_taken_over_with_resume_fencing_and_its_recovery_never_types_into
     assert!(fx.calls("pane run").is_empty());
 }
 
+fn approve(fx: &Fx, task: &str) {
+    let selection = corral_core::OperatingSelection {
+        tasks: [task.to_owned()].into(),
+        ..Default::default()
+    };
+    let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
+    fx.ctx
+        .store
+        .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+        .unwrap();
+}
+
+#[test]
+fn a_refused_takeover_keeps_the_original_pane_adopted_and_resume_never_types_into_it() {
+    // Given a PM adopted in owner pane A whose host died.
+    let mut fx = fixture();
+    owner_pane(&fx);
+    let mut old = HostProc::spawn(true);
+    let first = fx.bind(&pm_target(), "pm-pane", &old);
+    old.kill();
+    adopt(&f::ctx_at(fx.root()), PANE, &Overrides::default()).unwrap();
+    let mut host = HostProc::spawn(true);
+    let mut previous = first.clone();
+    previous.pane = PANE.into();
+    fx.hello_next(&previous, &Recipient::Pm, &host);
+    host.kill();
+    // And an approved scope that now selects a different project.
+    fx.ctx.store.config.projects.insert(
+        "other".into(),
+        serde_json::from_value(json!({"path": "app"})).unwrap(),
+    );
+    fx.ctx.store.save_config().unwrap();
+    let other = fx
+        .ctx
+        .store
+        .create(
+            "other",
+            Some("other"),
+            corral_core::Status::Ready,
+            "fixture",
+        )
+        .unwrap();
+    approve(&fx, &other.id);
+    // When `corral pi` in pane B is refused by recovery.
+    std::fs::write(fx.root().join("w1:p8"), "").unwrap();
+    let error = adopt(&f::ctx_at(fx.root()), "w1:p8", &Overrides::default()).unwrap_err();
+    assert!(error.to_string().starts_with("out_of_scope"), "{error}");
+    // Then pane A is still the adopted PM pane.
+    let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    assert_eq!(pm.pane, PANE);
+    assert!(pm.adopted(), "{:?}", pm.adopted_pane);
+    // And after the original scope returns, resume refuses instead of typing into pane A.
+    approve(&fx, &fx.id);
+    let error =
+        crate::agent::recovery::resume_container(&f::ctx_at(fx.root()), &ContainerRef::Pm, false)
+            .unwrap_err();
+    assert!(error.to_string().starts_with("pane_adopted"), "{error}");
+    assert!(fx.calls("pane run").is_empty());
+}
+
 #[test]
 fn pm_open_in_a_new_pane_drops_the_adoption() {
     let fx = fixture();

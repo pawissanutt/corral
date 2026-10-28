@@ -85,6 +85,7 @@ fn pi_command(ctx: &Ctx, task: &Task, parent: &Run, pane: &str) -> Result<String
             .and_then(|model| crate::agent::launch::host_provider(child.vendor.as_deref(), model)),
         effort: child.effort.clone(),
         prompt_file: Some(review_prompt_file(ctx, &task.id, &run.id)),
+        adopt: false,
     };
     let target = BindTarget::Reviewer {
         task: task.id.clone(),
