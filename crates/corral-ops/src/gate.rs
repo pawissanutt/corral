@@ -739,7 +739,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             .context("task has no running gate")?;
         let pane = gate.pane.as_deref();
         let listed = crate::pane_liveness::inventory(ctx);
-        if listed.is_some()
+        let gone = listed.is_some()
             && crate::pane_liveness::gone(
                 ctx,
                 crate::pane_liveness::Sample {
@@ -756,8 +756,10 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
                     ticket: listed.as_ref().map(|inventory| inventory.ticket),
                     count_miss: true,
                 },
-            )?
-        {
+            )?;
+        // Collecting attaches artifacts and may wait for storage: release the lease first (T-509).
+        drop(listed);
+        if gone {
             // The script may have finished just before the pane closed.
             if let Some(record) = gate_collect(ctx, id)? {
                 return Ok(record);
@@ -768,7 +770,6 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
                 pane.unwrap_or("?")
             );
         }
-        drop(listed);
         std::thread::sleep(Duration::from_millis(500));
     }
 }

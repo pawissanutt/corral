@@ -237,7 +237,6 @@ fn sync_scoped(
     {
         return Ok(changes);
     }
-    crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     let panes: HashMap<String, PaneInfo> = inventory
         .panes
@@ -316,6 +315,8 @@ fn sync_scoped(
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
     drop(storage);
+    // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
+    crate::hooks::reconcile_post_land(ctx)?;
     crate::agent::gate_queue::advance_tasks(ctx, &tasks)?;
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::availability::advance_all(ctx, now)?);
