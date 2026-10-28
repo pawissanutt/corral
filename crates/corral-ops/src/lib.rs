@@ -203,6 +203,8 @@ pub use phases::{CommandSpan, Phase, Span, task_phases};
 pub use plan::member_add::{PlanMemberAdded, plan_add_member, plan_add_member_from};
 pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
+#[doc(hidden)]
+pub use plan::member_move::{PlanMemberMoved, plan_move_member, plan_move_member_from};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{PlanVerdict, plan_review, plan_verdict, plan_verdict_report};

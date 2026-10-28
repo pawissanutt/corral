@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod integrity;
 mod landing;
+mod membership;
 mod policy;
 mod review;
 

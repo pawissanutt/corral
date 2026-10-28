@@ -247,6 +247,12 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
     } else {
         original
     };
+    // Absent on Plans whose membership never moved, preserving their identities.
+    let scoped = if task.membership_revision != 0 {
+        digest(&(scoped, task.membership_revision))?
+    } else {
+        scoped
+    };
     if task.approved_scope_revision != 0 || !task.approved_scope_history.is_empty() {
         digest(&(
             scoped,

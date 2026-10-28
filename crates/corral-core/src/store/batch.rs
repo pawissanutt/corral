@@ -183,6 +183,7 @@ pub(super) fn draft_task(
         approved_scope: None,
         approved_scope_revision: 0,
         approved_scope_history: Vec::new(),
+        membership_revision: 0,
         member_gates: Default::default(),
         aggregate_attempts: Vec::new(),
         parent: None,
