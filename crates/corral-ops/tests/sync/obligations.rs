@@ -233,6 +233,104 @@ fn expired_wait_notifies_once_and_does_not_mask_the_watchdog() {
     assert!(processes.killed.borrow().is_empty());
 }
 
+fn stuck_attention(fx: &Fx, at: i64) -> usize {
+    corral_ops::attention::board(&fx.ctx, fx.at(at))
+        .unwrap()
+        .tasks
+        .iter()
+        .flat_map(|task| &task.assessment.conditions)
+        .filter(|condition| condition.kind == "stuck_process")
+        .count()
+}
+
+#[test]
+fn parked_wait_suppresses_stuck_until_expired_or_withdrawn() {
+    for withdraw in [false, true] {
+        let fx = Fx::new("fake");
+        let processes = super::watchdog::Processes::default();
+        super::watchdog::foreground(&fx, &processes, &[(42, &["corral-launch"])], 2000);
+        fx.herdr_says("idle");
+        // Start idle before parking so the watchdog is already eligible.
+        corral_ops::sync_at_with_processes(&fx.ctx, fx.at(0), &processes).unwrap();
+        let mut request = wait(&fx);
+        request.deadline = Some(fx.at(1800));
+        request.handle = WaitHandle::Channel {
+            channel_id: "task:T-523:landed".into(),
+            capability: Some("wait_v1".into()),
+        };
+        let task = register_wait(&fx.ctx, "T-001", request, fx.at(10)).unwrap();
+        assert!(task.runs[0].releases_slot(&task.id));
+        assert_eq!(task.runs[0].parked_on(&task.id), ["T-523"]);
+        for at in [301, 600, 1500] {
+            corral_ops::sync_at_with_processes(&fx.ctx, fx.at(at), &processes).unwrap();
+            assert!(fx.ctx.store.get("T-001").unwrap().runs[0].stuck.is_none());
+            assert_eq!(stuck_attention(&fx, at), 0);
+        }
+        assert_eq!(fx.events("stuck"), 0);
+        assert!(
+            !fx.ctx
+                .store
+                .get("T-001")
+                .unwrap()
+                .attention
+                .records
+                .keys()
+                .any(|key| key.0.contains("/stuck_process/"))
+        );
+        if withdraw {
+            let mut cancelled = receipt(&fx, ResumeDelivery::Acknowledged);
+            cancelled.outcome = ReceiptOutcome::Cancelled;
+            cancelled.observed_at = fx.at(1600);
+            resume_run(
+                &fx.ctx,
+                "T-001",
+                ResumeTarget::Wait("event"),
+                cancelled,
+                fx.at(1600),
+            )
+            .unwrap();
+        }
+        // Both closure paths must restore detection even if slot reacquisition is queued.
+        corral_ops::sync_at_with_processes(&fx.ctx, fx.at(1801), &processes).unwrap();
+        assert!(fx.ctx.store.get("T-001").unwrap().runs[0].stuck.is_some());
+        assert_eq!(stuck_attention(&fx, 1801), 1);
+        assert_eq!(fx.events("stuck"), 1);
+        assert!(processes.killed.borrow().is_empty());
+    }
+}
+
+#[test]
+fn parking_resolves_existing_stuck_attention_and_expiry_reopens_it() {
+    let fx = Fx::new("fake");
+    let processes = super::watchdog::Processes::default();
+    super::watchdog::foreground(&fx, &processes, &[(42, &["corral-launch"])], 2000);
+    fx.herdr_says("idle");
+    corral_ops::sync_at_with_processes(&fx.ctx, fx.at(0), &processes).unwrap();
+    corral_ops::sync_at_with_processes(&fx.ctx, fx.at(301), &processes).unwrap();
+    assert_eq!(stuck_attention(&fx, 301), 1);
+    let mut request = wait(&fx);
+    request.handle = WaitHandle::Channel {
+        channel_id: "task:T-523:landed".into(),
+        capability: Some("wait_v1".into()),
+    };
+    register_wait(&fx.ctx, "T-001", request, fx.at(310)).unwrap();
+    // Assessment must hide old metadata even before sync clears it.
+    assert_eq!(stuck_attention(&fx, 310), 0);
+    corral_ops::sync_at_with_processes(&fx.ctx, fx.at(400), &processes).unwrap();
+    let task = fx.ctx.store.get("T-001").unwrap();
+    assert!(task.runs[0].stuck.is_none());
+    assert!(
+        task.attention
+            .records
+            .iter()
+            .filter(|(key, _)| key.0.contains("/stuck_process/"))
+            .all(|(_, record)| record.resolved_at.is_some())
+    );
+    corral_ops::sync_at_with_processes(&fx.ctx, fx.at(601), &processes).unwrap();
+    assert_eq!(stuck_attention(&fx, 601), 1);
+    assert_eq!(fx.events("stuck"), 2);
+}
+
 #[test]
 fn unsupported_unverifiable_and_lost_handles_have_distinct_outcomes() {
     for (capability, channel_id, deadline, expected) in [
