@@ -241,7 +241,11 @@ pub(crate) fn reconcile_review_sampled_at(
         .blocked_excerpt
         .as_deref()
         .filter(|text| text.starts_with(FAILURE_PREFIX));
-    if idle && !gone && stalled.is_none() && base_moved_refusal(run, review, failure)? {
+    // A healthy pi-native host is never idle here; between its turns it is equally settled, and
+    // sync runs this before the hook's nudge, so the relaunch also wins that silent turn.
+    let settled =
+        idle || (agent_reports && crate::agent::hooks::review::between_silent_turns(&task));
+    if settled && !gone && stalled.is_none() && base_moved_refusal(run, review, failure)? {
         return relaunch(ctx, id, run, review, now);
     }
     let problem = if gone && crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str())

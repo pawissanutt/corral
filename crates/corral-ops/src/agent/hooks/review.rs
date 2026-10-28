@@ -136,6 +136,17 @@ pub fn idle_exempt(child: &Run) -> bool {
         .is_some_and(|state| matches!(state.binding.health, HostHealth::Healthy | HostHealth::Lost))
 }
 
+/// Whether the open pi-native reviewer is between turns after one that ended without a verdict:
+/// superseding its review then interrupts no active turn, and it precedes the turn's nudge.
+pub fn between_silent_turns(task: &Task) -> bool {
+    consulted("review");
+    live_reviewer(task).is_some_and(|container| {
+        agent::container_state(task, &container)
+            .and_then(latest_silent)
+            .is_some()
+    })
+}
+
 /// Review -> Needs me while the open review child's host is lost and its pane stays. The review
 /// stays pending and the child open, so `corral agent resume` can start its next generation, and
 /// `release_lost` returns the task to Review once it has. A gone pane is left to the watchdog.
