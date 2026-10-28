@@ -114,6 +114,38 @@ fn model_picker_filters_and_picks() {
 }
 
 #[test]
+fn pi_native_model_picker_lists_the_installed_hosts_models() {
+    // Given a pi-native profile and a detection report where the installed host listed its catalog.
+    let fx = fixture();
+    let mut text = fx.toml();
+    text.push_str("\n[profiles.pi]\nharness = \"pi-native\"\nvendor = \"openai\"\n");
+    std::fs::write(fx.ctx.store.config_path(), text).unwrap();
+    let cache = fx.ctx.store.state_dir().join(corral_ops::HARNESS_CACHE_FILE);
+    let mut report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
+    report["harnesses"].as_array_mut().unwrap().push(serde_json::json!({
+        "key": "pi-native", "program": null, "path": "/usr/bin/bun", "version": "1.3.0",
+        "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"],
+        "model_source": "listed", "efforts": [], "takes_effort": true
+    }));
+    std::fs::write(&cache, serde_json::to_vec(&report).unwrap()).unwrap();
+    let ctx = crate::board::tests::fixture_ctx(Store::open(&fx.root).unwrap());
+    let mut v = SettingsView::new(&ctx);
+    v.on_key(c('2'), &ctx);
+    v.open_profile("pi".into());
+    // When the model picker opens.
+    press(&mut v, &ctx, &[c('j'), k(KeyCode::Enter)]);
+    // Then it offers the listed provider-qualified models.
+    let s = render(&mut v, &ctx);
+    assert!(s.contains("model for pi"), "{s}");
+    assert!(
+        s.contains("openai-codex/gpt-6.1-sol") && s.contains("openai-codex/gpt-5.5"),
+        "{s}"
+    );
+    assert!(s.contains("2 models (listed by the harness)"), "{s}");
+}
+
+#[test]
 fn free_text_model_and_save_as_default() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);

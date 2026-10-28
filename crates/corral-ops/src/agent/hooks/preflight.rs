@@ -158,6 +158,15 @@ pub fn supported_vendors(ctx: &Ctx) -> Vec<String> {
         },
         |dir| declared_providers(&dir),
     );
+    allowed(&declared)
+}
+
+/// The allowlisted vendors the host installed at `dir` can run.
+pub(crate) fn host_vendors(dir: &Path) -> Vec<String> {
+    allowed(&declared_providers(dir))
+}
+
+fn allowed(declared: &[String]) -> Vec<String> {
     corral_core::PI_NATIVE_VENDORS
         .iter()
         .filter(|vendor| declared.iter().any(|d| d == *vendor))

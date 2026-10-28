@@ -658,3 +658,47 @@ fn failed_discovery_warns_and_allows_routing_and_dispatch() {
     assert_eq!(stderr.matches("allowing unverified model").count(), 1);
     assert!(ws.root.join("launch").is_file());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
+    // Given a pi-native profile with a typo, and a harness report where the installed host listed
+    // its offline catalog (fixture listing output, no live provider).
+    let ws = routing_ws(
+        "[profiles.pi]\nharness = 'pi-native'\nvendor = 'openai'\nmodel = 'openai-codex/gpt-6.1-sl'\n",
+    );
+    let path = ws.root.join(".corral/state/harnesses.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("cache")).expect("json");
+    cache["harnesses"]
+        .as_array_mut()
+        .expect("harnesses")
+        .push(serde_json::json!({
+            "key": "pi-native",
+            "program": null,
+            "path": "/fixture/bun",
+            "version": "1.3.0",
+            "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"],
+            "model_source": "listed",
+            "efforts": [],
+            "takes_effort": true
+        }));
+    std::fs::write(&path, serde_json::to_vec(&cache).expect("json")).expect("cache");
+    ok(&ws.root, &["new", "Pi typo", "-p", "app", "--ready"]);
+    // When it is dispatched.
+    let out = dispatch_with_herdr(&ws.root, &["--profile", "pi"]);
+    // Then the listed catalog rejects the typo with close matches instead of allowing it unverified.
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        error.contains("not an exact discovered model ID for harness 'pi-native'"),
+        "{error}"
+    );
+    assert!(
+        error.contains("close matches:") && error.contains("openai-codex/gpt-6.1-sol"),
+        "{error}"
+    );
+    assert!(!error.contains("allowing unverified model"), "{error}");
+    assert!(!ws.root.join("app/.worktrees").exists());
+    assert!(!ws.root.join("launch").exists());
+}

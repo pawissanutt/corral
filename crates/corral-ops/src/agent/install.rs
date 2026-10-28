@@ -246,7 +246,7 @@ fn publish(
     Ok(record)
 }
 
-fn compat_pi_version(source: &Path) -> Result<String> {
+pub(crate) fn compat_pi_version(source: &Path) -> Result<String> {
     let path = source.join("compat.json");
     let value: Value = serde_json::from_slice(
         &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,

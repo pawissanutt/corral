@@ -134,6 +134,41 @@ fn pi_native_is_reported_ready_with_its_vendors_and_efforts() {
 }
 
 #[test]
+fn pi_native_carries_the_models_its_host_listed() {
+    // Given a ready host whose detection listed provider-qualified models.
+    let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
+    config.harnesses.clear();
+    config.agents.clear();
+    let probed = crate::HarnessInfo {
+        key: "pi-native".into(),
+        program: None,
+        path: Some("/bin/bun".into()),
+        version: Some("1.3.0".into()),
+        models: vec!["openai-codex/gpt-6.1-sol".into()],
+        model_source: crate::ModelSource::Listed,
+        efforts: Vec::new(),
+        takes_effort: true,
+        notes: Vec::new(),
+    };
+    // When discovery runs.
+    let report = discover_with(
+        timestamp(),
+        vec![probed],
+        &config,
+        true,
+        vec!["openai".into()],
+    );
+    // Then the settings picker and routing see the listed models.
+    let entry = report
+        .harnesses
+        .iter()
+        .find(|h| h.key == "pi-native")
+        .unwrap();
+    assert_eq!(entry.models, vec!["openai-codex/gpt-6.1-sol".to_owned()]);
+    report.validate().unwrap();
+}
+
+#[test]
 fn pi_native_is_listed_unready_only_when_configured() {
     // Given an unready host and a config that opts in through a pi-native harness.
     let mut config = Config::default_for(std::path::Path::new("/nonexistent"));

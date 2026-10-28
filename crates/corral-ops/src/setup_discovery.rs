@@ -60,9 +60,13 @@ pub struct CandidateObservation {
 pub fn setup_discover(ctx: &Ctx) -> SetupDiscovery {
     let config = &ctx.store.config;
     let ready = crate::agent::hooks::doctor::ready(ctx);
+    let mut harnesses = crate::detect_harnesses(config);
+    if ready && !harnesses.iter().any(|h| is_pi_native(&h.key)) {
+        harnesses.push(crate::harness::detect_pi_native(config));
+    }
     discover_with(
         Timestamp::now(),
-        crate::detect_harnesses(config),
+        harnesses,
         config,
         ready,
         crate::agent::hooks::preflight::supported_vendors(ctx),
@@ -78,11 +82,17 @@ fn discover_with(
 ) -> SetupDiscovery {
     let mut discovery = sanitized_discovery(observed_at, harnesses);
     if pi_native_ready || crate::agent::hooks::configured(config) {
+        let models = discovery
+            .harnesses
+            .iter()
+            .find(|h| is_pi_native(&h.key))
+            .map(|h| h.models.clone())
+            .unwrap_or_default();
         discovery.harnesses.retain(|h| !is_pi_native(&h.key));
         discovery.harnesses.push(DiscoveredHarness {
             key: PI_NATIVE_HARNESS.into(),
             installed: pi_native_ready,
-            models: Vec::new(),
+            models,
             efforts: config
                 .harness(PI_NATIVE_HARNESS)
                 .map(|(_, flags)| flags.efforts)
