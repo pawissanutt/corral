@@ -15,8 +15,10 @@ contended passes could therefore leave a fully published gate receipt marked
 Running. An uncontended manual sync could recover it. This is not a missing exit
 file and does not require changing the gate runner, commands or tiers.
 
-The fix collects authenticated receipts before acquiring pane inventory, so the
-UNKNOWN/busy-inventory branch cannot skip them. It acquires the shared session-ownership lease and checks both the selected client
+The fix collects authenticated receipts on the UNKNOWN/busy-inventory fallback,
+so failed inventory acquisition cannot skip them. The healthy path retains its
+existing collection under inventory's ownership lease, avoiding an extra binding
+read on every ordinary pass. The fallback acquires the shared session-ownership lease and checks both the selected client
 and any hook source against current tasks before collecting. Pane-dependent
 reconciliation and launches still stop: a missing inventory is not permission to
 start review or infer a pane's death. Review advances on the next usable pass.
@@ -74,7 +76,7 @@ artifact/index contention were not reproduced in the isolated regression.
 
 ## Scope
 
-Only sync's receipt-collection ordering and deterministic test fixtures change. Gate tiers, gate
+Only sync's receipt-collection fallback and deterministic test fixtures change. Gate tiers, gate
 commands, receipt validation, review admission guards and dispatch policy are
 unchanged. No claim is made that automation progresses with no driver, while a
 whole sync pass is blocked, or while launches remain legitimately prohibited.
