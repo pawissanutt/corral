@@ -19,6 +19,8 @@ fn expected_samples(path: &str) -> u64 {
     match path {
         "pm_next" => 4,
         "automation_status" => 5,
+        // A sync tick: resources::observe, then the admission reads of dispatch_policy.
+        super::sync_budget::PATH => 3,
         _ => 1,
     }
 }
@@ -26,7 +28,7 @@ fn expected_samples(path: &str) -> u64 {
 /// Promotion shortlists each path computes: the PM workset's one Idea suggestion.
 fn expected_shortlists(path: &str) -> u64 {
     match path {
-        "pm_next" | "automation_status" => 1,
+        "pm_next" | "automation_status" | super::sync_budget::PATH => 1,
         _ => 0,
     }
 }
@@ -43,6 +45,9 @@ pub(super) struct Expected {
     /// `likely_files` calls per shortlist: the Idea and every compared active task.
     pub(super) likely_per_shortlist: u64,
     pub(super) volumes: BTreeSet<PathBuf>,
+    /// The walks' stored bytes after a write the measured pass itself commits: each walk then
+    /// reads the store before or after it, and only the bytes differ.
+    pub(super) walk_bytes_after: Option<u64>,
 }
 
 impl Expected {
@@ -54,6 +59,7 @@ impl Expected {
             self.sample_stats,
             self.likely_per_shortlist,
             self.volumes,
+            self.walk_bytes_after,
         ])
     }
 
@@ -66,6 +72,7 @@ impl Expected {
             sample_stats: n(3),
             likely_per_shortlist: n(4),
             volumes: serde_json::from_value(value[5].clone()).unwrap(),
+            walk_bytes_after: value[6].as_u64(),
         }
     }
 }
@@ -143,6 +150,7 @@ pub(super) fn expected(fx: &Fixture) -> Expected {
         sample_stats: runs + walk_only,
         likely_per_shortlist: 1 + compared,
         volumes,
+        walk_bytes_after: None,
     }
 }
 
@@ -223,11 +231,13 @@ pub(super) fn followup_failures(
             calls * exp.tasks,
         );
         expect("rows", rows, calls * exp.walk_rows);
-        expect(
-            "doc bytes",
-            cell("decoded_doc_bytes"),
-            calls * exp.walk_bytes,
-        );
+        let bytes = cell("decoded_doc_bytes");
+        let split = exp.walk_bytes_after.is_some_and(|after| {
+            (0..=calls).any(|k| k * exp.walk_bytes + (calls - k) * after == bytes)
+        });
+        if !split {
+            expect("doc bytes", bytes, calls * exp.walk_bytes);
+        }
         expect("processes", cell("processes"), 0);
         let stats = if site == "sample" {
             calls * exp.sample_stats

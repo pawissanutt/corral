@@ -55,7 +55,7 @@ impl Fixture {
         gone(
             &self.ctx,
             Sample {
-                task: &self.task,
+                task: (&self.task).into(),
                 pane: Some("w1:p1"),
                 started,
                 seen: true,

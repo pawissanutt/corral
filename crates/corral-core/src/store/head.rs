@@ -127,7 +127,9 @@ pub(crate) fn read_rows(
     let rows = view.rows(num, q, PageReq::first(limit))?.items;
     if work::in_hot_scope() {
         for row in &rows {
-            let run = run_seq_of(row).and_then(runs);
+            // A checkpoint payload is keyed by digest: only a caller naming its run claims it.
+            let payload = (row.part == TaskPart::CheckpointPayload).then_some("");
+            let run = run_seq_of(row).or(payload).and_then(runs);
             let subject = match run.as_deref() {
                 Some(run) => Subject::RunChild { task, run },
                 None => Subject::Plain,
@@ -276,6 +278,25 @@ impl TaskHead {
             &|seq| self.known_run(seq),
             q,
             limit,
+            counter,
+        )
+    }
+
+    /// [`Self::query`] of rows that all belong to run `run`, checkpoint payloads included.
+    pub(crate) fn query_for_run(
+        &self,
+        q: &RowQuery,
+        counter: Counter,
+        run: &str,
+    ) -> Result<Vec<HistoryRow>> {
+        let view = self.pinned()?;
+        read_rows(
+            view.as_ref(),
+            self.num,
+            &self.task.id,
+            &|_| Some(run.to_owned()),
+            q,
+            u32::MAX,
             counter,
         )
     }

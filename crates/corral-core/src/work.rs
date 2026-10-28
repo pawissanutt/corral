@@ -281,9 +281,15 @@ impl Ledger {
     /// The innermost scope that claims an event: a follow-up claims everything, own-record
     /// scopes claim their run's child rows, emitted readers their emitted rows.
     fn bucket(&self, decode: bool, subject: Subject<'_>) -> Bucket {
+        self.bucket_of(decode, false, subject)
+    }
+
+    /// `transcript`: the usage collector's transcript work, which an own-record scope claims.
+    fn bucket_of(&self, decode: bool, transcript: bool, subject: Subject<'_>) -> Bucket {
         for scope in self.scopes.iter().rev() {
             match scope {
                 Scope::Followup(site) => return Bucket::Followup(site.clone()),
+                Scope::OwnRecords { .. } if transcript => return Bucket::OwnRecord,
                 Scope::OwnRecords { task, run } if decode => {
                     if let Subject::RunChild { task: t, run: r } = subject
                         && t == task
@@ -370,13 +376,17 @@ pub fn hydrated_at(location: &'static std::panic::Location<'static>) {
 }
 
 /// Counts `n` events of a counter that only a follow-up scope can claim (views, file stats,
-/// processes, transcript work).
+/// processes), or transcript work, which an own-record scope also claims.
 pub fn counted(counter: Counter, n: u64) {
     with_ledger(|ledger| {
         if ledger.hot == 0 {
             return;
         }
-        let bucket = ledger.bucket(false, Subject::Plain);
+        let transcript = matches!(
+            counter,
+            Counter::TranscriptLinesAggregated | Counter::TranscriptBytesRead
+        );
+        let bucket = ledger.bucket_of(false, transcript, Subject::Plain);
         ledger.add(counter, n, &bucket);
     });
 }
@@ -396,6 +406,26 @@ impl HotScope {
 impl Drop for HotScope {
     fn drop(&mut self) {
         with_ledger(|ledger| ledger.hot = ledger.hot.saturating_sub(1));
+    }
+}
+
+/// Derivation preparation inside a measured pass: an evaluation prepares its derivations
+/// before it enters [`HotScope`], and plan T-253 section 4 keeps that work outside the measured
+/// hot path even when the evaluation runs within an enclosing measured pass, such as sync.
+/// Nothing is counted until it is dropped.
+#[must_use = "counting resumes when dropped"]
+pub struct Preparation(u32);
+
+impl Preparation {
+    pub fn enter() -> Preparation {
+        Preparation(with_ledger(|ledger| std::mem::take(&mut ledger.hot)))
+    }
+}
+
+impl Drop for Preparation {
+    fn drop(&mut self) {
+        let hot = self.0;
+        with_ledger(|ledger| ledger.hot = hot);
     }
 }
 

@@ -65,7 +65,8 @@ const ACTIVE: [(Status, &str); 8] = [
 ];
 
 pub(crate) struct Fixture {
-    pub(crate) _root: tempfile::TempDir,
+    /// The fixture's directory, owned unless the fixture was reopened from another process's.
+    pub(crate) _root: Option<tempfile::TempDir>,
     pub(crate) ctx: Ctx,
     pub(crate) probe: Arc<RecordingProbe>,
     /// Tasks whose current run has a real checkout: equal at every size.
@@ -90,7 +91,11 @@ impl RecordingProbe {
 
 impl ResourceProbe for RecordingProbe {
     fn sample(&self, store: &Store) -> anyhow::Result<ResourceSnapshot> {
-        let snapshot = self.inner.sample(store)?;
+        let mut snapshot = self.inner.sample(store)?;
+        // PSI is a diagnostic machine reading the persisted state embeds; its printed width
+        // would make the stored bytes depend on host load.
+        snapshot.cpu_psi = snapshot.cpu_psi.map(|_| 0.0);
+        snapshot.mem_psi = snapshot.mem_psi.map(|_| 0.0);
         self.seen
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -137,17 +142,40 @@ fn checkout(path: &Path) {
     git(path, &["commit", "-q", "-m", "fixture"]);
 }
 
-fn settle(task: &mut Task, status: Status, shape: Shape, open: bool) {
+/// Where an open task's agent pane lives: nowhere the fake engine lists, or on its socket
+/// (`work_budget_herdr.sh`: `w1:p1`-`w1:p3` working, `w1:p4`-`w1:p5` blocked).
+#[derive(Clone)]
+pub(crate) enum Panes {
+    Unlisted,
+    Live { socket: PathBuf, next: [u32; 2] },
+}
+
+impl Panes {
+    fn pane(&mut self, id: &str, status: Status) -> corral_core::HerdrRef {
+        let (pane_id, socket) = match self {
+            Panes::Unlisted => (format!("w1:{id}"), None),
+            Panes::Live { socket, next } => {
+                let slot = usize::from(status == Status::NeedsMe);
+                next[slot] += 1;
+                (format!("w1:p{}", next[slot]), Some(socket.clone()))
+            }
+        };
+        corral_core::HerdrRef {
+            workspace_id: "w1".into(),
+            pane_id,
+            socket,
+        }
+    }
+}
+
+fn settle(task: &mut Task, status: Status, shape: Shape, open: bool, panes: &mut Panes) {
     grow(task, shape.history, shape.nested, open);
     if !open {
         return;
     }
+    let herdr = panes.pane(&task.id, status);
     let pane = task.runs.last_mut().unwrap();
-    pane.herdr = Some(corral_core::HerdrRef {
-        workspace_id: "w1".into(),
-        pane_id: format!("w1:{}", task.id),
-        socket: None,
-    });
+    pane.herdr = Some(herdr);
     if status == Status::NeedsMe {
         pane.agent_state = Some("blocked".into());
         pane.blocked_excerpt = Some("Which option should I take?".into());
@@ -174,6 +202,22 @@ fn events(ids: &[String], per_task: usize) -> String {
         }
     }
     log
+}
+
+/// Task-less events of a kind nothing reads, equal at every size, so every variant's event
+/// sequence numbers (and the cursors that store them) have the same width.
+fn filler() -> String {
+    let event = Event {
+        seq: 0,
+        ts: T0,
+        task: None,
+        kind: "budget_filler".into(),
+        actor: None,
+        via: None,
+        detail: serde_json::json!({}),
+    };
+    let line = serde_json::to_string(&event).unwrap() + "\n";
+    line.repeat(1000)
 }
 
 /// An approved Plan over two active members, so a frame computes tracker progress.
@@ -224,6 +268,12 @@ fn grant(store: &mut Store, task: &str) {
 }
 
 pub(crate) fn fixture(shape: Shape) -> Fixture {
+    fixture_with(shape, false)
+}
+
+/// `live` puts the open tasks' panes on the fake engine's socket, so a sync pass owns the
+/// inventory and reconciles them.
+pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
     let root = tempfile::tempdir().unwrap();
     let mut store = Store::init(root.path()).unwrap();
     std::fs::create_dir_all(root.path().join("app").join(".git")).unwrap();
@@ -249,6 +299,14 @@ pub(crate) fn fixture(shape: Shape) -> Fixture {
     )
     .unwrap();
     let herdr = Herdr::with_bin(bin, Some("corral-test".into()));
+    let mut panes = if live {
+        Panes::Live {
+            socket: herdr.socket_path().unwrap(),
+            next: [0, 3],
+        }
+    } else {
+        Panes::Unlisted
+    };
     let mut ids = Vec::new();
     let mut checkouts = Vec::new();
     for (status, title) in ACTIVE {
@@ -258,7 +316,7 @@ pub(crate) fn fixture(shape: Shape) -> Fixture {
         task.created = T0;
         task.updated = T0;
         let open = matches!(status, Status::Running | Status::NeedsMe);
-        settle(&mut task, status, shape, open);
+        settle(&mut task, status, shape, open, &mut panes);
         if open || status == Status::Review {
             let path = root.path().join("checkouts").join(&task.id);
             checkout(&path);
@@ -282,10 +340,11 @@ pub(crate) fn fixture(shape: Shape) -> Fixture {
             .unwrap();
         task.created = T0;
         task.updated = T0;
-        settle(&mut task, status, BASE, false);
+        settle(&mut task, status, BASE, false, &mut panes);
         store.fixture_put_task(&task).unwrap();
     }
     let active: Vec<String> = ids.iter().map(|(id, _)| id.clone()).collect();
+    store.fixture_append_events(&filler()).unwrap();
     store
         .fixture_append_events(&events(&active, 3 * shape.history))
         .unwrap();
@@ -300,10 +359,37 @@ pub(crate) fn fixture(shape: Shape) -> Fixture {
         resource_probe: probe.clone(),
     };
     Fixture {
-        _root: root,
+        _root: Some(root),
         ctx,
         probe,
         checkouts,
         running: member(Status::Running),
+    }
+}
+
+/// The fixture another process built at `root`, opened afresh: a cold process on a settled
+/// store. `running` names the Running task the mutation step edits.
+pub(crate) fn reopen(root: &Path, running: &str) -> Fixture {
+    let store = Store::open(root).unwrap();
+    let herdr = Herdr::with_bin(root.join("herdr"), Some("corral-test".into()));
+    let mut checkouts: Vec<PathBuf> = std::fs::read_dir(root.join("checkouts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    checkouts.sort();
+    let probe = Arc::new(RecordingProbe {
+        inner: PinnedReadingsProbe::admitting(),
+        seen: Mutex::default(),
+    });
+    Fixture {
+        _root: None,
+        ctx: Ctx {
+            store,
+            herdr,
+            resource_probe: probe.clone(),
+        },
+        probe,
+        checkouts,
+        running: running.to_owned(),
     }
 }

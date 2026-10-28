@@ -73,6 +73,28 @@ impl Inbox<'_> {
             .context("decoding inbox head")
     }
 
+    /// The scoped observe cursor for one adapter and binding, read by key.
+    pub fn observe_cursor_of(
+        &self,
+        adapter: &str,
+        binding: &SessionBinding,
+    ) -> Result<Option<ObserveCursor>> {
+        match self.recipient.task() {
+            Some(task) => Ok(self
+                .store
+                .head(task)?
+                .observe_cursor(&self.recipient, adapter, binding)?
+                .map(|stream| stream.cursor)),
+            None => Ok(self
+                .pm_state()?
+                .inbox
+                .observe_cursors
+                .into_iter()
+                .find(|stream| stream.adapter == adapter && &stream.binding == binding)
+                .map(|stream| stream.cursor)),
+        }
+    }
+
     pub fn effect_applied(&self, seq: u64) -> Result<bool> {
         match self.recipient.task() {
             Some(task) => self.store.head(task)?.effect_applied(&self.recipient, seq),

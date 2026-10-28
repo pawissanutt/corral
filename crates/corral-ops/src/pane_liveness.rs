@@ -194,7 +194,7 @@ pub(crate) fn unknown(reason: &str) {
 }
 
 pub(crate) struct Sample<'a> {
-    pub task: &'a corral_core::Task,
+    pub task: crate::session_scope::Owner<'a>,
     pub pane: Option<&'a str>,
     pub started: Timestamp,
     pub seen: bool,
@@ -218,7 +218,7 @@ struct Observation {
 /// sighting, two distinct consecutive missing samples are needed, even minutes
 /// after startup. The launch timestamp prevents pane-ID reuse inheriting misses.
 pub(crate) fn gone(ctx: &Ctx, sample: Sample<'_>) -> Result<bool> {
-    if !crate::session_scope::owns_task(ctx, sample.task)? {
+    if !crate::session_scope::owns(ctx, sample.task)? {
         return Ok(false);
     }
     let grace = SignedDuration::from_secs(

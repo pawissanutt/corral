@@ -99,6 +99,7 @@ mod routing;
 mod scratch_reclaim;
 mod search;
 mod session_scope;
+mod settling;
 mod setup;
 mod setup_discovery;
 mod setup_structure;

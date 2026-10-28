@@ -217,7 +217,39 @@ impl ReadView for FakeView {
                 });
                 self.page(found.into_iter(), &page)
             }
+            HeadQuery::DashboardDue { now } => self.page(
+                heads
+                    .filter(|head| {
+                        head.header
+                            .fields
+                            .dashboard_due
+                            .is_some_and(|due| due <= *now)
+                    })
+                    .cloned(),
+                &page,
+            ),
         }
+    }
+
+    fn token_owners(
+        &self,
+        part: TaskPart,
+        token: &str,
+        limit: u32,
+    ) -> Result<Vec<TaskNum>, ViewError> {
+        self.fresh()?;
+        Ok(self
+            .state
+            .tasks
+            .iter()
+            .filter(|(_, task)| {
+                task.rows
+                    .values()
+                    .any(|row| row.part == part && row.index.iter().any(|t| t == token))
+            })
+            .map(|(num, _)| *num)
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .collect())
     }
 
     fn task(&self, num: TaskNum, parts: &TaskParts) -> Result<Option<TaskDoc>, ViewError> {

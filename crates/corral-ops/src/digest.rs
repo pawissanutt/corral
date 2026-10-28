@@ -208,10 +208,7 @@ pub fn scheduled_digest_at(ctx: &Ctx, now: Timestamp) -> Result<Option<DigestRep
     };
     let previous = ctx
         .store
-        .events_of(None, &["digest"])?
-        .iter()
-        .rev()
-        .find(|e| e.kind == "digest" && e.detail["scheduled"] == true)
+        .last_event_where(None, &["digest"], None, |e| e.detail["scheduled"] == true)?
         .map(|event| {
             event.detail["snapshot_at"]
                 .as_str()

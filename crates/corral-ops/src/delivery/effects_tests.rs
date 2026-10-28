@@ -41,7 +41,12 @@ impl EffectHandler for Handler {
         }
         Ok(())
     }
-    fn apply_task(&self, task: &mut Task, _: &Message, _: &Receipt) -> Result<()> {
+    fn apply_task(
+        &self,
+        task: &mut corral_core::TaskHeadMut,
+        _: &Message,
+        _: &Receipt,
+    ) -> Result<()> {
         self.task_calls.set(self.task_calls.get() + 1);
         task.labels.push("effect".into());
         Ok(())
@@ -348,7 +353,7 @@ impl EffectHandler for DecisionHandler {
         Ok(())
     }
 
-    fn apply_task(&self, _: &mut Task, _: &Message, _: &Receipt) -> Result<()> {
+    fn apply_task(&self, _: &mut corral_core::TaskHeadMut, _: &Message, _: &Receipt) -> Result<()> {
         self.task_calls.set(self.task_calls.get() + 1);
         Ok(())
     }

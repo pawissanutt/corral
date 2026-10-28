@@ -66,8 +66,8 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         ..ctx.clone()
     };
     let mut changes = Vec::new();
-    for task in ctx.store.list()? {
-        if task.status != Status::Review || crate::plan_pilot::handles(&task) {
+    for task in output::review_tasks(&ctx)? {
+        if crate::plan_pilot::handles(&task) {
             continue;
         }
         output::record_authority(&ctx, &task)?;

@@ -252,3 +252,6 @@ fn unrelated_cwd_still_short_circuits_later_cached_errors() {
 
 #[path = "usage_cache_eviction_tests.rs"]
 mod eviction;
+
+#[path = "usage_board_step_tests.rs"]
+mod board_step;

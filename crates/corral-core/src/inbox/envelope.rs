@@ -119,7 +119,7 @@ impl Inbox<'_> {
         flush: bool,
     ) -> Result<Option<Envelope>> {
         let _lock = self.lock()?;
-        let state = self.state()?;
+        let state = self.state_head()?;
         ensure!(
             state.open_envelope.is_none(),
             "recipient already has an open envelope"
@@ -196,7 +196,7 @@ impl Inbox<'_> {
     /// Reattach a publication interrupted before its task state was saved.
     pub fn recover_publication(&self) -> Result<()> {
         let _lock = self.lock()?;
-        let state = self.state()?;
+        let state = self.state_head()?;
         if let Some(number) = state.replacement_envelope {
             let envelope = self.envelope(number)?;
             let mut pending = false;

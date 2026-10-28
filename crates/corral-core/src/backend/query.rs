@@ -58,6 +58,11 @@ pub enum HeadQuery {
     RecentByStatus {
         status: String,
     },
+    /// Tasks whose unpaused dashboard schedule is due by `now` (`tasks_dashboard_due`), by
+    /// number.
+    DashboardDue {
+        now: jiff::Timestamp,
+    },
 }
 
 /// Rows of one family of one task, in key order (or reverse key order), matching every given

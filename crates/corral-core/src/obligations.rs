@@ -126,6 +126,41 @@ pub struct WaitRecord {
     pub receipt: Option<ResumeReceipt>,
 }
 
+impl WaitRecord {
+    /// Whether an obligations tick can still change this wait: it has no receipt, its request
+    /// names another run than `run`, or its observation is not the one its receipt renders.
+    pub fn open(&self, run: &str) -> bool {
+        let Some(receipt) = &self.receipt else {
+            return true;
+        };
+        let rendered = receipt_observation(receipt, self.observation.at);
+        self.request.run != run
+            || rendered.state != self.observation.state
+            || rendered.detail != self.observation.detail
+    }
+}
+
+/// The observation a resume receipt fixes, observed at `now`.
+pub fn receipt_observation(receipt: &ResumeReceipt, now: Timestamp) -> WaitObservation {
+    let state = match receipt.delivery {
+        ResumeDelivery::Unknown => WaitState::DeliveryUnknown,
+        ResumeDelivery::Acknowledged => match receipt.outcome {
+            ReceiptOutcome::Ready | ReceiptOutcome::Answered => WaitState::Ready,
+            ReceiptOutcome::Failed => WaitState::Failed,
+            ReceiptOutcome::Cancelled => WaitState::Cancelled,
+            ReceiptOutcome::Lost => WaitState::Lost,
+        },
+    };
+    WaitObservation {
+        at: now,
+        state,
+        detail: format!(
+            "receipt {}: {:?}; delivery {:?}",
+            receipt.id, receipt.outcome, receipt.delivery
+        ),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub request: DecisionRequest,

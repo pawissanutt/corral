@@ -485,6 +485,67 @@ impl Store {
             .collect()
     }
 
+    /// Events of `task` (any task when `None`) and `kinds`, newest first, read one at a time
+    /// for as long as `more` accepts each one; the first event it refuses ends the scan and is
+    /// not returned. Exactly the events examined are decoded, never an older page remainder.
+    ///
+    /// # Errors
+    /// Returns read errors.
+    pub fn events_newest(
+        &self,
+        task: Option<&str>,
+        kinds: &[&str],
+        run: Option<&str>,
+        mut more: impl FnMut(&Event) -> bool,
+    ) -> Result<Vec<Event>> {
+        let view = self.view()?;
+        let query = EventQuery {
+            task: task.map(str::to_owned),
+            kinds: kinds.iter().map(|kind| (*kind).to_owned()).collect(),
+            run: run.map(str::to_owned),
+            newest_first: true,
+            valid_only: true,
+            ..EventQuery::default()
+        };
+        let mut events = Vec::new();
+        let mut page = PageReq::first(1);
+        loop {
+            let found = view.events(&query, page.clone())?;
+            for row in found.items {
+                let Some(event) = projected(row)? else {
+                    continue;
+                };
+                if !more(&event) {
+                    return Ok(events);
+                }
+                events.push(event);
+            }
+            match found.next {
+                Some(next) => page.after = Some(next),
+                None => return Ok(events),
+            }
+        }
+    }
+
+    /// The newest event of `task`, `kinds` and `run` that `matches` accepts; older ones are not
+    /// read.
+    ///
+    /// # Errors
+    /// Returns read errors.
+    pub fn last_event_where(
+        &self,
+        task: Option<&str>,
+        kinds: &[&str],
+        run: Option<&str>,
+        matches: impl Fn(&Event) -> bool,
+    ) -> Result<Option<Event>> {
+        let mut found = false;
+        let events = self.events_newest(task, kinds, run, |event| {
+            !std::mem::replace(&mut found, matches(event))
+        })?;
+        Ok(events.into_iter().last().filter(|event| matches(event)))
+    }
+
     /// Run-filtered event page, strictly after `after`.
     pub fn events_of_run(
         &self,

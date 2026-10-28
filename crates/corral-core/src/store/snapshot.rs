@@ -132,6 +132,14 @@ impl ReadView for SharedView {
     ) -> Result<Page<HistoryRow>, ViewError> {
         self.view().rows(num, q, page)
     }
+    fn token_owners(
+        &self,
+        part: TaskPart,
+        token: &str,
+        limit: u32,
+    ) -> Result<Vec<TaskNum>, ViewError> {
+        self.view().token_owners(part, token, limit)
+    }
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         self.view().tasks(q, page)
     }

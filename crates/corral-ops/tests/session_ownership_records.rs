@@ -145,6 +145,29 @@ fn summary_matches_full_walk_for_every_reference_family() {
             // Then both agree with the full walk, including unknown legacy gate ownership.
             assert_eq!(inventory, expected, "{kind}/{owner}");
             assert_eq!(consumed, expected, "{kind}/{owner}");
+            let board = ctx.store.board(None).unwrap();
+            assert_eq!(
+                session_scope::owns_board(&ctx, &ctx.store, &board).unwrap(),
+                expected,
+                "{kind}/{owner}"
+            );
+            // And each task's head decides as its full walk.
+            for task in &tasks {
+                let head = ctx.store.head(&task.id).unwrap();
+                let full = session_scope::owns_task(&ctx, task).unwrap();
+                assert_eq!(
+                    session_scope::owns_head(&ctx, &head).unwrap(),
+                    full,
+                    "{kind}/{owner}/{}",
+                    task.id
+                );
+                assert_eq!(
+                    session_scope::owns(&ctx, session_scope::Owner::Head(&head)).unwrap(),
+                    full,
+                    "{kind}/{owner}/{}",
+                    task.id
+                );
+            }
             assert_eq!(
                 session_scope::check_launch(&ctx).is_ok(),
                 expected,
@@ -196,6 +219,8 @@ fn explicit_binding_resolves_legacy_references_in_every_container() {
 
         // Then both the summary and the original task-local walk recognize the owner.
         assert!(session_scope::owns_task(&ctx, &task).unwrap(), "{kind}");
+        let head = ctx.store.head(&task.id).unwrap();
+        assert!(session_scope::owns_head(&ctx, &head).unwrap(), "{kind}");
         assert!(session_scope::owns_inventory(&ctx).unwrap(), "{kind}");
     }
 }

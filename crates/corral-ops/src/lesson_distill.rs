@@ -117,7 +117,10 @@ pub(crate) fn announce_due(ctx: &Ctx, now: Timestamp) -> Result<()> {
         store: ctx.store.read_only_snapshot()?,
         ..ctx.clone()
     };
-    crate::lesson_rows::prepare(&snapshot)?;
+    {
+        let _prepare = corral_core::work::Preparation::enter();
+        crate::lesson_rows::prepare(&snapshot)?;
+    }
     let _hot = corral_core::work::HotScope::enter();
     for due in lessons_due(&snapshot, now)?
         .into_iter()

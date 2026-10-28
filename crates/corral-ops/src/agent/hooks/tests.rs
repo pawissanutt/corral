@@ -80,8 +80,13 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
     let _ = review::preflight(ctx, profile);
     let _ = pm::preflight(ctx, Some(profile));
     let _ = review::command(ctx, task, run, profile);
-    crate::provider_stall::advance_agent(ctx, task, &HashMap::new(), jiff::Timestamp::now())
-        .unwrap();
+    crate::provider_stall::advance_agent(
+        ctx,
+        &ctx.store.head(&task.id).unwrap(),
+        &HashMap::new(),
+        jiff::Timestamp::now(),
+    )
+    .unwrap();
     let mut done = task.clone();
     done.status = Status::Done;
     if task_is_pi_native(&done) {

@@ -423,7 +423,11 @@ impl Tx<'_> {
         for row in rows {
             self.put_row(num, row)?;
         }
-        self.scope(ChangeScope::Task { num, parts });
+        self.scope(ChangeScope::Task {
+            num,
+            parts,
+            history: true,
+        });
         Ok(())
     }
 
@@ -489,7 +493,9 @@ impl Tx<'_> {
         }
         let old_fields = task.head.header.fields.clone();
         let mut parts = BTreeSet::new();
+        let mut history = false;
         for write in change.rows.iter().cloned().chain(extra) {
+            history |= write.container_history();
             match write {
                 RowWrite::Put(row) => {
                     parts.insert(row.part);
@@ -518,6 +524,7 @@ impl Tx<'_> {
         self.scope(ChangeScope::Task {
             num,
             parts: parts.into_iter().collect(),
+            history,
         });
         for event in &change.events {
             self.append_event(event.clone())?;

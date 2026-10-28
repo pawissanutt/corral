@@ -34,7 +34,20 @@ impl TaskHeadMut {
     /// Rows matching `q` as this mutation would store them: the view's, overlaid with the rows
     /// already queued.
     pub(crate) fn rows_now(&self, q: &RowQuery, counter: Counter) -> Result<Vec<HistoryRow>> {
-        let stored = self.head.query(q, u32::MAX, counter)?;
+        self.overlay(q, self.head.query(q, u32::MAX, counter)?)
+    }
+
+    /// [`Self::rows_now`] of rows that all belong to run `run`.
+    pub(crate) fn rows_now_for_run(
+        &self,
+        q: &RowQuery,
+        counter: Counter,
+        run: &str,
+    ) -> Result<Vec<HistoryRow>> {
+        self.overlay(q, self.head.query_for_run(q, counter, run)?)
+    }
+
+    fn overlay(&self, q: &RowQuery, stored: Vec<HistoryRow>) -> Result<Vec<HistoryRow>> {
         {
             let mut originals = self.originals.borrow_mut();
             for row in &stored {
@@ -386,13 +399,14 @@ impl TaskHeadMut {
         doc: Value,
         id: &str,
         receipt: Option<&str>,
+        open: bool,
     ) -> HistoryRow {
         let mut row = plain(
             TaskPart::RunObligation,
             format!("{}/{kind}/{}", child_key(s, SELF), seq(n)),
             doc,
         );
-        row.open = receipt.is_none();
+        row.open = open;
         row.index = std::iter::once(format!("id:{id}"))
             .chain(receipt.map(|r| format!("receipt:{r}")))
             .collect();
@@ -429,6 +443,7 @@ impl TaskHeadMut {
             serde_json::to_value(&wait)?,
             &wait.request.id,
             receipt.as_deref(),
+            wait.open(run),
         ));
         Ok(())
     }
@@ -453,6 +468,7 @@ impl TaskHeadMut {
             serde_json::to_value(&decision)?,
             &decision.request.id,
             receipt.as_deref(),
+            decision.receipt.is_none(),
         ));
         Ok(())
     }
@@ -493,6 +509,7 @@ impl TaskHeadMut {
             serde_json::to_value(&after)?,
             id,
             after.receipt.as_ref().map(|r| r.id.as_str()),
+            after.open(run),
         );
         if new == row {
             return Ok(());
@@ -535,6 +552,7 @@ impl TaskHeadMut {
             serde_json::to_value(&after)?,
             id,
             after.receipt.as_ref().map(|r| r.id.as_str()),
+            after.receipt.is_none(),
         );
         if new == row {
             return Ok(());

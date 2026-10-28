@@ -117,7 +117,8 @@ fn a_full_update_writes_only_the_changed_run_row_and_a_no_op_writes_nothing() {
         page.entries[0].scopes,
         [ChangeScope::Task {
             num: TaskNum(1),
-            parts: vec![TaskPart::Run]
+            parts: vec![TaskPart::Run],
+            history: true,
         }]
     );
     assert_eq!(

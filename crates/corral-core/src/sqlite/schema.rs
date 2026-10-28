@@ -159,6 +159,8 @@ CREATE INDEX task_rows_open ON task_rows(task, part, key) WHERE open = 1;
 -- Secondary lookup tokens of each row (keyed child reads by an indexed attribute).
 CREATE TABLE task_row_index(task INTEGER NOT NULL, part TEXT NOT NULL, token TEXT NOT NULL, key TEXT NOT NULL,
   PRIMARY KEY(task, part, token, key)) STRICT;
+-- Cross-task token lookups (the sync sweep's pane owners).
+CREATE INDEX task_row_index_token ON task_row_index(part, token, task);
 CREATE TRIGGER recoveries_no_update BEFORE UPDATE ON recoveries BEGIN SELECT RAISE(ABORT, 'recoveries are append-only'); END;
 CREATE TRIGGER recoveries_no_delete BEFORE DELETE ON recoveries BEGIN SELECT RAISE(ABORT, 'recoveries are append-only'); END;
 CREATE TRIGGER recovery_outcomes_no_update BEFORE UPDATE ON recovery_outcomes BEGIN SELECT RAISE(ABORT, 'recovery outcomes are append-only'); END;

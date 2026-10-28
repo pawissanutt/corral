@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, ensure};
 use corral_core::inbox::{EffectStatus, Inbox, Message, Receipt, ReceiptLevel, Recipient};
-use corral_core::{ReceiptOutcome, ResumeDelivery, ResumeReceipt, Status, Task};
+use corral_core::{ReceiptOutcome, ResumeDelivery, ResumeReceipt, Status, TaskHead, TaskHeadMut};
 
 use crate::Ctx;
 
@@ -28,7 +28,12 @@ pub trait EffectHandler {
         receipt: &Receipt,
         decision_receipt: Option<&ResumeReceipt>,
     ) -> Result<()>;
-    fn apply_task(&self, task: &mut Task, message: &Message, receipt: &Receipt) -> Result<()>;
+    fn apply_task(
+        &self,
+        task: &mut TaskHeadMut,
+        message: &Message,
+        receipt: &Receipt,
+    ) -> Result<()>;
 }
 
 pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) -> Result<()> {
@@ -39,23 +44,18 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
         let Some(observed) = entry.observed else {
             continue;
         };
-        let stale = recipient
-            .task()
-            .map(|id| {
-                ctx.store.get(id).map(|t| {
-                    !current(
-                        &t,
-                        recipient,
-                        &message,
-                        entry
-                            .effect
-                            .as_ref()
-                            .and_then(|effect| effect.decision_receipt.as_ref()),
-                    )
-                })
-            })
-            .transpose()?
-            .unwrap_or(false);
+        let stale = match recipient.task() {
+            Some(id) => !current(
+                &ctx.store.head(id)?,
+                recipient,
+                &message,
+                entry
+                    .effect
+                    .as_ref()
+                    .and_then(|effect| effect.decision_receipt.as_ref()),
+            )?,
+            None => false,
+        };
         let decision_receipt = match entry.effect {
             Some(effect) => effect.decision_receipt,
             None if stale => None,
@@ -96,39 +96,34 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
         if let Some(id) = recipient.task() {
             let _inbox = inbox.lock()?;
             let view = pending_view(&inbox)?;
-            ctx.store.update(id, |task| {
-                if !current(task, recipient, &message, effect.decision_receipt.as_ref()) {
+            ctx.store.update_head(id, |task| {
+                let head = task.head();
+                if !current(head, recipient, &message, effect.decision_receipt.as_ref())? {
                     became_stale = true;
                     return Ok(());
                 }
                 if let Some(expected) = &effect.decision_receipt {
+                    let run = head
+                        .current_run
+                        .as_ref()
+                        .context("effect run disappeared")?
+                        .id
+                        .clone();
                     ensure!(
-                        task.current_run()
-                            .context("effect run disappeared")?
-                            .obligations
-                            .decisions
-                            .iter()
-                            .any(|decision| decision.receipt.as_ref() == Some(expected)),
+                        head.receipt(&run, &expected.id)?.as_ref() == Some(expected),
                         "locked handler did not commit the prepared decision receipt"
                     );
                 }
-                if recipient
-                    .state_mut(task)?
-                    .effects_applied
-                    .contains(&message.seq)
-                {
+                if head.effect_applied(recipient, message.seq)? {
                     return Ok(());
                 }
                 handler.apply_task(task, &message, &effect.receipt)?;
                 // A checkpoint request answers nothing, so it leaves blocked state alone.
                 let wakes = message.kind != "control_request";
+                // current() holds each recipient to its current container.
                 let pending = match recipient {
-                    Recipient::Run { run, .. } => {
-                        let run = task
-                            .runs
-                            .iter_mut()
-                            .find(|r| &r.id == run)
-                            .context("effect run disappeared")?;
+                    Recipient::Run { .. } => {
+                        let run = task.current_run_mut().context("effect run disappeared")?;
                         if wakes {
                             run.blocked_excerpt = None;
                             run.seen_working = false;
@@ -137,35 +132,23 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                         }
                         &mut run.pending_reply
                     }
-                    Recipient::PlanRun { plan_run, .. } => {
+                    Recipient::PlanRun { .. } => {
                         &mut task
-                            .plan_runs
-                            .iter_mut()
-                            .find(|r| &r.id == plan_run)
+                            .last_plan_run_mut()
                             .context("effect plan run disappeared")?
                             .pending_reply
                     }
-                    Recipient::PlanReview { plan, review, .. } => {
+                    Recipient::PlanReview { .. } => {
                         &mut task
-                            .plans
-                            .iter_mut()
-                            .find(|p| &p.id == plan)
-                            .context("effect plan disappeared")?
-                            .reviews
-                            .iter_mut()
-                            .find(|r| &r.id == review)
+                            .last_plan_mut()
+                            .and_then(|plan| plan.current_review.as_mut())
                             .context("effect review disappeared")?
                             .pending_reply
                     }
-                    Recipient::ReviewRun { run, review, .. } => {
+                    Recipient::ReviewRun { .. } => {
                         &mut task
-                            .runs
-                            .iter_mut()
-                            .find(|r| &r.id == run)
-                            .context("effect run disappeared")?
-                            .review_runs
-                            .iter_mut()
-                            .find(|r| &r.id == review)
+                            .current_run_mut()
+                            .and_then(|run| run.current_child.as_deref_mut())
                             .context("effect review child disappeared")?
                             .pending_reply
                     }
@@ -178,11 +161,7 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                 {
                     task.status = Status::Running;
                 }
-                recipient
-                    .state_mut(task)?
-                    .effects_applied
-                    .insert(message.seq);
-                Ok(())
+                task.mark_effect_applied(recipient, message.seq)
             })?;
         }
         if became_stale {
@@ -213,48 +192,57 @@ pub(crate) fn pending_view(inbox: &Inbox<'_>) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// Whether `message` still addresses its recipient's current container, read from the head:
+/// projections, the decision by key, and the current review child.
 fn current(
-    task: &Task,
+    head: &TaskHead,
     recipient: &Recipient,
     message: &Message,
     decision_receipt: Option<&ResumeReceipt>,
-) -> bool {
+) -> Result<bool> {
     if message
         .binding
         .review_round
-        .is_some_and(|round| round != task.rounds)
+        .is_some_and(|round| round != head.rounds)
     {
-        return false;
+        return Ok(false);
     }
-    match recipient {
-        Recipient::Run { run, .. } => task.runs.last().is_some_and(|r| {
-            &r.id == run
-                && r.outcome.is_none()
-                && r.ended.is_none()
-                && message.binding.run.as_ref().is_none_or(|id| id == run)
-                && message.binding.decision.as_ref().is_none_or(|id| {
-                    r.obligations.decisions.iter().any(|d| {
-                        &d.request.id == id
-                            && (d.pending()
-                                || decision_receipt.is_some_and(|receipt| {
-                                    d.receipt.as_ref() == Some(receipt)
-                                        && receipt
-                                            .data
-                                            .get("inbox_message")
-                                            .and_then(|id| id.as_str())
-                                            == Some(message.id.as_str())
-                                }))
-                    })
-                })
-        }),
-        Recipient::PlanRun { plan_run, .. } => task.plan_runs.last().is_some_and(|r| {
+    Ok(match recipient {
+        Recipient::Run { run, .. } => {
+            let Some(r) = head.current_run.as_ref() else {
+                return Ok(false);
+            };
+            if &r.id != run
+                || r.outcome.is_some()
+                || r.ended.is_some()
+                || message.binding.run.as_ref().is_some_and(|id| id != run)
+            {
+                return Ok(false);
+            }
+            match &message.binding.decision {
+                None => true,
+                Some(id) => head.decision(run, id)?.is_some_and(|d| {
+                    d.pending()
+                        || decision_receipt.is_some_and(|receipt| {
+                            d.receipt.as_ref() == Some(receipt)
+                                && receipt.data.get("inbox_message").and_then(|id| id.as_str())
+                                    == Some(message.id.as_str())
+                        })
+                }),
+            }
+        }
+        Recipient::PlanRun { plan_run, .. } => head.last_plan_run.as_ref().is_some_and(|r| {
             &r.id == plan_run
-                && r.holds_slot()
+                && r.ended.is_none()
+                && matches!(
+                    r.state,
+                    corral_core::PlanRunState::Planning | corral_core::PlanRunState::Changes
+                )
                 && message.binding.run.as_ref().is_none_or(|id| id == plan_run)
         }),
-        Recipient::PlanReview { plan, review, .. } => task.plans.last().is_some_and(|p| {
+        Recipient::PlanReview { plan, review, .. } => head.last_plan.as_ref().is_some_and(|p| {
             &p.id == plan
-                && p.reviews.last().is_some_and(|r| {
+                && p.current_review.as_ref().is_some_and(|r| {
                     &r.id == review
                         && r.verdict.is_none()
                         && message.binding.run.as_ref().is_none_or(|id| id == review)
@@ -265,13 +253,18 @@ fn current(
             run,
             review,
         } => {
+            // Only the current child can be open: the shell holds the run and that child.
+            let is_current = head.current_run.as_ref().is_some_and(|r| {
+                &r.id == run && r.current_child.as_ref().is_some_and(|c| &c.id == review)
+            });
             let child = corral_core::agent::ContainerRef::Reviewer {
                 task: id.clone(),
                 run: run.clone(),
                 review: review.clone(),
             };
-            corral_core::agent::container_closure(task, &child).is_none()
+            is_current
+                && corral_core::agent::container_closure(&head.to_shell_task()?, &child).is_none()
         }
         Recipient::Pm => true,
-    }
+    })
 }

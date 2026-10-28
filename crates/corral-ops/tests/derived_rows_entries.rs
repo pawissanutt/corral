@@ -352,6 +352,10 @@ fn fresh_process_sync_announcement_reads_recover_deleted_cache() {
     // Given two due requests with different amounts of announcement and task history.
     let (base_dir, base, _) = fixture(1);
     let (grown_dir, grown, _) = fixture(10);
+    // Equal-width event positions: sync stores its PM event cursor as a record.
+    for _ in 0..10 {
+        append(&base, None, "padding", json!({}));
+    }
     for (ctx, scale) in [(&base, 1), (&grown, 10)] {
         ctx.store
             .update("T-001", |task| {

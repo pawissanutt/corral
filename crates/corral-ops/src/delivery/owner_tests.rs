@@ -172,7 +172,12 @@ impl EffectHandler for Interrupting {
     ) -> Result<()> {
         OwnerEffects.apply_locked(ctx, m, r, d)
     }
-    fn apply_task(&self, task: &mut Task, m: &Message, r: &Receipt) -> Result<()> {
+    fn apply_task(
+        &self,
+        task: &mut corral_core::TaskHeadMut,
+        m: &Message,
+        r: &Receipt,
+    ) -> Result<()> {
         if self.interrupt.replace(false) {
             anyhow::bail!("process died after the answer was committed");
         }

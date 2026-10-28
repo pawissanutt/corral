@@ -131,9 +131,40 @@ fn save(record: &StateRecord<'_>, state: &State) -> Result<()> {
 
 /// Run after landing advancement, even if herdr is down. The durable approval log is authority.
 pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()> {
-    let tasks = ctx.store.list()?;
-    let events = ctx.store.events_of(None, &["approved"])?;
-    for task in &tasks {
+    let open: Vec<Task> = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+        .iter()
+        .map(corral_core::TaskHead::to_shell_task)
+        .collect::<Result<_>>()?;
+    // Only a landing after an active run started concerns it: read approvals newest first
+    // back to the oldest active run's start, and the heads of the tasks they landed.
+    let since = open
+        .iter()
+        .filter(|task| task.status.holds_slot())
+        .filter_map(|task| task.current_run().filter(|r| r.outcome.is_none()))
+        .map(|run| run.started)
+        .min();
+    let events = match since {
+        Some(since) => ctx
+            .store
+            .events_newest(None, &["approved"], None, |event| event.ts >= since)?
+            .into_iter()
+            .rev()
+            .collect(),
+        None => Vec::new(),
+    };
+    let landed: Vec<String> = events.iter().filter_map(|e| e.task.clone()).collect();
+    let mut tasks = open.clone();
+    for head in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Ids(landed))?
+    {
+        if !tasks.iter().any(|t| t.id == head.id) {
+            tasks.push(head.to_shell_task()?);
+        }
+    }
+    for task in &open {
         if let Err(error) = reconcile_one(ctx, task, &events, &tasks, now, available) {
             crate::messages::report(
                 Some(&task.id),
@@ -159,7 +190,7 @@ fn reconcile_one(
     let record = state_record(ctx, &task.id);
     let mut state = RECORDS.load(&ctx.store, &task.id)?.unwrap_or_default();
     // Re-read after obtaining the queue lock; snapshots from sync may already be obsolete.
-    let task = ctx.store.get(&task.id)?;
+    let task = ctx.store.head(&task.id)?.to_shell_task()?;
     let active =
         task.status.holds_slot() && task.current_run().is_some_and(|r| r.outcome.is_none());
     for i in 0..state.notices.len() {
@@ -244,7 +275,7 @@ fn reconcile_one(
             .changed_at
             .is_some_and(|at| now.duration_since(at) >= SignedDuration::from_secs(QUIET_SECS))
     {
-        if let Some(notice) = construct(ctx, &task, &state.pending)? {
+        if let Some(notice) = construct(ctx, &ctx.store.get(&task.id)?, &state.pending)? {
             state.notices.push(notice);
         }
         state.pending.clear();

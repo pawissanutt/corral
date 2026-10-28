@@ -67,6 +67,14 @@ pub trait ReadView {
         q: &RowQuery,
         page: PageReq,
     ) -> Result<Page<HistoryRow>, ViewError>;
+    /// Tasks holding a row of `part` that carries index `token`, by number: a cross-task
+    /// lookup that decodes no row.
+    fn token_owners(
+        &self,
+        part: TaskPart,
+        token: &str,
+        limit: u32,
+    ) -> Result<Vec<TaskNum>, ViewError>;
     /// Eligible lesson artifacts in `(added DESC, path DESC)` order, bounded before decode.
     fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError>;
     /// Attribution facts for one selected SHA, committed in this view.
