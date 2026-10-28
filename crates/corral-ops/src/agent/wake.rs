@@ -16,13 +16,17 @@ use crate::Ctx;
 pub const OWNER: &str = "worker-role";
 pub const WAKE_KIND: &str = "wait_wake";
 
-/// Armed wait subscriptions whose wait left `pending`.
+/// Armed wait subscriptions whose wait left `pending`. A run that released its coding slot (parked
+/// on another task, or woken and queued for a slot) keeps its wakes owed until it holds a slot.
 pub fn due_wait_wakes(task: &Task) -> Vec<DueWake> {
     let mut due = Vec::new();
     for run in &task.runs {
         let Some(state) = run.agent_host.as_deref() else {
             continue;
         };
+        if run.releases_slot(&task.id) {
+            continue;
+        }
         let armed = state
             .wakes
             .iter()
@@ -148,7 +152,11 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
                     .iter()
                     .any(|w| w.request_id == wake.request_id && w.state == WakeState::Armed)
             });
-            if !armed {
+            let queued = task
+                .runs
+                .iter()
+                .any(|r| &r.id == run && r.releases_slot(&task.id));
+            if !armed || (queued && !closed) {
                 return Ok(false);
             }
             let reserved = if closed {

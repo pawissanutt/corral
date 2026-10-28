@@ -163,11 +163,14 @@ fn a_woken_run_waits_in_queue_then_reacquires_ahead_of_queued_work() {
     assert!(f.ctx.store.get(&later.id).unwrap().runs.is_empty());
     let usage = corral_ops::slot_usage(&f.ctx).unwrap();
     assert_eq!((usage.tasks, usage.parked), (LIMIT, 0));
-    assert!(f.ctx.store.events().unwrap().iter().any(|e| {
-        e.task.as_deref() == Some(a.as_str())
-            && e.kind == "wait_transition"
-            && e.detail["slot"] == "reacquired"
-    }));
+    assert!(
+        f.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.task.as_deref() == Some(a.as_str()) && e.kind == "slot_reacquired")
+    );
 }
 
 #[test]

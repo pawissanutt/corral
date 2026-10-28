@@ -364,7 +364,7 @@ pub struct PmCfg {
 /// The one list of PM-actionable event kinds, after `actionable_kind` normalization. It is what
 /// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts
 /// (plus `config_invalid`).
-pub const PM_ACTIONABLE_KINDS: [&str; 18] = [
+pub const PM_ACTIONABLE_KINDS: [&str; 19] = [
     "done",
     "needs_me",
     "stuck",
@@ -383,6 +383,7 @@ pub const PM_ACTIONABLE_KINDS: [&str; 18] = [
     "question_unattended",
     "turn_ended_without_report",
     "attention_due",
+    "slot_reacquired",
 ];
 
 fn default_push_kinds() -> Vec<String> {

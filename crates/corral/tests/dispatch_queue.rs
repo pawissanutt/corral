@@ -14,6 +14,8 @@ mod isolation;
 mod live;
 #[path = "dispatch_queue/parked.rs"]
 mod parked;
+#[path = "dispatch_queue/parked_wake.rs"]
+mod parked_wake;
 #[path = "dispatch_queue/pending_plans.rs"]
 mod pending_plans;
 #[path = "dispatch_queue/post_land.rs"]

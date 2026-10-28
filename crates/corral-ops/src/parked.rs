@@ -45,7 +45,16 @@ fn parked(task: &Task) -> Option<ParkedRun> {
 }
 
 /// Precedence key: red-main fixes first, then woken runs oldest first; other work has none.
+/// A claimant that cannot take a slot now (its project is saturated) reserves nothing.
 fn key(store: &Store, task: &Task) -> Result<Option<(u8, Timestamp)>> {
+    let key = claim(store, task)?;
+    if key.is_some() && crate::slots::capacity_reason(store, task, 0)?.is_some() {
+        return Ok(None);
+    }
+    Ok(key)
+}
+
+fn claim(store: &Store, task: &Task) -> Result<Option<(u8, Timestamp)>> {
     if let Some(slot) = woken(task) {
         return Ok(Some((u8::from(!red_main(task)), slot.since)));
     }
@@ -139,8 +148,8 @@ pub(crate) fn reacquire(ctx: &Ctx, id: &str) -> Result<bool> {
     crate::obligations::transition(
         ctx,
         &task.id,
-        "wait_transition",
-        json!({"run": run, "slot": "reacquired", "on": slot.on, "woken_since": slot.since}),
+        "slot_reacquired",
+        json!({"run": run, "on": slot.on, "woken_since": slot.since}),
     )?;
     Ok(true)
 }

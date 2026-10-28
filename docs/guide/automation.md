@@ -720,11 +720,15 @@ wait on CI, a monitor or the run's own task does not park the run.
 
 When the last task wait fires (a receipt, an expired deadline or any other terminal state),
 corral does not hand the slot back implicitly. The run takes a free slot at once if there is
-one; otherwise it queues and `corral run resume` prints that it is waiting. Woken runs take the
-next free slots, oldest first, ahead of ordinary queued work, and sync grants them before it
-drains the queue. Each grant is logged as a `wait_transition` event with `"slot": "reacquired"`,
-so a woken worker can wait with `corral wait --for wait_transition --task T-042` before it
-resumes. `corral queue list` lists woken runs first and parked runs last, each with the tasks it
+one; otherwise it queues (the run's `obligations.slot_wait` records since when) and `corral run
+resume` prints that it is waiting. Woken runs take the next free slots, oldest first, ahead of
+ordinary queued work, and sync grants them before it drains the queue. A claimant whose project
+is at its `per_project` cap reserves nothing, so it never blocks another project's dispatch. Each
+grant is logged as a `slot_reacquired` event. A woken worker waits with
+`corral wait --for slot_reacquired --task T-042 --since <slot_wait.since>`, which replays from
+the queue time, so a grant logged before the wait starts still releases it; no other event
+does. Pi-native wake messages for a run's waits stay owed while the run holds no slot and are
+delivered after the grant. `corral queue list` lists woken runs first and parked runs last, each with the tasks it
 waits on and the slot it released; the board's Running card says `parked on ...` or `woken ...`,
 and the slot badge counts parked runs as uncounted.
 

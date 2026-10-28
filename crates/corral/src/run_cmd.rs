@@ -156,10 +156,11 @@ pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
             {
                 eprintln!(
                     "{}: woken from {}; queued to re-acquire a coding slot. Do not resume work until \
-                     `corral wait --for wait_transition --task {}` reports slot reacquired.",
+                     `corral wait --for slot_reacquired --task {} --since {}` returns.",
                     task.id,
                     slot.on.join(", "),
-                    task.id
+                    task.id,
+                    slot.since
                 );
             }
             task
