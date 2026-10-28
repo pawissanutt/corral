@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use corral_core::{AutoStage, AutopilotState, ReviewRecord, RunOutcome, Status, Task};
+use corral_core::{AutoStage, AutopilotState, ReviewRecord, Run, RunOutcome, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -43,6 +43,75 @@ pub(super) fn record_failure(
         Ok(true)
     })?;
     Ok(())
+}
+
+/// A refusal on the review packet alone, with the candidate unchanged and main moved cleanly
+/// forward from the reviewed base, is base-derived staleness: review again instead of escalating.
+fn base_moved_refusal(run: &Run, review: &ReviewRecord, failure: Option<&str>) -> Result<bool> {
+    let Some(changes) = failure
+        .and_then(|f| f.strip_prefix(FAILURE_PREFIX))
+        .and_then(|f| f.strip_prefix("stale review: "))
+        .and_then(|f| serde_json::from_str::<Vec<serde_json::Value>>(f).ok())
+    else {
+        return Ok(false);
+    };
+    if changes.is_empty() || changes.iter().any(|c| c["field"] != "packet_digest") {
+        return Ok(false);
+    }
+    let Some(reviewed) = review
+        .identity
+        .as_ref()
+        .map(|i| i.integration_base.as_str())
+    else {
+        return Ok(false);
+    };
+    if crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str()) {
+        return Ok(false);
+    }
+    let base = corral_git::rev_sha(&run.worktree, &run.base)?;
+    if base == reviewed || !corral_git::is_ancestor(&run.worktree, reviewed, &base)? {
+        return Ok(false);
+    }
+    let merge = corral_git::merge_preflight(&run.worktree, &base, &review.sha)?;
+    Ok(matches!(merge, corral_git::MergePreflight::Clean { .. }))
+}
+
+/// Supersede the refused review without a verdict or a round; autopilot re-gates if needed and
+/// starts a fresh review of the current candidate in the normal queue.
+fn relaunch(
+    ctx: &Ctx,
+    id: &str,
+    run: &Run,
+    review: &ReviewRecord,
+    now: Timestamp,
+) -> Result<Option<Change>> {
+    let saved = ctx.store.try_update(id, |current| {
+        if current.status != Status::Review {
+            return Ok(false);
+        }
+        let Some(parent) = current
+            .current_run_mut()
+            .filter(|r| r.id == run.id && r.review.as_ref() == Some(review))
+        else {
+            return Ok(false);
+        };
+        super::supersede_review(ctx, parent, now);
+        Ok(true)
+    })?;
+    let Some(saved) = saved else {
+        return Ok(None);
+    };
+    cleanup(ctx, &saved, Cleanup::Round);
+    ctx.store.log_event(
+        Some(id),
+        "review_relaunched",
+        json!({
+            "run": run.id, "reviewer": review.reviewer,
+            "reason": "main moved during review; the candidate is unchanged",
+            "notes": review_notes_path(ctx, id, &run.id),
+        }),
+    )?;
+    Ok(None)
 }
 
 /// Called by sync even when autopilot is disabled. `panes` is one authoritative herdr inventory;
@@ -172,6 +241,9 @@ pub(crate) fn reconcile_review_sampled_at(
         .blocked_excerpt
         .as_deref()
         .filter(|text| text.starts_with(FAILURE_PREFIX));
+    if idle && !gone && stalled.is_none() && base_moved_refusal(run, review, failure)? {
+        return relaunch(ctx, id, run, review, now);
+    }
     let problem = if gone && crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str())
     {
         Some(

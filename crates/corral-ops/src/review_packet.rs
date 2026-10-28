@@ -391,6 +391,14 @@ fn reviewer_side(ctx: &Ctx, artifact: &corral_core::Artifact) -> bool {
         || (artifact.kind == ArtifactKind::Report && artifact.title.starts_with("Review ("))
 }
 
+/// An integration packet corral attached for a newer main after the review started: base-derived
+/// freshness, normalized like the gate's when the verdict is judged on the reviewed base.
+fn later_base_packet(ctx: &Ctx, artifact: &corral_core::Artifact, record: &ReviewRecord) -> bool {
+    artifact.added > record.at
+        && std::path::Path::new(&artifact.source)
+            .starts_with(ctx.store.state_dir().join("integration"))
+}
+
 fn findings(task: &Task, exclude: &str) -> Vec<Finding> {
     task.runs
         .iter()
@@ -492,6 +500,7 @@ pub(crate) fn build(
                 .artifacts
                 .iter()
                 .filter(|a| a.run == run.id && !reviewer_side(ctx, a))
+                .filter(|a| moved.is_none() || !later_base_packet(ctx, a, record))
                 .map(|a| ArtifactRef {
                     kind: a.kind,
                     title: a.title.clone(),
