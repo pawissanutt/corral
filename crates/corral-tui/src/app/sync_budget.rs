@@ -4,8 +4,8 @@
 //! on the base, grown (10x terminal tasks and 10x history on every active task) and nested
 //! (10x nested history inside every current container) stores, whose open tasks own live panes
 //! on the fake engine. Warm runs measure a settled tick and then a tick that contains one real
-//! current-run mutation (sync writing back a stale `agent_state`); cold runs reopen the
-//! settled store in a fresh process. Between the base and each larger variant every
+//! current-run mutation (sync writing back a stale `agent_state`); cold runs measure each of
+//! those steps in a fresh process on the settled store. Between the base and each larger variant every
 //! unattributed cell is unchanged, the unattributed hydration cell is 0, every inclusive total
 //! is the sum of its cells, each FU-3 cell equals its expected work on that variant's own rows,
 //! and the usage refresh's own-record cells equal the refreshed runs' own rows exactly. The
@@ -26,6 +26,7 @@ pub(super) const PATH: &str = "sync_tick";
 const STEPS: [&str; 2] = ["steady", "mutation"];
 const COLD_VAR: &str = "CORRAL_SYNC_BUDGET_ROOT";
 const RUNNING_VAR: &str = "CORRAL_SYNC_BUDGET_RUNNING";
+const STEP_VAR: &str = "CORRAL_SYNC_BUDGET_STEP";
 
 /// Ticks that bring a fresh fixture to its steady state: first sightings, usage notes and
 /// pane observations are written once.
@@ -205,41 +206,65 @@ fn warm(shape: Shape) -> Measured {
     m
 }
 
-/// The steady step in a fresh process on a store this process settled.
+/// Each step in its own fresh process on a store this process settled: the steady tick, then
+/// the tick that writes back a stale `agent_state`. A child must exit successfully.
 fn cold(shape: Shape) -> Measured {
     let fx = fixture_with(shape, true);
     settle(&fx);
     let root: PathBuf = fx.ctx.store.root().to_path_buf();
-    let out = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "app::sync_budget::cold_variant",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(COLD_VAR, &root)
-        .env(RUNNING_VAR, &fx.running)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text
-        .lines()
-        .find_map(|line| line.split_once("SYNCBUDGET ").map(|(_, json)| json))
-        .unwrap_or_else(|| panic!("cold {} run printed no result:\n{text}", shape.name));
-    decode(line)
+    let mut m = empty();
+    for step in STEPS {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::sync_budget::cold_variant",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(COLD_VAR, &root)
+            .env(RUNNING_VAR, &fx.running)
+            .env(STEP_VAR, step)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "cold {} {step} exited {:?}:\n{text}\n{}",
+            shape.name,
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let line = text
+            .lines()
+            .find_map(|line| line.split_once("SYNCBUDGET ").map(|(_, json)| json))
+            .unwrap_or_else(|| panic!("cold {} {step} printed no result:\n{text}", shape.name));
+        let child = decode(line);
+        m.cells.extend(child.cells);
+        m.outputs.extend(child.outputs);
+        m.expected.extend(child.expected);
+        m.failures.extend(child.failures);
+    }
+    m
 }
 
 #[test]
-#[ignore = "spawned by sync_tick_work_stays_independent_of_history for one cold variant"]
+#[ignore = "spawned by sync_tick_work_stays_independent_of_history for one cold step"]
 fn cold_variant() {
-    let (Some(root), Ok(running)) = (std::env::var_os(COLD_VAR), std::env::var(RUNNING_VAR)) else {
+    let (Some(root), Ok(running), Ok(step)) = (
+        std::env::var_os(COLD_VAR),
+        std::env::var(RUNNING_VAR),
+        std::env::var(STEP_VAR),
+    ) else {
         return;
     };
     let fx = reopen(Path::new(&root), &running);
     let mut m = empty();
-    measure_tick(&fx, "steady", &mut m);
+    if step == "mutation" {
+        stale_agent_state(&fx);
+    }
+    measure_tick(&fx, &step, &mut m);
     println!("SYNCBUDGET {}", encode(&m));
 }
 

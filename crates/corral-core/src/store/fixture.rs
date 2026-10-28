@@ -49,6 +49,16 @@ impl Store {
         self.event_fixture()?.fixture_restore_events()
     }
 
+    /// Fixes the instant [`Store::now`] returns for this store and its clones, so stamps written
+    /// afterwards have fixed values. Fails once pinned.
+    #[doc(hidden)]
+    pub fn fixture_pin_now(&self, at: jiff::Timestamp) -> Result<()> {
+        self.attribution
+            .pinned_now
+            .set(at)
+            .map_err(|_| anyhow::anyhow!("the fixture clock is already pinned"))
+    }
+
     /// Stores exactly this task: no timestamp, scope check or event, unlike [`Store::save`].
     #[doc(hidden)]
     pub fn fixture_put_task(&self, task: &Task) -> Result<()> {

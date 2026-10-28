@@ -14,10 +14,14 @@ use crate::delivery::omo_fixture::OmoWorld;
 /// cursors, with one owner reply waiting for delivery.
 fn world(earlier: u64) -> OmoWorld {
     let world = OmoWorld::new(Status::NeedsMe);
+    // Every stamp written from here on, including the pass's own receipts, is this instant.
+    let now: jiff::Timestamp = "2026-10-20T00:00:00Z".parse().unwrap();
+    world.ctx.store.fixture_pin_now(now).unwrap();
     world
         .ctx
         .store
         .update(&world.task.id, |task| {
+            task.created = now;
             let mut inbox = serde_json::to_value(&task.runs[0].inbox)?;
             inbox["next_seq"] = json!(1000);
             inbox["effects_applied"] = json!((1..=earlier).collect::<Vec<_>>());
@@ -40,9 +44,7 @@ fn world(earlier: u64) -> OmoWorld {
     world
 }
 
-/// The pass's unattributed decode, hydration, view, stat and process counts. Stored bytes are
-/// left out: the inbox receipts this pass writes and rereads carry wall-clock stamps whose
-/// printed width varies between runs.
+/// Every unattributed cell of the pass, stored bytes included: the fixture's clock is pinned.
 fn pass(world: &OmoWorld) -> Vec<(&'static str, u64)> {
     let _hot = HotScope::enter();
     let before = work::snapshot();
@@ -52,7 +54,6 @@ fn pass(world: &OmoWorld) -> Vec<(&'static str, u64)> {
     assert!(delta.check_identity().is_ok(), "{delta:?}");
     Counter::ALL
         .iter()
-        .filter(|c| **c != Counter::DecodedDocBytes)
         .map(|c| (c.name(), delta.cells(*c).unattributed))
         .collect()
 }

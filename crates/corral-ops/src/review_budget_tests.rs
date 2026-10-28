@@ -12,6 +12,8 @@ use corral_core::{AgentCmd, Status, Store, Verdict};
 use corral_herdr::Herdr;
 use serde_json::json;
 
+#[path = "review_budget/hot_tests.rs"]
+mod hot;
 #[path = "review_budget/replay_tests.rs"]
 mod replay;
 

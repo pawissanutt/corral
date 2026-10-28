@@ -271,7 +271,7 @@ impl DeliveryAdapter for OmoAdapter {
             "omo thread list failed (exit {status:?})"
         );
         let list: Value = serde_json::from_str(out.trim()).context("parsing omo thread list")?;
-        let mut rows = candidates(&list, &target, Timestamp::now())?;
+        let mut rows = candidates(&list, &target, ctx.store.now())?;
         if rows.len() > 1 {
             return Ok(BindOutcome::Ambiguous {
                 candidates: rows

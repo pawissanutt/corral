@@ -529,7 +529,7 @@ fn settle_with(
     adapter: &dyn DeliveryAdapter,
 ) -> Result<(), String> {
     let result = (|| {
-        super::observe_only(ctx, recipient, adapter, jiff::Timestamp::now())?;
+        super::observe_only(ctx, recipient, adapter, ctx.store.now())?;
         effects::reconcile(ctx, recipient, &OwnerEffects)?;
         refresh_view(ctx, recipient)
     })();

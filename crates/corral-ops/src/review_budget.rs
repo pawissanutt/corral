@@ -585,6 +585,11 @@ pub(crate) fn reconcile(
                     )?
                 {
                     let mut release_reason = None;
+                    // Finishing a reviewer collects the child's usage from its own rows, as the
+                    // usage refresh does; the scope spans the edit and its commit.
+                    let _own = (kind == Kind::Reviewer).then(|| {
+                        corral_core::work::own_records("review_budget_finish", &task.id, &run.id)
+                    });
                     ctx.store.try_update_head(&task.id, |task| {
                         if !crate::session_scope::owns_head(ctx, task.head())? {
                             return Ok(false);

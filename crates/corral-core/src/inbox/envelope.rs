@@ -29,7 +29,7 @@ impl Inbox<'_> {
             self.save_record(
                 "control",
                 "flush",
-                &json!({"at":Timestamp::now(),"via":"replacement","envelope":envelope.number}),
+                &json!({"at":self.store.now(),"via":"replacement","envelope":envelope.number}),
             )?;
             // Persist the adapter's source before any write can hide the old publication.
             s.replacement_envelope = Some(envelope.number);

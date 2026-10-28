@@ -115,7 +115,7 @@ pub fn deliver(
     adapter: &dyn DeliveryAdapter,
     fallback: Option<&dyn DeliveryAdapter>,
 ) -> Result<DeliveryStatus> {
-    deliver_at(ctx, recipient, adapter, fallback, Timestamp::now())
+    deliver_at(ctx, recipient, adapter, fallback, ctx.store.now())
 }
 
 /// Explicit time makes rate and alert policy deterministic in tests.

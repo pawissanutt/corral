@@ -71,7 +71,17 @@ pub(super) fn load(ctx: &Ctx, task: &str) -> Result<Option<Prepared>> {
     let Some(plan) = current.plans.last() else {
         return Ok(None);
     };
-    let Some(prepared) = PREPARED.load(&ctx.store, &format!("{task}-{}", plan.id))? else {
+    load_for(ctx, task, &plan.id)
+}
+
+/// Whether a prepared review of plan `plan`, the task's last, awaits its launch, read by key.
+pub(crate) fn has_prepared(ctx: &Ctx, task: &str, plan: &str) -> Result<bool> {
+    Ok(load_for(ctx, task, plan)?.is_some())
+}
+
+/// The prepared review of plan `plan`, the task's last, still awaiting its launch.
+fn load_for(ctx: &Ctx, task: &str, plan: &str) -> Result<Option<Prepared>> {
+    let Some(prepared) = PREPARED.load(&ctx.store, &format!("{task}-{plan}"))? else {
         return Ok(None);
     };
     match ctx

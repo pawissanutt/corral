@@ -196,16 +196,18 @@ pub fn digest_at(ctx: &Ctx, since: &str, now: Timestamp) -> Result<DigestReport>
     write_report(ctx, since, now, false)
 }
 
-/// Called by sync. First enabled sync reports the last interval; later reports
-/// start at the previous scheduled snapshot so downtime never drops events.
-pub fn scheduled_digest_at(ctx: &Ctx, now: Timestamp) -> Result<Option<DigestReport>> {
-    let Some(every) = ctx.store.config.digest.every.as_deref() else {
-        return Ok(None);
-    };
-    let every = parse_age(every)?;
-    let Some(_lock) = ctx.store.try_lock("digest")? else {
-        return Ok(None);
-    };
+/// The last scheduled digest's snapshot (`None`: none was written), committed with that
+/// digest's event, so a sync that is not yet due reads one record rather than the digests
+/// written since.
+const LAST_SCHEDULED: corral_core::records::RecordArea<Option<Timestamp>> =
+    corral_core::records::RecordArea::new("digest-schedule");
+
+fn last_scheduled(ctx: &Ctx) -> Result<Option<Timestamp>> {
+    if let Some(previous) = LAST_SCHEDULED.load(&ctx.store, "last")? {
+        return Ok(previous);
+    }
+    // A store from before the record: one scan, recovered outside the measured pass.
+    let _prepare = corral_core::work::Preparation::enter();
     let previous = ctx
         .store
         .last_event_where(None, &["digest"], None, |e| e.detail["scheduled"] == true)?
@@ -217,6 +219,21 @@ pub fn scheduled_digest_at(ctx: &Ctx, now: Timestamp) -> Result<Option<DigestRep
                 .context("invalid scheduled digest snapshot")
         })
         .transpose()?;
+    LAST_SCHEDULED.save(&ctx.store, "last", &previous)?;
+    Ok(previous)
+}
+
+/// Called by sync. First enabled sync reports the last interval; later reports
+/// start at the previous scheduled snapshot so downtime never drops events.
+pub fn scheduled_digest_at(ctx: &Ctx, now: Timestamp) -> Result<Option<DigestReport>> {
+    let Some(every) = ctx.store.config.digest.every.as_deref() else {
+        return Ok(None);
+    };
+    let every = parse_age(every)?;
+    let Some(_lock) = ctx.store.try_lock("digest")? else {
+        return Ok(None);
+    };
+    let previous = last_scheduled(ctx)?;
     if previous.is_some_and(|at| now.duration_since(at) < every) {
         return Ok(None);
     }
@@ -264,11 +281,17 @@ fn write_report(
     )?;
     let artifact_ref = PinRef::of_artifact(&anchor, &artifact).to_string();
     ctx.store.pin(&artifact_ref, Some("Daily digest"), false)?;
-    ctx.store.log_event(
-        Some(&anchor),
-        "digest",
-        json!({"since": since, "snapshot_at": now, "scheduled": scheduled, "artifact": artifact_ref}),
-    )?;
+    ctx.store.records_transaction(|| {
+        ctx.store.log_event(
+            Some(&anchor),
+            "digest",
+            json!({"since": since, "snapshot_at": now, "scheduled": scheduled, "artifact": artifact_ref}),
+        )?;
+        if scheduled {
+            LAST_SCHEDULED.save(&ctx.store, "last", &Some(now))?;
+        }
+        Ok(())
+    })?;
     Ok(DigestReport {
         digest,
         artifact,
@@ -349,3 +372,7 @@ fn posted_request<'a>(history: &[&'a Event], id: &serde_json::Value) -> Option<&
             && e.detail["by"] != "autopilot"
     })
 }
+
+#[cfg(test)]
+#[path = "digest_hot_tests.rs"]
+mod hot_tests;

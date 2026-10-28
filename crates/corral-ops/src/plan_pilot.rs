@@ -76,7 +76,8 @@ pub(crate) fn reconcile(
             | corral_herdr::AgentStatus::Unknown => task.status,
         };
         if task.status != status {
-            ctx.store.update(&task.id, |t| {
+            // A scalar status change: written on the head, never the full task.
+            ctx.store.update_head(&task.id, |t| {
                 t.status = status;
                 ctx.store.log_event(
                     Some(&task.id),
@@ -130,12 +131,74 @@ fn planner_owns(task: &Task) -> bool {
 }
 
 fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
-    // Until a planner claim or a plan to progress exists, every check below reads only head
-    // fields and the last plan run, which the head holds.
     let shell = ctx.store.head(id)?.to_shell_task()?;
-    if !plan_dispatch::may_resume(&shell)? && (planner_owns(&shell) || shell.plans.is_empty()) {
+    if idle(ctx, &shell, now)? {
         return Ok(());
     }
+    act(ctx, id, now)
+}
+
+/// `act`'s decision from the head alone, which holds the last plan with its current review and
+/// the last plan run: `true` only where `act` returns without writing, the same error where
+/// it refuses before any write, and `false` (the full path) wherever it may act.
+fn idle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<bool> {
+    if plan_dispatch::may_resume(task)? {
+        return Ok(false);
+    }
+    if planner_owns(task) {
+        return Ok(true);
+    }
+    let Some(plan) = task.plans.last() else {
+        return Ok(true);
+    };
+    crate::plan::config(ctx)?;
+    if crate::plan_review::has_prepared(ctx, &task.id, &plan.id)? {
+        return Ok(false);
+    }
+    if plan.approval.is_some() {
+        return Ok(task.plan.as_deref() == Some(&format!("{}@{}", task.id, plan.id)));
+    }
+    crate::plan::fresh(ctx, task, plan)?;
+    let Some(review) = plan.reviews.last() else {
+        crate::operating::require(
+            &ctx.store,
+            task,
+            corral_core::OperatingActionKind::PlanReview,
+        )?;
+        return Ok(false);
+    };
+    Ok(match review.verdict {
+        None => match &review.herdr {
+            None => true,
+            Some(herdr) => {
+                let grace =
+                    i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX);
+                now.duration_since(review.at).as_secs() <= grace
+                    || ctx.herdr.pane_get(&herdr.pane_id)?.is_some()
+            }
+        },
+        Some(Verdict::Approve) => {
+            crate::operating::require(
+                &ctx.store,
+                task,
+                corral_core::OperatingActionKind::AcceptPlan,
+            )
+            .is_err()
+                && task
+                    .plan_runs
+                    .last()
+                    .is_some_and(|r| r.state == PlanRunState::AwaitingOwner)
+        }
+        Some(Verdict::Changes) if crate::queue::queued_plan_requested(task) => true,
+        Some(Verdict::Changes) => {
+            crate::operating::require(&ctx.store, task, corral_core::OperatingActionKind::Plan)?;
+            false
+        }
+        Some(Verdict::Escalate) => false,
+    })
+}
+
+fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     let task = &ctx.store.get(id)?;
     let config = crate::plan::config(ctx)?;
     // Prepared actions retain their exact round and owner/automatic provenance. A

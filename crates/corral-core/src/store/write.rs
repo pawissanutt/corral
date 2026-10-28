@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
-use jiff::Timestamp;
 
 use super::codec::{FACTS, Split, split};
 use super::plan_scope::ScopeWrite;
@@ -204,7 +203,7 @@ impl Store {
             }
             self.check_runtime()?;
             let mut t = task.clone();
-            t.updated = Timestamp::now();
+            t.updated = self.now();
             self.insert_exact(&t)?;
             return Ok(t);
         };
@@ -229,7 +228,7 @@ impl Store {
         t.updated = if task == &before {
             before.updated
         } else {
-            Timestamp::now()
+            self.now()
         };
         let record = TaskRecord {
             task: t.clone(),
@@ -501,7 +500,7 @@ impl Store {
             );
             record.recoveries.push(recovery.clone());
         }
-        record.task.updated = Timestamp::now();
+        record.task.updated = self.now();
         self.write_record(&stored, &record, false)?;
         Ok(())
     }

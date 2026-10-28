@@ -216,6 +216,11 @@ pub(crate) fn reconcile_review_sampled_at(
     if since == run.idle_since && reason.is_none() {
         return Ok(None);
     }
+    // Finishing collects the child's usage from its own rows, as the usage refresh does; the
+    // scope spans the edit and its commit.
+    let _own = reason
+        .is_some()
+        .then(|| corral_core::work::own_records("review_finish", id, &run.id));
     let saved = ctx.store.try_update_head(id, |current| {
         if !crate::session_scope::owns_head(ctx, current.head())? {
             return Ok(false);
@@ -233,20 +238,23 @@ pub(crate) fn reconcile_review_sampled_at(
             return Ok(false);
         }
         parent.idle_since = since;
-        let has_child = parent.current_child.is_some();
-        if has_child {
+        let state = pane
+            .map(|p| p.status.as_str())
+            .unwrap_or("gone")
+            .to_string();
+        if reason.is_none() {
+            // Liveness alone is two scalars of the child's projection: no nested row is read.
+            if let Some(child) = parent.current_child.as_deref_mut() {
+                child.idle_since = since;
+                child.agent_state = Some(state);
+            }
+        } else if parent.current_child.is_some() {
             current.edit_current_review_child(&run.id, |child| {
                 child.idle_since = since;
-                child.agent_state = Some(
-                    pane.map(|p| p.status.as_str())
-                        .unwrap_or("gone")
-                        .to_string(),
-                );
-                if reason.is_some() {
-                    finish_review_child(ctx, review, child, now);
-                    if stalled.is_some() {
-                        child.outcome = Some(RunOutcome::Interrupted);
-                    }
+                child.agent_state = Some(state);
+                finish_review_child(ctx, review, child, now);
+                if stalled.is_some() {
+                    child.outcome = Some(RunOutcome::Interrupted);
                 }
                 Ok(())
             })?;

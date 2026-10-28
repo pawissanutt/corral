@@ -11,6 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 
 mod batches;
+mod growth;
 mod receipts;
 
 const HERDR: &str = r#"#!/bin/sh
