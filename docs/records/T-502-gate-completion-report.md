@@ -74,6 +74,19 @@ passes, distinct from the reproduced early-return bug. No live owner panes or
 servers were created, changed or stopped. The historical incident and prolonged
 artifact/index contention were not reproduced in the isolated regression.
 
+## Landing rework (changes round 1)
+
+Independent review approved the implementation, but the full landing gate caught
+an older board test that explicitly required UNKNOWN inventory to defer even an
+already-published receipt. Reproduced that assertion failure in the isolated test
+server (`round1-board-red.log`). Updated the test to require collection during the
+UNKNOWN tick and compare the entire task after normalizing only the authenticated
+gate record, its two receipt artifacts and the task write timestamp. This retains
+the stronger invariant that UNKNOWN cannot change pane liveness, autopilot stage,
+or other task fields. A repeated UNKNOWN tick must be idempotent, and inventory
+recovery must reuse the same receipt. All six board sync-step tests pass
+(`round1-board-green.log`); no production change was needed for this rework.
+
 ## Scope
 
 Only sync's receipt-collection fallback and deterministic test fixtures change. Gate tiers, gate
