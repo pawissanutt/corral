@@ -308,7 +308,10 @@ flags = "generic"
 model_flag = "--model"
 ```
 
-`corral harness list` shows which harnesses are installed, their versions and models.
+`corral harness list` shows which harnesses are installed, their versions and models. The built-in pi-native
+harness lists the installed host's offline Pi catalog (`openai-codex/<id>`, `anthropic/<id>`) for each provider
+`corral agent doctor` sees logged in; without an installation or a login it falls back to free-text models with a
+note naming `corral agent install` or `corral agent login`.
 
 ## profiles
 
@@ -413,7 +416,7 @@ The profile for a run is the first of these that applies:
 
 Rules skip a profile whose model is not available (with a warning). Explicit choices are always honored, but
 dispatch checks the final model against what the harness reports before it creates a worktree or pane: the
-model must exactly match a discovered id (`provider/id` for OMO and OMP), and an unknown id fails with the close
+model must exactly match a discovered id (`provider/id` for OMO, OMP and pi-native), and an unknown id fails with the close
 matches instead of silently picking another model. If harness discovery itself failed, dispatch warns and allows
 the unverified model. `corral harness list --refresh` re-detects installed models.
 
