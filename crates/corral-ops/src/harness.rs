@@ -24,6 +24,8 @@ mod availability;
 mod pi_native;
 pub(crate) use availability::preferred_omo_models;
 pub(crate) use pi_native::detect as detect_pi_native;
+pub use pi_native::models_for_profile;
+pub(crate) use pi_native::{catalog_selector, foreign_selector};
 
 #[cfg(test)]
 mod tests;

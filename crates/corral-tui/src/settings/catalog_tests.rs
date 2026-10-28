@@ -115,10 +115,12 @@ fn model_picker_filters_and_picks() {
 
 #[test]
 fn pi_native_model_picker_lists_the_installed_hosts_models() {
-    // Given a pi-native profile and a detection report where the installed host listed its catalog.
+    // Given OpenAI and Anthropic pi-native profiles and a detection report where the installed
+    // host listed both providers' catalogs.
     let fx = fixture();
     let mut text = fx.toml();
     text.push_str("\n[profiles.pi]\nharness = \"pi-native\"\nvendor = \"openai\"\n");
+    text.push_str("\n[profiles.pi-claude]\nharness = \"pi-native\"\nvendor = \"anthropic\"\n");
     std::fs::write(fx.ctx.store.config_path(), text).unwrap();
     let cache = fx
         .ctx
@@ -132,24 +134,38 @@ fn pi_native_model_picker_lists_the_installed_hosts_models() {
         .unwrap()
         .push(serde_json::json!({
             "key": "pi-native", "program": null, "path": "/usr/bin/bun", "version": "1.3.0",
-            "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"],
+            "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5",
+                       "anthropic/claude-opus-5-5"],
             "model_source": "listed", "efforts": [], "takes_effort": true
         }));
     std::fs::write(&cache, serde_json::to_vec(&report).unwrap()).unwrap();
     let ctx = crate::board::tests::fixture_ctx(Store::open(&fx.root).unwrap());
-    let mut v = SettingsView::new(&ctx);
-    v.on_key(c('2'), &ctx);
-    v.open_profile("pi".into());
-    // When the model picker opens.
-    press(&mut v, &ctx, &[c('j'), k(KeyCode::Enter)]);
-    // Then it offers the listed provider-qualified models.
-    let s = render(&mut v, &ctx);
-    assert!(s.contains("model for pi"), "{s}");
-    assert!(
-        s.contains("openai-codex/gpt-6.1-sol") && s.contains("openai-codex/gpt-5.5"),
-        "{s}"
-    );
-    assert!(s.contains("2 models (listed by the harness)"), "{s}");
+    for (profile, offered, foreign, note) in [
+        (
+            "pi",
+            &["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"][..],
+            "anthropic/claude-opus-5-5",
+            "2 models (listed by the harness)",
+        ),
+        (
+            "pi-claude",
+            &["anthropic/claude-opus-5-5"][..],
+            "openai-codex/",
+            "1 model (listed by the harness)",
+        ),
+    ] {
+        let mut v = SettingsView::new(&ctx);
+        v.on_key(c('2'), &ctx);
+        v.open_profile(profile.into());
+        // When the model picker opens.
+        press(&mut v, &ctx, &[c('j'), k(KeyCode::Enter)]);
+        // Then it offers only the listed models of the profile's own provider.
+        let s = render(&mut v, &ctx);
+        assert!(s.contains(&format!("model for {profile}")), "{s}");
+        assert!(offered.iter().all(|m| s.contains(m)), "{profile}\n{s}");
+        assert!(!s.contains(foreign), "{profile} offers {foreign}\n{s}");
+        assert!(s.contains(note), "{s}");
+    }
 }
 
 #[test]

@@ -660,13 +660,28 @@ fn failed_discovery_warns_and_allows_routing_and_dispatch() {
 }
 
 #[cfg(unix)]
-#[test]
-fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
-    // Given a pi-native profile with a typo, and a harness report where the installed host listed
-    // its offline catalog (fixture listing output, no live provider).
-    let ws = routing_ws(
-        "[profiles.pi]\nharness = 'pi-native'\nvendor = 'openai'\nmodel = 'openai-codex/gpt-6.1-sl'\n",
-    );
+/// pi-native profiles over a harness report where the installed host listed both providers'
+/// offline catalogs (fixture listing output, no live provider).
+fn pi_native_ws() -> Ws {
+    let mut profiles = String::new();
+    for (name, vendor, model) in [
+        ("pi-typo", "openai", "openai-codex/gpt-6.1-sl"),
+        ("pi-openai", "openai", "openai-codex/gpt-6.1-sol"),
+        ("pi-openai-bare", "openai", "gpt-6.1-sol"),
+        ("pi-anthropic", "anthropic", "anthropic/claude-opus-5-5"),
+        ("pi-anthropic-bare", "anthropic", "claude-opus-5-5"),
+        ("pi-openai-cross", "openai", "anthropic/claude-opus-5-5"),
+        (
+            "pi-anthropic-cross",
+            "anthropic",
+            "openai-codex/gpt-6.1-sol",
+        ),
+    ] {
+        profiles.push_str(&format!(
+            "[profiles.{name}]\nharness = 'pi-native'\nvendor = '{vendor}'\nmodel = '{model}'\n"
+        ));
+    }
+    let ws = routing_ws(&profiles);
     let path = ws.root.join(".corral/state/harnesses.json");
     let mut cache: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("cache")).expect("json");
@@ -678,16 +693,27 @@ fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
             "program": null,
             "path": "/fixture/bun",
             "version": "1.3.0",
-            "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"],
+            "models": [
+                "openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5",
+                "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5"
+            ],
             "model_source": "listed",
             "efforts": [],
             "takes_effort": true
         }));
     std::fs::write(&path, serde_json::to_vec(&cache).expect("json")).expect("cache");
-    ok(&ws.root, &["new", "Pi typo", "-p", "app", "--ready"]);
+    ok(&ws.root, &["new", "Pi models", "-p", "app", "--ready"]);
+    ws
+}
+
+#[cfg(unix)]
+#[test]
+fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
+    // Given an OpenAI pi-native profile with a typo, and both providers listed.
+    let ws = pi_native_ws();
     // When it is dispatched.
-    let out = dispatch_with_herdr(&ws.root, &["--profile", "pi"]);
-    // Then the listed catalog rejects the typo with close matches instead of allowing it unverified.
+    let out = dispatch_with_herdr(&ws.root, &["--profile", "pi-typo"]);
+    // Then its provider's listed models reject the typo with close matches, not as unverified.
     let error = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(
@@ -698,7 +724,102 @@ fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
         error.contains("close matches:") && error.contains("openai-codex/gpt-6.1-sol"),
         "{error}"
     );
+    assert!(
+        !error.contains("anthropic/"),
+        "only its provider's models: {error}"
+    );
     assert!(!error.contains("allowing unverified model"), "{error}");
     assert!(!ws.root.join("app/.worktrees").exists());
     assert!(!ws.root.join("launch").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn bare_and_qualified_pi_native_ids_of_the_profiles_provider_pass_model_checks() {
+    let ws = pi_native_ws();
+    for profile in [
+        "pi-openai",
+        "pi-openai-bare",
+        "pi-anthropic",
+        "pi-anthropic-bare",
+    ] {
+        // When the route is explained and then dispatched:
+        let route: serde_json::Value = serde_json::from_str(&ok(
+            &ws.root,
+            &["route", "1", "--profile", profile, "--json"],
+        ))
+        .expect("route json");
+        let out = dispatch_with_herdr(&ws.root, &["--profile", profile]);
+        // Then neither the route nor the final dispatch validation rejects the model; dispatch
+        // stops later, at the pi-native preflight of this fixture without an installation.
+        assert_eq!(
+            route["warnings"],
+            serde_json::json!([]),
+            "{profile}: {route}"
+        );
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{profile}");
+        assert!(
+            !error.contains("not an exact discovered"),
+            "{profile}: {error}"
+        );
+        assert!(
+            error.contains("pi-native preflight refused"),
+            "{profile}: {error}"
+        );
+        assert!(!ws.root.join("launch").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pi_native_profile_rejects_the_other_providers_models() {
+    let ws = pi_native_ws();
+    // Given profiles bound to one provider naming the other provider's listed selector:
+    for (profile, own, other) in [
+        (
+            "pi-openai-cross",
+            "openai-codex/",
+            "anthropic/claude-opus-5-5",
+        ),
+        (
+            "pi-anthropic-cross",
+            "anthropic/",
+            "openai-codex/gpt-6.1-sol",
+        ),
+    ] {
+        // When it is dispatched, then validation rejects it with its own provider's matches.
+        let out = dispatch_with_herdr(&ws.root, &["--profile", profile]);
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{profile}");
+        assert!(
+            error.contains(&format!("model '{other}' is not an exact discovered")),
+            "{error}"
+        );
+        let matches = error.split("close matches:").nth(1).unwrap_or_default();
+        assert!(
+            matches.contains(own) && !matches.contains(other),
+            "{profile}: {error}"
+        );
+        assert!(!ws.root.join("launch").exists());
+    }
+    // And an explicit cross-provider override on an OpenAI profile is flagged by the route.
+    let route: serde_json::Value = serde_json::from_str(&ok(
+        &ws.root,
+        &[
+            "route",
+            "1",
+            "--profile",
+            "pi-openai",
+            "--model",
+            "anthropic/claude-opus-5-5",
+            "--json",
+        ],
+    ))
+    .expect("route json");
+    let warnings = route["warnings"].to_string();
+    assert!(
+        warnings.contains("not an exact discovered model ID"),
+        "{route}"
+    );
 }

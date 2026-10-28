@@ -385,7 +385,9 @@ pub(crate) fn route_task_for_role(
             .entry(profile.harness.clone())
             .or_insert_with(|| model_catalog(ctx, &profile.harness));
         match catalog {
-            ModelCatalog::Known(models) => rejection(&profile.harness, model, models),
+            ModelCatalog::Known(models) => {
+                rejection(&profile.harness, profile.vendor.as_deref(), model, models)
+            }
             ModelCatalog::Unknown(reason) => {
                 if !warnings.contains(reason) {
                     warnings.push(reason.clone());
@@ -415,7 +417,13 @@ pub(crate) fn validate_model(ctx: &Ctx, decision: &RouteDecision) -> Result<Opti
     };
     match discovered_catalog(ctx, &decision.harness) {
         ModelCatalog::Known(models) => {
-            if let Some(reason) = rejection(&decision.harness, model, &models) {
+            let vendor = ctx
+                .store
+                .config
+                .resolve_route(decision)
+                .ok()
+                .and_then(|resolved| resolved.vendor);
+            if let Some(reason) = rejection(&decision.harness, vendor.as_deref(), model, &models) {
                 bail!("profile '{}': {reason}", decision.profile);
             }
             Ok(None)
@@ -445,14 +453,17 @@ pub(crate) fn known_model_unavailability(
         .unwrap_or(&profile.harness)
         == "omo";
     if is_omo && let Some(models) = harness::preferred_omo_models(ctx) {
-        return rejection(&profile.harness, model, &models);
+        return rejection(&profile.harness, profile.vendor.as_deref(), model, &models);
     }
     let report = harness::cached_harness_report(ctx)?;
     let info = report.get(&profile.harness)?;
     match info.model_source {
-        ModelSource::Listed | ModelSource::Builtin => {
-            rejection(&profile.harness, model, &info.models)
-        }
+        ModelSource::Listed | ModelSource::Builtin => rejection(
+            &profile.harness,
+            profile.vendor.as_deref(),
+            model,
+            &info.models,
+        ),
         ModelSource::FreeText | ModelSource::None => None,
     }
 }
@@ -499,8 +510,25 @@ fn discovered_catalog(ctx: &Ctx, key: &str) -> ModelCatalog {
     }
 }
 
-fn rejection(harness: &str, model: &str, models: &[String]) -> Option<String> {
-    if models.iter().any(|listed| listed == model) {
+/// Whether `model` is outside the discovered catalog of a profile on `harness` bound to `vendor`.
+/// A pi-native profile is checked against its own provider's models only, with a bare id
+/// qualified by that provider. A selector naming another provider never runs on its host; when
+/// discovery listed none of the profile provider's models (it is not logged in), the catalog is
+/// no evidence about any other id.
+fn rejection(
+    harness: &str,
+    vendor: Option<&str>,
+    model: &str,
+    models: &[String],
+) -> Option<String> {
+    let scoped = harness::models_for_profile(harness, vendor, Some(model), models);
+    if scoped.is_empty() && !models.is_empty() && !harness::foreign_selector(harness, vendor, model)
+    {
+        return None;
+    }
+    let models = &scoped[..];
+    let selector = harness::catalog_selector(harness, vendor, model);
+    if models.iter().any(|listed| *listed == selector) {
         return None;
     }
     let mut nearest: Vec<_> = models

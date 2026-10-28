@@ -179,7 +179,7 @@ pub use gate_tier::{
 };
 pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
-    cached_harness_report, detect_harnesses, harness_report,
+    cached_harness_report, detect_harnesses, harness_report, models_for_profile,
 };
 pub use history::{Finish, Landed, finished_tasks, finishes};
 pub use hooks::{

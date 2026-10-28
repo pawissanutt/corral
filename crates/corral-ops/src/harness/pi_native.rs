@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use corral_core::{Config, PI_NATIVE_HARNESS};
+use corral_core::{Config, PI_NATIVE_HARNESS, is_pi_native};
 
 use super::{
     HarnessInfo, MODELS_TIMEOUT, ModelSource, apply_efforts, parse_omp_models, run_capture,
@@ -20,6 +20,56 @@ use crate::agent::install;
 
 /// The listing entry point inside an asset installation.
 pub const MODELS_ENTRY: &str = "src/auth/models.ts";
+
+/// The discovered models a profile can run. A pi-native profile runs on one provider (its
+/// vendor's, else its model's, as launch binds it), so it sees only that provider's selectors;
+/// any other harness, or a profile with no recognizable provider, sees the whole list.
+pub fn models_for_profile(
+    harness: &str,
+    vendor: Option<&str>,
+    model: Option<&str>,
+    models: &[String],
+) -> Vec<String> {
+    match profile_provider(harness, vendor, model) {
+        Some(provider) => {
+            let prefix = format!("{provider}/");
+            models
+                .iter()
+                .filter(|m| m.starts_with(&prefix))
+                .cloned()
+                .collect()
+        }
+        None => models.to_vec(),
+    }
+}
+
+/// The discovered selector `model` names for this profile: the host accepts a bare pi-native id
+/// for its bound provider, so it is qualified with that provider before a catalog lookup.
+pub(crate) fn catalog_selector(harness: &str, vendor: Option<&str>, model: &str) -> String {
+    match profile_provider(harness, vendor, Some(model)) {
+        Some(provider) if !model.contains('/') => format!("{provider}/{model}"),
+        _ => model.to_owned(),
+    }
+}
+
+/// Whether a pi-native profile names a model qualified with a provider other than the one its
+/// host binds; the host strips only its own provider's prefix, so such a model never runs.
+pub(crate) fn foreign_selector(harness: &str, vendor: Option<&str>, model: &str) -> bool {
+    match (
+        profile_provider(harness, vendor, Some(model)),
+        model.split_once('/'),
+    ) {
+        (Some(provider), Some((prefix, _))) => prefix != provider,
+        _ => false,
+    }
+}
+
+fn profile_provider(harness: &str, vendor: Option<&str>, model: Option<&str>) -> Option<String> {
+    if !is_pi_native(harness) {
+        return None;
+    }
+    crate::agent::launch::host_provider(vendor, model.unwrap_or_default())
+}
 
 pub(crate) fn detect(config: &Config) -> HarnessInfo {
     detect_with(config, install::data_root().ok(), find_bun())
