@@ -255,6 +255,7 @@ fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
         );
     advance(&ctx, &reviewing.id, now).unwrap();
     let lost = ctx.store.get(&id).unwrap();
+    let lost_head = ctx.store.head(&id).unwrap();
     assert_eq!(lost.plan_runs[0].state, PlanRunState::Escalated);
     assert_eq!(lost.plans[0].reviews[0].verdict, Some(Verdict::Escalate));
     assert!(lost.plans[0].reviews[0].pending_reply.is_none());
@@ -275,7 +276,7 @@ fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
 
     let retry = crate::plan_review(&ctx, &id, None).unwrap();
     assert_ne!(retry.id, attempt.id);
-    escalate(&ctx, &lost, "Stale reviewer-loss observation").unwrap();
+    escalate(&ctx, &lost_head, "Stale reviewer-loss observation").unwrap();
     assert!(
         ctx.store.get(&id).unwrap().plans[0].reviews[1]
             .verdict
@@ -387,7 +388,7 @@ fn automatic_initial_planner_refusal_retains_preparation_without_a_process_slot(
     let launch = std::thread::spawn(move || {
         crate::plan_dispatch::dispatch(
             &launch_ctx,
-            &launch_ctx.store.get(&id).unwrap(),
+            &launch_ctx.store.head(&id).unwrap(),
             &crate::DispatchOpts {
                 plan: true,
                 ..Default::default()
@@ -445,7 +446,7 @@ fn automatic_revision_refusal_retains_notes_without_consuming_its_round() {
     let launch = std::thread::spawn(move || {
         crate::plan_dispatch::revise(
             &launch_ctx,
-            &launch_ctx.store.get(&launch_id).unwrap(),
+            &launch_ctx.store.head(&launch_id).unwrap(),
             "Review notes",
             crate::operating::Origin::Automatic,
         )
@@ -540,7 +541,7 @@ fn prepared_planner_without_provenance_never_gains_owner_authority() {
     )
     .unwrap();
     // When recovery reaches its original exact authorization reference.
-    let result = crate::plan_dispatch::resume_prepared(&ctx, &task);
+    let result = crate::plan_dispatch::resume_prepared(&ctx, &ctx.store.head(&id).unwrap());
     // Then it refuses without a manual fallback or a new command.
     assert!(result.is_err());
     assert!(!tmp.path().join("engine/launch-command").exists());

@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     HerdrRef, OperatingActionKind, PlanRun, PlanRunState, ProfileChoice, Status,
-    SubmissionDisposition, Task,
+    SubmissionDisposition, Task, TaskHead, TaskRef as _,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -16,24 +16,30 @@ mod claim;
 #[cfg(test)]
 mod snapshot_tests;
 
-pub(crate) fn needed(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> bool {
+pub(crate) fn needed<T: corral_core::TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    opts: &DispatchOpts,
+) -> bool {
     opts.plan
-        || task.dispatch_plan.as_ref().is_some_and(|p| p.plan)
-        || ((task.design
+        || task.dispatch_plan().as_ref().is_some_and(|p| p.plan)
+        || ((*task.design()
             || ctx
                 .store
                 .config
-                .plan_required(task.project.as_deref(), task.plan_required))
+                .plan_required(task.project().as_deref(), *task.plan_required()))
             && !matches!(crate::approved_plan(ctx, task), Ok(Some(_))))
 }
 
 pub(crate) fn dispatch(
     ctx: &Ctx,
-    task: &Task,
+    head: &TaskHead,
     opts: &DispatchOpts,
     admission: &Admission,
-) -> Result<DispatchOutcome> {
-    crate::tracker::check_action(task, "dispatch tracker to the plan pipeline")?;
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    crate::tracker::check_action(head, "dispatch tracker to the plan pipeline")?;
+    // The planner checks read head fields and the current containers only.
+    let task = &head.shell_task()?;
     let project = task
         .project
         .as_deref()
@@ -45,7 +51,7 @@ pub(crate) fn dispatch(
         .context("resolving plan repository")?;
     let mut plan = crate::queue::resolve_plan(ctx, task, opts)?;
     crate::plan_sandbox::check(&repo, ctx.store.dir())?;
-    let id = format!("D{}", task.plan_runs.len() + 1);
+    let id = format!("D{}", head.plan_runs_len()? + 1);
     let output_dir = crate::scratch_reclaim::Attempt::Planner {
         task: &task.id,
         run: &id,
@@ -57,7 +63,7 @@ pub(crate) fn dispatch(
         .try_lock("session-ownership")?
         .context("pane inventory is being reconciled; retry plan dispatch")?;
     crate::session_scope::check_launch(ctx)?;
-    let origin = admission.origin(&ctx.store, task)?;
+    let origin = admission.origin(&ctx.store, head)?;
     let mut claim = claim::Claim {
         run: id.clone(),
         attempt: "launch".into(),
@@ -79,18 +85,19 @@ pub(crate) fn dispatch(
     plan.authorization =
         (origin == crate::operating::Origin::Owner).then(|| authorization.id.clone());
     claim.attempt = authorization.action.attempt;
-    let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
+    let (claimed, reason) = ctx.store.dispatch_update_head(&task.id, |store, current| {
         crate::session_scope::check_launch_in(ctx, store)?;
-        crate::queue::check_snapshot(ctx, store, task, current)?;
+        crate::queue::check_snapshot_head(ctx, store, head, current.head())?;
         ensure!(
             opts.plan
                 || current
-                    .plan_runs
-                    .last()
+                    .head()
+                    .last_plan_run
+                    .as_ref()
                     .is_none_or(|r| r.state != PlanRunState::Cancelled),
             "cancelled plan run requires explicit replacement dispatch with --plan"
         );
-        let reason = admission.reason(ctx, store, current, opts)?;
+        let reason = admission.reason(ctx, store, &*current, opts)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
@@ -102,7 +109,8 @@ pub(crate) fn dispatch(
             queued.plan = true;
             current.dispatch_plan = Some(queued);
         } else {
-            current.plan_runs.push(PlanRun {
+            let spec_revision = crate::plan_spec_revision(&current.shell_task()?)?;
+            current.start_plan_run(PlanRun {
                 execution: Some(corral_core::ExecutionSnapshot {
                     candidate: plan.route.availability.clone(),
                     ..corral_core::ExecutionSnapshot::new(&ctx.store.config, resolved.clone())
@@ -116,7 +124,7 @@ pub(crate) fn dispatch(
                 model: resolved.model.clone(),
                 vendor: resolved.vendor.clone(),
                 effort: resolved.effort.clone(),
-                spec_revision: crate::plan_spec_revision(current)?,
+                spec_revision,
                 started: corral_core::clock::now(),
                 ended: None,
                 herdr: None,
@@ -125,26 +133,26 @@ pub(crate) fn dispatch(
                 rounds: 0,
                 state: PlanRunState::Planning,
                 pending_reply: claim.notes.clone(),
-            });
+            })?;
             current.status = Status::Running;
             current.queued = false;
             current.dispatch_plan = None;
             current.dispatch_hold = false;
-            admission.audit(ctx, store, current, &plan, &id)?;
+            admission.audit(ctx, store, &*current, &plan, &id)?;
         }
         Ok(reason)
     })?;
     if let Some(reason) = reason {
         return Ok(DispatchOutcome::Queued {
-            task: claimed,
+            task: Box::new(claimed),
             reason,
         });
     }
-    claim.save(&claimed)?;
+    claim.save(&claimed.shell_task()?)?;
     let launched = launch(ctx, &claimed, &repo, claim);
     match launched {
         Ok((task, pane_id)) => Ok(DispatchOutcome::Started {
-            task,
+            task: Box::new(task),
             run_id: id,
             pane_id,
         }),
@@ -152,15 +160,17 @@ pub(crate) fn dispatch(
             if crate::operating::refused(&error) {
                 if origin == crate::operating::Origin::Owner {
                     // A stale owner start stays replannable by a fresh owner request.
-                    ctx.store.update(&task.id, |t| {
-                        if t.plan_runs.last().is_some_and(|r| !r.holds_slot()) {
-                            t.status = task.status;
+                    let status = task.status;
+                    ctx.store.update_head(&task.id, |t| {
+                        if t.last_plan_run_mut().is_some_and(|r| !r.holds_slot()) {
+                            t.status = status;
                         }
                         Ok(())
                     })?;
                 }
                 return Err(error);
             }
+            let claimed = claimed.shell_task()?;
             if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())?
             {
                 close_planner(ctx, &ctx.store.get(&task.id)?)?;
@@ -170,7 +180,14 @@ pub(crate) fn dispatch(
     }
 }
 
-fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Result<(Task, String)> {
+fn launch(
+    ctx: &Ctx,
+    head: &TaskHead,
+    repo: &Path,
+    mut claim: claim::Claim,
+) -> Result<(TaskHead, String)> {
+    // The claim and command checks read head fields and the current containers only.
+    let task = &head.shell_task()?;
     claim.check(task)?;
     let authorization = crate::operating::load(
         ctx,
@@ -217,7 +234,7 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
     if let Some(notes) = &claim.notes {
         text.push_str(&format!("\n## Required plan changes\n\n{notes}\n"));
     }
-    text.push_str(&crate::comments::owner_comments(task));
+    text.push_str(&crate::comments::owner_comments_head(head, task)?);
     text.push_str(&crate::scratch_reclaim::prompt_section(
         ctx,
         &run.output_dir,
@@ -256,11 +273,10 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
     claim.herdr = Some(herdr.clone());
     claim.command = Some(command.clone());
     claim.save(task)?;
-    let saved = ctx.store.update(&task.id, |t| {
-        claim.check(t)?;
+    let saved = ctx.store.update_head(&task.id, |t| {
+        claim.check(&t.shell_task()?)?;
         let current = t
-            .plan_runs
-            .last_mut()
+            .last_plan_run_mut()
             .filter(|r| r.id == run.id)
             .context("plan run replaced before launch")?;
         ensure!(
@@ -288,31 +304,34 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
             ("target", "plan"),
         ],
     )?;
-    let submitted = crate::operating::submit(
+    let submitted = crate::operating::submit_head(
         ctx,
         &authorization,
         |store, task| {
-            claim.check(task)?;
+            let shell = task.shell_task()?;
+            claim.check(&shell)?;
             crate::session_scope::check_launch_in(ctx, store)?;
             let fresh = Ctx {
                 store: store.clone(),
                 ..ctx.clone()
             };
             if let Some(reason) =
-                crate::queue::capacity_reason(&fresh, store, task, claim.force_resources)?
+                crate::queue::capacity_reason(&fresh, store, &shell, claim.force_resources)?
             {
                 bail!("{reason}");
             }
             ensure!(!task.dispatch_hold, "planner dispatch is held");
             ensure!(
-                task.plan_runs.last().is_some_and(|current| current.state
-                    != PlanRunState::Cancelled
-                    && current.herdr.as_ref() == Some(&herdr)
-                    && current.execution == run.execution
-                    && current.route == run.route),
+                task.head()
+                    .last_plan_run
+                    .as_ref()
+                    .is_some_and(|current| current.state != PlanRunState::Cancelled
+                        && current.herdr.as_ref() == Some(&herdr)
+                        && current.execution == run.execution
+                        && current.route == run.route),
                 "prepared planner was cancelled or replaced"
             );
-            let run = task.plan_runs.last_mut().context("plan run missing")?;
+            let run = task.last_plan_run_mut().context("plan run missing")?;
             run.rounds = claim.round;
             run.ended = None;
             run.pending_reply = None;
@@ -323,8 +342,8 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
     );
     if let Err(error) = submitted {
         if crate::operating::refused(&error) {
-            ctx.store.update(&task.id, |task| {
-                if let Some(run) = task.plan_runs.last_mut().filter(|run| {
+            ctx.store.update_head(&task.id, |task| {
+                if let Some(run) = task.last_plan_run_mut().filter(|run| {
                     run.id == claim.run
                         && run.rounds == claim.previous_round
                         && run.state != PlanRunState::Cancelled
@@ -336,7 +355,7 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         }
         return Err(error);
     }
-    smoke.check(ctx, &ctx.store.get(&saved.id)?)?;
+    smoke.check(ctx, &ctx.store.head(&saved.id)?.shell_task()?)?;
     ctx.store.log_event(
         Some(&task.id),
         "plan_dispatched",
@@ -345,7 +364,7 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
             "pane":herdr.pane_id, "read_only":true, "output":output,
         }),
     )?;
-    Ok((ctx.store.get(&task.id)?, herdr.pane_id))
+    Ok((ctx.store.head(&task.id)?, herdr.pane_id))
 }
 
 fn render_command(
@@ -437,10 +456,14 @@ pub(crate) fn revision_notes(task: &Task) -> Option<&str> {
 }
 
 /// The owner's `changes` verdict authorizes its revision; blocked launches queue.
-pub(crate) fn revise_owner(ctx: &Ctx, task: &Task, notes: &str) -> Result<DispatchOutcome> {
-    let started = revise(ctx, task, notes, crate::operating::Origin::Owner)?;
-    let task = ctx.store.get(&task.id)?;
-    let run = task.plan_runs.last().context("plan run missing")?;
+pub(crate) fn revise_owner(
+    ctx: &Ctx,
+    head: &TaskHead,
+    notes: &str,
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    let started = revise(ctx, head, notes, crate::operating::Origin::Owner)?;
+    let task = ctx.store.head(&head.id)?;
+    let run = task.last_plan_run.as_ref().context("plan run missing")?;
     if started {
         let run_id = run.id.clone();
         let pane_id = run
@@ -450,29 +473,35 @@ pub(crate) fn revise_owner(ctx: &Ctx, task: &Task, notes: &str) -> Result<Dispat
             .pane_id
             .clone();
         return Ok(DispatchOutcome::Started {
-            task,
+            task: Box::new(task),
             run_id,
             pane_id,
         });
     }
-    let reason = crate::queue::blocked_reason(ctx, &ctx.store, &task, false)?
+    let reason = crate::queue::blocked_reason(ctx, &ctx.store, &task.shell_task()?, false)?
         .unwrap_or_else(|| "planner revision is held".into());
-    Ok(DispatchOutcome::Queued { task, reason })
+    Ok(DispatchOutcome::Queued {
+        task: Box::new(task),
+        reason,
+    })
 }
 
 pub(crate) fn revise(
     ctx: &Ctx,
-    task: &Task,
+    head: &TaskHead,
     notes: &str,
     origin: crate::operating::Origin,
 ) -> Result<bool> {
     let owner = origin == crate::operating::Origin::Owner;
-    crate::tracker::check_action(task, "revise tracker in the plan pipeline")?;
-    let current = ctx.store.get(&task.id)?;
+    let _action = (!owner).then(|| corral_core::work::action(&head.id, OperatingActionKind::Plan));
+    crate::tracker::check_action(head, "revise tracker in the plan pipeline")?;
+    // The revision reads head fields and the current plan, review and planner run only.
+    let task = &head.shell_task()?;
+    let current = ctx.store.head(&task.id)?;
     if current.dispatch_hold
         || current
-            .plan_runs
-            .last()
+            .last_plan_run
+            .as_ref()
             .is_some_and(|run| run.state == PlanRunState::Cancelled)
     {
         return Ok(false);
@@ -523,25 +552,27 @@ pub(crate) fn revise(
         herdr: None,
     };
     crate::operating::authorize(ctx, claim.identity(&task.id), origin)?;
-    let (claimed, started) = ctx.store.dispatch_update(&task.id, |store, current| {
+    let (claimed, started) = ctx.store.dispatch_update_head(&task.id, |store, current| {
         // Cancellation is terminal even for a pilot holding an older snapshot.
         if current.dispatch_hold
             || current
-                .plan_runs
-                .last()
+                .head()
+                .last_plan_run
+                .as_ref()
                 .is_some_and(|r| r.state == PlanRunState::Cancelled)
         {
             return Ok(None);
         }
         if !owner {
-            crate::operating::require(store, current, OperatingActionKind::Plan)?;
+            crate::operating::require(store, &*current, OperatingActionKind::Plan)?;
         }
-        crate::queue::check_snapshot(ctx, store, task, current)?;
-        let blocked = crate::queue::blocked_reason(ctx, store, current, false)?.is_some();
+        crate::queue::check_snapshot_head(ctx, store, head, current.head())?;
+        let blocked =
+            crate::queue::blocked_reason(ctx, store, &current.shell_task()?, false)?.is_some();
         if blocked && !owner {
             return Ok(None);
         }
-        let current_run = current.plan_runs.last_mut().context("plan run missing")?;
+        let current_run = current.last_plan_run_mut().context("plan run missing")?;
         ensure!(current_run.id == run.id, "plan run changed");
         current_run.state = PlanRunState::Changes;
         current_run.pending_reply = Some(notes.to_string());
@@ -549,16 +580,17 @@ pub(crate) fn revise(
             // The saved owner claim resumes through the plan pilot once capacity clears.
             return Ok(Some(false));
         }
-        current_run.started = corral_core::clock::now();
         current_run.ended = None;
+        current.restart_last_plan_run(corral_core::clock::now())?;
         current.status = Status::Running;
         Ok(Some(true))
     })?;
     let Some(started) = started else {
         return Ok(false);
     };
-    close_planner(ctx, &claimed)?;
-    claim.save(&claimed)?;
+    let shell = claimed.shell_task()?;
+    close_planner(ctx, &shell)?;
+    claim.save(&shell)?;
     if !started {
         return Ok(false);
     }
@@ -567,16 +599,17 @@ pub(crate) fn revise(
         if crate::operating::refused(&error) {
             if owner {
                 // Leave the task replannable by a fresh owner request.
-                ctx.store.update(&task.id, |t| {
-                    if t.plan_runs.last().is_some_and(|r| !r.holds_slot()) {
-                        t.status = task.status;
+                let status = task.status;
+                ctx.store.update_head(&task.id, |t| {
+                    if t.last_plan_run_mut().is_some_and(|r| !r.holds_slot()) {
+                        t.status = status;
                     }
                     Ok(())
                 })?;
             }
             return Err(error);
         }
-        if crate::plan_lifecycle::fail(ctx, &claimed, &format!("{error:#}"), Timestamp::now())? {
+        if crate::plan_lifecycle::fail(ctx, &shell, &format!("{error:#}"), Timestamp::now())? {
             close_planner(ctx, &ctx.store.get(&task.id)?)?;
         }
         return Err(error);
@@ -595,7 +628,9 @@ pub(crate) fn may_resume(task: &Task) -> Result<bool> {
     Ok(!task.dispatch_hold && !cancelled && claim::load(task)?.is_some())
 }
 
-pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
+pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
+    // The prepared claim and its checks read head fields and the current containers only.
+    let task = &head.shell_task()?;
     if task.dispatch_hold
         || task
             .plan_runs
@@ -625,7 +660,7 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
         | SubmissionDisposition::Uncertain { .. } => return Ok(false),
     }
     let automatic = crate::operating::is_automatic(&authorization);
-    if automatic && crate::operating::require(&ctx.store, task, OperatingActionKind::Plan).is_err()
+    if automatic && crate::operating::require(&ctx.store, head, OperatingActionKind::Plan).is_err()
     {
         return Ok(false);
     }
@@ -642,17 +677,18 @@ pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
             crate::operating::Origin::Automatic,
         )?;
     }
-    let (admitted, ()) = ctx.store.dispatch_update(&task.id, |store, task| {
-        claim.check(task)?;
+    let (admitted, ()) = ctx.store.dispatch_update_head(&task.id, |store, task| {
+        let shell = task.shell_task()?;
+        claim.check(&shell)?;
         if automatic {
-            crate::operating::require(store, task, OperatingActionKind::Plan)?;
+            crate::operating::require(store, &*task, OperatingActionKind::Plan)?;
         }
         if let Some(reason) =
-            crate::queue::capacity_reason(ctx, store, task, claim.force_resources)?
+            crate::queue::capacity_reason(ctx, store, &shell, claim.force_resources)?
         {
             bail!("{reason}");
         }
-        let run = task.plan_runs.last_mut().context("plan run missing")?;
+        let run = task.last_plan_run_mut().context("plan run missing")?;
         run.ended = None;
         Ok(())
     })?;

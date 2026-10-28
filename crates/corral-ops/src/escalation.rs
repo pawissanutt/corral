@@ -1,9 +1,17 @@
 //! Retry choices and their durable provenance.
 
 use anyhow::{Context, Result, bail};
+use corral_core::TaskRef as _;
 use corral_core::{
-    Config, GateResult, ProfileChoice, ProfileSwitch, RetryPlan, RouteSource, Task, Verdict,
+    Config, GateRecord, GateResult, ProfileChoice, ProfileSwitch, RetryPlan, ReviewRecord,
+    RouteSource, Task, TaskHead, Verdict,
 };
+
+fn failed(gate: Option<&GateRecord>, review: Option<&ReviewRecord>, failures: u32) -> u32 {
+    let failed = gate.is_some_and(|g| g.result == GateResult::Fail)
+        || review.is_some_and(|r| r.verdict == Some(Verdict::Changes));
+    failures.max(u32::from(failed))
+}
 
 /// Failures since this profile was selected. Historical runs may predate the counter.
 fn failures(task: &Task) -> u32 {
@@ -15,16 +23,30 @@ fn failures(task: &Task) -> u32 {
         .rev()
         .take_while(|run| run.agent == current.agent)
         .fold(0_u32, |count, run| {
-            let failed = run
-                .gate
-                .as_ref()
-                .is_some_and(|g| g.result == GateResult::Fail)
-                || run
-                    .review
-                    .as_ref()
-                    .is_some_and(|r| r.verdict == Some(Verdict::Changes));
-            count.saturating_add(run.failures.max(u32::from(failed)))
+            count.saturating_add(failed(run.gate.as_ref(), run.review.as_ref(), run.failures))
         })
+}
+
+/// [`failures`] of a head: the streak's earlier runs are read by key, newest first, until the
+/// profile changes. Its cost follows the streak, not the task's history.
+fn failures_head(head: &TaskHead) -> Result<u32> {
+    let Some(current) = head.current_run.as_ref() else {
+        return Ok(0);
+    };
+    let mut count = failed(
+        current.gate.as_ref(),
+        current.review.as_ref(),
+        current.failures,
+    );
+    let mut back = 1;
+    while let Some(run) = head
+        .run_head_back(back)?
+        .filter(|run| run.agent == current.agent)
+    {
+        count = count.saturating_add(failed(run.gate.as_ref(), run.review.as_ref(), run.failures));
+        back += 1;
+    }
+    Ok(count)
 }
 
 pub(crate) fn escalation(
@@ -32,13 +54,22 @@ pub(crate) fn escalation(
     task: &Task,
     forced: bool,
 ) -> Result<Option<ProfileSwitch>> {
+    escalation_with(config, task, forced, || Ok(failures(task)))
+}
+
+fn escalation_with(
+    config: &Config,
+    task: &Task,
+    forced: bool,
+    failures: impl FnOnce() -> Result<u32>,
+) -> Result<Option<ProfileSwitch>> {
     let run = task.current_run().context("task has no run to escalate")?;
     if !forced
         && (task.profile.is_some() || run.route.as_ref().is_some_and(|source| source.is_manual()))
     {
         return Ok(None);
     }
-    let count = failures(task);
+    let count = failures()?;
     if !forced && (config.routing.escalate_after == 0 || count < config.routing.escalate_after) {
         return Ok(None);
     }
@@ -69,11 +100,25 @@ pub(crate) fn escalation(
     }))
 }
 
-pub(crate) fn retry_plan(
+/// The retry plan of a head: the choice reads head fields and the current run; only the
+/// failure streak reads earlier runs, by key.
+pub(crate) fn retry_plan_head(
+    ctx: &crate::Ctx,
+    head: &TaskHead,
+    choice: &ProfileChoice,
+    forced: bool,
+) -> Result<RetryPlan> {
+    retry_plan_with(ctx, &head.shell_task()?, choice, forced, || {
+        failures_head(head)
+    })
+}
+
+fn retry_plan_with(
     ctx: &crate::Ctx,
     task: &Task,
     choice: &ProfileChoice,
     forced: bool,
+    failures: impl FnOnce() -> Result<u32>,
 ) -> Result<RetryPlan> {
     let config = &ctx.store.config;
     let run = task.current_run().context("task has no run to retry")?;
@@ -127,7 +172,7 @@ pub(crate) fn retry_plan(
     } else if explicit && !forced {
         None
     } else {
-        escalation(config, task, forced)?
+        escalation_with(config, task, forced, failures)?
     };
     // A profile pin bound to an approved candidate keeps its list, not one exact model.
     let candidate_bound = run

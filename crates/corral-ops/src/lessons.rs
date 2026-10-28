@@ -97,19 +97,17 @@ fn keywords(text: &str) -> BTreeSet<String> {
 
 /// Exact lesson bytes selected for a dispatched run, including an explicit empty selection.
 pub fn applied_lessons(ctx: &Ctx, task: &Task, run: &Run) -> Result<Option<Vec<Lesson>>> {
-    snapshot(ctx, task, run, "lessons_applied")
+    snapshot(ctx, &task.id, &run.id, "lessons_applied")
 }
 
-fn snapshot(ctx: &Ctx, task: &Task, run: &Run, kind: &str) -> Result<Option<Vec<Lesson>>> {
+/// The newest `kind` event of (`task`, `run`): one indexed read, whatever the event history.
+fn snapshot(ctx: &Ctx, task: &str, run: &str, kind: &str) -> Result<Option<Vec<Lesson>>> {
     ctx.store
-        .events_of(Some(&task.id), &[kind])?
-        .iter()
-        .rev()
-        .find(|e| {
+        .last_event_where(Some(task), &[kind], Some(run), |e| {
             e.kind == kind
-                && e.task.as_deref() == Some(&task.id)
-                && e.detail["run"].as_str() == Some(&run.id)
-        })
+                && e.task.as_deref() == Some(task)
+                && e.detail["run"].as_str() == Some(run)
+        })?
         .map(|event| {
             serde_json::from_value(event.detail["lessons"].clone())
                 .context("reading dispatched lesson snapshot")
@@ -118,7 +116,7 @@ fn snapshot(ctx: &Ctx, task: &Task, run: &Run, kind: &str) -> Result<Option<Vec<
 }
 
 pub(crate) fn record_lessons(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
-    if snapshot(ctx, task, run, "lessons_selected")?.is_none() {
+    if snapshot(ctx, &task.id, &run.id, "lessons_selected")?.is_none() {
         let lessons = lessons_for(ctx, task, Some(run))?;
         ctx.store.log_event(
             Some(&task.id),
@@ -129,13 +127,17 @@ pub(crate) fn record_lessons(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn record_exposure(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
-    if applied_lessons(ctx, task, run)?.is_none() {
-        let lessons = snapshot(ctx, task, run, "lessons_selected")?.unwrap_or_default();
+pub(crate) fn record_exposure<T: corral_core::TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &str,
+) -> Result<()> {
+    if snapshot(ctx, task.id(), run, "lessons_applied")?.is_none() {
+        let lessons = snapshot(ctx, task.id(), run, "lessons_selected")?.unwrap_or_default();
         ctx.store.log_event(
-            Some(&task.id),
+            Some(task.id()),
             "lessons_applied",
-            json!({"run":run.id,"project":task.project,"lessons":lessons}),
+            json!({"run":run,"project":task.project(),"lessons":lessons}),
         )?;
     }
     Ok(())
@@ -144,7 +146,7 @@ pub(crate) fn record_exposure(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
 pub(crate) fn lessons_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let lessons = match applied_lessons(ctx, task, run)? {
         Some(lessons) => lessons,
-        None => match snapshot(ctx, task, run, "lessons_selected")? {
+        None => match snapshot(ctx, &task.id, &run.id, "lessons_selected")? {
             Some(lessons) => lessons,
             None => lessons_for(ctx, task, Some(run))?,
         },

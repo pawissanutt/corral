@@ -180,7 +180,7 @@ impl TaskHead {
     /// One plan revision, projected without its review history.
     pub fn plan_by_id(&self, id: &str) -> Result<Option<super::PlanHead>> {
         if let Some(plan) = self.last_plan.as_ref().filter(|p| p.id == id) {
-            return Ok(Some(plan.clone()));
+            return Ok(Some((**plan).clone()));
         }
         self.query(
             &crate::backend::RowQuery::part(crate::backend::TaskPart::Plan)
@@ -405,6 +405,16 @@ impl Store {
         Self::head_on(&view, TaskNum(id_number(&id)))?
             .filter(|head| head.task.id == id)
             .with_context(|| format!("task {id} not found"))
+    }
+
+    /// The head of task `id` when it exists; its keyed reads use the view it was read on.
+    ///
+    /// # Errors
+    /// Returns id or read errors.
+    pub fn head_if_exists(&self, id: &str) -> Result<Option<TaskHead>> {
+        let id = Self::normalize_id(id)?;
+        let view = self.pinned_view()?;
+        Ok(Self::head_on(&view, TaskNum(id_number(&id)))?.filter(|head| head.task.id == id))
     }
 
     /// Heads matching `q`, all on one view.

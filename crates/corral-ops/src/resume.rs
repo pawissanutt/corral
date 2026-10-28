@@ -1,7 +1,10 @@
 //! Resume packets are structured data, never reconstructed from terminal prose.
 use anyhow::bail;
 use anyhow::{Context, Result};
-use corral_core::{CheckpointRecord, CriterionProgress, Run, RunObligations, RunProgress, Task};
+use corral_core::{
+    CheckpointMeta, CheckpointRecord, CriterionProgress, Run, RunHead, RunObligations, RunProgress,
+    Task, TaskHead, TaskRef as _,
+};
 use serde::Serialize;
 use serde_json::json;
 
@@ -153,11 +156,160 @@ pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> 
     Ok(packet)
 }
 
-pub(crate) fn restore_progress(ctx: &Ctx, task: &Task, run: &mut Run) -> Result<()> {
-    let packet = resume_packet(ctx, task, run)?;
+/// [`resume_packet`] of a launch over a head (plan T-253 section 4, Worker-launch resume): the
+/// same packet, with the current identity computed once, candidates rejected on their metadata,
+/// registration checked by key, and at most two payloads plus the source run's obligations
+/// emitted. `task` is the head's shell (head fields and current containers) and `source` the run
+/// whose checkpoints resume `run`.
+pub(crate) fn resume_packet_head(
+    ctx: &Ctx,
+    head: &TaskHead,
+    task: &Task,
+    source: Option<&RunHead>,
+    run: &Run,
+) -> Result<ResumePacket> {
+    let _own = source.map(|s| corral_core::work::own_records("resume_packet", &head.id, &s.id));
+    let spec_revision = progress_spec_revision(task)?;
+    let mut packet = ResumePacket {
+        version: 1,
+        task: task.id.clone(),
+        run: run.id.clone(),
+        spec_revision: spec_revision.clone(),
+        canonical_title: task.title.clone(),
+        canonical_spec: task.body.clone(),
+        status: ResumeStatus::Missing,
+        reasons: vec!["checkpoint_missing".into()],
+        checkpoint: None,
+        compatible_checkpoint: None,
+        progress: None,
+        criteria: Vec::new(),
+        evidence_failures: crate::evidence_failures(ctx, task, run)?,
+        reusable_evidence: Vec::new(),
+        prior_run_obligations: match source {
+            Some(source) => head.emitted_obligations(&source.id)?,
+            None => RunObligations::default(),
+        },
+    };
+    let Some(source) = source else {
+        packet.criteria = corral_core::criterion_progress(task, run, None);
+        return Ok(packet);
+    };
+    // Computed once, on the first candidate, as the per-candidate identity always agreed.
+    let mut identity: Option<[String; 3]> = None;
+    let source_missing = source.id != run.id && !source.worktree.is_dir();
+    let source_progress = source.progress.as_ref().map_or(0, |p| p.revision);
+    let mut assess = |meta: &CheckpointMeta| -> Result<Vec<String>> {
+        let [head_sha, base, tree] = match &identity {
+            Some(identity) => identity.clone(),
+            None => identity
+                .insert([
+                    corral_git::rev_sha(&run.worktree, "HEAD")?,
+                    corral_git::rev_sha(&run.worktree, &run.base)?,
+                    tree_revision(run)?,
+                ])
+                .clone(),
+        };
+        let mut reasons = Vec::new();
+        for (changed, reason) in [
+            (meta.task != task.id, "task_changed"),
+            (meta.spec_revision != spec_revision, "spec_changed"),
+            (meta.head != head_sha, "head_changed"),
+            (meta.base != base, "base_changed"),
+            (meta.tree != tree, "tree_changed"),
+            (source_missing, "source_worktree_missing"),
+        ] {
+            if changed {
+                reasons.push(reason.to_owned());
+            }
+        }
+        if head
+            .checkpoint_by_artifact(&meta.run, &meta.artifact)?
+            .is_none()
+        {
+            reasons.push("source_run_changed".into());
+        }
+        if source_progress != meta.progress_revision {
+            reasons.push("progress_changed".into());
+        }
+        Ok(reasons)
+    };
+    let mut metas = head.checkpoint_metas_newest_first(&source.id)?;
+    if let Some(newest) = metas.next().transpose()? {
+        packet.checkpoint = Some(
+            head.emitted_checkpoint(&newest)?
+                .context("newest checkpoint payload missing")?,
+        );
+        packet.reasons = assess(&newest)?;
+        packet.status = ResumeStatus::Stale;
+        let mut candidate = Some((newest.clone(), packet.reasons.is_empty()));
+        while let Some((meta, compatible)) = candidate.take() {
+            if !compatible {
+                candidate = match metas.next().transpose()? {
+                    Some(next) => {
+                        let compatible = assess(&next)?.is_empty();
+                        Some((next, compatible))
+                    }
+                    None => None,
+                };
+                continue;
+            }
+            let record = if meta.ordinal == newest.ordinal {
+                packet.checkpoint.clone()
+            } else {
+                head.emitted_checkpoint(&meta)?
+            }
+            .context("compatible checkpoint payload missing")?;
+            packet.status = ResumeStatus::Compatible;
+            packet.progress = record.checkpoint.progress.clone();
+            if newest.artifact != record.artifact {
+                packet.compatible_checkpoint = Some(record.clone());
+                packet
+                    .reasons
+                    .push("using_older_compatible_checkpoint".into());
+            }
+            if source.id == run.id && record.checkpoint.input.run == run.id {
+                packet.reusable_evidence = reusable(&record, run, &packet.evidence_failures);
+            }
+        }
+    }
+    let source_run: Run = serde_json::from_value(serde_json::to_value(source)?)?;
+    packet.criteria = corral_core::criterion_progress(task, &source_run, packet.progress.as_ref());
+    Ok(packet)
+}
+
+/// Evidence keys of `record` the run still holds and no evidence failure names.
+fn reusable(record: &CheckpointRecord, run: &Run, failures: &[String]) -> Vec<String> {
+    record
+        .checkpoint
+        .input
+        .evidence_refs
+        .iter()
+        .filter(|key| {
+            run.completion.evidence.iter().any(|e| {
+                e.observation.key == **key
+                    && !failures.iter().any(|failure| {
+                        failure
+                            .split_once(':')
+                            .is_some_and(|(_, id)| id == e.observation.criterion)
+                    })
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Restores a launch's progress and checkpoints from its source run: see [`resume_packet_head`].
+/// The source handoff stays visible after restart, including stale cleanup obligations; a new
+/// run must still publish its own checkpoint before its next handoff.
+pub(crate) fn restore_progress_head(
+    ctx: &Ctx,
+    head: &TaskHead,
+    task: &Task,
+    source: Option<&RunHead>,
+    run: &mut Run,
+) -> Result<()> {
+    let packet = resume_packet_head(ctx, head, task, source, run)?;
     run.progress = packet.progress;
-    // Keep the source handoff visible after restart, including stale cleanup obligations.
-    // A new run must still publish its own checkpoint before its next handoff.
     run.checkpoints = packet
         .compatible_checkpoint
         .into_iter()
@@ -206,6 +358,52 @@ pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
             task.id
         );
     };
+    checkpoint_current(task, run, record, &run.obligations)
+}
+
+/// [`require_checkpoint`] of the head's current run `run`, an own-record read of that run
+/// (plan T-253 section 4): its newest checkpoint meta and payload and its waits and decisions.
+pub(crate) fn require_checkpoint_head(head: &TaskHead, run: &str) -> Result<()> {
+    let task = head.shell_task()?;
+    let current = task
+        .current_run()
+        .filter(|current| current.id == run)
+        .with_context(|| format!("stale_run: {run} is not the current run"))?;
+    if !current.checkpoint_required {
+        return Ok(());
+    }
+    let _own = corral_core::work::own_records("require_checkpoint", &head.id, run);
+    let newest = head
+        .checkpoint_metas_newest_first(run)?
+        .next()
+        .transpose()?;
+    let Some(record) = newest
+        .map(|meta| -> Result<Option<CheckpointRecord>> {
+            Ok(head
+                .checkpoint_payload(run, meta.ordinal)?
+                .map(|checkpoint| CheckpointRecord {
+                    checkpoint,
+                    artifact: meta.artifact,
+                }))
+        })
+        .transpose()?
+        .flatten()
+    else {
+        bail!(
+            "checkpoint_required: run {run}; use corral run checkpoint {} --file <json>",
+            task.id
+        );
+    };
+    checkpoint_current(&task, current, &record, &head.run_obligations(run)?)
+}
+
+/// The stale reasons of the run's newest checkpoint `record`, given the run's obligations.
+fn checkpoint_current(
+    task: &Task,
+    run: &Run,
+    record: &CheckpointRecord,
+    obligations: &RunObligations,
+) -> Result<()> {
     let mut reasons = stale_reasons(task, run, record)?;
     if record.checkpoint.input.run != run.id {
         reasons.push("source_run_changed".into());
@@ -214,7 +412,7 @@ pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
     {
         reasons.push("progress_changed".into());
     }
-    if run.obligations != record.checkpoint.run_obligations {
+    if *obligations != record.checkpoint.run_obligations {
         reasons.push("obligations_changed".into());
     }
     if !reasons.is_empty() {

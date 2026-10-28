@@ -37,7 +37,7 @@ impl TaskHead {
     /// earlier one (without a child) by one keyed row.
     pub fn run_head(&self, id: &str) -> Result<Option<RunHead>> {
         if let Some(current) = self.current_run.as_ref().filter(|r| r.id == id) {
-            return Ok(Some(current.clone()));
+            return Ok(Some((**current).clone()));
         }
         Ok(
             keyed::<RunHead>(self.history_row(TaskPart::Run, format!("id:{id}"))?)?.map(
@@ -51,7 +51,7 @@ impl TaskHead {
 
     pub fn plan_run_head(&self, id: &str) -> Result<Option<PlanRunHead>> {
         if let Some(current) = self.last_plan_run.as_ref().filter(|r| r.id == id) {
-            return Ok(Some(current.clone()));
+            return Ok(Some((**current).clone()));
         }
         Ok(
             keyed::<PlanRunHead>(self.history_row(TaskPart::PlanRun, format!("id:{id}"))?)?.map(
@@ -65,7 +65,7 @@ impl TaskHead {
 
     pub fn aggregate_attempt_head(&self, id: &str) -> Result<Option<AttemptHead>> {
         if let Some(current) = self.last_aggregate_attempt.as_ref().filter(|a| a.id == id) {
-            return Ok(Some(current.clone()));
+            return Ok(Some((**current).clone()));
         }
         Ok(
             keyed::<AttemptHead>(
@@ -80,11 +80,17 @@ impl TaskHead {
 
     /// The coding run before the current one, by its key.
     pub fn previous_run_head(&self) -> Result<Option<RunHead>> {
-        let Some(current) = self.seqs.run.filter(|s| *s > 1) else {
+        self.run_head_back(1)
+    }
+
+    /// The coding run `back` positions before the current one (1 is the previous run), by
+    /// its key: one history row.
+    pub fn run_head_back(&self, back: usize) -> Result<Option<RunHead>> {
+        let Some(current) = self.seqs.run.filter(|s| *s > back) else {
             return Ok(None);
         };
         let rows = self.query(
-            &RowQuery::key(TaskPart::Run, seq(current - 1)),
+            &RowQuery::key(TaskPart::Run, seq(current - back)),
             1,
             Counter::HistoryRowDecodes,
         )?;
@@ -308,6 +314,27 @@ impl TaskHead {
         .into_iter()
         .map(|row| Ok(serde_json::from_value(row.doc)?))
         .collect()
+    }
+
+    /// Every wait and decision of `run` in order, decoded as `run`'s own child rows: inside
+    /// `work::own_records` for that run they count as own records (plan T-253 section 4,
+    /// `require_checkpoint`).
+    pub fn run_obligations(&self, run: &str) -> Result<RunObligations> {
+        let Some(owner) = self.run_owner(run)? else {
+            return Ok(RunObligations::default());
+        };
+        let rows = |kind: &str| -> Result<Vec<serde_json::Value>> {
+            let q = RowQuery::under(TaskPart::RunObligation, format!("{owner}{kind}"));
+            Ok(self
+                .query_for_run(&q, Counter::NestedRowDecodes, run)?
+                .into_iter()
+                .map(|row| row.doc)
+                .collect())
+        };
+        Ok(RunObligations {
+            waits: decode_all(rows("wait/")?)?,
+            decisions: decode_all(rows("decision/")?)?,
+        })
     }
 
     /// Every wait and decision of `run` in order, for the resume packet only.

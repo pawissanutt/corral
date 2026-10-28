@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 
 use super::RunHead;
 use super::codec::{FACTS, SELF, child_key, seq};
@@ -357,7 +357,11 @@ impl TaskHeadMut {
 
     /// Refuses a direct projection edit that renames, restarts, adds or removes a container or
     /// child in place: only the keyed helpers change which container a position holds.
-    pub(super) fn ensure_stable_identities(base: &TaskHead, head: &TaskHead) -> Result<()> {
+    pub(super) fn ensure_stable_identities(
+        base: &TaskHead,
+        head: &TaskHead,
+        restarted: super::head_mut::Restarted,
+    ) -> Result<()> {
         fn same<T, K: PartialEq>(a: Option<&T>, b: Option<&T>, key: impl Fn(&T) -> K) -> bool {
             match (a, b) {
                 (Some(a), Some(b)) => key(a) == key(b),
@@ -366,12 +370,16 @@ impl TaskHeadMut {
             }
         }
         let (old, new) = (&base.seqs, &head.seqs);
-        let run = |r: &RunHead| (r.id.clone(), r.started);
+        let run = |r: &RunHead| (r.id.clone(), (!restarted.run).then_some(r.started));
         let checks = [
             (
                 "the current run",
                 old.run != new.run
-                    || same(base.current_run.as_ref(), head.current_run.as_ref(), run),
+                    || same(
+                        base.current_run.as_deref(),
+                        head.current_run.as_deref(),
+                        run,
+                    ),
             ),
             (
                 "the current review child",
@@ -393,7 +401,7 @@ impl TaskHeadMut {
                     || same(
                         base.last_plan_run.as_ref(),
                         head.last_plan_run.as_ref(),
-                        |r| (r.id.clone(), r.started),
+                        |r| (r.id.clone(), (!restarted.plan_run).then_some(r.started)),
                     ),
             ),
             (
@@ -530,5 +538,37 @@ fn set_rev(row: &mut HistoryRow, field: &str, rev: u64) {
         .and_then(serde_json::Value::as_object_mut)
     {
         facts.insert(field.to_owned(), format!("{rev:020}").into());
+    }
+}
+
+impl TaskHeadMut {
+    /// Restarts the current coding run's clock in place (a launch's startup grace).
+    ///
+    /// # Errors
+    /// Refuses a task without a current run.
+    pub fn restart_current_run(&mut self, at: jiff::Timestamp) -> Result<()> {
+        let run = self
+            .head
+            .current_run
+            .as_mut()
+            .context("no current run to restart")?;
+        run.started = at;
+        self.restarted.run = true;
+        Ok(())
+    }
+
+    /// Restarts the last planning run's clock in place (a planner revision's startup grace).
+    ///
+    /// # Errors
+    /// Refuses a task without a planning run.
+    pub fn restart_last_plan_run(&mut self, at: jiff::Timestamp) -> Result<()> {
+        let run = self
+            .head
+            .last_plan_run
+            .as_mut()
+            .context("no planning run to restart")?;
+        run.started = at;
+        self.restarted.plan_run = true;
+        Ok(())
     }
 }

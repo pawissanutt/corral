@@ -5,12 +5,18 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-const EMITTED: [&str; 3] = [
+const EMITTED: [&str; 4] = [
     "emitted_comments",
     "emitted_findings",
     "emitted_obligations",
+    "emitted_checkpoint",
 ];
-const CHECKPOINT: [&str; 2] = ["checkpoint_payload", "checkpoint_metas_newest_first"];
+/// Readers of a run's checkpoints and its whole obligations: own-record and emitted paths only.
+const CHECKPOINT: [&str; 3] = [
+    "checkpoint_payload",
+    "checkpoint_metas_newest_first",
+    "run_obligations",
+];
 
 /// The four prompt builders: Owner comments, the review packet's previous findings, Previous
 /// plan findings and the resume packet.
@@ -21,6 +27,9 @@ const BUILDERS: [&str; 4] = [
     "corral-ops/src/resume.rs",
 ];
 
+/// SQL schema text naming tables after the readers (`run_obligations`), not calls.
+const SQL: [&str; 1] = ["corral-core/src/sqlite/schema.rs"];
+
 /// Where the readers are defined or forwarded, not called.
 const DEFINITIONS: [&str; 5] = [
     "corral-core/src/store/head.rs",
@@ -30,11 +39,14 @@ const DEFINITIONS: [&str; 5] = [
     "corral-core/src/task_ref.rs",
 ];
 
-/// The own-record scope's four entries; `refresh_current` is `refresh_active_usage`'s per-task
-/// step, checked below to have no other caller.
-const OWN_RECORDS: [(&str, &str); 5] = [
+/// The own-record scope's four entries, with the head forms of the first two (T-332);
+/// `refresh_current` is `refresh_active_usage`'s per-task step, checked below to have no other
+/// caller.
+const OWN_RECORDS: [(&str, &str); 7] = [
     ("corral-ops/src/resume.rs", "resume_packet"),
+    ("corral-ops/src/resume.rs", "resume_packet_head"),
     ("corral-ops/src/resume.rs", "require_checkpoint"),
+    ("corral-ops/src/resume.rs", "require_checkpoint_head"),
     ("corral-core/src/progress.rs", "save_checkpoint"),
     ("corral-ops/src/usage.rs", "refresh_active_usage"),
     ("corral-ops/src/usage.rs", "refresh_current"),
@@ -134,7 +146,7 @@ fn emitted_checkpoint_and_own_record_readers_are_called_only_where_allowed() {
     let mut seen = BTreeSet::new();
     for call in calls() {
         let at = format!("{}:{} in {}", call.file, call.line, call.function);
-        if DEFINITIONS.contains(&call.file.as_str()) {
+        if DEFINITIONS.contains(&call.file.as_str()) || SQL.contains(&call.file.as_str()) {
             continue;
         }
         seen.insert(call.name);

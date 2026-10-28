@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
+use corral_core::TaskRef as _;
 use corral_core::{ArtifactKind, PlanRun, PlanRunState, Status, Task};
 use jiff::Timestamp;
 use serde_json::json;
@@ -122,7 +123,8 @@ impl Smoke {
             Err(error) => return Err(error).context("planner launch observation disconnected"),
         }
         // Submission can finish inside the window and close its own pane.
-        let current = ctx.store.get(&task.id)?;
+        // The current plan run is a head projection: no history is read.
+        let current = ctx.store.head(&task.id)?.shell_task()?;
         let run = task.plan_runs.last().context("planner run missing")?;
         if current
             .plan_runs

@@ -107,7 +107,21 @@ pub(crate) fn snapshot_hashes(
     earliest: Timestamp,
     refs: &[String],
 ) -> Result<Vec<String>> {
-    let allowed = crate::artifact_storage::snapshot_dir(ctx.store.dir(), &task.id, run);
+    snapshot_hashes_with(ctx, &task.id, run, earliest, refs, &|path| {
+        Ok(task.artifacts.iter().find(|a| a.path == path).cloned())
+    })
+}
+
+/// [`snapshot_hashes`] with each referenced artifact looked up by its stored path.
+pub(crate) fn snapshot_hashes_with(
+    ctx: &Ctx,
+    task: &str,
+    run: &str,
+    earliest: Timestamp,
+    refs: &[String],
+    artifact: &dyn Fn(&str) -> Result<Option<corral_core::Artifact>>,
+) -> Result<Vec<String>> {
+    let allowed = crate::artifact_storage::snapshot_dir(ctx.store.dir(), task, run);
     let allowed = allowed
         .canonicalize()
         .context("missing artifact snapshot directory")?;
@@ -116,7 +130,7 @@ pub(crate) fn snapshot_hashes(
         .dir()
         .canonicalize()
         .context("resolving store directory")?;
-    if allowed != crate::artifact_storage::snapshot_dir(&root, &task.id, run) {
+    if allowed != crate::artifact_storage::snapshot_dir(&root, task, run) {
         bail!("artifact_directory_escape");
     }
     let mut hashes = Vec::new();
@@ -129,10 +143,8 @@ pub(crate) fn snapshot_hashes(
         {
             bail!("invalid_artifact_path: {reference}");
         }
-        let artifact = task
-            .artifacts
-            .iter()
-            .find(|a| a.run == run && a.path == *reference)
+        let artifact = artifact(reference)?
+            .filter(|a| a.run == run)
             .with_context(|| format!("unknown_or_wrong_run_artifact: {reference}"))?;
         if artifact.added < earliest {
             bail!("artifact_before_attempt: {reference}");

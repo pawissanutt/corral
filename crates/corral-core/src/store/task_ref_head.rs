@@ -223,19 +223,19 @@ impl TaskHeadMut {
 macro_rules! projections {
     ($head:ident) => {
         fn current_run_head(&self) -> Result<Option<Cow<'_, RunHead>>> {
-            Ok(self.$head().current_run.as_ref().map(Cow::Borrowed))
+            Ok(self.$head().current_run.as_deref().map(Cow::Borrowed))
         }
         fn last_plan_run_head(&self) -> Result<Option<Cow<'_, PlanRunHead>>> {
-            Ok(self.$head().last_plan_run.as_ref().map(Cow::Borrowed))
+            Ok(self.$head().last_plan_run.as_deref().map(Cow::Borrowed))
         }
         fn last_plan_head(&self) -> Result<Option<Cow<'_, PlanHead>>> {
-            Ok(self.$head().last_plan.as_ref().map(Cow::Borrowed))
+            Ok(self.$head().last_plan.as_deref().map(Cow::Borrowed))
         }
         fn last_aggregate_attempt_head(&self) -> Result<Option<Cow<'_, AttemptHead>>> {
             Ok(self
                 .$head()
                 .last_aggregate_attempt
-                .as_ref()
+                .as_deref()
                 .map(Cow::Borrowed))
         }
         fn history_summary(&self) -> Result<Cow<'_, HistorySummary>> {

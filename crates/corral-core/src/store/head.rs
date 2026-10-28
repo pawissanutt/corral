@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use super::assemble::head_object;
-use super::codec::{FACTS, SELF, child_key, cursor_token, seq};
+use super::codec::{FACTS, SELF, child_key, cursor_token};
 use super::read::{doc_bytes, run_seq_of};
 use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead, TaskHeadFields};
 use crate::backend::{
@@ -19,8 +19,8 @@ use crate::backend::{
 use crate::inbox::{Recipient, SessionCursor};
 use crate::work::{self, Counter, Subject};
 use crate::{
-    AggregateReview, Checkpoint, CheckpointMeta, ContainerFacts, DecisionRecord, HistorySummary,
-    ResumeReceipt, RunObligations, UsageEntry, WaitRecord,
+    AggregateReview, CheckpointMeta, ContainerFacts, DecisionRecord, HistorySummary, ResumeReceipt,
+    RunObligations, UsageEntry, WaitRecord,
 };
 
 /// The view a head was read on, shared by its keyed reads.
@@ -44,10 +44,10 @@ pub struct TaskHead {
     pub num: TaskNum,
     pub rev: u64,
     pub task: TaskHeadFields,
-    pub current_run: Option<RunHead>,
-    pub last_plan_run: Option<PlanRunHead>,
-    pub last_plan: Option<PlanHead>,
-    pub last_aggregate_attempt: Option<AttemptHead>,
+    pub current_run: Option<Box<RunHead>>,
+    pub last_plan_run: Option<Box<PlanRunHead>>,
+    pub last_plan: Option<Box<PlanHead>>,
+    pub last_aggregate_attempt: Option<Box<AttemptHead>>,
     pub summary: HistorySummary,
     pub(crate) seqs: CurrentSeqs,
     pub(crate) view: Option<PinnedView>,
@@ -253,10 +253,10 @@ impl TaskHead {
             num,
             rev: doc.header.rev,
             task,
-            current_run,
-            last_plan_run,
-            last_plan,
-            last_aggregate_attempt,
+            current_run: current_run.map(Box::new),
+            last_plan_run: last_plan_run.map(Box::new),
+            last_plan: last_plan.map(Box::new),
+            last_aggregate_attempt: last_aggregate_attempt.map(Box::new),
             summary: serde_json::from_value(doc.summary)?,
             seqs,
             view: None,
@@ -479,7 +479,7 @@ impl TaskHead {
         self.run_children(run, |p| RowQuery::under(TaskPart::ReviewRun, p), u32::MAX)
     }
 
-    fn decode<T: DeserializeOwned>(rows: Vec<HistoryRow>) -> Result<Vec<T>> {
+    pub(super) fn decode<T: DeserializeOwned>(rows: Vec<HistoryRow>) -> Result<Vec<T>> {
         rows.into_iter()
             .map(|row| Ok(serde_json::from_value(row.doc)?))
             .collect()
@@ -686,52 +686,6 @@ impl TaskHead {
         &self.summary.operating_contract_revision
     }
 
-    pub fn checkpoint_by_artifact(
-        &self,
-        run: &str,
-        artifact: &str,
-    ) -> Result<Option<CheckpointMeta>> {
-        let Some(owner) = self.run_owner(run)? else {
-            return Ok(None);
-        };
-        let q = RowQuery::under(TaskPart::RunCheckpoint, owner)
-            .with_index(format!("artifact:{artifact}"));
-        Ok(Self::decode(self.query(&q, 1, Counter::NestedRowDecodes)?)?
-            .into_iter()
-            .next())
-    }
-
-    /// The checkpoint metadata of `run`, newest first, read one row at a time as consumed.
-    pub fn checkpoint_metas_newest_first(&self, run: &str) -> Result<CheckpointMetas<'_>> {
-        Ok(CheckpointMetas::of_owner(self, self.run_owner(run)?))
-    }
-
-    /// The canonical checkpoint `ordinal` (1-based) of `run`: its meta row and one payload.
-    pub fn checkpoint_payload(&self, run: &str, ordinal: u64) -> Result<Option<Checkpoint>> {
-        let Some(owner) = self.run_owner(run)? else {
-            return Ok(None);
-        };
-        let key = format!("{owner}{}", seq(usize::try_from(ordinal)?));
-        let Some(meta) = self
-            .query(
-                &RowQuery::key(TaskPart::RunCheckpoint, key),
-                1,
-                Counter::NestedRowDecodes,
-            )?
-            .into_iter()
-            .next()
-        else {
-            return Ok(None);
-        };
-        let meta: CheckpointMeta = serde_json::from_value(meta.doc)?;
-        let payload = self.query(
-            &RowQuery::key(TaskPart::CheckpointPayload, meta.payload_digest),
-            1,
-            Counter::NestedRowDecodes,
-        )?;
-        Ok(Self::decode(payload)?.into_iter().next())
-    }
-
     /// The usage entries of one owner, a run or one of its review children (output-sized).
     pub fn usage_entries(&self, run: &str, child: Option<&str>) -> Result<Vec<UsageEntry>> {
         let Some(owner) = self.owner_key(run, child)? else {
@@ -840,14 +794,24 @@ pub struct CheckpointMetas<'a> {
     head: &'a TaskHead,
     owner: Option<String>,
     after: Option<String>,
+    /// The run the rows belong to, when the caller named it.
+    run: Option<String>,
 }
 
 impl<'a> CheckpointMetas<'a> {
+    /// The metas under `owner`, each counted as `run`'s own child row.
+    pub(super) fn of_run(head: &'a TaskHead, owner: Option<String>, run: &str) -> Self {
+        let mut metas = Self::of_owner(head, owner);
+        metas.run = Some(run.to_owned());
+        metas
+    }
+
     pub(super) fn of_owner(head: &'a TaskHead, owner: Option<String>) -> Self {
         Self {
             head,
             owner,
             after: None,
+            run: None,
         }
     }
 
@@ -872,7 +836,10 @@ impl<'a> CheckpointMetas<'a> {
             self.owner = None;
         }
         let row = page.items.into_iter().next()?;
-        let run = run_seq_of(&row).and_then(|seq| self.head.known_run(seq));
+        let run = self
+            .run
+            .clone()
+            .or_else(|| run_seq_of(&row).and_then(|seq| self.head.known_run(seq)));
         let subject = match run.as_deref() {
             Some(run) => Subject::RunChild {
                 task: &self.head.task.id,

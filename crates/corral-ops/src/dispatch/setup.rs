@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use corral_core::{AutoStage, AutopilotState, Run, RunOutcome, Task};
+use corral_core::{AutoStage, AutopilotState, Run, RunOutcome, Task, TaskRef};
 use serde_json::json;
 
 use crate::Ctx;
@@ -81,21 +81,23 @@ pub(super) fn carried_changes(task: &Task) -> Option<(Run, AutopilotState)> {
     Some((prev.clone(), state))
 }
 
-pub(crate) fn check_plan(
+pub(crate) fn check_plan<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    head: &T,
     route: &corral_core::RouteDecision,
     expected: Option<&corral_core::PlanRecord>,
 ) -> Result<()> {
     // Before any worktree or pane, and again inside the claim transaction.
     crate::agent::hooks::preflight::route(ctx, corral_core::agent::AgentRole::Worker, route)?;
-    let approved = crate::approved_plan(ctx, task)?;
+    let approved = crate::approved_plan(ctx, head)?;
     if approved.as_ref() != expected {
         bail!(
             "plan approval changed during dispatch; inspect the plan and dispatch explicitly again"
         );
     }
     if let Some(plan) = expected {
+        // The policy and profile checks read head fields and the current run only.
+        let task = &head.shell_task()?;
         let config = crate::plan::config(ctx)?;
         let policy = config.task_review_policy(task);
         if plan.run.is_none()
@@ -131,11 +133,7 @@ pub(crate) fn check_plan(
                     .as_deref()
                     .context("plan approval requires a known dispatch vendor")?,
             )?;
-            if !plan
-                .reviews
-                .iter()
-                .any(|r| r.reviewer == reviewer && r.verdict == Some(corral_core::Verdict::Approve))
-            {
+            if head.plan_review_approved_by(&plan.id, &reviewer)?.is_none() {
                 bail!(
                     "stale plan approval: dispatch override requires reviewer {reviewer}; review again"
                 );

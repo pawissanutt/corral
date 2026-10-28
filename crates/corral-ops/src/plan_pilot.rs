@@ -1,6 +1,6 @@
 //! Plan-only review progression. No code gate or integration path is reachable.
 use anyhow::{Context, Result};
-use corral_core::{PlanRunState, Status, Task, Verdict};
+use corral_core::{PlanRunState, Status, Task, TaskHead, TaskRef as _, Verdict};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -199,11 +199,14 @@ fn idle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<bool> {
 }
 
 fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
-    let task = &ctx.store.get(id)?;
+    let head = ctx.store.head(id)?;
+    // The decision reads head fields, the last plan with its current review and the last
+    // planner run, which the head's shell holds.
+    let task = &head.shell_task()?;
     let config = crate::plan::config(ctx)?;
     // Prepared actions retain their exact round and owner/automatic provenance. A
     // failed authorization is not a planner exit, nor a reason to claim a round.
-    if plan_dispatch::resume_prepared(ctx, task)? {
+    if plan_dispatch::resume_prepared(ctx, &head)? {
         return Ok(());
     }
     let run = task.plan_runs.last();
@@ -227,7 +230,7 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
                 crate::plan_decompose::apply(ctx, &task.id, &plan.id)?;
             } else {
                 ctx.store
-                    .reconcile_plan_acceptance(&task.id, |store, current| {
+                    .reconcile_plan_acceptance_head(&task.id, |store, current| {
                         crate::operating::require(
                             store,
                             current,
@@ -249,7 +252,7 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
             corral_core::OperatingActionKind::PlanReview,
         )?;
         if let Err(error) = crate::plan::expected_reviewer(&config, task) {
-            return escalate(ctx, task, &format!("{error:#}"));
+            return escalate(ctx, &head, &format!("{error:#}"));
         }
         crate::plan_review::review_auto(ctx, &task.id)?;
         return Ok(());
@@ -264,7 +267,7 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
                 {
                     escalate(
                         ctx,
-                        task,
+                        &head,
                         "plan reviewer disappeared before recording a verdict",
                     )?;
                 }
@@ -286,11 +289,11 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
                     || config.explicit_owner_acceptance(task, true)
                     || crate::plan::owner_decisions(task, plan))
             {
-                ctx.store.update(&task.id, |t| {
-                    if t.plans.last() != task.plans.last() || t.plan_runs != task.plan_runs {
+                ctx.store.update_head(&task.id, |t| {
+                    if !same_plan_state(t.head(), &head) {
                         return Ok(());
                     }
-                    if let Some(run) = t.plan_runs.last_mut() {
+                    if let Some(run) = t.last_plan_run_mut() {
                         run.state = PlanRunState::AwaitingOwner;
                     }
                     t.status = Status::NeedsMe;
@@ -311,7 +314,7 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
             let Some(run) = run else {
                 return escalate(
                     ctx,
-                    task,
+                    &head,
                     "plan changes require a planner; dispatch a plan run",
                 );
             };
@@ -321,11 +324,11 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
                 .review_policy(task.project.as_deref(), task.review)
                 .max_rounds;
             if run.rounds >= max {
-                return escalate(ctx, task, "plan review reached max_rounds");
+                return escalate(ctx, &head, "plan review reached max_rounds");
             }
             plan_dispatch::revise(
                 ctx,
-                task,
+                &head,
                 review
                     .notes
                     .as_deref()
@@ -335,37 +338,46 @@ fn act(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
         }
         Some(Verdict::Escalate) => escalate(
             ctx,
-            task,
+            &head,
             review.notes.as_deref().unwrap_or("plan review escalated"),
         )?,
     }
     Ok(())
 }
 
-fn escalate(ctx: &Ctx, task: &Task, reason: &str) -> Result<()> {
+/// The plan state a decision was taken on is still current: the last plan with its current
+/// review and facts, the last planner run and the planner run count, as the full comparison of
+/// the last plan and every planner run decided.
+fn same_plan_state(current: &TaskHead, seen: &TaskHead) -> bool {
+    current.last_plan == seen.last_plan
+        && current.last_plan_run == seen.last_plan_run
+        && current.summary.plan_runs == seen.summary.plan_runs
+}
+
+fn escalate(ctx: &Ctx, head: &TaskHead, reason: &str) -> Result<()> {
     let mut escalated = false;
-    ctx.store.update(&task.id, |t| {
+    ctx.store.update_head(&head.id, |t| {
         // A concurrent owner verdict or review retry supersedes this observation.
-        if t.plans.last() != task.plans.last()
-            || t.plan_runs != task.plan_runs
-            || t.plan_runs
-                .last()
+        if !same_plan_state(t.head(), head)
+            || t.head()
+                .last_plan_run
+                .as_ref()
                 .is_some_and(|r| r.state == PlanRunState::Cancelled)
         {
             return Ok(());
         }
-        if let Some(plan) = t.plans.last_mut() {
-            crate::plan_review::terminalize_pending(plan, reason);
+        if let Some(plan) = t.head().last_plan.as_ref().map(|p| p.id.clone()) {
+            t.terminalize_pending_plan_reviews(&plan, reason)?;
         }
         t.status = Status::NeedsMe;
         t.queued = false;
-        if let Some(run) = t.plan_runs.last_mut() {
+        if let Some(run) = t.last_plan_run_mut() {
             run.state = PlanRunState::Escalated;
             run.pending_reply = Some(reason.into());
         }
         escalated = true;
         ctx.store.log_event(
-            Some(&task.id),
+            Some(&head.id),
             "plan_escalated",
             json!({"target":"plan","reason":reason}),
         )?;

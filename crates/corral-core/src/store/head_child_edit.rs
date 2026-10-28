@@ -109,7 +109,7 @@ impl TaskHeadMut {
         }
         self.write_panes(&old_panes, &new_panes);
         self.put(new_row);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -163,7 +163,7 @@ impl TaskHeadMut {
         }
         self.write_panes(&old_panes, &new_panes);
         self.put(new_row);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 }

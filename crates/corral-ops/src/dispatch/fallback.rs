@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use corral_core::{ProfileChoice, RetryPlan};
+use corral_core::{ProfileChoice, RetryPlan, TaskHead};
 
 use super::{DispatchOutcome, retry_with};
 use crate::Ctx;
@@ -7,9 +7,17 @@ use crate::Ctx;
 /// A linked continuation on the next approved candidate of the same profile, selected by the
 /// availability episode. The old worker is quiescent; its last compatible checkpoint is the
 /// handoff because the failed model cannot write a new one. Never a difficulty switch.
-pub(crate) fn availability_retry(ctx: &Ctx, id: &str, run: &str) -> Result<DispatchOutcome> {
-    let task = ctx.store.get(id)?;
-    let previous = task.current_run().context("task has no run to continue")?;
+pub(crate) fn availability_retry(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Dispatch);
+    let task = ctx.store.head(id)?;
+    let previous = task
+        .current_run
+        .as_ref()
+        .context("task has no run to continue")?;
     let plan = RetryPlan {
         source: Some(corral_core::RouteSource::Retry {
             previous: Box::new(

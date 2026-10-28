@@ -1,6 +1,8 @@
 //! Authorization and explanations for the existing queued dispatch drain.
 use anyhow::{Context, Result, bail};
-use corral_core::{DispatchPlan, ProfileChoice, RetryPlan, RunOutcome, Status, Store, Task};
+use corral_core::{
+    DispatchPlan, ProfileChoice, RetryPlan, RunOutcome, Status, Store, Task, TaskHead, TaskRef,
+};
 use serde::Serialize;
 use serde_json::json;
 
@@ -161,20 +163,13 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
     )
 }
 
-/// [`authorized_ready`] of a head, numbering its next run from the head's counts.
-pub(crate) fn authorized_ready_head(store: &Store, head: &corral_core::TaskHead) -> bool {
-    !head.tracker
-        && head.status == Status::Ready
-        && !head.dispatch_hold
-        && store.config.ready_project_allowed(head.project.as_deref())
-        && crate::operating::queued_origin_head(store, head).is_ok()
-}
-
-pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
-    !task.tracker
-        && task.status == Status::Ready
-        && !task.dispatch_hold
-        && store.config.ready_project_allowed(task.project.as_deref())
+pub(crate) fn authorized_ready<T: TaskRef + ?Sized>(store: &Store, task: &T) -> bool {
+    !*task.tracker()
+        && *task.status() == Status::Ready
+        && !*task.dispatch_hold()
+        && store
+            .config
+            .ready_project_allowed(task.project().as_deref())
         && crate::operating::queued_origin(store, task).is_ok()
 }
 
@@ -213,20 +208,23 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
     Ok(changes)
 }
 
-pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
-    if task.tracker {
+pub(crate) fn ready_reason<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Option<String> {
+    if *task.tracker() {
         Some("tracker; dispatch its child tasks instead".into())
-    } else if task.dispatch_hold {
+    } else if *task.dispatch_hold() {
         Some("dequeued; move to Ready or enqueue to authorize".into())
-    } else if task.project.is_none() {
+    } else if task.project().is_none() {
         Some("task has no project".into())
     } else if task
-        .project
+        .project()
         .as_ref()
         .is_some_and(|project| !store.config.projects.contains_key(project))
     {
         Some("unknown task project".into())
-    } else if !store.config.ready_project_allowed(task.project.as_deref()) {
+    } else if !store
+        .config
+        .ready_project_allowed(task.project().as_deref())
+    {
         Some("project is not admitted by dispatch.ready_projects".into())
     } else if let Err(error) = crate::operating::queued_origin(store, task) {
         Some(format!(
@@ -237,8 +235,12 @@ pub(crate) fn ready_reason(store: &Store, task: &Task) -> Option<String> {
     }
 }
 
-pub(crate) fn queued_plan_requested(task: &Task) -> bool {
-    task.queued && task.dispatch_plan.as_ref().is_some_and(|p| p.explicit_plan)
+pub(crate) fn queued_plan_requested<T: TaskRef + ?Sized>(task: &T) -> bool {
+    *task.queued()
+        && task
+            .dispatch_plan()
+            .as_ref()
+            .is_some_and(|p| p.explicit_plan)
 }
 
 /// Only the latest submission for the current task contract can hold admission.
@@ -267,6 +269,23 @@ pub(crate) fn check_snapshot(
     store: &Store,
     expected: &Task,
     current: &Task,
+) -> Result<()> {
+    crate::tracker::check_action(current, "dispatch tracker")?;
+    if expected != current || ctx.store.config != store.config {
+        bail!(
+            "{} or dispatch configuration changed; retry with the current state",
+            current.id
+        );
+    }
+    Ok(())
+}
+
+/// [`check_snapshot`] of a head: any committed change of the task advances its revision.
+pub(crate) fn check_snapshot_head(
+    ctx: &Ctx,
+    store: &Store,
+    expected: &TaskHead,
+    current: &TaskHead,
 ) -> Result<()> {
     crate::tracker::check_action(current, "dispatch tracker")?;
     if expected != current || ctx.store.config != store.config {

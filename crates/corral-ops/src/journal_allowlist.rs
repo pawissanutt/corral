@@ -99,14 +99,14 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
         "plan_dispatch.rs",
         "launch",
         "plan_dispatched",
-        "submit",
+        "submit_head",
         "pane_run inside the planner send callback",
     ),
     (
-        "plan_review.rs",
+        "plan_review/launch.rs",
         "review_with_origin",
         "plan_review_delivery",
-        "submit",
+        "submit_head",
         "agent_prompt inside the PM plan review send callback",
     ),
     (

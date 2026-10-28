@@ -37,10 +37,10 @@ pub(crate) enum Demoted {
 pub struct TaskHeadMut {
     pub(crate) head: TaskHead,
     /// The head as read: decides which current container rows changed.
-    pub(crate) base: TaskHead,
+    pub(crate) base: Box<TaskHead>,
     /// The head as of the last fact adjustment: direct projection edits since then still owe
     /// their fact deltas.
-    pub(crate) seen: TaskHead,
+    pub(crate) seen: Box<TaskHead>,
     pub(crate) rows: BTreeMap<(TaskPart, String), Option<HistoryRow>>,
     pub(crate) demoted: Vec<Demoted>,
     pub(crate) usage_dirty: bool,
@@ -53,6 +53,16 @@ pub struct TaskHeadMut {
     pub(crate) scope_history_changed: bool,
     /// The head fields and scope revision count the contract revision was last settled for.
     pub(crate) contract_settled: Option<(TaskHeadFields, u64)>,
+    /// Set by [`Self::restart_current_run`] and [`Self::restart_last_plan_run`]: the only
+    /// in-place change of a current container's start.
+    pub(crate) restarted: Restarted,
+}
+
+/// Which current containers this mutation restarted the clock of.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Restarted {
+    pub(crate) run: bool,
+    pub(crate) plan_run: bool,
 }
 
 impl Deref for TaskHeadMut {
@@ -243,8 +253,8 @@ fn split_rows(
 impl TaskHeadMut {
     pub(crate) fn new(head: TaskHead) -> TaskHeadMut {
         TaskHeadMut {
-            base: head.clone(),
-            seen: head.clone(),
+            base: Box::new(head.clone()),
+            seen: Box::new(head.clone()),
             head,
             rows: BTreeMap::new(),
             demoted: Vec::new(),
@@ -253,6 +263,7 @@ impl TaskHeadMut {
             originals: std::cell::RefCell::default(),
             scope_history_changed: false,
             contract_settled: None,
+            restarted: Restarted::default(),
         }
     }
 
@@ -262,19 +273,19 @@ impl TaskHeadMut {
     }
 
     pub fn current_run_mut(&mut self) -> Option<&mut RunHead> {
-        self.head.current_run.as_mut()
+        self.head.current_run.as_deref_mut()
     }
 
     pub fn last_plan_run_mut(&mut self) -> Option<&mut PlanRunHead> {
-        self.head.last_plan_run.as_mut()
+        self.head.last_plan_run.as_deref_mut()
     }
 
     pub fn last_plan_mut(&mut self) -> Option<&mut PlanHead> {
-        self.head.last_plan.as_mut()
+        self.head.last_plan.as_deref_mut()
     }
 
     pub fn last_aggregate_attempt_mut(&mut self) -> Option<&mut AttemptHead> {
-        self.head.last_aggregate_attempt.as_mut()
+        self.head.last_aggregate_attempt.as_deref_mut()
     }
 
     pub(crate) fn put(&mut self, row: HistoryRow) {
@@ -340,7 +351,7 @@ impl TaskHeadMut {
                 self.put(run_row(old_seq, c, child, true)?);
             }
             self.head.summary.fold_run_head(&old);
-            self.demoted.push(Demoted::Run(old_seq, old));
+            self.demoted.push(Demoted::Run(old_seq, *old));
         }
         let rows =
             split_rows(|rows| split_run(rows, n, SELF, &run, serde_json::to_value(&run)?, true))?;
@@ -371,9 +382,9 @@ impl TaskHeadMut {
             }
         }
         self.put_task_panes(&split_panes_of_run(n, &run));
-        self.head.current_run = Some(head);
+        self.head.current_run = Some(Box::new(head));
         self.head.seqs.run = Some(n);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -392,7 +403,7 @@ impl TaskHeadMut {
             (self.head.last_plan_run.take(), self.head.seqs.plan_run)
         {
             self.head.summary.fold_plan_run_head(&old);
-            self.demoted.push(Demoted::PlanRun(old_seq, old));
+            self.demoted.push(Demoted::PlanRun(old_seq, *old));
         }
         let rows =
             split_rows(|rows| plan_run_rows(rows, n, &run, serde_json::to_value(&run)?, true))?;
@@ -406,9 +417,9 @@ impl TaskHeadMut {
             &format!("plan_run:{}", seq(n)),
             &run,
         ));
-        self.head.last_plan_run = Some(head);
+        self.head.last_plan_run = Some(Box::new(head));
         self.head.seqs.plan_run = Some(n);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -423,7 +434,7 @@ impl TaskHeadMut {
                 self.put(plan_review_row(old_seq, r, review, true)?);
             }
             self.head.summary.fold_plan_head(&old);
-            self.demoted.push(Demoted::Plan(old_seq, old));
+            self.demoted.push(Demoted::Plan(old_seq, *old));
         }
         let rows =
             split_rows(|rows| plan_rows(rows, n, &plan, serde_json::to_value(&plan)?, true))?;
@@ -455,9 +466,9 @@ impl TaskHeadMut {
                 review.herdr.as_ref(),
             ));
         }
-        self.head.last_plan = Some(head);
+        self.head.last_plan = Some(Box::new(head));
         self.head.seqs.plan = Some(n);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -474,7 +485,7 @@ impl TaskHeadMut {
                 self.put(aggregate_review_row(old_seq, r, review, true)?);
             }
             self.head.summary.fold_attempt_head(&old);
-            self.demoted.push(Demoted::Attempt(old_seq, old));
+            self.demoted.push(Demoted::Attempt(old_seq, *old));
         }
         let rows = split_rows(|rows| {
             attempt_rows(rows, n, &attempt, serde_json::to_value(&attempt)?, true)
@@ -502,9 +513,9 @@ impl TaskHeadMut {
                 review.herdr.as_ref(),
             ));
         }
-        self.head.last_aggregate_attempt = Some(head);
+        self.head.last_aggregate_attempt = Some(Box::new(head));
         self.head.seqs.attempt = Some(n);
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 
@@ -572,7 +583,7 @@ impl TaskHeadMut {
     /// comparing each current projection with the one this mutation started from.
     pub(crate) fn adjust_projections(&mut self) -> Result<()> {
         let base = self.seen.clone();
-        Self::ensure_stable_identities(&base, &self.head)?;
+        Self::ensure_stable_identities(&base, &self.head, self.restarted)?;
         if let (Some(run), Some(old), Some(seq)) = (
             self.head.current_run.as_mut(),
             base.current_run.as_ref(),
@@ -713,7 +724,7 @@ impl TaskHeadMut {
             add_panes(&mut attempt.facts.pane_refs, &after, 1);
             self.write_panes(&before, &after);
         }
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(())
     }
 

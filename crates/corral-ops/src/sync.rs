@@ -691,7 +691,7 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut queued: Vec<Task> = Vec::new();
     for head in open_heads(ctx)? {
         if !head.tracker
-            && (head.launch.is_some() || crate::queue::authorized_ready_head(&ctx.store, &head))
+            && (head.launch.is_some() || crate::queue::authorized_ready(&ctx.store, &head))
         {
             queued.push(head.to_shell_task()?);
         }

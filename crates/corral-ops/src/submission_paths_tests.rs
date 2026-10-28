@@ -14,6 +14,10 @@ pub(crate) mod fixture {
     use crate as corral_ops;
     include!("../tests/operating_launch/fixture.rs");
 }
+#[path = "../tests/support/action_budget.rs"]
+mod action_budget;
+#[path = "../tests/support/action_heads.rs"]
+mod action_heads;
 #[path = "../tests/support/submission_aggregate.rs"]
 mod aggregate;
 #[path = "../tests/support/submission_path_crashes.rs"]

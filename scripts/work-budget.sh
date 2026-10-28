@@ -9,6 +9,9 @@
 # sync step (sync pass and usage refresh) on the same three stores, settled and with one real
 # current-run mutation, warm and in a fresh process, with no counted hydration, the usage
 # refresh's own-record cells at the refreshed runs' rows and the mutation as one task change.
+# Then runs the actions-launch action budget: each of its automatic actions through its real
+# entry on a base, a 10x grown and an emitted store, with no counted hydration and identical
+# unattributed decode cells.
 # Counts are deterministic; printed timings are informational only. Reports print on failure,
 # or always with WORK_BUDGET_REPORT=1.
 set -euo pipefail
@@ -22,3 +25,5 @@ for test in \
   if [[ -n "${WORK_BUDGET_REPORT:-}" ]]; then args+=(--nocapture); fi
   cargo test -p corral-tui --lib -- "${args[@]}"
 done
+cargo test -p corral-ops --lib -- --exact \
+  submission_paths_tests::action_budget::action_budget_actions_launch_kinds_do_not_follow_history

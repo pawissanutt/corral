@@ -138,7 +138,11 @@ pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
 }
 
 /// [`finish`] on the current run of a head: the reviewer snapshot is its current child.
-fn finish_head(task: &mut corral_core::TaskHeadMut, kind: Kind, now: Timestamp) -> Result<()> {
+pub(crate) fn finish_head(
+    task: &mut corral_core::TaskHeadMut,
+    kind: Kind,
+    now: Timestamp,
+) -> Result<()> {
     let current = task.current_run_mut().context("no current run")?;
     match kind {
         Kind::Gate => {

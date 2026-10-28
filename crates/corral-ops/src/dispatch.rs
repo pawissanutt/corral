@@ -8,14 +8,12 @@ pub(crate) use admission::Admission;
 pub use pane::{jump, live_tail};
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::{
-    AutoStage, AutopilotState, ProfileChoice, RetryPlan, Run, RunMode, RunOutcome, Status, Task,
-};
+use corral_core::{AutopilotState, Run, RunMode, Status, Task, TaskHead, TaskHeadMut, TaskRef};
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
-use crate::cleanup::{Cleanup, cleanup};
+use crate::cleanup::{Cleanup, cleanup_head};
 use crate::integration::RepairKey;
 
 mod setup;
@@ -42,22 +40,44 @@ pub struct DispatchOpts {
     pub force_resources: bool,
 }
 
+/// The task is the full task for owner commands and the head on automatic paths.
 #[derive(Debug, Clone)]
-pub enum DispatchOutcome {
+pub enum DispatchOutcome<T = Task> {
     Started {
-        task: Task,
+        task: T,
         run_id: String,
         pane_id: String,
     },
     Queued {
-        task: Task,
+        task: T,
         reason: String,
     },
 }
 
+impl DispatchOutcome<Box<TaskHead>> {
+    /// The owner command's output: the full task, read once after the action.
+    pub(crate) fn full(self, ctx: &Ctx) -> Result<DispatchOutcome> {
+        Ok(match self {
+            Self::Started {
+                task,
+                run_id,
+                pane_id,
+            } => DispatchOutcome::Started {
+                task: ctx.store.get(&task.id)?,
+                run_id,
+                pane_id,
+            },
+            Self::Queued { task, reason } => DispatchOutcome::Queued {
+                task: ctx.store.get(&task.id)?,
+                reason,
+            },
+        })
+    }
+}
+
 /// Manual and queued dispatch share the same atomic board claim and per-task launch owner.
 pub fn dispatch(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<DispatchOutcome> {
-    dispatch_with(ctx, id, opts, Admission::Manual)
+    dispatch_with(ctx, id, opts, Admission::Manual)?.full(ctx)
 }
 
 pub(crate) fn dispatch_automatic(
@@ -65,7 +85,8 @@ pub(crate) fn dispatch_automatic(
     id: &str,
     inputs: serde_json::Value,
     at: Timestamp,
-) -> Result<DispatchOutcome> {
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Dispatch);
     dispatch_with(
         ctx,
         id,
@@ -79,7 +100,8 @@ pub(crate) fn dispatch_queued(
     id: &str,
     rank: usize,
     at: Timestamp,
-) -> Result<DispatchOutcome> {
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Dispatch);
     dispatch_with(
         ctx,
         id,
@@ -96,8 +118,8 @@ fn dispatch_with(
     id: &str,
     opts: &DispatchOpts,
     admission: Admission,
-) -> Result<DispatchOutcome> {
-    crate::tracker::check_action(&ctx.store.get(id)?, "dispatch tracker")?;
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    crate::tracker::check_action(&ctx.store.head(id)?, "dispatch tracker")?;
     let queued_only = matches!(admission, Admission::Queued { .. });
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
@@ -114,19 +136,21 @@ fn dispatch_with(
             bail!("{reason}; use --force to dispatch anyway");
         }
     }
-    let task = ctx.store.get(id)?;
+    let task = ctx.store.head(id)?;
     let _owner = ctx
         .store
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress for this task")?;
-    let task = ctx.store.get(&task.id)?;
-    crate::tracker::check_action(&task, "dispatch tracker")?;
-    if queued_only && !crate::queue::authorized_ready(&ctx.store, &task) && task.launch.is_none() {
-        bail!("{} is no longer authorized for queued dispatch", task.id);
+    let head = Box::new(ctx.store.head(&task.id)?);
+    crate::tracker::check_action(&*head, "dispatch tracker")?;
+    if queued_only && !crate::queue::authorized_ready(&ctx.store, &*head) && head.launch.is_none() {
+        bail!("{} is no longer authorized for queued dispatch", head.id);
     }
-    if task.launch.is_some() {
-        return crate::launch::resume(ctx, &task, opts.force_resources);
+    if head.launch.is_some() {
+        return crate::launch::resume(ctx, &head, opts.force_resources);
     }
+    // Read-only checks below see head fields and current containers only.
+    let task = head.shell_task()?;
     let opts = &DispatchOpts {
         plan: admission.plan_requested(&task, opts),
         ..opts.clone()
@@ -146,7 +170,7 @@ fn dispatch_with(
         && matches!(admission, Admission::Manual)
         && let Some(notes) = crate::plan_dispatch::revision_notes(&task)
     {
-        return crate::plan_dispatch::revise_owner(ctx, &task, notes);
+        return crate::plan_dispatch::revise_owner(ctx, &head, notes);
     }
     if task.status == Status::Idea {
         bail!(
@@ -170,12 +194,12 @@ fn dispatch_with(
             task.status.label()
         );
     }
-    if crate::plan_dispatch::needed(ctx, &task, opts) {
-        return crate::plan_dispatch::dispatch(ctx, &task, opts, &admission);
+    if crate::plan_dispatch::needed(ctx, &*head, opts) {
+        return crate::plan_dispatch::dispatch(ctx, &head, opts, &admission);
     }
-    let approved_plan = crate::approved_plan(ctx, &task)?;
+    let approved_plan = crate::approved_plan(ctx, &*head)?;
     let plan = crate::queue::resolve_plan(ctx, &task, opts)?;
-    check_plan(ctx, &task, &plan.route, approved_plan.as_ref())?;
+    check_plan(ctx, &*head, &plan.route, approved_plan.as_ref())?;
     let resolved = &plan.route;
     for warning in &resolved.warnings {
         crate::messages::report(
@@ -227,7 +251,7 @@ fn dispatch_with(
     let resolved = &plan.route;
     let agent = resolved.profile.clone();
     let carried = carried_changes(&task);
-    let n = task.runs.len() + 1;
+    let n = head.runs_len()? + 1;
     let run_id = format!("R{n}");
     let suffix = if n == 1 {
         task.id.clone()
@@ -302,7 +326,7 @@ fn dispatch_with(
         .try_lock("session-ownership")?
         .context("pane inventory is being reconciled; retry dispatch")?;
     crate::session_scope::check_launch(ctx)?;
-    let origin = admission.origin(&ctx.store, &task)?;
+    let origin = admission.origin(&ctx.store, &*head)?;
     let action = crate::operating::identity(
         &task.id,
         &run_id,
@@ -312,18 +336,23 @@ fn dispatch_with(
     let authorization = crate::operating::authorize_start(ctx, action, origin, queued_only)?;
     plan.authorization =
         (origin == crate::operating::Origin::Owner).then(|| authorization.id.clone());
-    let (claimed, reason) = ctx.store.dispatch_update(&task.id, |store, current| {
+    let (claimed, reason) = ctx.store.dispatch_update_head(&task.id, |store, current| {
         crate::session_scope::check_launch_in(ctx, store)?;
-        crate::queue::check_snapshot(ctx, store, &task, current)?;
-        check_plan(ctx, current, &plan.route, approved_plan.as_ref())?;
-        let reason = admission.reason(ctx, store, current, opts)?;
+        crate::queue::check_snapshot_head(ctx, store, &head, current.head())?;
+        check_plan(ctx, &*current, &plan.route, approved_plan.as_ref())?;
+        let reason = admission.reason(ctx, store, &*current, opts)?;
         if let Some(reason) = &reason {
             if !opts.queue_if_blocked {
                 bail!("cannot dispatch {}: {reason}", current.id);
             }
         } else {
-            crate::tracker::check_dispatch_base(store, current, &run.base, &run.base_sha)?;
-            current.runs.push(run);
+            crate::tracker::check_dispatch_base(
+                store,
+                &current.shell_task()?,
+                &run.base,
+                &run.base_sha,
+            )?;
+            current.start_run(run)?;
             current.launch = Some(corral_core::LaunchReservation {
                 authorization: Some(authorization.clone()),
                 approved_plan: approved_plan.clone(),
@@ -338,7 +367,7 @@ fn dispatch_with(
         current.dispatch_hold = false;
         current.dispatch_plan = Some(plan.clone());
         if reason.is_none() {
-            admission.audit(ctx, store, current, &plan, &run_id)?;
+            admission.audit(ctx, store, &*current, &plan, &run_id)?;
             store.log_event(
                 Some(&current.id),
                 "dispatch_claimed",
@@ -357,7 +386,7 @@ fn dispatch_with(
             json!({"reason": reason, "plan": plan}),
         )?;
         return Ok(DispatchOutcome::Queued {
-            task: claimed,
+            task: Box::new(claimed),
             reason,
         });
     }
@@ -542,266 +571,7 @@ mod changes;
 mod inbox_reply;
 pub(crate) use inbox_reply::note as inbox_note;
 
-/// From Review/NeedsMe/Running: marks the current run outcome Superseded (closing its pane when it exists),
-/// then dispatches a new run (fresh worktree from base). Explicit profile choices win; otherwise failed
-/// rounds can select `escalate_to`. A switch uses the target defaults instead of the old model/effort.
-/// The owner redirecting the task resets the autopilot's rounds, but not profile failure history.
-pub fn retry(ctx: &Ctx, id: &str, choice: &ProfileChoice) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, None, false, None, None, |t| t.rounds = 0)
-}
-
-/// Guard a retry against an obsolete worker/run identity.
-pub fn retry_run(
-    ctx: &Ctx,
-    id: &str,
-    run: &str,
-    choice: &ProfileChoice,
-) -> Result<DispatchOutcome> {
-    retry_with(ctx, id, choice, Some(run), false, None, None, |t| {
-        t.rounds = 0
-    })
-}
-
-/// Explicitly leaves the live session and starts its configured escalation profile.
-pub fn request_changes_escalated(ctx: &Ctx, id: &str, text: &str) -> Result<DispatchOutcome> {
-    let task = ctx.store.get(id)?;
-    if !task.awaiting_owner() {
-        bail!(
-            "{} is {}; changes can only be requested in Review",
-            task.id,
-            task.status.label()
-        );
-    }
-    retry_with(
-        ctx,
-        id,
-        &ProfileChoice::default(),
-        None,
-        true,
-        None,
-        None,
-        |t| {
-            t.rounds = 0;
-            if let Some(run) = t.current_run_mut() {
-                run.autopilot = Some(AutopilotState {
-                    stage: AutoStage::Changes,
-                    reason: Some(text.to_string()),
-                    sha: crate::worktree_head(run),
-                    at: Timestamp::now(),
-                });
-            }
-        },
-    )
-}
-
-/// The autopilot's fresh retry, when escalation is due or the agent pane is gone. Records round `round`
-/// and the request `state` on the superseded run, which `dispatch` appends to the new run's prompt.
-pub(crate) fn auto_retry(
-    ctx: &Ctx,
-    id: &str,
-    round: u32,
-    state: AutopilotState,
-    expected: &RepairKey,
-) -> Result<DispatchOutcome> {
-    retry_with(
-        ctx,
-        id,
-        &ProfileChoice::default(),
-        None,
-        false,
-        Some(expected),
-        None,
-        |t| {
-            t.rounds = round;
-            if let Some(run) = t.current_run_mut() {
-                run.autopilot = Some(state);
-            }
-        },
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn retry_with(
-    ctx: &Ctx,
-    id: &str,
-    choice: &ProfileChoice,
-    expected_run: Option<&str>,
-    forced: bool,
-    expected: Option<&RepairKey>,
-    availability: Option<RetryPlan>,
-    mark: impl FnOnce(&mut Task),
-) -> Result<DispatchOutcome> {
-    let automatic = expected.is_some() || availability.is_some();
-    let id = corral_core::Store::normalize_id(id)?;
-    let owner = ctx
-        .store
-        .try_lock(&format!("launch-{id}"))?
-        .context("dispatch is already in progress for this task")?;
-    let task = ctx.store.get(&id)?;
-    if let Some(expected) = expected {
-        expected.check(&task)?;
-        crate::operating::require(&ctx.store, &task, corral_core::OperatingActionKind::Repair)?;
-    }
-    if task.launch.is_some() {
-        bail!(
-            "{} has an unfinished launch; recover it before retrying",
-            task.id
-        );
-    }
-    if !matches!(
-        task.status,
-        Status::Review | Status::NeedsMe | Status::Running
-    ) {
-        bail!(
-            "{} is {}; only Running, Needs me and Review tasks can be retried",
-            task.id,
-            task.status.label()
-        );
-    }
-    let prev = task
-        .current_run()
-        .cloned()
-        .ok_or_else(|| anyhow!("{} has no run to retry", task.id))?;
-    if let Some(expected) = expected_run
-        && expected != prev.id
-    {
-        bail!("stale_run: expected {}, received {}", prev.id, expected);
-    }
-    let plan = match availability.clone() {
-        Some(plan) => plan,
-        None => crate::escalation::retry_plan(ctx, &task, choice, forced)?,
-    };
-    // Validate the target before closing the working session or superseding its run.
-    let decision = crate::routing::route_task(
-        ctx,
-        &task,
-        &ProfileChoice {
-            profile: Some(plan.profile.clone()),
-            model: plan.model.clone(),
-            effort: plan.effort.clone(),
-        },
-    )?;
-    crate::routing::validate_model(ctx, &decision)?;
-    let reachable = match &prev.herdr {
-        Some(h) => ctx.herdr.pane_get(&h.pane_id)?.is_some(),
-        None => false,
-    };
-    let can_checkpoint = reachable && prev.worktree.is_dir();
-    // An availability handoff never depends on the old pane: a missing source tree or
-    // checkpoint is not permission to replay work whose outcome is unknown.
-    if availability.is_some() {
-        anyhow::ensure!(
-            prev.worktree.is_dir(),
-            "no trustworthy handoff: source worktree {} is missing",
-            prev.worktree.display()
-        );
-        crate::resume::require_checkpoint(&task, &prev)?;
-    } else if can_checkpoint {
-        if automatic {
-            crate::resume::require_checkpoint(&task, &prev)?;
-        } else {
-            crate::resume::retry_checkpoint(ctx, &task, &prev)?;
-        }
-    }
-    // Back to Ready so the retried task can be dispatched and does not count against its own slot.
-    let (task, ()) = ctx.store.dispatch_update(&task.id, |store, t| {
-        if let Some(expected) = expected {
-            expected.check(t)?;
-            crate::operating::require(store, t, corral_core::OperatingActionKind::Repair)?;
-        }
-        if t.current_run().is_none_or(|r| r.id != prev.id)
-            || !matches!(t.status, Status::Review | Status::NeedsMe | Status::Running)
-        {
-            bail!(
-                "{}: run {} is no longer current ({}); not retrying",
-                t.id,
-                prev.id,
-                t.status.label()
-            );
-        }
-        if can_checkpoint || availability.is_some() {
-            crate::resume::require_checkpoint(t, t.current_run().context("missing_run")?)?;
-        }
-        // Close only the identity validated under this lock. A failed close leaves
-        // the current run intact instead of stranding a half-applied retry.
-        if reachable && let Some(h) = &prev.herdr {
-            ctx.herdr.pane_close(&h.pane_id)?;
-        }
-        mark(t);
-        if let Some(run) = t.current_run_mut() {
-            run.outcome = Some(RunOutcome::Superseded);
-            run.ended = Some(Timestamp::now());
-            run.retry = Some(plan.clone());
-            if run
-                .autopilot
-                .as_ref()
-                .is_none_or(|a| a.stage != AutoStage::Changes)
-            {
-                let reason = run
-                    .review
-                    .as_ref()
-                    .filter(|r| r.verdict == Some(corral_core::Verdict::Changes))
-                    .and_then(|r| r.notes.clone())
-                    .or_else(|| {
-                        run.gate
-                            .as_ref()
-                            .filter(|g| g.result == corral_core::GateResult::Fail)
-                            .map(|g| {
-                                format!(
-                                    "Gate failed: {}",
-                                    g.failed_cmd.as_deref().unwrap_or("unknown command")
-                                )
-                            })
-                    });
-                if reason.is_some() {
-                    run.autopilot = Some(AutopilotState {
-                        stage: AutoStage::Changes,
-                        reason,
-                        sha: crate::worktree_head(run),
-                        at: Timestamp::now(),
-                    });
-                }
-            }
-        }
-        t.status = Status::Ready;
-        t.queued = true;
-        ctx.store.log_event(
-            Some(&t.id),
-            "superseded",
-            json!({ "run": prev.id, "checkpoint_unavailable": !can_checkpoint,
-                "source_worktree_missing": !prev.worktree.is_dir() }),
-        )?;
-        t.dispatch_plan = None;
-        Ok(())
-    })?;
-    cleanup(ctx, &task, Cleanup::Round);
-    let opts = DispatchOpts {
-        plan: false,
-        profile: Some(plan.profile),
-        model: plan.model,
-        effort: plan.effort,
-        mode: prev.mode,
-        base: Some(prev.base),
-        queue_if_blocked: true,
-        force_resources: false,
-    };
-    drop(owner);
-    if automatic {
-        let inputs = if availability.is_some() {
-            json!({"source": "availability", "reason": "approved availability fallback"})
-        } else {
-            json!({"source": "repair", "reason": "bounded automatic retry"})
-        };
-        dispatch_with(
-            ctx,
-            &task.id,
-            &opts,
-            Admission::Automatic {
-                inputs,
-                at: Timestamp::now(),
-            },
-        )
-    } else {
-        dispatch(ctx, &task.id, &opts)
-    }
-}
+mod retry;
+pub(crate) use retry::auto_retry;
+use retry::retry_with;
+pub use retry::{request_changes_escalated, retry, retry_run};

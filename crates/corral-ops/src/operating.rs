@@ -247,9 +247,9 @@ pub(crate) fn is_automatic(authorization: &ActionAuthorization) -> bool {
     matches!(authorization.origin, OperatingOrigin::Automatic { .. })
 }
 
-pub(crate) fn require_origin(
+pub(crate) fn require_origin<T: TaskRef + ?Sized>(
     store: &Store,
-    task: &Task,
+    task: &T,
     kind: OperatingActionKind,
     origin: Origin,
 ) -> Result<()> {
@@ -283,12 +283,12 @@ pub(crate) fn missing_provenance(task: &str) -> anyhow::Error {
 }
 
 pub(crate) fn start_identity(task: &Task, planning: bool) -> OperatingActionIdentity {
-    start_identity_at(task, task.runs.len(), task.plan_runs.len(), planning)
+    start_identity_at(&task.id, task.runs.len(), task.plan_runs.len(), planning)
 }
 
 /// [`start_identity`] with the task's coding and planning run counts given.
-fn start_identity_at(
-    task: &Task,
+pub(crate) fn start_identity_at(
+    task: &str,
     runs: usize,
     plan_runs: usize,
     planning: bool,
@@ -298,35 +298,23 @@ fn start_identity_at(
     } else {
         (format!("R{}", runs + 1), OperatingActionKind::Dispatch)
     };
-    let mut action = identity(&task.id, &run, kind, "launch");
+    let mut action = identity(task, &run, kind, "launch");
     if planning {
         action.round = Some(0);
     }
     action
 }
 
-pub(crate) fn queued_origin(store: &Store, task: &Task) -> Result<Origin> {
-    queued_origin_at(store, task, task.runs.len(), task.plan_runs.len())
-}
-
-/// [`queued_origin`] from a head: its shell task carries only the current containers, so the
-/// next run is numbered from the head's counts.
-pub(crate) fn queued_origin_head(store: &Store, head: &corral_core::TaskHead) -> Result<Origin> {
-    let runs = usize::try_from(head.summary.runs)? + usize::from(head.current_run.is_some());
-    let plan_runs =
-        usize::try_from(head.summary.plan_runs)? + usize::from(head.last_plan_run.is_some());
-    queued_origin_at(store, &head.to_shell_task()?, runs, plan_runs)
-}
-
-fn queued_origin_at(store: &Store, task: &Task, runs: usize, plan_runs: usize) -> Result<Origin> {
+/// The origin of a queued start; the next run is numbered from the task's run counts.
+pub(crate) fn queued_origin<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<Origin> {
     let ctx = Ctx::from_store(store.clone());
     let planning = crate::plan_dispatch::needed(&ctx, task, &crate::DispatchOpts::default());
-    let action = start_identity_at(task, runs, plan_runs, planning);
+    let action = start_identity_at(task.id(), task.runs_len()?, task.plan_runs_len()?, planning);
     if let Some(authorization) = load_start(&ctx, &action)?
         && !is_automatic(&authorization)
-        && task.queued
+        && *task.queued()
         && task
-            .dispatch_plan
+            .dispatch_plan()
             .as_ref()
             .and_then(|plan| plan.authorization.as_ref())
             == Some(&authorization.id)

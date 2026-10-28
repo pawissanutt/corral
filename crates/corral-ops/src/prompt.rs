@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::{
-    Config, ExecutionSnapshot, FULL_TIER, ProfileChoice, ResolvedProfile, Run, Task,
+    Config, ExecutionSnapshot, FULL_TIER, ProfileChoice, ResolvedProfile, Run, Task, TaskRef as _,
 };
 
 use crate::Ctx;
@@ -20,6 +20,38 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// A tiered run's `{{gate}}` points to the one authoritative Gate contract section that is always
 /// appended after the template, whether or not the template contains `{{gate}}`.
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
+    render_prompt(
+        ctx,
+        task,
+        run,
+        &crate::comments::owner_comments(task),
+        || crate::resume_packet(ctx, task, run),
+    )
+}
+
+/// [`task_prompt`] of a launch over a head: the Owner comments section reads exactly the
+/// emitted comment rows and the resume packet is [`crate::resume::resume_packet_head`]'s.
+/// `task` is the head's shell whose current run is `source`, as the launch's source task.
+pub(crate) fn task_prompt_head(
+    ctx: &Ctx,
+    head: &corral_core::TaskHead,
+    task: &Task,
+    source: Option<&corral_core::RunHead>,
+    run: &Run,
+) -> Result<String> {
+    let comments = crate::comments::owner_comments_head(head, task)?;
+    render_prompt(ctx, task, run, &comments, || {
+        crate::resume::resume_packet_head(ctx, head, task, source, run)
+    })
+}
+
+fn render_prompt(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    comments: &str,
+    packet: impl FnOnce() -> Result<crate::ResumePacket>,
+) -> Result<String> {
     let template = run_template(ctx, run)?;
     let corral = shell_path(&corral_bin()?);
     let project_dir = match task.project.as_deref() {
@@ -124,11 +156,10 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     if let Some(link) = &task.plan
         && let Some((parent, revision)) = link.split_once('@')
     {
-        let parent = ctx.store.get(parent)?;
-        let plan = parent
-            .plans
-            .iter()
-            .find(|p| p.id == revision)
+        let plan = ctx
+            .store
+            .head(parent)?
+            .plan_head(revision)?
             .context("linked approved plan revision is missing")?;
         prompt.push_str(&format!(
             "\n## Approved design plan\n\nPlan: {link}\nSnapshot: {}\nSHA-256: {}\n\nRead this approved plan before implementing the task's own scope.\n",
@@ -136,8 +167,8 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ));
     }
     prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
-    prompt.push_str(&crate::comments::owner_comments(task));
-    let packet = crate::resume_packet(ctx, task, run)?;
+    prompt.push_str(comments);
+    let packet = packet()?;
     prompt.push_str("\n## Portable resume contract\n\n");
     prompt.push_str("The task specification above is canonical. Progress is not criterion acceptance. \
         Reuse only compatible progress; stale checkpoints are historical context, not valid checks. \

@@ -63,7 +63,7 @@ fn tracker_guards_refuse_before_engine_config_or_plan_file_access() {
         ));
         refuses(crate::plan_dispatch::dispatch(
             &ctx,
-            &task,
+            &ctx.store.head(&task.id).unwrap(),
             &opts,
             &crate::dispatch::Admission::Manual,
         ));

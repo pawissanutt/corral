@@ -41,7 +41,7 @@ use record::{record_verdict, worktree_changes};
 mod submission;
 pub use callback::token as review_callback_token;
 use history::finish_review;
-pub(crate) use history::supersede_review;
+pub(crate) use history::{supersede_review, supersede_review_head};
 pub(crate) use submission::current_assessment;
 
 fn short(sha: &str) -> &str {

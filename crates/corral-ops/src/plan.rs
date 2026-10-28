@@ -2,7 +2,9 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use corral_core::{ArtifactKind, Config, PlanDocument, PlanRecord, PlanRunState, Task, Verdict};
+use corral_core::{
+    ArtifactKind, Config, PlanDocument, PlanRecord, PlanRunState, Task, TaskRef, Verdict,
+};
 use serde_json::json;
 
 use crate::{Ctx, add_artifact, verification};
@@ -156,33 +158,35 @@ pub(crate) fn accepted_owner_notes(ctx: &Ctx, task: &Task) -> Result<Option<Stri
     else {
         return Ok(None);
     };
-    let parent = ctx.store.get(parent)?;
-    let Some(plan) = parent
-        .plans
-        .iter()
-        .find(|p| p.id == revision && p.approval.as_ref().is_some_and(|a| a.by == "owner"))
+    let Some(plan) = ctx
+        .store
+        .head(parent)?
+        .plan_head(revision)?
+        .filter(|p| p.approval.as_ref().is_some_and(|a| a.by == "owner"))
     else {
         return Ok(None);
     };
     Ok(plan
-        .reviews
-        .last()
+        .current_review
         .filter(|r| r.reviewer == "owner" && r.verdict == Some(Verdict::Approve))
-        .and_then(|r| r.notes.clone()))
+        .and_then(|r| r.notes))
 }
 
-/// Fail before dispatch can create a worktree, pane, queue entry or run.
-pub fn approved_plan(ctx: &Ctx, task: &Task) -> Result<Option<PlanRecord>> {
+/// Fail before dispatch can create a worktree, pane, queue entry or run. The record carries the
+/// current plan with the reviews its approval check reads (the current one, and the previous one
+/// of an owner approval), not the plan's whole review history.
+pub fn approved_plan<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<PlanRecord>> {
     crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
     let config = ctx.store.reopen()?.config;
-    if !task.design && !config.plan_required(task.project.as_deref(), task.plan_required) {
+    if !*task.design() && !config.plan_required(task.project().as_deref(), *task.plan_required()) {
         return Ok(None);
     }
     config.validate_review()?;
-    let plan = task.plans.last().context(
+    let shell = corral_core::plan_policy::approval_shell(task)?;
+    let plan = shell.plans.last().context(
         "plan required: submit with `corral plan submit <id> <path>`, then review and approve it before dispatch",
     )?;
-    corral_core::plan_policy::validate_approval(&ctx.store, &config, task, plan)?;
+    corral_core::plan_policy::validate_approval(&ctx.store, &config, &shell, plan)?;
     Ok(Some(plan.clone()))
 }
 

@@ -152,9 +152,9 @@ impl TaskHeadMut {
         if before.total_usage() != after.total_usage() {
             self.usage_dirty = true;
         }
-        self.head.current_run = Some(head);
+        self.head.current_run = Some(Box::new(head));
         self.head.seqs.run_child = child_seq;
-        self.seen = self.head.clone();
+        *self.seen = self.head.clone();
         Ok(true)
     }
 }

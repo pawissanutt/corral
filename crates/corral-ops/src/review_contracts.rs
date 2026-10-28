@@ -104,22 +104,32 @@ pub(crate) fn contract_section(route: &ReviewRoute) -> String {
     )
 }
 
-/// Plan prompt additions: contract, route, previous plan findings and matched lessons.
-pub(crate) fn plan_context(ctx: &Ctx, task: &Task, route: &ReviewRoute) -> Result<String> {
-    let findings: Vec<_> = task
-        .plans
-        .iter()
-        .flat_map(|plan| plan.reviews.iter().map(move |review| (plan, review)))
-        .filter(|(_, review)| {
-            review
-                .verdict
-                .is_some_and(|v| v != corral_core::Verdict::Approve)
-        })
-        .map(|(plan, review)| {
-            serde_json::json!({"plan": plan.id, "attempt": review.id, "reviewer": review.reviewer,
-                "verdict": review.verdict, "notes": review.notes})
+/// Plan prompt additions: contract, route, previous plan findings and matched lessons. Previous
+/// plan findings read exactly the emitted finding rows of the head.
+/// `task` is the head's shell.
+pub(crate) fn plan_context_head(
+    ctx: &Ctx,
+    head: &corral_core::TaskHead,
+    task: &Task,
+    route: &ReviewRoute,
+) -> Result<String> {
+    let findings: Vec<_> = head
+        .emitted_findings(corral_core::FindingSource::Plan, None)?
+        .into_iter()
+        .map(|f| {
+            serde_json::json!({"plan": f.owner, "attempt": f.attempt, "reviewer": f.reviewer,
+                "verdict": f.verdict, "notes": f.notes})
         })
         .collect();
+    plan_context_with(ctx, task, route, &findings)
+}
+
+fn plan_context_with(
+    ctx: &Ctx,
+    task: &Task,
+    route: &ReviewRoute,
+    findings: &[serde_json::Value],
+) -> Result<String> {
     let lessons = crate::lessons::lessons_for(ctx, task, None)?;
     let guidance = serde_json::json!({
         "profile": route.profile,

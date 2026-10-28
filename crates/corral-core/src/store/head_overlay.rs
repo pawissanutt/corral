@@ -210,6 +210,6 @@ impl TaskHeadMut {
     }
 
     pub(crate) fn has_pending_writes(&self) -> bool {
-        !self.rows.is_empty() || !self.demoted.is_empty() || self.head != self.base
+        !self.rows.is_empty() || !self.demoted.is_empty() || self.head != *self.base
     }
 }

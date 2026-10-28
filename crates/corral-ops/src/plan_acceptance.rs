@@ -105,6 +105,29 @@ fn current<'a>(tracker: &'a Task, attempt: &str) -> Result<&'a AggregateAttempt>
     Ok(latest)
 }
 
+/// The current attempt of a head, when it is `attempt` and not yet accepted: the projection
+/// whose equality, its review facts included, guards review launch and acceptance.
+fn current_head<'a>(
+    head: &'a corral_core::TaskHead,
+    attempt: &str,
+) -> Result<&'a corral_core::AttemptHead> {
+    let latest = head
+        .last_aggregate_attempt
+        .as_ref()
+        .with_context(|| format!("{} has no aggregate attempt", head.id))?;
+    ensure!(
+        latest.id == attempt,
+        "{attempt} is not the current aggregate attempt of {} (current {})",
+        head.id,
+        latest.id
+    );
+    ensure!(
+        latest.acceptance.is_none(),
+        "{attempt} already has an acceptance"
+    );
+    Ok(latest)
+}
+
 /// Fail when moved main, head, spec, policy, members or inputs changed the identity.
 fn ensure_fresh(attempt: &AggregateAttempt, actual: &capture::Candidate) -> Result<()> {
     let mut changes: Vec<_> = attempt
@@ -130,7 +153,11 @@ fn ensure_fresh(attempt: &AggregateAttempt, actual: &capture::Candidate) -> Resu
     Ok(())
 }
 
-fn fresh_candidate(ctx: &Ctx, tracker: &Task, attempt: &AggregateAttempt) -> Result<()> {
+fn fresh_candidate<T: corral_core::TaskRef + ?Sized>(
+    ctx: &Ctx,
+    tracker: &T,
+    attempt: &AggregateAttempt,
+) -> Result<()> {
     let candidate = capture::capture(
         ctx,
         &ctx.store.reopen()?,
@@ -456,20 +483,65 @@ fn snapshots(
     attempt: &AggregateAttempt,
     refs: &[String],
 ) -> Result<Vec<String>> {
+    snapshots_with(ctx, &tracker.id, attempt, refs, &|path| {
+        Ok(tracker.artifacts.iter().find(|a| a.path == path).cloned())
+    })
+}
+
+fn snapshots_with(
+    ctx: &Ctx,
+    tracker: &str,
+    attempt: &AggregateAttempt,
+    refs: &[String],
+    artifact: &dyn Fn(&str) -> Result<Option<corral_core::Artifact>>,
+) -> Result<Vec<String>> {
     if refs.is_empty() {
         return Ok(Vec::new());
     }
-    crate::completion::snapshot_hashes(ctx, tracker, TRACKER_ARTIFACT_RUN, earliest(attempt), refs)
+    crate::completion::snapshot_hashes_with(
+        ctx,
+        tracker,
+        TRACKER_ARTIFACT_RUN,
+        earliest(attempt),
+        refs,
+        artifact,
+    )
 }
 
 /// Recorded evidence whose snapshot bytes are missing, changed or captured before the attempt.
 fn evidence_failures(ctx: &Ctx, tracker: &Task, attempt: &AggregateAttempt) -> Vec<String> {
+    evidence_failures_with(ctx, &tracker.id, attempt, &|path| {
+        Ok(tracker.artifacts.iter().find(|a| a.path == path).cloned())
+    })
+}
+
+/// [`evidence_failures`] of a head: each referenced snapshot is read by its stored path.
+fn evidence_failures_head(
+    ctx: &Ctx,
+    head: &corral_core::TaskHead,
+    attempt: &AggregateAttempt,
+) -> Vec<String> {
+    evidence_failures_with(ctx, &head.id, attempt, &|path| head.artifact_by_path(path))
+}
+
+fn evidence_failures_with(
+    ctx: &Ctx,
+    tracker: &str,
+    attempt: &AggregateAttempt,
+    artifact: &dyn Fn(&str) -> Result<Option<corral_core::Artifact>>,
+) -> Vec<String> {
     attempt
         .evidence
         .iter()
         .filter_map(|record| {
             let key = &record.observation.key;
-            match snapshots(ctx, tracker, attempt, &record.observation.artifacts) {
+            match snapshots_with(
+                ctx,
+                tracker,
+                attempt,
+                &record.observation.artifacts,
+                artifact,
+            ) {
                 Ok(hashes) if hashes == record.artifact_hashes => None,
                 Ok(_) => Some(format!("evidence {key}: artifact_tampered")),
                 Err(error) => Some(format!("evidence {key}: {error:#}")),

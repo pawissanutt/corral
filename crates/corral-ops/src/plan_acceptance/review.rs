@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
     AggregateAttempt, AggregateReview, ArtifactKind, GateResult, HerdrRef, ResolvedProfile,
-    ReviewRoute, Reviewer, Store, Task, Verdict,
+    ReviewRoute, Reviewer, Store, Task, TaskHead, TaskRef as _, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::{capture, current, evidence_failures, fresh_candidate, gate};
+use super::{capture, current, current_head, evidence_failures, fresh_candidate, gate};
 use crate::Ctx;
 use crate::review_contracts::Selected;
 use crate::scratch_reclaim::Attempt;
@@ -61,7 +61,8 @@ fn expected(store: &Store, tracker: &Task) -> Result<Option<Selected>> {
 fn implementer_vendor(store: &Store, tracker: &Task) -> Result<String> {
     let mut vendors = std::collections::BTreeSet::new();
     for id in &tracker.children {
-        let child = store.get(id)?;
+        // Each member's current run, read as its head's shell.
+        let child = store.head(id)?.shell_task()?;
         let run = child
             .current_run()
             .with_context(|| format!("{id} has no run"))?;
@@ -179,6 +180,33 @@ fn check_inputs(
     tracker: &Task,
     attempt: &AggregateAttempt,
 ) -> Result<()> {
+    check_inputs_with(store, tracker, attempt, || {
+        evidence_failures(ctx, tracker, attempt)
+    })?;
+    fresh_candidate(ctx, tracker, attempt)
+}
+
+/// [`check_inputs`] of a head: evidence snapshots are read by path, the candidate from the
+/// head. `tracker` is the head's shell.
+fn check_inputs_head(
+    ctx: &Ctx,
+    store: &Store,
+    head: &TaskHead,
+    tracker: &Task,
+    attempt: &AggregateAttempt,
+) -> Result<()> {
+    check_inputs_with(store, tracker, attempt, || {
+        super::evidence_failures_head(ctx, head, attempt)
+    })?;
+    fresh_candidate(ctx, head, attempt)
+}
+
+fn check_inputs_with(
+    store: &Store,
+    tracker: &Task,
+    attempt: &AggregateAttempt,
+    evidence: impl FnOnce() -> Vec<String>,
+) -> Result<()> {
     ensure!(
         attempt
             .gate
@@ -186,14 +214,14 @@ fn check_inputs(
             .is_none_or(|gate| gate.result != GateResult::Running),
         "gate_incomplete"
     );
-    let failures = evidence_failures(ctx, tracker, attempt);
+    let failures = evidence();
     ensure!(
         failures.is_empty(),
         "aggregate evidence is invalid: {}",
         failures.join("; ")
     );
     let _landing = corral_git::landing_lock(&capture::repo(store, tracker)?)?;
-    fresh_candidate(ctx, tracker, attempt)
+    Ok(())
 }
 
 /// The prompt and notes of aggregate review `review`, in its registered scratch directory.
@@ -219,6 +247,7 @@ fn quote(path: &Path) -> String {
 
 fn prompt(
     ctx: &Ctx,
+    head: &TaskHead,
     tracker: &Task,
     attempt: &AggregateAttempt,
     review: &AggregateReview,
@@ -296,7 +325,7 @@ fn prompt(
         notes.display(),
     );
     text.push_str(&crate::review_contracts::contract_section(&review.route));
-    text.push_str(&crate::comments::owner_comments(tracker));
+    text.push_str(&crate::comments::owner_comments_head(head, tracker)?);
     let dir = attempt_dir(&tracker.id, &attempt.id, &review.id).dir(ctx)?;
     text.push_str(&crate::scratch_reclaim::prompt_section(ctx, &dir));
     Ok(text)
@@ -343,6 +372,19 @@ fn stored_review<'a>(
         .with_context(|| format!("aggregate review {review} was replaced"))
 }
 
+/// The current review `review` of current attempt `attempt`, as the head holds it.
+fn current_review<'a>(
+    task: &'a mut corral_core::TaskHeadMut,
+    attempt: &str,
+    review: &str,
+) -> Result<&'a mut AggregateReview> {
+    task.last_aggregate_attempt_mut()
+        .filter(|stored| stored.id == attempt)
+        .and_then(|stored| stored.current_review.as_mut())
+        .filter(|stored| stored.id == review)
+        .with_context(|| format!("aggregate review {review} was replaced"))
+}
+
 /// Launch the policy-selected reviewer on the current attempt and its evidence. The pending
 /// record is published before launch; an earlier pending review is superseded and its
 /// callback refused from then on.
@@ -360,9 +402,13 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         .context("pane inventory is being reconciled; retry aggregate review")?;
     let store = ctx.store.reopen()?;
     store.config.validate_review()?;
-    let tracker = store.get(id)?;
+    // The tracker is read as a head: its current attempt with the current review is the
+    // projection, and the review count is the attempt's facts.
+    let head = store.head(id)?;
+    let tracker = head.shell_task()?;
+    let chosen_head = current_head(&head, attempt)?.clone();
     let chosen = current(&tracker, attempt)?.clone();
-    check_inputs(ctx, &store, &tracker, &chosen)?;
+    check_inputs_head(ctx, &store, &head, &tracker, &chosen)?;
     let selected = expected(&store, &tracker)?.with_context(|| {
         format!(
             "no aggregate reviewer is configured for {id}; set [review] reviewer or the task's reviewer"
@@ -376,7 +422,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         repo
     };
     let review = AggregateReview {
-        id: format!("{}-R{}", chosen.id, chosen.reviews.len() + 1),
+        id: format!("{}-R{}", chosen.id, chosen_head.facts.children + 1),
         reviewer: name.clone(),
         route: Box::new(selected.route.clone()),
         identity: chosen.identity.clone(),
@@ -391,7 +437,7 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     let (prompt_file, notes) = files(ctx, id, &chosen.id, &review.id)?;
     std::fs::write(
         &prompt_file,
-        prompt(ctx, &tracker, &chosen, &review, &cwd, &notes)?,
+        prompt(ctx, &head, &tracker, &chosen, &review, &cwd, &notes)?,
     )
     .with_context(|| format!("writing {}", prompt_file.display()))?;
     match std::fs::remove_file(&notes) {
@@ -400,20 +446,19 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         Err(error) => return Err(error).context("clearing replaced aggregate review notes"),
     }
     let mut superseded = Vec::new();
-    ctx.store.update(id, |task| {
+    ctx.store.update_head(id, |task| {
+        // The attempt projection compares its review facts too, so a review child edited and
+        // edited back (A->B->A) refuses as a genuine change does.
         ensure!(
-            current(task, &chosen.id)? == &chosen,
+            current_head(task.head(), &chosen.id)? == &chosen_head,
             "aggregate attempt changed; retry"
         );
-        let stored = task
-            .aggregate_attempts
-            .last_mut()
-            .context("aggregate attempt missing")?;
-        for previous in stored.reviews.iter_mut().filter(|r| r.pending()) {
+        superseded = task.pending_aggregate_reviews(&chosen.id)?;
+        task.supersede_pending_aggregate_reviews(&chosen.id, &review.id)?;
+        for previous in &mut superseded {
             previous.abandoned = Some(format!("superseded by {}", review.id));
-            superseded.push(previous.clone());
         }
-        stored.reviews.push(review.clone());
+        task.push_aggregate_review(&chosen.id, review.clone())?;
         ctx.store.log_event(
             Some(id),
             "aggregate_review_requested",
@@ -426,7 +471,8 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     }
     let launched = launch(
         ctx,
-        &tracker,
+        &tracker.id,
+        &tracker.title,
         &review,
         &selected.resolved,
         &prompt_file,
@@ -434,8 +480,8 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
     );
     if let Err(error) = &launched {
         let reason = format!("launch failed: {error:#}");
-        let saved = ctx.store.update(id, |task| {
-            if let Ok(stored) = stored_review(task, &chosen.id, &review.id)
+        let saved = ctx.store.update_head(id, |task| {
+            if let Ok(stored) = current_review(task, &chosen.id, &review.id)
                 && stored.pending()
             {
                 stored.abandoned = Some(reason.clone());
@@ -448,9 +494,9 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
             Ok(())
         })?;
         if let Some(stored) = saved
-            .aggregate_attempts
-            .last()
-            .and_then(|attempt| attempt.reviews.last())
+            .last_aggregate_attempt
+            .as_ref()
+            .and_then(|attempt| attempt.current_review.as_ref())
         {
             close(ctx, id, stored);
         }
@@ -462,25 +508,23 @@ pub fn plan_aggregate_review(ctx: &Ctx, id: &str, attempt: &str) -> Result<Aggre
         json!({"attempt": chosen.id, "review": review.id, "reviewer": name, "pane": herdr.pane_id}),
     )?;
     ctx.store
-        .get(id)?
-        .aggregate_attempts
-        .iter()
-        .find(|stored| stored.id == chosen.id)
-        .and_then(|stored| stored.reviews.iter().find(|r| r.id == review.id))
-        .cloned()
+        .head(id)?
+        .aggregate_review(&chosen.id, &review.id)?
         .context("aggregate review disappeared")
 }
 
 /// Attach the pane before sending: a synchronous reviewer can call back immediately.
 fn launch(
     ctx: &Ctx,
-    tracker: &Task,
+    id: &str,
+    title: &str,
     review: &AggregateReview,
     resolved: &ResolvedProfile,
     prompt_file: &Path,
     cwd: &Path,
 ) -> Result<HerdrRef> {
-    let title = format!("{} aggregate review", tracker.id);
+    let tracker_title = title;
+    let title = format!("{id} aggregate review");
     let herdr = if review.reviewer == PM {
         let pane_id = match crate::pm::live_pm_pane(ctx)? {
             Some(pane) => pane,
@@ -504,8 +548,8 @@ fn launch(
         }
     };
     let attempt = review.identity.attempt.clone();
-    ctx.store.update(&tracker.id, |task| {
-        let stored = stored_review(task, &attempt, &review.id)?;
+    ctx.store.update_head(id, |task| {
+        let stored = current_review(task, &attempt, &review.id)?;
         ensure!(
             stored.pending(),
             "aggregate review {} ended before launch",
@@ -518,8 +562,8 @@ fn launch(
         let message = format!(
             "Review aggregate attempt {attempt} of {} ({}): read the review prompt at {} and follow it. \
              Do not edit files; finish with its exact plan aggregate-verdict command, including --review {}.",
-            tracker.id,
-            tracker.title,
+            id,
+            tracker_title,
             prompt_file.display(),
             review.id
         );
@@ -538,7 +582,7 @@ fn launch(
             &herdr.pane_id,
             &title,
             &[
-                ("task", tracker.id.as_str()),
+                ("task", id),
                 ("attempt", attempt.as_str()),
                 ("review", review.id.as_str()),
                 ("target", "aggregate-review"),
@@ -549,11 +593,11 @@ fn launch(
             &[
                 ("prompt_file", prompt_file.display().to_string()),
                 ("name", title.clone()),
-                ("task", tracker.id.clone()),
+                ("task", id.to_owned()),
                 ("worktree", cwd.display().to_string()),
             ],
         )?;
-        let receipt = crate::launch_exit::receipt(ctx, &tracker.id, &review.id)?;
+        let receipt = crate::launch_exit::receipt(ctx, id, &review.id)?;
         let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
     }

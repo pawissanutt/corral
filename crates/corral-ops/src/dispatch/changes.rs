@@ -34,12 +34,13 @@ fn deliver(
 /// (agent_prompt), clears the run's outcome/ended/summary, status Running, logs "changes_requested". The owner
 /// redirecting the task resets the autopilot's rounds and its record on the run. Error when the pane is gone.
 pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
-    send_changes(ctx, id, text, "owner", None, |t| {
+    let head = send_changes(ctx, id, text, "owner", None, |t| {
         t.rounds = 0;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = None;
         }
-    })
+    })?;
+    ctx.store.get(&head.id)
 }
 
 /// The autopilot's request-changes: like `request_changes`, but records round `round` and `state` on the run.
@@ -50,7 +51,8 @@ pub(crate) fn auto_request_changes(
     round: u32,
     state: AutopilotState,
     expected: &RepairKey,
-) -> Result<Task> {
+) -> Result<TaskHead> {
+    let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Repair);
     send_changes(ctx, id, text, "autopilot", Some(expected), |t| {
         t.rounds = round;
         if let Some(run) = t.current_run_mut() {
@@ -65,8 +67,8 @@ fn send_changes(
     text: &str,
     by: &str,
     expected: Option<&RepairKey>,
-    mark: impl FnOnce(&mut Task),
-) -> Result<Task> {
+    mark: impl FnOnce(&mut TaskHeadMut),
+) -> Result<TaskHead> {
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
@@ -79,7 +81,9 @@ fn send_changes(
         .store
         .try_lock(&format!("delivery-{id}"))?
         .context("another reply is being delivered; try again")?;
-    let task = ctx.store.get(&id)?;
+    let head = ctx.store.head(&id)?;
+    // The checks read head fields and the current run's scalars and current review child.
+    let task = head.shell_task()?;
     if let Some(expected) = expected {
         expected.check(&task)?;
     }
@@ -101,17 +105,18 @@ fn send_changes(
         bail!("{}: agent pane {pane} is gone; use retry instead", task.id);
     }
     if let Some(expected) = expected {
-        expected.check(&ctx.store.get(&task.id)?)?;
+        expected.check(&ctx.store.head(&task.id)?.shell_task()?)?;
     }
     // Reopening Review reserves shared capacity before contacting the composer.
     // Pending text and Running status survive a launcher crash without freeing its slot.
-    let prepare = |store: &corral_core::Store, current: &mut Task| {
-        crate::queue::check_snapshot(ctx, store, &task, current)?;
-        if let Some(reason) = crate::queue::blocked_reason(ctx, store, current, false)? {
+    let prepare = |store: &corral_core::Store, current: &mut TaskHeadMut| {
+        crate::queue::check_snapshot_head(ctx, store, &head, current.head())?;
+        let shell = current.shell_task()?;
+        if let Some(reason) = crate::queue::blocked_reason(ctx, store, &shell, false)? {
             bail!("cannot request changes for {}: {reason}", current.id);
         }
         if let Some(expected) = expected {
-            expected.check(current)?;
+            expected.check(&shell)?;
         }
         let run = current
             .current_run_mut()
@@ -178,12 +183,12 @@ fn send_changes(
             Some(inbox) => {
                 let reserved = std::cell::RefCell::new(None);
                 let _posting = inbox.lock()?;
-                crate::operating::submit(
+                crate::operating::submit_head(
                     ctx,
                     &authorization,
                     |store, current| {
                         prepare(store, current)?;
-                        *reserved.borrow_mut() = Some(inbox.reserve_in(current, post())?);
+                        *reserved.borrow_mut() = Some(inbox.reserve_in_head(current, post())?);
                         Ok(())
                     },
                     || {
@@ -196,17 +201,21 @@ fn send_changes(
                 )
                 .map(|()| posted = reserved.into_inner())
             }
-            None => crate::operating::submit(ctx, &authorization, prepare, || {
+            None => crate::operating::submit_head(ctx, &authorization, prepare, || {
                 deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
             }),
         }
-    } else if let Some(recipient) = &recipient {
-        post_changes(ctx, recipient, text, |current, _| {
-            prepare(&ctx.store, current)
-        })
-        .map(|message| posted = Some(message))
+    } else if let Some(inbox) = &inbox {
+        // The owner's request: admission and the reserved message commit in one head update,
+        // and the message is announced after it, as a post does.
+        let _posting = inbox.lock()?;
+        let (_, message) = ctx.store.dispatch_update_head(&task.id, |store, current| {
+            prepare(store, current)?;
+            inbox.reserve_in_head(current, post())
+        })?;
+        inbox.announce(&message).map(|()| posted = Some(message))
     } else {
-        ctx.store.dispatch_update(&task.id, prepare)?;
+        ctx.store.dispatch_update_head(&task.id, prepare)?;
         deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
     };
     if let Err(error) = delivery {
@@ -215,7 +224,8 @@ fn send_changes(
         }
         // Keep T-051's failed-delivery contract: preserve the pending request in Review.
         // Do not overwrite a worker that reported completion in the meantime.
-        ctx.store.update(&task.id, |current| {
+        let status = task.status;
+        ctx.store.update_head(&task.id, |current| {
             if current.status == Status::Running
                 && let Some(run) = current
                     .current_run_mut()
@@ -224,7 +234,7 @@ fn send_changes(
                 run.outcome = previous.outcome;
                 run.ended = previous.ended;
                 run.summary = previous.summary.clone();
-                current.status = task.status;
+                current.status = status;
             }
             Ok(())
         })?;
@@ -232,17 +242,20 @@ fn send_changes(
     }
     crate::watch::capture_review(ctx, &task, previous);
     if let (Some(recipient), Some(message)) = (&recipient, posted) {
-        let task = ctx.store.update(&task.id, |current| {
-            if current.current_run().is_none_or(|r| r.id != previous.id) {
+        let task = ctx.store.update_head(&task.id, |current| {
+            if current
+                .head()
+                .current_run
+                .as_ref()
+                .is_none_or(|r| r.id != previous.id)
+            {
                 bail!("run changed after posting changes");
             }
-            if let Some(run) = current.current_run_mut() {
-                crate::reviewer::supersede_review(ctx, run, Timestamp::now());
-            }
+            crate::reviewer::supersede_review_head(current, Timestamp::now())?;
             mark(current);
             Ok(())
         })?;
-        cleanup(ctx, &task, Cleanup::Round);
+        cleanup_head(ctx, &task, Cleanup::Round);
         let status = crate::delivery::owner::kick(ctx, recipient);
         let observed = crate::delivery::owner::is_observed(ctx, recipient, message.seq)?;
         ctx.store.log_event(
@@ -253,14 +266,19 @@ fn send_changes(
                 "submitted": observed, "error": status.err(),
             }),
         )?;
-        return ctx.store.get(&task.id);
+        return ctx.store.head(&task.id);
     }
-    let task = ctx.store.update(&task.id, |current| {
-        if current.current_run().is_none_or(|r| r.id != previous.id) {
+    let task = ctx.store.update_head(&task.id, |current| {
+        if current
+            .head()
+            .current_run
+            .as_ref()
+            .is_none_or(|r| r.id != previous.id)
+        {
             bail!("run changed after submitting changes");
         }
+        crate::reviewer::supersede_review_head(current, Timestamp::now())?;
         if let Some(run) = current.current_run_mut() {
-            crate::reviewer::supersede_review(ctx, run, Timestamp::now());
             if run.pending_reply.as_deref() == Some(text) {
                 run.pending_reply = None;
             }
@@ -272,29 +290,6 @@ fn send_changes(
         mark(current);
         Ok(())
     })?;
-    cleanup(ctx, &task, Cleanup::Round);
+    cleanup_head(ctx, &task, Cleanup::Round);
     Ok(task)
-}
-
-fn post_changes(
-    ctx: &Ctx,
-    recipient: &corral_core::inbox::Recipient,
-    text: &str,
-    admit: impl FnOnce(&mut Task, &corral_core::inbox::Message) -> Result<()>,
-) -> Result<corral_core::inbox::Message> {
-    let run = match recipient {
-        corral_core::inbox::Recipient::Run { run, .. } => Some(run.clone()),
-        _ => None,
-    };
-    crate::delivery::owner::post(
-        ctx,
-        recipient,
-        "changes_requested",
-        text,
-        corral_core::inbox::MessageBinding {
-            run,
-            ..Default::default()
-        },
-        admit,
-    )
 }
