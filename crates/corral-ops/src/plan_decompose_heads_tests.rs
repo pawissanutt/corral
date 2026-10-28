@@ -89,3 +89,93 @@ fn automatic_multi_scope_publication_reads_the_parent_as_a_head() {
         );
     }
 }
+
+/// Scope amendments on the parent and terminal tasks on the board, neither of which a
+/// publication reads.
+fn grow_scope_and_board(ctx: &Ctx, id: &str, n: u64) {
+    let mut task = ctx.store.get(id).unwrap();
+    task.approved_scope_history.extend((1..=n).map(|revision| {
+        corral_core::ApprovedScopeRevision {
+            revision,
+            approved_scope: None,
+            superseded_at: "2026-10-18T08:00:00Z".parse().unwrap(),
+        }
+    }));
+    ctx.store.fixture_put_task(&task).unwrap();
+    // The owner grants the amended contract again, as after any scope amendment.
+    let selection = corral_core::OperatingSelection {
+        tasks: [id.to_owned()].into(),
+        plan_scopes: [(id.to_owned(), ["a".into(), "b".into()].into())].into(),
+        authority: corral_core::OperatingAuthority {
+            dispatch: true,
+            plan_accept: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let preview = ctx.store.preview_operating_policy(&selection).unwrap();
+    ctx.store
+        .confirm_operating_policy(&preview, "owner", "2026-10-18T08:00:00Z".parse().unwrap())
+        .unwrap();
+    for i in 0..n {
+        ctx.store
+            .create(&format!("Basalt {i}"), None, Status::Done, "")
+            .unwrap();
+    }
+}
+
+#[test]
+fn interrupted_automatic_publication_recovers_without_scope_history_or_board_reads() {
+    use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
+    let mut measured: Vec<WorkSnapshot> = Vec::new();
+    // Stamps written during the calls are pinned, so their encodings do not vary.
+    corral_core::clock::pin_thread(Some("2026-10-18T12:00:00Z".parse().unwrap()));
+    for n in [1, 10] {
+        // Given an automatic two-scope publication interrupted after its journal and first
+        // child, on a parent with n scope amendments and a board with n terminal tasks.
+        let (_dir, ctx, id) = scoped_fixture(&["a", "b"]);
+        ctx.store
+            .fixture_pin_now("2026-10-18T12:00:00Z".parse().unwrap())
+            .unwrap();
+        grow_scope_and_board(&ctx, &id, n);
+        let blocked = format!("T-{:03}", ctx.store.next_task_number().unwrap() + 1);
+        ctx.store.fixture_block_task(&blocked, true).unwrap();
+        assert!(apply_auto(&ctx, &id, "P1").is_err(), "x{n}");
+        ctx.store.fixture_block_task(&blocked, false).unwrap();
+        // When automatic acceptance recovers it.
+        let recovery = {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            apply_auto(&ctx, &id, "P1").unwrap();
+            work::snapshot().since(&before)
+        };
+        // Then each child and the tracker are published exactly once, and no task is hydrated.
+        assert_eq!(ctx.store.get(&id).unwrap().children.len(), 2, "x{n}");
+        let board = ctx.store.list().unwrap().len();
+        assert_eq!(
+            board,
+            usize::try_from(n).unwrap() + 4,
+            "x{n}: parent, terminal, children, tracker"
+        );
+        {
+            let delta = &recovery;
+            delta.check_identity().unwrap();
+            let sites: Vec<String> = delta
+                .sites
+                .iter()
+                .filter(|site| site.followup.is_none())
+                .map(|site| format!("{}:{}", site.location.file(), site.location.line()))
+                .collect();
+            assert!(sites.is_empty(), "x{n}: counted hydrations at {sites:?}");
+            assert_eq!(delta.unattributed_hydrations(), 0, "x{n}");
+        }
+        measured.push(recovery);
+    }
+    // And recovery decodes no more documents of any class as the scope history and the board
+    // grow. Its byte totals vary by a few bytes between identical runs (an unpinned stamp of
+    // this fixture's store); exact byte accounting is the action budget's.
+    let (small, large) = (&measured[0], &measured[1]);
+    for counter in Counter::DECODES {
+        assert_eq!(small.get(counter), large.get(counter), "{counter:?}");
+    }
+}

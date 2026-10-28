@@ -176,7 +176,25 @@ pub(super) fn parse_psi(text: &str) -> Result<f64> {
     Ok(value)
 }
 
+#[cfg(test)]
+thread_local! {
+    static PINNED_PSI: std::cell::Cell<Option<(Option<f64>, Option<f64>)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test seam: the PSI readings `(cpu, memory)` this thread's samples read instead of
+/// `/proc/pressure`, as the clock is pinned. Every probe, `PinnedReadingsProbe` included,
+/// still passes them through unchanged.
+#[cfg(test)]
+pub(crate) fn pin_psi(readings: Option<(Option<f64>, Option<f64>)>) {
+    PINNED_PSI.set(readings);
+}
+
 fn pressure(resource: &str) -> Result<Option<f64>> {
+    #[cfg(test)]
+    if let Some((cpu, memory)) = PINNED_PSI.get() {
+        return Ok(if resource == "cpu" { cpu } else { memory });
+    }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = resource;

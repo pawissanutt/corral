@@ -247,8 +247,8 @@ fn clean_listed(
         .socket_path()
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
-    // Rows whose pane this pass closed or found absent; a row with a workspace stays owed
-    // until a Task cleanup finds that workspace gone too.
+    // Rows whose pane this pass closed or found absent. A Round release leaves the row's
+    // workspace owed to a Task cleanup; a Task cleanup keeps a row whose workspace stays open.
     let mut done: Vec<(usize, corral_core::CleanupPane)> = Vec::new();
     for (pane, (i, rows)) in &owned {
         let (task, _) = owners[*i];
@@ -295,22 +295,32 @@ fn clean_listed(
         }
         gone = Some(open);
     }
-    let mut released: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    // owner -> (released keys, workspaces they leave owed)
+    type Settled = (Vec<String>, Vec<(String, String)>);
+    let mut released: BTreeMap<usize, Settled> = BTreeMap::new();
     for (i, row) in done {
-        let settled = match (&row.workspace, &gone) {
-            (None, _) => true,
-            (Some(workspace), Some(open)) => !open.contains(workspace),
-            (Some(_), None) => false,
-        };
-        if settled {
-            released.entry(i).or_default().push(row.key);
+        let entry = released.entry(i).or_default();
+        match (&row.workspace, &gone) {
+            (None, _) => entry.0.push(row.key),
+            (Some(workspace), Some(open)) => {
+                if !open.contains(workspace) {
+                    entry.0.push(row.key);
+                }
+            }
+            (Some(workspace), None) => {
+                entry.0.push(row.key);
+                entry.1.push((workspace.clone(), row.socket.clone()));
+            }
         }
     }
-    for (i, keys) in released {
+    for (i, (keys, owed)) in released {
+        if keys.is_empty() {
+            continue;
+        }
         let (task, _) = owners[i];
         if let Err(error) = ctx
             .store
-            .update_head(&task.id, |head| head.release_panes(&keys))
+            .update_head(&task.id, |head| head.release_panes(&keys, &owed))
         {
             failed(ctx, &task.id, "inventory", &error);
         }

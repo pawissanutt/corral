@@ -428,6 +428,16 @@ impl ReadView for SqliteView {
         self.page(&page, &sql, args, |_, row| load::history_row(row))
     }
 
+    fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
+        let db = self.fresh()?;
+        (|| -> anyhow::Result<Option<TaskNum>> {
+            let last: Option<i64> =
+                db.query_row("SELECT MAX(num) FROM tasks", [], |row| row.get(0))?;
+            last.map(|num| Ok(TaskNum(uint(num)?))).transpose()
+        })()
+        .or_view()
+    }
+
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         let mut filters = Vec::new();
         let mut args: Vec<Sql> = Vec::new();

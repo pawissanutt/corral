@@ -1,6 +1,7 @@
 //! T-331 review round 1 regressions on both backends: scalar child edits read and write only
 //! the edited child's row (F1); an excluded finding's row is never returned by the backend
 //! (F3); a mutable head's keyed reads see its own queued edits, as the full task does (F4).
+//! T-332: task-number allocation reads no page of task headers.
 
 mod store_support;
 #[path = "task_ref_support/mod.rs"]
@@ -122,7 +123,11 @@ fn scalar_child_edits_cost_the_same_as_nested_history_grows() {
     }
 }
 
-/// A fake backend whose views record the key of every task row they return.
+/// What a view records for each page of task headers it returns.
+const TASKS_PAGE: &str = "<tasks page>";
+
+/// A fake backend whose views record the key of every task row they return, and each page of
+/// task headers.
 struct Counting {
     inner: FakeBackend,
     returned: Arc<Mutex<Vec<(TaskPart, String)>>>,
@@ -229,7 +234,14 @@ impl ReadView for CountingView {
         self.inner.lesson_approvals(sha)
     }
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
+        self.returned
+            .lock()
+            .unwrap()
+            .push((TaskPart::Comment, TASKS_PAGE.into()));
         self.inner.tasks(q, page)
+    }
+    fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
+        self.inner.last_task_num()
     }
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError> {
         self.inner.events(q, page)
@@ -568,5 +580,42 @@ fn a_mutable_head_reads_its_own_queued_edits_as_the_full_task_does() {
         let stored = store.get("T-001").unwrap();
         full.updated = stored.updated;
         assert_eq!(stored, full, "{backend}: the committed task");
+    }
+}
+
+#[test]
+fn task_number_allocation_reads_no_header_page() {
+    for n in [1_u64, 10] {
+        // Given boards of n terminal tasks, one behind a view recording every header page.
+        let (_dir, base) = store_support::store();
+        let returned = Arc::new(Mutex::new(Vec::new()));
+        let store = base.with_backend(Box::new(Counting {
+            inner: fake(),
+            returned: Arc::clone(&returned),
+        }));
+        for i in 0..n {
+            base.create(&format!("Done {i}"), None, Status::Done, "")
+                .unwrap();
+            store
+                .create(&format!("Done {i}"), None, Status::Done, "")
+                .unwrap();
+        }
+        returned.lock().unwrap().clear();
+        // When the next task number and the numbers either side of it are read.
+        for store in [&base, &store] {
+            let next = store.next_task_number().unwrap();
+            // Then they are exact on both backends...
+            assert_eq!(next, n + 1, "x{n}");
+            assert!(store.task_number_taken(n).unwrap(), "x{n}");
+            assert!(!store.task_number_taken(next).unwrap(), "x{n}");
+        }
+        // ...and the recorded view returned no page of task headers.
+        let pages = returned
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, key)| key == TASKS_PAGE)
+            .count();
+        assert_eq!(pages, 0, "x{n}");
     }
 }

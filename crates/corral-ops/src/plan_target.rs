@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{PlanDeliveryTarget, Run, RunPlanTarget, Store, Task};
+use corral_core::{PlanDeliveryTarget, Run, RunPlanTarget, Store, Task, TaskHead, TaskRef};
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
@@ -39,8 +39,9 @@ fn path(repo: &Path, branch: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn branch(store: &Store, task: &Task) -> Result<Option<String>> {
-    Ok(store.execution_plan(task)?.and_then(|plan| {
+    Ok(store.execution_plan_ref(task)?.and_then(|plan| {
         plan.approved_scope
+            .clone()
             .map(|scope| match scope.delivery_target {
                 PlanDeliveryTarget::Main => "main".into(),
                 PlanDeliveryTarget::Integration { branch } => branch,
@@ -89,8 +90,10 @@ pub(crate) fn plan_head(
     Ok(Some((target.head, target.checkout, target.initial_head)))
 }
 
-fn integration_plan(store: &Store, task: &Task) -> Result<Option<(Task, String)>> {
-    let Some(plan) = store.execution_plan(task)? else {
+/// The task's integration Plan as its head: its id, project, approved scope and stored
+/// contract revision are all a target needs.
+fn integration_plan(store: &Store, task: &Task) -> Result<Option<(TaskHead, String)>> {
+    let Some(plan) = store.execution_plan_ref(task)? else {
         return Ok(None);
     };
     match &plan
@@ -104,7 +107,8 @@ fn integration_plan(store: &Store, task: &Task) -> Result<Option<(Task, String)>
             crate::tracker::validate_target(&PlanDeliveryTarget::Integration {
                 branch: branch.clone(),
             })?;
-            Ok(Some((plan.clone(), branch.clone())))
+            let branch = branch.clone();
+            Ok(Some((plan, branch)))
         }
     }
 }
@@ -127,19 +131,19 @@ impl Target {
         Ok(Some(target))
     }
 
-    fn check_owner(&self, store: &Store, plan: &Task) -> Result<()> {
+    fn check_owner<T: TaskRef + ?Sized>(&self, store: &Store, plan: &T) -> Result<()> {
         ensure!(
             self.owner
                 == store
                     .root()
                     .canonicalize()
                     .context("resolving Plan store")?
-                && self.plan == plan.id
+                && self.plan == *plan.id()
                 && self.checkout
                     == self
                         .repo
                         .join(".worktrees")
-                        .join(format!("{}-integration", plan.id)),
+                        .join(format!("{}-integration", plan.id())),
             "Plan integration target has a different owner"
         );
         Ok(())
@@ -188,11 +192,11 @@ impl Target {
         Ok(())
     }
 
-    pub(crate) fn binding(&self, plan: &Task) -> Result<RunPlanTarget> {
+    pub(crate) fn binding<T: TaskRef + ?Sized>(&self, plan: &T) -> Result<RunPlanTarget> {
         Ok(RunPlanTarget {
-            plan: plan.id.clone(),
-            scope_revision: plan.approved_scope_revision,
-            contract_revision: corral_core::operating_contract_revision(plan)?,
+            plan: plan.id().clone(),
+            scope_revision: *plan.approved_scope_revision(),
+            contract_revision: plan.contract_revision()?,
             branch: self.branch.clone(),
             checkout: self.checkout.clone(),
         })

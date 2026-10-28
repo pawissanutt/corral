@@ -460,3 +460,124 @@ fn ledger_cleanup_closes_what_the_history_walk_closed() {
         }
     }
 }
+
+/// A first coding run R1 with its own pane.
+fn start_run(world: &mut World) {
+    let workspace = world.workspace("wr");
+    let pane = world.pane(&workspace);
+    let run: Run = serde_json::from_value(json!({
+        "id": "R1", "agent": "fake", "worktree": "/", "branch": "b",
+        "base": "main", "base_sha": "0".repeat(40), "started": T,
+        "herdr": {"workspace_id": workspace, "pane_id": pane, "socket": world.socket},
+    }))
+    .unwrap();
+    world
+        .ctx
+        .store
+        .update(&world.id, |t| {
+            t.runs.push(run);
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// A gate opened in its own fallback workspace on the current run, replacing the previous one.
+fn fallback_gate(world: &mut World) -> (String, String) {
+    let run = world.current_run().unwrap();
+    let id = world.id.clone();
+    let workspace = world.workspace("wf");
+    let pane = world.pane(&workspace);
+    let socket = world.socket.clone();
+    world
+        .ctx
+        .store
+        .update_head(&id, |h| {
+            h.record_run_workspace(&run, &pane, &workspace, &socket)?;
+            h.current_run_mut().unwrap().gate = Some(serde_json::from_value(gate(&pane, &socket))?);
+            Ok(())
+        })
+        .unwrap();
+    (pane, workspace)
+}
+
+#[test]
+fn repeated_round_cleanup_releases_closed_fallback_panes() {
+    use corral_core::work::{self, Counter, HotScope};
+    let mut measured = Vec::new();
+    for n in [1, 10] {
+        // Given a current run whose n earlier fallback gates were each cleaned by a Round.
+        let mut world = World::new();
+        start_run(&mut world);
+        let mut workspaces = BTreeSet::new();
+        for _ in 0..n {
+            let (pane, workspace) = fallback_gate(&mut world);
+            let head = world.ctx.store.head(&world.id).unwrap();
+            cleanup_head(&world.ctx, &head, Cleanup::Round);
+            assert_eq!(
+                world.calls(),
+                (BTreeSet::from([pane]), BTreeSet::new()),
+                "x{n}"
+            );
+            workspaces.insert(workspace);
+        }
+        // When one more fallback gate is cleaned by a Round.
+        let (pane, workspace) = fallback_gate(&mut world);
+        workspaces.insert(workspace);
+        let head = world.ctx.store.head(&world.id).unwrap();
+        let delta = {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            cleanup_head(&world.ctx, &head, Cleanup::Round);
+            work::snapshot().since(&before)
+        };
+        // Then it closes only that pane, no closed pane stays open in the run's ledger, and
+        // exactly the fallback workspaces stay owed to the Task cleanup.
+        assert_eq!(
+            world.calls(),
+            (BTreeSet::from([pane]), BTreeSet::new()),
+            "x{n}"
+        );
+        let head = world.ctx.store.head(&world.id).unwrap();
+        let round: Vec<String> = head
+            .unreleased_panes(true)
+            .unwrap()
+            .into_iter()
+            .map(|p| p.kind)
+            .collect();
+        assert_eq!(
+            round,
+            ["run"],
+            "x{n}: only the worker's own pane stays open"
+        );
+        let owed: BTreeSet<String> = head
+            .unreleased_panes(false)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.kind == "workspace_debt")
+            .filter_map(|p| p.workspace)
+            .collect();
+        assert_eq!(owed, workspaces, "x{n}");
+        measured.push(delta);
+        // And the Task cleanup still closes every emptied fallback workspace and settles it.
+        let task = world.ctx.store.get(&world.id).unwrap();
+        cleanup_report(&world.ctx, &task, Cleanup::Task);
+        let (_, closed) = world.calls();
+        assert!(workspaces.is_subset(&closed), "x{n}: {closed:?}");
+        let head = world.ctx.store.head(&world.id).unwrap();
+        assert!(
+            head.unreleased_panes(false)
+                .unwrap()
+                .iter()
+                .all(|p| p.kind != "workspace_debt"),
+            "x{n}"
+        );
+    }
+    // And a Round reads no more as closed fallback panes accumulate on the run.
+    for counter in Counter::DECODES {
+        assert_eq!(
+            measured[0].get(counter),
+            measured[1].get(counter),
+            "{counter:?}"
+        );
+    }
+}

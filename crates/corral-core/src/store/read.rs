@@ -211,14 +211,16 @@ impl Store {
         }
     }
 
-    pub(crate) fn next_task_number(&self) -> Result<u64> {
+    /// One past the highest stored task number, read without enumerating the board.
+    pub fn next_task_number(&self) -> Result<u64> {
         let reader = self.reader()?;
-        let last = Self::headers_on(&*reader)?
-            .iter()
-            .map(|header| header.num.0)
-            .max()
-            .unwrap_or(0);
-        Ok(last + 1)
+        let last = reader.last_task_num()?.map_or(0, |num| num.0);
+        anyhow::Context::context(last.checked_add(1), "task ID exhausted")
+    }
+
+    /// Whether a stored task, readable or not as a card, holds task number `num`.
+    pub fn task_number_taken(&self, num: u64) -> Result<bool> {
+        Ok(self.reader()?.head(TaskNum(num))?.is_some())
     }
 
     fn list_on(

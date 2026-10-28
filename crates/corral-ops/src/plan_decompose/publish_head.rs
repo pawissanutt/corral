@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use corral_core::{OperatingActionKind, Status, TaskMut as _, TaskRef as _};
 
 use super::{
-    PUBLICATIONS, check_attachment, check_publication_identity_of, check_scopes, publication,
+    PUBLICATIONS, check_attachment, check_publication_identity, check_scopes, publication,
     scoped_child, validate,
 };
 use crate::Ctx;
@@ -77,7 +77,7 @@ pub(super) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                     journal.backlink == backlink && journal.document == document,
                     "unfinished decomposition belongs to a different plan"
                 );
-                check_publication_identity_of(store, &journal, &*parent, plan_id)?;
+                check_publication_identity(&journal, &*parent, plan_id)?;
                 Some(journal)
             }
         } else {

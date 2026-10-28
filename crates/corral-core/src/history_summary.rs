@@ -88,6 +88,10 @@ pub struct HistorySummary {
     /// The task's operating-contract revision, kept here because its digest covers the whole
     /// scope-amendment history: hot reads take it without reading that history.
     pub operating_contract_revision: String,
+    /// [`crate::operating::scope_history_chain`] of the scope-amendment history, extended as
+    /// revisions are appended, so the contract revision is recomputed without reading it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope_history_chain: String,
 }
 
 fn n(len: usize) -> u64 {
@@ -111,6 +115,9 @@ impl HistorySummary {
     pub fn of(task: &Task) -> anyhow::Result<HistorySummary> {
         let mut summary = HistorySummary {
             operating_contract_revision: crate::operating::operating_contract_revision(task)?,
+            scope_history_chain: crate::operating::scope_history_chain(
+                &task.approved_scope_history,
+            )?,
             comments: n(task.comments.len()),
             artifacts: n(task.artifacts.len()),
             kept_artifacts: n(task

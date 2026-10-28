@@ -152,6 +152,9 @@ impl ReadView for SharedView {
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         self.view().tasks(q, page)
     }
+    fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
+        self.view().last_task_num()
+    }
     fn lesson_artifacts(&self, num: TaskNum, limit: u32) -> Result<Vec<HistoryRow>, ViewError> {
         self.view().lesson_artifacts(num, limit)
     }

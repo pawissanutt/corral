@@ -1,7 +1,7 @@
 //! The multi-scope publication shared by the owner's decomposition (a full parent) and the
 //! automatic one (the parent's head shell, plan T-253 section 4): staging, ID remapping, scope
 //! bindings and the one-operation publish. Staged tasks never inherit the parent's history.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{
@@ -111,22 +111,25 @@ pub(super) fn publish(store: &Store, parent: &str, journal: &Journal) -> Result<
     for text in &journal.children {
         staged.push(Store::parse_task_markdown(text)?);
     }
-    store.publish_staged(&staged)
+    // A staged task an interrupted run already published with this exact contract came from
+    // the same journal text: it is not rewritten, so recovery never reads it in full.
+    let mut unwritten = Vec::with_capacity(staged.len());
+    for task in staged {
+        let published = match store.head_if_exists(&task.id)? {
+            Some(existing) => existing.contract_revision()? == operating_contract_revision(&task)?,
+            None => false,
+        };
+        if !published {
+            unwritten.push(task);
+        }
+    }
+    store.publish_staged(&unwritten)
 }
 
-fn reserved_numbers(store: &Store) -> Result<BTreeSet<u64>> {
-    // list() skips malformed cards. Their filenames still reserve IDs, just as
-    // they do for Store::create; never overwrite or alias an unreadable card.
-    store.reserved_task_numbers()
-}
-
+/// One past the highest stored task number, as `Store::create` allocates: one keyed read,
+/// never an enumeration of the board.
 fn next_number(store: &Store) -> Result<u64> {
-    reserved_numbers(store)?
-        .last()
-        .copied()
-        .unwrap_or(0)
-        .checked_add(1)
-        .context("task ID exhausted")
+    store.next_task_number()
 }
 
 pub(super) fn children(
@@ -266,7 +269,6 @@ pub(super) fn remap_collisions(store: &Store, journal: &mut Journal) -> Result<(
         next = next.max(number.checked_add(1).context("task ID exhausted")?);
     }
     let mut replacements = BTreeMap::new();
-    let reserved = reserved_numbers(store)?;
     for task in &tasks {
         // Each staged ID is looked up by key: only the tasks it may collide with are read.
         if let Some(existing) = store.head_if_exists(&task.id)? {
@@ -292,8 +294,8 @@ pub(super) fn remap_collisions(store: &Store, journal: &mut Journal) -> Result<(
                 replacements.insert(task.id.clone(), format!("T-{next:03}"));
                 next = next.checked_add(1).context("task ID exhausted")?;
             }
-        } else if reserved.contains(&task.id.trim_start_matches("T-").parse::<u64>()?) {
-            // An unreadable card is still somebody else's allocated ID.
+        } else if store.task_number_taken(task.id.trim_start_matches("T-").parse::<u64>()?)? {
+            // A stored task under another id prefix still holds its number.
             replacements.insert(task.id.clone(), format!("T-{next:03}"));
             next = next.checked_add(1).context("task ID exhausted")?;
         }

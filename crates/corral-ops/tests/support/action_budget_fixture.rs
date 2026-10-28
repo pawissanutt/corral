@@ -10,13 +10,11 @@
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use corral_core::{
-    CommentAuthor, ObligationSource, OperatingActionKind, ResourceSnapshot, Run, Status, Store,
-    TaskComment,
-};
+use corral_core::{ObligationSource, OperatingActionKind, ResourceSnapshot, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::json;
 
+use super::action_budget_growth::{emit, grow, grown_by, land_grown};
 use super::fixture::{self, Fx};
 use super::{Path, aggregate};
 use crate::resources::{PinnedReadingsProbe, ResourceProbe};
@@ -118,6 +116,8 @@ impl Variant {
 pub(super) struct RecordingProbe {
     inner: PinnedReadingsProbe,
     seen: Mutex<Vec<(ResourceSnapshot, super::action_budget_checks::Walk)>>,
+    /// Samples taken on a live store: each opens one view, a pass snapshot's open none.
+    live: std::sync::atomic::AtomicU64,
 }
 
 impl RecordingProbe {
@@ -125,6 +125,7 @@ impl RecordingProbe {
         Arc::new(RecordingProbe {
             inner: PinnedReadingsProbe::admitting(),
             seen: Mutex::default(),
+            live: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -132,15 +133,20 @@ impl RecordingProbe {
     pub(super) fn take(&self) -> Vec<(ResourceSnapshot, super::action_budget_checks::Walk)> {
         std::mem::take(&mut *self.seen.lock().unwrap_or_else(PoisonError::into_inner))
     }
+
+    /// The samples taken on live stores since the last call.
+    pub(super) fn take_live(&self) -> u64 {
+        self.live.swap(0, std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl ResourceProbe for RecordingProbe {
     fn sample(&self, store: &Store) -> anyhow::Result<ResourceSnapshot> {
-        let mut snapshot = self.inner.sample(store)?;
-        // PSI is a diagnostic machine reading the persisted state embeds; its printed width
-        // would make the stored bytes depend on host load.
-        snapshot.cpu_psi = snapshot.cpu_psi.map(|_| 0.0);
-        snapshot.mem_psi = snapshot.mem_psi.map(|_| 0.0);
+        // The approved sample path, PSI included; the fixture pins PSI at its source.
+        let snapshot = self.inner.sample(store)?;
+        if !store.is_snapshot() {
+            self.live.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         // The expected walk of this sample, on the store as it stands now: counted on another
         // thread, so outside the measured pass's ledger.
         let at = corral_core::clock::now();
@@ -172,6 +178,9 @@ pub(super) struct Bench {
 }
 
 const SCOPED_PLAN: &str = "---\ngoal: Bounded regression\nnon_goals: []\ndecisions: []\naffected_paths: [candidate.txt]\ncontracts: []\ndependencies:\n  - {task: a, write_scope: [a/], depends_on: [], acceptance: [{scenario: a, expected: verified}]}\n  - {task: b, write_scope: [b/], depends_on: [a], acceptance: [{scenario: b, expected: verified}]}\nacceptance: [{scenario: bounded, expected: verified}]\nverification: [check]\nowner_decisions: []\n---\n";
+
+/// The PSI `(cpu, memory)` every fixture sample reads, pinned at its source.
+pub(super) const PSI: (Option<f64>, Option<f64>) = (Some(0.25), Some(1.5));
 
 /// The kind's acted task and its current inputs, before any growth.
 fn setup(kind: Kind) -> (Fx, String, String) {
@@ -347,123 +356,6 @@ fn source_run(fx: &Fx, id: &str, emitted: bool) {
         .unwrap();
 }
 
-fn historic_run(index: usize, worktree: &FsPath) -> Run {
-    serde_json::from_value(json!({
-        "id": format!("H{index:03}"), "agent": "historic", "harness": "historic",
-        "worktree": worktree.join(format!("history-{index:03}")), "branch": "corral/history",
-        "base": "main", "base_sha": "0".repeat(40), "started": fixture::now(),
-        "ended": fixture::now(), "outcome": "superseded",
-        "review": {"reviewer": "historic", "sha": "0".repeat(40), "verdict": "approve",
-                   "at": fixture::now()},
-    }))
-    .unwrap()
-}
-
-/// `scale` earlier rows in every history family of `id` that no current input reads, and
-/// nested growth before each current container's current child.
-fn grow(store: &Store, root: &FsPath, id: &str, scale: usize) {
-    store
-        .update(id, |t| {
-            if !t.runs.is_empty() {
-                let earlier: Vec<Run> = (0..scale).map(|i| historic_run(i, root)).collect();
-                t.runs.splice(0..0, earlier);
-            }
-            if let Some(current) = t.plan_runs.last().cloned() {
-                let earlier = (0..scale).map(|i| {
-                    let mut run = current.clone();
-                    run.id = format!("HD{i:03}");
-                    run.state = corral_core::PlanRunState::Cancelled;
-                    run.ended = Some(fixture::now());
-                    run.herdr = None;
-                    run.inbox = Default::default();
-                    run
-                });
-                let at = t.plan_runs.len() - 1;
-                t.plan_runs.splice(at..at, earlier.collect::<Vec<_>>());
-            }
-            if let Some(current) = t.plans.last().cloned() {
-                let earlier = (0..scale).map(|i| {
-                    let mut plan = current.clone();
-                    plan.id = format!("HP{i:03}");
-                    plan.reviews.clear();
-                    plan.approval = None;
-                    plan
-                });
-                let at = t.plans.len() - 1;
-                t.plans.splice(at..at, earlier.collect::<Vec<_>>());
-                let plan = t.plans.last_mut().unwrap();
-                if let Some(template) = plan.reviews.last().cloned() {
-                    let reviews = (0..scale).map(|i| {
-                        let mut review = template.clone();
-                        review.id = format!("HPR{i:03}");
-                        review.reviewer = "historic".into();
-                        review.verdict = Some(corral_core::Verdict::Approve);
-                        review.notes = None;
-                        review.herdr = None;
-                        review.pending_reply = None;
-                        review.inbox = Default::default();
-                        review
-                    });
-                    plan.reviews.splice(0..0, reviews.collect::<Vec<_>>());
-                }
-            }
-            if let Some(current) = t.aggregate_attempts.last().cloned() {
-                let earlier = (0..scale).map(|i| {
-                    let mut attempt = current.clone();
-                    attempt.id = format!("HA{i:03}");
-                    attempt.acceptance = None;
-                    attempt
-                });
-                let at = t.aggregate_attempts.len() - 1;
-                t.aggregate_attempts
-                    .splice(at..at, earlier.collect::<Vec<_>>());
-                let attempt = t.aggregate_attempts.last_mut().unwrap();
-                if let Some(template) = attempt.reviews.last().cloned() {
-                    let reviews = (0..scale).map(|i| {
-                        let mut review = template.clone();
-                        review.id = format!("{}-H{i:03}", attempt.id);
-                        review.notes = None;
-                        review.herdr = None;
-                        review
-                    });
-                    attempt.reviews.splice(0..0, reviews.collect::<Vec<_>>());
-                }
-            }
-            // Nested history goes before the current child and the last switch, which stay.
-            if let Some(run) = t.runs.last_mut().filter(|run| !run.review_runs.is_empty()) {
-                let children = (0..scale).map(|i| {
-                    let mut child = historic_run(i, root);
-                    child.id = format!("{}-review-h{i:03}", run.id);
-                    child.outcome = Some(corral_core::RunOutcome::Done);
-                    child
-                });
-                run.review_runs.splice(0..0, children.collect::<Vec<_>>());
-            }
-            if let Some(run) = t.runs.last_mut().filter(|run| !run.switches.is_empty()) {
-                let switches = (0..scale).map(|i| corral_core::ProfileSwitch {
-                    from: format!("historic-{i}"),
-                    to: format!("historic-{}", i + 1),
-                    reason: "earlier switch".into(),
-                });
-                run.switches.splice(0..0, switches.collect::<Vec<_>>());
-            }
-            Ok(())
-        })
-        .unwrap();
-    for i in 0..scale {
-        let run = format!("H{i:03}");
-        for kind in ["fixture_history", "lessons_applied", "gate_started"] {
-            store
-                .log_event(
-                    Some(id),
-                    kind,
-                    json!({"run": run, "lessons": [], "pane": "h"}),
-                )
-                .unwrap();
-        }
-    }
-}
-
 /// A Done prerequisite of the acted task, whose head every launch check reads.
 fn dependency(store: &Store, id: &str) -> String {
     let dep = store
@@ -485,34 +377,27 @@ fn relations(store: &Store, id: &str) -> Vec<String> {
     let mut ids: Vec<String> = task.depends_on.clone();
     ids.extend(task.parent.clone());
     ids.extend(task.children.clone());
+    // The execution plan's tracker, and the plan targets its backlinks and runs name.
+    ids.extend(
+        store
+            .execution_plan(&task)
+            .unwrap()
+            .map(|tracker| tracker.id),
+    );
+    let backlinks = task.plan.iter().chain(
+        task.runs
+            .iter()
+            .filter_map(|run| run.plan_target.as_ref().map(|t| &t.plan)),
+    );
+    for backlink in backlinks {
+        if let Some((target, _)) = backlink.split_once('@') {
+            ids.push(target.to_owned());
+        }
+    }
+    ids.retain(|other| other != id);
     ids.sort();
     ids.dedup();
     ids
-}
-
-/// Emitted history: owner comments and non-approve findings with notes on earlier plans and
-/// review children.
-fn emit(store: &Store, id: &str, scale: usize) {
-    store
-        .update(id, |t| {
-            for i in 0..scale + 1 {
-                t.comments.push(TaskComment {
-                    at: fixture::now(),
-                    author: CommentAuthor::Owner,
-                    text: format!("Owner note {i:02}"),
-                });
-            }
-            let count = t.plans.len();
-            for plan in t.plans.iter_mut().take(count.saturating_sub(1)) {
-                if let Some(mut review) = plan.reviews.first().cloned() {
-                    review.verdict = Some(corral_core::Verdict::Changes);
-                    review.notes = Some(format!("Finding on {}", plan.id));
-                    plan.reviews.push(review);
-                }
-            }
-            Ok(())
-        })
-        .unwrap();
 }
 
 /// Task-less events nothing reads, padding every variant's event log to one sequence width.
@@ -537,6 +422,7 @@ fn filler(store: &Store) {
 
 pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
     corral_core::clock::pin_thread(Some(fixture::now()));
+    crate::resources::pin_psi(Some(PSI));
     let (fx, id, attempt) = setup(kind);
     let store = fx.ctx.store.clone();
     let root = fx.temp.path().to_path_buf();
@@ -570,12 +456,26 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             .unwrap();
     }
     let scale = variant.scale();
-    grow(&store, &root, &id, scale);
-    for relation in relations(&store, &id) {
-        grow(&store, &root, &relation, scale);
+    grow(&store, &root, &id, scale, true);
+    let related = relations(&store, &id);
+    for relation in &related {
+        grow(&store, &root, relation, scale, false);
+    }
+    for (task, acted) in std::iter::once((&id, true)).chain(related.iter().map(|r| (r, false))) {
+        grown_by(&store, task, scale, acted);
+    }
+    for relation in &related {
+        land_grown(&store, relation);
     }
     if variant == Variant::Emitted {
-        emit(&store, &id, scale);
+        emit(&store, &id, scale, kind);
+        if matches!(kind, Kind::RepairLegacy | Kind::RepairInbox) {
+            // The emitted repair store really holds the repaired run's added obligations.
+            let head = store.head(&id).unwrap();
+            let run = head.current_run.as_ref().unwrap().id.clone();
+            let obligations = head.emitted_obligations(&run).unwrap();
+            assert!(obligations.waits.len() >= 10 && !obligations.decisions.is_empty());
+        }
     }
     for n in 0..variant.terminal() {
         let task = store
@@ -591,19 +491,24 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             &root,
             &task.id,
             if variant == Variant::Grown { 10 } else { 1 },
+            false,
         );
     }
     // The grant binds the acted task's contract: it is confirmed once every input is final.
     let mut fx = fx;
-    match kind {
-        Kind::AggregateCode | Kind::AggregateNoCode => {}
-        Kind::AcceptPlanScopes => grant_scopes(&mut fx, &id, &attempt),
-        _ => fx.grant(&[&id]),
-    }
-    let attempt = if kind == Kind::AcceptPlanScopes {
-        String::new()
-    } else {
-        attempt
+    let attempt = match kind {
+        // The grown specs need a fresh verification, as after any scope amendment.
+        Kind::AggregateCode | Kind::AggregateNoCode => {
+            aggregate::verified_attempt(&mut fx, &id, true)
+        }
+        Kind::AcceptPlanScopes => {
+            grant_scopes(&mut fx, &id, &attempt);
+            String::new()
+        }
+        _ => {
+            fx.grant(&[&id]);
+            attempt
+        }
     };
     filler(&store);
     let probe = RecordingProbe::arc();

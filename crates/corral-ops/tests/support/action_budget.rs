@@ -8,11 +8,13 @@
 //! the added rows' stored bytes the prompt shows; no counted hydration; every inclusive total
 //! is the sum of its cells; each FU-3 cell is its expected walk; outputs equal but for ids.
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
 
 use super::action_budget_checks::{
-    Cells, Walk, followup_failures, preconditions, section_cells, sections, submitted, walk,
+    Cells, Walk, effect_failures, followup_failures, preconditions, section_cells, sections,
+    submitted, walk,
 };
 use super::action_budget_fixture::{Bench, KINDS, Kind, Variant, build, reopen, settle};
 use super::fixture;
@@ -43,22 +45,144 @@ fn flatten(delta: &WorkSnapshot, herdr: u64, git: u64) -> Cells {
     cells
 }
 
-/// Ordinal-derived ids and stamps differ by size; the rest of an output must not.
+/// Ordinal-derived identifiers (task, run, plan, attempt and child numbers) and content
+/// digests differ by size; every other character of an output, digits included, must not.
 fn normalize(output: &str) -> String {
+    let output = &mask_times(output);
     let mut out = String::with_capacity(output.len());
-    let mut digits = false;
-    for c in output.chars() {
-        if c.is_ascii_digit() {
-            if !digits {
-                out.push('#');
-            }
-            digits = true;
-        } else {
-            digits = false;
+    let mut chars = output.char_indices().peekable();
+    while let Some((start, c)) = chars.next() {
+        if !c.is_ascii_alphanumeric() {
             out.push(c);
+            continue;
+        }
+        let mut end = start + c.len_utf8();
+        while let Some(&(i, next)) = chars.peek() {
+            if !next.is_ascii_alphanumeric() {
+                break;
+            }
+            end = i + next.len_utf8();
+            chars.next();
+        }
+        let word = &output[start..end];
+        let letters = word.trim_end_matches(|c: char| c.is_ascii_digit());
+        let digits = &word[letters.len()..];
+        let ordinal_prefix = ["T-", "-r", "-h", "review-", "reviewer:", "-H"]
+            .iter()
+            .any(|prefix| out.ends_with(prefix));
+        if word.len() >= 40 && word.chars().all(|c| c.is_ascii_hexdigit()) {
+            out.push_str("<digest>");
+        } else if letters.is_empty() && ordinal_prefix {
+            out.push('#');
+        } else if !digits.is_empty()
+            && (1..=3).contains(&letters.len())
+            && letters.chars().all(|c| c.is_ascii_uppercase())
+        {
+            out.push_str(letters);
+            out.push('#');
+        } else if !digits.is_empty() && matches!(letters, "r" | "h") && out.ends_with('-') {
+            // A worktree branch's run suffix (`-r11`) or a historic child (`-h001`).
+            out.push_str(letters);
+            out.push('#');
+        } else if !digits.is_empty() && letters.len() == 1 && ordinal_prefix {
+            out.push_str(letters);
+            out.push('#');
+        } else {
+            out.push_str(word);
         }
     }
     out
+}
+
+/// RFC 3339 stamps: the fixture's are pinned, but a gate's commands are stamped by the gate
+/// script's own process clock.
+fn mask_times(output: &str) -> String {
+    let bytes = output.as_bytes();
+    let shape = b"dddd-dd-ddTdd:dd:dd";
+    let mut out = String::with_capacity(output.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let fits = bytes.len() - i >= shape.len()
+            && shape.iter().zip(&bytes[i..]).all(|(s, b)| match s {
+                b'd' => b.is_ascii_digit(),
+                s => s == b,
+            });
+        if fits {
+            let mut end = i + shape.len();
+            if bytes.get(end) == Some(&b'.') {
+                end += 1;
+                while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                    end += 1;
+                }
+            }
+            if bytes.get(end) == Some(&b'Z') {
+                out.push_str("<time>");
+                i = end + 1;
+                continue;
+            }
+        }
+        let c = output[i..].chars().next().unwrap();
+        out.push(c);
+        i += c.len_utf8();
+    }
+    out
+}
+
+/// Every text file of the store's directory, by path: what a pass writes is compared.
+fn store_files(bench: &Bench) -> BTreeMap<PathBuf, String> {
+    let root = bench.ctx.store.dir().to_path_buf();
+    let mut files = BTreeMap::new();
+    let mut dirs = vec![root.clone()];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path)
+                && !path.to_string_lossy().contains(".db")
+            {
+                files.insert(path.strip_prefix(&root).unwrap().to_path_buf(), text);
+            }
+        }
+    }
+    files
+}
+
+/// The pass's durable output: the acted task's head fields, the events it logged and the
+/// text files it wrote or changed.
+fn durable_output(bench: &Bench, events: usize, files: &BTreeMap<PathBuf, String>) -> String {
+    let mut out = Vec::new();
+    let shell = bench
+        .ctx
+        .store
+        .head(&bench.id)
+        .unwrap()
+        .to_shell_task()
+        .unwrap();
+    let mut shell = serde_json::to_value(shell).unwrap();
+    shell["updated"] = serde_json::Value::Null;
+    out.push(format!("task {shell}"));
+    for event in bench.ctx.store.events().unwrap().into_iter().skip(events) {
+        out.push(format!("event {} {}", event.kind, event.detail));
+    }
+    for (path, text) in store_files(bench) {
+        if files.get(&path) != Some(&text) {
+            out.push(format!("file {}:\n{text}", path.display()));
+        }
+    }
+    // Each store has its own temporary root and cache directory.
+    let cache = bench.ctx.store.cache_root().unwrap();
+    let per_store = cache
+        .parent()
+        .unwrap_or(&cache)
+        .to_string_lossy()
+        .into_owned();
+    out.join("\n")
+        .replace(&per_store, "<store-cache>")
+        .replace(&bench.root.to_string_lossy().into_owned(), "<root>")
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -123,6 +247,7 @@ fn run(entry: &Entry, bench: &Bench) -> String {
 
 pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     corral_core::clock::pin_thread(Some(fixture::now()));
+    crate::resources::pin_psi(Some(super::action_budget_fixture::PSI));
     let mut m = Measured::default();
     for (section, _) in sections(kind) {
         m.sections
@@ -131,11 +256,15 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     let entry = entry(kind, bench);
     let (before, volumes) = walk(bench);
     let effects = submitted(bench, kind);
+    let effects_before = super::action_budget_checks::effects(bench);
     bench.probe.take();
+    bench.probe.take_live();
     let (herdr, git) = (
         corral_herdr::work::invocations(),
         corral_git::work::invocations(),
     );
+    let files = store_files(bench);
+    let events = bench.ctx.store.events().unwrap().len();
     let start = work::snapshot();
     let output = run(&entry, bench);
     let delta = work::snapshot().since(&start);
@@ -144,8 +273,14 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
         corral_git::work::invocations() - git,
     );
     let samples = bench.probe.take();
+    let live = bench.probe.take_live();
     let (after, after_volumes) = walk(bench);
     let effects = submitted(bench, kind) - effects;
+    m.failures.extend(effect_failures(
+        kind,
+        &effects_before,
+        &super::action_budget_checks::effects(bench),
+    ));
     if let Err(error) = delta.check_identity() {
         m.failures.push(format!("identity: {error}"));
     }
@@ -168,8 +303,11 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     m.cells = flatten(&delta, herdr, git);
     let walks: Vec<Walk> = samples.iter().map(|(_, walk)| *walk).collect();
     m.failures
-        .extend(followup_failures(&m.cells, &before, &after, &walks));
-    m.output = normalize(&output);
+        .extend(followup_failures(&m.cells, &before, &after, &walks, live));
+    m.output = normalize(&format!(
+        "{output}\n{}",
+        durable_output(bench, events, &files)
+    ));
     m.before = Some(before);
     m.after = Some(after);
     m
@@ -179,6 +317,11 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
 fn cold(kind: Kind, variant: Variant) -> Measured {
     let bench = build(kind, variant);
     settle(&bench);
+    measure_cold(&bench, kind)
+}
+
+/// [`measure`] of `bench` in a fresh process: a cold cache and store.
+pub(super) fn measure_cold(bench: &Bench, kind: Kind) -> Measured {
     let out = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -197,8 +340,7 @@ fn cold(kind: Kind, variant: Variant) -> Measured {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
         out.status.success(),
-        "cold {kind:?} {} exited {:?}:\n{text}\n{}",
-        variant.name(),
+        "cold {kind:?} exited {:?}:\n{text}\n{}",
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
@@ -275,9 +417,24 @@ fn compare(kind: Kind, base: &Measured, other: &Measured, variant: Variant) -> V
         }
     }
     if base.output != other.output {
+        let (b, o) = base
+            .output
+            .lines()
+            .zip(other.output.lines())
+            .find(|(b, o)| b != o)
+            .unwrap_or(("<end>", "<end>"));
+        let (bc, oc): (Vec<char>, Vec<char>) = (b.chars().collect(), o.chars().collect());
+        let first = bc
+            .iter()
+            .zip(&oc)
+            .position(|(x, y)| x != y)
+            .unwrap_or(bc.len().min(oc.len()));
+        let from = first.saturating_sub(80);
+        let at = |line: &[char]| line.iter().skip(from).take(240).collect::<String>();
         failures.push(format!(
             "output differs:\n    base:  {}\n    {name}: {}",
-            base.output, other.output
+            at(&bc),
+            at(&oc)
         ));
     }
     let (base_emitted, other_emitted) = (emitted(&base.cells), emitted(&other.cells));
@@ -294,9 +451,12 @@ fn compare(kind: Kind, base: &Measured, other: &Measured, variant: Variant) -> V
             "emitted (rows, bytes) = {other_emitted:?} at {name}, expected {want:?} (base {base_emitted:?})"
         ));
     }
-    if own(&base.cells) != own(&other.cells) {
+    // A send-back reads none of the repaired run's obligations or frozen payload, which the
+    // emitted repair store adds: no kind's own records grow.
+    let want_own = own(&base.cells);
+    if own(&other.cells) != want_own {
         failures.push(format!(
-            "own-record (rows, bytes) = {:?} at {name}, {:?} at base",
+            "own-record (rows, bytes) = {:?} at {name}, expected {want_own:?} (base {:?})",
             own(&other.cells),
             own(&base.cells)
         ));
