@@ -1,12 +1,13 @@
-// The Anthropic route end to end inside Pi (T-479): Pi's own anthropic-messages client, given a
-// subscription OAuth credential, sends through the host's guarded fetch to an allowed endpoint.
+// The Anthropic route inside Pi (T-479, T-493): model calls run through the Claude Agent SDK lane,
+// so the host process never reaches Anthropic's messages endpoint itself. Pi's own
+// anthropic-messages client, given a subscription OAuth credential, is refused by the guard unsent.
 import { expect, test } from "bun:test";
 
 import type { Credential } from "@earendil-works/pi-ai";
 
 import { guardedFetch } from "../src/host/restrict.ts";
 
-test("Pi's Anthropic stream for claude-opus-5-5 reaches only the guarded messages endpoint", async () => {
+test("Pi's direct Anthropic stream for claude-opus-5-5 is refused by the host guard", async () => {
   const sent: string[] = [];
   const guard = guardedFetch(async (input) => {
     sent.push(String(input instanceof Request ? input.url : input));
@@ -30,7 +31,7 @@ test("Pi's Anthropic stream for claude-opus-5-5 reaches only the guarded message
   const stream = provider!.stream(model!, { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] } as never,
     { apiKey: auth?.auth.apiKey, fetch: guard.fetch as typeof fetch, maxRetries: 0 } as never);
   for await (const _event of stream) { /* drain */ }
-  expect(sent.length).toBeGreaterThan(0);
-  expect(new Set(sent)).toEqual(new Set(["https://api.anthropic.com/v1/messages?beta=true"]));
-  expect(guard.ledger().refused).toBe(0);
+  expect(sent).toEqual([]);
+  expect(guard.ledger().allowed).toBe(0);
+  expect(guard.ledger().refusedDestinations).toEqual(["https://api.anthropic.com/v1/messages"]);
 });

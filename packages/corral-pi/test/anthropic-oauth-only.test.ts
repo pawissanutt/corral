@@ -1,7 +1,8 @@
 // Review F1 of T-479: an Anthropic host never falls back to a paid API key. With a stored
 // subscription OAuth login and every ambient Anthropic auth source set (synthetic values), a
 // logout must leave the provider without auth, and no request may carry anything but the OAuth
-// token, even though paid and subscription traffic share the guarded messages endpoint.
+// token. Since T-493 requests run through the Claude Agent SDK lane (a fake `query` here), so the
+// token is what the Claude Code subprocess receives.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +12,7 @@ import auth from "../src/auth/index.ts";
 import { authDir } from "../src/auth/paths.ts";
 import { PROVIDERS } from "../src/auth/providers.ts";
 import { FileCredentialStore } from "../src/auth/store.ts";
+import { overrideSdk } from "../src/claude/sdk.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { restrictProvider } from "../src/host/session.ts";
 
@@ -31,6 +33,7 @@ const temps: string[] = [];
 afterEach(() => {
   for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
   Object.assign(process.env, saved);
+  overrideSdk(undefined);
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -43,18 +46,26 @@ async function anthropicHost(ambient: Record<string, string>) {
     type: "oauth", access: OAUTH, refresh: "refresh-synthetic", expires: Date.now() + 3_600_000,
   }));
   const sent: string[] = [];
-  const guard = guardedFetch(async (input, init) => {
-    const headers = new Headers(init?.headers);
-    sent.push(`${String(input)} x-api-key=${headers.get("x-api-key")} authorization=${headers.get("authorization")}`);
-    return new Response("synthetic", { status: 400 });
-  }, undefined, "anthropic");
+  overrideSdk({
+    query: ({ options }) => {
+      const env = options.env ?? {};
+      const ambient = Object.keys(env).filter((key) => key.startsWith("ANTHROPIC_"));
+      sent.push(`CLAUDE_CODE_OAUTH_TOKEN=${env.CLAUDE_CODE_OAUTH_TOKEN} ambient=[${ambient.join(",")}]`);
+      return Object.assign((async function* () {
+        yield { type: "result", subtype: "success", is_error: false, result: "ok", stop_reason: "end_turn" };
+      })(), { interrupt: async () => undefined, close: () => undefined }) as never;
+    },
+    createSdkMcpServer: () => { throw new Error("no custom tools in this test"); },
+  });
+  const guard = guardedFetch(async () => new Response("synthetic", { status: 400 }), undefined, "anthropic");
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const models = await ModelRuntime.create({
     credentials: auth.credentials({ provider: "anthropic", apiEndpoint: PROVIDERS.anthropic.api,
       refreshEndpoint: PROVIDERS.anthropic.refresh }),
     modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
   });
-  restrictProvider(models, "anthropic", guard.fetch as typeof fetch);
+  restrictProvider(models, "anthropic", guard.fetch as typeof fetch,
+    { configDir: join(root, "claude-code"), cwd: root, executable: () => "/synthetic/claude" });
   return { models, sent, guard };
 }
 
@@ -77,8 +88,7 @@ for (const [source, ambient] of Object.entries(AMBIENT)) {
     const before = await models.getAuth("anthropic");
     expect([before?.source, before?.auth.apiKey]).toEqual(["OAuth", OAUTH]);
     expect(await request(models, { apiKey: before?.auth.apiKey })).toBe("sent");
-    expect(sent).toEqual(["https://api.anthropic.com/v1/messages?beta=true x-api-key=null " +
-      `authorization=Bearer ${OAUTH}`]);
+    expect(sent).toEqual([`CLAUDE_CODE_OAUTH_TOKEN=${OAUTH} ambient=[]`]);
     // When the owner logs out in the pane:
     await models.logout("anthropic");
     // Then no auth resolves from the environment, and any non-OAuth request is refused unsent:
@@ -88,7 +98,7 @@ for (const [source, ambient] of Object.entries(AMBIENT)) {
       expect(await request(models, options)).toMatch(/^credentials_unavailable: anthropic requests must use the subscription/);
     }
     expect(sent).toHaveLength(1);
-    expect(guard.ledger().allowed).toBe(1);
+    expect(guard.ledger().allowed).toBe(0);
   });
 }
 

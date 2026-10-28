@@ -30,7 +30,14 @@
   },
   "lock": {
     "file": "bun.lock",
-    "sha256": "292af16cf0f192abd1b8038754b48551994dddd5a2eee83f91dfa3bce9c9fd48"
+    "sha256": "03d5a28d058a97d89e38ec074b446c136c49eabda84464b12b035613c8ec6aac"
+  },
+  "claude": {
+    "task": "T-493",
+    "package": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.306",
+    "integrity": "sha512-kmxcd+4WNhqhqnzODRPM5aOKb1EH2EdlRsf7ZeMx8uQsC1tHAHgHftQGFXGT8yMaYaYlDP9BGYJy1/aYv7IhkQ==",
+    "zod": "4.6.7"
   },
   "provider": {
     "id": "openai-codex",
