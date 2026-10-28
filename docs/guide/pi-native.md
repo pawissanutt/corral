@@ -412,6 +412,56 @@ boundary, so an old project's wake is never sent to a new project's PM. OmO ques
 keeps its existing opt-in configuration; without triage, waiting questions still reach
 Needs me after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
 
+## Starting Pi yourself: `corral pi`
+
+`corral pi` starts the Pi-native host from your own shell, the way `pi` starts plain Pi. It has
+two modes.
+
+**Bound PM in this pane.** `corral pi [--model M] [--provider P] [--effort E]`, run in a herdr
+pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
+the same checks as `corral pm` and `corral agent resume --pm` (a pi-native profile, an
+approved scope with exactly one project, the asset installation, the provider's login); the
+flags replace the profile's model, provider (`openai-codex` or `anthropic`) and effort for this
+launch. It then opens the PM's next generation in this pane, writes the one-shot bootstrap and
+launches it in-process: the same consume, check and exec `corral agent launch` performs, so the
+bootstrap is gone before Bun starts and no path is shown or typed. The host binds with hello as
+usual, and `corral agent state --pm` shows the new generation bound to this pane.
+
+It refuses, before writing anything, with:
+
+| Code | Meaning |
+|---|---|
+| `not_in_herdr` | `HERDR_PANE_ID` is unset; run it in a herdr pane, or use `--bare`. |
+| `pane_unknown` | The pane is not on this store's herdr server. |
+| `pm_alive` | A live Pi-native PM is bound (the message names its pane; `corral agent resume --pm --replace` replaces it), or a non-Pi PM session is open in another pane. |
+| `pm_scope_unapproved`, `pm_scope_ambiguous`, `assets_unavailable`, `credentials_unavailable`, `role_unavailable`, ... | The profile, scope or asset checks of `corral pm`. |
+| `unsupported_platform` | Not Unix. |
+
+The launch itself then refuses exactly as `corral agent launch` does. When the bound PM is dead,
+`corral pi` does not open a rival generation: it takes the PM over with `corral agent resume
+--pm` semantics (the lost generation is fenced, its calls drained and reconciled, one
+`recovery_notice` posted), and generation n+1 opens in this pane. A changed approved project is
+refused `out_of_scope`, as resume refuses it.
+
+The pane stays yours: see [session ownership](../session-ownership.md). corral never closes it,
+treats it as the PM pane only while its bound host is verifiably running, and never types into
+it once that host is gone, so `corral agent resume --pm` refuses `pane_adopted` then; run
+`corral pi` there again, or `corral pm` for a corral-owned pane. `--replace` still replaces
+a live host after verifying its pid, start time and command. Opening the PM in another pane
+(`corral pm` after the pane is gone) ends the adoption.
+
+**Plain Pi: `corral pi --bare`.** This starts unbound Pi in the current directory, inside or
+outside herdr and a corral workspace. There is no bootstrap, generation, nonce, bridge socket,
+hello, role or delivery module, and no `corral_*` tool: only Pi's own read, edit, write, bash,
+grep, find and ls. It runs the installed assets' pinned Pi SDK (after the same Bun range and lock
+checks), the corral-owned login of `--provider` (default `openai-codex`; run `corral agent
+login --provider <p>` first) and the same guarded fetch and restrictions as the bound host.
+`--model` defaults to Pi's own default for the provider. Sessions are kept in
+`$XDG_DATA_HOME/corral/pi-native/bare/sessions/` (Pi's agent directory beside it), and nothing
+is written to `.corral/`. It refuses `assets_unavailable` without an installation,
+`bare_unavailable` when the installation predates `corral pi` (reinstall with `corral agent
+install`), and `credentials_unavailable` without the provider's login.
+
 ## What else already applies
 
 - **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`

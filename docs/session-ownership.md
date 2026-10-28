@@ -83,3 +83,22 @@ ownership to a new server. Dispatch, gate and reviewer launches reject a foreign
 session once a store has saved pane ownership. A store without saved pane
 references or explicit legacy binding remains unbound, so its first queued
 dispatch and local-only gate collection still work.
+
+## Panes adopted by `corral pi`
+
+`corral pi` (bound mode) makes the herdr pane it runs in, the owner's own pane, the Pi-native
+PM pane. The adoption is recorded in `.corral/state/agent-pm.json` as `adopted_pane`, written
+before the generation that moves the PM there opens; it holds only while it names the saved PM
+pane, so it takes effect atomically with that move, and opening the PM in any other pane drops
+it. The record is launch provenance, not inferred from the current shell or configuration.
+
+While a pane is adopted:
+
+- corral never closes it: the cleanup that closes the pane of an exited PM agent never runs on
+  an adopted pane.
+- It counts as the live PM pane, for policy delivery, event pushes and `corral pm` reuse, only
+  while its bound host is verifiably running (the recorded pid and start time).
+- Recovery types into it only after the existing liveness checks verify its live host and
+  `corral agent resume --pm --replace` stops it. Once that host is gone, resume refuses
+  `pane_adopted` instead of typing into a shell the owner may be using; `corral pi` in that pane
+  takes the PM over in-process.
