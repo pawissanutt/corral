@@ -478,13 +478,26 @@ fn approve_fast_forward() {
     assert!(!worktree(&t).exists());
     assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_err());
     assert_eq!(approved_detail(&ws, &t)["branch_deleted"], true);
-    // The post-landing event records when the approval began, for phase timing.
-    let started: jiff::Timestamp = approved_detail(&ws, &t)["started"]
+    // Compare the recorded phase boundaries, not a fresh wall-clock reading:
+    // the host clock can step backwards after the approval event was written.
+    let approved = ws
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "approved" && e.task.as_deref() == Some(&t.id))
+        .unwrap();
+    let started: jiff::Timestamp = approved.detail["started"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
-    assert!(started <= jiff::Timestamp::now());
+    assert!(
+        started <= approved.ts,
+        "approval started {started} after completion {}",
+        approved.ts
+    );
     assert_eq!(ws.ctx.store.get(&t.id).unwrap().status, Status::Done);
     assert!(
         approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, false).is_err(),
