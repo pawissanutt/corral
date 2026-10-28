@@ -31,7 +31,8 @@ fn fixture(scopes: Vec<PlanScope>) -> (tempfile::TempDir, Ctx, String) {
     let task = store
         .create("Design feature", None, Status::Backlog, "Original spec\n")
         .unwrap();
-    let now = jiff::Timestamp::now();
+    // The process clock, so a test that pins it gets byte-stable plan documents.
+    let now = corral_core::clock::now();
     store
         .update(&task.id, |task| {
             task.design = true;

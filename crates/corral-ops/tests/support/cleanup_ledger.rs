@@ -581,3 +581,58 @@ fn repeated_round_cleanup_releases_closed_fallback_panes() {
         );
     }
 }
+
+#[test]
+fn one_sweep_settles_each_owners_workspace_debt() {
+    use corral_core::work::{self, Counter, HotScope};
+    // Given two tasks, each left with an emptied fallback workspace owed by a Round cleanup.
+    let mut world = World::new();
+    let first = world.id.clone();
+    let second = world
+        .ctx
+        .store
+        .create("Second owner", None, Status::Running, "")
+        .unwrap()
+        .id;
+    let mut owed = BTreeSet::new();
+    for id in [&first, &second] {
+        world.id = id.clone();
+        start_run(&mut world);
+        let (_, workspace) = fallback_gate(&mut world);
+        let head = world.ctx.store.head(id).unwrap();
+        cleanup_head(&world.ctx, &head, Cleanup::Round);
+        owed.insert(workspace);
+        world
+            .ctx
+            .store
+            .update(id, |t| {
+                t.status = Status::Done;
+                Ok(())
+            })
+            .unwrap();
+    }
+    world.calls();
+    // When one sweep cleans both terminal owners.
+    let tasks: Vec<Task> = [&first, &second]
+        .iter()
+        .map(|id| world.ctx.store.get(id).unwrap())
+        .collect();
+    super::sweep(&world.ctx, &tasks);
+    // Then both workspaces close and each task's own debt settles.
+    let (_, closed) = world.calls();
+    assert!(owed.is_subset(&closed), "{closed:?}");
+    for id in [&first, &second] {
+        let head = world.ctx.store.head(id).unwrap();
+        let open: Vec<_> = head.unreleased_panes(false).unwrap();
+        assert!(open.is_empty(), "{id}: {open:?}");
+    }
+    // And another sweep reads none of the settled rows.
+    let delta = {
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        super::sweep(&world.ctx, &tasks);
+        work::snapshot().since(&before)
+    };
+    assert_eq!(delta.get(Counter::NestedRowDecodes), 0);
+    assert_eq!(world.calls(), (BTreeSet::new(), BTreeSet::new()));
+}

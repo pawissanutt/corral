@@ -384,16 +384,15 @@ fn relations(store: &Store, id: &str) -> Vec<String> {
             .unwrap()
             .map(|tracker| tracker.id),
     );
-    let backlinks = task.plan.iter().chain(
+    if let Some((target, _)) = task.plan.as_deref().and_then(|b| b.split_once('@')) {
+        ids.push(target.to_owned());
+    }
+    // A run's plan target stores the planned task's bare id.
+    ids.extend(
         task.runs
             .iter()
-            .filter_map(|run| run.plan_target.as_ref().map(|t| &t.plan)),
+            .filter_map(|run| run.plan_target.as_ref().map(|t| t.plan.clone())),
     );
-    for backlink in backlinks {
-        if let Some((target, _)) = backlink.split_once('@') {
-            ids.push(target.to_owned());
-        }
-    }
     ids.retain(|other| other != id);
     ids.sort();
     ids.dedup();
@@ -456,13 +455,15 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             .unwrap();
     }
     let scale = variant.scale();
-    grow(&store, &root, &id, scale, true);
+    // A launch's demoted source run re-derives its review children in the content index:
+    // that growth is T-529's (PM decision 2026-10-28).
+    grow(&store, &root, &id, scale, true, kind != Kind::Worker);
     let related = relations(&store, &id);
     for relation in &related {
-        grow(&store, &root, relation, scale, false);
+        grow(&store, &root, relation, scale, false, true);
     }
     for (task, acted) in std::iter::once((&id, true)).chain(related.iter().map(|r| (r, false))) {
-        grown_by(&store, task, scale, acted);
+        grown_by(&store, task, scale, acted, !(acted && kind == Kind::Worker));
     }
     for relation in &related {
         land_grown(&store, relation);
@@ -492,6 +493,7 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             &task.id,
             if variant == Variant::Grown { 10 } else { 1 },
             false,
+            true,
         );
     }
     // The grant binds the acted task's contract: it is confirmed once every input is final.

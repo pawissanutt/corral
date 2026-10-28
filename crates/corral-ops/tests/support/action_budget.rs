@@ -48,7 +48,9 @@ fn flatten(delta: &WorkSnapshot, herdr: u64, git: u64) -> Cells {
 /// Ordinal-derived identifiers (task, run, plan, attempt and child numbers) and content
 /// digests differ by size; every other character of an output, digits included, must not.
 fn normalize(output: &str) -> String {
-    let output = &mask_times(output);
+    let output = &mask_counter(&mask_times(output), "\"next_seq\":");
+    // A delivered message's sequence number and id suffix: ordinals of the inbox's counter.
+    let output = &mask_counter(output, "\"seq\":");
     let mut out = String::with_capacity(output.len());
     let mut chars = output.char_indices().peekable();
     while let Some((start, c)) = chars.next() {
@@ -94,6 +96,23 @@ fn normalize(output: &str) -> String {
     out
 }
 
+/// The value after `field`: an inbox's sequence counter, an ordinal of the effects it applied.
+fn mask_counter(output: &str, field: &str) -> String {
+    let mut out = String::with_capacity(output.len());
+    let mut rest = output;
+    while let Some(at) = rest.find(field) {
+        let (head, tail) = rest.split_at(at + field.len());
+        out.push_str(head);
+        let digits = tail.len() - tail.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 {
+            out.push('#');
+        }
+        rest = &tail[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// RFC 3339 stamps: the fixture's are pinned, but a gate's commands are stamped by the gate
 /// script's own process clock.
 fn mask_times(output: &str) -> String {
@@ -130,7 +149,19 @@ fn mask_times(output: &str) -> String {
 
 /// Every text file of the store's directory, by path: what a pass writes is compared.
 fn store_files(bench: &Bench) -> BTreeMap<PathBuf, String> {
-    let root = bench.ctx.store.dir().to_path_buf();
+    files_under(bench.ctx.store.dir().to_path_buf())
+}
+
+/// Every generated prompt under the store's scratch root, by path: the worker's registered
+/// prompt copy, the planner's `prompt.md` and both plan reviews' attempt prompts.
+fn prompt_files(bench: &Bench) -> BTreeMap<PathBuf, String> {
+    let layout = bench.ctx.store.storage_layout().unwrap();
+    let mut files = files_under(layout.scratch_root().to_path_buf());
+    files.retain(|path, _| path.extension().is_some_and(|e| e == "md"));
+    files
+}
+
+fn files_under(root: PathBuf) -> BTreeMap<PathBuf, String> {
     let mut files = BTreeMap::new();
     let mut dirs = vec![root.clone()];
     while let Some(dir) = dirs.pop() {
@@ -153,7 +184,12 @@ fn store_files(bench: &Bench) -> BTreeMap<PathBuf, String> {
 
 /// The pass's durable output: the acted task's head fields, the events it logged and the
 /// text files it wrote or changed.
-fn durable_output(bench: &Bench, events: usize, files: &BTreeMap<PathBuf, String>) -> String {
+fn durable_output(
+    bench: &Bench,
+    events: usize,
+    files: &BTreeMap<PathBuf, String>,
+    prompts: &BTreeMap<PathBuf, String>,
+) -> String {
     let mut out = Vec::new();
     let shell = bench
         .ctx
@@ -164,6 +200,7 @@ fn durable_output(bench: &Bench, events: usize, files: &BTreeMap<PathBuf, String
         .unwrap();
     let mut shell = serde_json::to_value(shell).unwrap();
     shell["updated"] = serde_json::Value::Null;
+    strip_grown(&mut shell);
     out.push(format!("task {shell}"));
     for event in bench.ctx.store.events().unwrap().into_iter().skip(events) {
         out.push(format!("event {} {}", event.kind, event.detail));
@@ -173,6 +210,11 @@ fn durable_output(bench: &Bench, events: usize, files: &BTreeMap<PathBuf, String
             out.push(format!("file {}:\n{text}", path.display()));
         }
     }
+    for (path, text) in prompt_files(bench) {
+        if prompts.get(&path) != Some(&text) {
+            out.push(format!("prompt {}:\n{text}", path.display()));
+        }
+    }
     // Each store has its own temporary root and cache directory.
     let cache = bench.ctx.store.cache_root().unwrap();
     let per_store = cache
@@ -180,9 +222,81 @@ fn durable_output(bench: &Bench, events: usize, files: &BTreeMap<PathBuf, String
         .unwrap_or(&cache)
         .to_string_lossy()
         .into_owned();
-    out.join("\n")
-        .replace(&per_store, "<store-cache>")
-        .replace(&bench.root.to_string_lossy().into_owned(), "<root>")
+    let scratch = bench.ctx.store.storage_layout().unwrap();
+    let scratch = scratch.scratch_root().to_string_lossy().into_owned();
+    mask_clock_ids(
+        &out.join("\n")
+            .replace(&scratch, "<scratch>")
+            .replace(&per_store, "<store-cache>")
+            .replace(&bench.root.to_string_lossy().into_owned(), "<root>"),
+    )
+}
+
+/// Drops the rows the fixture grew into the shell's runs: what history a store holds is the
+/// variant, not the pass's output. The pass's own rows (its new run, delivered effect, current
+/// child) stay, and the inbox's applied set, an ordinal record of grown effects, is masked.
+fn strip_grown(shell: &mut serde_json::Value) {
+    let grown = |v: &serde_json::Value, field: &str, prefix: &str| {
+        v[field].as_str().is_some_and(|s| s.contains(prefix))
+    };
+    for run in shell["runs"].as_array_mut().into_iter().flatten() {
+        let mut retain = |field: &str, key: &str, prefix: &str| {
+            if let Some(rows) = run[field].as_array_mut() {
+                rows.retain(|row| !grown(row, key, prefix));
+            }
+        };
+        retain("review_runs", "id", "-review-h");
+        retain("switches", "from", "historic-");
+        retain("checkpoints", "artifact", "artifacts/history/");
+        if let Some(entries) = run["usage"]["entries"].as_array_mut() {
+            entries.retain(|e| !grown(e, "model", "historic-"));
+        }
+        for family in ["waits", "decisions"] {
+            if let Some(rows) = run["obligations"][family].as_array_mut() {
+                rows.retain(|r| {
+                    !r["request"]["id"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("-build-") || s.contains("-branch-"))
+                });
+            }
+        }
+        if let Some(cursors) = run["inbox"]["observe_cursors"].as_array_mut() {
+            cursors.retain(|c| c["adapter"] != "historic");
+        }
+        if run["inbox"]["effects_applied"].is_array() {
+            run["inbox"]["effects_applied"] = "<applied>".into();
+        }
+    }
+}
+
+/// Runs of twelve or more digits: real-clock nanoseconds in scratch registration ids.
+fn mask_clock_ids(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut digits = String::new();
+    // Only standalone runs: a digest's hex digits stay for its own normalization.
+    let mut joined = false;
+    for c in text.chars().chain(std::iter::once('\0')) {
+        if c.is_ascii_digit() {
+            if digits.is_empty() {
+                joined = out
+                    .chars()
+                    .last()
+                    .is_some_and(|p| p.is_ascii_alphanumeric());
+            }
+            digits.push(c);
+            continue;
+        }
+        if digits.len() >= 12 && !joined && !c.is_ascii_alphanumeric() {
+            out.push_str("<nanos>");
+        } else {
+            out.push_str(&digits);
+        }
+        digits.clear();
+        if c != '\0' {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -264,6 +378,7 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
         corral_git::work::invocations(),
     );
     let files = store_files(bench);
+    let prompts = prompt_files(bench);
     let events = bench.ctx.store.events().unwrap().len();
     let start = work::snapshot();
     let output = run(&entry, bench);
@@ -304,10 +419,14 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     let walks: Vec<Walk> = samples.iter().map(|(_, walk)| *walk).collect();
     m.failures
         .extend(followup_failures(&m.cells, &before, &after, &walks, live));
-    m.output = normalize(&format!(
-        "{output}\n{}",
-        durable_output(bench, events, &files)
-    ));
+    // A message id's sequence suffix (`T-#_R##10` once normalized).
+    m.output = mask_counter(
+        &normalize(&format!(
+            "{output}\n{}",
+            durable_output(bench, events, &files, &prompts)
+        )),
+        "##",
+    );
     m.before = Some(before);
     m.after = Some(after);
     m
@@ -402,6 +521,132 @@ pub(super) fn own(cells: &Cells) -> (u64, u64) {
 /// Base against one larger variant: every unattributed cell and output equal; the emitted
 /// cells equal on grown and grown by exactly the shown sections' added rows and bytes on
 /// emitted; own-record cells equal.
+/// An emitted store's prompts add its emitted sections and change nothing else: the base
+/// output's lines appear in order, and each emitted text the kind's prompts show is present.
+fn emitted_output_failures(kind: Kind, grew: &[&str], base: &str, emitted: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    let (base, base_packets) = cut_packets(base);
+    let (emitted, emitted_packets) = cut_packets(emitted);
+    if sections(kind).iter().any(|(s, _)| *s == "resume") {
+        failures.extend(packet_failures(&base_packets, &emitted_packets));
+    }
+    let mut lines = emitted.lines();
+    let mut added = Vec::new();
+    for want in base.lines() {
+        loop {
+            match lines.next() {
+                Some(line) if line == want => break,
+                // An empty list or object the emitted rows fill.
+                _ if matches!(want.trim(), "[]" | "{}") && emitted.contains("Finding on") => break,
+                Some(line) => added.push(line),
+                None => {
+                    failures.push(format!("emitted output lost a base line: {want:.240}"));
+                    return failures;
+                }
+            }
+        }
+    }
+    added.extend(lines);
+    for (section, _) in sections(kind).iter().filter(|(s, _)| grew.contains(s)) {
+        let marker = match *section {
+            "comments" => "Owner note",
+            "plan_findings" => "Finding on",
+            // The worker's resume packet, checked by `packet_failures`.
+            _ => continue,
+        };
+        if !added.iter().any(|line| line.contains(marker)) {
+            failures.push(format!(
+                "emitted prompt lacks its {section} section ({marker:?})"
+            ));
+        }
+    }
+    failures
+}
+
+const PACKET: &str = "## Portable resume contract";
+
+/// The output without its resume-contract sections, and each section's JSON packet.
+fn cut_packets(output: &str) -> (String, Vec<serde_json::Value>) {
+    let (mut rest, mut packets, mut inside, mut block) = (Vec::new(), Vec::new(), false, None);
+    for line in output.lines() {
+        if line == PACKET {
+            inside = true;
+            continue;
+        }
+        if inside && (line.starts_with("## ") || line.starts_with("prompt ")) {
+            inside = false;
+        }
+        if !inside {
+            rest.push(line);
+            continue;
+        }
+        match (&mut block, line.trim()) {
+            (None, "```json" | "<corral-resume>") => block = Some(String::new()),
+            (Some(text), "```" | "</corral-resume>") => {
+                packets.push(serde_json::from_str(text).unwrap_or(serde_json::Value::Null));
+                block = None;
+            }
+            (Some(text), _) => {
+                text.push_str(line);
+                text.push('\n');
+            }
+            (None, _) => {}
+        }
+    }
+    (rest.join("\n"), packets)
+}
+
+/// The paths at which two JSON values differ.
+fn json_diff(a: &serde_json::Value, b: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+    use serde_json::Value;
+    match (a, b) {
+        (Value::Object(x), Value::Object(y)) => {
+            for key in x.keys().chain(y.keys().filter(|k| !x.contains_key(*k))) {
+                let (l, r) = (
+                    x.get(key).unwrap_or(&Value::Null),
+                    y.get(key).unwrap_or(&Value::Null),
+                );
+                json_diff(l, r, &format!("{path}/{key}"), out);
+            }
+        }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (l, r)) in x.iter().zip(y).enumerate() {
+                json_diff(l, r, &format!("{path}/{i}"), out);
+            }
+        }
+        _ if a != b => out.push(path.to_owned()),
+        _ => {}
+    }
+}
+
+/// The emitted packet adds the emitted obligations and changes nothing else.
+fn packet_failures(base: &[serde_json::Value], emitted: &[serde_json::Value]) -> Vec<String> {
+    if base.is_empty() || base.len() != emitted.len() || base.iter().any(|p| p.is_null()) {
+        return vec![format!(
+            "resume packets: {} at base, {} emitted (or unparsed)",
+            base.len(),
+            emitted.len()
+        )];
+    }
+    let mut paths = Vec::new();
+    for (b, e) in base.iter().zip(emitted) {
+        json_diff(b, e, "", &mut paths);
+    }
+    let obligation = |p: &str| {
+        p.split('/')
+            .any(|s| matches!(s, "waits" | "decisions") || s.ends_with("obligations"))
+    };
+    let mut failures: Vec<String> = paths
+        .iter()
+        .filter(|p| !obligation(p))
+        .map(|p| format!("emitted resume packet changed {p}"))
+        .collect();
+    if !paths.iter().any(|p| obligation(p)) {
+        failures.push("emitted resume packet lacks the emitted obligations".into());
+    }
+    failures
+}
+
 fn compare(kind: Kind, base: &Measured, other: &Measured, variant: Variant) -> Vec<String> {
     let name = variant.name();
     let mut failures = Vec::new();
@@ -416,7 +661,20 @@ fn compare(kind: Kind, base: &Measured, other: &Measured, variant: Variant) -> V
             failures.push(format!("{cell}: absent at base, {y} at {name}"));
         }
     }
-    if base.output != other.output {
+    if variant == Variant::Emitted {
+        // The sections whose emitted rows this store really added.
+        let grew: Vec<&str> = sections(kind)
+            .iter()
+            .map(|(s, _)| *s)
+            .filter(|s| other.sections[*s].0 > base.sections[*s].0)
+            .collect();
+        failures.extend(emitted_output_failures(
+            kind,
+            &grew,
+            &base.output,
+            &other.output,
+        ));
+    } else if base.output != other.output {
         let (b, o) = base
             .output
             .lines()
