@@ -112,6 +112,13 @@ struct State {
     pending: Vec<Landing>,
     changed_at: Option<Timestamp>,
     notices: Vec<Notice>,
+    /// The event sequence through which `target` has seen approvals.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::settling::padded"
+    )]
+    after: Option<u64>,
 }
 
 const RECORDS: RecordArea<State> = RecordArea::new("main-movement");
@@ -137,15 +144,28 @@ pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()
         .iter()
         .map(corral_core::TaskHead::to_shell_task)
         .collect::<Result<_>>()?;
-    // Only a landing after an active run started concerns it: read approvals newest first
-    // back to the oldest active run's start, and the heads of the tasks they landed.
-    let since = open
-        .iter()
-        .filter(|task| task.status.holds_slot())
-        .filter_map(|task| task.current_run().filter(|r| r.outcome.is_none()))
-        .map(|run| run.started)
-        .min();
-    let events = match since {
+    // Only a landing after an active run started concerns it. A run that already observed
+    // approvals continues after its cursor, so a tick reads only approvals committed since the
+    // last one; a run new to its record reads back to its start once.
+    let tail = ctx.store.event_tail()?;
+    let mut cursors = std::collections::BTreeMap::new();
+    let mut replay_since: Option<Timestamp> = None;
+    for task in open.iter().filter(|task| task.status.holds_slot()) {
+        let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
+            continue;
+        };
+        let state = RECORDS.load(&ctx.store, &task.id)?.unwrap_or_default();
+        match state
+            .after
+            .filter(|_| state.target.as_ref() == Some(&Target::new(task, run)))
+        {
+            Some(after) => {
+                cursors.insert(task.id.clone(), after);
+            }
+            None => replay_since = Some(replay_since.map_or(run.started, |at| at.min(run.started))),
+        }
+    }
+    let replayed: Vec<Event> = match replay_since {
         Some(since) => ctx
             .store
             .events_newest(None, &["approved"], None, |event| event.ts >= since)?
@@ -154,7 +174,34 @@ pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()
             .collect(),
         None => Vec::new(),
     };
-    let landed: Vec<String> = events.iter().filter_map(|e| e.task.clone()).collect();
+    let mut followed = Vec::new();
+    if let Some(mut after) = cursors.values().min().copied() {
+        while after < tail {
+            let page = ctx
+                .store
+                .events_of_run(None, &["approved"], None, after, 64)?;
+            let Some(last) = page.last() else {
+                break;
+            };
+            after = last.seq;
+            followed.extend(page.into_iter().filter(|event| event.seq <= tail));
+        }
+    }
+    let events_for = |task: &str| -> Vec<Event> {
+        match cursors.get(task) {
+            Some(after) => followed
+                .iter()
+                .filter(|event| event.seq > *after)
+                .cloned()
+                .collect(),
+            None => replayed.clone(),
+        }
+    };
+    let landed: Vec<String> = replayed
+        .iter()
+        .chain(&followed)
+        .filter_map(|e| e.task.clone())
+        .collect();
     let mut tasks = open.clone();
     for head in ctx
         .store
@@ -165,7 +212,8 @@ pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()
         }
     }
     for task in &open {
-        if let Err(error) = reconcile_one(ctx, task, &events, &tasks, now, available) {
+        let events = events_for(&task.id);
+        if let Err(error) = reconcile_one(ctx, task, &events, &tasks, now, available, tail) {
             crate::messages::report(
                 Some(&task.id),
                 "main movement",
@@ -183,6 +231,7 @@ fn reconcile_one(
     tasks: &[Task],
     now: Timestamp,
     available: bool,
+    tail: u64,
 ) -> Result<()> {
     let Some(_lock) = ctx.store.try_lock(&format!("main-movement-{}", task.id))? else {
         return Ok(());
@@ -269,6 +318,7 @@ fn reconcile_one(
             state.changed_at = Some(now);
         }
     }
+    state.after = Some(tail);
     save(&record, &state)?;
     if !state.pending.is_empty()
         && state

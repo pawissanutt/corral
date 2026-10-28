@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::{Ctx, plan, prompt};
 
 mod prepared;
-pub(crate) use prepared::retains;
+pub(crate) use prepared::{has_prepared, retains};
 
 fn current<'a>(task: &'a mut Task, id: &str) -> Result<&'a mut PlanRecord> {
     task.plans

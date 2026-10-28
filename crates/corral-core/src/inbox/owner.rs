@@ -41,7 +41,7 @@ impl Inbox<'_> {
         self.save_record(
             "control",
             "flush",
-            &json!({"at":Timestamp::now(),"via":"manual"}),
+            &json!({"at":self.store.now(),"via":"manual"}),
         )?;
         self.event("inbox_flush_requested", json!({"via":"manual"}))
     }
@@ -93,7 +93,7 @@ impl Inbox<'_> {
             &Receipt {
                 envelope: envelope.as_ref().map(|e| e.number),
                 binding: envelope.map(|e| e.binding),
-                observed_at: Timestamp::now(),
+                observed_at: self.store.now(),
                 via: "manual".into(),
                 detail: json!({"reason":reason}),
             },
@@ -141,7 +141,7 @@ impl Inbox<'_> {
                 self.save_record(
                     "control",
                     "flush",
-                    &json!({"at":Timestamp::now(),"via":"manual","resend_envelope":number}),
+                    &json!({"at":self.store.now(),"via":"manual","resend_envelope":number}),
                 )?;
             }
             // Keep original attempt and uncertainty evidence. A resend is a NEW frozen envelope.
@@ -151,7 +151,7 @@ impl Inbox<'_> {
                 &json!({"via":"manual","action":match recovery {
                     Recovery::Resend => "resend", Recovery::Abandon => "abandon",
                     Recovery::Submit => "submit", Recovery::Discard => "discard",
-                },"at":Timestamp::now()}),
+                },"at":self.store.now()}),
             )?;
             s.open_envelope = None;
             self.event("inbox_recovered", json!({"envelope":number,"via":"manual","duplicate_possible":matches!(recovery,Recovery::Resend)}))

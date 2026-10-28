@@ -103,6 +103,16 @@ impl Drop for StoreLock {
 }
 
 impl Store {
+    /// The time stamped on what this store writes: the wall clock, or a fixture's pinned instant.
+    #[must_use]
+    pub fn now(&self) -> jiff::Timestamp {
+        self.attribution
+            .pinned_now
+            .get()
+            .copied()
+            .unwrap_or_else(jiff::Timestamp::now)
+    }
+
     /// Exclusive lock on `lock/<name>.lock`, held until the returned guard is dropped.
     pub(crate) fn lock(&self, name: &str) -> Result<StoreLock> {
         let dir = self.dir.join("lock");

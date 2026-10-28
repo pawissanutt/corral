@@ -4,7 +4,6 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::{Context, Result, bail, ensure};
-use jiff::Timestamp;
 use serde_json::Value;
 
 use super::codec::task_fields;
@@ -678,7 +677,7 @@ impl Store {
         let summary = serde_json::to_value(&new.summary)?;
         let mut fields = task_fields(&after)?;
         if !rows.is_empty() || doc != base_doc || summary != base_summary {
-            let now = Timestamp::now();
+            let now = self.now();
             new.task.updated = now;
             after.updated = now;
             fields.updated = now;

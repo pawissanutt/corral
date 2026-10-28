@@ -24,17 +24,19 @@ struct State {
     tasks: BTreeSet<String>,
 }
 
-mod padded {
+/// A change or event sequence stored zero-padded, so a record's size does not follow the
+/// feed's length.
+pub(crate) mod padded {
     use serde::{Deserialize, Deserializer, Serializer};
 
-    pub(super) fn serialize<S: Serializer>(cursor: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+    pub(crate) fn serialize<S: Serializer>(cursor: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
         match cursor {
             Some(seq) => s.serialize_some(&format!("{seq:020}")),
             None => s.serialize_none(),
         }
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
         Option::<String>::deserialize(d)?
             .map(|seq| seq.parse().map_err(serde::de::Error::custom))
             .transpose()

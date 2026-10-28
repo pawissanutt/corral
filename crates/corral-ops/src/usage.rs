@@ -147,8 +147,10 @@ fn refresh_current(store: &Store, head: &TaskHead) -> Result<()> {
     Ok(())
 }
 
-/// The time of the run's first verdict event at or after `from`, read in sequence order from the
-/// run's own verdict events (an owner action may finish a review without a harness verdict).
+/// The time of the run's first verdict event at or after `from` (an owner action may finish a
+/// review without a harness verdict): the run's verdict events newest first, back to the first
+/// one before `from`, so the run's earlier verdicts are never re-read. Events are appended in
+/// time order, so the oldest one read is the first in sequence order.
 fn first_verdict_from(
     store: &Store,
     task: &str,
@@ -157,17 +159,12 @@ fn first_verdict_from(
 ) -> Result<Option<Timestamp>> {
     #[cfg(test)]
     EVENT_READS.set(EVENT_READS.get() + 1);
-    let mut after = 0;
-    loop {
-        let page = store.events_of_run(Some(task), &VERDICT_KINDS, Some(run), after, 16)?;
-        let Some(last) = page.last() else {
-            return Ok(None);
-        };
-        after = last.seq;
-        if let Some(event) = page.iter().find(|event| event.ts >= from) {
-            return Ok(Some(event.ts));
-        }
-    }
+    Ok(store
+        .events_newest(Some(task), &VERDICT_KINDS, Some(run), |event| {
+            event.ts >= from
+        })?
+        .last()
+        .map(|event| event.ts))
 }
 
 fn refresh_runs(
@@ -768,3 +765,7 @@ mod tests;
 #[cfg(test)]
 #[path = "usage_guard_tests.rs"]
 mod guard_tests;
+
+#[cfg(test)]
+#[path = "usage_verdict_tests.rs"]
+mod verdict_tests;

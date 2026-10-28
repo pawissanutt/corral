@@ -90,7 +90,8 @@ fn unrelated_project_base_or_pre_dispatch_approvals_do_not_notify() {
         }
         assert_eq!(event.detail["sha"], landing.sha);
         // When the explicit snapshots pass through reconciliation.
-        reconcile_one(&fx.ctx, &fx.task, &events, &tasks, fx.now, true).unwrap();
+        let tail = fx.ctx.store.event_tail().unwrap();
+        reconcile_one(&fx.ctx, &fx.task, &events, &tasks, fx.now, true, tail).unwrap();
         reconcile_one(
             &fx.ctx,
             &fx.task,
@@ -98,6 +99,7 @@ fn unrelated_project_base_or_pre_dispatch_approvals_do_not_notify() {
             &tasks,
             fx.now + SignedDuration::from_secs(2),
             true,
+            tail,
         )
         .unwrap();
         // Then the worker is not interrupted.

@@ -32,6 +32,8 @@ struct Attribution {
 #[derive(Debug, Default)]
 pub(crate) struct AttributionContext {
     default: OnceLock<Attribution>,
+    /// A fixture's fixed "now" for stamps the store writes (`Store::fixture_pin_now`).
+    pub(crate) pinned_now: OnceLock<Timestamp>,
 }
 
 struct Scope {
@@ -110,7 +112,7 @@ impl Store {
             .context("parsing explicit event actor")?;
         Ok(Event {
             seq: 0,
-            ts: Timestamp::now(),
+            ts: self.now(),
             task: task.map(str::to_owned),
             kind: kind.to_owned(),
             actor: explicit.or(scoped).or_else(|| default.map(|a| a.actor)),

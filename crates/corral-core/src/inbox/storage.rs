@@ -167,7 +167,7 @@ impl<'a> Inbox<'a> {
             kind: post.kind.into(),
             urgency: post.urgency,
             author: post.author.into(),
-            created: Timestamp::now(),
+            created: self.store.now(),
             binding: post.binding,
             subject: post.subject,
             body: format!("[corral {}#{seq} {}]\n{}", self.key, post.kind, post.body),
@@ -379,7 +379,7 @@ impl<'a> Inbox<'a> {
             self.save_record(
                 state.suffix(),
                 &format!("{seq:020}"),
-                &json!({"reason":reason,"via":via,"at":Timestamp::now()}),
+                &json!({"reason":reason,"via":via,"at":self.store.now()}),
             )?;
             self.event(
                 &format!("message_{}", state.suffix()),
