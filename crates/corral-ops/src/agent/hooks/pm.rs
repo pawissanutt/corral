@@ -113,14 +113,16 @@ pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile>
 }
 
 pub fn command(ctx: &Ctx, pane: &str, resolved: &ResolvedProfile) -> Result<String> {
-    Ok(prepared(ctx, pane, resolved)?.command())
+    Ok(prepared(ctx, pane, resolved, false)?.command())
 }
 
-/// `command` without rendering it: the written bootstrap, for an in-process launch.
+/// `command` without rendering it: the written bootstrap, for an in-process launch; `adopt`
+/// records `pane` as the owner's adopted pane with the generation move.
 pub fn prepared(
     ctx: &Ctx,
     pane: &str,
     resolved: &ResolvedProfile,
+    adopt: bool,
 ) -> Result<super::super::launch::Prepared> {
     consulted("pm");
     preflight(ctx, Some(resolved))?;
@@ -138,6 +140,7 @@ pub fn prepared(
         }),
         effort: resolved.effort.clone(),
         prompt_file: Some(ctx.store.prompts_dir().join("pm.md")),
+        adopt,
     };
     super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)
 }

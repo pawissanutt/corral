@@ -225,6 +225,7 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
         model,
         effort: run.effort.clone(),
         prompt_file: Some(prompt),
+        adopt: false,
     };
     Ok(Relaunch {
         pane,
@@ -306,7 +307,9 @@ pub(crate) fn recover(
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
     let prepared = match (&plan.target, pm_profile) {
         (Some((target, spec)), _) => prepare_bootstrap(ctx, target, &plan.pane, spec)?,
-        (None, Some(resolved)) => super::hooks::pm::prepared(ctx, &plan.pane, &resolved)?,
+        (None, Some(resolved)) => {
+            super::hooks::pm::prepared(ctx, &plan.pane, &resolved, adopt.is_some())?
+        }
         (None, None) => bail!("the PM relaunch command is missing"),
     };
     let command = match &plan.exit_receipt {

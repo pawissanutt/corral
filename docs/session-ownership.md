@@ -87,10 +87,11 @@ dispatch and local-only gate collection still work.
 ## Panes adopted by `corral pi`
 
 `corral pi` (bound mode) makes the herdr pane it runs in, the owner's own pane, the Pi-native
-PM pane. The adoption is recorded in `.corral/state/agent-pm.json` as `adopted_pane`, written
-before the generation that moves the PM there opens; it holds only while it names the saved PM
-pane, so it takes effect atomically with that move, and opening the PM in any other pane drops
-it. The record is launch provenance, not inferred from the current shell or configuration.
+PM pane. The adoption is recorded in `.corral/state/agent-pm.json` as `adopted_pane`, in the
+same commit that opens the generation moving the PM there. A refused or failed `corral pi`
+therefore leaves the previous pane's adoption untouched. Relaunching the PM in the same pane keeps
+the adoption, and opening it in any other pane drops it.
+The record is launch provenance, not inferred from the current shell or configuration.
 
 While a pane is adopted:
 

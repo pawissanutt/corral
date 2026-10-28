@@ -98,7 +98,6 @@ pub(crate) fn adopted_alive(ctx: &Ctx, pane: &str) -> Result<Option<bool>> {
 pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
     platform()?;
     let resolved = super::hooks::pm::profile_with(ctx, overrides)?;
-    let project = super::hooks::pm::project(ctx)?;
     if ctx.herdr.pane_get(pane)?.is_none() {
         return Err(refuse(
             "pane_unknown",
@@ -119,7 +118,7 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
                 ),
             ));
         }
-        super::admission::adopt_pm_pane(&ctx.store, &project, pane)?;
+        // The adoption is recorded only with the generation move, so a refusal changes nothing.
         match bound {
             // A dead PM is taken over with resume's fencing, drain and notice.
             Some(_) => Ok(super::recovery::recover(
@@ -129,7 +128,7 @@ pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
                 Some((pane, &resolved)),
             )?
             .1),
-            None => super::hooks::pm::prepared(ctx, pane, &resolved),
+            None => super::hooks::pm::prepared(ctx, pane, &resolved, true),
         }
     })
 }

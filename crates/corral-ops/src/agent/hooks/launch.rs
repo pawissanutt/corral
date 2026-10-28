@@ -25,6 +25,7 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
                 .prompts_dir()
                 .join(format!("{}-{}.md", task.id, run.id)),
         ),
+        adopt: false,
     };
     let target = BindTarget::Worker {
         task: task.id.clone(),
