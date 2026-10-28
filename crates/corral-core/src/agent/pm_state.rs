@@ -15,6 +15,10 @@ pub struct AgentPm {
     pub pane: String,
     /// Binding (role pm, project = the one authorized scope), generations, receipts and turns.
     pub state: AgentRunState,
+    /// The owner's own pane `corral pi` adopted. It is in effect only while it is the saved
+    /// `pane`: corral never closes it, and types into it only after verifying its live host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_pane: Option<String>,
 }
 
 impl AgentPm {
@@ -23,7 +27,13 @@ impl AgentPm {
             version: AGENT_RECORD_VERSION,
             pane,
             state,
+            adopted_pane: None,
         }
+    }
+
+    /// True while the saved PM pane is the owner's pane adopted by `corral pi`.
+    pub fn adopted(&self) -> bool {
+        self.adopted_pane.as_deref() == Some(self.pane.as_str())
     }
 }
 

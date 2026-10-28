@@ -25,6 +25,7 @@ pub mod hooks;
 pub mod install;
 pub mod launch;
 mod ops;
+pub mod pi;
 pub mod pm_wake;
 mod receipts;
 #[cfg(test)]

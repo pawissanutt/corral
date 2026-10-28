@@ -15,6 +15,7 @@ Commands:
   inbox           Inspect and durably manage agent inbox messages without delivering them
   attention       Inspect current task conditions and progress without changing state
   agent           Pi-native agent host: authenticated host calls, launch, install and recovery
+  pi              Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
   question        Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
@@ -633,6 +634,22 @@ Options:
       --pm               The bound Pi-native PM instead of a task
       --replace          Replace a host that is still alive after verifying its pid, start time and command
   -h, --help             Print help
+```
+
+## `corral pi`
+
+```text
+Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+
+Usage: corral pi [OPTIONS]
+
+Options:
+      --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
+      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --model <MODEL>        Model to run instead of the PM profile's (bare: Pi's default for the provider)
+      --provider <PROVIDER>  Provider whose `corral agent login` runs the session (bare default: openai-codex) [possible values: openai-codex, anthropic]
+      --effort <EFFORT>      Reasoning effort instead of the PM profile's
+  -h, --help                 Print help
 ```
 
 ## `corral question`

@@ -197,9 +197,56 @@ pub fn host_provider(vendor: Option<&str>, model: &str) -> Option<String> {
     super::credentials::provider_for_vendor(&vendor).map(|p| p.id.to_owned())
 }
 
+/// A written one-shot bootstrap and the explicit asset directory its launch names, if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    pub bootstrap: PathBuf,
+    pub assets: Option<PathBuf>,
+    pub corral: PathBuf,
+}
+
+impl Prepared {
+    /// The pane command `{corral} agent launch --bootstrap <path> [--assets <dir>]`.
+    pub fn command(&self) -> String {
+        let quote = |p: &Path| {
+            format!(
+                "'{}'",
+                crate::prompt::sh_escape(&crate::prompt::shell_path(p))
+            )
+        };
+        let mut command = format!(
+            "{} agent launch --bootstrap {}",
+            quote(&self.corral),
+            quote(&self.bootstrap)
+        );
+        if let Some(assets) = &self.assets {
+            command.push_str(&format!(" --assets {}", quote(assets)));
+        }
+        command
+    }
+
+    /// What `corral agent launch` receives for this bootstrap, for an in-process launch.
+    pub fn launch_args(&self) -> LaunchArgs {
+        LaunchArgs {
+            bootstrap: self.bootstrap.clone(),
+            assets: self.assets.clone(),
+        }
+    }
+}
+
 /// The dispatch half: opens generation n+1 of `target` in `pane`, writes its one-shot bootstrap
 /// and returns the pane command `{corral} agent launch --bootstrap <path> [--assets <dir>]`.
 pub fn prepare(ctx: &Ctx, target: &BindTarget, pane: &str, spec: &HostSpec) -> Result<String> {
+    Ok(prepare_bootstrap(ctx, target, pane, spec)?.command())
+}
+
+/// `prepare` without rendering the command: `corral pi` launches the bootstrap in-process.
+pub fn prepare_bootstrap(
+    ctx: &Ctx,
+    target: &BindTarget,
+    pane: &str,
+    spec: &HostSpec,
+) -> Result<Prepared> {
     let explicit = ctx.store.config.agent.assets_dir.clone();
     let assets = match explicit.clone() {
         Some(dir) => dir,
@@ -317,21 +364,11 @@ pub fn prepare(ctx: &Ctx, target: &BindTarget, pane: &str, spec: &HostSpec) -> R
     };
     let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
     let path = write_bootstrap(&dir, &bootstrap)?;
-    let quote = |p: &Path| {
-        format!(
-            "'{}'",
-            crate::prompt::sh_escape(&crate::prompt::shell_path(p))
-        )
-    };
-    let mut command = format!(
-        "{} agent launch --bootstrap {}",
-        quote(&bootstrap.corral),
-        quote(&path)
-    );
-    if explicit.is_some() {
-        command.push_str(&format!(" --assets {}", quote(&assets)));
-    }
-    Ok(command)
+    Ok(Prepared {
+        bootstrap: path,
+        assets: explicit.is_some().then_some(assets),
+        corral: bootstrap.corral,
+    })
 }
 
 /// Root of every corral runtime directory for this user.

@@ -26,7 +26,9 @@ use super::bridge::liveness::{bound_host, gone};
 use super::bridge::notice::{self, Unconfirmed};
 use super::cli::{AgentTarget, CancelArgs, ResumeArgs};
 use super::effects;
-use super::launch::{CTL_CAP_FILE, HOST_ENTRY, HostSpec, SOCKET_FILE, generation_dir, prepare};
+use super::launch::{
+    CTL_CAP_FILE, HOST_ENTRY, HostSpec, Prepared, SOCKET_FILE, generation_dir, prepare_bootstrap,
+};
 use crate::Ctx;
 
 /// The T-252 child that lands recovery.
@@ -35,20 +37,7 @@ pub const NOTICE_KIND: &str = "recovery_notice";
 pub const UPDATE_KIND: &str = "recovery_update";
 
 #[cfg(all(test, target_os = "linux"))]
-fn receipt(
-    host: &super::test_support::Host,
-    call: &str,
-    op: &str,
-    state: &str,
-    result: Value,
-) -> RequestReceipt {
-    serde_json::from_value(json!({
-        "version": 1, "request_id": super::tool_request_id(super::bridge::fixture::SESSION, call),
-        "op": op, "payload_sha256": "00", "identity": host.identity, "state": state,
-        "result": result, "at": "2026-10-25T00:00:00Z",
-    }))
-    .unwrap()
-}
+use super::test_support::receipt;
 /// Evidence sources on a receipt reported `in_progress`, and on its one later update.
 const NOTICE_SOURCE: &str = "recovery_notice";
 const UPDATE_SOURCE: &str = "recovery_update";
@@ -247,12 +236,27 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
 }
 
 pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> Result<Value> {
+    Ok(recover(ctx, container, replace, None)?.0)
+}
+
+/// Resume, or with `adopt` (`corral pi` taking over a dead PM) the same fencing, drain and
+/// notice with generation n+1 opened in the adopting pane and launched in-process from the
+/// returned bootstrap instead of typed into the recorded pane.
+pub(crate) fn recover(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    replace: bool,
+    adopt: Option<(&str, &corral_core::ResolvedProfile)>,
+) -> Result<(Value, Prepared)> {
     let (state, _) = open(ctx, container)?;
     let n = state.binding.generation;
     ensure!(n > 0, "{} has no generation to resume", container.key());
     // Refuse unavailable assets, profiles or scope without stopping or fencing the old host.
     let pm_profile = if matches!(container, ContainerRef::Pm) {
-        let resolved = super::hooks::pm::profile(ctx)?;
+        let resolved = match adopt {
+            Some((_, resolved)) => resolved.clone(),
+            None => super::hooks::pm::profile(ctx)?,
+        };
         ensure!(
             super::hooks::pm::project(ctx)? == state.binding.project,
             "out_of_scope: the approved PM project differs from the existing binding"
@@ -261,7 +265,11 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     } else {
         None
     };
-    let plan = relaunch(ctx, container, &state)?;
+    let mut plan = relaunch(ctx, container, &state)?;
+    let adopted = adopt.is_none() && super::pi::adopted(ctx, container, &plan.pane)?;
+    if let Some((pane, _)) = adopt {
+        plan.pane = pane.into();
+    }
     if ctx.herdr.pane_get(&plan.pane)?.is_none() {
         bail!(
             "pane_gone: {} is gone; retry or discard the run (a review child whose pane is gone \
@@ -270,10 +278,15 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
         );
     }
     let host = bound_host(&state);
+    let alive = host.as_ref().map(gone).transpose()? == Some(false);
+    ensure!(
+        !adopted || alive,
+        "pane_adopted: {} is the owner's own pane adopted by `corral pi` and its host is gone; \
+         corral never types into it. Run `corral pi` in that pane, or `corral pm`",
+        plan.pane
+    );
     let mut replaced = false;
-    if let Some(host) = &host
-        && !gone(host)?
-    {
+    if let Some(host) = host.as_ref().filter(|_| alive) {
         ensure!(
             replace,
             "host_alive: generation {n}'s host (pid {}) is still running; `corral agent resume \
@@ -291,14 +304,14 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     reconcile(ctx, container, n)?;
     let interrupted = classify_lost(ctx, container, n, &plan)?;
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
-    let command = match (&plan.target, pm_profile) {
-        (Some((target, spec)), _) => prepare(ctx, target, &plan.pane, spec)?,
-        (None, Some(resolved)) => super::hooks::pm::command(ctx, &plan.pane, &resolved)?,
+    let prepared = match (&plan.target, pm_profile) {
+        (Some((target, spec)), _) => prepare_bootstrap(ctx, target, &plan.pane, spec)?,
+        (None, Some(resolved)) => super::hooks::pm::prepared(ctx, &plan.pane, &resolved)?,
         (None, None) => bail!("the PM relaunch command is missing"),
     };
     let command = match &plan.exit_receipt {
-        Some(receipt) => crate::launch_exit::arm(&command, receipt)?,
-        None => command,
+        Some(receipt) => crate::launch_exit::arm(&prepared.command(), receipt)?,
+        None => prepared.command(),
     };
     let next = snapshot(ctx, container)?.0.binding.generation;
     let notice = post_notice(ctx, container, (n, next), &interrupted, &unconfirmed, &plan)?;
@@ -315,7 +328,9 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
     if let ContainerRef::Reviewer { task, .. } = container {
         super::hooks::review::release_lost(ctx, task)?;
     }
-    ctx.herdr.pane_run(&plan.pane, &command)?;
+    if adopt.is_none() {
+        ctx.herdr.pane_run(&plan.pane, &command)?;
+    }
     if let Some(task) = container.task() {
         super::hooks::sync::settle_lost(ctx, task)?;
     }
@@ -332,7 +347,7 @@ pub fn resume_container(ctx: &Ctx, container: &ContainerRef, replace: bool) -> R
             "notice": notice.id, "calls": interrupted.calls.len(), "replaced": replaced,
         }),
     )?;
-    Ok(outcome)
+    Ok((outcome, prepared))
 }
 
 /// Fencing removes the generation's control credential and socket: nobody reaches it again.

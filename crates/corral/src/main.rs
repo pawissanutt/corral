@@ -20,6 +20,7 @@ mod lessons_cmd;
 mod list_cols;
 mod log_cmd;
 mod mode_cmd;
+mod pi_cmd;
 mod pins;
 mod plan_cmd;
 mod plugin;
@@ -75,6 +76,8 @@ pub enum Cmd {
     Attention(attention_cmd::AttentionArgs),
     /// Pi-native agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
+    /// Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+    Pi(pi_cmd::PiArgs),
     /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
     Question(question_cmd::QuestionArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority

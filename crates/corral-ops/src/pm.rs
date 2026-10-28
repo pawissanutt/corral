@@ -217,7 +217,7 @@ pub(crate) fn pm_session(ctx: &Ctx) -> Result<PmSession> {
     if let Ok(text) = std::fs::read_to_string(&state_file)
         && let Ok(state) = serde_json::from_str::<PmState>(&text)
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
-        && !exited(ctx, &state.pane_id)?
+        && live(ctx, &state.pane_id)?
     {
         return Ok(PmSession::Live(state.execution));
     }
@@ -226,6 +226,82 @@ pub(crate) fn pm_session(ctx: &Ctx) -> Result<PmSession> {
 
 fn pm_receipt(ctx: &Ctx, pane: &str) -> std::path::PathBuf {
     crate::launch_exit::receipt(ctx, "PM", &pane.replace(':', "_"))
+}
+
+/// The owner's pane adopted by `corral pi` is the PM's only while its host is verifiably alive,
+/// and is never closed; any other PM pane is live until its agent returns to the shell.
+fn live(ctx: &Ctx, pane: &str) -> Result<bool> {
+    match crate::agent::pi::adopted_alive(ctx, pane)? {
+        Some(alive) => Ok(alive),
+        None => Ok(!exited(ctx, pane)?),
+    }
+}
+
+/// `corral pi`: the owner's `pane` becomes the PM pane. Under `open_pm`'s pm-policy and board
+/// boundaries it refuses a live non-Pi PM, saves the prompt, runs `start` (the checks, the
+/// generation and its bootstrap) and records the pane with a confirmed startup: the host launches
+/// in-process, so nothing is typed into the pane.
+pub(crate) fn adopt_pm<T>(
+    ctx: &Ctx,
+    pane: &str,
+    resolved: &ResolvedProfile,
+    start: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let _delivery = ctx
+        .store
+        .try_lock("pm-policy")?
+        .context("PM policy delivery is in progress; retry `corral pi`")?;
+    let board = || -> Result<_> {
+        ctx.store
+            .try_lock("dispatch")?
+            .context("operating policy is being updated; retry `corral pi`")
+    };
+    let state_file = ctx.store.state_dir().join("pm.json");
+    if let Ok(text) = std::fs::read_to_string(&state_file)
+        && let Ok(state) = serde_json::from_str::<PmState>(&text)
+        && state.pane_id != pane
+        && !state
+            .execution
+            .is_some_and(|e| corral_core::is_pi_native(&e.harness))
+        && live_pm_pane(ctx)?.is_some()
+    {
+        return Err(crate::agent::pi::refuse(
+            "pm_alive",
+            format!(
+                "a non-Pi-native PM session is open in pane {}; close it before `corral pi`",
+                state.pane_id
+            ),
+        ));
+    }
+    {
+        let _board = board()?;
+        save_prompt(ctx, &crate::pm_policy::snapshot(ctx)?)?;
+    }
+    let started = start()?;
+    let _board = board()?;
+    let policy = crate::pm_policy::snapshot(ctx)?;
+    save_prompt(ctx, &policy)?;
+    let state = PmState {
+        pane_id: pane.into(),
+        bootstrap: None,
+        execution: Some(PmExecution {
+            harness: resolved.harness.clone(),
+            model: resolved.model.clone(),
+            vendor: resolved.vendor.clone(),
+        }),
+    };
+    crate::pm_policy::begin_startup(ctx, pane, &policy)?;
+    crate::pm_policy::write_atomic(&state_file, &serde_json::to_vec(&state)?)?;
+    crate::pm_policy::confirm_startup(ctx, pane)?;
+    drop(_board);
+    corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?
+        .record_pm_launch()?;
+    ctx.store.log_event(
+        None,
+        "pm_opened",
+        json!({ "pane": pane, "agent": resolved.profile, "adopted": true }),
+    )?;
+    Ok(started)
 }
 
 /// A pane whose PM agent returned to its shell is only a shell: report why once, close it and
@@ -252,7 +328,7 @@ pub(crate) fn live_pm_pane(ctx: &Ctx) -> Result<Option<String>> {
     if let Ok(text) = std::fs::read_to_string(&state_file)
         && let Ok(state) = serde_json::from_str::<PmState>(&text)
         && ctx.herdr.pane_get(&state.pane_id)?.is_some()
-        && !exited(ctx, &state.pane_id)?
+        && live(ctx, &state.pane_id)?
     {
         return Ok(Some(state.pane_id));
     }

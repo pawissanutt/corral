@@ -62,7 +62,22 @@ pub fn project(ctx: &Ctx) -> Result<String> {
         .context("no approved PM project")
 }
 
+/// What `corral pi` may change of the configured PM profile for one launch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Overrides {
+    pub model: Option<String>,
+    /// A Pi provider id (`openai-codex`, `anthropic`); it selects the vendor whose login runs.
+    pub provider: Option<String>,
+    pub effort: Option<String>,
+}
+
 pub fn profile(ctx: &Ctx) -> Result<ResolvedProfile> {
+    profile_with(ctx, &Overrides::default())
+}
+
+/// The configured PM profile with `overrides` applied, through the same eligibility, harness,
+/// scope, asset and credential checks as `corral pm` and resume.
+pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile> {
     let config = ctx.store.config_layers()?.config()?;
     config.check_profile_eligibility(
         &config.pm.agent,
@@ -70,7 +85,7 @@ pub fn profile(ctx: &Ctx) -> Result<ResolvedProfile> {
         None,
         false,
     )?;
-    let resolved = config.resolve_profile(
+    let mut resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(config.pm.agent.clone()),
             ..ProfileChoice::default()
@@ -82,11 +97,31 @@ pub fn profile(ctx: &Ctx) -> Result<ResolvedProfile> {
         is_pi_native(&resolved.harness),
         "the PM resume profile must be pi-native"
     );
+    if let Some(model) = &overrides.model {
+        resolved.model = Some(model.clone());
+    }
+    if let Some(id) = &overrides.provider {
+        let provider = super::super::credentials::provider(id)
+            .with_context(|| format!("usage_error: unknown provider {id}"))?;
+        resolved.vendor = Some(provider.vendor.into());
+    }
+    if let Some(effort) = &overrides.effort {
+        resolved.effort = Some(effort.trim().to_ascii_lowercase());
+    }
     preflight(ctx, Some(&resolved))?;
     Ok(resolved)
 }
 
 pub fn command(ctx: &Ctx, pane: &str, resolved: &ResolvedProfile) -> Result<String> {
+    Ok(prepared(ctx, pane, resolved)?.command())
+}
+
+/// `command` without rendering it: the written bootstrap, for an in-process launch.
+pub fn prepared(
+    ctx: &Ctx,
+    pane: &str,
+    resolved: &ResolvedProfile,
+) -> Result<super::super::launch::Prepared> {
     consulted("pm");
     preflight(ctx, Some(resolved))?;
     let target = super::super::admission::BindTarget::Pm {
@@ -104,7 +139,7 @@ pub fn command(ctx: &Ctx, pane: &str, resolved: &ResolvedProfile) -> Result<Stri
         effort: resolved.effort.clone(),
         prompt_file: Some(ctx.store.prompts_dir().join("pm.md")),
     };
-    super::super::launch::prepare(ctx, &target, pane, &spec)
+    super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)
 }
 
 #[cfg(all(test, target_os = "linux"))]
