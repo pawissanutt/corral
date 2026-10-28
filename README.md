@@ -35,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
 
-Native Windows (x86_64; see the [v0.3.0 release notes](docs/releases/v0.3.0.md)):
+Native Windows (x86_64; see the [v0.4.0 release notes](docs/releases/v0.4.0.md)):
 
 ```powershell
 Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression
