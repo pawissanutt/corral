@@ -11,6 +11,13 @@ Load the `{{skill}}` skill for this session.
 You are the dispatched coding agent, not the workspace PM. PM board-event subscriptions and
 `[corral]` push messages coordinate the board; they do not replace this run's checks or completion report.
 
+Load testing must never generate intentional load on the shared host: no host CPU/memory
+burners, spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to
+load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND`
+(one Podman container, maximum 4 CPUs, removed on exit/interrupt). If unavailable, report
+the blocked check; never fall back to host load. See `docs/guide/load-sandbox.md`.
+This does not authorize an extra gate or a different tier.
+
 Search `{{corral}} search "<query>" --in all --json` before re-running expensive investigations.
 
 1. Read {{agents_md}} and any deeper AGENTS.md before editing. Work only inside {{worktree}}; commit only
