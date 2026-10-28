@@ -28,6 +28,16 @@ def stopped_trace(process: subprocess.Popen[bytes]) -> bytes:
     return seen
 
 
+def publication_trace(tracer: str, lock: Path) -> list[str]:
+    """Stop at the first dispatch-lock close, independent of unrelated closes."""
+    # -P filters fd-based syscalls too, including the injection counter. A warm
+    # command's global close ordinal is not stable across independent processes.
+    return [
+        tracer, "-yy", "-P", str(lock), "-e", "trace=close,flock",
+        "-e", "inject=close:signal=SIGSTOP:when=1",
+    ]
+
+
 def main() -> None:
     """Interleave actual new/sync commands using an unlocked publication barrier."""
     tracer = shutil.which("strace")
@@ -96,20 +106,11 @@ def main() -> None:
         if idea:
             new_args.extend(["--idea", "--design"])
 
-        # Learn the first board-lock close, not a second update that a correct
-        # implementation no longer needs. StoreLock explicitly unlocks before close.
-        trace_args = [tracer, "-yy", "-e", "trace=close,flock"]
-        warm = run([*trace_args, *command, *new_args])
-        closes = [line for line in warm.stderr.splitlines() if line.startswith("close(")]
-        ordinal = next(
-            index + 1 for index, line in enumerate(closes)
-            if "/lock/dispatch.lock>" in line
-        )
-        corral("move", warm.stdout.strip(), "dropped", "--owner-ok")
-
+        # StoreLock explicitly unlocks before close. Filter by the lock path so
+        # startup/config/task-file closes cannot move the publication barrier.
+        trace_args = publication_trace(tracer, root / ".corral/lock/dispatch.lock")
         with subprocess.Popen(
-            [*trace_args, "-e", f"inject=close:signal=SIGSTOP:when={ordinal}",
-             *command, *new_args],
+            [*trace_args, *command, *new_args],
             cwd=root, env=environment, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         ) as creator:
