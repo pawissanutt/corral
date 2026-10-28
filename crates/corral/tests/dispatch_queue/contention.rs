@@ -54,6 +54,86 @@ impl ProtocolBarrier {
     }
 }
 
+fn churn(f: &Fixture, ids: &[String]) -> usize {
+    f.ctx
+        .store
+        .events()
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e.kind.as_str(), "queued" | "dispatch_failed"))
+        .filter(|e| e.task.as_ref().is_some_and(|t| ids.contains(t)))
+        .count()
+}
+
+#[test]
+fn unrunnable_ready_tasks_stay_quiet_across_syncs_and_leave_review_launches_free() {
+    // Given a task awaiting its gate and N authorized Ready tasks whose dependency is not done.
+    let mut f = super::queue_fixture();
+    f.ctx.store.config.review.gate = Some(vec!["true".into()]);
+    f.ctx.store.save_config().unwrap();
+    let reviewed = f.task("app", Status::Ready);
+    f.ok(&["dispatch", &reviewed.id]);
+    f.ok(&[
+        "done",
+        &reviewed.id,
+        "--summary",
+        "Verified: fixture\nNot verified: none",
+    ]);
+    let predecessor = f.task("other", Status::Backlog);
+    let blocked: Vec<String> = (0..4)
+        .map(|_| {
+            let task = f.task("other", Status::Ready);
+            f.ctx
+                .store
+                .update(&task.id, |t| {
+                    t.depends_on.push(predecessor.id.clone());
+                    Ok(())
+                })
+                .unwrap();
+            corral_ops::enqueue(&f.ctx, &task.id, &DispatchOpts::default()).unwrap();
+            task.id
+        })
+        .collect();
+    let enqueued = churn(&f, &blocked);
+
+    // When several sync passes run, some while another process holds the reconciliation lease.
+    let lease = f
+        .ctx
+        .store
+        .try_lock_shared("session-ownership")
+        .unwrap()
+        .unwrap();
+    for _ in 0..3 {
+        corral_ops::sync(&f.ctx).unwrap();
+    }
+    drop(lease);
+    for _ in 0..3 {
+        corral_ops::sync(&f.ctx).unwrap();
+    }
+
+    // Then no pass re-queues or re-fails the unchanged tasks, and the gate launch is admitted.
+    assert_eq!(churn(&f, &blocked), enqueued);
+    corral_ops::gate_start(&f.ctx, &reviewed.id).unwrap();
+    for id in &blocked {
+        assert!(f.ctx.store.get(id).unwrap().runs.is_empty());
+    }
+
+    // And the meaningful state change, the predecessor landing, admits the queued work again.
+    f.ctx
+        .store
+        .update(&predecessor.id, |t| {
+            t.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::sync(&f.ctx).unwrap();
+    assert!(
+        blocked
+            .iter()
+            .any(|id| f.ctx.store.get(id).unwrap().status == Status::Running)
+    );
+}
+
 #[test]
 fn protocol_barrier_retries_interrupted_receive() {
     // Given a real, queued protocol datagram and an interrupted first receive.
