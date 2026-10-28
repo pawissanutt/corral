@@ -6,6 +6,8 @@
 mod authority;
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;
+#[path = "autopilot_ops/deferred_gate.rs"]
+mod deferred_gate;
 #[path = "autopilot_ops/diagnostics.rs"]
 mod diagnostics;
 #[path = "autopilot_ops/empty_gates.rs"]

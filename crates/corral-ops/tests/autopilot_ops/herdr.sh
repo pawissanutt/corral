@@ -23,7 +23,15 @@ case "$1 $2" in
     status=idle
     if [ -f "$dir/status" ]; then IFS= read -r status < "$dir/status"; fi
     ok "{\"panes\":[{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",\"agent\":\"fake\",\"agent_status\":\"$status\"}$reviewer]}" ;;
-  "pane run") printf '%s\n' "$4" >> "$dir/runs.log"; bash -c "$4" >/dev/null 2>&1; r="${4#*> \'}"; r="${r%%\'*}"; case "$r" in */launch-exits/*) rm -f "$r" ;; esac; ok '{}' ;;
+  "pane run")
+    printf '%s\n' "$4" >> "$dir/runs.log"
+    if [ -f "$dir/defer-gate" ] && [[ "$4" == *'/state/gates/'* ]]; then
+      printf '%s\n' "$4" > "$dir/deferred-gate.sh"
+    else
+      bash -c "$4" >/dev/null 2>&1
+    fi
+    r="${4#*> \'}"; r="${r%%\'*}"; case "$r" in */launch-exits/*) rm -f "$r" ;; esac
+    ok '{}' ;;
   "pane get")
     # Test seam: skip N pane lookups, then run the hook once at the next one.
     if [ -f "$dir/pane-get-skip" ]; then
