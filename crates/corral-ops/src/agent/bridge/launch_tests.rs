@@ -280,6 +280,7 @@ fn a_new_review_child_uses_its_selected_exact_transcript_even_in_generation_one(
         .unwrap();
         assert_eq!(message["resume_session"], json!(expected));
         assert_eq!(message["session_dir"], json!(directory));
+        assert_eq!(message["ui"], json!("rich"), "[agent] ui defaults to rich");
         std::fs::remove_dir_all(runtime_dir(&fx.ctx.store, &recipient).unwrap()).unwrap();
     }
 }

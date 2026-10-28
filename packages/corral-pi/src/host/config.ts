@@ -9,6 +9,8 @@ import { ROLES, type HostIdentity, type Role } from "../roles/types.ts";
 export const LAUNCH_VERSION = 1;
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
+export type UiMode = "rich" | "plain";
+
 export interface HostSecrets {
   readonly hostCap: string;
   readonly ctlCap: string;
@@ -31,6 +33,7 @@ export interface HostConfig {
   readonly provider?: ProviderId;
   readonly effort?: string;
   readonly promptFile?: string;
+  readonly ui?: UiMode;
 }
 
 export class LaunchMessageInvalid extends Error {
@@ -93,6 +96,8 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.fresh_session !== undefined && typeof message.fresh_session !== "boolean") {
     throw new LaunchMessageInvalid("fresh_session must be a boolean");
   }
+  const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
+  if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {
     identity: {
       store: field(message, "store", TOKEN, 64),
@@ -118,6 +123,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     ...(provider ? { provider } : {}),
     effort: optional(message, "effort", TOKEN),
     promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),
+    ...(ui ? { ui } : {}),
   };
 }
 

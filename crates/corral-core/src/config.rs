@@ -429,6 +429,25 @@ pub struct AgentCfg {
     pub gate_start_uncertain_secs: u64,
     /// Grace for a host to drain before it is fenced.
     pub drain_secs: u64,
+    /// Pane look: `rich` (corral header, footer status, compact corral tool lines) or `plain` Pi.
+    pub ui: AgentUi,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentUi {
+    #[default]
+    Rich,
+    Plain,
+}
+
+impl AgentUi {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentUi::Rich => "rich",
+            AgentUi::Plain => "plain",
+        }
+    }
 }
 
 impl Default for AgentCfg {
@@ -438,6 +457,7 @@ impl Default for AgentCfg {
             question_unattended_secs: 600,
             gate_start_uncertain_secs: 300,
             drain_secs: 60,
+            ui: AgentUi::Rich,
         }
     }
 }

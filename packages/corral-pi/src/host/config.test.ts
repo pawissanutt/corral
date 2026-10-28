@@ -30,3 +30,10 @@ test("the launch provider is optional, defaults to Codex in the host, and must b
     .toBe("anthropic");
   expect(() => parseLaunchMessage(JSON.stringify({ ...message, provider: "mistral" }))).toThrow(LaunchMessageInvalid);
 });
+
+test("the pane ui is optional (rich in the host), plain is accepted and anything else is refused", () => {
+  expect(parseLaunchMessage(JSON.stringify(message)).ui).toBeUndefined();
+  expect(parseLaunchMessage(JSON.stringify({ ...message, ui: "plain" })).ui).toBe("plain");
+  expect(parseLaunchMessage(JSON.stringify({ ...message, ui: "rich" })).ui).toBe("rich");
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, ui: "fancy" }))).toThrow(LaunchMessageInvalid);
+});
