@@ -134,6 +134,136 @@ fn unrunnable_ready_tasks_stay_quiet_across_syncs_and_leave_review_launches_free
     );
 }
 
+#[cfg(target_os = "linux")]
+fn wrapped(f: &Fixture, prefix: &[&str], args: &[&str]) -> std::process::Command {
+    let inner = f.command(args);
+    let mut command = std::process::Command::new(prefix[0]);
+    command
+        .args(&prefix[1..])
+        .arg(inner.get_program())
+        .args(inner.get_args())
+        .stdin(std::process::Stdio::null());
+    for (key, value) in inner.get_envs() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn reviewed(f: &Fixture, project: &str) -> String {
+    let task = f.task(project, Status::Ready);
+    f.ok(&["dispatch", &task.id]);
+    f.ok(&[
+        "done",
+        &task.id,
+        "--summary",
+        "Verified: fixture\nNot verified: none",
+    ]);
+    task.id
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
+    use std::io::Read;
+    use std::process::Stdio;
+    // Given a finished gate that sync must collect and attach, and an unrelated task ready to gate.
+    let mut f = Fixture::new();
+    f.ctx.store.config.review.gate = Some(vec!["true".into()]);
+    f.ctx.store.config.limits.running = 3;
+    f.ctx.store.config.limits.review = 2;
+    f.ctx.store.save_config().unwrap();
+    let finished = reviewed(&f, "app");
+    let unrelated = reviewed(&f, "other");
+    f.ok(&["gate", &finished]);
+    let script = corral_ops::gate_paths(&f.ctx, &finished, "R1").script;
+    let ran = std::process::Command::new("bash")
+        .arg(script)
+        .env("CORRAL_ROOT", f.temp.path())
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{ran:?}");
+
+    // When another process holds artifact storage while a real sync process starts.
+    let lock = f.ctx.store.dir().join("lock/artifact-storage.lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    held.lock().unwrap();
+    let mut sync = wrapped(&f, &["strace", "-yy", "-e", "trace=flock"], &["sync"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut trace = sync.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut chunk = [0; 4096];
+        while let Ok(n) = trace.read(&mut chunk) {
+            if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    // Await the exact blocking syscall entry, bounded, without polling.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = Vec::new();
+    while !String::from_utf8_lossy(&seen).contains("/artifact-storage.lock>, LOCK_EX") {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| {
+                panic!(
+                    "sync never reached storage: {}",
+                    String::from_utf8_lossy(&seen)
+                )
+            });
+        seen.extend(rx.recv_timeout(remaining).unwrap());
+    }
+
+    // Then an unrelated gate launch proceeds while that pass still waits for storage.
+    let launch = wrapped(&f, &["timeout", "60"], &["gate", &unrelated])
+        .output()
+        .unwrap();
+    assert!(launch.status.success(), "{launch:?}");
+    assert!(sync.try_wait().unwrap().is_none(), "sync finished early");
+    let started = f.ctx.store.get(&unrelated).unwrap();
+    assert_eq!(
+        started.current_run().unwrap().gate.as_ref().unwrap().result,
+        corral_core::GateResult::Running
+    );
+
+    // And the pass collects the finished gate once storage is released.
+    held.unlock().unwrap();
+    assert!(sync.wait().unwrap().success());
+    drop(rx);
+    reader.join().unwrap();
+    let collected = f.ctx.store.get(&finished).unwrap();
+    assert_eq!(
+        collected
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .result,
+        corral_core::GateResult::Pass
+    );
+}
+
 #[test]
 fn protocol_barrier_retries_interrupted_receive() {
     // Given a real, queued protocol datagram and an interrupted first receive.

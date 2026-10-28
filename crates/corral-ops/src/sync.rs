@@ -6,7 +6,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use crate::{Ctx, DispatchOpts, DispatchOutcome, ProcessControl, SystemProcesses, omo};
+use crate::{Ctx, ProcessControl, SystemProcesses, omo};
 
 /// One status transition made by sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +207,9 @@ fn sync_scoped(
         crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
         return Ok(changes);
     }
+    // Wait for artifact storage before taking the reconciliation lease every finishing launch
+    // needs: a long search then delays this pass, never the launches (T-505).
+    let storage = crate::artifact_storage::storage_lock(ctx)?;
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         // Inventory contention/UNKNOWN must stop pane decisions and new launches,
         // not authenticated completion receipts. Use a receipt-only ownership
@@ -312,13 +315,14 @@ fn sync_scoped(
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
+    drop(storage);
     crate::agent::gate_queue::advance_tasks(ctx, &tasks)?;
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::availability::advance_all(ctx, now)?);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(crate::dashboard::advance(ctx, now)?);
-    changes.extend(start_queued(ctx, now)?);
+    changes.extend(crate::queue_drain::start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
     reconcile_attention(ctx, now, pm_live, attention)?;
@@ -736,59 +740,6 @@ fn read_excerpt(ctx: &Ctx, pane_id: &str) -> String {
         }
         Err(err) => format!("(could not read agent pane: {err:#})"),
     }
-}
-
-fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
-    let mut fresh = ctx.clone();
-    fresh.store.reload_config_if_changed()?;
-    let ctx = &fresh;
-    let mut queued: Vec<Task> = ctx
-        .store
-        .list()?
-        .into_iter()
-        .filter(|t| {
-            !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
-        })
-        .collect();
-    crate::queue::sort_candidates(&mut queued);
-    let mut changes = Vec::new();
-    for (index, task) in queued.into_iter().enumerate() {
-        if crate::queue_drain::still_blocked(ctx, &task, index + 1, now) {
-            continue;
-        }
-        let result = (|| {
-            if !task.queued && task.launch.is_none() {
-                crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
-            }
-            crate::dispatch::dispatch_queued(ctx, &task.id, index + 1, now)
-        })();
-        match result {
-            Ok(DispatchOutcome::Started { run_id, .. }) => changes.push(Change {
-                task: task.id.clone(),
-                from: task.status,
-                to: Status::Running,
-                note: format!("dispatched queued task as {run_id}"),
-                stage: None,
-            }),
-            Ok(DispatchOutcome::Queued { .. }) => {}
-            Err(err) => {
-                crate::messages::report(
-                    Some(&task.id),
-                    "dispatch",
-                    format!("dispatching queued {} failed: {err:#}", task.id),
-                );
-                if crate::queue_drain::contended(&err) {
-                    continue;
-                }
-                ctx.store.log_event(
-                    Some(&task.id),
-                    "dispatch_failed",
-                    json!({ "error": format!("{err:#}") }),
-                )?;
-            }
-        }
-    }
-    Ok(changes)
 }
 
 #[cfg(test)]
