@@ -6,7 +6,7 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, OnceLock};
 
-use corral_core::backend::{ChangeScope, ChangeSeq, FeedError};
+use corral_core::backend::{ChangeScope, ChangeSeq, FeedError, HeadQuery};
 
 use crate::{Change, Ctx};
 
@@ -114,14 +114,32 @@ fn projection(ctx: &Ctx, id: &str) -> Result<(Projection, bool)> {
                 }
                 Err(error) => return Err(error.into()),
             };
+            let mut unknown = BTreeSet::new();
             for entry in &page.entries {
-                changed |= entry.scopes.iter().any(|scope| match scope {
-                    ChangeScope::Task { num, .. } => previous
-                        .projection
-                        .scopes
-                        .contains(&format!("T-{:03}", num.0)),
-                    _ => false,
-                });
+                for scope in &entry.scopes {
+                    if let ChangeScope::Task { num, .. } = scope {
+                        let id = format!("T-{:03}", num.0);
+                        changed |= previous.projection.scopes.contains(&id);
+                        unknown.insert(id);
+                    }
+                }
+            }
+            if !changed && !unknown.is_empty() {
+                // Membership also depends on absent incoming edges: another owner listing
+                // a member/Plan, or an unlisted child naming a known Plan as parent.
+                // Read only tasks changed since this cursor, on the same pinned view.
+                // Only successful projections are cached, so a removed unknown edge
+                // cannot leave a cached refusal behind.
+                changed = ctx
+                    .store
+                    .heads(&HeadQuery::Ids(unknown.into_iter().collect()))?
+                    .iter()
+                    .any(|task| {
+                        task.parent
+                            .iter()
+                            .chain(&task.children)
+                            .any(|id| previous.projection.scopes.contains(id))
+                    });
             }
             if changed || !page.more {
                 break;
@@ -191,8 +209,8 @@ pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
         unmapped_criteria,
         ..
     } = projection;
-    // These inputs include Git refs, artifact bytes and checkpoint records, independent of
-    // task scopes. Do not memoize acceptance readiness on the task-only feed cursor.
+    // Readiness reads maintained artifact facts, Git refs and checkpoint records, independent
+    // of task scopes. Do not memoize acceptance readiness on the task-only feed cursor.
     let aggregate = crate::plan_acceptance::progress(&fresh, &tracker);
     Ok(PlanProgress {
         task: tracker.id,
@@ -485,3 +503,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tracker_progress_tests.rs"]
 mod progress_tests;
+
+#[cfg(test)]
+#[path = "tracker_membership_tests.rs"]
+mod membership_tests;

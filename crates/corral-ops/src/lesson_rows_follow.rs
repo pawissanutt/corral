@@ -34,7 +34,7 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
     let previous: Option<Cursor> = read(&path)?;
     let delta = previous
         .as_ref()
-        .filter(|c| c.version == 5 && c.change <= seq && c.config == config)
+        .filter(|c| c.version == 6 && c.change <= seq && c.config == config)
         .map(|c| changes(&ctx.store, c.change))
         .transpose()?
         .flatten();
@@ -129,15 +129,13 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
             }
         }
     }
-    let recent_path = root.join("recent.json");
-    let mut recent: Vec<StoredEvent> = if rebuild {
-        recent_rows(&ctx)?
-    } else if new_events || !affected.is_empty() {
-        read(&recent_path)?.unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    if new_events && !rebuild {
+    // The baseline's newest-4-MiB event window is kept as a bound (`window_after`) and its
+    // byte total, never as a copied event list: each event is read once on entry and once
+    // on eviction, and a refresh reads only its window tasks' own events.
+    let limit = u64::try_from(EVENT_BYTES)?;
+    if rebuild {
+        (cursor.window_after, cursor.window_bytes) = window(&ctx, limit)?;
+    } else if new_events {
         for stored in event_rows(
             &ctx.store,
             &EventQuery {
@@ -145,40 +143,33 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
                 ..EventQuery::default()
             },
         )? {
-            if let Some(event) = event(stored.clone())? {
+            cursor.window_bytes += u64::try_from(serde_json::to_vec(&stored.event)?.len())?;
+            if let Some(event) = event(stored)? {
                 schedule::apply(&root, &projects, &event)?;
                 affect(&root, &event, &mut affected)?;
             }
-            recent.push(stored);
         }
-        let mut bytes = 0;
-        let mut keep = recent.len();
-        for row in recent.iter().rev() {
-            bytes += serde_json::to_vec(&row.event)?.len();
-            if bytes > EVENT_BYTES {
+        let view = ctx.store.view()?;
+        while cursor.window_bytes > limit {
+            let query = EventQuery {
+                after: after(cursor.window_after),
+                ..EventQuery::default()
+            };
+            let Some(oldest) = view.events(&query, PageReq::first(1))?.items.pop() else {
                 break;
-            }
-            keep -= 1;
-        }
-        for stored in recent.drain(..keep) {
-            if let Some(event) = event(stored)? {
+            };
+            cursor.window_bytes -= u64::try_from(serde_json::to_vec(&oldest.event)?.len())?;
+            cursor.window_after = oldest.seq.0;
+            if let Some(event) = event(oldest)? {
                 affect(&root, &event, &mut affected)?;
             }
         }
     }
     if new_events {
-        save(&recent_path, &recent)?;
         cursor.event = ctx.store.event_tail()?;
     }
-    let recent = recent
-        .into_iter()
-        .map(event)
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
     for project in &affected {
-        refresh_signals(&ctx, &root, project, &changed, rebuild, &recent)?;
+        refresh_signals(&ctx, &root, project, &changed, rebuild, cursor.window_after)?;
         cursor.recomputations += 1;
     }
     // Scheduling rows are constant-size and project-keyed. A new event only updates the
@@ -191,7 +182,7 @@ pub(super) fn prepare_locked(ctx: &Ctx, selected: &BTreeSet<String>) -> Result<P
     }
     cursor.change = seq;
     cursor.config = config;
-    cursor.version = 5;
+    cursor.version = 6;
     save(&path, &cursor)?;
     Prepared::capture(&root, selected)
 }
@@ -226,7 +217,7 @@ fn refresh_signals(
     project: &str,
     changed: &BTreeSet<String>,
     rebuild: bool,
-    recent: &[Event],
+    window_after: u64,
 ) -> Result<()> {
     #[derive(Serialize, Deserialize)]
     struct Cached {
@@ -241,7 +232,22 @@ fn refresh_signals(
     )?;
     let mut sources = Vec::new();
     let mut landed = BTreeMap::new();
+    let mut recent = Vec::new();
     for head in heads {
+        let task_events = event_rows(
+            &ctx.store,
+            &EventQuery {
+                task: Some(head.id.clone()),
+                after: after(window_after),
+                ..EventQuery::default()
+            },
+        )?
+        .into_iter()
+        .map(event)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
         let path = root.join("sources").join(format!("{}.json", key(&head.id)));
         let cached: Option<Cached> = if rebuild || changed.contains(&head.id) {
             None
@@ -262,7 +268,7 @@ fn refresh_signals(
                 source
             }
         };
-        let mut related = recent
+        let mut related = task_events
             .iter()
             .filter(|event| {
                 event.task.as_deref() == Some(head.id.as_str())
@@ -295,8 +301,9 @@ fn refresh_signals(
             landed.insert(event.seq, files);
         }
         sources.push(source);
+        recent.extend(task_events);
     }
-    let signals = crate::lesson_signals::collect(ctx, project, &sources, recent, &landed)?;
+    let signals = crate::lesson_signals::collect(ctx, project, &sources, &recent, &landed)?;
     save(
         &root.join(format!("signals-{}.json", key(project))),
         &signals,
@@ -322,24 +329,25 @@ fn event_rows(store: &corral_core::Store, query: &EventQuery) -> Result<Vec<Stor
     }
 }
 
-fn recent_rows(ctx: &Ctx) -> Result<Vec<StoredEvent>> {
+/// The baseline window: the newest events whose serialized size totals at most `limit`.
+/// Returns the sequence just before the window (0 when it starts at the log's head) and
+/// the window's byte total.
+fn window(ctx: &Ctx, limit: u64) -> Result<(u64, u64)> {
     let view = ctx.store.view()?;
     let query = EventQuery {
         newest_first: true,
         ..EventQuery::default()
     };
     let mut page = PageReq::first(64);
-    let mut out = Vec::new();
     let mut bytes = 0;
     loop {
         let rows = view.events(&query, page)?;
         for row in rows.items {
-            bytes += serde_json::to_vec(&row.event)?.len();
-            if bytes > EVENT_BYTES {
-                out.reverse();
-                return Ok(out);
+            let size = u64::try_from(serde_json::to_vec(&row.event)?.len())?;
+            if bytes + size > limit {
+                return Ok((row.seq.0, bytes));
             }
-            out.push(row);
+            bytes += size;
         }
         match rows.next {
             Some(next) => {
@@ -348,10 +356,11 @@ fn recent_rows(ctx: &Ctx) -> Result<Vec<StoredEvent>> {
                     limit: 64,
                 }
             }
-            None => {
-                out.reverse();
-                return Ok(out);
-            }
+            None => return Ok((0, bytes)),
         }
     }
+}
+
+fn after(seq: u64) -> Option<EventSeq> {
+    (seq > 0).then_some(EventSeq(seq))
 }

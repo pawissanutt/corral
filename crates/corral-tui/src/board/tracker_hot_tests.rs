@@ -441,6 +441,152 @@ fn accepted_frame_budget(code: bool) {
     }
 }
 
+fn frame_membership_edge(parent: bool) {
+    let mut refused_reports = Vec::new();
+    let mut restored_reports = Vec::new();
+    for factor in [1, 10] {
+        // Given a warmed frame with one accepted member and tenfold terminal/member history.
+        let mut fx = fixture(factor, false);
+        let probe = std::sync::Arc::new(corral_ops::resources::PinnedReadingsProbe::admitting());
+        fx.ctx.resource_probe = probe.clone();
+        let mut member = fx.ctx.store.get(MEMBER).unwrap();
+        member.status = Status::Done;
+        // Lesson preparation refreshes a changed project's newest 256 sources, each holding a
+        // task's newest 32 runs and 32 eligible artifacts: the db316644 signal windows. Fill
+        // them at both sizes so the comparison isolates growth beyond them.
+        for i in 0..32 {
+            let id = format!("pad{i:04}");
+            let mut run = super::tests::run(&id, "worker");
+            run.started = at(0);
+            run.ended = Some(at(1));
+            run.outcome = Some(corral_core::RunOutcome::Done);
+            let current = member.runs.len() - 1;
+            member.runs.insert(current, run);
+            member.artifacts.insert(
+                0,
+                serde_json::from_value(json!({
+                    "run": id, "kind": "log", "title": "Pad log",
+                    "path": format!("artifacts/{}/{id}/log.txt", member.id),
+                    "source": "/tmp/log.txt", "sha256": "0".repeat(64), "bytes": 1,
+                    "added": at(2)
+                }))
+                .unwrap(),
+            );
+        }
+        fx.ctx.store.fixture_put_task(&member).unwrap();
+        for _ in 0..260 {
+            fx.ctx.store.create("Old", None, Status::Done, "").unwrap();
+        }
+        // Grow terminal trackers as well as ordinary terminal tasks and member history:
+        // scanning all trackers must not hide behind an unchanged open-board population.
+        for mut old in fx
+            .ctx
+            .store
+            .list()
+            .unwrap()
+            .into_iter()
+            .filter(|task| task.title == "Old")
+        {
+            old.tracker = true;
+            old.project = Some("corral".into());
+            old.created = at(-100);
+            // Whole seconds: wall-clock stamps vary in printed width between runs.
+            old.updated = at(-100);
+            fx.ctx.store.fixture_put_task(&old).unwrap();
+        }
+        // The constructor performs exactly one complete production board load.
+        let mut board = fx.board();
+        assert_eq!(probe.samples(), 1);
+        let accepted = board.plan_progress[PLAN].as_ref().unwrap();
+        assert_eq!(accepted.counts.accepted, 1);
+        let accepted = serde_json::to_value(accepted).unwrap();
+        let new = fx
+            .ctx
+            .store
+            .create("New", Some("corral"), Status::Done, "")
+            .unwrap();
+        let mut new = fx
+            .ctx
+            .store
+            .update(&new.id, |task| {
+                if parent {
+                    task.parent = Some(PLAN.into());
+                } else {
+                    task.tracker = true;
+                    task.children = vec![MEMBER.into()];
+                }
+                Ok(())
+            })
+            .unwrap();
+        new.created = at(0);
+        new.updated = at(0);
+        fx.ctx.store.fixture_put_task(&new).unwrap();
+        let expected = format!("{:#}", fx.ctx.store.execution_plan(&member).unwrap_err());
+        let samples = probe.samples();
+        let before = work::snapshot();
+
+        // When the warm second frame sees a new incoming membership edge, measure the
+        // WHOLE production call, including preparation outside its internal HotScope.
+        let refused = {
+            let _whole_call = HotScope::enter();
+            BoardSnapshot::load(&fx.ctx).unwrap()
+        };
+
+        // Then the real frame refuses exactly like the uncached full-task validator.
+        let report = work::snapshot().since(&before);
+        board.apply_snapshot(refused);
+        assert_eq!(board.plan_progress[PLAN].as_ref().unwrap_err(), &expected);
+        assert_eq!(probe.samples() - samples, 1);
+        refused_reports.push(report);
+        let mut new = fx
+            .ctx
+            .store
+            .update(&new.id, |task| {
+                task.parent = None;
+                task.children.clear();
+                Ok(())
+            })
+            .unwrap();
+        new.updated = at(0);
+        fx.ctx.store.fixture_put_task(&new).unwrap();
+        assert_eq!(
+            fx.ctx.store.execution_plan(&member).unwrap().unwrap().id,
+            PLAN
+        );
+        let samples = probe.samples();
+        let before = work::snapshot();
+        let restored = {
+            let _whole_call = HotScope::enter();
+            BoardSnapshot::load(&fx.ctx).unwrap()
+        };
+        let report = work::snapshot().since(&before);
+        board.apply_snapshot(restored);
+        assert_eq!(
+            serde_json::to_value(board.plan_progress[PLAN].as_ref().unwrap()).unwrap(),
+            accepted
+        );
+        assert_eq!(probe.samples() - samples, 1);
+        restored_reports.push(report);
+    }
+    for reports in [&refused_reports, &restored_reports] {
+        for report in reports {
+            assert_eq!(report.unattributed_hydrations(), 0);
+            report.check_identity().unwrap();
+        }
+        for counter in Counter::ALL {
+            assert_eq!(
+                reports[0].get(counter),
+                reports[1].get(counter),
+                "{counter:?}; all cells: {:?}",
+                Counter::ALL
+                    .iter()
+                    .map(|&cell| (cell, reports[0].get(cell), reports[1].get(cell)))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
 #[test]
 fn accepted_code_member_frame_keeps_same_run_artifact_work_constant() {
     accepted_frame_budget(true);
@@ -449,4 +595,14 @@ fn accepted_code_member_frame_keeps_same_run_artifact_work_constant() {
 #[test]
 fn accepted_no_code_member_frame_keeps_same_run_artifact_work_constant() {
     accepted_frame_budget(false);
+}
+
+#[test]
+fn warm_second_frame_membership_edge_budget_includes_preparation() {
+    frame_membership_edge(false);
+}
+
+#[test]
+fn frame_tracker_refuses_new_unlisted_child_then_recovers() {
+    frame_membership_edge(true);
 }
