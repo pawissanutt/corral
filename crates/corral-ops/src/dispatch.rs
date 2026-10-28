@@ -289,6 +289,7 @@ fn dispatch_with(
         review_runs: Vec::new(),
         usage: None,
         usage_note: None,
+        usage_pending: false,
         autopilot: carried.as_ref().map(|(_, a)| a.clone()),
         gate_rules,
         promotion_origin: None,

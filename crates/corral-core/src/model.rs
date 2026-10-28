@@ -635,6 +635,10 @@ pub struct Run {
     /// Why usage is unavailable; collection never prevents finishing a run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_note: Option<String>,
+    /// Ended without its final usage: the next usage refresh collects it once, as finishing
+    /// a reviewer used to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub usage_pending: bool,
     /// Raw herdr idle stretch, independent of inferred OmO session activity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr_idle_since: Option<Timestamp>,

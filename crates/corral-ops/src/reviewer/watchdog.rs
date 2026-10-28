@@ -46,20 +46,17 @@ pub(super) fn record_failure(
 }
 
 /// `finish_review` on the parent's current child, which holds the parent's review record.
-fn finish_review_child(
-    ctx: &Ctx,
-    review: &ReviewRecord,
-    snapshot: &mut corral_core::Run,
-    ended: Timestamp,
-) {
+/// A finished review on the current child's projection. Its usage is collected by the next
+/// usage refresh (`usage_pending`), never here: finishing reads none of the child's history.
+fn finish_review_child(review: &ReviewRecord, child: &mut corral_core::RunHead, ended: Timestamp) {
     let mut record = review.clone();
     if record.notes.is_none() {
-        record.notes = snapshot.review.as_ref().and_then(|r| r.notes.clone());
+        record.notes = child.review.as_ref().and_then(|r| r.notes.clone());
     }
-    snapshot.review = Some(record);
-    if snapshot.ended.is_none() {
-        snapshot.ended = Some(ended);
-        crate::usage::collect(snapshot, &ctx.store);
+    child.review = Some(record);
+    if child.ended.is_none() {
+        child.ended = Some(ended);
+        child.usage_pending = true;
     }
 }
 
@@ -216,79 +213,21 @@ pub(crate) fn reconcile_review_sampled_at(
     if since == run.idle_since && reason.is_none() {
         return Ok(None);
     }
-    // Finishing collects the child's usage from its own rows, as the usage refresh does; the
-    // scope spans the edit and its commit.
-    let _own = reason
-        .is_some()
-        .then(|| corral_core::work::own_records("review_finish", id, &run.id));
-    let saved = ctx.store.try_update_head(id, |current| {
-        if !crate::session_scope::owns_head(ctx, current.head())? {
-            return Ok(false);
-        }
-        if current.status != Status::Review {
-            return Ok(false);
-        }
-        let Some(parent) = current.current_run_mut().filter(|r| r.id == run.id) else {
-            return Ok(false);
-        };
-        if parent.review.as_ref() != Some(review)
-            || parent.idle_since != run.idle_since
-            || parent.blocked_excerpt != run.blocked_excerpt
-        {
-            return Ok(false);
-        }
-        parent.idle_since = since;
-        let state = pane
-            .map(|p| p.status.as_str())
-            .unwrap_or("gone")
-            .to_string();
-        if reason.is_none() {
-            // Liveness alone is two scalars of the child's projection: no nested row is read.
-            if let Some(child) = parent.current_child.as_deref_mut() {
-                child.idle_since = since;
-                child.agent_state = Some(state);
-            }
-        } else if parent.current_child.is_some() {
-            current.edit_current_review_child(&run.id, |child| {
-                child.idle_since = since;
-                child.agent_state = Some(state);
-                finish_review_child(ctx, review, child, now);
-                if stalled.is_some() {
-                    child.outcome = Some(RunOutcome::Interrupted);
-                }
-                Ok(())
-            })?;
-        }
-        let parent = current
-            .current_run_mut()
-            .context("review run disappeared")?;
-        if let Some(reason) = &reason {
-            parent.blocked_excerpt = Some(reason.clone());
-            parent.autopilot = Some(AutopilotState {
-                stage: AutoStage::Escalated,
-                reason: Some(reason.clone()),
-                sha: Some(review.sha.clone()),
-                at: now,
-            });
-            current.status = Status::NeedsMe;
-            if stalled.is_some() {
-                ctx.store.log_event(
-                    Some(id),
-                    "review_interrupted",
-                    json!({"run": run.id, "reviewer": review.reviewer, "reason": reason}),
-                )?;
-            }
-            ctx.store.log_event(
-                Some(id),
-                "review_escalated",
-                json!({
-                    "run": run.id, "reason": reason,
-                    "notes": notes,
-                }),
-            )?;
-        }
-        Ok(true)
-    })?;
+    let state = pane.map(|p| p.status.as_str()).unwrap_or("gone");
+    let saved = commit_observation(
+        ctx,
+        id,
+        &Observation {
+            run,
+            review,
+            since,
+            state,
+            reason: reason.as_deref(),
+            stalled: stalled.is_some(),
+            notes: &notes,
+            now,
+        },
+    )?;
     let (Some(_), Some(reason)) = (saved, reason) else {
         return Ok(None);
     };
@@ -311,4 +250,87 @@ pub(crate) fn reconcile_review_sampled_at(
         note: reason,
         stage: Some(AutoStage::Escalated),
     }))
+}
+
+/// What one watchdog sample observed of a reviewing run.
+pub(crate) struct Observation<'a> {
+    pub(crate) run: &'a corral_core::Run,
+    pub(crate) review: &'a ReviewRecord,
+    pub(crate) since: Option<Timestamp>,
+    /// The reviewer pane's status, or `gone`.
+    pub(crate) state: &'a str,
+    /// Set when the review escalates: the child finishes and the run needs the owner.
+    pub(crate) reason: Option<&'a str>,
+    pub(crate) stalled: bool,
+    pub(crate) notes: &'a std::path::Path,
+    pub(crate) now: Timestamp,
+}
+
+/// Writes `o` on the head: the run's idle start, the current child's liveness and, with a
+/// reason, the child's finish and the run's escalation. Every write is a scalar of a projection,
+/// so no nested row of the child's history is read. `None` when the head moved on.
+pub(crate) fn commit_observation(
+    ctx: &Ctx,
+    id: &str,
+    o: &Observation<'_>,
+) -> Result<Option<corral_core::TaskHead>> {
+    ctx.store.try_update_head(id, |current| {
+        if !crate::session_scope::owns_head(ctx, current.head())? {
+            return Ok(false);
+        }
+        if current.status != Status::Review {
+            return Ok(false);
+        }
+        let Some(parent) = current.current_run_mut().filter(|r| r.id == o.run.id) else {
+            return Ok(false);
+        };
+        if parent.review.as_ref() != Some(o.review)
+            || parent.idle_since != o.run.idle_since
+            || parent.blocked_excerpt != o.run.blocked_excerpt
+        {
+            return Ok(false);
+        }
+        parent.idle_since = o.since;
+        // The child's liveness, and its finish, are scalars of its projection: no nested row
+        // of its history is read.
+        if let Some(child) = parent.current_child.as_deref_mut() {
+            child.idle_since = o.since;
+            child.agent_state = Some(o.state.to_string());
+            if o.reason.is_some() {
+                finish_review_child(o.review, child, o.now);
+                if o.stalled {
+                    child.outcome = Some(RunOutcome::Interrupted);
+                }
+            }
+        }
+        let parent = current
+            .current_run_mut()
+            .context("review run disappeared")?;
+        if let Some(reason) = o.reason {
+            parent.blocked_excerpt = Some(reason.to_string());
+            parent.autopilot = Some(AutopilotState {
+                stage: AutoStage::Escalated,
+                reason: Some(reason.to_string()),
+                sha: Some(o.review.sha.clone()),
+                at: o.now,
+            });
+            current.status = Status::NeedsMe;
+            if o.stalled {
+                ctx.store.log_event(
+                    Some(id),
+                    "review_interrupted",
+                    json!({"run": o.run.id, "reviewer": o.review.reviewer, "reason": reason}),
+                )?;
+            }
+            ctx.store.log_event(
+                Some(id),
+                "review_escalated",
+                json!({
+                    "run": o.run.id, "reason": reason,
+                    "notes": o.notes,
+                }),
+            )?;
+        }
+        Ok(true)
+    })
 }

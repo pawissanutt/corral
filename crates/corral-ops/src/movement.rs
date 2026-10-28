@@ -146,7 +146,7 @@ pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()
         .collect::<Result<_>>()?;
     // Only a landing after an active run started concerns it. A run that already observed
     // approvals continues after its cursor, so a tick reads only approvals committed since the
-    // last one; a run new to its record reads back to its start once.
+    // last one; a run new to its record reads the approvals once.
     let tail = ctx.store.event_tail()?;
     let mut cursors = std::collections::BTreeMap::new();
     let mut replay_since: Option<Timestamp> = None;
@@ -165,12 +165,14 @@ pub(crate) fn reconcile(ctx: &Ctx, now: Timestamp, available: bool) -> Result<()
             None => replay_since = Some(replay_since.map_or(run.started, |at| at.min(run.started))),
         }
     }
+    // In sequence order and without an early stop: an approval's time need not follow its
+    // position, so a later-positioned earlier one never hides an eligible one.
     let replayed: Vec<Event> = match replay_since {
         Some(since) => ctx
             .store
-            .events_newest(None, &["approved"], None, |event| event.ts >= since)?
+            .events_of_run(None, &["approved"], None, 0, u32::MAX)?
             .into_iter()
-            .rev()
+            .filter(|event| event.ts >= since)
             .collect(),
         None => Vec::new(),
     };
