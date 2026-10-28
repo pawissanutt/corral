@@ -45,8 +45,21 @@ applies to hosts launched after the change.
 
 ## Installing the host
 
-`corral agent install [--from <dir>] [--json]` installs the host from the `packages/corral-pi`
-package (by default the one in the checkout the binary was built from). It refuses a fixture
+A release install (`install.sh`, v0.4.0 and later) puts `corral-pi-host` beside `corral` and
+runs `corral agent install`, which then installs that compiled host. It is one executable
+built by `scripts/build-pi-host.sh` that embeds Bun, every dependency from the frozen lock and
+the role, delivery and auth modules, and never autoloads `.env` or `bunfig.toml`.
+`--from <path>` also accepts a `corral-pi-host` executable. The installation is
+`assets/<digest>/` holding that executable plus the `compat.json` and role files it writes
+(`corral-pi-host --write-install`); the digest covers all of them, so a replaced executable
+is refused like any other changed asset. A compiled installation needs no Bun: dispatch,
+login (`corral-pi-host login`) and recovery run the executable directly, and `corral agent
+doctor` reports its Bun as embedded. Anthropic profiles in a compiled host use the `claude`
+CLI on PATH, because the per-platform Claude Code binary the SDK ships is not bundled.
+
+Without a sibling `corral-pi-host`, `corral agent install [--from <dir>] [--json]` installs the
+host from the `packages/corral-pi` package (by default the one in the checkout the binary was
+built from). It refuses a fixture
 installation (`fixture_assets_not_allowed`) and a Bun outside the package's `compat.json`
 range (`bun_unavailable`, `bun_version_unsupported`), then copies only what a host runs:
 `package.json`, `bun.lock`, `compat.json`, `src/` (without `*.test.ts`) and `assets/`, never

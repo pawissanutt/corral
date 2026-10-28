@@ -103,6 +103,15 @@ jobs:
           RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
           CORRAL_BUILD_SHA: ${{ github.sha }}
         run: cargo build --release --locked -p corral --target ${{ matrix.target }} </dev/null
+      # Pi-native runs on Unix only. The host is compiled natively on each runner, so its
+      # platform add-ons match; the Bun version must equal the GO manifest's pin.
+      - if: runner.os != 'Windows'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Build the compiled Pi-native host
+        if: runner.os != 'Windows'
+        run: sh scripts/build-pi-host.sh "target/${{ matrix.target }}/release/corral-pi-host" </dev/null
       - name: Package archive and checksum
         run: python scripts/package-release.py ${{ matrix.target }} </dev/null
       - name: Native clean install and failure-path proof without Rust

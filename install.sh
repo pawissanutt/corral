@@ -52,6 +52,7 @@ fi
 
 if [ "$dry_run" = true ]; then
     echo "would download $url into $bin_dir"
+    echo "would install corral-pi-host (the Pi-native agent host) beside corral when the archive has it, then run: corral agent install"
     echo "would check for herdr >= $min_herdr_version, corral's terminal engine"
     echo "if needed, would offer: curl -fsSL $herdr_installer | sh"
     exit 0
@@ -69,8 +70,10 @@ fetch() {
 
 tmp=$(mktemp -d)
 staged=
+staged_host=
 cleanup() {
     if [ -n "$staged" ]; then rm -f "$staged"; fi
+    if [ -n "$staged_host" ]; then rm -f "$staged_host"; fi
     rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -141,16 +144,37 @@ elif command -v shasum >/dev/null 2>&1; then
 else
     fail "need sha256sum or shasum to verify the download"
 fi
-tar -xzf "$tmp/$asset" -C "$tmp" corral || fail "invalid archive: $asset"
-if [ ! -f "$tmp/corral" ] || [ -L "$tmp/corral" ]; then
+mkdir "$tmp/archive"
+tar -xzf "$tmp/$asset" -C "$tmp/archive" || fail "invalid archive: $asset"
+if [ ! -f "$tmp/archive/corral" ] || [ -L "$tmp/archive/corral" ]; then
     fail "archive has no regular corral binary"
 fi
-if [ -d "$bin_dir/corral" ]; then
-    fail "install destination is a directory: $bin_dir/corral"
+# Releases before 0.4.0 ship corral alone; Pi-native then needs a source install.
+host=false
+if [ -e "$tmp/archive/corral-pi-host" ] || [ -L "$tmp/archive/corral-pi-host" ]; then
+    if [ ! -f "$tmp/archive/corral-pi-host" ] || [ -L "$tmp/archive/corral-pi-host" ]; then
+        fail "archive has a corral-pi-host that is not a regular file"
+    fi
+    host=true
 fi
+for name in corral corral-pi-host; do
+    if [ -d "$bin_dir/$name" ]; then
+        fail "install destination is a directory: $bin_dir/$name"
+    fi
+done
 mkdir -p "$bin_dir"
+if [ "$host" = true ]; then
+    staged_host=$(mktemp "$bin_dir/.corral-pi-host-install.XXXXXX")
+    cp "$tmp/archive/corral-pi-host" "$staged_host"
+    chmod 755 "$staged_host"
+    host_version=$("$staged_host" --version </dev/null) || fail "downloaded corral-pi-host cannot run on this machine; existing install unchanged"
+    case "$host_version" in
+    "corral-pi-host "*) ;;
+    *) fail "downloaded corral-pi-host did not identify itself; existing install unchanged" ;;
+    esac
+fi
 staged=$(mktemp "$bin_dir/.corral-install.XXXXXX")
-cp "$tmp/corral" "$staged"
+cp "$tmp/archive/corral" "$staged"
 chmod 755 "$staged"
 installed_version=$("$staged" --version) || fail "downloaded binary cannot run on this machine; existing install unchanged"
 case "$installed_version" in
@@ -160,9 +184,23 @@ esac
 if [ "$version" != latest ] && [ "$installed_version" != "corral ${version#v}" ]; then
     fail "version mismatch: requested $version, got $installed_version; existing install unchanged"
 fi
+if [ "$host" = true ]; then
+    mv -f "$staged_host" "$bin_dir/corral-pi-host"
+    staged_host=
+fi
 mv -f "$staged" "$bin_dir/corral"
 staged=
 echo "installed $installed_version to $bin_dir/corral"
+if [ "$host" = true ]; then
+    echo "installed $host_version to $bin_dir/corral-pi-host"
+    # Registers the host for Pi-native profiles; corral itself works without it.
+    if "$bin_dir/corral" agent install </dev/null >"$tmp/agent-install.log" 2>&1; then
+        echo "set up the Pi-native agent host (corral agent install)"
+    else
+        echo "note: 'corral agent install' failed; Pi-native profiles need it. Output:"
+        awk '{ print "  " $0 }' "$tmp/agent-install.log"
+    fi
+fi
 case ":$PATH:" in
 *":$bin_dir:"*) ;;
 *)
