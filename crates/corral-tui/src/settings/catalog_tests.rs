@@ -120,14 +120,21 @@ fn pi_native_model_picker_lists_the_installed_hosts_models() {
     let mut text = fx.toml();
     text.push_str("\n[profiles.pi]\nharness = \"pi-native\"\nvendor = \"openai\"\n");
     std::fs::write(fx.ctx.store.config_path(), text).unwrap();
-    let cache = fx.ctx.store.state_dir().join(corral_ops::HARNESS_CACHE_FILE);
+    let cache = fx
+        .ctx
+        .store
+        .state_dir()
+        .join(corral_ops::HARNESS_CACHE_FILE);
     let mut report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
-    report["harnesses"].as_array_mut().unwrap().push(serde_json::json!({
-        "key": "pi-native", "program": null, "path": "/usr/bin/bun", "version": "1.3.0",
-        "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"],
-        "model_source": "listed", "efforts": [], "takes_effort": true
-    }));
+    report["harnesses"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "key": "pi-native", "program": null, "path": "/usr/bin/bun", "version": "1.3.0",
+            "models": ["openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5"],
+            "model_source": "listed", "efforts": [], "takes_effort": true
+        }));
     std::fs::write(&cache, serde_json::to_vec(&report).unwrap()).unwrap();
     let ctx = crate::board::tests::fixture_ctx(Store::open(&fx.root).unwrap());
     let mut v = SettingsView::new(&ctx);
