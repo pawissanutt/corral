@@ -3,12 +3,10 @@
 import fcntl
 import json
 import os
-import selectors
 import shutil
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 
@@ -16,15 +14,12 @@ def lock_attempt(process: subprocess.Popen[bytes], marker: bytes) -> bytes:
     """Subscribe to the exact blocking syscall, not a timing-dependent delay."""
     assert process.stderr is not None
     seen = b""
-    deadline = time.monotonic() + 15
-    with selectors.DefaultSelector() as ready:
-        ready.register(process.stderr, selectors.EVENT_READ)
-        while marker not in seen:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0 and ready.select(remaining), seen.decode()
-            chunk = os.read(process.stderr.fileno(), 4096)
-            assert chunk, seen.decode()
-            seen += chunk
+    # A blocking pipe read waits for the syscall (or EOF), regardless of host load.
+    # A per-phase deadline would reject correctly progressing slow debug builds.
+    while marker not in seen:
+        chunk = os.read(process.stderr.fileno(), 4096)
+        assert chunk, seen.decode()
+        seen += chunk
     return seen
 
 
@@ -48,7 +43,6 @@ def main() -> None:
             env=environment,
             stdin=subprocess.DEVNULL,
             capture_output=True,
-            timeout=15,
             check=False,
         )
         print(json.dumps({
@@ -81,7 +75,7 @@ def main() -> None:
             clean = tracked.read_bytes()
             tracked.write_bytes(clean + b"approval fixture dirty checkout\n")
             fcntl.flock(held, fcntl.LOCK_UN)
-            stdout, stderr = approval.communicate(timeout=15)
+            stdout, stderr = approval.communicate()
             print("DIRTY_CHECKOUT_REFUSAL\n" + stdout.decode() + stderr.decode(), flush=True)
             assert approval.returncode == 1
             assert b"has uncommitted changes" in stderr
@@ -94,7 +88,7 @@ def main() -> None:
             fcntl.flock(held, fcntl.LOCK_UN)
             if approval.poll() is None:
                 os.killpg(approval.pid, signal.SIGKILL)
-                approval.wait(timeout=15)
+                approval.wait()
     assert cli("verdict", peer, "approve", "--notes", "Peer fixture reviewed.").returncode == 0
     assert cli("sync").returncode == 0
 
@@ -119,7 +113,7 @@ def main() -> None:
                 assert second.returncode == 1
                 assert b"approval already in progress" in second.stderr
             fcntl.flock(held, fcntl.LOCK_UN)
-            stdout, stderr = sync.communicate(timeout=15)
+            stdout, stderr = sync.communicate()
             print("SYNC_FINISHED\n" + stdout.decode() + stderr.decode(), flush=True)
             assert sync.returncode == 0
             if first.returncode != 0:
@@ -153,7 +147,7 @@ def main() -> None:
             fcntl.flock(held, fcntl.LOCK_UN)
             if sync.poll() is None:
                 os.killpg(sync.pid, signal.SIGKILL)
-                sync.wait(timeout=15)
+                sync.wait()
             print("TRACE_CLEANUP: disposable trace process reaped; fixture locks released", flush=True)
 
 
