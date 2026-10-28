@@ -19,8 +19,8 @@ corral wait --for config_changed,config_invalid --json --print-cursor
 the same list `pm.push_kinds` accepts) plus `config_invalid`: `done`, `needs_me`, `stuck`,
 `blocked`, `escalated`, `config_changed`, `lessons_due`, `run_resumed`, `wait_transition`,
 `pm_decision_resolved`, `delivery_uncertain`, `delivery_orphaned`, `message_unobserved`,
-`question_opened`, `question_escalated`, `question_unattended`, `turn_ended_without_report`
-and `attention_due`.
+`question_opened`, `question_escalated`, `question_unattended`, `turn_ended_without_report`,
+`attention_due` and `slot_reacquired`.
 Other question events such as `question_answered` never wake a wait. `--task` and `--project`
 narrow the match. Configuration events
 are workspace-wide and do not match task/project filters. Unlike PM push, an explicit
@@ -64,8 +64,8 @@ push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_chang
 Push is off by default, including for existing configs. Enable it in `.corral/corral.toml` or
 Settings > General > PM event push. PM push kinds is a comma-separated list of PM-actionable
 names: the eleven above by default, plus the opt-in `delivery_uncertain`, `delivery_orphaned`,
-`message_unobserved`, `question_opened`, `question_escalated`, `question_unattended` and
-`turn_ended_without_report`. Clearing it selects none. Invalid names block saving. `config_changed`
+`message_unobserved`, `question_opened`, `question_escalated`, `question_unattended`,
+`turn_ended_without_report` and `slot_reacquired`. Clearing it selects none. Invalid names block saving. `config_changed`
 wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
 to `wait` and config history but is not a PM push kind.
 
