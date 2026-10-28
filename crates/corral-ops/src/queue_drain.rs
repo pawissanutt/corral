@@ -1,10 +1,86 @@
-//! Keeps the Ready-queue drain from re-attempting work whose admission has not changed (T-505).
-use anyhow::Error;
-use corral_core::Task;
+//! The Ready-queue drain, which attempts each queued task at most once per meaningful state
+//! change (T-505).
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::{Context, Error, Result};
+use corral_core::{Status, Task};
 use jiff::Timestamp;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::dispatch::Admission;
-use crate::{Ctx, DispatchOpts};
+use crate::{Change, Ctx, DispatchOpts, DispatchOutcome};
+
+const REFUSALS: &str = "queue-refusals.json";
+
+pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
+    let mut fresh = ctx.clone();
+    fresh.store.reload_config_if_changed()?;
+    let ctx = &fresh;
+    let mut queued: Vec<Task> = ctx
+        .store
+        .list()?
+        .into_iter()
+        .filter(|t| {
+            !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
+        })
+        .collect();
+    crate::queue::sort_candidates(&mut queued);
+    let mut refusals = Refusals::load(ctx)?;
+    refusals.retain(&queued);
+    let mut changes = Vec::new();
+    for (index, task) in queued.into_iter().enumerate() {
+        if still_blocked(ctx, &task, index + 1, now) {
+            continue;
+        }
+        let state = refusal_state(ctx, &task)?;
+        if refusals.unchanged(&task.id, &state) {
+            continue;
+        }
+        let result = (|| {
+            if !task.queued && task.launch.is_none() {
+                crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
+            }
+            crate::dispatch::dispatch_queued(ctx, &task.id, index + 1, now)
+        })();
+        match result {
+            Ok(outcome) => {
+                refusals.clear(&task.id);
+                if let DispatchOutcome::Started { run_id, .. } = outcome {
+                    changes.push(Change {
+                        task: task.id.clone(),
+                        from: task.status,
+                        to: Status::Running,
+                        note: format!("dispatched queued task as {run_id}"),
+                        stage: None,
+                    });
+                }
+            }
+            Err(err) => {
+                crate::messages::report(
+                    Some(&task.id),
+                    "dispatch",
+                    format!("dispatching queued {} failed: {err:#}", task.id),
+                );
+                if contended(&err) {
+                    continue;
+                }
+                ctx.store.log_event(
+                    Some(&task.id),
+                    "dispatch_failed",
+                    json!({ "error": format!("{err:#}") }),
+                )?;
+                let after = match ctx.store.get(&task.id) {
+                    Ok(current) => refusal_state(ctx, &current)?,
+                    Err(_) => state,
+                };
+                refusals.record(&task.id, after);
+            }
+        }
+    }
+    refusals.save(ctx)?;
+    Ok(changes)
+}
 
 /// A queued task whose admission check still names a blocker needs no dispatch attempt this pass.
 /// The attempt would only take its launch and session-ownership locks, re-resolve its route and log
@@ -36,4 +112,96 @@ pub(crate) fn contended(error: &Error) -> bool {
     error
         .chain()
         .any(|cause| MARKERS.iter().any(|m| cause.to_string().contains(m)))
+}
+
+/// Everything a persistent enqueue or dispatch refusal can depend on: the task itself (without
+/// its derived attention bookkeeping), its transitive dependency graph, the configuration and the
+/// discovered harness catalog that routes resolve against.
+fn refusal_state(ctx: &Ctx, task: &Task) -> Result<String> {
+    let mut hash = Sha256::new();
+    let mut record = serde_json::to_value(task).context("encoding task for refusal state")?;
+    if let Some(fields) = record.as_object_mut() {
+        fields.remove("attention");
+        fields.remove("updated");
+    }
+    hash.update(serde_json::to_vec(&record)?);
+    let mut pending = task.depends_on.clone();
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        match ctx.store.get(&id) {
+            Ok(dep) => {
+                hash.update(format!(
+                    "{id}:{}:{:?}\n",
+                    dep.status.as_str(),
+                    dep.depends_on
+                ));
+                pending.extend(dep.depends_on);
+            }
+            Err(_) => hash.update(format!("{id}:missing\n")),
+        }
+    }
+    hash.update(serde_json::to_vec(&ctx.store.config).context("encoding configuration")?);
+    let catalog = ctx.store.state_dir().join(crate::HARNESS_CACHE_FILE);
+    match std::fs::read(&catalog) {
+        Ok(bytes) => hash.update(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("reading {}", catalog.display())),
+    }
+    Ok(format!("{:x}", hash.finalize()))
+}
+
+/// The state each persistent refusal was logged under, shared by every syncing process.
+struct Refusals {
+    states: BTreeMap<String, String>,
+    changed: bool,
+}
+
+impl Refusals {
+    fn path(ctx: &Ctx) -> std::path::PathBuf {
+        ctx.store.state_dir().join(REFUSALS)
+    }
+
+    fn load(ctx: &Ctx) -> Result<Self> {
+        let path = Self::path(ctx);
+        let states = match std::fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing {}", path.display()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        };
+        Ok(Self {
+            states,
+            changed: false,
+        })
+    }
+
+    fn retain(&mut self, candidates: &[Task]) {
+        let before = self.states.len();
+        self.states
+            .retain(|id, _| candidates.iter().any(|task| &task.id == id));
+        self.changed |= self.states.len() != before;
+    }
+
+    fn unchanged(&self, id: &str, state: &str) -> bool {
+        self.states.get(id).is_some_and(|logged| logged == state)
+    }
+
+    fn record(&mut self, id: &str, state: String) {
+        self.changed |= self.states.insert(id.to_owned(), state.clone()) != Some(state);
+    }
+
+    fn clear(&mut self, id: &str) {
+        self.changed |= self.states.remove(id).is_some();
+    }
+
+    fn save(&self, ctx: &Ctx) -> Result<()> {
+        if !self.changed {
+            return Ok(());
+        }
+        std::fs::create_dir_all(ctx.store.state_dir()).context("creating state directory")?;
+        crate::artifact_storage::replace(&Self::path(ctx), &serde_json::to_vec(&self.states)?)
+    }
 }

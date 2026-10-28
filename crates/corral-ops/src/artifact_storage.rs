@@ -10,17 +10,64 @@ use flate2::{Compression, read::MultiGzDecoder, write::GzEncoder};
 
 use crate::Ctx;
 
-pub(crate) fn storage_lock(ctx: &Ctx) -> Result<fs::File> {
+thread_local! {
+    static HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Exclusive artifact-storage access. Nested acquisitions on the holding thread reuse it, so a
+/// caller can hold storage across work that attaches artifacts (T-505).
+pub(crate) struct StorageGuard {
+    _file: Option<fs::File>,
+}
+
+impl StorageGuard {
+    fn enter(file: Option<fs::File>) -> Self {
+        HELD.with(|held| held.set(held.get() + 1));
+        Self { _file: file }
+    }
+}
+
+impl Drop for StorageGuard {
+    fn drop(&mut self) {
+        HELD.with(|held| held.set(held.get().saturating_sub(1)));
+    }
+}
+
+fn held_here() -> bool {
+    HELD.with(|held| held.get() > 0)
+}
+
+fn open_lock(ctx: &Ctx) -> Result<fs::File> {
     let dir = ctx.store.dir().join("lock");
     fs::create_dir_all(&dir).context("creating artifact lock directory")?;
-    let file = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(dir.join("artifact-storage.lock"))
-        .context("opening artifact storage lock")?;
+        .context("opening artifact storage lock")
+}
+
+pub(crate) fn storage_lock(ctx: &Ctx) -> Result<StorageGuard> {
+    if held_here() {
+        return Ok(StorageGuard::enter(None));
+    }
+    let file = open_lock(ctx)?;
     file.lock().context("locking artifact storage")?;
-    Ok(file)
+    Ok(StorageGuard::enter(Some(file)))
+}
+
+/// None while another holder has artifact storage.
+pub(crate) fn try_storage_lock(ctx: &Ctx) -> Result<Option<StorageGuard>> {
+    if held_here() {
+        return Ok(Some(StorageGuard::enter(None)));
+    }
+    let file = open_lock(ctx)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(StorageGuard::enter(Some(file)))),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(error)) => Err(error).context("locking artifact storage"),
+    }
 }
 
 pub(crate) fn replace(path: &Path, bytes: &[u8]) -> Result<()> {

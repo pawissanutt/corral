@@ -267,10 +267,12 @@ impl<'a> ReviewLaunch<'a> {
                     ),
                 ] {
                     let Some(pane) = pane else { continue };
-                    // Collect completed gates even if their pane remains open.
+                    // Collect completed gates even if their pane remains open, but never wait
+                    // for artifact storage: an uncollected gate keeps counting as active.
                     if record_kind == Kind::Gate
                         && run.gate.as_ref().is_some_and(|g| g.identity.is_some())
                         && task.current_run().is_some_and(|r| r.id == run.id)
+                        && let Some(_storage) = crate::artifact_storage::try_storage_lock(ctx)?
                         && crate::gate::gate_collect(ctx, &task.id)?.is_some()
                     {
                         continue;
