@@ -228,6 +228,10 @@ impl TaskHeadMut {
             }
         }
         self.sync_projection_revisions(&writes);
+        for (key, row, old) in self.finding_writes(&writes, &stored)? {
+            stored.insert(key.clone(), old);
+            writes.insert(key, row);
+        }
         let mut rows = Vec::with_capacity(writes.len());
         let mut history_edit = false;
         for (key, row) in writes {

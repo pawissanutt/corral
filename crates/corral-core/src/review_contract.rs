@@ -556,3 +556,27 @@ pub fn plan_review_round(task: &Task) -> u32 {
         .count();
     u32::try_from(changes).unwrap_or(u32::MAX).saturating_add(1)
 }
+
+/// [`implementation_review_round`] from the summary and the current run's facts.
+///
+/// # Errors
+/// Returns read errors of the task form.
+pub fn implementation_review_round_ref<T: crate::TaskRef + ?Sized>(
+    task: &T,
+) -> anyhow::Result<u32> {
+    let current = task
+        .current_run_head()?
+        .map_or(0, |run| run.facts.changes_unsuperseded);
+    let changes = task.history_summary()?.review_changes_unsuperseded + current;
+    Ok(u32::try_from(changes).unwrap_or(u32::MAX).saturating_add(1))
+}
+
+/// [`plan_review_round`] from the summary and the current plan's facts.
+///
+/// # Errors
+/// Returns read errors of the task form.
+pub fn plan_review_round_ref<T: crate::TaskRef + ?Sized>(task: &T) -> anyhow::Result<u32> {
+    let current = task.last_plan_head()?.map_or(0, |plan| plan.facts.changes);
+    let changes = task.history_summary()?.plan_review_changes + current;
+    Ok(u32::try_from(changes).unwrap_or(u32::MAX).saturating_add(1))
+}

@@ -21,7 +21,10 @@ mod gate_rows;
 mod head;
 mod head_api;
 mod head_children;
+mod head_edit;
+mod head_findings;
 mod head_finish;
+mod head_keyed;
 mod head_mut;
 mod head_reviews;
 mod head_run;
@@ -33,6 +36,10 @@ mod read;
 mod readers;
 mod snapshot;
 mod submission;
+mod submit;
+mod task_mut_task;
+mod task_ref_head;
+pub(crate) mod task_ref_task;
 mod write;
 pub use codec::{spec_revision, task_panes};
 pub use conditions::{SLIM_TEXT_BYTES, is_condition_kind};
@@ -44,6 +51,7 @@ pub use head_mut::TaskHeadMut;
 pub use heads::*;
 pub use member_gate::{MemberGateAmended, MemberGateAmendment};
 use plan_scope::ScopeWrite;
+pub use task_ref_head::shell_of;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
 mod lock_tests;
@@ -578,83 +586,7 @@ impl Store {
         prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
         submit: impl FnOnce() -> Result<R>,
     ) -> Result<crate::SubmissionOutcome<R>> {
-        use crate::{SubmissionDisposition, SubmissionOutcome};
-        anyhow::ensure!(
-            Self::normalize_id(&expected.task)? == expected.task,
-            "submission needs canonical task identity"
-        );
-        self.submission_barrier("submission_entered");
-        let _board = self.lock("dispatch")?;
-        let _task = self.lock(&expected.task)?;
-        let mut record = self.authorized_submission(&authorization.id)?;
-        anyhow::ensure!(
-            record.authorization == *authorization && authorization.action == *expected,
-            "submission authorization does not match exact task/run/attempt"
-        );
-        match record.disposition {
-            SubmissionDisposition::Prepared
-            | SubmissionDisposition::AuthorizationRefused { .. } => {}
-            SubmissionDisposition::Submitting
-            | SubmissionDisposition::Submitted
-            | SubmissionDisposition::Uncertain { .. } => {
-                bail!("submission already attempted; refusing replay")
-            }
-        }
-        let held = self.hold(&expected.task)?;
-        let mut task = held.task();
-        let validation = self.operating_config().and_then(|config| {
-            self.validate_operating_action(&config, &task, authorization)?;
-            Ok(config)
-        });
-        let config = match validation {
-            Ok(config) => config,
-            Err(error) => {
-                let reason = format!("{error:#}");
-                record.disposition = SubmissionDisposition::AuthorizationRefused {
-                    reason: reason.clone(),
-                };
-                self.save_authorized_submission(&record)?;
-                self.submission_barrier("refused_committed");
-                return Ok(SubmissionOutcome::AuthorizationRefused(reason));
-            }
-        };
-        let mut fresh = self.clone();
-        fresh.config = config;
-        let unit = fresh.event_unit();
-        if let Err(error) = prepare(&fresh, &mut task) {
-            drop(unit);
-            let reason = format!("submission precondition refused: {error:#}");
-            record.disposition = SubmissionDisposition::AuthorizationRefused {
-                reason: reason.clone(),
-            };
-            self.save_authorized_submission(&record)?;
-            self.submission_barrier("refused_committed");
-            return Ok(SubmissionOutcome::AuthorizationRefused(reason));
-        }
-        fresh.submission_barrier("prepare_returned");
-        record.disposition = SubmissionDisposition::Submitting;
-        fresh.buffer_authorization(fresh.authorization_operation(&record)?)?;
-        fresh.save_held(&held, &task)?;
-        drop(unit);
-        fresh.submission_barrier("authorization_committed");
-        let sent = submit();
-        fresh.submission_barrier("send_returned");
-        match sent {
-            Ok(result) => {
-                record.disposition = SubmissionDisposition::Submitted;
-                self.save_authorized_submission(&record)?;
-                fresh.submission_barrier("submitted_committed");
-                Ok(SubmissionOutcome::Submitted(result))
-            }
-            Err(error) => {
-                record.disposition = SubmissionDisposition::Uncertain {
-                    reason: format!("{error:#}"),
-                };
-                self.save_authorized_submission(&record)?;
-                fresh.submission_barrier("uncertain_committed");
-                Err(error)
-            }
-        }
+        self.submit_in(authorization, expected, prepare, submit)
     }
 
     /// Appends one database event, or joins the active update's atomic write. A condition

@@ -329,11 +329,15 @@ impl Store {
     ///
     /// # Errors
     /// Rejects unavailable repositories and invalid execution Plan membership.
-    pub fn operating_member(&self, config: &Config, task: &Task) -> Result<ScopedTask> {
-        let project = task.project.as_ref().context("task has no project")?;
+    pub fn operating_member<T: crate::TaskRef + ?Sized>(
+        &self,
+        config: &Config,
+        task: &T,
+    ) -> Result<ScopedTask> {
+        let project = task.project().as_ref().context("task has no project")?;
         let (repository, repository_identity) = self.project_identity(config, project)?;
-        let contract = operating_contract_revision(task)?;
-        let plan = if task.tracker {
+        let contract = task.contract_revision()?;
+        let plan = if *task.tracker() {
             None
         } else {
             self.execution_plan_fields(task)?

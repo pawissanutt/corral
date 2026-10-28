@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 
 use crate::store::StoreLock;
-use crate::{ActionAuthorization, AuthorizedSubmission, Config, OperatingOrigin, Store, Task};
+use crate::{ActionAuthorization, AuthorizedSubmission, Config, OperatingOrigin, Store};
 
 impl Store {
     pub fn authorized_submission(&self, id: &str) -> Result<AuthorizedSubmission> {
@@ -14,14 +14,14 @@ impl Store {
         self.save_submission_record(record)
     }
 
-    pub(crate) fn validate_operating_action(
+    pub(crate) fn validate_operating_action<T: crate::TaskRef + ?Sized>(
         &self,
         config: &Config,
-        task: &Task,
+        task: &T,
         authorization: &ActionAuthorization,
     ) -> Result<()> {
         ensure!(
-            authorization.workspace == self.root() && authorization.action.task == task.id,
+            authorization.workspace == self.root() && authorization.action.task == *task.id(),
             "action workspace/task identity changed"
         );
         ensure!(
@@ -44,9 +44,9 @@ impl Store {
                     "automatic grant was revoked"
                 );
                 ensure!(
-                    effective.allows(&task.id, authorization.action.kind),
+                    effective.allows(task.id(), authorization.action.kind),
                     "automatic action is not authorized: {:?}",
-                    effective.tasks.get(&task.id).map(|task| &task.refusals)
+                    effective.tasks.get(task.id()).map(|task| &task.refusals)
                 );
             }
             OperatingOrigin::ExplicitOwner {
@@ -62,7 +62,7 @@ impl Store {
         }
         if let Some(candidate) = &authorization.action.candidate {
             ensure!(
-                candidate.task == task.id && candidate.run == authorization.action.run,
+                candidate.task == *task.id() && candidate.run == authorization.action.run,
                 "candidate does not match action task/run"
             );
         }

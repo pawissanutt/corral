@@ -247,7 +247,7 @@ impl TaskHead {
         }))
     }
 
-    fn pinned(&self) -> Result<std::sync::MutexGuard<'_, Box<dyn ReadView + Send>>> {
+    pub(crate) fn pinned(&self) -> Result<std::sync::MutexGuard<'_, Box<dyn ReadView + Send>>> {
         Ok(self
             .view
             .as_ref()
@@ -391,7 +391,8 @@ impl TaskHead {
             .next())
     }
 
-    /// The review child of `run` whose review was recorded at `at`.
+    /// The newest review child of `run` whose review was recorded at `at` (an availability
+    /// fallback child carries its parent's record, so several may share it).
     pub fn review_child_by_review_at(
         &self,
         run: &str,
@@ -401,7 +402,11 @@ impl TaskHead {
         Ok(self
             .run_children(
                 run,
-                |p| RowQuery::under(TaskPart::ReviewRun, p).with_index(token),
+                |p| {
+                    RowQuery::under(TaskPart::ReviewRun, p)
+                        .with_index(token)
+                        .newest_first()
+                },
                 1,
             )?
             .into_iter()
@@ -580,6 +585,16 @@ impl TaskHead {
         let Some(owner) = self.run_owner(run)? else {
             return Ok(Vec::new());
         };
+        self.owner_obligation_rows(&owner, kind, token, open)
+    }
+
+    fn owner_obligation_rows(
+        &self,
+        owner: &str,
+        kind: &str,
+        token: Option<String>,
+        open: bool,
+    ) -> Result<Vec<HistoryRow>> {
         let mut q = RowQuery::under(TaskPart::RunObligation, format!("{owner}{kind}"));
         q.index = token;
         q.open_only = open;
@@ -619,9 +634,17 @@ impl TaskHead {
 
     /// Waits and decisions of `run` whose observation can still change, in order.
     pub fn open_obligations(&self, run: &str) -> Result<RunObligations> {
+        let Some(owner) = self.run_owner(run)? else {
+            return Ok(RunObligations::default());
+        };
         Ok(RunObligations {
-            waits: Self::decode(self.obligation_rows(run, "wait/", None, true)?)?,
-            decisions: Self::decode(self.obligation_rows(run, "decision/", None, true)?)?,
+            waits: Self::decode(self.owner_obligation_rows(&owner, "wait/", None, true)?)?,
+            decisions: Self::decode(self.owner_obligation_rows(
+                &owner,
+                "decision/",
+                None,
+                true,
+            )?)?,
         })
     }
 
@@ -658,27 +681,6 @@ impl TaskHead {
     /// The task's operating-contract revision, as its summary keeps it: no history is read.
     pub fn operating_contract_revision(&self) -> &str {
         &self.summary.operating_contract_revision
-    }
-
-    /// Every owner comment in order, for the prompts' Owner comments section only.
-    pub fn emitted_comments(&self) -> Result<Vec<crate::TaskComment>> {
-        let _emitted = work::emitted();
-        let view = self.pinned()?;
-        let rows = view
-            .rows(
-                self.num,
-                &RowQuery::part(TaskPart::Comment),
-                PageReq::first(u32::MAX),
-            )?
-            .items;
-        for row in &rows {
-            work::decoded(
-                Counter::HistoryRowDecodes,
-                doc_bytes(&row.doc),
-                Subject::Emitted,
-            );
-        }
-        Self::decode(rows)
     }
 
     pub fn checkpoint_by_artifact(

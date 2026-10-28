@@ -158,8 +158,12 @@ impl<'a> Inbox<'a> {
     }
 
     fn build(&self, state: &mut InboxState, post: Post<'_>) -> Result<Message> {
-        let seq = state.next_seq;
-        state.next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
+        self.build_at(&mut state.next_seq, post)
+    }
+
+    fn build_at(&self, next_seq: &mut u64, post: Post<'_>) -> Result<Message> {
+        let seq = *next_seq;
+        *next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
         Ok(Message {
             id: format!("{}#{seq}", self.key),
             recipient: self.recipient.clone(),
@@ -187,6 +191,32 @@ impl<'a> Inbox<'a> {
         let message = self.build(&mut next, post)?;
         self.write_message(&message)?;
         *state = next;
+        self.store.submission_effect_barrier("inbox_reserved");
+        Ok(message)
+    }
+
+    /// [`Self::reserve_in`] on a head: the recipient's current container reserves the seq.
+    ///
+    /// # Errors
+    /// Returns validation, transaction, inbox lookup or message write errors.
+    pub fn reserve_in_head(
+        &self,
+        head: &mut crate::TaskHeadMut,
+        post: Post<'_>,
+    ) -> Result<Message> {
+        use crate::TaskMut;
+        self.check(&post)?;
+        ensure!(
+            self.store.has_record_unit(),
+            "inbox reservation requires an open task transaction"
+        );
+        let message = head.inbox_state_mut(&self.recipient, |inbox| {
+            let mut next_seq = inbox.next_seq;
+            let message = self.build_at(&mut next_seq, post)?;
+            self.write_message(&message)?;
+            inbox.next_seq = next_seq;
+            Ok(message)
+        })?;
         self.store.submission_effect_barrier("inbox_reserved");
         Ok(message)
     }
