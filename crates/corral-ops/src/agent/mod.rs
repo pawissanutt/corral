@@ -20,6 +20,7 @@ mod effects_stat_tests;
 #[cfg(test)]
 mod effects_tests;
 mod envelope;
+pub(crate) mod gate_queue;
 pub mod hooks;
 pub mod install;
 pub mod launch;

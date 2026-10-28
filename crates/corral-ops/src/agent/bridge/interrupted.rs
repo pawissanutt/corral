@@ -254,6 +254,7 @@ pub fn classify_corral(
     match receipt.state {
         ReceiptState::Committed => (ResumeClass::Result, compact(result)),
         ReceiptState::Rejected => (ResumeClass::Rejected, compact(result)),
+        ReceiptState::Queued => (ResumeClass::NotExecuted, compact(result)),
         ReceiptState::Reserved if running => (
             ResumeClass::InProgress,
             "its executor still ran after drain_secs; one recovery_update reports the final \

@@ -186,6 +186,8 @@ pub enum ReceiptState {
     Rejected,
     /// Two-phase only: the reservation committed and its executor may still run.
     Reserved,
+    /// A gate awaiting admission; no executor or submitted side effect.
+    Queued,
     Uncertain,
     Abandoned,
 }

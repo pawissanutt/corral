@@ -91,7 +91,7 @@ question-lifecycle and pm-role (PM receipts).
 | `op` | string | one of the enumerated v1 ops |
 | `payload_sha256` | hex | SHA-256 of the canonical payload (see "Wire formats") |
 | `identity` | RequestIdentity | `{store, project, role, task?, run?, review?, callback?, session_id, generation, turn?}`; never auth |
-| `state` | `committed` \| `rejected` \| `reserved` \| `uncertain` \| `abandoned` | `reserved` only for two-phase ops |
+| `state` | `committed` \| `rejected` \| `reserved` \| `queued` \| `uncertain` \| `abandoned` | `reserved` only for two-phase ops; `queued` only for gate admission |
 | `result` | JSON | ≤ 8 KiB serialized (`RESULT_MAX_BYTES`) |
 | `executor` | `{pid, start_time}`? | reservations only |
 | `effect` | `{kind, ref}`? | the durable effect, e.g. `generation_bound`/`g1`, `turn`/`1/3`, a gate attempt |
@@ -104,6 +104,15 @@ receipt_lookup, whose own request is never stored. A PM container's receipts inc
 `Task.agent_pm_receipts` on the target task a lookup names. Replaying a request ID with the
 same op and payload digest returns the stored receipt. Reusing it with another op or payload
 is rejected `payload_mismatch` and logged as `agent_request_rejected`.
+
+A queued gate keeps its `pending_start` wake. Sync claims the receipt after releasing its
+pane-inventory lease, retries temporary admission without model turns, and uses the existing
+gate-result wake after submission. A permanent refusal after queueing wakes the worker with
+`not_started`; a fenced or closed run is abandoned without a wake. A claimed queued receipt
+records its executor; recovery checks attempt evidence before retrying, so a lost submission
+acknowledgement never starts a second gate. Admission gates the clean HEAD at launch time.
+Stores containing `queued` receipts require a binary that understands this state; do not
+open them with an older binary.
 
 ### ResumeClass and InterruptedCall
 

@@ -49,6 +49,23 @@ pub fn due_wait_wakes(task: &Task) -> Vec<DueWake> {
 }
 
 fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<String> {
+    if reason == "not_started" {
+        let receipt = task
+            .runs
+            .iter()
+            .filter_map(|r| r.agent_host.as_deref())
+            .flat_map(|s| &s.receipts)
+            .find(|r| {
+                r.effect.as_ref().is_some_and(|e| e.reference == attempt)
+                    && r.result["queued"] == true
+            });
+        return Ok(format!(
+            "Queued gate attempt {attempt} did not start: {}. Resolve the cause and call corral_gate again.",
+            receipt
+                .and_then(|r| r.result["reason"].as_str())
+                .unwrap_or("admission refused")
+        ));
+    }
     if reason == "gate_start_uncertain" {
         return Ok(format!(
             "corral could not confirm that gate attempt {attempt} started. Read `corral show {} \

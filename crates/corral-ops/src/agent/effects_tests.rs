@@ -856,5 +856,8 @@ fn verdict_waits_until_the_reviewer_observed_every_answer_and_correction() {
 #[path = "effects_gate_tests.rs"]
 mod gate;
 
+#[path = "effects_queue_tests.rs"]
+mod queue;
+
 #[path = "effects_recovery_tests.rs"]
 mod recovery;

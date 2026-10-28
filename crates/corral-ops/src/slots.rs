@@ -13,6 +13,8 @@ pub struct SlotUsage {
     pub reservations: usize,
     count_reviews: bool,
     count_gates: bool,
+    #[serde(skip)]
+    shared_gates: usize,
 }
 
 impl SlotUsage {
@@ -20,7 +22,11 @@ impl SlotUsage {
         self.tasks
             + self.reservations
             + if self.count_reviews { self.reviews } else { 0 }
-            + if self.count_gates { self.gates } else { 0 }
+            + if self.count_gates {
+                self.gates.saturating_sub(self.shared_gates)
+            } else {
+                0
+            }
     }
 
     pub fn from_tasks(tasks: &[Task], limits: &Limits) -> Self {
@@ -34,11 +40,22 @@ impl SlotUsage {
             ..Self::default()
         };
         for task in tasks {
+            let sharing = gate_shares_dispatch_slot(task);
             usage.tasks += usize::from(task.status.holds_slot() && task.holds_dispatch_slot());
             usage.reservations += usize::from(
                 !task.status.holds_slot() && task.launch.as_ref().is_some_and(|l| l.reserved),
             );
             for run in &task.runs {
+                usage.shared_gates += usize::from(
+                    sharing
+                        && task
+                            .current_run()
+                            .is_some_and(|current| current.id == run.id)
+                        && run
+                            .gate
+                            .as_ref()
+                            .is_some_and(corral_core::GateRecord::holds_slot),
+                );
                 usage.gates += usize::from(
                     run.gate
                         .as_ref()
@@ -68,7 +85,7 @@ impl SlotUsage {
                         .is_some_and(corral_core::ReviewRecord::holds_slot),
                 });
                 let counted = match work {
-                    ReviewWork::Gate => limits.count_gates,
+                    ReviewWork::Gate => limits.count_gates && !sharing,
                     ReviewWork::Reviewer => limits.count_reviews,
                 };
                 usage.reservations += usize::from(counted && !recorded);
@@ -76,6 +93,11 @@ impl SlotUsage {
         }
         usage
     }
+}
+
+/// Only the current coding run can reuse a slot already held by its worker.
+pub(crate) fn gate_shares_dispatch_slot(task: &Task) -> bool {
+    task.status.holds_slot() && task.holds_dispatch_slot() && task.current_run().is_some()
 }
 
 pub fn slot_usage(ctx: &Ctx) -> Result<SlotUsage> {
