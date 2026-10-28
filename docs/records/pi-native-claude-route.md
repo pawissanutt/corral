@@ -131,6 +131,22 @@ per-turn Claude Agent SDK lane, ported from senpi's `anthropic-subscription` pro
 anthropic-messages client is refused unsent. Claude Code's non-essential traffic is switched off
 with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
 
+**System prompt.** The first live worker request sent Pi's own system prompt as Claude Code's
+custom prompt and was refused with HTTP 400 "Third-party apps now draw from your extra usage, not
+your plan limits", while a plain request with a short prompt succeeded. As in senpi's
+preset-append mode, the lane therefore keeps Claude Code's `claude_code` preset and appends only
+corral's own prompt sections (the role contract and the working directory), dropping Pi's
+preamble, tool, rule and docs sections and the harness name. With that, the live worker turn
+succeeded.
+
+**Live smoke (T-493).** Profile `harness = "pi-native", vendor = "anthropic", model =
+"claude-sonnet-5-5"`, candidate assets installed with `corral agent install` (doctor ready),
+dispatched in a private plugin-free herdr server. The worker read its prompt and `notes.txt` and
+edited `notes.txt` through Pi's tools in one turn (4 model requests, all `api: claude-agent-sdk`,
+no error). Budget: 6 of the 10 authorised requests (1 direct lane check, 1 refused before the
+system-prompt fix, 4 for the worker turn). No API key was present: the token came from the
+corral-owned login and every `ANTHROPIC_*` variable was stripped.
+
 Not ported (follow-ups): a resident long-lived SDK session, session reuse, Claude Code native
 compaction, multiple accounts, failover, rate-limit polling and auto-downloading Claude Code.
 The live smoke result is attached to T-493.
