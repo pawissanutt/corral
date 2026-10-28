@@ -2,8 +2,11 @@
 // imports it, and replaceable so tests drive the lane with a fake `query` and no network.
 import { createRequire } from "node:module";
 import { statSync } from "node:fs";
+import { delimiter, join } from "node:path";
 
 import type { Options, Query, SDKUserMessage, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+
+import { compiledBundle } from "../host/bundle.ts";
 
 export interface SdkBoundary {
   query(input: { prompt: AsyncIterable<SDKUserMessage>; options: Options }): Query;
@@ -46,6 +49,9 @@ export function claudeCodeCandidates(platform: string, arch: string): string[] {
 export interface ExecutableDeps {
   readonly platform: string;
   readonly arch: string;
+  /** A compiled release host, which carries no platform package and may use `claude` on PATH. */
+  readonly compiled?: boolean;
+  readonly path?: string;
   resolve(specifier: string): string;
   isFile(path: string): boolean;
 }
@@ -53,7 +59,8 @@ export interface ExecutableDeps {
 function defaultDeps(): ExecutableDeps {
   const require = createRequire(import.meta.url);
   return {
-    platform: process.platform, arch: process.arch,
+    platform: process.platform, arch: process.arch, compiled: compiledBundle() !== undefined,
+    ...(process.env.PATH ? { path: process.env.PATH } : {}),
     resolve: (specifier) => require.resolve(specifier),
     isFile: (path) => {
       try {
@@ -79,6 +86,13 @@ export function resolveClaudeCode(deps: ExecutableDeps = defaultDeps()): string 
       continue;
     }
     if (deps.isFile(path)) return path;
+  }
+  if (deps.compiled) {
+    const name = deps.platform === "win32" ? "claude.exe" : "claude";
+    const found = (deps.path ?? "").split(delimiter).filter(Boolean).map((dir) => join(dir, name)).find(deps.isFile);
+    if (found) return found;
+    throw new ClaudeCodeUnavailable("claude_code_unavailable: Anthropic profiles run through Claude Code; install the " +
+      "`claude` CLI (https://docs.anthropic.com/en/docs/claude-code) so it is on PATH");
   }
   const wanted = candidates[0]?.slice(0, candidates[0].lastIndexOf("/")) ?? "@anthropic-ai/claude-agent-sdk";
   throw new ClaudeCodeUnavailable(`claude_code_unavailable: no Claude Code executable for ${deps.platform}-${deps.arch}; ` +

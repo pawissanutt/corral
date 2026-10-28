@@ -2,7 +2,13 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import auth from "../src/auth/index.ts";
+import delivery from "../src/delivery/index.ts";
+import { setBundle } from "../src/host/bundle.ts";
 import { ModuleInvalid, ModuleUnavailable, loadModules, missingModules, modulePaths } from "../src/host/modules.ts";
+import { pmRole } from "../src/roles/pm/index.ts";
+import { reviewerRole } from "../src/roles/reviewer/index.ts";
+import { workerRole } from "../src/roles/worker/index.ts";
 import type { Role } from "../src/roles/types.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
 
@@ -38,6 +44,31 @@ test("a fixture installation loads every role's modules from the fixed paths", a
   expect(modulePaths("reviewer")).toEqual({
     role: "src/roles/reviewer/index.ts", delivery: "src/delivery/index.ts", auth: "src/auth/index.ts",
   });
+});
+
+test("a compiled host loads its bundled modules, building each role on the installation directory", async () => {
+  const roots: string[] = [];
+  const built = (factory: (root: string) => unknown) => (root: string) => {
+    roots.push(root);
+    return factory(root);
+  };
+  setBundle({
+    roles: { worker: built(workerRole), reviewer: built(reviewerRole), pm: built(pmRole) },
+    delivery, auth,
+  });
+  try {
+    expect(missingModules("/no/source/tree", "worker")).toEqual([]);
+    for (const role of ["worker", "reviewer", "pm"] as Role[]) {
+      const loaded = await loadModules(PACKAGE_ROOT, role, "anthropic");
+      expect(loaded.role.role).toBe(role);
+      expect(loaded.auth.providers).toEqual(["openai-codex", "anthropic"]);
+    }
+    expect(roots).toEqual([PACKAGE_ROOT, PACKAGE_ROOT, PACKAGE_ROOT]);
+  } finally {
+    setBundle(undefined);
+  }
+  expect(missingModules("/no/source/tree", "worker").map((m) => m.code))
+    .toEqual(["role_unavailable", "delivery_unavailable", "credentials_unavailable"]);
 });
 
 test("a bare installation missing PM answers ModuleUnavailable naming its owner", async () => {

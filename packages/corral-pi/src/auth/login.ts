@@ -200,13 +200,14 @@ function terminalInteraction(): AuthInteraction {
   };
 }
 
-if (import.meta.main) {
+/** The login command line: `--auth-dir <dir> --provider <id>`, from Bun or the compiled host. */
+export function runLogin(argv: readonly string[]): void {
   process.env.PI_OFFLINE = "1";
   process.env.PI_TELEMETRY = "0";
   process.env.PI_SKIP_VERSION_CHECK = "1";
   const arg = (flag: string) => {
-    const index = process.argv.indexOf(flag);
-    return index === -1 ? undefined : process.argv[index + 1];
+    const index = argv.indexOf(flag);
+    return index === -1 ? undefined : argv[index + 1];
   };
   const dir = arg("--auth-dir") ?? authDir();
   const provider = arg("--provider") ?? "openai-codex";
@@ -223,3 +224,5 @@ if (import.meta.main) {
     process.exit(1);
   });
 }
+
+if (import.meta.main) runLogin(process.argv);

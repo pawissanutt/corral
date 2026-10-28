@@ -12,7 +12,8 @@ import { openSession, withRecoveryContext } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { loadPeerLookup } from "./peer.ts";
 import { guardedFetch, restrictEnvironment } from "./restrict.ts";
-import { checkRuntime, readCompat } from "./runtime.ts";
+import { compiledBundle } from "./bundle.ts";
+import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { HostSession, authContext } from "./session.ts";
 
 function launchFd(argv: readonly string[]): number {
@@ -27,7 +28,9 @@ function launchFd(argv: readonly string[]): number {
 async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
   restrictEnvironment(process.env);
-  checkRuntime(config.assets, readCompat(config.assets));
+  const compat = readCompat(config.assets);
+  if (compiledBundle()) checkCompiledRuntime(compat);
+  else checkRuntime(config.assets, compat);
   const provider = config.provider ?? "openai-codex";
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);

@@ -8,6 +8,7 @@ import type { ProviderId } from "../auth/providers.ts";
 import type { AuthModule } from "../auth/types.ts";
 import type { DeliveryModule } from "../delivery/types.ts";
 import { CORRAL_OPS, ROLES, type Role, type RoleModule, UPSTREAM_TOOLS } from "../roles/types.ts";
+import { compiledBundle } from "./bundle.ts";
 
 export type ModuleKind = "role" | "delivery" | "auth";
 
@@ -57,6 +58,7 @@ function present(assetRoot: string, module: string): boolean {
 /** Every missing module of a role, in the order the launcher reports them. */
 export function missingModules(assetRoot: string, role: Role): ModuleUnavailable[] {
   const paths = modulePaths(role);
+  if (compiledBundle()) return [];
   const missing: ModuleUnavailable[] = [];
   if (!present(assetRoot, paths.role)) missing.push(new ModuleUnavailable("role", paths.role, ROLE_OWNERS[role], role));
   if (!present(assetRoot, paths.delivery)) missing.push(new ModuleUnavailable("delivery", paths.delivery, "inbox-adapter"));
@@ -144,6 +146,14 @@ export async function loadModules(
   const [first] = missingModules(assetRoot, role);
   if (first) throw first;
   const paths = modulePaths(role);
+  const bundle = compiledBundle();
+  if (bundle) {
+    return {
+      role: checkRole(bundle.roles[role](assetRoot), paths.role, role),
+      delivery: checkDelivery(bundle.delivery, paths.delivery),
+      auth: checkAuth(bundle.auth, paths.auth, provider),
+    };
+  }
   return {
     role: checkRole(await importDefault(assetRoot, paths.role), paths.role, role),
     delivery: checkDelivery(await importDefault(assetRoot, paths.delivery), paths.delivery),

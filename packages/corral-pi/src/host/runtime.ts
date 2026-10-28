@@ -58,6 +58,18 @@ export interface RuntimePins {
   readonly lockSha256: string;
 }
 
+/**
+ * A compiled host embeds its Bun and its bundled dependencies, which the release build installed
+ * from the pinned lock, so only the embedded Bun is checked against the tested range.
+ */
+export function checkCompiledRuntime(compat: Compat, bunVersion = bunApi().version): RuntimePins {
+  if (!bunApi().semver.satisfies(bunVersion, compat.bun.range)) {
+    throw new RuntimeRefused("bun_version_unsupported",
+      `the embedded bun ${bunVersion} is outside the tested range ${compat.bun.range}`);
+  }
+  return { bun: bunVersion, pi: compat.pi.version, lockSha256: compat.lock.sha256 };
+}
+
 export function checkRuntime(assetRoot: string, compat: Compat, bunVersion = bunApi().version): RuntimePins {
   const bun = bunApi();
   if (!bun.semver.satisfies(bunVersion, compat.bun.range)) {
