@@ -137,6 +137,52 @@ pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
     }
 }
 
+/// [`finish`] on the current run of a head: the reviewer snapshot is its current child.
+fn finish_head(
+    ctx: &Ctx,
+    task: &mut corral_core::TaskHeadMut,
+    run: &str,
+    kind: Kind,
+) -> Result<()> {
+    let current = task.current_run_mut().context("no current run")?;
+    match kind {
+        Kind::Gate => {
+            if let Some(gate) = &mut current.gate
+                && gate.result == GateResult::Running
+            {
+                gate.process_lost = true;
+            }
+        }
+        Kind::Reviewer => {
+            let Some(review) = current.review.as_mut().filter(|r| r.holds_slot()) else {
+                return Ok(());
+            };
+            review.process_lost = true;
+            let review = review.clone();
+            if current
+                .current_child
+                .as_deref()
+                .is_some_and(|child| child.ended.is_none())
+            {
+                task.edit_current_review_child(run, |snapshot| {
+                    snapshot.review = Some(review);
+                    snapshot.ended = Some(Timestamp::now());
+                    crate::usage::collect(snapshot, &ctx.store);
+                    Ok(())
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn same_process_head(current: &corral_core::RunHead, observed: &Run, kind: Kind) -> bool {
+    match kind {
+        Kind::Gate => current.gate == observed.gate,
+        Kind::Reviewer => current.review == observed.review,
+    }
+}
+
 fn same_process(current: &Run, observed: &Run, kind: Kind) -> bool {
     match kind {
         Kind::Gate => current.gate == observed.gate,
@@ -247,7 +293,7 @@ impl<'a> ReviewLaunch<'a> {
                         Some(inventory) => crate::pane_liveness::gone(
                             ctx,
                             crate::pane_liveness::Sample {
-                                task: &task,
+                                task: (&task).into(),
                                 pane,
                                 started,
                                 seen: false,
@@ -488,10 +534,16 @@ pub(crate) fn reconcile(
     if let Some(pending) = load_pending(ctx)? {
         abandon(ctx, &pending)?;
     }
-    for task in ctx.store.list()? {
-        if !crate::session_scope::owns_task(ctx, &task)? {
+    // Gate and reviewer slots are held only by open tasks' current runs; the shell holds that
+    // run and its current review child.
+    for head in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
+        if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
         }
+        let task = head.to_shell_task()?;
         for run in &task.runs {
             for (kind, record) in [
                 (
@@ -521,7 +573,7 @@ pub(crate) fn reconcile(
                     || crate::pane_liveness::gone(
                         ctx,
                         crate::pane_liveness::Sample {
-                            task: &task,
+                            task: (&head).into(),
                             pane,
                             started,
                             seen: false,
@@ -533,18 +585,19 @@ pub(crate) fn reconcile(
                     )?
                 {
                     let mut release_reason = None;
-                    ctx.store.try_update(&task.id, |task| {
-                        if !crate::session_scope::owns_task(ctx, task)? {
+                    ctx.store.try_update_head(&task.id, |task| {
+                        if !crate::session_scope::owns_head(ctx, task.head())? {
                             return Ok(false);
                         }
-                        let Some(current) = task
-                            .runs
-                            .iter_mut()
-                            .find(|r| r.id == run.id && same_process(r, run, kind))
-                        else {
+                        if !task
+                            .head()
+                            .current_run
+                            .as_ref()
+                            .is_some_and(|r| r.id == run.id && same_process_head(r, run, kind))
+                        {
                             return Ok(false);
-                        };
-                        finish(ctx, current, kind);
+                        }
+                        finish_head(ctx, task, &run.id, kind)?;
                         let reason = if exited {
                             crate::launch_exit::reason(ctx, "The reviewer", pane)
                         } else {

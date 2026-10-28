@@ -165,6 +165,34 @@ fn refresh_view(ctx: &Ctx, recipient: &Recipient) -> Result<()> {
     let inbox = Inbox::new(&ctx.store, recipient.clone())?;
     let _lock = inbox.lock()?;
     let view = effects::pending_view(&inbox)?;
+    // A current container's view is a projection field; an earlier one's needs the full form.
+    let mut current = false;
+    ctx.store.try_update_head(id, |head| {
+        let pending = match recipient {
+            Recipient::Run { run, .. } => head
+                .current_run_mut()
+                .filter(|r| &r.id == run)
+                .map(|r| &mut r.pending_reply),
+            Recipient::PlanRun { plan_run, .. } => head
+                .last_plan_run_mut()
+                .filter(|r| &r.id == plan_run)
+                .map(|r| &mut r.pending_reply),
+            _ => None,
+        };
+        let Some(pending) = pending else {
+            return Ok(false);
+        };
+        current = true;
+        Ok(if *pending == view {
+            false
+        } else {
+            pending.clone_from(&view);
+            true
+        })
+    })?;
+    if current || !matches!(recipient, Recipient::Run { .. } | Recipient::PlanRun { .. }) {
+        return Ok(());
+    }
     ctx.store.try_update(id, |task| {
         let pending = match recipient {
             Recipient::Run { run, .. } => task
@@ -374,21 +402,22 @@ pub(crate) fn work(ctx: &Ctx, recipient: &Recipient) -> Result<Work> {
     }
     work.late_evidence |= !inbox.records("late-evidence")?.is_empty();
     work.unsettled |= inbox.state_head()?.open_envelope.is_some();
-    let task = ctx.store.get(
+    let task = ctx.store.head(
         recipient
             .task()
             .context("inbox work requires a task recipient")?,
     )?;
+    // Only current containers are recipients of a sync pass.
     let shown = match recipient {
         Recipient::Run { run, .. } => task
-            .runs
-            .iter()
-            .find(|r| &r.id == run)
+            .current_run
+            .as_ref()
+            .filter(|r| &r.id == run)
             .map(|r| &r.pending_reply),
         Recipient::PlanRun { plan_run, .. } => task
-            .plan_runs
-            .iter()
-            .find(|r| &r.id == plan_run)
+            .last_plan_run
+            .as_ref()
+            .filter(|r| &r.id == plan_run)
             .map(|r| &r.pending_reply),
         _ => None,
     };
@@ -404,10 +433,18 @@ pub fn reconcile_all(ctx: &Ctx) -> Result<()> {
 }
 
 pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Result<()> {
-    for task in ctx.store.list()? {
-        if !crate::session_scope::owns_task(ctx, &task)? {
+    // Only open tasks' current containers: a pass never revisits a finished task's or an
+    // earlier run's inbox, so its cost follows in-flight work rather than history.
+    let heads = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+        .into_iter()
+        .chain(crate::settling::terminal_heads(ctx)?);
+    for head in heads {
+        if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
         }
+        let task = crate::settling::shell_with_open_children(&head)?;
         let mut recipients = Vec::new();
         let mut registered = Vec::new();
         // A settled Pi container's inbox is final; it is never revisited.
@@ -546,7 +583,12 @@ impl EffectHandler for OwnerEffects {
         Ok(())
     }
 
-    fn apply_task(&self, _task: &mut Task, _message: &Message, _receipt: &Receipt) -> Result<()> {
+    fn apply_task(
+        &self,
+        _task: &mut corral_core::TaskHeadMut,
+        _message: &Message,
+        _receipt: &Receipt,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -554,3 +596,7 @@ impl EffectHandler for OwnerEffects {
 #[cfg(all(test, unix))]
 #[path = "owner_tests.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "owner_growth_tests.rs"]
+mod growth_tests;

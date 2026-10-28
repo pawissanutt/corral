@@ -172,27 +172,39 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
 /// overflow rebuilds from that same view. The caller's listing is not read: a listing older
 /// than the view would let a refresh acknowledge changes it never indexed.
 pub fn refresh_search_index_with_tasks(ctx: &Ctx, _tasks: &[Task]) -> Result<()> {
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
-    let root = ctx.store.cache_root()?;
-    let index = root.join("content-search.json");
-    let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
-    if let Some(at) = read_cursor(&root)?
-        && index.is_file()
-    {
-        if at == seq {
-            return Ok(());
-        }
-        let view = view_ctx.store.view()?;
-        if let Some(delta) = changes_after(view.as_ref(), at)?
-            && ((delta.tasks.is_empty() && !delta.events)
-                || crate::content_index::follow(&view_ctx, &delta)?)
-        {
-            return write_cursor(&root, seq);
-        }
+    if follow_index(ctx)? {
+        return Ok(());
     }
+    let _storage = crate::artifact_storage::storage_lock(ctx)?;
+    let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
     let tasks = view_ctx.store.list()?;
     crate::content_index::refresh_snapshot(&view_ctx, &tasks, seq)?;
     Ok(())
+}
+
+/// Brings the index to the feed position of one read view by following the feed from its
+/// cursor. `false` when it cannot be followed (missing or unreadable index, pruned feed,
+/// budget overflow) and must be rebuilt.
+fn follow_index(ctx: &Ctx) -> Result<bool> {
+    let _storage = crate::artifact_storage::storage_lock(ctx)?;
+    let root = ctx.store.cache_root()?;
+    let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
+    let Some(at) = read_cursor(&root)?.filter(|_| root.join("content-search.json").is_file())
+    else {
+        return Ok(false);
+    };
+    if at == seq {
+        return Ok(true);
+    }
+    let view = view_ctx.store.view()?;
+    if let Some(delta) = changes_after(view.as_ref(), at)?
+        && ((delta.tasks.is_empty() && !delta.events)
+            || crate::content_index::follow(&view_ctx, &delta)?)
+    {
+        write_cursor(&root, seq)?;
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 /// The feed position the index was last brought to.
@@ -226,10 +238,15 @@ fn changes_after(
             after = entry.seq;
             for scope in &entry.scopes {
                 match scope {
-                    ChangeScope::Task { num, parts } => {
+                    ChangeScope::Task {
+                        num,
+                        parts,
+                        history,
+                    } => {
                         let id = corral_core::Store::normalize_id(&num.0.to_string())?;
                         let task = delta.tasks.entry(id).or_default();
                         task.parts.extend(parts.iter().copied());
+                        task.history |= history;
                     }
                     ChangeScope::Artifact { task } => {
                         let task = delta.tasks.entry(task.clone()).or_default();
@@ -271,8 +288,9 @@ pub(crate) fn task_stamp(ctx: &Ctx) -> Result<String> {
     ctx.store.tasks_stamp()
 }
 
-/// Sync's refresh. Whether or not tasks changed after sync's sample, the feed carries every
-/// change since the index's cursor, so neither case lists the board.
-pub(crate) fn refresh_after_sync(ctx: &Ctx, tasks: &[Task], _before: &str) -> Result<()> {
-    refresh_search_index_with_tasks(ctx, tasks)
+/// Sync's refresh inside its measured pass. Whether or not tasks changed after sync's sample,
+/// the feed carries every change since the index's cursor, so neither case lists the board.
+/// `false` when the index needs a rebuild, which sync runs after the measured pass.
+pub(crate) fn refresh_after_sync(ctx: &Ctx, _tasks: &[Task], _before: &str) -> Result<bool> {
+    follow_index(ctx)
 }

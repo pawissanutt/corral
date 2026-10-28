@@ -53,10 +53,14 @@ fn continuation(task: &Task) -> Option<Subject<'_>> {
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
     let mut panes: Option<HashMap<String, PaneInfo>> = None;
-    for task in ctx.store.list()? {
-        if !crate::session_scope::owns_task(ctx, &task)? {
+    for head in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
+        if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
         }
+        let task = head.to_shell_task()?;
         let Some(subject) = continuation(&task) else {
             continue;
         };

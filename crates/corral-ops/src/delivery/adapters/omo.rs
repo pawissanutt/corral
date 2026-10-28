@@ -73,11 +73,44 @@ impl OmoAdapter {
 }
 
 pub(crate) fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Target> {
-    let task = ctx.store.get(
+    let head = ctx.store.head(
         recipient
             .task()
             .context("OmO delivery requires a task recipient")?,
     )?;
+    // The current containers come from the head; an earlier run is read in full.
+    match recipient {
+        Recipient::Run { run, .. } if head.current_run.as_ref().is_some_and(|r| &r.id == run) => {
+            let run = head.current_run.as_ref().context("inbox run not found")?;
+            return Ok(Target {
+                cwd: run.worktree.clone(),
+                pane: run.herdr.as_ref().map(|h| h.pane_id.clone()),
+                started: run.started,
+                ended: run.ended,
+            });
+        }
+        Recipient::PlanRun { plan_run, .. }
+            if head
+                .last_plan_run
+                .as_ref()
+                .is_some_and(|r| &r.id == plan_run) =>
+        {
+            let run = head
+                .last_plan_run
+                .as_ref()
+                .context("inbox plan run not found")?;
+            return Ok(Target {
+                cwd: ctx
+                    .store
+                    .project_path(head.project.as_deref().context("planner has no project")?)?,
+                pane: run.herdr.as_ref().map(|h| h.pane_id.clone()),
+                started: run.started,
+                ended: run.ended,
+            });
+        }
+        _ => {}
+    }
+    let task = ctx.store.get(&head.id)?;
     match recipient {
         Recipient::Run { run, .. } => {
             let run = task
@@ -220,12 +253,12 @@ impl DeliveryAdapter for OmoAdapter {
     fn bind(&self, ctx: &Ctx, recipient: &Recipient) -> Result<BindOutcome> {
         // Pane ids are meaningful only on the recorded launch server; check ownership
         // before trusting any pane/process match on the selected one.
-        let task = ctx.store.get(
+        let head = ctx.store.head(
             recipient
                 .task()
                 .context("OmO delivery requires a task recipient")?,
         )?;
-        if !crate::session_scope::owns_task(ctx, &task)? {
+        if !crate::session_scope::owns_head(ctx, &head)? {
             return Ok(BindOutcome::Unbound {
                 reason: "selected herdr session does not own the recipient's pane".into(),
             });

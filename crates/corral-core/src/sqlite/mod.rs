@@ -374,6 +374,7 @@ impl SqliteBackend {
         let scope = ChangeScope::Task {
             num,
             parts: Vec::new(),
+            history: false,
         };
         tx.execute(
             "INSERT INTO change_scopes(seq, kind, key) VALUES (?1, 'task', ?2)",

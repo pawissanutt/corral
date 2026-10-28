@@ -10,6 +10,16 @@ use crate::Ctx;
 pub(super) const LOG_TAIL_LINES: usize = 30;
 
 /// Report authority transitions once per run, including concurrent sync callers.
+/// The open Review tasks, as head shells: autopilot never reads a terminal task.
+pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<Task>> {
+    ctx.store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+        .into_iter()
+        .filter(|head| head.status == corral_core::Status::Review)
+        .map(|head| head.to_shell_task())
+        .collect()
+}
+
 pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
     let Some(_lock) = ctx
         .store
@@ -18,18 +28,14 @@ pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
         return Ok(());
     };
     let run = task.current_run().map(|run| run.id.as_str());
-    let events = ctx.store.events_of(
+    // The run's newest automation event, without reading the task's earlier runs' events.
+    let previous = ctx.store.last_event_where(
         Some(&task.id),
         &["automation_blocked", "automation_resumed"],
+        run,
+        |event| event.detail["run"].as_str() == run,
     )?;
-    let previous = events.iter().rev().find(|event| {
-        event.task.as_deref() == Some(task.id.as_str())
-            && event.detail["run"].as_str() == run
-            && matches!(
-                event.kind.as_str(),
-                "automation_blocked" | "automation_resumed"
-            )
-    });
+    let previous = previous.as_ref();
     if let Some(reason) = crate::automation_blocker(ctx, task)? {
         if previous.is_none_or(|event| {
             event.kind != "automation_blocked"

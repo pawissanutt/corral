@@ -326,7 +326,40 @@ impl ReadView for SqliteView {
                 vec![Sql::Text(status.clone())],
                 head_query,
             ),
+            HeadQuery::DashboardDue { now } => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks WHERE dashboard_due IS NOT NULL \
+                     AND dashboard_due <= ? ORDER BY num"
+                ),
+                vec![Sql::Text(ts(*now))],
+                head_query,
+            ),
         }
+    }
+
+    fn token_owners(
+        &self,
+        part: TaskPart,
+        token: &str,
+        limit: u32,
+    ) -> Result<Vec<TaskNum>, ViewError> {
+        let db = self.fresh()?;
+        let read = || -> anyhow::Result<Vec<TaskNum>> {
+            let mut statement = db.prepare_cached(
+                "SELECT DISTINCT task FROM task_row_index WHERE part = ?1 AND token = ?2 \
+                 ORDER BY task LIMIT ?3",
+            )?;
+            let rows = statement.query_map(params![name(&part)?, token, limit], |row| {
+                row.get::<_, i64>(0)
+            })?;
+            let mut owners = Vec::new();
+            for row in rows {
+                owners.push(TaskNum(u64::try_from(row?)?));
+            }
+            Ok(owners)
+        };
+        read().or_view()
     }
 
     fn task(&self, num: TaskNum, parts: &TaskParts) -> Result<Option<TaskDoc>, ViewError> {

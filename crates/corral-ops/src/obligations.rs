@@ -320,25 +320,7 @@ pub(crate) fn answer_reply_with(ctx: &Ctx, id: &str, receipt: &ResumeReceipt) ->
     )
 }
 
-pub(crate) fn receipt_observation(receipt: &ResumeReceipt, now: Timestamp) -> WaitObservation {
-    let state = match receipt.delivery {
-        ResumeDelivery::Unknown => WaitState::DeliveryUnknown,
-        ResumeDelivery::Acknowledged => match receipt.outcome {
-            ReceiptOutcome::Ready | ReceiptOutcome::Answered => WaitState::Ready,
-            ReceiptOutcome::Failed => WaitState::Failed,
-            ReceiptOutcome::Cancelled => WaitState::Cancelled,
-            ReceiptOutcome::Lost => WaitState::Lost,
-        },
-    };
-    WaitObservation {
-        at: now,
-        state,
-        detail: format!(
-            "receipt {}: {:?}; delivery {:?}",
-            receipt.id, receipt.outcome, receipt.delivery
-        ),
-    }
-}
+pub(crate) use corral_core::receipt_observation;
 
 pub(crate) fn transition(ctx: &Ctx, id: &str, kind: &str, detail: serde_json::Value) -> Result<()> {
     ctx.store.log_event(Some(id), kind, detail.clone())?;

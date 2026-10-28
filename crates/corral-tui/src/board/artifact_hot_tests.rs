@@ -25,6 +25,9 @@ fn artifact_growth_keeps_production_frame_and_pm_work_constant_and_cards_equal_f
     let probe = Arc::new(corral_ops::resources::PinnedReadingsProbe::admitting());
     fx.ctx.resource_probe = probe.clone();
     fx.ctx.store.config.ui.done_max = 1;
+    // A frame after the first reads only the heads changed since it (`Store::board_since`):
+    // measure those steady frames, as the pm pass below is measured after a first evaluation.
+    snapshot::BoardSnapshot::load(&fx.ctx).unwrap();
     let initial = fx.ctx.store.get("T-006").unwrap();
     let mut reviewed = BTreeSet::from([initial.artifacts[1].path.clone()]);
     let mut old_count = 0;

@@ -6,7 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Config, Event, ProfileChoice, Run, Status, Store, Usage, UsageEntry};
+use corral_core::backend::HeadQuery;
+use corral_core::{Config, Event, ProfileChoice, Run, Status, Store, TaskHead, Usage, UsageEntry};
 use jiff::Timestamp;
 use serde::Deserialize;
 
@@ -52,49 +53,120 @@ pub fn refresh_usage(store: &Store, id: &str) -> Result<()> {
 /// Refresh the current run (and its reviews) of every unfinished task, for the board's background update.
 /// Finished tasks keep the usage collected when they finished. A failure is reported through the message sink
 /// (stderr in CLI use) and never stops the other tasks.
+///
+/// Open heads replace the board listing, and each active task's current run is refreshed as an
+/// own-record pass over that run's rows (plan T-253 section 4, "Usage refresh"): terminal
+/// tasks, other tasks, the task's earlier runs and other runs' events are never read.
 pub fn refresh_active_usage(store: &Store) {
+    let _hot = corral_core::work::HotScope::enter();
     let refreshed = transcript_cache::refresh(|| {
-        let tasks = match store.list() {
-            Ok(tasks) => tasks,
+        let heads = match store.heads(&HeadQuery::Open { project: None }) {
+            Ok(heads) => heads,
             Err(error) => {
                 corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
                 return;
             }
         };
-        for task in tasks {
+        for head in heads {
             if !matches!(
-                task.status,
+                head.status,
                 Status::Running | Status::NeedsMe | Status::Review
             ) {
                 continue;
             }
-            let Some(run) = task.current_run() else {
-                continue;
-            };
-            let events = match usage_events(store, &task.id) {
-                Ok(events) => events,
-                Err(error) => {
-                    corral_core::report_message(
-                        Some(&task.id),
-                        "Usage not refreshed",
-                        format!("{}: {error:#}", task.id),
-                    );
-                    continue;
-                }
-            };
-            if let Err(error) =
-                refresh_runs(store, &task.id, std::slice::from_ref(run), None, &events)
-            {
+            if let Err(error) = refresh_current(store, &head) {
                 corral_core::report_message(
-                    Some(&task.id),
+                    Some(&head.id),
                     "Usage not refreshed",
-                    format!("{}: {error:#}", task.id),
+                    format!("{}: {error:#}", head.id),
                 );
             }
         }
     });
     if let Err(error) = refreshed {
         corral_core::report_message(None, "Usage not refreshed", format!("{error:#}"));
+    }
+}
+
+const VERDICT_KINDS: [&str; 4] = ["verdict", "approved", "changes_requested", "discarded"];
+
+/// `refresh_runs`' algorithm on the current run alone, reading that run's own records and its
+/// own events; the write is guarded by the whole assembled run, as the full form was.
+fn refresh_current(store: &Store, head: &TaskHead) -> Result<()> {
+    let Some(run_id) = head.current_run.as_ref().map(|run| run.id.clone()) else {
+        return Ok(());
+    };
+    let _own = corral_core::work::own_records("usage_refresh", &head.id, &run_id);
+    let Some(run) = head.current_run_record()? else {
+        return Ok(());
+    };
+    let mut measured = run.clone();
+    if measured.review_runs.is_empty() {
+        #[cfg(test)]
+        EVENT_READS.set(EVENT_READS.get() + 1);
+        let mut kinds = vec!["review_started"];
+        kinds.extend(VERDICT_KINDS);
+        let events = store.events_of_run(Some(&head.id), &kinds, Some(&run.id), 0, u32::MAX)?;
+        backfill_reviews(&mut measured, store, &head.id, &events);
+    }
+    for review in &mut measured.review_runs {
+        if review.ended.is_none()
+            && let Some(end) = first_verdict_from(store, &head.id, &run.id, review.started)?
+        {
+            review.ended = Some(end);
+            let previous = review.usage.clone();
+            collect(review, store);
+            if review.usage.is_none() {
+                review.usage = previous;
+            }
+        }
+    }
+    refresh_run(&mut measured, store);
+    if measured == run {
+        return Ok(());
+    }
+    store.try_update_head(&head.id, |current| {
+        if current
+            .head()
+            .current_run
+            .as_ref()
+            .is_none_or(|r| r.id != run.id)
+        {
+            return Ok(false);
+        }
+        current.edit_current_run(&run.id, |stored| {
+            if *stored != run {
+                return Ok(false);
+            }
+            stored.usage = measured.usage.clone();
+            stored.usage_note = measured.usage_note.clone();
+            stored.review_runs = measured.review_runs.clone();
+            Ok(true)
+        })
+    })?;
+    Ok(())
+}
+
+/// The time of the run's first verdict event at or after `from`, read in sequence order from the
+/// run's own verdict events (an owner action may finish a review without a harness verdict).
+fn first_verdict_from(
+    store: &Store,
+    task: &str,
+    run: &str,
+    from: Timestamp,
+) -> Result<Option<Timestamp>> {
+    #[cfg(test)]
+    EVENT_READS.set(EVENT_READS.get() + 1);
+    let mut after = 0;
+    loop {
+        let page = store.events_of_run(Some(task), &VERDICT_KINDS, Some(run), after, 16)?;
+        let Some(last) = page.last() else {
+            return Ok(None);
+        };
+        after = last.seq;
+        if let Some(event) = page.iter().find(|event| event.ts >= from) {
+            return Ok(Some(event.ts));
+        }
     }
 }
 
@@ -692,3 +764,7 @@ fn add(total: &mut Option<Usage>, usage: Usage) -> Result<()> {
 #[cfg(test)]
 #[path = "usage_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "usage_guard_tests.rs"]
+mod guard_tests;

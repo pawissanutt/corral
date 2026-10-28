@@ -183,13 +183,20 @@ pub(crate) fn aggregate_review_row(
 }
 
 pub(crate) fn pane_row(pane: &PaneRef) -> HistoryRow {
+    let mut index = Vec::new();
+    if !pane.pane.is_empty() {
+        index.push(format!("pane:{}", pane.pane));
+    }
+    if let Some(workspace) = &pane.workspace {
+        index.push(format!("workspace:{workspace}"));
+    }
     history_row(
         TaskPart::PaneRef,
         pane.key(),
         false,
         false,
         serde_json::json!({"socket": pane.socket, "workspace": pane.workspace}),
-        Vec::new(),
+        index,
     )
 }
 
@@ -728,7 +735,7 @@ impl TaskHeadMut {
     }
 }
 
-fn split_panes_of_run(n: usize, run: &Run) -> Vec<PaneRef> {
+pub(crate) fn split_panes_of_run(n: usize, run: &Run) -> Vec<PaneRef> {
     let mut panes = crate::container_facts::run_panes(&format!("run:{}", child_key(n, SELF)), run);
     for (c, child) in run.review_runs.iter().enumerate() {
         panes.extend(crate::container_facts::run_panes(

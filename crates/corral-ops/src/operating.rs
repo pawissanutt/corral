@@ -255,16 +255,20 @@ pub(crate) fn missing_provenance(task: &str) -> anyhow::Error {
 }
 
 pub(crate) fn start_identity(task: &Task, planning: bool) -> OperatingActionIdentity {
+    start_identity_at(task, task.runs.len(), task.plan_runs.len(), planning)
+}
+
+/// [`start_identity`] with the task's coding and planning run counts given.
+fn start_identity_at(
+    task: &Task,
+    runs: usize,
+    plan_runs: usize,
+    planning: bool,
+) -> OperatingActionIdentity {
     let (run, kind) = if planning {
-        (
-            format!("D{}", task.plan_runs.len() + 1),
-            OperatingActionKind::Plan,
-        )
+        (format!("D{}", plan_runs + 1), OperatingActionKind::Plan)
     } else {
-        (
-            format!("R{}", task.runs.len() + 1),
-            OperatingActionKind::Dispatch,
-        )
+        (format!("R{}", runs + 1), OperatingActionKind::Dispatch)
     };
     let mut action = identity(&task.id, &run, kind, "launch");
     if planning {
@@ -274,9 +278,22 @@ pub(crate) fn start_identity(task: &Task, planning: bool) -> OperatingActionIden
 }
 
 pub(crate) fn queued_origin(store: &Store, task: &Task) -> Result<Origin> {
+    queued_origin_at(store, task, task.runs.len(), task.plan_runs.len())
+}
+
+/// [`queued_origin`] from a head: its shell task carries only the current containers, so the
+/// next run is numbered from the head's counts.
+pub(crate) fn queued_origin_head(store: &Store, head: &corral_core::TaskHead) -> Result<Origin> {
+    let runs = usize::try_from(head.summary.runs)? + usize::from(head.current_run.is_some());
+    let plan_runs =
+        usize::try_from(head.summary.plan_runs)? + usize::from(head.last_plan_run.is_some());
+    queued_origin_at(store, &head.to_shell_task()?, runs, plan_runs)
+}
+
+fn queued_origin_at(store: &Store, task: &Task, runs: usize, plan_runs: usize) -> Result<Origin> {
     let ctx = Ctx::from_store(store.clone());
     let planning = crate::plan_dispatch::needed(&ctx, task, &crate::DispatchOpts::default());
-    let action = start_identity(task, planning);
+    let action = start_identity_at(task, runs, plan_runs, planning);
     if let Some(authorization) = load_start(&ctx, &action)?
         && !is_automatic(&authorization)
         && task.queued

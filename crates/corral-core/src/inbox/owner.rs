@@ -103,7 +103,7 @@ impl Inbox<'_> {
     pub fn recover(&self, recovery: Recovery) -> Result<()> {
         let _deliver = self.delivery_lock()?;
         self.recover_publication()?;
-        let state = self.state()?;
+        let state = self.state_head()?;
         let number = state
             .open_envelope
             .context("recipient has no open envelope")?;

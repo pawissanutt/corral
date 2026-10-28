@@ -304,13 +304,7 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
     }
     split_recoveries(&mut rows, &record.recoveries)?;
     for pane in task_panes(task) {
-        rows.put(row(
-            TaskPart::PaneRef,
-            pane.key(),
-            false,
-            false,
-            json!({"socket": pane.socket, "workspace": pane.workspace}),
-        ));
+        rows.put(super::head_mut::pane_row(&pane));
     }
     Ok(Split {
         fields: task_fields(task)?,
@@ -641,7 +635,7 @@ fn split_nested(
                     TaskPart::RunObligation,
                     format!("{owner}/wait/{}", seq(i + 1)),
                     false,
-                    wait.receipt.is_none(),
+                    wait.open(&run.id),
                     doc,
                 ),
                 index,

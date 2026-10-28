@@ -585,6 +585,16 @@ pub(crate) fn revise(
 }
 
 /// Resume a definitely unsubmitted claim with its original owner or automatic consent.
+/// Whether [`resume_prepared`] could find a prepared planner launch: it reads only head fields
+/// and the last plan run's claim file.
+pub(crate) fn may_resume(task: &Task) -> Result<bool> {
+    let cancelled = task
+        .plan_runs
+        .last()
+        .is_some_and(|run| run.state == PlanRunState::Cancelled);
+    Ok(!task.dispatch_hold && !cancelled && claim::load(task)?.is_some())
+}
+
 pub(crate) fn resume_prepared(ctx: &Ctx, task: &Task) -> Result<bool> {
     if task.dispatch_hold
         || task

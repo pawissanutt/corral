@@ -150,7 +150,7 @@ fn grant(store: &Store, id: &str, plan_accept: bool) {
 }
 
 fn review(ctx: &Ctx, id: &str, verdict: Verdict) {
-    advance(ctx, &ctx.store.get(id).unwrap(), Timestamp::now()).unwrap();
+    advance(ctx, id, Timestamp::now()).unwrap();
     let task = ctx.store.get(id).unwrap();
     let plan = task.plans.last().unwrap();
     let attempt = plan.reviews.last().unwrap();
@@ -174,14 +174,14 @@ fn plan_changes_relaunch_planner_and_stop_at_max_rounds() {
     let (_tmp, ctx, id, path) = fixture();
     review(&ctx, &id, Verdict::Changes);
     // When autopilot returns changes and then receives another rejected revision.
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     let revised = ctx.store.get(&id).unwrap();
     assert_eq!(revised.plan_runs[0].rounds, 1);
     assert_eq!(revised.plan_runs[0].state, PlanRunState::Changes);
     assert_eq!(revised.status, Status::Running);
     crate::plan_submit(&ctx, &id, &path).unwrap();
     review(&ctx, &id, Verdict::Changes);
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     // Then bounded retries escalate without a code candidate or code gate.
     let task = ctx.store.get(&id).unwrap();
     assert_eq!(task.plan_runs[0].rounds, 1);
@@ -199,7 +199,7 @@ fn review_approval_waits_for_owner_without_holding_worker_slot() {
     let (_tmp, ctx, id, _path) = fixture();
     // When the reviewer approves and autopilot reconciles.
     review(&ctx, &id, Verdict::Approve);
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     // Then owner attention is visible, but no acceptance or worker slot exists.
     let task = ctx.store.get(&id).unwrap();
     assert_eq!(task.status, Status::NeedsMe);
@@ -241,7 +241,7 @@ fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
     ctx.store.config.limits.review = 1;
     ctx.store.config.limits.count_reviews = true;
     ctx.store.save_config().unwrap();
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     let reviewing = ctx.store.get(&id).unwrap();
     let attempt = reviewing.plans[0].reviews[0].clone();
     assert_eq!(crate::slot_usage(&ctx).unwrap().total(), 1);
@@ -251,7 +251,7 @@ fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
         + jiff::SignedDuration::from_secs(
             i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap() + 1,
         );
-    advance(&ctx, &reviewing, now).unwrap();
+    advance(&ctx, &reviewing.id, now).unwrap();
     let lost = ctx.store.get(&id).unwrap();
     assert_eq!(lost.plan_runs[0].state, PlanRunState::Escalated);
     assert_eq!(lost.plans[0].reviews[0].verdict, Some(Verdict::Escalate));
@@ -309,7 +309,7 @@ fn reviewer_loss_and_owner_supersession_release_one_slot_admission() {
         )
         .is_err()
     );
-    advance(&ctx, &changes, Timestamp::now()).unwrap();
+    advance(&ctx, &changes.id, Timestamp::now()).unwrap();
     let revised = ctx.store.get(&id).unwrap();
     assert_eq!(revised.status, Status::Running);
     assert_eq!(revised.plan_runs[0].rounds, 1);
@@ -462,7 +462,7 @@ fn automatic_revision_refusal_retains_notes_without_consuming_its_round() {
     assert!(!task.plan_runs[0].holds_slot());
     assert!(!tmp.path().join("engine/launch-command").exists());
     let before = task.plan_runs.clone();
-    advance(&ctx, &task, "2026-10-18T08:10:00Z".parse().unwrap()).unwrap();
+    advance(&ctx, &task.id, "2026-10-18T08:10:00Z".parse().unwrap()).unwrap();
     assert_eq!(ctx.store.get(&id).unwrap().plan_runs, before);
 }
 

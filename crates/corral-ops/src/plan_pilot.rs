@@ -30,7 +30,7 @@ pub(crate) fn reconcile(
     let gone = crate::pane_liveness::gone(
         ctx,
         crate::pane_liveness::Sample {
-            task,
+            task: task.into(),
             pane: pane_id,
             started: run.started,
             seen: false,
@@ -102,30 +102,23 @@ pub(crate) fn handles(task: &Task) -> bool {
 
 pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
     let _attribution = ctx.store.attribute(corral_core::Actor::Autopilot);
-    for task in ctx.store.list()? {
-        if matches!(task.status, Status::Done | Status::Dropped) {
-            continue;
-        }
+    for task in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
         let Some(_lock) = ctx.store.try_lock(&format!("plan-pilot-{}", task.id))? else {
             continue;
         };
-        if let Err(error) = advance(ctx, &task, now) {
+        if let Err(error) = advance(ctx, &task.id, now) {
             crate::messages::report(Some(&task.id), "plan autopilot", format!("{error:#}"));
         }
     }
     Ok(())
 }
 
-fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
-    let task = &ctx.store.get(&task.id)?;
-    let config = crate::plan::config(ctx)?;
-    // Prepared actions retain their exact round and owner/automatic provenance. A
-    // failed authorization is not a planner exit, nor a reason to claim a round.
-    if plan_dispatch::resume_prepared(ctx, task)? {
-        return Ok(());
-    }
-    let run = task.plan_runs.last();
-    if run.is_some_and(|r| {
+/// The last plan run is still the planner's, or ended without a plan to progress.
+fn planner_owns(task: &Task) -> bool {
+    task.plan_runs.last().is_some_and(|r| {
         matches!(
             r.state,
             PlanRunState::Planning
@@ -133,7 +126,25 @@ fn advance(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
                 | PlanRunState::Escalated
                 | PlanRunState::Cancelled
         ) || (r.state == PlanRunState::Changes && task.status == Status::Running)
-    }) {
+    })
+}
+
+fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
+    // Until a planner claim or a plan to progress exists, every check below reads only head
+    // fields and the last plan run, which the head holds.
+    let shell = ctx.store.head(id)?.to_shell_task()?;
+    if !plan_dispatch::may_resume(&shell)? && (planner_owns(&shell) || shell.plans.is_empty()) {
+        return Ok(());
+    }
+    let task = &ctx.store.get(id)?;
+    let config = crate::plan::config(ctx)?;
+    // Prepared actions retain their exact round and owner/automatic provenance. A
+    // failed authorization is not a planner exit, nor a reason to claim a round.
+    if plan_dispatch::resume_prepared(ctx, task)? {
+        return Ok(());
+    }
+    let run = task.plan_runs.last();
+    if planner_owns(task) {
         return Ok(());
     }
     let Some(plan) = task.plans.last() else {

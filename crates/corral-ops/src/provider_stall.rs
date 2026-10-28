@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use corral_core::records::RecordArea;
-use corral_core::{AvailabilityClass, Run, Status, Task};
+use corral_core::{AvailabilityClass, Run, Status};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -343,8 +343,8 @@ fn retry_text(role: Role, message: &str, attempt: u32) -> String {
 }
 
 fn still_current(ctx: &Ctx, target: &Target<'_>) -> Result<bool> {
-    let task = ctx.store.get(target.task)?;
-    let Some(run) = task.current_run() else {
+    let task = ctx.store.head(target.task)?;
+    let Some(run) = task.current_run.as_ref() else {
         return Ok(false);
     };
     Ok(match target.role {
@@ -352,8 +352,8 @@ fn still_current(ctx: &Ctx, target: &Target<'_>) -> Result<bool> {
         Role::Reviewer => {
             run.review.as_ref().is_some_and(|r| r.verdict.is_none())
                 && run
-                    .review_runs
-                    .last()
+                    .current_child
+                    .as_deref()
                     .is_some_and(|c| c.id == target.run.id && c.outcome.is_none())
         }
     })
@@ -525,11 +525,16 @@ pub(crate) fn drive(ctx: &Ctx, target: &Target<'_>, now: Timestamp) -> Result<Dr
 /// Task agents: retry a stalled live run; once exhausted move it to Needs me with the real reason.
 pub(crate) fn advance_agent(
     ctx: &Ctx,
-    task: &Task,
+    head: &corral_core::TaskHead,
     panes: &HashMap<String, PaneInfo>,
     now: Timestamp,
 ) -> Result<Option<Change>> {
-    let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
+    let shell = head.to_shell_task()?;
+    let task = &shell;
+    let (Some(run), Some(facts)) = (
+        task.current_run().filter(|r| r.outcome.is_none()),
+        head.current_run.as_ref().map(|r| &r.facts),
+    ) else {
         return Ok(None);
     };
     if crate::agent::hooks::run_is_pi_native(run) {
@@ -541,7 +546,7 @@ pub(crate) fn advance_agent(
     let Some(pane) = panes.get(pane_id) else {
         return Ok(None);
     };
-    if run.obligations.pending_decision().is_some() {
+    if facts.pending_decision.is_some() {
         return Ok(None);
     }
     let key = agent_key(&task.id, run);
@@ -554,7 +559,7 @@ pub(crate) fn advance_agent(
         run,
         boundary: provider_session::boundary(ctx, &task.id, run),
         scope: provider_session::Scope::Created {
-            until: run.review_runs.first().map(|review| review.started),
+            until: facts.first_child_started,
         },
         episode: Some(crate::availability::run_episode(&task.id, run)),
         exclude_provider: None,
@@ -564,7 +569,7 @@ pub(crate) fn advance_agent(
     };
     let from = task.status;
     let run_id = run.id.clone();
-    let saved = ctx.store.try_update(&task.id, |t| {
+    let saved = ctx.store.try_update_head(&task.id, |t| {
         if t.status != from {
             return Ok(false);
         }

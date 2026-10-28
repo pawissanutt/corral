@@ -83,7 +83,7 @@ pub(super) fn deliver(
             "another reply delivery holds the pane",
         );
     };
-    if !target.matches(&ctx.store.get(&target.task)?) {
+    if !target.matches(&ctx.store.head(&target.task)?.to_shell_task()?) {
         return record(
             ctx,
             receipt,

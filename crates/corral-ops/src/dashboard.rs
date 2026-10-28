@@ -85,10 +85,7 @@ fn eligible(task: &Task, now: Timestamp) -> bool {
 /// Active, failed, review and attention states are never recycled automatically.
 pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
-    for task in ctx.store.list()? {
-        if !eligible(&task, now) {
-            continue;
-        }
+    for task in due_candidates(ctx, now)? {
         match queue_due(ctx, &task.id, now) {
             Ok(Some(change)) => changes.push(change),
             Ok(None) => {}
@@ -100,6 +97,22 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         }
     }
     Ok(changes)
+}
+
+/// The tasks whose occurrence is due: only an unpaused schedule due by `now` can be eligible,
+/// so the `tasks_dashboard_due` page bounds the candidates.
+fn due_candidates(ctx: &Ctx, now: Timestamp) -> Result<Vec<Task>> {
+    let mut due = Vec::new();
+    for head in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::DashboardDue { now })?
+    {
+        let task = head.to_shell_task()?;
+        if eligible(&task, now) {
+            due.push(task);
+        }
+    }
+    Ok(due)
 }
 
 fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
@@ -173,3 +186,6 @@ fn queue_due(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Change>> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod hot_tests;

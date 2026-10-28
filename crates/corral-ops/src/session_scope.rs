@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use corral_core::{HerdrRef, HerdrSessionBinding, Run, Store, Task};
+use corral_core::{Board, HerdrRef, HerdrSessionBinding, Run, SessionView, Store, Task, TaskHead};
 
 use crate::Ctx;
 
@@ -28,7 +28,74 @@ pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<boo
     let view = store.session_view()?;
     if let [task] = tasks {
         // A task-local mutation must not inherit an unrelated task's foreign ownership.
-        let head = store.head(&task.id)?;
+        return head_owned(ctx, &view, &store.head(&task.id)?);
+    }
+    owns_summary(ctx, &view)
+}
+
+/// [`owns_tasks`] over the whole board, from its open heads and status counts: a store of one
+/// task checks that task's head, any other store the bounded summary.
+pub(crate) fn owns_board(ctx: &Ctx, store: &Store, board: &Board) -> Result<bool> {
+    let view = store.session_view()?;
+    let total: u64 = board.status_counts.iter().map(|c| c.n).sum();
+    match board.heads.as_slice() {
+        [head] if total == 1 => head_owned(ctx, &view, head),
+        [] if total == 1 => {
+            let sole = ["done", "dropped"].iter().find_map(|status| {
+                store
+                    .heads_page(
+                        &corral_core::backend::HeadQuery::RecentByStatus {
+                            status: (*status).to_owned(),
+                        },
+                        1,
+                    )
+                    .map(|heads| heads.into_iter().next())
+                    .transpose()
+            });
+            match sole.transpose()? {
+                Some(head) => head_owned(ctx, &view, &head),
+                None => owns_summary(ctx, &view),
+            }
+        }
+        _ => owns_summary(ctx, &view),
+    }
+}
+
+/// [`owns_task`] from a head: the summary's and current containers' pane references cover
+/// every pane the task recorded.
+pub(crate) fn owns_head(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
+    let view = ctx.store.session_view()?;
+    head_owned(ctx, &view, head)
+}
+
+/// A task or a head, for checks that accept either.
+#[derive(Clone, Copy)]
+pub(crate) enum Owner<'a> {
+    Task(&'a Task),
+    Head(&'a TaskHead),
+}
+
+impl<'a> From<&'a Task> for Owner<'a> {
+    fn from(task: &'a Task) -> Self {
+        Owner::Task(task)
+    }
+}
+
+impl<'a> From<&'a TaskHead> for Owner<'a> {
+    fn from(head: &'a TaskHead) -> Self {
+        Owner::Head(head)
+    }
+}
+
+pub(crate) fn owns(ctx: &Ctx, owner: Owner<'_>) -> Result<bool> {
+    match owner {
+        Owner::Task(task) => owns_task(ctx, task),
+        Owner::Head(head) => owns_head(ctx, head),
+    }
+}
+
+fn head_owned(ctx: &Ctx, view: &SessionView, head: &TaskHead) -> Result<bool> {
+    {
         let actual = ctx.herdr.socket_path()?;
         let legacy = view.binding.as_ref().map(|binding| &binding.socket);
         let owns = |socket: &str| {
@@ -46,7 +113,7 @@ pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<boo
                     .iter()
                     .map(|attempt| &attempt.facts),
             );
-        return Ok(legacy.is_none_or(|socket| socket == &actual)
+        Ok(legacy.is_none_or(|socket| socket == &actual)
             && head.summary.pane_refs.keys().all(|socket| owns(socket))
             && facts
                 .flat_map(|facts| facts.pane_refs.keys())
@@ -58,9 +125,8 @@ pub(crate) fn owns_tasks(ctx: &Ctx, store: &Store, tasks: &[Task]) -> Result<boo
             && view
                 .pending
                 .as_ref()
-                .is_none_or(|socket| socket.as_ref().or(legacy) == Some(&actual)));
+                .is_none_or(|socket| socket.as_ref().or(legacy) == Some(&actual)))
     }
-    owns_summary(ctx, &view)
 }
 
 fn owns_summary(ctx: &Ctx, view: &corral_core::SessionView) -> Result<bool> {

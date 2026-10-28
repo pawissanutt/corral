@@ -444,16 +444,21 @@ pub(crate) fn check_action(task: &Task, action: &str) -> Result<()> {
 /// false from try_update preserves timestamps and concurrent owner edits.
 pub(crate) fn reconcile_one(ctx: &Ctx, id: &str) -> Result<Option<Change>> {
     let mut from = None;
-    let saved = ctx.store.try_update(id, |task| {
+    let saved = ctx.store.try_update_head(id, |task| {
         // Acceptance criteria make all-children-Done ready for aggregate acceptance, not Done.
         if !task.tracker
-            || task.plan_acceptance_required()
+            || task
+                .approved_scope
+                .as_ref()
+                .is_some_and(|scope| !scope.acceptance.is_empty())
             || matches!(task.status, Status::Done | Status::Dropped)
             || task.children.is_empty()
         {
             return Ok(false);
         }
-        let children = ctx.store.list()?;
+        let children = ctx
+            .store
+            .heads(&corral_core::backend::HeadQuery::Ids(task.children.clone()))?;
         if !task.children.iter().all(|id| {
             children
                 .iter()
@@ -476,7 +481,7 @@ pub(crate) fn reconcile_one(ctx: &Ctx, id: &str) -> Result<Option<Change>> {
         return Ok(None);
     };
     Ok(from.map(|from| Change {
-        task: task.id,
+        task: task.id.clone(),
         from,
         to: Status::Done,
         note: "all tracker children are Done".into(),
@@ -486,7 +491,11 @@ pub(crate) fn reconcile_one(ctx: &Ctx, id: &str) -> Result<Option<Change>> {
 
 pub(crate) fn reconcile(ctx: &Ctx) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
-    for task in ctx.store.list()? {
+    // A Done or Dropped tracker has nothing left to complete.
+    for task in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
         if task.tracker
             && let Some(change) = reconcile_one(ctx, &task.id)?
         {

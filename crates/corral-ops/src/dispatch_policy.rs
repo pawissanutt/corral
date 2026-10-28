@@ -202,12 +202,17 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         return Ok(vec![]);
     }
     let mut changes = Vec::new();
-    let mut backlog: Vec<_> = ctx
+    // Automatic admission considers open Backlog work only.
+    let mut backlog: Vec<_> = Vec::new();
+    for head in ctx
         .store
-        .list()?
-        .into_iter()
-        .filter(|task| automatic_task(ctx, task))
-        .collect();
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
+        let task = head.to_shell_task()?;
+        if automatic_task(ctx, &task) {
+            backlog.push(task);
+        }
+    }
     crate::queue::sort_candidates(&mut backlog);
     for (index, task) in backlog.iter().enumerate() {
         if free_slots(ctx)? == 0 {
@@ -227,7 +232,9 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             "eligibility": {"status": "backlog", "depends_on_done": task.depends_on},
             "reason": "auto_backlog: dependency-ready backlog, priority then oldest",
         });
-        dispatch_one(ctx, task, inputs, now, &mut changes)?;
+        // The admission compares its snapshot with the stored task as a whole.
+        let task = ctx.store.get(&task.id)?;
+        dispatch_one(ctx, &task, inputs, now, &mut changes)?;
     }
     // Recompute after each promotion: a newly running task may conflict with the next idea.
     let mut considered = std::collections::BTreeSet::new();
@@ -236,7 +243,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             .into_iter()
             .find(|candidate| {
                 !considered.contains(&candidate.id)
-                    && ctx.store.get(&candidate.id).is_ok_and(|task| {
+                    && ctx.store.head(&candidate.id).is_ok_and(|task| {
                         !task.tracker
                             && ctx
                                 .store

@@ -91,6 +91,7 @@ fn successful_full_and_head_callbacks_publish_task_and_events_in_one_change() {
         assert!(page.entries[0].scopes.contains(&ChangeScope::Task {
             num: TaskNum(1),
             parts: vec![],
+            history: false,
         }));
         assert!(page.entries[0].scopes.contains(&ChangeScope::Events {
             task: Some(task.id.clone()),

@@ -68,12 +68,52 @@ impl<'a> Inbox<'a> {
                 Ok(result)
             }),
             _ => {
+                let id = self.recipient.task().context("task recipient")?;
+                // A current container's inbox is a projection: its scalars are edited in place
+                // and applied effects or cursors become keyed rows, so no history is read.
+                let mut f = Some(f);
                 let mut result = None;
-                self.store
-                    .update(self.recipient.task().context("task recipient")?, |task| {
+                self.store.try_update_head(id, |head| {
+                    let Some(inbox) = current_inbox(head, &self.recipient) else {
+                        return Ok(false);
+                    };
+                    let mut state = InboxState {
+                        next_seq: inbox.next_seq,
+                        next_envelope: inbox.next_envelope,
+                        open_envelope: inbox.open_envelope,
+                        replacement_envelope: inbox.replacement_envelope,
+                        effects_applied: Default::default(),
+                        binding: inbox.binding.clone(),
+                        observe_cursor: inbox.observe_cursor.clone(),
+                        observe_cursors: Vec::new(),
+                        settled: inbox.settled,
+                    };
+                    let update = f.take().context("inbox state update ran twice")?;
+                    result = Some(update(&mut state)?);
+                    *inbox = crate::InboxHead {
+                        next_seq: state.next_seq,
+                        next_envelope: state.next_envelope,
+                        open_envelope: state.open_envelope,
+                        replacement_envelope: state.replacement_envelope,
+                        binding: state.binding,
+                        observe_cursor: state.observe_cursor,
+                        settled: state.settled,
+                    };
+                    for seq in state.effects_applied {
+                        head.mark_effect_applied(&self.recipient, seq)?;
+                    }
+                    for cursor in state.observe_cursors {
+                        head.set_observe_cursor(&self.recipient, cursor)?;
+                    }
+                    Ok(true)
+                })?;
+                if let Some(f) = f {
+                    // An earlier container's inbox: the full form, as before.
+                    self.store.update(id, |task| {
                         result = Some(f(state_mut(task, &self.recipient)?)?);
                         Ok(())
                     })?;
+                }
                 result.context("inbox state update did not run")
             }
         }
@@ -216,7 +256,7 @@ impl<'a> Inbox<'a> {
 
     /// Output-sized committed message history for this recipient.
     pub fn messages(&self) -> Result<Vec<Message>> {
-        let next = self.state()?.next_seq;
+        let next = self.state_head()?.next_seq;
         let mut messages = Vec::new();
         for row in self.records("messages")? {
             let record: super::records::MessageRecord =
@@ -394,5 +434,35 @@ pub(super) fn state_mut<'a>(
             .context("inbox review child not found")?
             .inbox),
         Recipient::Pm => anyhow::bail!("PM has no task state"),
+    }
+}
+
+/// The inbox projection of `recipient` when it is one of the head's current containers.
+fn current_inbox<'h>(
+    head: &'h mut crate::TaskHeadMut,
+    recipient: &Recipient,
+) -> Option<&'h mut crate::InboxHead> {
+    match recipient {
+        Recipient::Run { run, .. } => head
+            .current_run_mut()
+            .filter(|r| &r.id == run)
+            .map(|r| &mut r.inbox),
+        Recipient::ReviewRun { run, review, .. } => head
+            .current_run_mut()
+            .filter(|r| &r.id == run)
+            .and_then(|r| r.current_child.as_deref_mut())
+            .filter(|c| &c.id == review)
+            .map(|c| &mut c.inbox),
+        Recipient::PlanRun { plan_run, .. } => head
+            .last_plan_run_mut()
+            .filter(|r| &r.id == plan_run)
+            .map(|r| &mut r.inbox),
+        Recipient::PlanReview { plan, review, .. } => head
+            .last_plan_mut()
+            .filter(|p| &p.id == plan)
+            .and_then(|p| p.current_review.as_mut())
+            .filter(|r| &r.id == review)
+            .map(|r| &mut r.inbox),
+        Recipient::Pm => None,
     }
 }

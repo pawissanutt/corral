@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, GateTierReceipt,
-    HerdrRef, Run, Status, Task,
+    HerdrRef, Run, Task,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -802,7 +802,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
             && crate::pane_liveness::gone(
                 ctx,
                 crate::pane_liveness::Sample {
-                    task: &task,
+                    task: (&task).into(),
                     pane,
                     started: gate.at,
                     seen: false,
@@ -837,15 +837,16 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
 pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>> {
     let mut done = Vec::new();
     let mut legacy = 0;
-    for task in ctx.store.list()? {
-        if !crate::session_scope::owns_task(ctx, &task)? {
-            continue;
-        }
-        if matches!(task.status, Status::Done | Status::Dropped) {
+    for task in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
+        if !crate::session_scope::owns_head(ctx, &task)? {
             continue;
         }
         let running = task
-            .current_run()
+            .current_run
+            .as_ref()
             .and_then(|r| r.gate.as_ref())
             .is_some_and(|g| g.result == GateResult::Running);
         if !running {

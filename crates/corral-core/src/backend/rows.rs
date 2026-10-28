@@ -419,6 +419,11 @@ pub enum ChangeScope {
     Task {
         num: TaskNum,
         parts: Vec<TaskPart>,
+        /// Whether a non-current row of a container family (run, review child, plan, plan
+        /// review) was written or deleted: a demotion or a history edit. Without it, only the
+        /// current containers changed.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        history: bool,
     },
     /// Records, claims (`claims`), leases (`leases`), authorizations (`authorizations`) and
     /// the session binding (`session`).

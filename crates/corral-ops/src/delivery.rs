@@ -130,7 +130,7 @@ pub fn deliver_at(
     let _deliver = inbox.delivery_lock()?;
     let mut open = observe_pass(ctx, &inbox, adapter, fallback, now)?;
     let replacement = inbox
-        .state()?
+        .state_head()?
         .replacement_envelope
         .map(|number| inbox.envelope(number))
         .transpose()?;
@@ -321,7 +321,7 @@ fn observe_pass(
 ) -> Result<Option<Envelope>> {
     inbox.recover_publication()?;
     let mut open = inbox
-        .state()?
+        .state_head()?
         .open_envelope
         .map(|n| inbox.envelope(n))
         .transpose()?;
@@ -436,11 +436,7 @@ fn observe(
     now: Timestamp,
 ) -> Result<()> {
     let mut cursor = inbox
-        .state()?
-        .observe_cursors
-        .into_iter()
-        .find(|stream| stream.adapter == adapter.harness() && &stream.binding == binding)
-        .map(|stream| stream.cursor)
+        .observe_cursor_of(adapter.harness(), binding)?
         // A new stream starts from its origin, never another stream's offset.
         .unwrap_or_default();
     for observation in adapter.observe(ctx, binding, &mut cursor)? {

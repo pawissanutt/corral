@@ -3,8 +3,8 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use corral_core::{
-    GateResult, ReceiptOutcome, ResumeDelivery, ResumeReceipt, Run, WaitHandle, WaitObservation,
-    WaitRecord, WaitState,
+    GateResult, ReceiptOutcome, ResumeDelivery, ResumeReceipt, Run, TaskHead, WaitHandle,
+    WaitObservation, WaitRecord, WaitState,
 };
 use corral_herdr::PaneInfo;
 use jiff::Timestamp;
@@ -19,20 +19,35 @@ pub(crate) fn reconcile_one(
     now: Timestamp,
     panes: Option<&HashMap<String, PaneInfo>>,
 ) -> Result<Option<Change>> {
-    let task = ctx.store.get(id)?;
-    if panes.is_some() && !crate::session_scope::owns_task(ctx, &task)? {
+    reconcile_head(ctx, &ctx.store.head(id)?, now, panes)
+}
+
+/// Re-observes only the current run's open obligations: a wait or decision with a resume
+/// receipt keeps the observation its receipt fixed, so no tick can change it.
+pub(crate) fn reconcile_head(
+    ctx: &Ctx,
+    head: &TaskHead,
+    now: Timestamp,
+    panes: Option<&HashMap<String, PaneInfo>>,
+) -> Result<Option<Change>> {
+    if panes.is_some() && !crate::session_scope::owns_head(ctx, head)? {
         return Ok(None);
     }
-    let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
+    let Some(current) = head.current_run.as_ref().filter(|r| r.outcome.is_none()) else {
         return Ok(None);
     };
-    if !task.status.holds_slot() || run.obligations.is_empty() {
+    if !head.status.holds_slot() || current.facts.waits + current.facts.decisions == 0 {
         return Ok(None);
     }
-    let mut next = run.obligations.clone();
+    let shell = head.to_shell_task()?;
+    let Some(run) = shell.current_run() else {
+        return Ok(None);
+    };
+    let open = head.open_obligations(&run.id)?;
+    let mut next = open.clone();
     let mut transitions = Vec::new();
     for wait in &mut next.waits {
-        let (state, detail, receipt) = observe(ctx, &task.id, run, wait, now, panes);
+        let (state, detail, receipt) = observe(ctx, &head.id, run, wait, now, panes);
         if let Some(receipt) = receipt {
             wait.receipt = Some(receipt);
         }
@@ -63,26 +78,43 @@ pub(crate) fn reconcile_one(
             transitions.push(json!({"decision":decision.request.id,"state":"expired","question":decision.request.question}));
         }
     }
-    if next == run.obligations {
+    if next == open {
         return Ok(None);
     }
-    let written = ctx.store.try_update(id, |t| {
-        if panes.is_some() && !crate::session_scope::owns_task(ctx, t)? {
+    let (status, rev) = (head.status, current.facts.obligations_rev);
+    let written = ctx.store.try_update_head(&head.id, |t| {
+        if panes.is_some() && !crate::session_scope::owns_head(ctx, t.head())? {
             return Ok(false);
         }
-        if t.status != task.status {
+        if t.status != status {
             return Ok(false);
         }
-        let Some(current) = t
+        let Some(fresh) = t
             .current_run_mut()
             .filter(|r| r.id == run.id && r.outcome.is_none())
         else {
             return Ok(false);
         };
-        if current.obligations != run.obligations || current.gate != run.gate {
+        // obligations_rev stands in for the whole obligations: stricter only on A->B->A.
+        if fresh.facts.obligations_rev != rev || fresh.gate != run.gate {
             return Ok(false);
         }
-        current.obligations = next.clone();
+        for (before, after) in open.waits.iter().zip(&next.waits) {
+            if before != after {
+                t.edit_wait(&run.id, &after.request.id, |w| {
+                    *w = after.clone();
+                    Ok(())
+                })?;
+            }
+        }
+        for (before, after) in open.decisions.iter().zip(&next.decisions) {
+            if before != after {
+                t.edit_decision(&run.id, &after.request.id, |d| {
+                    *d = after.clone();
+                    Ok(())
+                })?;
+            }
+        }
         Ok(true)
     })?;
     let Some(task) = written else {
@@ -92,7 +124,7 @@ pub(crate) fn reconcile_one(
         transition(ctx, &task.id, "wait_transition", detail)?;
     }
     Ok(Some(Change {
-        task: task.id,
+        task: task.id.clone(),
         from: task.status,
         to: task.status,
         note: next.lines().join("; "),
@@ -196,3 +228,11 @@ fn observe(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "obligations_sync_guard_tests.rs"]
+mod guard_tests;
+
+#[cfg(test)]
+#[path = "obligations_sync_differential_tests.rs"]
+mod differential_tests;

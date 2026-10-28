@@ -30,6 +30,18 @@ pub struct Board {
     pub status_counts: Vec<StatusCount>,
 }
 
+impl Board {
+    /// This board without its read view, to keep between frames without holding a read open;
+    /// [`Store::board_since`] rebinds it.
+    #[must_use]
+    pub fn detach(mut self) -> Board {
+        for head in &mut self.heads {
+            head.view = None;
+        }
+        self
+    }
+}
+
 /// The task a head describes with every history vector empty, for the checks and digests that
 /// read only head fields.
 pub(crate) fn shell_task(fields: &TaskHeadFields) -> Result<Task> {
@@ -459,6 +471,58 @@ impl Store {
         Ok(heads)
     }
 
+    /// The open board as of now: `prev`'s heads, with every task changed after `prev.seq` read
+    /// again and those that left the open board dropped. Only changed heads are decoded; a
+    /// pruned feed reads the whole open board instead.
+    ///
+    /// # Errors
+    /// Returns read errors.
+    pub fn board_since(&self, prev: &Board) -> Result<Board> {
+        let view = self.pinned_view()?;
+        let delta = {
+            let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
+            if guard.seq() < prev.seq {
+                // Another store now lives at this root: nothing of `prev` carries over.
+                drop(guard);
+                return self.board(None);
+            }
+            match guard.board(Some(prev.seq)) {
+                Ok(delta) => delta,
+                Err(crate::backend::FeedError::Gap { .. }) => {
+                    drop(guard);
+                    return self.board(None);
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        // Every changed head replaces its previous entry, including one that no longer decodes
+        // and is skipped: a full board would not show it either.
+        let changed_ids: Vec<String> = delta
+            .heads
+            .iter()
+            .map(|doc| doc.header.id.clone())
+            .collect();
+        let changed = Self::board_on(&view, delta)?;
+        let gone: std::collections::BTreeSet<&str> = changed_ids
+            .iter()
+            .map(String::as_str)
+            .chain(changed.left.iter().map(String::as_str))
+            .collect();
+        let mut heads: Vec<TaskHead> = prev
+            .heads
+            .iter()
+            .filter(|head| !gone.contains(head.id.as_str()))
+            .cloned()
+            .map(|mut head| {
+                head.view = Some(Arc::clone(&view));
+                head
+            })
+            .collect();
+        heads.extend(changed.heads.iter().cloned());
+        heads.sort_by_key(|head| head.num);
+        Ok(Board { heads, ..changed })
+    }
+
     /// The open board, or the heads changed after `since`, on one view.
     ///
     /// # Errors
@@ -469,6 +533,10 @@ impl Store {
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
             guard.board(since)?
         };
+        Self::board_on(&view, delta)
+    }
+
+    fn board_on(view: &PinnedView, delta: crate::backend::BoardDelta) -> Result<Board> {
         let mut heads = Vec::new();
         for doc in delta.heads {
             work::decoded(
@@ -480,7 +548,7 @@ impl Store {
             let head = decode_or_skip(guard.as_ref(), doc)?;
             drop(guard);
             if let Some(mut head) = head {
-                head.view = Some(Arc::clone(&view));
+                head.view = Some(Arc::clone(view));
                 heads.push(head);
             }
         }
@@ -495,6 +563,20 @@ impl Store {
                 .collect(),
             status_counts: delta.status_counts,
         })
+    }
+
+    /// Tasks that recorded pane `pane`, or a pane in workspace `workspace` (`token` is
+    /// `pane:<id>` or `workspace:<id>`), by id; no row is decoded.
+    ///
+    /// # Errors
+    /// Returns read errors.
+    pub fn pane_owners(&self, token: &str) -> Result<Vec<String>> {
+        Ok(self
+            .view()?
+            .token_owners(crate::backend::TaskPart::PaneRef, token, 64)?
+            .into_iter()
+            .map(|num| format!("T-{:03}", num.0))
+            .collect())
     }
 
     /// Change-feed entries after `after`.

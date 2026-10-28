@@ -131,6 +131,22 @@ pub enum RowWrite {
     Delete { part: TaskPart, key: String },
 }
 
+impl RowWrite {
+    /// Whether this write touches a non-current container row (`ChangeScope::Task::history`).
+    pub fn container_history(&self) -> bool {
+        let container = |part: TaskPart| {
+            matches!(
+                part,
+                TaskPart::Run | TaskPart::ReviewRun | TaskPart::Plan | TaskPart::PlanReview
+            )
+        };
+        match self {
+            RowWrite::Put(row) => container(row.part) && !row.current,
+            RowWrite::Delete { part, .. } => container(*part),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AggregateWrite {
     /// Replaces one usage total; its document holds its blob references like any other.

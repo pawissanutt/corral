@@ -70,7 +70,7 @@ fn run_path(ctx: &Ctx, path: &str) -> String {
     }
 }
 
-fn flatten(delta: &WorkSnapshot, herdr: u64, git: u64) -> Cells {
+pub(super) fn flatten(delta: &WorkSnapshot, herdr: u64, git: u64) -> Cells {
     let mut cells = Cells::new();
     for counter in Counter::ALL {
         let c = delta.cells(counter);
@@ -192,7 +192,7 @@ fn unattributed(cells: &Cells) -> impl Iterator<Item = (&String, &u64)> {
         .filter(|(key, _)| key.ends_with(".unattributed") || key.starts_with("calls."))
 }
 
-fn compare(base: &Measured, larger: &Measured, name: &str) -> Vec<String> {
+pub(super) fn compare(base: &Measured, larger: &Measured, name: &str) -> Vec<String> {
     let mut failures = Vec::new();
     for (key, b) in &base.cells {
         let Some(l) = larger.cells.get(key) else {
@@ -252,7 +252,7 @@ fn in_variant(m: &Measured, name: &str) -> Vec<String> {
     failures
 }
 
-fn report(m: &Measured) -> String {
+pub(super) fn report(m: &Measured) -> String {
     let mut out = String::new();
     for (key, cells) in &m.cells {
         let line: Vec<String> = cells
@@ -265,7 +265,7 @@ fn report(m: &Measured) -> String {
     out
 }
 
-fn encode(m: &Measured) -> String {
+pub(super) fn encode(m: &Measured) -> String {
     serde_json::json!({
         "cells": m.cells, "outputs": m.outputs, "expected": m.expected.iter().map(|(k, e)| (k.clone(), e.encode())).collect::<BTreeMap<_, _>>(),
         "failures": m.failures,
@@ -273,7 +273,7 @@ fn encode(m: &Measured) -> String {
     .to_string()
 }
 
-fn decode(line: &str) -> Measured {
+pub(super) fn decode(line: &str) -> Measured {
     let v: serde_json::Value = serde_json::from_str(line).unwrap();
     Measured {
         cells: serde_json::from_value(v["cells"].clone()).unwrap(),

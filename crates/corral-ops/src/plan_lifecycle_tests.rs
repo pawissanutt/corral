@@ -149,7 +149,7 @@ fn cancel_stale_d1_keeps_p3_pending_owner_approval() {
         crate::plan_submit(&ctx, &id, &path).unwrap();
     }
     review(&ctx, &id, Verdict::Approve);
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     // Reproduce T-048's erroneous stale D1 alongside an unrelated pending P3.
     let task = active(&ctx, &id);
     let before = task.plans.clone();
@@ -224,7 +224,7 @@ fn cancelled_planner_rejects_stale_automatic_progression() {
         let stale = ctx.store.get(&id).unwrap();
         let cancelled = crate::plan_cancel(&ctx, &id).unwrap();
         // When automatic actions consume that stale observation.
-        advance(&ctx, &stale, Timestamp::now()).unwrap();
+        advance(&ctx, &stale.id, Timestamp::now()).unwrap();
         escalate(&ctx, &stale, "Stale observation").unwrap();
         assert!(
             !crate::plan_dispatch::revise(

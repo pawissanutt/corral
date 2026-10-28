@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use corral_core::{AutoStage, Run, RunOutcome, Status, Task};
+use corral_core::backend::HeadQuery;
+use corral_core::{AutoStage, Run, RunOutcome, Status, Task, TaskHead};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -89,18 +90,35 @@ fn sync_passes(
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
     }
+    // Recovery and derivation preparation run before the measured passes.
+    crate::settling::recover(ctx)?;
+    let mut rebuild = false;
+    let changes = hot_passes(ctx, now, processes, source, &mut rebuild)?;
+    // Rebuildable state recovers outside the measured hot path (plan T-253 section 4).
+    if rebuild {
+        crate::content_refresh::refresh_search_index(ctx)?;
+    }
+    Ok(changes)
+}
+
+/// The measured passes; `rebuild` is set when a pass could not follow the search index.
+fn hot_passes(
+    ctx: &Ctx,
+    now: Timestamp,
+    processes: &dyn ProcessControl,
+    source: Option<&Ctx>,
+    rebuild: &mut bool,
+) -> Result<Vec<Change>> {
+    let _hot = corral_core::work::HotScope::enter();
     let mut changes = Vec::new();
-    let mut visited = std::collections::BTreeSet::new();
     let mut attempted = std::collections::BTreeSet::new();
     loop {
-        let before = serde_json::to_vec(&ctx.store.list()?)?;
-        if !visited.insert(crate::verification::digest(&before)) {
-            break;
-        }
-        let pass = sync_scoped(ctx, now, processes, source)?;
+        // The change feed position, not a serialized board, tells whether anything committed.
+        let before = ctx.store.view()?.seq();
+        let pass = sync_scoped(ctx, now, processes, source, rebuild)?;
         let progressed = !pass.is_empty();
         changes.extend(pass);
-        let after = serde_json::to_vec(&ctx.store.list()?)?;
+        let after = ctx.store.view()?.seq();
         // A concurrent owner's write is not this pass's progress. In
         // particular, landing during rebuildable indexing must not make this
         // same sync consume a new repair round on an owner-ready peer.
@@ -116,7 +134,7 @@ fn sync_passes(
         let mut fresh_action = false;
         for action in &workset.actions {
             if let Some(id) = &action.action.task {
-                let task = ctx.store.get(id)?;
+                let task = ctx.store.head(id)?;
                 // Terminal samples cannot create another attempt. Only a new
                 // action, candidate/receipt, plan, round or policy can continue.
                 let key = crate::verification::digest(&serde_json::to_vec(&(
@@ -125,9 +143,12 @@ fn sync_passes(
                     action.authority,
                     &action.action.evidence,
                     task.rounds,
-                    task.current_run()
+                    task.current_run
+                        .as_ref()
                         .map(|run| (&run.id, &run.gate, &run.review)),
-                    task.plans.last(),
+                    task.last_plan
+                        .as_ref()
+                        .map(|plan| (plan, plan.facts.children_rev)),
                 ))?);
                 fresh_action |= attempted.insert(key);
             }
@@ -144,6 +165,7 @@ fn sync_scoped(
     now: Timestamp,
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
+    rebuild: &mut bool,
 ) -> Result<Vec<Change>> {
     // The per-pass clone reads the binding once for every guard of this pass; nothing is
     // cached on the caller's long-lived ctx. Inventory re-reads under its lease.
@@ -175,26 +197,25 @@ fn sync_scoped(
         crate::hooks::reconcile_post_land(ctx)?;
         crate::gate::collect_finished(ctx, now)?;
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
-        let tasks = ctx.store.list()?;
-        for task in &tasks {
-            crate::obligations_sync::reconcile_one(ctx, &task.id, now, None)?;
+        for head in open_heads(ctx)? {
+            crate::obligations_sync::reconcile_head(ctx, &head, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
-        crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
+        *rebuild |= !crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp)?;
         return Ok(changes);
     }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
-    let tasks = ctx.store.list()?;
-    if !crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
+    let board = ctx.store.board(None)?;
+    if !crate::session_scope::owns_board(ctx, &ctx.store, &board)? {
         return Ok(changes);
     }
     if let Some(source) = source
-        && !crate::session_scope::owns_tasks(source, &ctx.store, &tasks)?
+        && !crate::session_scope::owns_board(source, &ctx.store, &board)?
     {
         return Ok(changes);
     }
@@ -208,59 +229,63 @@ fn sync_scoped(
         .map(|p| (p.pane_id.clone(), p))
         .collect();
     let snapshot = inventory.snapshot(&panes);
-    crate::cleanup::sweep(ctx, &tasks);
-    for task in &tasks {
+    crate::cleanup::sweep_inventory(ctx, &board, &inventory.panes);
+    // Each task's head is read afresh: gate collection above may have just recorded a result.
+    for head in &board.heads {
         if let Some(change) =
-            crate::obligations_sync::reconcile_one(ctx, &task.id, now, Some(&panes))?
+            crate::obligations_sync::reconcile_one(ctx, &head.id, now, Some(&panes))?
         {
             changes.push(change);
         }
     }
-    for task in ctx.store.list()? {
-        if !crate::session_scope::owns_task(ctx, &task)? {
+    for head in open_heads(ctx)? {
+        if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
         }
-        crate::plan_pilot::reconcile(ctx, &task, snapshot, now)?;
-        let reconciled = ctx.store.get(&task.id)?;
-        if reconciled.status != task.status {
+        crate::plan_pilot::reconcile(ctx, &head.to_shell_task()?, snapshot, now)?;
+        let reconciled = ctx.store.head(&head.id)?;
+        if reconciled.status != head.status {
             changes.push(Change {
-                task: task.id.clone(),
-                from: task.status,
+                task: head.id.clone(),
+                from: head.status,
                 to: reconciled.status,
                 note: reconciled
-                    .plan_runs
-                    .last()
+                    .last_plan_run
+                    .as_ref()
                     .and_then(|r| r.pending_reply.clone())
                     .unwrap_or_else(|| "planner agent state changed".into()),
                 stage: None,
             });
         }
-        let current = ctx.store.get(&task.id)?;
+        let current = reconciled.to_shell_task()?;
         if let Some(change) = crate::launch_exit::plan_review(ctx, &current)? {
             changes.push(change);
         }
         crate::plan_acceptance::reconcile_exit(ctx, &current)?;
         if let Some(change) =
-            crate::reviewer::reconcile_review_sampled_at(ctx, &task.id, now, snapshot)?
+            crate::reviewer::reconcile_review_sampled_at(ctx, &head.id, now, snapshot)?
         {
             changes.push(change);
         }
         // One hook call per task holding live pi-native work; other tasks never reach it.
-        let (task, agent) = if crate::agent::hooks::sync::wants(&task) {
-            let synced = crate::agent::hooks::sync::task(ctx, &task, now)?;
-            (ctx.store.get(&task.id)?, synced)
+        let shell = crate::settling::shell_with_open_children(&head)?;
+        let (head, agent) = if crate::agent::hooks::sync::wants(&shell) {
+            let synced = crate::agent::hooks::sync::task(ctx, &shell, now)?;
+            (ctx.store.head(&head.id)?, synced)
         } else {
-            (task, Default::default())
+            (head, Default::default())
         };
-        let agent_healthy = agent.current_worker_healthy(&task);
-        if !crate::plan_pilot::handles(&task) && task.status.holds_slot() && task.launch.is_none() {
-            if let Some(change) = crate::provider_stall::advance_agent(ctx, &task, &panes, now)? {
+        let shell = head.to_shell_task()?;
+        let agent_healthy = agent.current_worker_healthy(&shell);
+        if !crate::plan_pilot::handles(&shell) && head.status.holds_slot() && head.launch.is_none()
+        {
+            if let Some(change) = crate::provider_stall::advance_agent(ctx, &head, &panes, now)? {
                 changes.push(change);
                 continue;
             }
             if let Some(change) = reconcile(
                 ctx,
-                &task,
+                &head,
                 snapshot,
                 now,
                 processes,
@@ -269,6 +294,14 @@ fn sync_scoped(
             )? {
                 changes.push(change);
             }
+        }
+    }
+    // Terminal tasks whose Pi-native containers still owe their run-end duties.
+    for head in crate::settling::terminal_heads(ctx)? {
+        let shell = crate::settling::shell_with_open_children(&head)?;
+        if crate::session_scope::owns_head(ctx, &head)? && crate::agent::hooks::sync::wants(&shell)
+        {
+            crate::agent::hooks::sync::task(ctx, &shell, now)?;
         }
     }
     crate::delivery::owner::reconcile_all(ctx)?;
@@ -286,13 +319,18 @@ fn sync_scoped(
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
-    crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
+    *rebuild |= !crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp)?;
     Ok(changes)
+}
+
+/// The open board's heads on one view: every task a pass reconciles.
+fn open_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
+    ctx.store.heads(&HeadQuery::Open { project: None })
 }
 
 fn reconcile(
     ctx: &Ctx,
-    task: &Task,
+    head: &TaskHead,
     snapshot: crate::pane_liveness::Snapshot<'_>,
     now: Timestamp,
     processes: &dyn ProcessControl,
@@ -301,13 +339,19 @@ fn reconcile(
 ) -> Result<Option<Change>> {
     let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
-    if !task.status.holds_slot() {
+    if !head.status.holds_slot() {
         return Ok(None);
     }
+    let shell = head.to_shell_task()?;
+    let task = &shell;
     if crate::resource_escalation::holds_attention(ctx, task)? {
         return Ok(None);
     }
     let Some(run) = task.current_run().filter(|r| r.outcome.is_none()) else {
+        return Ok(None);
+    };
+    // The shell run carries no obligations: their current state is the run's facts.
+    let Some(facts) = head.current_run.as_ref().map(|r| &r.facts) else {
         return Ok(None);
     };
     let Some(pane_id) = run.herdr.as_ref().map(|h| h.pane_id.clone()) else {
@@ -325,7 +369,7 @@ fn reconcile(
     let gone = crate::pane_liveness::gone(
         ctx,
         crate::pane_liveness::Sample {
-            task,
+            task: head.into(),
             pane: Some(&pane_id),
             started: run.started,
             seen: seen_pane,
@@ -383,7 +427,7 @@ fn reconcile(
     let stall_key = crate::provider_stall::agent_key(&task.id, run);
     let stall_retrying = crate::provider_stall::retrying(ctx, &stall_key);
     let stall_escalated = crate::provider_stall::escalated(ctx, &stall_key);
-    let decision = run.obligations.pending_decision();
+    let decision = facts.pending_decision.as_ref();
     let harness_question = match crate::pm_questions::pending(ctx, run) {
         Ok(question) => question,
         Err(error) => {
@@ -395,11 +439,8 @@ fn reconcile(
             return Ok(None);
         }
     };
-    let waiting = run
-        .obligations
-        .waits
-        .iter()
-        .any(|w| w.observation.state == corral_core::WaitState::Pending);
+    let waiting = facts.pending_waits > 0;
+    let obligations_rev = facts.obligations_rev;
     // A Pi-native question that waits on the owner holds Needs me like an owner decision.
     let (to, note) =
         if decision.is_some() || harness_question.is_some() || agent_attention.is_some() {
@@ -510,8 +551,8 @@ fn reconcile(
     // Everything above was decided from the snapshot `sync` listed; herdr calls since then leave time
     // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
     // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
-    let written = ctx.store.try_update(&task.id, |t| {
-        if !crate::session_scope::owns_task(ctx, t)? {
+    let written = ctx.store.try_update_head(&task.id, |t| {
+        if !crate::session_scope::owns_head(ctx, t.head())? {
             return Ok(false);
         }
         if t.status != from {
@@ -523,9 +564,10 @@ fn reconcile(
         else {
             return Ok(false);
         };
+        // obligations_rev stands in for the whole obligations: stricter only on A->B->A.
         if r.stuck != run.stuck
             || r.pending_reply != run.pending_reply
-            || r.obligations != run.obligations
+            || r.facts.obligations_rev != obligations_rev
             || r.seen_pane != run.seen_pane
         {
             return Ok(false);
@@ -645,14 +687,15 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
-    let mut queued: Vec<Task> = ctx
-        .store
-        .list()?
-        .into_iter()
-        .filter(|t| {
-            !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
-        })
-        .collect();
+    // Only open tasks can be queued or carry a launch claim.
+    let mut queued: Vec<Task> = Vec::new();
+    for head in open_heads(ctx)? {
+        if !head.tracker
+            && (head.launch.is_some() || crate::queue::authorized_ready_head(&ctx.store, &head))
+        {
+            queued.push(head.to_shell_task()?);
+        }
+    }
     crate::queue::sort_candidates(&mut queued);
     let mut changes = Vec::new();
     for (index, task) in queued.into_iter().enumerate() {
@@ -691,3 +734,7 @@ fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
 #[cfg(test)]
 #[path = "agent/hooks/sync_seam_tests.rs"]
 mod agent_seam_tests;
+
+#[cfg(test)]
+#[path = "sync_guard_tests.rs"]
+mod guard_tests;

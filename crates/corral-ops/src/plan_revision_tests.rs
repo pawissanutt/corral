@@ -38,7 +38,7 @@ fn escalated_with(mode: &str, with_run: bool) -> (tempfile::TempDir, Ctx, String
         },
     )
     .unwrap();
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     match mode {
         "autopilot" => {}
         "paused" => {
@@ -144,7 +144,7 @@ fn owner_revision_queues_while_dispatch_is_paused_and_resumes_after() {
     // And it starts on the next sync once dispatch resumes.
     ctx.store.config.dispatch.paused = false;
     ctx.store.save_config().unwrap();
-    advance(&ctx, &task, Timestamp::now()).unwrap();
+    advance(&ctx, &task.id, Timestamp::now()).unwrap();
     assert_revising(&tmp, &ctx, &id, "owner-revision-1", true);
 }
 
@@ -175,7 +175,7 @@ fn autopilot_revision_counts_owner_changes_resolutions() {
         assert!(!effective.allows(&id, kind), "{kind:?}");
     }
     // And the plan pilot reconciles, its own revision path starts instead of refusing.
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     assert_revising(&tmp, &ctx, &id, "revision-1", false);
 }
 
@@ -258,7 +258,7 @@ fn explicit_replacement_supersedes_a_queued_revision_after_the_spec_changed() {
     ctx.store.save_config().unwrap();
     // Then the stale queued action is refused without stranding the task.
     let task = ctx.store.get(&id).unwrap();
-    assert!(advance(&ctx, &task, Timestamp::now()).is_err());
+    assert!(advance(&ctx, &task.id, Timestamp::now()).is_err());
     assert!(!tmp.path().join("engine/launch-command").exists());
     assert_eq!(ctx.store.get(&id).unwrap().status, Status::Review);
     // And an explicit replacement starts a current-spec planner with the notes.

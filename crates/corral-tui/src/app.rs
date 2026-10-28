@@ -91,6 +91,8 @@ mod settings_parity_tests;
 mod slot_tests;
 #[cfg(test)]
 mod snapshot_tests;
+#[cfg(test)]
+mod sync_budget;
 pub(crate) mod sync_step;
 #[cfg(test)]
 mod tests;

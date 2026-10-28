@@ -30,6 +30,9 @@ use crate::artifact_storage::{ARTIFACT_KEYS, KeyDoc, task_of};
 #[derive(Debug, Default)]
 pub(crate) struct TaskDelta {
     pub parts: BTreeSet<TaskPart>,
+    /// A non-current container row was written since the cursor (a demotion or a history
+    /// edit); without one only the current containers' documents can have changed.
+    pub history: bool,
 }
 
 /// What changed after the index's cursor.
@@ -187,9 +190,20 @@ fn task(
     ]
     .iter()
     .any(|part| changed.parts.contains(part))
+        && !changed.history
     {
-        // The feed names changed families, not rows: every run and plan review document is
-        // re-derived from rows, so a container demoted since the cursor is never missed.
+        current_records(ident, &head, documents, records);
+    } else if [
+        TaskPart::Run,
+        TaskPart::ReviewRun,
+        TaskPart::Plan,
+        TaskPart::PlanReview,
+    ]
+    .iter()
+    .any(|part| changed.parts.contains(part))
+    {
+        // A demotion or history edit: every run and plan review document is re-derived from
+        // rows, so a container demoted since the cursor is never missed.
         documents
             .retain(|r, doc| doc.task != id || doc.scope != "reviews" || r.starts_with(&comment));
         let mut page = PageReq::first(256);
@@ -213,17 +227,7 @@ fn task(
                 .context("plan row without id")?
                 .to_string();
             for review in head.plan_reviews(&plan)? {
-                records.push(Record::text_of(
-                    ident,
-                    None,
-                    "reviews",
-                    &format!("{plan}:{}", review.id),
-                    format!(
-                        "Verdict: {}\n{}",
-                        review.verdict.map_or("", |v| v.as_str()),
-                        review.notes.as_deref().unwrap_or("")
-                    ),
-                ));
+                records.push(plan_review_record(ident, &plan, &review));
             }
         }
     }
@@ -264,6 +268,52 @@ fn artifact_record(
         records.push(Record::artifact(id, &artifact));
     }
     Ok(())
+}
+
+/// Only current containers changed: their documents are re-derived from the head's
+/// projections (the current run, its current child and the current plan review).
+fn current_records(
+    ident: (&str, &str, jiff::Timestamp),
+    head: &corral_core::TaskHead,
+    documents: &mut BTreeMap<String, super::Document>,
+    records: &mut Vec<Record>,
+) {
+    let id = ident.0;
+    let mut rederive = |run: &corral_core::RunHead, key: &str, records: &mut Vec<Record>| {
+        documents.remove(&format!("{id}:{key}:summary"));
+        documents.remove(&format!("{id}:{key}:review"));
+        run_records(ident, run, key, records);
+    };
+    if let Some(run) = &head.current_run {
+        rederive(run, &run.id, records);
+        if let Some(child) = run.current_child.as_deref() {
+            let ordinal = run.facts.children.saturating_sub(1);
+            rederive(child, &format!("{}:reviewer:{ordinal}", run.id), records);
+        }
+    }
+    if let Some(plan) = &head.last_plan
+        && let Some(review) = &plan.current_review
+    {
+        records.push(plan_review_record(ident, &plan.id, review));
+    }
+}
+
+fn plan_review_record(
+    ident: (&str, &str, jiff::Timestamp),
+    plan: &str,
+    review: &corral_core::PlanReviewHead,
+) -> Record {
+    Record::text_of(
+        ident,
+        None,
+        "reviews",
+        &format!("{plan}:{}", review.id),
+        format!(
+            "Verdict: {}\n{}",
+            review.verdict.map_or("", |v| v.as_str()),
+            review.notes.as_deref().unwrap_or("")
+        ),
+    )
 }
 
 /// The summary and review documents of `run` under `key`, as `content_index::runs` derives

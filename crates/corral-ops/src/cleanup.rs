@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use corral_core::{Run, Status, Task};
+use corral_herdr::PaneInfo;
 use serde_json::json;
 
 use crate::Ctx;
@@ -31,7 +32,28 @@ pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<Stri
     }
 }
 
-/// One inventory for the whole sweep, rather than subprocesses per finished task on each board tick.
+/// The per-tick retry net, bounded by what herdr lists rather than by finished history: each
+/// listed pane, and each listed workspace without a pane, is looked up among the panes tasks
+/// recorded, and only Done or Dropped owners are read and cleaned, with one inventory for the
+/// whole sweep. Panes that only a finished task's creation events still name are left to that
+/// task's own terminal cleanup.
+pub(crate) fn sweep_inventory(ctx: &Ctx, board: &corral_core::Board, live: &[PaneInfo]) {
+    let terminal = match leaked_owners(ctx, board, live) {
+        Ok(terminal) => terminal,
+        Err(error) => {
+            crate::messages::report(None, "cleanup", format!("pane owner lookup: {error:#}"));
+            return;
+        }
+    };
+    if let Err(error) = clean(ctx, terminal.iter(), Cleanup::Task)
+        && let Some(task) = terminal.first()
+    {
+        failed(ctx, task, "inventory", &error);
+    }
+}
+
+/// The sweep over an explicit task list, as tests drive it.
+#[cfg(test)]
 pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
     let terminal: Vec<&Task> = tasks
         .iter()
@@ -42,6 +64,28 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
     {
         failed(ctx, task, "inventory", &error);
     }
+}
+
+fn leaked_owners(ctx: &Ctx, board: &corral_core::Board, live: &[PaneInfo]) -> Result<Vec<Task>> {
+    let mut owners = BTreeSet::new();
+    for pane in live {
+        owners.extend(ctx.store.pane_owners(&format!("pane:{}", pane.pane_id))?);
+    }
+    let busy: BTreeSet<&str> = live.iter().map(|p| p.workspace_id.as_str()).collect();
+    for (workspace, _) in ctx.herdr.workspace_list()? {
+        if !busy.contains(workspace.as_str()) {
+            owners.extend(ctx.store.pane_owners(&format!("workspace:{workspace}"))?);
+        }
+    }
+    let open: BTreeSet<&str> = board.heads.iter().map(|head| head.id.as_str()).collect();
+    let mut terminal = Vec::new();
+    for id in owners.iter().filter(|id| !open.contains(id.as_str())) {
+        let task = ctx.store.get(id)?;
+        if matches!(task.status, Status::Done | Status::Dropped) {
+            terminal.push(task);
+        }
+    }
+    Ok(terminal)
 }
 
 fn failed(ctx: &Ctx, task: &Task, resource: &str, error: &anyhow::Error) {

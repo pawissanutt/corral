@@ -484,7 +484,12 @@ pub(crate) fn start_due(ctx: &Ctx) {
 }
 
 pub(crate) fn start_due_with(ctx: &Ctx, launch: &mut dyn FnMut(&str) -> Result<()>) {
-    let tasks = match ctx.store.list() {
+    // A Done or Dropped Plan has no checkpoint left to take.
+    let open = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })
+        .and_then(|heads| heads.iter().map(|head| head.to_shell_task()).collect());
+    let tasks: Vec<corral_core::Task> = match open {
         Ok(tasks) => tasks,
         Err(error) => {
             crate::messages::report(None, "plan-checkpoint", format!("{error:#}"));

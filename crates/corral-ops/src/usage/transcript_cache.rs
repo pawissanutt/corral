@@ -94,6 +94,10 @@ impl Transcript {
                 if n == 0 {
                     break;
                 }
+                corral_core::work::counted(
+                    corral_core::work::Counter::TranscriptBytesRead,
+                    u64::try_from(n)?,
+                );
                 self.observed_len = self
                     .observed_len
                     .checked_add(u64::try_from(n)?)
@@ -165,6 +169,10 @@ pub(super) fn with_lines<T>(
         cache.transcripts.remove(path);
         return Err(error);
     }
+    corral_core::work::counted(
+        corral_core::work::Counter::TranscriptLinesAggregated,
+        u64::try_from(transcript.lines.len())?,
+    );
     aggregate(&transcript.lines).with_context(|| format!("parsing {}", path.display()))
 }
 
@@ -177,6 +185,12 @@ pub(super) fn counts(path: &Path) -> (usize, usize, u64) {
         transcript.decoded,
         transcript.parsed_offset,
     )
+}
+
+/// Forgets every cached transcript, as a fresh process starts.
+#[cfg(test)]
+pub(super) fn clear() {
+    cache().unwrap().transcripts.clear();
 }
 
 #[cfg(test)]

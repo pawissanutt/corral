@@ -161,6 +161,15 @@ pub fn admit_ready(ctx: &Ctx, project: &str, enabled: bool) -> Result<()> {
     )
 }
 
+/// [`authorized_ready`] of a head, numbering its next run from the head's counts.
+pub(crate) fn authorized_ready_head(store: &Store, head: &corral_core::TaskHead) -> bool {
+    !head.tracker
+        && head.status == Status::Ready
+        && !head.dispatch_hold
+        && store.config.ready_project_allowed(head.project.as_deref())
+        && crate::operating::queued_origin_head(store, head).is_ok()
+}
+
 pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
     !task.tracker
         && task.status == Status::Ready
@@ -172,11 +181,14 @@ pub(crate) fn authorized_ready(store: &Store, task: &Task) -> bool {
 /// Upgrade the old invisible Backlog queue on the next owning sync.
 pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
     let mut changes = Vec::new();
-    for task in ctx.store.list()? {
+    for task in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
         if task.tracker || task.status != Status::Backlog || !task.queued {
             continue;
         }
-        let moved = ctx.store.try_update(&task.id, |current| {
+        let moved = ctx.store.try_update_head(&task.id, |current| {
             if current.tracker || current.status != Status::Backlog || !current.queued {
                 return Ok(false);
             }
@@ -190,7 +202,7 @@ pub(crate) fn migrate_backlog(ctx: &Ctx) -> Result<Vec<crate::Change>> {
         })?;
         if let Some(task) = moved {
             changes.push(crate::Change {
-                task: task.id,
+                task: task.id.clone(),
                 from: Status::Backlog,
                 to: Status::Ready,
                 note: "migrated queued Backlog task to Ready".into(),

@@ -8,7 +8,7 @@ use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use super::{finish_review, notes_of};
+use super::notes_of;
 use crate::cleanup::{Cleanup, cleanup};
 use crate::{Change, Ctx};
 
@@ -45,6 +45,24 @@ pub(super) fn record_failure(
     Ok(())
 }
 
+/// `finish_review` on the parent's current child, which holds the parent's review record.
+fn finish_review_child(
+    ctx: &Ctx,
+    review: &ReviewRecord,
+    snapshot: &mut corral_core::Run,
+    ended: Timestamp,
+) {
+    let mut record = review.clone();
+    if record.notes.is_none() {
+        record.notes = snapshot.review.as_ref().and_then(|r| r.notes.clone());
+    }
+    snapshot.review = Some(record);
+    if snapshot.ended.is_none() {
+        snapshot.ended = Some(ended);
+        crate::usage::collect(snapshot, &ctx.store);
+    }
+}
+
 /// Called by sync even when autopilot is disabled. `panes` is one authoritative herdr inventory;
 /// `now` is injected, and idle debounce is persisted so restarts cannot reset the deadline.
 pub fn reconcile_review_at(
@@ -69,13 +87,15 @@ pub(crate) fn reconcile_review_sampled_at(
 ) -> Result<Option<Change>> {
     let panes = snapshot.panes;
     let _attribution = ctx.store.attribute(corral_core::Actor::Reviewer);
-    let task = ctx.store.get(id)?;
-    if task.status != Status::Review {
+    let head = ctx.store.head(id)?;
+    if head.status != Status::Review {
         return Ok(None);
     }
-    if !crate::session_scope::owns_task(ctx, &task)? {
+    if !crate::session_scope::owns_head(ctx, &head)? {
         return Ok(None);
     }
+    // The shell's only review child is the current one, all that liveness reads.
+    let task = head.to_shell_task()?;
     if panes.is_empty() {
         crate::pane_liveness::unknown("herdr returned an empty pane inventory");
         return Ok(None);
@@ -95,7 +115,7 @@ pub(crate) fn reconcile_review_sampled_at(
     let gone = crate::pane_liveness::gone(
         ctx,
         crate::pane_liveness::Sample {
-            task: &task,
+            task: (&head).into(),
             pane: review.pane.as_deref(),
             started: review.at,
             seen: false,
@@ -196,8 +216,8 @@ pub(crate) fn reconcile_review_sampled_at(
     if since == run.idle_since && reason.is_none() {
         return Ok(None);
     }
-    let saved = ctx.store.try_update(id, |current| {
-        if !crate::session_scope::owns_task(ctx, current)? {
+    let saved = ctx.store.try_update_head(id, |current| {
+        if !crate::session_scope::owns_head(ctx, current.head())? {
             return Ok(false);
         }
         if current.status != Status::Review {
@@ -213,21 +233,28 @@ pub(crate) fn reconcile_review_sampled_at(
             return Ok(false);
         }
         parent.idle_since = since;
-        if let Some(child) = parent.review_runs.last_mut() {
-            child.idle_since = since;
-            child.agent_state = Some(
-                pane.map(|p| p.status.as_str())
-                    .unwrap_or("gone")
-                    .to_string(),
-            );
+        let has_child = parent.current_child.is_some();
+        if has_child {
+            current.edit_current_review_child(&run.id, |child| {
+                child.idle_since = since;
+                child.agent_state = Some(
+                    pane.map(|p| p.status.as_str())
+                        .unwrap_or("gone")
+                        .to_string(),
+                );
+                if reason.is_some() {
+                    finish_review_child(ctx, review, child, now);
+                    if stalled.is_some() {
+                        child.outcome = Some(RunOutcome::Interrupted);
+                    }
+                }
+                Ok(())
+            })?;
         }
+        let parent = current
+            .current_run_mut()
+            .context("review run disappeared")?;
         if let Some(reason) = &reason {
-            finish_review(ctx, parent, now);
-            if stalled.is_some()
-                && let Some(child) = parent.review_runs.last_mut()
-            {
-                child.outcome = Some(RunOutcome::Interrupted);
-            }
             parent.blocked_excerpt = Some(reason.clone());
             parent.autopilot = Some(AutopilotState {
                 stage: AutoStage::Escalated,
@@ -254,10 +281,11 @@ pub(crate) fn reconcile_review_sampled_at(
         }
         Ok(true)
     })?;
-    let (Some(saved), Some(reason)) = (saved, reason) else {
+    let (Some(_), Some(reason)) = (saved, reason) else {
         return Ok(None);
     };
-    cleanup(ctx, &saved, Cleanup::Round);
+    // Escalation only: the round's panes include every review child of the run.
+    cleanup(ctx, &ctx.store.get(id)?, Cleanup::Round);
     if let Err(error) = ctx
         .herdr
         .notify(&format!("{} needs you", id), &reason, true)

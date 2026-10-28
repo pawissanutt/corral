@@ -15,9 +15,29 @@ pub(super) struct FrameSources {
     pub pins: Vec<shelf::Entry>,
 }
 
+/// The previous frame's open board per store, kept without its read view.
+static LAST_BOARD: std::sync::Mutex<Option<(std::path::PathBuf, corral_core::Board)>> =
+    std::sync::Mutex::new(None);
+
+/// The open board, reading only the tasks changed since the previous frame of this store.
+fn open_board(ctx: &Ctx) -> Result<corral_core::Board> {
+    let root = ctx.store.root().to_path_buf();
+    let mut last = LAST_BOARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let board = match last.take() {
+        Some((previous_root, previous)) if previous_root == root => {
+            ctx.store.board_since(&previous)?
+        }
+        _ => ctx.store.board(None)?,
+    };
+    *last = Some((root, board.clone().detach()));
+    Ok(board)
+}
+
 impl FrameSources {
     pub fn load(ctx: &Ctx) -> Result<Self> {
-        let board = ctx.store.board(None)?;
+        let board = open_board(ctx)?;
         let status_counts = board.status_counts;
         let slot_usage = SlotUsage::from_heads(&board.heads, &ctx.store.config.limits);
         let mut heads = board.heads;
