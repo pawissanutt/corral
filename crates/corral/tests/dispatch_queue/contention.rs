@@ -166,6 +166,116 @@ fn reviewed(f: &Fixture, project: &str) -> String {
 }
 
 #[cfg(target_os = "linux")]
+struct Traced {
+    child: std::process::Child,
+    trace: std::sync::mpsc::Receiver<Vec<u8>>,
+    seen: Vec<u8>,
+    reader: std::thread::JoinHandle<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl Traced {
+    fn sync(f: &Fixture, strace: &[&str]) -> Self {
+        use std::io::Read;
+        let mut child = wrapped(f, strace, &["sync"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (tx, trace) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0; 4096];
+            while let Ok(n) = stderr.read(&mut chunk) {
+                if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            trace,
+            seen: Vec::new(),
+            reader,
+        }
+    }
+
+    /// Awaits traced syscall text with a bounded deadline, without polling.
+    fn until(&mut self, reached: impl Fn(&str) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !reached(&String::from_utf8_lossy(&self.seen)) {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "trace never matched: {}",
+                        String::from_utf8_lossy(&self.seen)
+                    )
+                });
+            self.seen
+                .extend(self.trace.recv_timeout(remaining).unwrap());
+        }
+    }
+
+    fn finish(self) -> std::process::ExitStatus {
+        let mut child = self.child;
+        let status = child.wait().unwrap();
+        drop(self.trace);
+        self.reader.join().unwrap();
+        status
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_syncs_attempt_an_unchanged_refusal_once() {
+    // Given an authorized Ready task whose admission claim refuses its missing dependency.
+    let mut f = super::queue_fixture();
+    let task = f.task("app", Status::Ready);
+    f.ctx
+        .store
+        .update(&task.id, |t| {
+            t.depends_on = vec!["T-999".into()];
+            Ok(())
+        })
+        .unwrap();
+    f.grant(&[&task.id]);
+
+    // When one sync process stops right after opening the refusal state, before its attempt,
+    let refusals = f.ctx.store.state_dir().join("queue-refusals.json");
+    let refusals = refusals.to_str().unwrap();
+    let stop = "inject=openat:signal=SIGSTOP:when=1";
+    let mut stopped = Traced::sync(
+        &f,
+        &["strace", "-P", refusals, "-e", "trace=openat", "-e", stop],
+    );
+    stopped.until(|trace| trace.contains("stopped by SIGSTOP"));
+    // another sync process runs to completion,
+    f.ok(&["sync"]);
+    // and the stopped one then resumes.
+    let tracer = stopped.child.id();
+    let tracee = std::fs::read_to_string(format!("/proc/{tracer}/task/{tracer}/children")).unwrap();
+    let resumed = std::process::Command::new("kill")
+        .arg("-CONT")
+        .arg(tracee.trim())
+        .status()
+        .unwrap();
+    assert!(resumed.success());
+    assert!(stopped.finish().success());
+
+    // Then the unchanged refusal was attempted and logged exactly once.
+    let failures = f
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "dispatch_failed" && e.task.as_deref() == Some(task.id.as_str()))
+        .count();
+    assert_eq!(failures, 1);
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
     use std::io::Read;

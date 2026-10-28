@@ -17,6 +17,12 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
+    // One process drains at a time and the others skip this pass instead of waiting, so a
+    // refusal is checked, attempted and recorded once across every syncing process. The board
+    // and refusal states are read only after the claim.
+    let Some(_drain) = ctx.store.try_lock("queue-drain")? else {
+        return Ok(Vec::new());
+    };
     let mut queued: Vec<Task> = ctx
         .store
         .list()?
@@ -33,8 +39,10 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         if still_blocked(ctx, &task, index + 1, now) {
             continue;
         }
-        let state = refusal_state(ctx, &task)?;
-        if refusals.unchanged(&task.id, &state) {
+        if task.launch.is_none()
+            && refusals.has(&task.id)
+            && refusals.unchanged(&task.id, &refusal_state(ctx, &task)?)
+        {
             continue;
         }
         let result = (|| {
@@ -70,11 +78,14 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                     "dispatch_failed",
                     json!({ "error": format!("{err:#}") }),
                 )?;
-                let after = match ctx.store.get(&task.id) {
-                    Ok(current) => refusal_state(ctx, &current)?,
-                    Err(_) => state,
-                };
-                refusals.record(&task.id, after);
+                // A reserved launch's failure depends on the terminal engine, which no state
+                // here describes, so its recovery keeps retrying every pass.
+                match ctx.store.get(&task.id) {
+                    Ok(current) if current.launch.is_none() => {
+                        refusals.record(&task.id, refusal_state(ctx, &current)?);
+                    }
+                    _ => refusals.clear(&task.id),
+                }
             }
         }
     }
@@ -115,8 +126,9 @@ pub(crate) fn contended(error: &Error) -> bool {
 }
 
 /// Everything a persistent enqueue or dispatch refusal can depend on: the task itself (without
-/// its derived attention bookkeeping), its transitive dependency graph, the configuration and the
-/// discovered harness catalog that routes resolve against.
+/// its derived attention bookkeeping), its transitive dependency graph, the configuration, the
+/// discovered harness catalog that routes resolve against, and the project repository's refs,
+/// HEAD and registered worktrees that bases, branches and worktrees resolve against.
 fn refusal_state(ctx: &Ctx, task: &Task) -> Result<String> {
     let mut hash = Sha256::new();
     let mut record = serde_json::to_value(task).context("encoding task for refusal state")?;
@@ -149,6 +161,29 @@ fn refusal_state(ctx: &Ctx, task: &Task) -> Result<String> {
         Ok(bytes) => hash.update(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error).with_context(|| format!("reading {}", catalog.display())),
+    }
+    if let Some(project) = task.project.as_deref()
+        && let Ok(repo) = ctx.store.project_path(project)
+    {
+        for args in [
+            &["for-each-ref", "--format=%(refname) %(objectname)"][..],
+            &["symbolic-ref", "-q", "HEAD"],
+            &["worktree", "list", "--porcelain"],
+        ] {
+            match std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .output()
+            {
+                Ok(out) => {
+                    hash.update(out.status.code().unwrap_or(-1).to_le_bytes());
+                    hash.update(&out.stdout);
+                }
+                Err(error) => hash.update(error.to_string()),
+            }
+        }
     }
     Ok(format!("{:x}", hash.finalize()))
 }
@@ -183,6 +218,10 @@ impl Refusals {
         self.states
             .retain(|id, _| candidates.iter().any(|task| &task.id == id));
         self.changed |= self.states.len() != before;
+    }
+
+    fn has(&self, id: &str) -> bool {
+        self.states.contains_key(id)
     }
 
     fn unchanged(&self, id: &str, state: &str) -> bool {
