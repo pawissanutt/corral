@@ -37,8 +37,9 @@ Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs
 Dracula palette (a dark theme; on a light terminal background use `plain`) and shows a
 two-line header (role, task and run, generation, model, effort and worktree), names the
 terminal tab after the task and role (`T-503 worker`), and adds footer status for the corral
-binding (`● corral g2`, or `○ corral unbound`) and, once one happens, a count of refused network
-calls and denied tools. Each `corral_*` call is one line, such as `corral ask clarification: ...`
+binding (a filled dot with the generation, such as `● g2`, or a hollow dot when unbound) and, once
+one happens, a count of refused network calls and denied tools. Each `corral_*` call is one line:
+its short name and the argument that says what it does (for an ask, its kind and question),
 followed by `✓ key=Q-3` or `✗ rejected  <code>: <reason>`. Expanding tool output
 shows the full receipt. `ui = "plain"` keeps stock Pi. The setting is read at dispatch, so it
 applies to hosts launched after the change.
