@@ -35,7 +35,7 @@ Commands can modify worktree files, so use a disposable worktree for destructive
 This is resource isolation, not a sandbox for hostile code.
 
 The default image is `docker.io/library/rust:1.94-trixie` (Bash, glibc and build tools).
-Use `--image IMAGE` for a locally provisioned image with additional test dependencies
+Use `scripts/load-sandbox.sh --image IMAGE -- COMMAND` for a locally provisioned image with additional test dependencies
 (e.g. Python, Git, herdr, nextest or strace). Images must provide `/bin/bash` and be
 compatible with the mounted host toolchains. Podman may pull missing images; no
 host package installation is performed. Network access follows Podman's default;
