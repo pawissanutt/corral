@@ -91,54 +91,76 @@ impl TaskHeadMut {
     }
 }
 
+/// Runs one trait mutation, then [`TaskHeadMut::sync`], so the next `TaskRef` read of the
+/// same operation sees facts that agree with the edit.
+macro_rules! synced {
+    ($self:ident, $mutation:expr) => {{
+        let result = $mutation;
+        if result.is_ok() {
+            $self.sync()?;
+        }
+        result
+    }};
+}
+
 impl TaskMut for TaskHeadMut {
     fn edit_head_fields(
         &mut self,
         edit: impl FnOnce(&mut TaskHeadFields) -> Result<()>,
     ) -> Result<()> {
-        let mut fields = self.head.task.clone();
-        edit(&mut fields)?;
-        anyhow::ensure!(
-            fields.member_gates == self.head.task.member_gates,
-            "member gates change only through a member-gate amendment"
-        );
-        self.head.task = fields;
-        Ok(())
+        synced!(
+            self,
+            (|| -> Result<()> {
+                let mut fields = self.head.task.clone();
+                edit(&mut fields)?;
+                anyhow::ensure!(
+                    fields.member_gates == self.head.task.member_gates,
+                    "member gates change only through a member-gate amendment"
+                );
+                self.head.task = fields;
+                Ok(())
+            })()
+        )
     }
 
     fn start_run(&mut self, run: Run) -> Result<()> {
-        TaskHeadMut::start_run(self, run)
+        synced!(self, TaskHeadMut::start_run(self, run))
     }
 
     fn start_plan_run(&mut self, run: PlanRun) -> Result<()> {
-        TaskHeadMut::start_plan_run(self, run)
+        synced!(self, TaskHeadMut::start_plan_run(self, run))
     }
 
     fn push_plan(&mut self, plan: PlanRecord) -> Result<()> {
-        TaskHeadMut::push_plan(self, plan)
+        synced!(self, TaskHeadMut::push_plan(self, plan))
     }
 
     fn push_aggregate_attempt(&mut self, attempt: AggregateAttempt) -> Result<()> {
-        TaskHeadMut::push_aggregate_attempt(self, attempt)
+        synced!(self, TaskHeadMut::push_aggregate_attempt(self, attempt))
     }
 
     fn add_comment(&mut self, comment: TaskComment) -> Result<()> {
-        TaskHeadMut::add_comment(self, comment)
+        synced!(self, TaskHeadMut::add_comment(self, comment))
     }
 
     fn push_scope_revision(&mut self, revision: ApprovedScopeRevision) -> Result<()> {
-        TaskHeadMut::push_scope_revision(self, revision)
+        synced!(self, TaskHeadMut::push_scope_revision(self, revision))
     }
 
     fn edit_run(&mut self, id: &str, edit: impl FnOnce(&mut RunHead) -> Result<()>) -> Result<()> {
-        if let Some(current) = self.head.current_run.as_mut().filter(|r| r.id == id) {
-            let mut after = current.clone();
-            edit(&mut after)?;
-            check_run_edit(current, &after)?;
-            *current = after;
-            return Ok(());
-        }
-        self.edit_history_run(id, edit)
+        synced!(
+            self,
+            (|| -> Result<()> {
+                if let Some(current) = self.head.current_run.as_mut().filter(|r| r.id == id) {
+                    let mut after = current.clone();
+                    edit(&mut after)?;
+                    check_run_edit(current, &after)?;
+                    *current = after;
+                    return Ok(());
+                }
+                self.edit_history_run(id, edit)
+            })()
+        )
     }
 
     fn edit_plan_run(
@@ -146,14 +168,19 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut PlanRunHead) -> Result<()>,
     ) -> Result<()> {
-        if let Some(current) = self.head.last_plan_run.as_mut().filter(|r| r.id == id) {
-            let mut after = current.clone();
-            edit(&mut after)?;
-            check_plan_run_edit(current, &after)?;
-            *current = after;
-            return Ok(());
-        }
-        self.edit_history_plan_run(id, edit)
+        synced!(
+            self,
+            (|| -> Result<()> {
+                if let Some(current) = self.head.last_plan_run.as_mut().filter(|r| r.id == id) {
+                    let mut after = current.clone();
+                    edit(&mut after)?;
+                    check_plan_run_edit(current, &after)?;
+                    *current = after;
+                    return Ok(());
+                }
+                self.edit_history_plan_run(id, edit)
+            })()
+        )
     }
 
     fn edit_plan(
@@ -161,21 +188,26 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut PlanHead) -> Result<()>,
     ) -> Result<()> {
-        if let Some(current) = self.head.last_plan.as_mut().filter(|p| p.id == id) {
-            let mut after = current.clone();
-            edit(&mut after)?;
-            check_plan_edit(current, &after)?;
-            *current = after;
-            return Ok(());
-        }
-        let (s, row) = self.history_container(TaskPart::Plan, id)?;
-        let (mut before, facts): (PlanHead, _) = projection(&row.doc)?;
-        before.facts = facts;
-        let mut after = before.clone();
-        edit(&mut after)?;
-        check_plan_edit(&before, &after)?;
-        self.put(plan_row(s, &after, false)?);
-        Ok(())
+        synced!(
+            self,
+            (|| -> Result<()> {
+                if let Some(current) = self.head.last_plan.as_mut().filter(|p| p.id == id) {
+                    let mut after = current.clone();
+                    edit(&mut after)?;
+                    check_plan_edit(current, &after)?;
+                    *current = after;
+                    return Ok(());
+                }
+                let (s, row) = self.history_container(TaskPart::Plan, id)?;
+                let (mut before, facts): (PlanHead, _) = projection(&row.doc)?;
+                before.facts = facts;
+                let mut after = before.clone();
+                edit(&mut after)?;
+                check_plan_edit(&before, &after)?;
+                self.put(plan_row(s, &after, false)?);
+                Ok(())
+            })()
+        )
     }
 
     fn edit_aggregate_attempt(
@@ -183,26 +215,31 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut AttemptHead) -> Result<()>,
     ) -> Result<()> {
-        if let Some(current) = self
-            .head
-            .last_aggregate_attempt
-            .as_mut()
-            .filter(|a| a.id == id)
-        {
-            let mut after = current.clone();
-            edit(&mut after)?;
-            check_attempt_edit(current, &after)?;
-            *current = after;
-            return Ok(());
-        }
-        let (s, row) = self.history_container(TaskPart::AggregateAttempt, id)?;
-        let (mut before, facts): (AttemptHead, _) = projection(&row.doc)?;
-        before.facts = facts;
-        let mut after = before.clone();
-        edit(&mut after)?;
-        check_attempt_edit(&before, &after)?;
-        self.put(attempt_row(s, &after, false)?);
-        Ok(())
+        synced!(
+            self,
+            (|| -> Result<()> {
+                if let Some(current) = self
+                    .head
+                    .last_aggregate_attempt
+                    .as_mut()
+                    .filter(|a| a.id == id)
+                {
+                    let mut after = current.clone();
+                    edit(&mut after)?;
+                    check_attempt_edit(current, &after)?;
+                    *current = after;
+                    return Ok(());
+                }
+                let (s, row) = self.history_container(TaskPart::AggregateAttempt, id)?;
+                let (mut before, facts): (AttemptHead, _) = projection(&row.doc)?;
+                before.facts = facts;
+                let mut after = before.clone();
+                edit(&mut after)?;
+                check_attempt_edit(&before, &after)?;
+                self.put(attempt_row(s, &after, false)?);
+                Ok(())
+            })()
+        )
     }
 
     fn inbox_state_mut<R>(
@@ -210,39 +247,48 @@ impl TaskMut for TaskHeadMut {
         recipient: &Recipient,
         edit: impl FnOnce(&mut InboxHead) -> Result<R>,
     ) -> Result<R> {
-        let head = &mut self.head;
-        let inbox = match recipient {
-            Recipient::Run { run, .. } => head
-                .current_run
-                .as_mut()
-                .filter(|r| r.id == *run)
-                .map(|r| &mut r.inbox),
-            Recipient::ReviewRun { run, review, .. } => head
-                .current_run
-                .as_mut()
-                .filter(|r| r.id == *run)
-                .and_then(|r| r.current_child.as_deref_mut())
-                .filter(|c| c.id == *review)
-                .map(|c| &mut c.inbox),
-            Recipient::PlanRun { plan_run, .. } => head
-                .last_plan_run
-                .as_mut()
-                .filter(|r| r.id == *plan_run)
-                .map(|r| &mut r.inbox),
-            Recipient::PlanReview { plan, review, .. } => head
-                .last_plan
-                .as_mut()
-                .filter(|p| p.id == *plan)
-                .and_then(|p| p.current_review.as_mut())
-                .filter(|r| r.id == *review)
-                .map(|r| &mut r.inbox),
-            Recipient::Pm => None,
-        };
-        edit(inbox.context("the recipient's inbox is not on a current container of this head")?)
+        synced!(
+            self,
+            (|| -> Result<R> {
+                let head = &mut self.head;
+                let inbox = match recipient {
+                    Recipient::Run { run, .. } => head
+                        .current_run
+                        .as_mut()
+                        .filter(|r| r.id == *run)
+                        .map(|r| &mut r.inbox),
+                    Recipient::ReviewRun { run, review, .. } => head
+                        .current_run
+                        .as_mut()
+                        .filter(|r| r.id == *run)
+                        .and_then(|r| r.current_child.as_deref_mut())
+                        .filter(|c| c.id == *review)
+                        .map(|c| &mut c.inbox),
+                    Recipient::PlanRun { plan_run, .. } => head
+                        .last_plan_run
+                        .as_mut()
+                        .filter(|r| r.id == *plan_run)
+                        .map(|r| &mut r.inbox),
+                    Recipient::PlanReview { plan, review, .. } => head
+                        .last_plan
+                        .as_mut()
+                        .filter(|p| p.id == *plan)
+                        .and_then(|p| p.current_review.as_mut())
+                        .filter(|r| r.id == *review)
+                        .map(|r| &mut r.inbox),
+                    Recipient::Pm => None,
+                };
+                edit(
+                    inbox.context(
+                        "the recipient's inbox is not on a current container of this head",
+                    )?,
+                )
+            })()
+        )
     }
 
     fn push_review_child(&mut self, run: &str, child: Run) -> Result<()> {
-        TaskHeadMut::push_review_child(self, run, child)
+        synced!(self, TaskHeadMut::push_review_child(self, run, child))
     }
 
     fn edit_review_child(
@@ -251,11 +297,11 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut RunHead) -> Result<()>,
     ) -> Result<()> {
-        self.edit_review_child_head(run, id, edit)
+        synced!(self, self.edit_review_child_head(run, id, edit))
     }
 
     fn push_plan_review(&mut self, plan: &str, review: PlanReview) -> Result<()> {
-        TaskHeadMut::push_plan_review(self, plan, review)
+        synced!(self, TaskHeadMut::push_plan_review(self, plan, review))
     }
 
     fn edit_plan_review(
@@ -264,19 +310,25 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut PlanReviewHead) -> Result<()>,
     ) -> Result<()> {
-        self.edit_plan_review_head(plan, id, edit)
+        synced!(self, self.edit_plan_review_head(plan, id, edit))
     }
 
     fn pop_current_plan_review(&mut self, plan: &str) -> Result<()> {
-        TaskHeadMut::pop_current_plan_review(self, plan)
+        synced!(self, TaskHeadMut::pop_current_plan_review(self, plan))
     }
 
     fn terminalize_pending_plan_reviews(&mut self, plan: &str, reason: &str) -> Result<()> {
-        TaskHeadMut::terminalize_pending_plan_reviews(self, plan, reason)
+        synced!(
+            self,
+            TaskHeadMut::terminalize_pending_plan_reviews(self, plan, reason)
+        )
     }
 
     fn push_aggregate_review(&mut self, attempt: &str, review: AggregateReview) -> Result<()> {
-        TaskHeadMut::push_aggregate_review(self, attempt, review)
+        synced!(
+            self,
+            TaskHeadMut::push_aggregate_review(self, attempt, review)
+        )
     }
 
     fn edit_aggregate_review(
@@ -285,31 +337,37 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut AggregateReview) -> Result<()>,
     ) -> Result<()> {
-        TaskHeadMut::edit_aggregate_review(self, attempt, id, edit)
+        synced!(
+            self,
+            TaskHeadMut::edit_aggregate_review(self, attempt, id, edit)
+        )
     }
 
     fn supersede_pending_aggregate_reviews(&mut self, attempt: &str, by: &str) -> Result<()> {
-        TaskHeadMut::supersede_pending_aggregate_reviews(self, attempt, by)
+        synced!(
+            self,
+            TaskHeadMut::supersede_pending_aggregate_reviews(self, attempt, by)
+        )
     }
 
     fn push_checkpoint(&mut self, run: &str, record: CheckpointRecord) -> Result<()> {
-        TaskHeadMut::push_checkpoint(self, run, record)
+        synced!(self, TaskHeadMut::push_checkpoint(self, run, record))
     }
 
     fn restore_checkpoints(&mut self, run: &str, records: Vec<CheckpointRecord>) -> Result<()> {
-        TaskHeadMut::restore_checkpoints(self, run, records)
+        synced!(self, TaskHeadMut::restore_checkpoints(self, run, records))
     }
 
     fn push_switch(&mut self, run: &str, switch: ProfileSwitch) -> Result<()> {
-        TaskHeadMut::push_switch(self, run, switch)
+        synced!(self, TaskHeadMut::push_switch(self, run, switch))
     }
 
     fn push_wait(&mut self, run: &str, wait: WaitRecord) -> Result<()> {
-        TaskHeadMut::push_wait(self, run, wait)
+        synced!(self, TaskHeadMut::push_wait(self, run, wait))
     }
 
     fn push_decision(&mut self, run: &str, decision: DecisionRecord) -> Result<()> {
-        TaskHeadMut::push_decision(self, run, decision)
+        synced!(self, TaskHeadMut::push_decision(self, run, decision))
     }
 
     fn edit_wait(
@@ -318,7 +376,7 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut WaitRecord) -> Result<()>,
     ) -> Result<()> {
-        TaskHeadMut::edit_wait(self, run, id, edit)
+        synced!(self, TaskHeadMut::edit_wait(self, run, id, edit))
     }
 
     fn edit_decision(
@@ -327,15 +385,21 @@ impl TaskMut for TaskHeadMut {
         id: &str,
         edit: impl FnOnce(&mut DecisionRecord) -> Result<()>,
     ) -> Result<()> {
-        TaskHeadMut::edit_decision(self, run, id, edit)
+        synced!(self, TaskHeadMut::edit_decision(self, run, id, edit))
     }
 
     fn mark_effect_applied(&mut self, recipient: &Recipient, effect: u64) -> Result<()> {
-        TaskHeadMut::mark_effect_applied(self, recipient, effect)
+        synced!(
+            self,
+            TaskHeadMut::mark_effect_applied(self, recipient, effect)
+        )
     }
 
     fn set_observe_cursor(&mut self, recipient: &Recipient, cursor: SessionCursor) -> Result<()> {
-        TaskHeadMut::set_observe_cursor(self, recipient, cursor)
+        synced!(
+            self,
+            TaskHeadMut::set_observe_cursor(self, recipient, cursor)
+        )
     }
 
     fn append_usage_entries(
@@ -344,10 +408,13 @@ impl TaskMut for TaskHeadMut {
         child: Option<&str>,
         entries: Vec<UsageEntry>,
     ) -> Result<()> {
-        TaskHeadMut::append_usage_entries(self, run, child, entries)
+        synced!(
+            self,
+            TaskHeadMut::append_usage_entries(self, run, child, entries)
+        )
     }
 
     fn set_usage(&mut self, run: &str, child: Option<&str>, usage: Usage) -> Result<()> {
-        TaskHeadMut::set_usage(self, run, child, usage)
+        synced!(self, TaskHeadMut::set_usage(self, run, child, usage))
     }
 }

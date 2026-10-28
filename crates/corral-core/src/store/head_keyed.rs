@@ -268,23 +268,33 @@ impl TaskHead {
         self.agent_record(container, "turns", format!("turn:{generation}:{seq}"))
     }
 
-    /// Every stored row of `q` but the one at `except`, which is not read, each counted as
-    /// an emitted decode, with this head's overlay applied.
+    /// Every row of `q` but the one at `except`, as this mutation would leave them; the
+    /// stored row at `except` is not read. Each returned row counts once as an emitted
+    /// decode; a stored row the overlay replaces or removes counts as a plain one.
     fn emitted_rows(
         &self,
         q: &RowQuery,
         except: &str,
         counter: Counter,
     ) -> Result<Vec<HistoryRow>> {
-        let rows = {
+        let stored = {
             let view = self.pinned()?;
             view.rows_except(self.num, q, except, PageReq::first(u32::MAX))?
                 .items
         };
+        let rows = match self.overlay.as_ref().filter(|o| o.touches(q.part)) {
+            Some(overlay) => {
+                for row in stored.iter().filter(|r| overlay.holds(q.part, &r.key)) {
+                    work::decoded(counter, doc_bytes(&row.doc), Subject::Plain);
+                }
+                overlay.apply(q, stored, except, u32::MAX)
+            }
+            None => stored,
+        };
         for row in &rows {
             work::decoded(counter, doc_bytes(&row.doc), Subject::Emitted);
         }
-        Ok(self.overlaid_rows(q, rows))
+        Ok(rows)
     }
 
     /// Every owner comment in order, for the prompts' Owner comments section only.
@@ -386,14 +396,7 @@ impl TaskHead {
             &except,
             Counter::HistoryRowDecodes,
         )?;
-        let mut findings = Vec::new();
-        for row in rows {
-            let finding: EmittedFinding = serde_json::from_value(row.doc)?;
-            if Some(finding.attempt.as_str()) != exclude {
-                findings.push(finding);
-            }
-        }
-        Ok(findings)
+        decode_all(rows.into_iter().map(|row| row.doc).collect())
     }
 }
 
