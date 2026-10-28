@@ -770,6 +770,15 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                     Err(error) => format!("{error:#}"),
                 }
             };
+            let reason = match task.current_run().and_then(|r| r.gate.as_ref()) {
+                Some(g) if g.result == corral_core::GateResult::Stale => format!(
+                    "{reason}; gate stale: {}",
+                    g.failed_cmd
+                        .as_deref()
+                        .unwrap_or("inputs changed; rebase and gate once")
+                ),
+                _ => reason,
+            };
             Ok(QueueEntry {
                 id: task.id,
                 project: task.project,

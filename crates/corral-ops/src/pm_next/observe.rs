@@ -305,6 +305,9 @@ fn review_observation(
                             .into(),
                 });
             }
+            Some(g) if g.result == GateResult::Stale => {
+                return Ok(PmObservation::GateNeeded { task: id.clone() });
+            }
             Some(g) if g.result == GateResult::Fail => {
                 // Delegated bounded repair is routine work, not an owner question.
                 if task.rounds < policy.max_rounds

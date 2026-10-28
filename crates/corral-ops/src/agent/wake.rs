@@ -88,6 +88,15 @@ fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<Stri
     if let Some(contract) = &contract {
         body.push_str(&format!("contract_sha256: {contract}\n"));
     }
+    if reason == "stale" {
+        let detail = task
+            .current_run()
+            .and_then(|r| r.gate.as_ref())
+            .and_then(|g| g.failed_cmd.as_deref())
+            .unwrap_or("verification inputs changed");
+        body.push_str(&format!("Commands passed, but the receipt is stale: {detail}. This is not a command failure and cannot authorize done or approve. Rebase onto current main, then call corral_gate once on the new base."));
+        return Ok(body);
+    }
     body.push_str(
         "When it passed and the task is complete, call corral_done with this gate_ref and \
          contract_sha256. Otherwise fix the failure inside the module scope, commit, rebase and \

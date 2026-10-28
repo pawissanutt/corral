@@ -215,7 +215,12 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
                     {
                         Some(ReviewWork::Reviewer)
                     }
-                    Some(GateResult::Running | GateResult::Pass | GateResult::Fail) => None,
+                    Some(
+                        GateResult::Running
+                        | GateResult::Pass
+                        | GateResult::Fail
+                        | GateResult::Stale,
+                    ) => None,
                 },
                 Some(AutoStage::Reviewing) if run.review.is_none() => Some(ReviewWork::Reviewer),
                 Some(

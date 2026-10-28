@@ -197,6 +197,6 @@ fn legacy_environmentless_receipt_requires_a_new_gate() {
     // When the new collector considers the old pass.
     let gate = corral_ops::gate_collect(&fx.ctx, &fx.id).unwrap().unwrap();
     // Then an environmentless legacy receipt cannot silently authorize landing.
-    assert_eq!(gate.result, GateResult::Fail);
+    assert_eq!(gate.result, GateResult::Stale);
     assert!(gate.failed_cmd.unwrap().starts_with("stale_result:"));
 }

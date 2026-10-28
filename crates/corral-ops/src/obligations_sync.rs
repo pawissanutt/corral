@@ -154,7 +154,7 @@ fn observe(
                 );
             }
             match gate.result {
-                GateResult::Pass | GateResult::Fail => {
+                GateResult::Pass | GateResult::Fail | GateResult::Stale => {
                     // gate_collect is the only authority that turns the real result file into Pass/Fail.
                     let receipt = ResumeReceipt {
                         version: 1,

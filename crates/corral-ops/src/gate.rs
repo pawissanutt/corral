@@ -17,6 +17,7 @@ use crate::Ctx;
 use crate::artifacts::add_artifact;
 use crate::gate_script::{qp, render};
 use crate::verification;
+mod stale;
 
 /// Files of one gate run under `.corral/state/gates/`, all named `<task>-<run>.*`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +100,7 @@ pub(crate) fn command_log_valid(
     let marker: &[u8] = match result {
         GateResult::Pass => b"corral gate: pass",
         GateResult::Fail => b"corral gate: fail",
-        GateResult::Running => return false,
+        GateResult::Running | GateResult::Stale => return false,
     };
     if receipts.is_empty()
         || receipts.len() > commands.len()
@@ -571,9 +572,17 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
                 )?)
         {
             let old = record.clone();
-            record.result = GateResult::Fail;
-            record.failed_cmd =
-                Some("stale_result: candidate, spec, base, policy or gate log changed".into());
+            let log_passed = stale::log_passed(ctx, &task, &run, &record)?;
+            record.result = if log_passed {
+                GateResult::Stale
+            } else {
+                GateResult::Fail
+            };
+            record.failed_cmd = Some(if log_passed {
+                stale::reason(ctx, &task, &run, &record, None)?
+            } else {
+                "invalid_command_receipts: gate log missing, changed or inconsistent".into()
+            });
             ctx.store.update(&task.id, |t| {
                 if let Some(r) = t
                     .current_run_mut()
@@ -632,10 +641,21 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     let mut command_failed = false;
     let stale = record.identity.as_ref() != Some(&parsed.identity)
         || !verification::gate_fresh(ctx, &task, &run, &record)?;
-    let (mut result, mut failed_cmd) = if stale {
+    let reported_commands: Vec<_> = parsed.commands.iter().map(|r| r.command.clone()).collect();
+    let (mut result, mut failed_cmd) = if stale
+        && parsed.result == "pass"
+        && parsed.exit_code == 0
+        && command_log_valid(&log, &reported_commands, &parsed.commands, GateResult::Pass)
+    {
         (
-            GateResult::Fail,
-            Some("stale_result: candidate, attempt, spec, base or policy changed".into()),
+            GateResult::Stale,
+            Some(stale::reason(
+                ctx,
+                &task,
+                &run,
+                &record,
+                Some(&parsed.identity),
+            )?),
         )
     } else if !receipts_valid
         || (parsed.result == "pass"
@@ -664,9 +684,8 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             && let Some(current) = t.current_run().filter(|r| r.id == run_id)
             && !verification::gate_fresh(ctx, t, current, &record)?
         {
-            result = GateResult::Fail;
-            failed_cmd =
-                Some("stale_result: verification inputs changed at collection boundary".into());
+            result = GateResult::Stale;
+            failed_cmd = Some(stale::reason(ctx, t, current, &record, None)?);
         }
         if let Some(r) = t.current_run_mut().filter(|r| r.id == run_id)
             && let Some(g) = r.gate.as_mut().filter(|g| **g == record)
@@ -678,7 +697,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             g.commands = parsed.commands.clone();
             g.log_sha256 = Some(verification::digest(&log));
             finished = Some(g.clone());
-            if result == GateResult::Fail {
+            if matches!(result, GateResult::Fail | GateResult::Stale) {
                 r.failures = r.failures.saturating_add(1);
             }
             // A quick approval is never promoted after a full command failure, even onto a

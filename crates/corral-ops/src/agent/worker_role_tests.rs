@@ -356,6 +356,39 @@ fn corral_gate_wakes_once_across_a_restart_and_done_moves_the_task_to_review() {
 }
 
 #[test]
+fn stale_gate_wakes_with_rebase_guidance_and_cannot_authorize_done() {
+    let w = worker(true);
+    let started = w.op(None, "gate-stale", "gate", json!({}));
+    let receipt = committed(&started);
+    w.ctx()
+        .store
+        .update(&w.id, |t| {
+            let gate = t.runs[0].gate.as_mut().unwrap();
+            gate.result = GateResult::Stale;
+            gate.failed_cmd = Some("stale_result: changed integration_base".into());
+            Ok(())
+        })
+        .unwrap();
+    w.write_prompt();
+    for _ in 0..2 {
+        crate::agent::hooks::sync::task(w.ctx(), &w.task(), Timestamp::now()).unwrap();
+    }
+    let wakes = w.messages("wait_wake");
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(w.wake(&receipt.request_id), WakeState::Fired);
+    let body = &wakes[0].1;
+    assert!(body.contains("finished: stale"), "{body}");
+    assert!(body.contains("integration_base"), "{body}");
+    assert!(
+        body.contains("Rebase") && body.contains("once on the new base"),
+        "{body}"
+    );
+    let error = crate::done_with_result(w.ctx(), &w.id, SUMMARY, None).unwrap_err();
+    assert!(error.to_string().contains("gate_stale"));
+    assert_ne!(w.task().status, Status::Review);
+}
+
+#[test]
 fn a_gate_refused_before_submission_is_rejected_and_arms_no_wake() {
     // Given a fence that commits between the gate's preparation and its submission:
     let w = worker(true);

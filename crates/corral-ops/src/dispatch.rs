@@ -741,7 +741,12 @@ fn retry_with(
                     .or_else(|| {
                         run.gate
                             .as_ref()
-                            .filter(|g| g.result == corral_core::GateResult::Fail)
+                            .filter(|g| {
+                                matches!(
+                                    g.result,
+                                    corral_core::GateResult::Fail | corral_core::GateResult::Stale
+                                )
+                            })
                             .map(|g| {
                                 format!(
                                     "Gate failed: {}",

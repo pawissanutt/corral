@@ -32,8 +32,9 @@ fn gate_line(g: &GateRecord, run: &Run) -> String {
             g.pane.as_deref().unwrap_or("?")
         ),
         GateResult::Pass => format!("pass at {sha} ({})", g.at),
-        GateResult::Fail => format!(
-            "fail at {sha} ({}): {}",
+        GateResult::Fail | GateResult::Stale => format!(
+            "{} at {sha} ({}): {}",
+            g.result.as_str(),
             g.at,
             g.failed_cmd.as_deref().unwrap_or("?")
         ),
@@ -67,8 +68,8 @@ fn gate(ctx: &Ctx, id: &str, wait: bool, force: bool) -> Result<()> {
         .current_run()
         .ok_or_else(|| anyhow!("{} has no run", task.id))?;
     println!("{} gate: {}", task.id, gate_line(&record, run));
-    if record.result == GateResult::Fail {
-        bail!("gate failed for {}", task.id);
+    if record.result != GateResult::Pass {
+        bail!("gate {} for {}", record.result.as_str(), task.id);
     }
     Ok(())
 }

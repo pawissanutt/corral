@@ -206,7 +206,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         && run
             .gate
             .as_ref()
-            .is_some_and(|g| g.result == GateResult::Fail)
+            .is_some_and(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))
         && ctx.store.events_shared()?.iter().any(|event| {
             event.task.as_deref() == Some(id)
                 && event.kind == "candidate_rebased"

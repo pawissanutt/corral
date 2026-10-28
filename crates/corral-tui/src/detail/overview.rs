@@ -202,6 +202,7 @@ impl DetailView {
                         GateResult::Running => "running",
                         GateResult::Pass => "passed",
                         GateResult::Fail => "failed",
+                        GateResult::Stale => "stale",
                     }
                 }
             });

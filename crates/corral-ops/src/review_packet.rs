@@ -194,6 +194,7 @@ fn receipt(
             Some(GateResult::Running) => "running",
             Some(GateResult::Pass) => "pass",
             Some(GateResult::Fail) => "fail",
+            Some(GateResult::Stale) => "stale",
         },
         fresh,
         attempt: gate.and_then(|g| g.identity.as_ref().map(|i| i.attempt.clone())),
@@ -322,6 +323,9 @@ pub(crate) fn evidence_gaps(
                 gap(GapCode::GateStale, detail);
             }
             match g.result {
+                GateResult::Stale => {
+                    gap(GapCode::GateStale, g.failed_cmd.clone().unwrap_or_default())
+                }
                 GateResult::Fail => gap(
                     GapCode::GateFailed,
                     g.failed_cmd.clone().unwrap_or_default(),
