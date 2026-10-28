@@ -96,9 +96,23 @@ after a `/logout` or a removed credential the provider has no auth rather than a
 any Anthropic request without the subscription OAuth token is refused before it is sent. corral
 never reads or writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
 
-Anthropic profiles run on your Claude Pro/Max subscription through the same OAuth route Pi
-uses. That route is outside Anthropic's documented API terms; the evidence and the accepted
-policy risk are recorded in `docs/records/pi-native-claude-route.md`.
+Anthropic profiles run on your Claude Pro/Max subscription through the official Claude Agent SDK
+(`@anthropic-ai/claude-agent-sdk`, pinned in `package.json` and `compat.json`). Pi keeps the
+conversation and runs every tool; each model call starts one SDK `query()`, which spawns the real
+Claude Code engine from the SDK's platform package (for example
+`@anthropic-ai/claude-agent-sdk-linux-x64`). Claude Code receives the conversation as one user
+message and the corral login's access token as `CLAUDE_CODE_OAUTH_TOKEN` in its environment, and
+nothing else: every `ANTHROPIC_*` and other `CLAUDE_CODE_*` variable is removed, and its config
+directory is a private `claude-code/` directory under the host's runtime directory, so it never
+reads `~/.claude`. Claude Code only plans: its tool calls stream back to Pi, while a
+`PreToolUse` hook and the permission callback deny every execution inside Claude Code. Pi's
+`read`, `write`, `edit`, `bash`, `grep` and `find` appear to Claude Code as its own Read, Write,
+Edit, Bash, Grep and Glob; the role's other tools (`corral_*`, the LSP tools) appear through an
+in-process MCP server whose handler refuses. Cancelling a turn interrupts and closes the query. A
+missing platform package is refused `claude_code_unavailable`, naming the package to install;
+nothing is downloaded. Each model call is independent: there is no resident Claude Code session,
+session reuse or Claude Code compaction. The policy record is
+`docs/records/pi-native-claude-route.md`.
 
 ## Readback
 
@@ -179,9 +193,12 @@ skill); skills in the worktree, your home directory or another harness are never
 off. Its network is a guarded fetch that sends only POST requests to the bound profile's provider
 API and that provider's token-refresh endpoint: for `openai`,
 `https://chatgpt.com/backend-api/codex/responses` and `https://auth.openai.com/oauth/token`; for
-`anthropic`, `https://api.anthropic.com/v1/messages` (with Pi's `?beta=true` query) and
-`https://platform.claude.com/v1/oauth/token`. Every other request, the other provider's endpoints
-and bug-report uploads included, is refused. The same holds after a reload and
+`anthropic`, only `https://platform.claude.com/v1/oauth/token`, since the host process never
+calls `https://api.anthropic.com` itself. Claude Code's own traffic (model requests, and
+whatever else it sends; its non-essential traffic is switched off with
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`) leaves from its subprocess, outside this guarded
+fetch. Every other request, the other provider's endpoints and bug-report uploads included, is
+refused. The same holds after a reload and
 after the session is replaced.
 
 ### The bridge

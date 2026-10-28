@@ -104,3 +104,33 @@ directory above; it is separate from the production corral-owned Pi auth directo
 Raw output is attached to T-306: the live and offline result files, the budget ledger and the offline lane
 log. Reproduce the offline side with `bash tools/pi-probe/claude/run.sh offline`; a rerun of the live side
 needs a new owner authorization and budget.
+
+## Update (T-493): the Claude Agent SDK lane
+
+On subscription accounts, Anthropic treats direct `api.anthropic.com/v1/messages` traffic from a
+third-party harness as extra usage instead of plan usage, so the direct Pi route above could not
+run under corral's subscription-only guard. T-493 replaces it in the production host with a
+per-turn Claude Agent SDK lane, ported from senpi's `anthropic-subscription` provider (MIT):
+
+- Each model call runs one `query()` of `@anthropic-ai/claude-agent-sdk` (pinned exactly in
+  `packages/corral-pi/package.json`, `bun.lock` and `compat.json`). The SDK spawns Claude Code from
+  its platform package; a missing package is refused `claude_code_unavailable` and nothing is
+  downloaded.
+- Claude Code gets the corral-owned `anthropic` login's access token as `CLAUDE_CODE_OAUTH_TOKEN`
+  in its subprocess environment only. `ANTHROPIC_*`, other `CLAUDE_CODE_*` variables and
+  `CLAUDE_CONFIG_DIR` are removed first, and its config directory is a host-owned one, so it reads
+  neither an API key nor `~/.claude`. Pi still refreshes the token through the guarded fetch.
+- Claude Code only plans. A `PreToolUse` deny hook (which also stops its loop) and a deny-only
+  `canUseTool` keep it from executing anything; its streamed `tool_use` blocks become Pi tool
+  calls that Pi executes.
+
+**Network guard.** Claude Code's traffic leaves from its own process, outside the host's
+`guardedFetch`; corral does not proxy or inspect it. The host process itself no longer reaches
+`api.anthropic.com`: for `anthropic` the guard now allows only the token refresh
+(`https://platform.claude.com/v1/oauth/token`), and a regression test shows Pi's direct
+anthropic-messages client is refused unsent. Claude Code's non-essential traffic is switched off
+with `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`.
+
+Not ported (follow-ups): a resident long-lived SDK session, session reuse, Claude Code native
+compaction, multiple accounts, failover, rate-limit polling and auto-downloading Claude Code.
+The live smoke result is attached to T-493.

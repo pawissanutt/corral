@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { checkRuntime, readCompat } from "../src/host/runtime.ts";
+import { bunApi, checkRuntime, readCompat } from "../src/host/runtime.ts";
 import { PACKAGE_ROOT } from "./support/fixture-install.ts";
 
 const REPO = join(PACKAGE_ROOT, "../..");
@@ -11,18 +11,30 @@ const json = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const go = json(join(REPO, "tools/pi-probe/bun-go.json"));
 
-test("package.json pins exactly the GO manifest's Pi release and the probe's dev pins", () => {
+test("package.json pins exactly the GO manifest's Pi release, the Claude Agent SDK lane and the probe's dev pins", () => {
   const pkg = json(join(PACKAGE_ROOT, "package.json"));
+  const compat = json(join(PACKAGE_ROOT, "compat.json"));
   expect(go.verdict).toBe("GO");
-  expect(pkg.dependencies).toEqual({ [go.pi.package]: go.pi.version });
+  expect(pkg.dependencies).toEqual({
+    [go.pi.package]: go.pi.version, [compat.claude.package]: compat.claude.version, zod: compat.claude.zod,
+  });
   expect(pkg.devDependencies).toEqual(json(join(REPO, "tools/pi-probe/package.json")).devDependencies);
   expect(pkg.trustedDependencies).toEqual([]);
   expect(pkg.scripts.typecheck).toBe("tsc --noEmit -p tsconfig.json");
 });
 
-test("bun.lock is the GO lock byte for byte", () => {
-  expect(sha256(join(PACKAGE_ROOT, "bun.lock"))).toBe(go.lock.sha256);
+test("bun.lock keeps every GO lock entry and adds only the pinned Claude Agent SDK (T-493)", () => {
   expect(sha256(join(REPO, go.lock.file))).toBe(go.lock.sha256);
+  const parse = (path: string) => bunApi().JSONC.parse(readFileSync(path, "utf8")) as { packages: Record<string, unknown[]> };
+  const goLock = parse(join(REPO, go.lock.file));
+  const lock = parse(join(PACKAGE_ROOT, "bun.lock"));
+  for (const [name, entry] of Object.entries(goLock.packages)) expect([name, lock.packages[name]]).toEqual([name, entry]);
+  const added = Object.keys(lock.packages).filter((name) => !(name in goLock.packages));
+  expect(added.every((name) => name.startsWith("@anthropic-ai/claude-agent-sdk"))).toBeTrue();
+  const compat = json(join(PACKAGE_ROOT, "compat.json"));
+  const sdk = lock.packages[compat.claude.package]!;
+  expect([sdk[0], sdk[3]]).toEqual([`${compat.claude.package}@${compat.claude.version}`, compat.claude.integrity]);
+  expect(lock.packages.zod?.[0]).toBe(`zod@${compat.claude.zod}`);
 });
 
 test("compat.json is derived from bun-go.json", () => {
@@ -36,7 +48,7 @@ test("compat.json is derived from bun-go.json", () => {
   for (const key of ["package", "version", "integrity", "upstreamCommit", "packages"]) {
     expect(compat.pi[key]).toEqual(go.pi[key]);
   }
-  expect(compat.lock).toEqual({ file: "bun.lock", sha256: go.lock.sha256 });
+  expect(compat.lock).toEqual({ file: "bun.lock", sha256: sha256(join(PACKAGE_ROOT, "bun.lock")) });
 });
 
 test("the frozen install satisfies the startup pins and an unpinned Bun is refused", () => {

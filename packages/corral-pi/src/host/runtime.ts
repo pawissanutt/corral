@@ -67,7 +67,7 @@ export function checkRuntime(assetRoot: string, compat: Compat, bunVersion = bun
   const bytes = readFileSync(join(assetRoot, compat.lock.file));
   const lockSha256 = createHash("sha256").update(bytes).digest("hex");
   if (lockSha256 !== compat.lock.sha256) {
-    throw new RuntimeRefused("lock_digest_mismatch", `${compat.lock.file} is not the GO lock`);
+    throw new RuntimeRefused("lock_digest_mismatch", `${compat.lock.file} is not the pinned lock`);
   }
   const lock = bun.JSONC.parse(bytes.toString("utf8"));
   const entry = record(lock) && record(lock.packages) ? lock.packages[compat.pi.package] : undefined;

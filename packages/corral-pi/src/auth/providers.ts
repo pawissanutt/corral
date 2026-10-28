@@ -23,6 +23,11 @@ export interface ProviderRoute {
   readonly oauthTokenMarker?: string;
   /** The OAuth endpoints a login may POST to. */
   readonly login: readonly string[];
+  /**
+   * Set when model calls run in a subprocess instead of through the host's fetch (T-493): the
+   * Claude Agent SDK lane spawns Claude Code, so the host itself never POSTs to `api`.
+   */
+  readonly lane?: "claude-agent-sdk";
 }
 
 export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
@@ -53,6 +58,7 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
     refresh: "https://platform.claude.com/v1/oauth/token",
     oauthTokenMarker: "sk-ant-oat",
     login: ["https://platform.claude.com/v1/oauth/token"],
+    lane: "claude-agent-sdk",
   },
 };
 
@@ -62,8 +68,12 @@ export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === "string" && (PROVIDER_IDS as readonly string[]).includes(value);
 }
 
-/** The destinations a host run of `provider` may POST to: its model endpoint and token refresh. */
+/**
+ * The destinations a host run of `provider` may POST to: its model endpoint and token refresh,
+ * or only the token refresh when a subprocess lane owns the model traffic.
+ */
 export function hostDestinations(provider: ProviderId): readonly string[] {
   const route = PROVIDERS[provider];
+  if (route.lane !== undefined) return [route.refresh];
   return [route.api, ...route.apiQueries.map((query) => `${route.api}${query}`), route.refresh];
 }

@@ -2,6 +2,7 @@
 // (agent_start to agent_settled) and provider errors to corral as `event` calls, and answers
 // bridge input with upstream's own dispositions: started, queued, handled or rejected.
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type {
@@ -9,10 +10,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import type { StreamFunction } from "@earendil-works/pi-ai";
+import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
+import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
@@ -60,14 +63,25 @@ type Models = Awaited<ReturnType<typeof Sdk.ModelRuntime.create>>;
  * environment tokens or workload federation) is dropped, so a logout or a removed credential
  * leaves the provider without auth instead of falling back to a paid key; and a request whose
  * auth is not the provider's OAuth token is refused before it is sent, since paid and
- * subscription Anthropic traffic share one endpoint.
+ * subscription Anthropic traffic share one endpoint. A provider with a `lane` never reaches its
+ * endpoint from this process: its calls run through that lane's registered Pi API (T-493).
  */
-export function restrictProvider(models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch): void {
+export function restrictProvider(
+  models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch, lane?: ClaudeLaneConfig,
+): void {
   const route = PROVIDERS[providerId];
   const provider = models.getProvider(route.id);
   if (!provider?.auth.oauth) throw new Error(`model_unavailable: ${route.id} has no subscription OAuth`);
-  const stream = provider.stream.bind(provider) as StreamFunction;
-  const streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
+  let stream = provider.stream.bind(provider) as StreamFunction;
+  let streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
+  if (route.lane !== undefined) {
+    if (!lane) throw new Error(`model_unavailable: ${route.id} runs through the ${route.lane} lane, which has no configuration`);
+    registerClaudeSdkApi(lane);
+    const api = getApiProvider(CLAUDE_SDK_API);
+    if (!api) throw new Error(`model_unavailable: the ${route.lane} lane is not registered`);
+    stream = (current, context, options) => api.stream({ ...current, api: CLAUDE_SDK_API }, context, options);
+    streamSimple = (current, context, options) => api.streamSimple({ ...current, api: CLAUDE_SDK_API }, context, options);
+  }
   const checked = (current: { api: string }, streamOptions: unknown) => {
     if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
     const auth = (streamOptions ?? {}) as { apiKey?: unknown; headers?: Record<string, unknown> };
@@ -151,7 +165,8 @@ export class HostSession {
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch);
+    restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
+      { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd });
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);

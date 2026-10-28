@@ -64,19 +64,18 @@ test("the environment turns off upstream startup network and telemetry", () => {
   expect(env).toEqual({ PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0" });
 });
 
-test("an Anthropic profile reaches only the Anthropic messages and token-refresh endpoints (T-479)", async () => {
+test("an Anthropic host reaches only the token refresh; Claude Code owns the model traffic (T-479, T-493)", async () => {
   const sent: string[] = [];
   const guard = guardedFetch(async (input) => {
     sent.push(String(input));
     return new Response("{}");
   }, undefined, "anthropic");
-  const allowed = [
-    "https://api.anthropic.com/v1/messages", "https://api.anthropic.com/v1/messages?beta=true",
-    "https://platform.claude.com/v1/oauth/token",
-  ];
+  const allowed = ["https://platform.claude.com/v1/oauth/token"];
   for (const url of allowed) await guard.fetch(url, { method: "POST", body: "{}" });
   expect(sent).toEqual(allowed);
   const refused = [
+    () => guard.fetch("https://api.anthropic.com/v1/messages", { method: "POST" }),
+    () => guard.fetch("https://api.anthropic.com/v1/messages?beta=true", { method: "POST" }),
     () => guard.fetch("https://api.anthropic.com/v1/messages"),
     () => guard.fetch("https://api.anthropic.com/v1/messages?beta=false", { method: "POST" }),
     () => guard.fetch("https://api.anthropic.com/v1/models", { method: "POST" }),
@@ -86,9 +85,9 @@ test("an Anthropic profile reaches only the Anthropic messages and token-refresh
     () => guard.fetch(TOKEN_REFRESH, { method: "POST" }),
   ];
   for (const attempt of refused) await expect(attempt()).rejects.toThrow(/^network_refused: /);
-  expect(guard.ledger().allowed).toBe(3);
+  expect(guard.ledger().allowed).toBe(1);
   expect(guard.ledger().refused).toBe(refused.length);
-  expect(sent).toHaveLength(3);
+  expect(sent).toHaveLength(1);
 });
 
 test("an OpenAI profile cannot reach any Anthropic endpoint", async () => {
