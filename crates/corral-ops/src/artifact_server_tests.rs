@@ -470,12 +470,31 @@ fn an_open_page_moves_to_the_later_run_that_updates_its_document() {
     let path = s._root.path().join("w/report.html");
     add(&s, &task.id, &path, b"<body>R1 body</body>", None);
     let first = set_run(&s, &task.id, "R1");
+
+    // Stage the snapshot before subscribing, but keep its entry unpublished until it has
+    // its final run binding. Publishing via add + set_run lets the watcher see R0 first.
+    let mut second = add(&s, &task.id, &path, b"<body>R2 body</body>", None);
+    s.ctx
+        .store
+        .update(&task.id, |t| {
+            assert_eq!(t.artifacts.pop().unwrap(), second);
+            Ok(())
+        })
+        .unwrap();
+    second.run = "R2".to_string();
+    // The later recorded run deliberately has an earlier wall-clock timestamp.
+    second.added = "2026-01-01T00:00:00Z".parse().unwrap();
     let mut events = subscribe(&s, &url(&s, &first));
     assert_eq!(verdict(&mut events), None);
 
-    // When run R2 records a new version of the same file.
-    add(&s, &task.id, &path, b"<body>R2 body</body>", None);
-    let second = set_run(&s, &task.id, "R2");
+    // When run R2 records a new version and its binding as one observed change.
+    s.ctx
+        .store
+        .update(&task.id, |t| {
+            t.artifacts.push(second.clone());
+            Ok(())
+        })
+        .unwrap();
 
     // Then the page is sent to R2's URL, which serves the new body.
     let data = verdict(&mut events).unwrap();
