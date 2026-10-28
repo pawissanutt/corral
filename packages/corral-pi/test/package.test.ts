@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { bunApi, checkRuntime, readCompat } from "../src/host/runtime.ts";
+import { bunApi, checkCompiledRuntime, checkRuntime, readCompat } from "../src/host/runtime.ts";
 import { PACKAGE_ROOT } from "./support/fixture-install.ts";
 
 const REPO = join(PACKAGE_ROOT, "../..");
@@ -49,6 +49,13 @@ test("compat.json is derived from bun-go.json", () => {
     expect(compat.pi[key]).toEqual(go.pi[key]);
   }
   expect(compat.lock).toEqual({ file: "bun.lock", sha256: sha256(join(PACKAGE_ROOT, "bun.lock")) });
+});
+
+test("a compiled host checks only its embedded Bun against the tested range", () => {
+  const compat = readCompat(PACKAGE_ROOT);
+  expect(checkCompiledRuntime(compat, compat.bun.range.replace(/^[^0-9]*/, "")))
+    .toEqual({ bun: compat.bun.range.replace(/^[^0-9]*/, ""), pi: compat.pi.version, lockSha256: compat.lock.sha256 });
+  expect(() => checkCompiledRuntime(compat, "1.4.1")).toThrow(/bun_version_unsupported: the embedded bun 1\.4\.1/);
 });
 
 test("the frozen install satisfies the startup pins and an unpinned Bun is refused", () => {
