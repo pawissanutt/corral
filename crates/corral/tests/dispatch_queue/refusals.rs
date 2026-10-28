@@ -1,5 +1,6 @@
 //! T-505: a persistent queue refusal is logged once per state and retried after a change.
 use corral_core::Status;
+use corral_ops::DispatchOpts;
 
 use crate::queue_support::Fixture;
 
@@ -106,6 +107,35 @@ fn queued_task_whose_graph_becomes_a_cycle_fails_once_until_it_changes() {
             Ok(())
         })
         .unwrap();
+    corral_ops::sync(&f.ctx).unwrap();
+    assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
+}
+
+#[test]
+fn unavailable_queued_base_fails_once_and_dispatches_once_it_is_restored() {
+    // Given work explicitly queued on the app repository's main branch.
+    let f = crate::queue_fixture();
+    let task = f.task("app", Status::Ready);
+    let opts = DispatchOpts {
+        base: Some("main".into()),
+        ..DispatchOpts::default()
+    };
+    corral_ops::enqueue(&f.ctx, &task.id, &opts).unwrap();
+    let before = churn(&f, &task.id).len();
+    let repo = f.temp.path().join("app");
+
+    // When main disappears and several sync passes run.
+    crate::queue_support::git(&repo, &["branch", "-m", "main", "temporary"]);
+    passes(&f);
+
+    // Then exactly one failure is logged and nothing launches.
+    let logged = churn(&f, &task.id)[before..].to_vec();
+    assert_eq!(logged.len(), 1, "{logged:?}");
+    assert!(logged[0].starts_with("dispatch_failed "), "{logged:?}");
+    assert!(f.ctx.store.get(&task.id).unwrap().runs.is_empty());
+
+    // And restoring the base, with no task or configuration edit, admits it on the next pass.
+    crate::queue_support::git(&repo, &["branch", "-m", "temporary", "main"]);
     corral_ops::sync(&f.ctx).unwrap();
     assert_eq!(f.ctx.store.get(&task.id).unwrap().status, Status::Running);
 }
