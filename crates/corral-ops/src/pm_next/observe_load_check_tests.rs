@@ -586,3 +586,149 @@ fn legacy_backfill_generations_are_idempotent_and_do_not_advance_old_snapshots()
         ))
     );
 }
+
+fn publish(ctx: &Ctx, task: &Task, value: Value, title: &str) -> Artifact {
+    let path = ctx.store.dir().join("state/report.json");
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    crate::add_artifact(
+        ctx,
+        &task.id,
+        &path,
+        Some(ArtifactKind::Report),
+        Some(title),
+    )
+    .unwrap()
+}
+
+fn edit(ctx: &Ctx, id: &str, change: impl Fn(&mut Task)) {
+    ctx.store
+        .update(id, |task| {
+            change(task);
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn evaluate(ctx: &Ctx, id: &str, head: &str) -> (Result<Value, String>, Result<Value, String>) {
+    let ctx = frozen(ctx);
+    crate::pm_workset(&ctx).unwrap();
+    let task = ctx.store.get(id).unwrap();
+    let run = task.current_run().unwrap();
+    (
+        outcome(load_check(&ctx, &task, run, head)),
+        outcome(full_oracle(&ctx, &task, run, head)),
+    )
+}
+
+/// Two fresh evaluations of the same committed state equal the full-task oracle and each other.
+fn settled(ctx: &Ctx, id: &str, head: &str) -> Value {
+    let (first, oracle) = evaluate(ctx, id, head);
+    assert_eq!(first, oracle);
+    let (second, _) = evaluate(ctx, id, head);
+    assert_eq!(second, first);
+    first.unwrap()
+}
+
+#[test]
+fn retitling_the_selected_failure_away_clears_the_selection() {
+    let (_root, ctx, task, head) = fixture();
+    publish(&ctx, &task, check(&task, &head, 101, 0), TITLE);
+    assert!(!settled(&ctx, &task.id, &head).is_null());
+    edit(&ctx, &task.id, |t| {
+        t.artifacts[0].title = "Ordinary report".into()
+    });
+    assert!(settled(&ctx, &task.id, &head).is_null());
+}
+
+#[test]
+fn retitling_an_ordinary_failure_report_into_the_selection_finds_it() {
+    let (_root, ctx, task, head) = fixture();
+    publish(&ctx, &task, check(&task, &head, 101, 0), "Ordinary report");
+    assert!(settled(&ctx, &task.id, &head).is_null());
+    edit(&ctx, &task.id, |t| t.artifacts[0].title = TITLE.into());
+    assert!(!settled(&ctx, &task.id, &head).is_null());
+}
+
+#[test]
+fn reattributing_the_selected_registration_to_another_heads_success_clears_it() {
+    let (_root, ctx, task, head) = fixture();
+    publish(&ctx, &task, check(&task, &"a".repeat(40), 0, 1), TITLE);
+    publish(&ctx, &task, check(&task, &head, 101, 0), TITLE);
+    assert!(!settled(&ctx, &task.id, &head).is_null());
+    // The count is unchanged; only the selected registration's identity and bytes differ.
+    edit(&ctx, &task.id, |t| t.artifacts[1] = t.artifacts[0].clone());
+    assert!(settled(&ctx, &task.id, &head).is_null());
+}
+
+#[test]
+fn removing_the_last_match_stays_clear_and_later_publication_is_selected() {
+    let (_root, ctx, task, head) = fixture();
+    publish(&ctx, &task, check(&task, &head, 101, 0), TITLE);
+    assert!(!settled(&ctx, &task.id, &head).is_null());
+    edit(&ctx, &task.id, |t| t.artifacts.clear());
+    assert!(settled(&ctx, &task.id, &head).is_null());
+    publish(&ctx, &task, check(&task, &head, 0, 1), TITLE);
+    assert!(settled(&ctx, &task.id, &head).is_null());
+    publish(&ctx, &task, check(&task, &head, 102, 2), TITLE);
+    assert!(!settled(&ctx, &task.id, &head).is_null());
+}
+
+#[test]
+fn removing_the_newest_match_selects_the_older_remaining_one() {
+    let (_root, ctx, task, head) = fixture();
+    publish(&ctx, &task, check(&task, &head, 101, 0), TITLE);
+    publish(&ctx, &task, check(&task, &head, 102, 1), TITLE);
+    let newest = settled(&ctx, &task.id, &head);
+    edit(&ctx, &task.id, |t| {
+        t.artifacts.pop();
+    });
+    let older = settled(&ctx, &task.id, &head);
+    assert!(!older.is_null());
+    assert_ne!(older, newest);
+}
+
+#[test]
+fn an_older_snapshot_keeps_its_selection_after_an_edit_is_recovered() {
+    let (_root, ctx, task, head) = fixture();
+    publish(&ctx, &task, check(&task, &head, 101, 0), TITLE);
+    let old = frozen(&ctx);
+    edit(&ctx, &task.id, |t| t.artifacts.clear());
+    assert!(settled(&ctx, &task.id, &head).is_null());
+    // When the older evaluation first prepares after the edit was recovered.
+    crate::pm_workset(&old).unwrap();
+    let task = old.store.get(&task.id).unwrap();
+    let run = task.current_run().unwrap();
+    let selected = outcome(load_check(&old, &task, run, &head));
+    assert_eq!(selected, outcome(full_oracle(&old, &task, run, &head)));
+    assert!(!selected.unwrap().is_null());
+}
+
+#[test]
+fn warm_evaluation_after_an_edit_is_recovered_is_history_independent() {
+    let mut reports = Vec::new();
+    for factor in [1, 10] {
+        let (_root, ctx, task, head) = fixture();
+        publish(&ctx, &task, check(&task, &head, 101, 0), TITLE);
+        for n in 1..=4 * factor {
+            publish(&ctx, &task, check(&task, &head, 0, n), TITLE);
+            publish(&ctx, &task, check(&task, &"a".repeat(40), 101, n), TITLE);
+        }
+        let task = pin(&ctx, &task.id);
+        edit(&ctx, &task.id, |t| {
+            t.artifacts[0].title = "Ordinary report".into()
+        });
+        // The first evaluation recovers once; the measured one is warm.
+        crate::pm_workset(&frozen(&ctx)).unwrap();
+        let ctx = frozen(&ctx);
+        let before = work::snapshot();
+        crate::pm_workset(&ctx).unwrap();
+        reports.push(work::snapshot().since(&before));
+        let task = ctx.store.get(&task.id).unwrap();
+        let run = task.current_run().unwrap();
+        assert_eq!(
+            outcome(load_check(&ctx, &task, run, &head)),
+            outcome(full_oracle(&ctx, &task, run, &head))
+        );
+    }
+    equal_cells(&reports[0], &reports[1]);
+}
