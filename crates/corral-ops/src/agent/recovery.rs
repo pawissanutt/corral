@@ -375,7 +375,13 @@ fn stop_host(host: &Executor) -> Result<()> {
         return Ok(());
     }
     let argv = command_line(host.pid)?;
-    let entry = argv.iter().any(|a| a.ends_with(HOST_ENTRY));
+    let entry = argv.iter().any(|a| {
+        a.ends_with(HOST_ENTRY)
+            || Path::new(a).file_name()
+                == Some(std::ffi::OsStr::new(
+                    crate::agent::bridge::assets::HOST_BINARY,
+                ))
+    });
     let launched = argv.iter().any(|a| a == "--launch-fd");
     ensure!(
         entry && launched,

@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::consulted;
 use crate::Ctx;
 use crate::agent::bridge::assets::{
-    asset_digest, bun_version, find_bun, read_compat, version_satisfies,
+    asset_digest, bun_version, compiled_host, find_bun, has_module, read_compat, version_satisfies,
 };
 use crate::agent::{credentials, install};
 
@@ -61,7 +61,8 @@ pub fn installation(ctx: &Ctx, root: Option<PathBuf>) -> Value {
     };
     let digest = asset_digest(&dir).unwrap_or_else(|error| format!("unreadable ({error:#})"));
     let range = read_compat(&dir).ok().map(|pins| pins.range);
-    let auth = if !dir.join("src/auth/index.ts").is_file() {
+    let compiled = compiled_host(&dir);
+    let auth = if !has_module(&dir, "src/auth/index.ts") {
         "missing"
     } else if dir.join("fixture.json").exists() {
         "fixture"
@@ -70,10 +71,7 @@ pub fn installation(ctx: &Ctx, root: Option<PathBuf>) -> Value {
     };
     let roles: Vec<&str> = ROLES
         .iter()
-        .filter(|role| {
-            dir.join(format!("src/roles/{}/index.ts", role.as_str()))
-                .is_file()
-        })
+        .filter(|role| has_module(&dir, &format!("src/roles/{}/index.ts", role.as_str())))
         .map(|role| role.as_str())
         .collect();
     let summary = format!(
@@ -89,6 +87,7 @@ pub fn installation(ctx: &Ctx, root: Option<PathBuf>) -> Value {
     json!({
         "dir": dir, "source": source, "digest": digest, "compat": range.as_ref().map(|_| "GO"),
         "bun_range": range, "auth": auth, "roles": roles, "summary": summary,
+        "compiled": compiled,
     })
 }
 
@@ -144,34 +143,46 @@ pub(crate) fn checks_with(
         }
     };
     let range = found["bun_range"].as_str();
-    let runtime = match bun.as_deref().map(|bun| (bun, bun_version(bun))) {
-        None => (
-            false,
-            "pi-native bun: no executable `bun` on PATH".to_owned(),
+    let runtime = match (
+        found["compiled"].as_str(),
+        bun.as_deref().map(|bun| (bun, bun_version(bun))),
+    ) {
+        (Some(host), _) => (
+            true,
+            format!(
+                "pi-native bun embedded in {host} (GO range {})",
+                range.unwrap_or("unknown")
+            ),
         ),
-        Some((_, Err(refusal))) => (false, format!("pi-native bun: {refusal}")),
-        Some((path, Ok(version))) => match range {
-            Some(range) if !version_satisfies(&version, range) => (
-                false,
-                format!(
-                    "pi-native bun {version} at {} is outside the GO range {range}",
-                    path.display()
-                ),
-            ),
-            Some(range) => (
-                true,
-                format!(
-                    "pi-native bun {version} at {} (GO range {range})",
-                    path.display()
-                ),
-            ),
+        (None, runtime) => match runtime {
             None => (
-                true,
-                format!(
-                    "pi-native bun {version} at {} (no GO range to compare)",
-                    path.display()
-                ),
+                false,
+                "pi-native bun: no executable `bun` on PATH".to_owned(),
             ),
+            Some((_, Err(refusal))) => (false, format!("pi-native bun: {refusal}")),
+            Some((path, Ok(version))) => match range {
+                Some(range) if !version_satisfies(&version, range) => (
+                    false,
+                    format!(
+                        "pi-native bun {version} at {} is outside the GO range {range}",
+                        path.display()
+                    ),
+                ),
+                Some(range) => (
+                    true,
+                    format!(
+                        "pi-native bun {version} at {} (GO range {range})",
+                        path.display()
+                    ),
+                ),
+                None => (
+                    true,
+                    format!(
+                        "pi-native bun {version} at {} (no GO range to compare)",
+                        path.display()
+                    ),
+                ),
+            },
         },
     };
     let stored = root.as_deref().map(|root| {

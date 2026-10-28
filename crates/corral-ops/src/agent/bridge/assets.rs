@@ -9,7 +9,24 @@ use serde_json::Value;
 use crate::agent::launch::LaunchRefusal;
 
 const ASSET_FILES_MAX: usize = 4096;
-const ASSET_BYTES_MAX: u64 = 64 * 1024 * 1024;
+/// Room for the compiled host (about 100 MiB: Bun plus every bundled dependency).
+const ASSET_BYTES_MAX: u64 = 512 * 1024 * 1024;
+/// The release host `bun build --compile` makes from `src/host/compiled.ts`: it embeds Bun and
+/// its role, delivery and auth modules, so its installation has no `src/` modules or Bun to find.
+pub const HOST_BINARY: &str = "corral-pi-host";
+
+/// The compiled host of a release installation, when `assets` is one.
+pub fn compiled_host(assets: &Path) -> Option<PathBuf> {
+    let path = assets.join(HOST_BINARY);
+    std::fs::symlink_metadata(&path)
+        .is_ok_and(|meta| meta.is_file())
+        .then_some(path)
+}
+
+/// Whether `assets` supplies `module`: as a source file, or bundled inside a compiled host.
+pub fn has_module(assets: &Path, module: &str) -> bool {
+    compiled_host(assets).is_some() || assets.join(module).is_file()
+}
 
 fn refuse(code: &'static str, detail: impl Into<String>) -> LaunchRefusal {
     LaunchRefusal {
@@ -67,7 +84,7 @@ pub fn missing_modules(assets: &Path, role: AgentRole) -> Vec<(&'static str, Str
     ];
     modules
         .into_iter()
-        .filter(|(module, _, _)| !assets.join(module).is_file())
+        .filter(|(module, _, _)| !has_module(assets, module))
         .map(|(_, code, detail)| (code, detail))
         .collect()
 }
@@ -78,7 +95,13 @@ pub fn missing_modules(assets: &Path, role: AgentRole) -> Vec<(&'static str, Str
 /// outside it; a symlink inside it is refused.
 pub fn asset_digest(dir: &Path) -> Result<String> {
     let mut files = Vec::new();
-    for name in ["package.json", "bun.lock", "compat.json", "fixture.json"] {
+    for name in [
+        "package.json",
+        "bun.lock",
+        "compat.json",
+        "fixture.json",
+        HOST_BINARY,
+    ] {
         let path = dir.join(name);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.is_file() => files.push(PathBuf::from(name)),

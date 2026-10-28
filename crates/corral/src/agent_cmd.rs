@@ -35,7 +35,8 @@ enum AgentCmd {
     },
     /// Install the Pi-native host assets into the user data directory
     Install {
-        /// Package directory to install from
+        /// Package directory, or a compiled corral-pi-host, to install from (default: the
+        /// corral-pi-host beside this corral, else this build's checkout)
         #[arg(long)]
         from: Option<PathBuf>,
         #[arg(long)]
