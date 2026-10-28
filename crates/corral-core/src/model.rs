@@ -869,6 +869,10 @@ pub struct Task {
     pub approved_scope_revision: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved_scope_history: Vec<crate::ApprovedScopeRevision>,
+    /// Membership move counter; existing Plans start at zero. Part of the operating contract, so
+    /// proof bound to an earlier membership stays stale even when the member list is restored.
+    #[serde(default, skip_serializing_if = "crate::plan::is_scope_revision_zero")]
+    pub membership_revision: u64,
     /// Owner member-gate records by member ID; outside the operating contract revision.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub member_gates: std::collections::BTreeMap<String, crate::MemberGateRecord>,

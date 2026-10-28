@@ -126,6 +126,7 @@ mod tests {
             approved_scope: None,
             approved_scope_revision: 0,
             approved_scope_history: Vec::new(),
+            membership_revision: 0,
             aggregate_attempts: Vec::new(),
             parent: None,
             source_digest: None,

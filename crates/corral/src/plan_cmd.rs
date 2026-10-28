@@ -138,6 +138,16 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+    MoveMember {
+        tracker: String,
+        member: String,
+        /// The tracker Plan that receives the member
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Set the task's plan requirement, or inherit workspace/project review policy
     Policy {
         id: String,
@@ -504,6 +514,28 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     added.member,
                     added.tracker,
                     added.children.join(", ")
+                );
+            }
+        }
+        PlanCmd::MoveMember {
+            tracker,
+            member,
+            to,
+            json,
+        } => {
+            let moved = corral_ops::plan_move_member(ctx, &tracker, &member, &to)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&moved)?);
+            } else {
+                println!(
+                    "{} moved from {} to {}; {} members: {}; {} members: {}",
+                    moved.member,
+                    moved.from,
+                    moved.to,
+                    moved.from,
+                    moved.from_children.join(", "),
+                    moved.to,
+                    moved.to_children.join(", ")
                 );
             }
         }

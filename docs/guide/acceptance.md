@@ -373,3 +373,29 @@ covers the Plan is refused until the owner confirms it again. Every earlier
 attempt names `members` as stale. The member gates and runs like any other
 member, and the new attempt is the same full-tier verification with every
 member required. Neither tier is lowered.
+
+### Moving a held member to another Plan
+
+A member that is deliberately held, for example in Backlog until other work
+lands, keeps its Plan from verifying. The owner can move it to another tracker
+Plan in the same project, so the first Plan delivers without it:
+
+```bash
+corral plan move-member T-010 T-021 --to T-030
+corral plan verify T-010
+```
+
+`plan move-member` is owner-only, with the same entry rules as
+`plan add-member`. The member must be unstarted (Idea, Backlog or Ready with no
+runs). Neither Plan may be Done, Dropped or accepted, and no member of either
+Plan may be Running, Needs me or in Review. The task keeps its ID, holds,
+dependencies and criteria, and the owner's member gate for it moves to the
+target Plan. A decomposed Plan's design follows its tracker. The move logs one
+`plan_member_moved` event on the source Plan, and rerunning the same command
+finishes a move a crash interrupted.
+
+The move advances both Plans' `membership_revision`, which is part of their
+operating contracts. Confirmed grants that cover either Plan need confirming
+again, and every earlier attempt of either Plan names `spec_digest` as stale,
+even when the source's member list is the same as when that attempt ran.
+`plan progress` and `plan verify` use the new membership right away.

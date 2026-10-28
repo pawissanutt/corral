@@ -1352,6 +1352,7 @@ Commands:
   verdict            Record a plan-only verdict; callbacks must include their exact attempt
   member-gate        Amend a published integration-Plan member's gate (owner only, revision-guarded)
   add-member         Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
+  move-member        Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
   policy             Set the task's plan requirement, or inherit workspace/project review policy
   help               Print this message or the help of the given subcommand(s)
 
@@ -1608,6 +1609,24 @@ Arguments:
 Options:
       --json         
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral plan move-member`
+
+```text
+Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+
+Usage: corral plan move-member [OPTIONS] --to <TO> <TRACKER> <MEMBER>
+
+Arguments:
+  <TRACKER>  
+  <MEMBER>   
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --to <TO>      The tracker Plan that receives the member
+      --json         
   -h, --help         Print help
 ```
 
