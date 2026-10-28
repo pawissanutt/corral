@@ -21,6 +21,9 @@ import type { DeliveryHost } from "../delivery/types.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
+import { installChrome } from "../ui/chrome.ts";
+import { corralRenderers } from "../ui/render.ts";
+import type { UiMode } from "./config.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 
@@ -34,6 +37,8 @@ export interface HostSessionOptions {
   readonly provider?: ProviderId;
   readonly effort?: string;
   readonly promptFile?: string;
+  /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
+  readonly ui?: UiMode;
   readonly modules: LoadedModules;
   readonly client: CorralClient;
   readonly events: EventLog;
@@ -211,11 +216,19 @@ export class HostSession {
   private extension(pi: ExtensionAPI): void {
     const allowed = new Set(this.loadout);
     const specs = this.options.modules.role.tools(this.roleContext);
+    const rich = this.options.ui !== "plain";
     for (const spec of specs) {
-      pi.registerTool(defineCorralTool(spec, {
+      const tool = defineCorralTool(spec, {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
         sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
-      }));
+      });
+      pi.registerTool(rich ? { ...tool, ...corralRenderers(tool.name) } : tool);
+    }
+    if (rich) {
+      installChrome(pi, {
+        identity: this.options.identity, provider: this.provider, model: this.options.model,
+        cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
+      }, this.options.events, () => this.bound, this.options.sdk.Theme);
     }
     for (const tool of this.localTools) pi.registerTool(tool);
     pi.on("tool_call", (event) => {
