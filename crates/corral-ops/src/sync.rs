@@ -299,7 +299,7 @@ fn sync_scoped(
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
-    crate::agent::gate_queue::advance(ctx)?;
+    crate::agent::gate_queue::advance_tasks(ctx, &tasks)?;
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::availability::advance_all(ctx, now)?);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);

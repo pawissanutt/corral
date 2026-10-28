@@ -206,10 +206,25 @@ fn manual_resource_overrides_do_not_bypass_other_admission_limits() {
     ));
     corral_ops::gate_start_with_force(&fx.ctx, &fx.id, true).unwrap();
     assert_eq!(fx.run().gate.unwrap().result, GateResult::Running);
-    // The host override still cannot create another gate in exhausted capacity.
+    // The host override still cannot start new work in exhausted slot capacity. (A running
+    // worker's own gate shares its task slot, so new coding work is what the limit refuses.)
     fx.ctx.store.config.limits.running = 2;
     fx.ctx.store.save_config().unwrap();
-    assert!(corral_ops::gate_start_with_force(&fx.ctx, &task.id, true).is_err());
+    let third = fx
+        .ctx
+        .store
+        .create("Third", Some("app"), Status::Ready, "")
+        .unwrap();
+    let forced = DispatchOpts {
+        profile: Some("fake".into()),
+        force_resources: true,
+        ..Default::default()
+    };
+    assert!(!matches!(
+        corral_ops::dispatch(&fx.ctx, &third.id, &forced),
+        Ok(DispatchOutcome::Started { .. })
+    ));
+    assert!(fx.ctx.store.get(&third.id).unwrap().runs.is_empty());
 }
 
 #[test]

@@ -249,7 +249,9 @@ impl Fixture {
     }
 
     fn assert_capacity_held(&self) {
-        assert_eq!(corral_ops::slots(&self.ctx).unwrap(), (4, 4));
+        // Two running workers and the pending reviewer; the first worker's running gate shares
+        // its task slot (a gate never needs a second slot, so workers cannot deadlock it).
+        assert_eq!(corral_ops::slots(&self.ctx).unwrap(), (3, 4));
         let tasks = self.ctx.store.list().unwrap();
         let runs: Vec<_> = tasks.iter().flat_map(|task| &task.runs).collect();
         assert_eq!(

@@ -341,7 +341,8 @@ fn dispatch_recommendations_include_active_gate_capacity() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Wait);
+    // A running worker's live gate shares its worker's slot, so one of the two slots stays free.
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Dispatch);
     ctx.store
         .update(&id, |task| {
             task.current_run_mut().unwrap().gate = None;
