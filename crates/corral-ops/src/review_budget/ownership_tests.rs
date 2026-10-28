@@ -198,11 +198,13 @@ fn sync_launch_still_excludes_an_external_inventory_consumer() {
     let (ready, sampled) = mpsc::channel();
     let (release, released) = mpsc::channel();
     std::thread::scope(|scope| {
+        // Disconnect on assertion failure too, before scope joins the observer.
+        let release = release;
         let ctx = &fx.ctx;
         let observer = scope.spawn(move || {
             let inventory = crate::pane_liveness::inventory(ctx).unwrap();
             ready.send(()).unwrap();
-            released.recv_timeout(Duration::from_secs(10)).unwrap();
+            released.recv().unwrap();
             drop(inventory);
         });
         sampled.recv_timeout(Duration::from_secs(10)).unwrap();
