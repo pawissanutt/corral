@@ -63,6 +63,7 @@ pub(crate) fn reconcile_one(
             transitions.push(json!({"decision":decision.request.id,"state":"expired","question":decision.request.question}));
         }
     }
+    next.settle_parking(&run.parked_on(&task.id), &task.id, now);
     if next == run.obligations {
         return Ok(None);
     }
@@ -91,6 +92,7 @@ pub(crate) fn reconcile_one(
     for detail in transitions {
         transition(ctx, &task.id, "wait_transition", detail)?;
     }
+    crate::parked::reacquire(ctx, &task.id)?;
     Ok(Some(Change {
         task: task.id,
         from: task.status,

@@ -323,6 +323,7 @@ fn sync_scoped(
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(crate::dashboard::advance(ctx, now)?);
+    changes.extend(crate::parked::reacquire_woken(ctx)?);
     changes.extend(crate::queue_drain::start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());

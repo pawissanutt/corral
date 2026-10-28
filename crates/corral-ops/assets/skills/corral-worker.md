@@ -58,7 +58,10 @@ This does not authorize an extra gate or a different tier.
    `corral run decision <id> --file <json>`. To declare that the run waits on something external (CI,
    another task landing), use `corral run wait <id> --file <json>` and record the outcome with
    `corral run resume <id> --wait <wait-id> --file <receipt-json>`. Payloads are in
-   docs/guide/automation.md, "Explicit waits and owner decisions".
+   docs/guide/automation.md, "Explicit waits and owner decisions". Name the task in a landing wait's
+   channel ID (`task:T-512:landed`): the run then releases its coding slot while parked. If
+   `corral run resume` reports the run queued for a slot, wait with
+   `corral wait --for wait_transition --task <id>` until the slot is reacquired before resuming work.
 
 ## Variants by task kind
 

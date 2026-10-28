@@ -148,7 +148,21 @@ pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
                 (None, Some(decision)) => ResumeTarget::Decision(decision),
                 _ => bail!("select exactly one of --wait or --decision"),
             };
-            corral_ops::resume_run(ctx, &id, target, payload::<ResumeReceipt>(&file)?, now)?
+            let task =
+                corral_ops::resume_run(ctx, &id, target, payload::<ResumeReceipt>(&file)?, now)?;
+            if let Some(slot) = task
+                .current_run()
+                .and_then(|r| r.obligations.slot_wait.as_ref())
+            {
+                eprintln!(
+                    "{}: woken from {}; queued to re-acquire a coding slot. Do not resume work until \
+                     `corral wait --for wait_transition --task {}` reports slot reacquired.",
+                    task.id,
+                    slot.on.join(", "),
+                    task.id
+                );
+            }
+            task
         }
     };
     println!("{}", serde_json::to_string_pretty(&task)?);

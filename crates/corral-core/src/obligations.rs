@@ -146,11 +146,13 @@ pub struct RunObligations {
     pub waits: Vec<WaitRecord>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<DecisionRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_wait: Option<crate::SlotWait>,
 }
 
 impl RunObligations {
     pub fn is_empty(&self) -> bool {
-        self.waits.is_empty() && self.decisions.is_empty()
+        self.waits.is_empty() && self.decisions.is_empty() && self.slot_wait.is_none()
     }
 
     /// Exact owner questions take precedence over terminal heuristics.
@@ -180,6 +182,12 @@ impl RunObligations {
                 w.observation.state.as_str(),
                 w.request.owner,
                 w.request.condition
+            ));
+        }
+        if let Some(slot) = &self.slot_wait {
+            lines.push(format!(
+                "woken from {}; queued to re-acquire a coding slot",
+                slot.on.join(", ")
             ));
         }
         lines

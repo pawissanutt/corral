@@ -519,8 +519,8 @@ route or launch journal. Each migrated task logs one `queue_migrated` event. Exi
 `ready_projects` lists remain restrictions; an empty list now admits all configured projects
 instead of disabling admission. Set `dispatch.paused = true` to retain a fully paused queue.
 
-Sync uses the existing queue drain, ordered by P0, P1, P2, P3 (unknown priorities last), then creation
-timestamp, then task ID. Dependencies must be **Done**: Review is not approval. Missing dependencies
+Sync uses the existing queue drain, ordered by `red_main` fixes first, then P0, P1, P2, P3 (unknown
+priorities last), then creation timestamp, then task ID (see "Parked runs and red-main fixes"). Dependencies must be **Done**: Review is not approval. Missing dependencies
 and cycles are reported as errors with task IDs, not indefinite waiting. `queue list` explains pause,
 authorization, dependency, capacity, model, launch-failure and finishing-work waits.
 
@@ -708,6 +708,31 @@ resends a command or launches another worker because a wait completed. Receipts 
 Unknown delivery requires inspection and, if necessary, an explicit owner reply rather than an
 automatic resend. All declarations leave the T-033 watchdog and its confirmed, identity-checked
 recovery path intact: a wait is never permission to suppress a stuck diagnostic or kill a process.
+
+### Parked runs and red-main fixes
+
+A run is parked when every open wait is a channel wait whose `channel_id` names another task
+(`task:T-512:landed`, `worker:T-512-landed`, `corral:T-506:landed-and-installed`; the task ID
+is `T-` followed by at least three digits), no owner decision is pending and no gate or reviewer
+is live. A parked run keeps its status, pane and worktree, but it releases its coding slot, so
+the task it waits on can be dispatched even when parked runs would otherwise fill every slot. A
+wait on CI, a monitor or the run's own task does not park the run.
+
+When the last task wait fires (a receipt, an expired deadline or any other terminal state),
+corral does not hand the slot back implicitly. The run takes a free slot at once if there is
+one; otherwise it queues and `corral run resume` prints that it is waiting. Woken runs take the
+next free slots, oldest first, ahead of ordinary queued work, and sync grants them before it
+drains the queue. Each grant is logged as a `wait_transition` event with `"slot": "reacquired"`,
+so a woken worker can wait with `corral wait --for wait_transition --task T-042` before it
+resumes. `corral queue list` lists woken runs first and parked runs last, each with the tasks it
+waits on and the slot it released; the board's Running card says `parked on ...` or `woken ...`,
+and the slot badge counts parked runs as uncounted.
+
+A task labeled `red_main` fixes failing tests on the integration base. It sorts ahead of every
+other queued task regardless of priority, ahead of woken runs, and no other coding dispatch may
+take the last free slot while it waits. While it waits for gate admission, other gates may not
+take the last review-process slot. It also skips the finishing-work first refusal. Gate tiers,
+review policy and dependency rules are unchanged.
 
 ## Manual review
 

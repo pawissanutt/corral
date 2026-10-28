@@ -247,7 +247,10 @@ fn meta_lines(
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started, now), dim));
                 if r.stuck.is_none() {
-                    if obligations::waiting(r) {
+                    if let Some(label) = obligations::parked_label(&t.id, r) {
+                        spans.push(sep());
+                        spans.push(Span::styled(label, Style::new().fg(theme::BLUE)));
+                    } else if obligations::waiting(r) {
                         spans.push(sep());
                         spans.push(Span::styled("⧗ waiting", Style::new().fg(theme::BLUE)));
                     } else if r.idle_no_report {

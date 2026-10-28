@@ -404,6 +404,11 @@ impl<'a> ReviewLaunch<'a> {
                     "review process limit reached ({active}/{limit})"
                 )));
             }
+            if kind == Kind::Gate
+                && let Some(reason) = crate::parked::gate_precedence(store, current, active)?
+            {
+                return Ok(Some(reason));
+            }
             let counted = match kind {
                 Kind::Gate => store.config.limits.count_gates,
                 Kind::Reviewer => store.config.limits.count_reviews,
