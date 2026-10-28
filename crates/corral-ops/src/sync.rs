@@ -207,6 +207,21 @@ fn sync_scoped(
         crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
         return Ok(changes);
     }
+    // Inventory contention/UNKNOWN must stop pane decisions and new launches,
+    // not authenticated completion receipts. Otherwise repeated busy samples
+    // strand a finished gate as Running until an uncontended manual sync.
+    // Keep ownership stable and re-check both the client and hook source;
+    // receipt collection needs no pane IDs or liveness observation.
+    if let Some(_ownership) = ctx.store.try_begin_session_pass()? {
+        let tasks = ctx.store.list()?;
+        let source_owned = source
+            .map(|source| crate::session_scope::owns_tasks(source, &ctx.store, &tasks))
+            .transpose()?
+            .unwrap_or(true);
+        if source_owned && crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
+            crate::gate::collect_finished(ctx, now)?;
+        }
+    }
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         reconcile_attention(ctx, now, None, attention)?;
         return Ok(changes);
@@ -222,7 +237,6 @@ fn sync_scoped(
         return Ok(changes);
     }
     crate::hooks::reconcile_post_land(ctx)?;
-    crate::gate::collect_finished(ctx, now)?;
     let panes: HashMap<String, PaneInfo> = inventory
         .panes
         .iter()
