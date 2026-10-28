@@ -540,9 +540,9 @@ mod attempt;
 mod recovery;
 
 #[cfg(test)]
-pub(crate) use attempt::{AttemptState, attempt_state};
+pub(crate) use attempt::{AttemptState, attempt_state, retained_attempt};
 pub use attempt::{DueWake, due_gate_wakes, fire_wake, own_attempt};
-pub(crate) use attempt::{bounded, evidence, retained_attempt, settle};
+pub(crate) use attempt::{adoptable_attempt, bounded, evidence, settle};
 
 /// Release completed/gone review processes even when review autopilot is disabled.
 pub(crate) fn reconcile(

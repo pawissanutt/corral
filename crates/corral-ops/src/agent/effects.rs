@@ -617,7 +617,7 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     let (task_id, run_id) = worker(&container)?;
     failpoint("gate_before_reservation");
     let me = executor()?;
-    let retained = crate::review_budget::retained_attempt(ctx, &task_id, &run_id)?;
+    let retained = crate::review_budget::adoptable_attempt(ctx, &task_id, &run_id)?;
     let attempt = retained
         .clone()
         .unwrap_or_else(|| own_attempt(&origin.request_id));

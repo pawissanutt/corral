@@ -101,9 +101,25 @@ pub(crate) fn attempt_state(
     })
 }
 
-/// The gate attempt a new request of this run adopts: a retained preparation, or a stale
-/// never-submitted journal that the next reservation retains.
+/// Historical evidence remains addressable even when a new request must not adopt it.
+#[cfg(test)]
 pub(crate) fn retained_attempt(ctx: &Ctx, task: &str, run: &str) -> Result<Option<String>> {
+    Ok(preparation(ctx, task, run)?.and_then(|p| p.authorization.map(|a| a.action.attempt)))
+}
+
+/// The gate attempt a new request can adopt. Changed candidates need a fresh attempt;
+/// reservation will archive the historical preparation before replacing it.
+pub(crate) fn adoptable_attempt(ctx: &Ctx, task: &str, run: &str) -> Result<Option<String>> {
+    let retained = preparation(ctx, task, run)?;
+    if let Some(pending) = &retained
+        && super::recovery::stale(ctx, pending)?
+    {
+        return Ok(None);
+    }
+    Ok(retained.and_then(|p| p.authorization.map(|a| a.action.attempt)))
+}
+
+fn preparation(ctx: &Ctx, task: &str, run: &str) -> Result<Option<Pending>> {
     let stale = load_pending(ctx)?.filter(|p| {
         p.task == task
             && p.run == run
@@ -111,16 +127,10 @@ pub(crate) fn retained_attempt(ctx: &Ctx, task: &str, run: &str) -> Result<Optio
             && p.started
             && p.submitted == Some(false)
     });
-    let retained = match stale {
-        Some(pending) => Some(pending),
-        None => submission::load_retained(ctx, task, run, Kind::Gate)?,
-    };
-    if let Some(pending) = &retained
-        && super::recovery::stale(ctx, pending)?
-    {
-        return Ok(None);
+    match stale {
+        Some(pending) => Ok(Some(pending)),
+        None => submission::load_retained(ctx, task, run, Kind::Gate),
     }
-    Ok(retained.and_then(|p| p.authorization.map(|a| a.action.attempt)))
 }
 
 /// Largest refusal reason a receipt quotes; longer reasons are cut at a character boundary.
