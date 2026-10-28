@@ -353,6 +353,88 @@ fn main_delivery_members_and_unplanned_tasks_have_no_member_gate() {
 }
 
 #[test]
+fn a_member_moved_into_a_designed_integration_plan_needs_the_owners_gate() {
+    // Given a published designed integration Plan and an imported Plan whose held member has no
+    // owner gate record.
+    let (dir, ctx, design) = published(integration());
+    let api = members(&ctx, &design)["api"].clone();
+    let target = ctx
+        .store
+        .execution_plan(&ctx.store.get(&api).unwrap())
+        .unwrap()
+        .unwrap()
+        .id;
+    let source = dir.path().join("source.md");
+    std::fs::write(
+        &source,
+        "---\ntitle: Source\napproved_scope:\n  goal: Held work\n  acceptance:\n    - {scenario: held works, expected: pass}\ntasks:\n  - {key: ready, title: Ready}\n  - {key: held, title: Held}\n---\n",
+    )
+    .unwrap();
+    let imported = crate::import_plan(&ctx, &source, false, corral_core::Origin::Agent).unwrap();
+    let (from, held) = (imported.tracker.id, imported.tasks[1].id.clone());
+    let owner = crate::OwnerEntry {
+        agent: false,
+        pm: false,
+        cwd: dir.path().to_path_buf(),
+    };
+    let gate_file = dir.path().join("gate.yaml");
+    let move_held = |gate: Option<&crate::MoveGate>| {
+        crate::plan_move_member_from(&ctx, &from, &held, &target, gate, &owner)
+    };
+    let before = (
+        ctx.store.get(&target).unwrap(),
+        ctx.store.get(&held).unwrap(),
+    );
+
+    // When the owner moves it without a gate, or with a tier the project does not define.
+    let error = format!("{:#}", move_held(None).unwrap_err());
+    assert!(
+        error.contains("would have no gate") && error.contains("--gate-file"),
+        "{error}"
+    );
+    std::fs::write(&gate_file, "tier: turbo\n").unwrap();
+    let turbo = crate::MoveGate {
+        file: &gate_file,
+        reason: "held until the API lands",
+    };
+    let error = format!("{:#}", move_held(Some(&turbo)).unwrap_err());
+    assert!(error.contains("\"turbo\" is not defined"), "{error}");
+    // Then nothing is written.
+    let after = (
+        ctx.store.get(&target).unwrap(),
+        ctx.store.get(&held).unwrap(),
+    );
+    assert_eq!(after, before);
+
+    // When the owner moves it with a defined gate.
+    std::fs::write(&gate_file, "tier: full\n").unwrap();
+    let full = crate::MoveGate {
+        file: &gate_file,
+        reason: "held until the API lands",
+    };
+    let moved = move_held(Some(&full)).unwrap();
+
+    // Then its gate resolves to the owner's record, the design follows the tracker, and the
+    // published members keep their journal-bound plan gates.
+    let source = format!("member-gate:{target}@1");
+    assert_eq!(moved.member_gate.as_deref(), Some(source.as_str()));
+    let resolved_held = resolved(&ctx, &held).unwrap().unwrap();
+    assert_eq!(resolved_held.tracker, target);
+    assert_eq!(resolved_held.gate, gate("full", &[], &[]));
+    assert_eq!(resolved_held.source, source);
+    let record = &ctx.store.get(&target).unwrap().member_gates[&held];
+    assert_eq!(
+        (record.by.as_str(), record.reason.as_str()),
+        ("owner", full.reason)
+    );
+    assert_eq!(ctx.store.get(&design).unwrap().children, moved.to_children);
+    assert_eq!(
+        resolved(&ctx, &api).unwrap().unwrap().source,
+        scope_source(&design, "api")
+    );
+}
+
+#[test]
 fn plan_submit_rejects_a_scope_gate_naming_an_undefined_tier() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::init(dir.path()).unwrap();

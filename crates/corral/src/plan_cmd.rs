@@ -145,6 +145,11 @@ pub enum PlanCmd {
         /// The tracker Plan that receives the member
         #[arg(long)]
         to: String,
+        /// Gate YAML recorded as the member's gate in the target (required by designed integration Plans)
+        #[arg(long, requires = "reason")]
+        gate_file: Option<PathBuf>,
+        #[arg(long, requires = "gate_file")]
+        reason: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -521,9 +526,15 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             tracker,
             member,
             to,
+            gate_file,
+            reason,
             json,
         } => {
-            let moved = corral_ops::plan_move_member(ctx, &tracker, &member, &to)?;
+            let gate = gate_file.as_deref().map(|file| corral_ops::MoveGate {
+                file,
+                reason: reason.as_deref().unwrap_or_default(),
+            });
+            let moved = corral_ops::plan_move_member(ctx, &tracker, &member, &to, gate.as_ref())?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&moved)?);
             } else {

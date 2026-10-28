@@ -66,26 +66,13 @@ impl Store {
         let _tracker = fresh.lock(&tracker)?;
         let mut task = fresh.get(&tracker)?;
         check_revision(&task, &member, amendment.expected_revision)?;
-        let revision = amendment
-            .expected_revision
-            .checked_add(1)
-            .context("member-gate revision exhausted")?;
-        let mut history = Vec::new();
-        if let Some(previous) = task.member_gates.get(&member) {
-            history.extend(previous.history.iter().cloned());
-            history.push(MemberGateRecord {
-                history: Vec::new(),
-                ..previous.clone()
-            });
-        }
-        let record = MemberGateRecord {
-            revision,
-            gate: amendment.gate.clone(),
-            reason: amendment.reason.clone(),
-            by: amendment.by.clone(),
-            at: crate::clock::now(),
-            history,
-        };
+        let record = next_record(
+            task.member_gates.get(&member),
+            &amendment.gate,
+            &amendment.reason,
+            &amendment.by,
+        )?;
+        let revision = record.revision;
         task.member_gates.insert(member.clone(), record.clone());
         let saved = fresh.save_task(&task, ScopeWrite::MemberGate)?;
         fresh.log_event(
@@ -104,6 +91,35 @@ impl Store {
             reconciled_run,
         })
     }
+}
+
+/// The record after `previous` (revision 1 without one), keeping its history.
+pub(super) fn next_record(
+    previous: Option<&MemberGateRecord>,
+    gate: &ScopeGate,
+    reason: &str,
+    by: &str,
+) -> Result<MemberGateRecord> {
+    let revision = previous
+        .map_or(0, |record| record.revision)
+        .checked_add(1)
+        .context("member-gate revision exhausted")?;
+    let mut history = Vec::new();
+    if let Some(previous) = previous {
+        history.extend(previous.history.iter().cloned());
+        history.push(MemberGateRecord {
+            history: Vec::new(),
+            ..previous.clone()
+        });
+    }
+    Ok(MemberGateRecord {
+        revision,
+        gate: gate.clone(),
+        reason: reason.to_owned(),
+        by: by.to_owned(),
+        at: crate::clock::now(),
+        history,
+    })
 }
 
 fn check_revision(tracker: &Task, member: &str, expected: u64) -> Result<()> {
