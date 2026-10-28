@@ -503,7 +503,10 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
             .push(check("run_reported", &run.id, None, false));
         out.push(condition);
     }
-    if let Some(stuck) = &run.stuck {
+    // Parking can be recorded before sync clears an earlier stuck observation.
+    if let Some(stuck) = &run.stuck
+        && run.parked_on(&task.id).is_empty()
+    {
         // Linux start ticks identify the process but are not a wall-clock timestamp.
         let mut condition = row(
             task,

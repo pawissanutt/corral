@@ -418,7 +418,11 @@ fn reconcile(
     let stuck_after = SignedDuration::from_secs(
         i64::try_from(ctx.store.config.sync.stuck_after_secs).unwrap_or(i64::MAX),
     );
-    let stuck = if herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after) {
+    // A parked worker is deliberately idle, not blocked by its foreground launcher.
+    // Do not suppress a slot_wait alone: expired/withdrawn waits must expose stuck work again.
+    let stuck = if run.parked_on(&task.id).is_empty()
+        && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
+    {
         match ctx
             .herdr
             .pane_process_info(&pane_id)
