@@ -146,10 +146,9 @@ pub(crate) fn check_attachment<T: TaskRef + ?Sized>(
         if publication.backlink == backlink {
             // Publication writes the replacement journal before its children,
             // but keeps the original parent attachment until all writes finish.
-            // The source contract includes that exact attachment. Only an interrupted
-            // publication reaches this recovery check; a task with scope amendments, whose
-            // projected contract digests that history, is read in full for it.
-            check_publication_identity_of(store, &publication, task, plan_id)?;
+            // The source contract includes that exact attachment. A self-projection's
+            // projected contract takes the scope history as the head's chain.
+            check_publication_identity(&publication, task, plan_id)?;
         } else {
             ensure!(
                 publication.backlink == *previous
@@ -167,12 +166,11 @@ pub(crate) fn check_attachment<T: TaskRef + ?Sized>(
 }
 
 /// The unfinished publication still belongs to `parent`'s exact accepted latest plan. A
-/// self-projection's projected contract is computed on the parent's shell with `history`, the
-/// parent's scope-amendment history.
+/// self-projection's projected contract is computed on the parent's shell with the head's
+/// scope-history chain, so no scope revision is read.
 fn check_publication_identity<T: TaskRef + ?Sized>(
     journal: &Journal,
     parent: &T,
-    history: &[corral_core::ApprovedScopeRevision],
     plan_id: &str,
 ) -> Result<()> {
     let plan = parent
@@ -194,7 +192,6 @@ fn check_publication_identity<T: TaskRef + ?Sized>(
             "self-projection journal scope count changed"
         );
         let mut projected = parent.shell_task()?;
-        projected.approved_scope_history = history.to_vec();
         projected.plan = Some(journal.backlink.clone());
         if let Some(scope) = plan.document.dependencies.first()
             && !scope.write_scope.is_empty()
@@ -202,7 +199,11 @@ fn check_publication_identity<T: TaskRef + ?Sized>(
             projected.write_scope = scope.write_scope.clone();
         }
         ensure!(
-            journal.projected_contract == operating_contract_revision(&projected)?,
+            journal.projected_contract
+                == corral_core::operating_contract_revision_chained(
+                    &projected,
+                    &parent.history_summary()?.scope_history_chain
+                )?,
             "self-projection journal parent identity changed"
         );
         for scope in &plan.document.dependencies {
@@ -245,22 +246,6 @@ fn check_publication_identity<T: TaskRef + ?Sized>(
         );
     }
     Ok(())
-}
-
-/// [`check_publication_identity`] on `task` as read: a task without scope amendments as its
-/// head, one with amendments in full (its projected contract digests that history).
-fn check_publication_identity_of<T: TaskRef + ?Sized>(
-    store: &Store,
-    journal: &Journal,
-    task: &T,
-    plan_id: &str,
-) -> Result<()> {
-    if task.history_summary()?.scope_revisions == 0 {
-        check_publication_identity(journal, task, &[], plan_id)
-    } else {
-        let full = store.get(task.id())?;
-        check_publication_identity(journal, &full, &full.approved_scope_history, plan_id)
-    }
 }
 
 /// Projects a final owner/auto acceptance, never an independent review verdict.
@@ -429,12 +414,7 @@ fn apply_with_origin(
                     journal.backlink == backlink && journal.document == document,
                     "unfinished decomposition belongs to a different plan"
                 );
-                check_publication_identity(
-                    &journal,
-                    parent,
-                    &parent.approved_scope_history,
-                    plan_id,
-                )?;
+                check_publication_identity(&journal, parent, plan_id)?;
                 Some(journal)
             }
         } else {

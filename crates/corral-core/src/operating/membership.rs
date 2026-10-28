@@ -22,6 +22,21 @@ impl Store {
             .transpose()
     }
 
+    /// [`Store::execution_plan`] of any task form, as the plan's head: no task is hydrated.
+    ///
+    /// # Errors
+    /// Returns the same membership and lookup errors as the full form.
+    pub fn execution_plan_ref<T: crate::TaskRef + ?Sized>(
+        &self,
+        task: &T,
+    ) -> Result<Option<TaskHead>> {
+        if *task.tracker() && task.approved_scope().is_some() {
+            self.check_operating_plan(&task.shell_task()?)?;
+            return Ok(Some(self.head(task.id())?));
+        }
+        self.execution_plan_fields(task)
+    }
+
     /// Head-only form of [`Store::execution_plan`], on the caller's read snapshot.
     ///
     /// # Errors

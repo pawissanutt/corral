@@ -15,6 +15,8 @@ use crate::Ctx;
 const OBSERVATIONS: RecordArea<ResourceState> = RecordArea::new("resources");
 
 mod system;
+#[cfg(test)]
+pub(crate) use system::pin_psi;
 pub use system::{PinnedReadingsProbe, SystemResourceProbe};
 
 pub trait ResourceProbe: Send + Sync + Debug {

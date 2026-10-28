@@ -91,6 +91,112 @@ pub(super) fn store_walk(store: &corral_core::Store) -> (Walk, BTreeSet<PathBuf>
     (walk, volumes)
 }
 
+/// What an action's durable effect leaves on its task and repository, read outside the counters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Effects {
+    status: corral_core::Status,
+    runs: usize,
+    panes: usize,
+    plan_runs: usize,
+    plan_reviews: usize,
+    approved: bool,
+    children: usize,
+    messages: u64,
+    pending_reply: Option<String>,
+    /// `changes_requested` events whose text was submitted to the run's pane.
+    submitted_changes: usize,
+    accepted: usize,
+    main: String,
+}
+
+pub(super) fn effects(bench: &Bench) -> Effects {
+    let task = bench.ctx.store.get(&bench.id).unwrap();
+    let repo = bench.ctx.store.project_path("app").unwrap();
+    let current = task.current_run();
+    Effects {
+        status: task.status,
+        runs: task.runs.len(),
+        panes: task.runs.iter().filter(|run| run.herdr.is_some()).count(),
+        plan_runs: task.plan_runs.len(),
+        plan_reviews: task.plans.last().map_or(0, |plan| plan.reviews.len()),
+        approved: task
+            .plans
+            .last()
+            .is_some_and(|plan| plan.approval.is_some()),
+        children: task.children.len(),
+        messages: current.map_or(0, |run| run.inbox.next_seq),
+        pending_reply: current.and_then(|run| run.pending_reply.clone()),
+        submitted_changes: bench
+            .ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|event| {
+                event.task.as_deref() == Some(bench.id.as_str())
+                    && event.kind == "changes_requested"
+                    && event.detail["submitted"] == true
+            })
+            .count(),
+        accepted: task
+            .aggregate_attempts
+            .iter()
+            .filter(|attempt| attempt.acceptance.is_some())
+            .count(),
+        main: corral_git::rev_sha(&repo, "main").unwrap_or_default(),
+    }
+}
+
+/// The selected path's own durable effect happened exactly once: its transport, publication,
+/// message or landing, not only a Submitted authorization.
+pub(super) fn effect_failures(kind: Kind, b: &Effects, a: &Effects) -> Vec<String> {
+    use corral_core::Status;
+    let launched = a.runs == b.runs + 1 && a.panes == b.panes + 1 && a.status == Status::Running;
+    let (ok, what) = match kind {
+        Kind::Worker => (launched, "one launched run with its pane"),
+        Kind::Planner => (a.plan_runs == b.plan_runs + 1, "one planning run"),
+        Kind::PlanReviewPane | Kind::PlanReviewPm => {
+            (a.plan_reviews == b.plan_reviews + 1, "one plan review")
+        }
+        Kind::AcceptPlan => (
+            !b.approved && a.approved && launched,
+            "one acceptance and launch",
+        ),
+        Kind::AcceptPlanScopes => (
+            !b.approved && a.approved && b.children == 0 && a.children == 2,
+            "one acceptance publishing two children",
+        ),
+        Kind::RepairInbox => (
+            b.status == Status::Review
+                && a.status == Status::Running
+                && a.messages == b.messages + 1,
+            "one changes request in the run's inbox",
+        ),
+        Kind::RepairLegacy => (
+            b.status == Status::Review
+                && a.status == Status::Running
+                && a.submitted_changes == b.submitted_changes + 1
+                && a.pending_reply.is_none(),
+            "one changes request submitted to the run's pane",
+        ),
+        Kind::AggregateCode => (
+            a.accepted == b.accepted + 1 && a.main != b.main,
+            "one acceptance landing on main",
+        ),
+        Kind::AggregateNoCode => (
+            a.accepted == b.accepted + 1 && a.main == b.main,
+            "one acceptance without a landing",
+        ),
+    };
+    if ok {
+        Vec::new()
+    } else {
+        vec![format!(
+            "effect: expected {what}; after {a:?}; before {b:?}"
+        )]
+    }
+}
+
 pub(super) fn submitted(bench: &Bench, kind: Kind) -> usize {
     super::authorizations(&bench.ctx, &bench.id, kind.action())
         .into_iter()
@@ -154,6 +260,7 @@ pub(super) fn followup_failures(
     before: &Walk,
     after: &Walk,
     samples: &[Walk],
+    live_samples: u64,
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let get = |cell: &str| cells.get(cell).copied().unwrap_or(0);
@@ -192,10 +299,14 @@ pub(super) fn followup_failures(
         if cell("processes") != 0 {
             failures.push(format!("FU-3 {site}: processes = {}", cell("processes")));
         }
-        // A sample may reuse the pass's open view instead of opening one.
+        // A sample on a live store opens one view; one on a pass snapshot lists through the
+        // snapshot's view. Likely files read on views the pass already holds.
         let views = cell("views_opened");
-        if views > calls {
-            failures.push(format!("FU-3 {site}: views = {views} over {calls} calls"));
+        let want = if site == "sample" { live_samples } else { 0 };
+        if views != want {
+            failures.push(format!(
+                "FU-3 {site}: views = {views} over {calls} calls, expected {want}"
+            ));
         }
     }
     failures

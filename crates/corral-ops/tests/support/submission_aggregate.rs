@@ -91,44 +91,8 @@ pub(super) fn scenario(code: bool, automatic: bool) -> (Fx, String, String, Stri
             .unwrap();
     }
     let id = imported.tracker.id;
-    if automatic {
-        let selection = corral_core::OperatingSelection {
-            tasks: [id.clone()].into(),
-            authority: corral_core::OperatingAuthority {
-                aggregate_accept: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
-        fx.ctx.store.config = fx
-            .ctx
-            .store
-            .confirm_operating_policy(&preview, "fixture owner", fixture::now())
-            .unwrap();
-    }
-    let attempt = crate::plan_verify(&fx.ctx, &id).unwrap();
-    let observation = serde_json::from_value(json!({
-        "version":1,"key":"submission-C1","criterion":"C1","run":"aggregate",
-        "attempt":attempt.id,"status":"pass","action":"run combined scenario",
-        "environment":"fixture","expected":"verified","observed":"verified",
-        "artifacts":[],"captured":corral_core::clock::now(),"producer":"test","live":false
-    }))
-    .unwrap();
-    crate::plan_evidence(&fx.ctx, &id, &observation).unwrap();
-    let review = crate::plan_aggregate_review(&fx.ctx, &id, &attempt.id).unwrap();
-    crate::plan_aggregate_verdict(
-        &fx.ctx,
-        &id,
-        &crate::AggregateVerdict {
-            attempt: &attempt.id,
-            review: &review.id,
-            verdict: Verdict::Approve,
-            notes: "verified",
-        },
-    )
-    .unwrap();
-    (fx, id, attempt.id, before)
+    let attempt = verified_attempt(&mut fx, &id, automatic);
+    (fx, id, attempt, before)
 }
 
 #[test]
@@ -197,4 +161,48 @@ fn submission_paths_aggregate_code_and_no_code_land_exactly_once() {
             );
         }
     }
+}
+
+/// Grants automatic aggregate acceptance on `id` when `automatic`, then verifies the Plan,
+/// records the combined scenario's evidence and an approving aggregate review: the attempt.
+pub(super) fn verified_attempt(fx: &mut Fx, id: &str, automatic: bool) -> String {
+    let id = id.to_owned();
+    if automatic {
+        let selection = corral_core::OperatingSelection {
+            tasks: [id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                aggregate_accept: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
+        fx.ctx.store.config = fx
+            .ctx
+            .store
+            .confirm_operating_policy(&preview, "fixture owner", fixture::now())
+            .unwrap();
+    }
+    let attempt = crate::plan_verify(&fx.ctx, &id).unwrap();
+    let observation = serde_json::from_value(json!({
+        "version":1,"key":"submission-C1","criterion":"C1","run":"aggregate",
+        "attempt":attempt.id,"status":"pass","action":"run combined scenario",
+        "environment":"fixture","expected":"verified","observed":"verified",
+        "artifacts":[],"captured":corral_core::clock::now(),"producer":"test","live":false
+    }))
+    .unwrap();
+    crate::plan_evidence(&fx.ctx, &id, &observation).unwrap();
+    let review = crate::plan_aggregate_review(&fx.ctx, &id, &attempt.id).unwrap();
+    crate::plan_aggregate_verdict(
+        &fx.ctx,
+        &id,
+        &crate::AggregateVerdict {
+            attempt: &attempt.id,
+            review: &review.id,
+            verdict: Verdict::Approve,
+            notes: "verified",
+        },
+    )
+    .unwrap();
+    attempt.id
 }

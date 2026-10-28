@@ -300,6 +300,11 @@ impl ReadView for FakeView {
         }
     }
 
+    fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError> {
+        self.fresh()?;
+        Ok(self.state.tasks.keys().next_back().copied())
+    }
+
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError> {
         let mut headers: Vec<TaskHeader> = self
             .state

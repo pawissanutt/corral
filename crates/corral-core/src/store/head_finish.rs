@@ -160,8 +160,8 @@ impl TaskHeadMut {
     }
 
     fn settle_contract_revision(&mut self) -> Result<()> {
-        use crate::operating::operating_contract_revision;
-        let mut after = super::head_api::shell_task(&self.head.task)?;
+        use crate::operating::{operating_contract_revision, operating_contract_revision_chained};
+        let after = super::head_api::shell_task(&self.head.task)?;
         let before = super::head_api::shell_task(&self.base.task)?;
         if !self.scope_history_changed
             && operating_contract_revision(&before)? == operating_contract_revision(&after)?
@@ -170,17 +170,15 @@ impl TaskHeadMut {
                 self.base.summary.operating_contract_revision.clone();
             return Ok(());
         }
-        if self.head.summary.scope_revisions > 0 {
-            let rows = self.rows_now(
-                &crate::backend::RowQuery::part(TaskPart::ScopeRevision),
-                crate::work::Counter::HistoryRowDecodes,
-            )?;
-            after.approved_scope_history = rows
-                .into_iter()
-                .map(|row| serde_json::from_value(row.doc))
-                .collect::<Result<_, _>>()?;
-        }
-        self.head.summary.operating_contract_revision = operating_contract_revision(&after)?;
+        // The history enters as its chain: no scope revision is read.
+        let summary = &self.head.summary;
+        anyhow::ensure!(
+            summary.scope_revisions == 0 || !summary.scope_history_chain.is_empty(),
+            "{}: head summary lacks its scope-history chain",
+            self.head.task.id
+        );
+        self.head.summary.operating_contract_revision =
+            operating_contract_revision_chained(&after, &summary.scope_history_chain)?;
         Ok(())
     }
 

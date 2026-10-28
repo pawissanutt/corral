@@ -88,6 +88,8 @@ pub trait ReadView {
     /// Attribution facts for one selected SHA, committed in this view.
     fn lesson_approvals(&self, sha: &str) -> Result<Vec<LessonApproval>, ViewError>;
     fn tasks(&self, q: &TaskQuery, page: PageReq) -> Result<Page<TaskHeader>, ViewError>;
+    /// The highest stored task number, read without enumerating the tasks.
+    fn last_task_num(&self) -> Result<Option<TaskNum>, ViewError>;
     fn events(&self, q: &EventQuery, page: PageReq) -> Result<Page<StoredEvent>, ViewError>;
     fn conditions(
         &self,

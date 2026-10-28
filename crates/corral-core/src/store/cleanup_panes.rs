@@ -20,8 +20,9 @@ pub struct CleanupPane {
     /// The row key: `<owner>/<kind>/<pane>`.
     #[serde(skip)]
     pub key: String,
-    /// `run` (a coding run's own pane), `gate`, `review`, `plan_review`, or `workspace` (a
-    /// tool pane opened in its own fallback workspace).
+    /// `run` (a coding run's own pane), `gate`, `review`, `plan_review`, `workspace` (a
+    /// tool pane opened in its own fallback workspace) or `workspace_debt` (a released pane's
+    /// workspace still owed; its `pane` is empty).
     pub kind: String,
     pub pane: String,
     /// The recorded server socket, `""` when the record has none.
@@ -137,6 +138,26 @@ pub(crate) fn carry_ledger(
     }
 }
 
+/// A workspace a released pane left owed: kind `workspace_debt`, no pane, keyed outside every
+/// run's subtree so a Round cleanup never reads it.
+fn workspace_debt(workspace: &str, socket: &str) -> HistoryRow {
+    let debt = CleanupPane {
+        key: String::new(),
+        kind: "workspace_debt".into(),
+        pane: String::new(),
+        socket: socket.into(),
+        workspace: Some(workspace.into()),
+    };
+    HistoryRow {
+        part: TaskPart::CleanupPane,
+        key: format!("debt/workspace/{workspace}"),
+        current: false,
+        open: true,
+        index: vec![format!("workspace:{workspace}")],
+        doc: serde_json::to_value(&debt).unwrap_or(Value::Null),
+    }
+}
+
 fn decode(rows: Vec<HistoryRow>) -> Result<Vec<CleanupPane>> {
     rows.into_iter()
         .map(|row| {
@@ -203,11 +224,17 @@ impl TaskHeadMut {
         Ok(())
     }
 
-    /// Releases the ledger rows `keys`: cleanup confirmed their panes closed or absent.
+    /// Releases the ledger rows `keys`: cleanup confirmed their panes closed or absent. Each
+    /// `(workspace, socket)` of `owed` is a released pane's workspace not yet seen gone; it
+    /// stays owed as one workspace row, outside every run's subtree, that only a Task cleanup
+    /// reads and settles.
     ///
     /// # Errors
     /// Returns read errors.
-    pub fn release_panes(&mut self, keys: &[String]) -> Result<()> {
+    pub fn release_panes(&mut self, keys: &[String], owed: &[(String, String)]) -> Result<()> {
+        for (workspace, socket) in owed {
+            self.put(workspace_debt(workspace, socket));
+        }
         for key in keys {
             let q = RowQuery::key(TaskPart::CleanupPane, key.clone());
             if let Some(mut row) = self

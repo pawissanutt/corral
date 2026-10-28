@@ -1,6 +1,5 @@
 //! Store-owned database readers and portable task rendering.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -87,15 +86,6 @@ impl Store {
     /// Opaque identity of every stored task.
     pub fn tasks_stamp(&self) -> Result<String> {
         Ok(format!("seq:{}", self.reader()?.seq().0))
-    }
-
-    /// Task numbers already taken.
-    pub fn reserved_task_numbers(&self) -> Result<BTreeSet<u64>> {
-        let reader = self.reader()?;
-        Ok(Self::headers_on(&*reader)?
-            .iter()
-            .map(|header| header.num.0)
-            .collect())
     }
 
     /// The portable Markdown form of a task.

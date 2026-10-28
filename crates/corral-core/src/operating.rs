@@ -237,7 +237,40 @@ pub(crate) fn digest(value: &impl Serialize) -> Result<String> {
 }
 
 /// Execution progress, comments, receipts and branch movement do not change a task contract.
+/// The scope-history chain an operating contract revision folds in. Seed: the empty string.
+/// Each approved scope revision, in history order, extends it as
+/// `digest(&(previous_chain, revision))`, `digest` being this module's SHA-256 of the
+/// `serde_json` encoding. It is empty exactly when the history is.
+///
+/// # Errors
+/// Returns serialization errors.
+pub fn scope_history_chain(history: &[crate::ApprovedScopeRevision]) -> Result<String> {
+    history.iter().try_fold(String::new(), |chain, revision| {
+        chain_scope_revision(&chain, revision)
+    })
+}
+
+/// [`scope_history_chain`] extended by one revision appended to the history.
+///
+/// # Errors
+/// Returns serialization errors.
+pub fn chain_scope_revision(
+    chain: &str,
+    revision: &crate::ApprovedScopeRevision,
+) -> Result<String> {
+    digest(&(chain, revision))
+}
+
 pub fn operating_contract_revision(task: &Task) -> Result<String> {
+    operating_contract_revision_chained(task, &scope_history_chain(&task.approved_scope_history)?)
+}
+
+/// [`operating_contract_revision`] of `task` whose scope history has the chain `chain`
+/// (`task.approved_scope_history` is not read).
+///
+/// # Errors
+/// Returns serialization errors.
+pub fn operating_contract_revision_chained(task: &Task, chain: &str) -> Result<String> {
     let original = digest(&(
         &task.id,
         &task.title,
@@ -265,12 +298,8 @@ pub fn operating_contract_revision(task: &Task) -> Result<String> {
     } else {
         original
     };
-    if task.approved_scope_revision != 0 || !task.approved_scope_history.is_empty() {
-        digest(&(
-            scoped,
-            task.approved_scope_revision,
-            &task.approved_scope_history,
-        ))
+    if task.approved_scope_revision != 0 || !chain.is_empty() {
+        digest(&(scoped, task.approved_scope_revision, chain))
     } else {
         Ok(scoped)
     }

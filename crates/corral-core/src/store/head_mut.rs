@@ -559,6 +559,10 @@ impl TaskHeadMut {
 
     pub fn push_scope_revision(&mut self, revision: ApprovedScopeRevision) -> Result<()> {
         self.scope_history_changed = true;
+        self.head.summary.scope_history_chain = crate::operating::chain_scope_revision(
+            &self.head.summary.scope_history_chain,
+            &revision,
+        )?;
         self.head.summary.scope_revisions += 1;
         let n = usize::try_from(self.head.summary.scope_revisions)?;
         self.put(history_row(
