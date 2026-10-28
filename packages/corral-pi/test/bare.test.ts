@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,4 +48,31 @@ test("bare Pi starts unbound with only Pi's own tools, guarded, and writes no co
   expect(existsSync(join(cwd, ".corral"))).toBeFalse();
   await expect(globalThis.fetch("https://example.invalid/")).rejects.toThrow("network_refused");
   expect(bare.network.ledger().refused).toBe(1);
+}, 60_000);
+
+const ANTHROPIC_AUTH = `const credential = { type: "oauth", access: "sk-ant-oat-synthetic", refresh: "r", expires: Date.now() + 3_600_000 };
+export default {
+  provider: "openai-codex", providers: ["openai-codex", "anthropic"],
+  credentials() {
+    return {
+      async read(provider) { return provider === "anthropic" ? credential : undefined; },
+      async list() { return [{ providerId: "anthropic", type: "oauth" }]; },
+      async modify() { throw new Error("read-only"); },
+      async delete() { throw new Error("read-only"); },
+    };
+  },
+};
+`;
+
+test("bare Anthropic runs through the bound host's Claude Agent SDK lane with only the refresh endpoint open", async () => {
+  const install = buildFixtureInstall({ overlays: false });
+  try {
+    writeFileSync(join(install.dir, "src/auth/index.ts"), ANTHROPIC_AUTH);
+    const options = parseBareArgs(["--cwd", cwd, "--provider", "anthropic"], install.dir, { XDG_DATA_HOME: join(work, "data-anthropic") });
+    const bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
+    expect(bare.runtime.session.getAllTools().some((tool) => tool.name.startsWith("corral_"))).toBeFalse();
+    await expect(globalThis.fetch("https://api.anthropic.com/v1/messages", { method: "POST" })).rejects.toThrow("network_refused");
+  } finally {
+    install.cleanup();
+  }
 }, 60_000);
