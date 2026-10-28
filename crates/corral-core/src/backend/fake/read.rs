@@ -271,6 +271,16 @@ impl ReadView for FakeView {
         q: &RowQuery,
         page: PageReq,
     ) -> Result<Page<HistoryRow>, ViewError> {
+        self.rows_except(num, q, "", page)
+    }
+
+    fn rows_except(
+        &self,
+        num: TaskNum,
+        q: &RowQuery,
+        except: &str,
+        page: PageReq,
+    ) -> Result<Page<HistoryRow>, ViewError> {
         self.fresh()?;
         let Some(task) = self.state.tasks.get(&num) else {
             return self.page(std::iter::empty(), &page);
@@ -280,7 +290,7 @@ impl ReadView for FakeView {
             .range((q.part, String::new())..)
             .take_while(|((part, _), _)| *part == q.part)
             .map(|(_, row)| row)
-            .filter(|row| q.matches(row));
+            .filter(|row| (except.is_empty() || row.key != except) && q.matches(row));
         if q.newest_first {
             let mut rows: Vec<&HistoryRow> = rows.collect();
             rows.reverse();

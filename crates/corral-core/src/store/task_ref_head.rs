@@ -1,16 +1,18 @@
 //! [`TaskRef`] over heads: every method is the head's own counted read. A mutable head serves
-//! its current projections as mutated; its keyed reads observe the view it was read on and are
-//! refused once the mutation has queued rows they could miss.
+//! its current projections as mutated, and its keyed reads see the rows it has queued.
 
 use std::borrow::Cow;
 
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use jiff::Timestamp;
 
 use super::head::TaskHead;
 use super::head_mut::TaskHeadMut;
 use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead};
-use crate::agent::{AgentGeneration, AgentTurn, ContainerRef};
+use crate::agent::{
+    AgentGeneration, AgentQuestion, AgentReport, AgentTurn, ContainerRef, RequestReceipt,
+    WakeSubscription,
+};
 use crate::backend::TaskPart;
 use crate::inbox::{Recipient, SessionBinding, SessionCursor};
 use crate::{
@@ -130,6 +132,45 @@ macro_rules! keyed_reads {
         ) -> Result<Option<AgentTurn>> {
             self.$reads()?.agent_turn(container, generation, seq)
         }
+        fn agent_receipt(
+            &self,
+            container: &ContainerRef,
+            request_id: &str,
+        ) -> Result<Option<RequestReceipt>> {
+            self.$reads()?.agent_receipt(container, request_id)
+        }
+        fn agent_question(
+            &self,
+            container: &ContainerRef,
+            key: &str,
+        ) -> Result<Option<AgentQuestion>> {
+            self.$reads()?.agent_question(container, key)
+        }
+        fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
+            self.$reads()?.pending_agent_questions(container)
+        }
+        fn agent_wake(
+            &self,
+            container: &ContainerRef,
+            request_id: &str,
+        ) -> Result<Option<WakeSubscription>> {
+            self.$reads()?.agent_wake(container, request_id)
+        }
+        fn active_agent_wakes(&self, container: &ContainerRef) -> Result<Vec<WakeSubscription>> {
+            self.$reads()?.active_agent_wakes(container)
+        }
+        fn agent_reports(&self, container: &ContainerRef) -> Result<Vec<AgentReport>> {
+            self.$reads()?.agent_reports(container)
+        }
+        fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
+            self.$reads()?.pm_receipt(request_id)
+        }
+        fn member_gate(&self, member: &str) -> Result<Option<crate::MemberGateHead>> {
+            Ok(self.$reads()?.task.member_gates.get(member).cloned())
+        }
+        fn member_gate_history(&self, member: &str) -> Result<Vec<crate::MemberGateRecord>> {
+            self.$reads()?.member_gate_history(member)
+        }
         fn open_review_children(&self, run: &str) -> Result<Vec<RunHead>> {
             self.$reads()?.open_review_children(run)
         }
@@ -141,12 +182,6 @@ macro_rules! keyed_reads {
         }
         fn open_obligations(&self, run: &str) -> Result<RunObligations> {
             self.$reads()?.open_obligations(run)
-        }
-        fn checkpoint_metas_newest_first(
-            &self,
-            run: &str,
-        ) -> Result<Box<dyn Iterator<Item = Result<CheckpointMeta>> + '_>> {
-            Ok(Box::new(self.$reads()?.checkpoint_metas_newest_first(run)?))
         }
         fn checkpoint_payload(&self, run: &str, ordinal: u64) -> Result<Option<Checkpoint>> {
             self.$reads()?.checkpoint_payload(run, ordinal)
@@ -171,22 +206,33 @@ macro_rules! keyed_reads {
 }
 
 impl TaskHead {
-    fn reads(&self) -> Result<&TaskHead> {
-        Ok(self)
+    fn reads(&self) -> Result<Cow<'_, TaskHead>> {
+        Ok(Cow::Borrowed(self))
+    }
+
+    /// Every checkpoint meta of `run`, newest first, through this head's overlay.
+    fn checkpoint_metas_overlaid(&self, run: &str) -> Result<Vec<CheckpointMeta>> {
+        let Some(owner) = self.run_owner(run)? else {
+            return Ok(Vec::new());
+        };
+        self.query(
+            &crate::backend::RowQuery::under(TaskPart::RunCheckpoint, owner).newest_first(),
+            u32::MAX,
+            crate::work::Counter::NestedRowDecodes,
+        )?
+        .into_iter()
+        .map(|row| Ok(serde_json::from_value(row.doc)?))
+        .collect()
     }
 }
 
 impl TaskHeadMut {
-    fn reads(&self) -> Result<&TaskHead> {
-        ensure!(
-            self.demoted.is_empty()
-                && self
-                    .rows
-                    .keys()
-                    .all(|(part, _)| matches!(part, TaskPart::PaneRef | TaskPart::Finding)),
-            "a keyed read after a queued row write in the same head mutation is not supported"
-        );
-        Ok(&self.head)
+    fn reads(&self) -> Result<Cow<'_, TaskHead>> {
+        if self.has_pending_writes() {
+            Ok(Cow::Owned(self.overlaid()?))
+        } else {
+            Ok(Cow::Borrowed(&self.head))
+        }
     }
 }
 
@@ -251,11 +297,31 @@ impl TaskHead {
 impl TaskRef for TaskHead {
     projections!(as_head);
     keyed_reads!(reads);
+
+    fn checkpoint_metas_newest_first(
+        &self,
+        run: &str,
+    ) -> Result<Box<dyn Iterator<Item = Result<CheckpointMeta>> + '_>> {
+        Ok(Box::new(TaskHead::checkpoint_metas_newest_first(
+            self, run,
+        )?))
+    }
 }
 
 impl TaskRef for TaskHeadMut {
     projections!(head);
     keyed_reads!(reads);
+
+    fn checkpoint_metas_newest_first(
+        &self,
+        run: &str,
+    ) -> Result<Box<dyn Iterator<Item = Result<CheckpointMeta>> + '_>> {
+        if !self.has_pending_writes() {
+            return Ok(Box::new(self.head.checkpoint_metas_newest_first(run)?));
+        }
+        let metas = self.overlaid()?.checkpoint_metas_overlaid(run)?;
+        Ok(Box::new(metas.into_iter().map(Ok)))
+    }
 }
 
 /// [`TaskRef::shell_task`]: the head fields and the current containers as a full task.

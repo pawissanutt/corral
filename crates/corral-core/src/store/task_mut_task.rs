@@ -8,9 +8,10 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use super::task_ref_task::{
-    attempt_projection, inbox_head_of, plan_projection, plan_run_projection, run_projection,
+    attempt_projection, child_projection, inbox_head_of, plan_projection, plan_review_projection,
+    plan_run_projection, run_projection,
 };
-use super::{AttemptHead, PlanHead, PlanRunHead, RunHead};
+use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead};
 use crate::inbox::{InboxState, Recipient, SessionCursor};
 use crate::{
     AggregateAttempt, AggregateReview, ApprovedScopeRevision, CheckpointRecord, DecisionRecord,
@@ -309,21 +310,20 @@ impl TaskMut for Task {
         &mut self,
         run: &str,
         id: &str,
-        edit: impl FnOnce(&mut Run) -> Result<()>,
+        edit: impl FnOnce(&mut RunHead) -> Result<()>,
     ) -> Result<()> {
-        let child = current_run(self, run)?
+        current_run(self, run)?;
+        let i = self.runs.len() - 1;
+        let c = self.runs[i]
             .review_runs
-            .iter_mut()
-            .find(|c| c.id == id)
+            .iter()
+            .position(|c| c.id == id)
             .with_context(|| format!("review child {id} not found on {run}"))?;
-        let mut after = child.clone();
+        let before = child_projection(self, i, c)?;
+        let mut after = before.clone();
         edit(&mut after)?;
-        ensure!(
-            after.id == child.id && after.started == child.started,
-            "a child edit may not change its id or start"
-        );
-        *child = after;
-        Ok(())
+        check_run_edit(&before, &after)?;
+        overlay(&mut self.runs[i].review_runs[c], &before, &after)
     }
 
     fn push_plan_review(&mut self, plan: &str, review: PlanReview) -> Result<()> {
@@ -341,21 +341,20 @@ impl TaskMut for Task {
         &mut self,
         plan: &str,
         id: &str,
-        edit: impl FnOnce(&mut PlanReview) -> Result<()>,
+        edit: impl FnOnce(&mut PlanReviewHead) -> Result<()>,
     ) -> Result<()> {
-        let review = current_plan(self, plan)?
+        current_plan(self, plan)?;
+        let i = self.plans.len() - 1;
+        let r = self.plans[i]
             .reviews
-            .iter_mut()
-            .find(|r| r.id == id)
+            .iter()
+            .position(|r| r.id == id)
             .with_context(|| format!("plan review {id} not found on {plan}"))?;
-        let mut after = review.clone();
+        let before = plan_review_projection(self, i, r)?;
+        let mut after = before.clone();
         edit(&mut after)?;
-        ensure!(
-            after.id == review.id,
-            "a plan review edit may not change its id"
-        );
-        *review = after;
-        Ok(())
+        super::head_child_edit::check_plan_review_edit(&before, &after)?;
+        overlay(&mut self.plans[i].reviews[r], &before, &after)
     }
 
     fn pop_current_plan_review(&mut self, plan: &str) -> Result<()> {

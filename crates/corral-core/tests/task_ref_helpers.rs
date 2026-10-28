@@ -170,3 +170,285 @@ fn helper_forms_on_heads_cost_the_same_as_history_grows() {
         );
     }
 }
+
+const PLAN: &str = "---\ngoal: Bounded regression\nnon_goals: []\ndecisions: []\naffected_paths: [candidate.txt]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: bounded, expected: verified}]\nverification: [check]\nowner_decisions: []\n---\n";
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Approval {
+    Owner,
+    Automatic,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Break {
+    None,
+    NoIndependentReview,
+    UnresolvedDecision,
+    Unsubmitted,
+    PolicyChanged,
+}
+
+fn approval_store(fake: bool) -> (tempfile::TempDir, Store) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("app")).unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    store
+        .edit_config(|doc| {
+            doc.set_str("projects.app.path", "app")?;
+            doc.set_str("review.reviewer", "omo")
+        })
+        .unwrap();
+    let mut store = Store::open(dir.path()).unwrap();
+    if fake {
+        store = store.with_backend(Box::new(corral_core::backend::fake::FakeBackend::new(
+            corral_core::backend::BackendConfig::default(),
+            std::sync::Arc::new(corral_core::backend::ManualClock::new(at(0))),
+            std::sync::Arc::new(corral_core::backend::FaultInjector::default()),
+        )));
+    }
+    (dir, store)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(bytes))
+}
+
+/// An approved plan on a task with `history` earlier runs, plan runs and plan reviews; the
+/// planner is the first, historical plan run.
+fn approved(
+    fake: bool,
+    approval: Approval,
+    broken: Break,
+    history: usize,
+) -> (tempfile::TempDir, Store, String) {
+    let (dir, store) = approval_store(fake);
+    let mut task = store
+        .create("Approval", Some("app"), Status::Running, "Spec\n")
+        .unwrap();
+    grow(&mut task, history + 1, 2, history + 1, 1);
+    (task.created, task.updated) = (at(0), at(0));
+    if approval == Approval::Automatic {
+        task.runs
+            .last_mut()
+            .unwrap()
+            .obligations
+            .decisions
+            .retain(|d| !d.pending());
+    }
+    let id = task.id.clone();
+    let path = format!("artifacts/{id}/P0001/plan.md");
+    std::fs::create_dir_all(store.dir().join(format!("artifacts/{id}/P0001"))).unwrap();
+    std::fs::write(store.dir().join(&path), PLAN).unwrap();
+    let source = dir.path().join("plan.md");
+    std::fs::write(&source, PLAN).unwrap();
+    let mut plan: corral_core::PlanRecord = serde_json::from_value(serde_json::json!({
+        "id": "P1",
+        "artifact": {"run": "P0001", "kind": "plan", "title": "Plan", "path": path,
+                     "source": source, "sha256": sha256(PLAN.as_bytes()),
+                     "bytes": PLAN.len(), "added": at(0)},
+        "spec_revision": corral_core::plan_contract_revision(&task).unwrap(),
+        "document": corral_core::PlanDocument::parse(PLAN).unwrap(),
+        "run": "P0001",
+    }))
+    .unwrap();
+    task.plans = vec![plan.clone()];
+    task.plan = Some(format!("{id}@P1"));
+    let digest = corral_core::plan_policy::policy_digest(&store.config, &task).unwrap();
+    let review = |n: usize, reviewer: &str, notes: Option<&str>, digest: &str| {
+        let mut r = plan_review(&format!("P1-PR{n:04}"), reviewer, Some("approve"));
+        r["policy_digest"] = digest.into();
+        r["notes"] = notes.into();
+        serde_json::from_value::<corral_core::PlanReview>(r).unwrap()
+    };
+    plan.reviews = (0..history)
+        .map(|n| review(n, "unnamed", None, "old"))
+        .collect();
+    let independent = if broken == Break::NoIndependentReview {
+        "unnamed"
+    } else {
+        "omo"
+    };
+    plan.reviews.push(review(900, independent, None, &digest));
+    let approval_by = match approval {
+        Approval::Owner => {
+            let notes = if broken == Break::UnresolvedDecision {
+                "looks good"
+            } else {
+                "Resolved: Ship? => yes"
+            };
+            plan.reviews
+                .push(review(901, "owner", Some(notes), &digest));
+            "owner"
+        }
+        Approval::Automatic => "omo",
+    };
+    plan.approval = Some(corral_core::PlanApproval {
+        by: approval_by.into(),
+        at: at(0),
+        policy_digest: digest.clone(),
+        authorization: None,
+    });
+    task.plans = vec![plan];
+    store.fixture_put_task(&task).unwrap();
+    if approval == Approval::Automatic {
+        let preview = store
+            .preview_operating_policy(&corral_core::OperatingSelection {
+                tasks: std::collections::BTreeSet::from([id.clone()]),
+                authority: corral_core::OperatingAuthority {
+                    plan_accept: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .confirm_operating_policy(&preview, "owner", at(0))
+            .unwrap();
+        let grant = store.operating_state().unwrap().approval.unwrap();
+        let authorization = store
+            .authorize_operating_action(
+                corral_core::OperatingActionIdentity {
+                    task: id.clone(),
+                    run: "P0001".into(),
+                    attempt: "accept-P1-PR0900".into(),
+                    kind: corral_core::OperatingActionKind::AcceptPlan,
+                    candidate: None,
+                    plan: Some("P1".into()),
+                    round: None,
+                },
+                corral_core::OperatingOrigin::Automatic {
+                    authorization: grant.authorization,
+                    revision: grant.revision,
+                },
+            )
+            .unwrap();
+        store
+            .update(&id, |t| {
+                t.plans[0].approval.as_mut().unwrap().authorization =
+                    Some(authorization.id.clone());
+                Ok(())
+            })
+            .unwrap();
+        if broken != Break::Unsubmitted {
+            let outcome = store
+                .submit_operating_action(
+                    &authorization,
+                    &authorization.action,
+                    |_, _| Ok(()),
+                    || Ok(()),
+                )
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                corral_core::SubmissionOutcome::Submitted(())
+            ));
+        }
+    }
+    if broken == Break::PolicyChanged {
+        store
+            .edit_config(|doc| doc.set_str("review.reviewer", "claude"))
+            .unwrap();
+        let mut store = store;
+        store.config = Store::open(dir.path()).unwrap().config;
+        return (dir, store, id);
+    }
+    (dir, store, id)
+}
+
+#[test]
+fn approval_forms_agree_on_successful_and_refused_owner_and_automatic_approvals() {
+    for fake in [false, true] {
+        for (approval, broken, refusal) in [
+            (Approval::Owner, Break::None, None),
+            (Approval::Automatic, Break::None, None),
+            (
+                Approval::Owner,
+                Break::NoIndependentReview,
+                Some("independent review missing"),
+            ),
+            (
+                Approval::Owner,
+                Break::UnresolvedDecision,
+                Some("explicit resolutions"),
+            ),
+            (
+                Approval::Automatic,
+                Break::Unsubmitted,
+                Some("submitted acceptance action"),
+            ),
+            (
+                Approval::Owner,
+                Break::PolicyChanged,
+                Some("reviewer policy changed"),
+            ),
+            (
+                Approval::Automatic,
+                Break::PolicyChanged,
+                Some("reviewer policy changed"),
+            ),
+        ] {
+            let (_dir, store, id) = approved(fake, approval, broken, 3);
+            let full = store.get(&id).unwrap();
+            let expected =
+                validate_approval(&store, &store.config, &full, full.plans.last().unwrap())
+                    .map_err(|e| format!("{e:#}"));
+            let head = store.head(&id).unwrap();
+            let headed =
+                validate_approval_ref(&store, &store.config, &head).map_err(|e| format!("{e:#}"));
+            assert_eq!(headed, expected, "fake={fake} {approval:?} {broken:?}");
+            assert_eq!(
+                validate_approval_ref(&store, &store.config, &full).map_err(|e| format!("{e:#}")),
+                expected
+            );
+            match refusal {
+                None => assert_eq!(expected, Ok(()), "fake={fake} {approval:?}"),
+                Some(text) => {
+                    let error = expected.unwrap_err();
+                    assert!(
+                        error.contains(text),
+                        "fake={fake} {approval:?} {broken:?}: {error}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn successful_approval_on_heads_costs_the_same_as_history_grows() {
+    for fake in [false, true] {
+        for approval in [Approval::Owner, Approval::Automatic] {
+            let mut costs = Vec::new();
+            for history in [1, 10] {
+                let (_dir, store, id) = approved(fake, approval, Break::None, history);
+                let head = store.head(&id).unwrap();
+                let _hot = HotScope::enter();
+                let before = work::snapshot();
+                validate_approval_ref(&store, &store.config, &head).unwrap();
+                let delta = work::snapshot().since(&before);
+                delta.check_identity().unwrap();
+                costs.push(delta);
+            }
+            for counter in [
+                Counter::TaskHeadDecodes,
+                Counter::HistoryRowDecodes,
+                Counter::NestedRowDecodes,
+                Counter::RecordDecodes,
+                Counter::ViewsOpened,
+            ] {
+                assert_eq!(
+                    costs[0].get(counter),
+                    costs[1].get(counter),
+                    "fake={fake} {approval:?} {counter:?}"
+                );
+            }
+            assert!(
+                costs[0].get(Counter::HistoryRowDecodes) + costs[0].get(Counter::NestedRowDecodes)
+                    > 0
+            );
+            assert_eq!(costs[0].full_task_hydrations(), 0);
+            assert_eq!(costs[1].full_task_hydrations(), 0);
+        }
+    }
+}

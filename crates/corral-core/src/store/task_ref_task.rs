@@ -10,7 +10,10 @@ use serde::de::DeserializeOwned;
 use super::codec::{Rows, SELF, attempt_rows, child_key, plan_rows, plan_run_rows, seq, split_run};
 use super::head::projection;
 use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead};
-use crate::agent::{AgentGeneration, AgentTurn, ContainerRef};
+use crate::agent::{
+    AgentGeneration, AgentQuestion, AgentReport, AgentTurn, ContainerRef, RequestReceipt,
+    WakeSubscription,
+};
 use crate::backend::TaskPart;
 use crate::inbox::{InboxState, Recipient, SessionBinding, SessionCursor};
 use crate::{
@@ -60,6 +63,17 @@ pub(crate) fn run_projection(task: &Task, i: usize, with_child: bool) -> Result<
         head.current_child = Some(Box::new(child));
     }
     Ok(head)
+}
+
+pub(crate) fn child_projection(task: &Task, i: usize, c: usize) -> Result<RunHead> {
+    child_projections(task, i)?
+        .into_iter()
+        .nth(c)
+        .context("no such review child")
+}
+
+pub(crate) fn plan_review_projection(task: &Task, i: usize, r: usize) -> Result<PlanReviewHead> {
+    review_projection(&plan_split(task, i)?, i, r + 1)
 }
 
 fn child_projections(task: &Task, i: usize) -> Result<Vec<RunHead>> {
@@ -457,6 +471,83 @@ impl TaskRef for Task {
                     .find(|t| t.generation == generation && t.seq == seq)
             })
             .cloned())
+    }
+
+    fn agent_receipt(
+        &self,
+        container: &ContainerRef,
+        request_id: &str,
+    ) -> Result<Option<RequestReceipt>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|s| s.receipts.iter().find(|r| r.request_id == request_id))
+            .cloned())
+    }
+
+    fn agent_question(&self, container: &ContainerRef, key: &str) -> Result<Option<AgentQuestion>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|s| s.questions.iter().find(|q| q.key == key))
+            .cloned())
+    }
+
+    fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
+        Ok(crate::agent::container_state(self, container)
+            .map(|s| {
+                s.questions
+                    .iter()
+                    .filter(|q| q.state.pending())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn agent_wake(
+        &self,
+        container: &ContainerRef,
+        request_id: &str,
+    ) -> Result<Option<WakeSubscription>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|s| s.wakes.iter().find(|w| w.request_id == request_id))
+            .cloned())
+    }
+
+    fn active_agent_wakes(&self, container: &ContainerRef) -> Result<Vec<WakeSubscription>> {
+        use crate::agent::WakeState;
+        Ok(crate::agent::container_state(self, container)
+            .map(|s| {
+                s.wakes
+                    .iter()
+                    .filter(|w| matches!(w.state, WakeState::Armed | WakeState::PendingStart))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn agent_reports(&self, container: &ContainerRef) -> Result<Vec<AgentReport>> {
+        Ok(crate::agent::container_state(self, container)
+            .map(|s| s.reports.clone())
+            .unwrap_or_default())
+    }
+
+    fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
+        Ok(self
+            .agent_pm_receipts
+            .iter()
+            .find(|r| r.request_id == request_id)
+            .cloned())
+    }
+
+    fn member_gate(&self, member: &str) -> Result<Option<crate::MemberGateHead>> {
+        Ok(crate::task_head_fields(self).member_gates.remove(member))
+    }
+
+    fn member_gate_history(&self, member: &str) -> Result<Vec<crate::MemberGateRecord>> {
+        Ok(self
+            .member_gates
+            .get(member)
+            .map(|g| g.history.clone())
+            .unwrap_or_default())
     }
 
     fn open_review_children(&self, run: &str) -> Result<Vec<RunHead>> {
