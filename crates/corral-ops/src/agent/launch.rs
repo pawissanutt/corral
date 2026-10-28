@@ -20,7 +20,8 @@ use serde_json::json;
 
 use super::admission::{BindTarget, open_generation};
 use super::bridge::assets::{
-    asset_digest, bun_version, find_bun, missing_modules, read_compat, version_satisfies,
+    asset_digest, bun_version, compiled_host, find_bun, missing_modules, read_compat,
+    version_satisfies,
 };
 use super::cli::LaunchArgs;
 use crate::Ctx;
@@ -575,6 +576,15 @@ pub fn check_with(
             ),
         ));
     }
+    if let Some(host) = compiled_host(&assets) {
+        // The digest above pinned this executable; it embeds its Bun and every module.
+        return Ok(Ready {
+            assets,
+            bun: host,
+            bun_version: format!("embedded (GO range {})", compat.range),
+            generation_dir: generation_dir.to_path_buf(),
+        });
+    }
     let bun = bun.ok_or_else(|| {
         refuse(
             "bun_unavailable",
@@ -688,9 +698,10 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
     Ok(bytes)
 }
 
-/// `bun --no-env-file <assets>/src/host/main.ts --launch-fd <n>` in the asset directory, with
-/// the launch message already written into a pipe whose read end the child inherits as `<n>`.
-/// The returned reader must outlive the spawn or exec.
+/// `bun --no-env-file <assets>/src/host/main.ts --launch-fd <n>` in the asset directory (or
+/// `<assets>/corral-pi-host --launch-fd <n>` for a compiled installation, built without `.env`
+/// or bunfig autoloading), with the launch message already written into a pipe whose read end
+/// the child inherits as `<n>`. The returned reader must outlive the spawn or exec.
 #[cfg(unix)]
 pub fn host_command(
     bootstrap: &Bootstrap,
@@ -707,9 +718,12 @@ pub fn host_command(
     rustix::io::fcntl_setfd(&reader, rustix::io::FdFlags::empty())
         .context("letting the host inherit the launch pipe")?;
     let mut command = std::process::Command::new(&ready.bun);
+    if compiled_host(&ready.assets).is_none() {
+        command
+            .arg("--no-env-file")
+            .arg(ready.assets.join(HOST_ENTRY));
+    }
     command
-        .arg("--no-env-file")
-        .arg(ready.assets.join(HOST_ENTRY))
         .arg("--launch-fd")
         .arg(reader.as_raw_fd().to_string())
         .current_dir(&ready.assets);

@@ -15,7 +15,9 @@ use corral_core::agent::{AgentRunState, ContainerRef, pm_state};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::bridge::assets::{asset_digest, bun_version, find_bun, read_compat, version_satisfies};
+use super::bridge::assets::{
+    HOST_BINARY, asset_digest, bun_version, find_bun, read_compat, version_satisfies,
+};
 use super::cli::{AgentTarget, InstallArgs, StateArgs};
 use super::hooks::doctor;
 use crate::Ctx;
@@ -54,11 +56,15 @@ fn data_root_from(xdg: Option<OsString>, home: Option<OsString>) -> Result<PathB
 }
 
 pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
-    let source = match &args.from {
-        Some(dir) => dir.clone(),
-        None => default_source()?,
+    let root = data_root()?;
+    let record = match &args.from {
+        Some(host) if host.is_file() => install_compiled(host, &root)?,
+        Some(dir) => install_into(dir, &root, find_bun())?,
+        None => match sibling_host() {
+            Some(host) => install_compiled(&host, &root)?,
+            None => install_into(&default_source()?, &root, find_bun())?,
+        },
     };
-    let record = install_into(&source, &data_root()?, find_bun())?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&record)?);
     } else {
@@ -71,6 +77,13 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The compiled host a release archive installs beside the `corral` executable.
+fn sibling_host() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let host = exe.parent()?.join(HOST_BINARY);
+    host.is_file().then_some(host)
 }
 
 fn default_source() -> Result<PathBuf> {
@@ -115,7 +128,96 @@ pub fn install_into(source: &Path, root: &Path, bun: Option<PathBuf>) -> Result<
         .with_context(|| format!("staging under {}", assets_root.display()))?;
     copy_shipped(&source, staging.path())?;
     let digest = asset_digest(staging.path())?;
-    let target = assets_root.join(&digest);
+    if !assets_root.join(&digest).exists() {
+        bun_install(&bun, staging.path())?;
+        if asset_digest(staging.path())? != digest {
+            bail!("bun install changed the shipped asset files; refusing the installation");
+        }
+    }
+    publish(root, staging.path(), digest, bun_version, pi)
+}
+
+/// Installs a compiled `corral-pi-host`: a copy of the executable plus the `compat.json` and
+/// role assets it writes beside itself, so no Bun, checkout or `bun install` is involved.
+pub fn install_compiled(host: &Path, root: &Path) -> Result<InstallRecord> {
+    let host = host
+        .canonicalize()
+        .with_context(|| format!("resolving {}", host.display()))?;
+    let assets_root = root.join("assets");
+    std::fs::create_dir_all(&assets_root)
+        .with_context(|| format!("creating {}", assets_root.display()))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".staging-")
+        .tempdir_in(&assets_root)
+        .with_context(|| format!("staging under {}", assets_root.display()))?;
+    // The source runs, never the fresh copy: a copy executed while another thread of this
+    // process may hold its write descriptor across a fork fails with ETXTBSY.
+    let version = run_host(&host, &["--version".as_ref()])?;
+    let (pi, bun) = parse_host_version(&version).with_context(|| {
+        format!(
+            "{} --version printed {version:?}, not `corral-pi-host pi <v> bun <v>`",
+            host.display()
+        )
+    })?;
+    run_host(
+        &host,
+        &["--write-install".as_ref(), staging.path().as_os_str()],
+    )?;
+    let staged = staging.path().join(HOST_BINARY);
+    copy_file(&host, &staged)?;
+    set_executable(&staged)?;
+    read_compat(staging.path())?;
+    let digest = asset_digest(staging.path())?;
+    publish(root, staging.path(), digest, bun, pi)
+}
+
+/// `corral-pi-host pi <pi> bun <bun>` -> `(pi, bun)`.
+fn parse_host_version(text: &str) -> Option<(String, String)> {
+    match text.split_whitespace().collect::<Vec<_>>()[..] {
+        ["corral-pi-host", "pi", pi, "bun", bun] => Some((pi.to_owned(), bun.to_owned())),
+        _ => None,
+    }
+}
+
+fn run_host(host: &Path, args: &[&std::ffi::OsStr]) -> Result<String> {
+    let output = std::process::Command::new(host)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .with_context(|| format!("running {}", host.display()))?;
+    if !output.status.success() {
+        bail!(
+            "{} {:?} failed ({}): {}",
+            host.display(),
+            args,
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("making {} executable", path.display()))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+/// Moves a staged installation to `assets/<digest>/` (or reuses an identical one) and records it.
+fn publish(
+    root: &Path,
+    staging: &Path,
+    digest: String,
+    bun: String,
+    pi: String,
+) -> Result<InstallRecord> {
+    let target = root.join("assets").join(&digest);
     if target.exists() {
         if asset_digest(&target).ok().as_deref() != Some(digest.as_str()) {
             bail!(
@@ -125,18 +227,14 @@ pub fn install_into(source: &Path, root: &Path, bun: Option<PathBuf>) -> Result<
             );
         }
     } else {
-        bun_install(&bun, staging.path())?;
-        if asset_digest(staging.path())? != digest {
-            bail!("bun install changed the shipped asset files; refusing the installation");
-        }
-        std::fs::rename(staging.path(), &target)
+        std::fs::rename(staging, &target)
             .with_context(|| format!("installing {}", target.display()))?;
     }
     let record = InstallRecord {
         version: RECORD_VERSION,
         digest,
         path: target,
-        bun: bun_version,
+        bun,
         pi,
         installed_at: jiff::Timestamp::now(),
     };
@@ -553,5 +651,96 @@ pub(crate) mod tests {
         assert!(refused(&package(), Some(failing)).contains("bun install --frozen-lockfile"));
         assert!(digests(&root).is_empty());
         assert!(read_record(&root).unwrap().is_none());
+    }
+
+    /// A stand-in compiled host: `--version` and `--write-install <dir>` as src/host/compiled.ts
+    /// answers them, writing the package's real compat.json.
+    fn fake_host(dir: &Path, version: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let source = dir.join("host.sh");
+        let compat = package().join("compat.json");
+        std::fs::write(
+            &source,
+            format!(
+                "#!/bin/sh\ncase \"$1\" in\n--version) echo '{version}' ;;\n--write-install) mkdir -p \
+                 \"$2/assets\" && cp '{}' \"$2/compat.json\" && echo contract > \"$2/assets/worker-contract.md\" ;;\n\
+                 *) exit 9 ;;\nesac\n",
+                compat.display()
+            ),
+        )
+        .unwrap();
+        let host = dir.join(HOST_BINARY);
+        let installed = std::process::Command::new("install")
+            .args(["-m", "0755"])
+            .arg(&source)
+            .arg(&host)
+            .status()
+            .unwrap();
+        assert!(installed.success());
+        host
+    }
+
+    #[test]
+    fn a_compiled_host_installs_without_bun_and_serves_every_role() {
+        // Given a compiled host and no Bun anywhere:
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let host = fake_host(
+            &tmp.path().join("release"),
+            "corral-pi-host pi 1.3.0 bun 1.4.2",
+        );
+
+        // When it is installed:
+        let record = install_compiled(&host, &root).unwrap();
+
+        // Then the installation is the executable plus what it wrote, named by its digest:
+        let dir = root.join("assets").join(&record.digest);
+        assert_eq!(record.path, dir);
+        assert_eq!(
+            (record.bun.as_str(), record.pi.as_str()),
+            ("1.4.2", "1.3.0")
+        );
+        assert!(dir.join(HOST_BINARY).is_file() && dir.join("compat.json").is_file());
+        assert!(!dir.join("src/host/main.ts").exists() && !dir.join("node_modules").exists());
+        assert_eq!(installed_in(&root).unwrap(), Some(dir.clone()));
+
+        // And every role is served by the bundle, with no source modules on disk:
+        for role in [AgentRole::Worker, AgentRole::Reviewer, AgentRole::Pm] {
+            preflight::assets(&dir, role, false).unwrap();
+        }
+
+        // And reinstalling the same executable is the same installation:
+        assert_eq!(
+            install_compiled(&host, &root).unwrap().digest,
+            record.digest
+        );
+        assert_eq!(digests(&root), vec![record.digest.clone()]);
+
+        // And a replaced executable is refused rather than launched:
+        std::fs::write(dir.join(HOST_BINARY), "#!/bin/sh\nexit 0\n").unwrap();
+        assert!(
+            installed_in(&root)
+                .unwrap_err()
+                .to_string()
+                .starts_with("installed_assets_changed")
+        );
+    }
+
+    #[test]
+    fn a_host_that_does_not_identify_itself_is_refused_leaving_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let host = fake_host(&tmp.path().join("release"), "something else");
+        let error = install_compiled(&host, &root).unwrap_err().to_string();
+        assert!(
+            error.contains("not `corral-pi-host pi <v> bun <v>`"),
+            "{error}"
+        );
+        assert!(digests(&root).is_empty());
+        assert!(read_record(&root).unwrap().is_none());
+        assert_eq!(
+            parse_host_version("corral-pi-host pi 1.3.0 bun 1.4.2"),
+            Some(("1.3.0".to_owned(), "1.4.2".to_owned()))
+        );
     }
 }

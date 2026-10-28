@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use corral_core::Store;
 
-use super::bridge::assets::{bun_version, find_bun, read_compat, version_satisfies};
+use super::bridge::assets::{
+    bun_version, compiled_host, find_bun, has_module, read_compat, version_satisfies,
+};
 use super::install::{data_root, installed_in};
 
 #[path = "login_picker.rs"]
@@ -159,14 +161,14 @@ pub fn login_assets(explicit: Option<PathBuf>, root: &Path) -> Result<PathBuf> {
             assets.display()
         );
     }
-    if !assets.join(LOGIN_ENTRY).is_file() {
+    if !has_module(&assets, LOGIN_ENTRY) {
         bail!(
             "credentials_unavailable: {} has no {LOGIN_ENTRY} (owner {OWNER})",
             assets.display()
         );
     }
     // Assets from before T-479 ignore `--provider` and always log in OpenAI Codex.
-    if !assets.join(PROVIDERS_ENTRY).is_file() {
+    if !has_module(&assets, PROVIDERS_ENTRY) {
         bail!(
             "assets_outdated: {} predates per-provider login and would ignore --provider; run \
              `corral agent install` first",
@@ -265,23 +267,37 @@ pub fn login(start: &Path, provider: Option<&str>) -> Result<()> {
     };
     let assets = login_assets(explicit, &root)?;
     let range = read_compat(&assets)?.range;
-    let bun = find_bun().context("bun_unavailable: no executable `bun` on PATH")?;
-    let version = bun_version(&bun)?;
-    if !version_satisfies(&version, &range) {
-        bail!("bun_version_unsupported: bun {version} is outside the GO manifest's range {range}");
-    }
+    let mut command = match compiled_host(&assets) {
+        Some(host) => {
+            let mut command = std::process::Command::new(host);
+            command.arg("login");
+            command
+        }
+        None => {
+            let bun = find_bun().context("bun_unavailable: no executable `bun` on PATH")?;
+            let version = bun_version(&bun)?;
+            if !version_satisfies(&version, &range) {
+                bail!(
+                    "bun_version_unsupported: bun {version} is outside the GO manifest's range \
+                     {range}"
+                );
+            }
+            let mut command = std::process::Command::new(bun);
+            command.arg("--no-env-file").arg(assets.join(LOGIN_ENTRY));
+            command
+        }
+    };
     let dir = auth_dir(&root);
     ensure_auth_dir(&dir)?;
-    let status = std::process::Command::new(&bun)
-        .arg("--no-env-file")
-        .arg(assets.join(LOGIN_ENTRY))
+    let program = command.get_program().to_owned();
+    let status = command
         .arg("--auth-dir")
         .arg(&dir)
         .arg("--provider")
         .arg(chosen.id)
         .current_dir(&assets)
         .status()
-        .with_context(|| format!("running {}", bun.display()))?;
+        .with_context(|| format!("running {}", Path::new(&program).display()))?;
     if !status.success() {
         bail!("corral agent login did not complete ({status})");
     }

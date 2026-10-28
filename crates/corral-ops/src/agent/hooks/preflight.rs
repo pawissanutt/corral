@@ -248,7 +248,7 @@ pub fn assets(dir: &Path, role: AgentRole, explicit: bool) -> Result<(), Refusal
         ),
     ];
     for (module, code, subject, owner) in modules {
-        if !dir.join(&module).is_file() {
+        if !crate::agent::bridge::assets::has_module(dir, &module) {
             return Err(refuse(
                 code,
                 format!(
