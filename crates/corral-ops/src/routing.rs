@@ -528,7 +528,7 @@ fn rejection(
     }
     let models = &scoped[..];
     let selector = harness::catalog_selector(harness, vendor, model);
-    if models.iter().any(|listed| *listed == selector) {
+    if models.contains(&selector) {
         return None;
     }
     let mut nearest: Vec<_> = models
