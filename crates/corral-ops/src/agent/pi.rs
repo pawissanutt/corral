@@ -94,6 +94,16 @@ pub(crate) fn adopted_alive(ctx: &Ctx, pane: &str) -> Result<Option<bool>> {
     }
 }
 
+/// Recovery never types into an adopted pane whose host is gone: the shell there is the owner's.
+pub(crate) fn refuse_dead_adopted(adopted: bool, alive: bool, pane: &str) -> Result<()> {
+    anyhow::ensure!(
+        !adopted || alive,
+        "pane_adopted: {pane} is the owner's own pane adopted by `corral pi` and its host is gone; \
+         corral never types into it. Run `corral pi` in that pane, or `corral pm`"
+    );
+    Ok(())
+}
+
 /// Bound mode up to the exec: every check, then generation n+1 in `pane` and its bootstrap.
 pub fn adopt(ctx: &Ctx, pane: &str, overrides: &Overrides) -> Result<Prepared> {
     platform()?;
