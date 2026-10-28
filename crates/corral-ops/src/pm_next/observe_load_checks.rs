@@ -1,7 +1,11 @@
 //! Failure selections and integrity issues are maintained at ingestion, not per evaluation.
-//! Legacy backfills commit once under the artifact storage lock. Immutable backfill keys
-//! include the input task revision: an older snapshot never consumes a newer generation.
-//! Only the selected report's bytes are reverified on every observation.
+//! A run's checkpoint is bound to its accepted-proof artifact revision, which changes on every
+//! corral-mediated artifact edit, so any edit outside publication forces one rebuild. Each
+//! rebuild starts a new epoch; live failure pointers from older epochs read as absent, which
+//! retires selections of reports that no longer match without scanning them. Legacy backfills
+//! commit once under the artifact storage lock. Immutable backfill keys include the input task
+//! revision: an older snapshot never consumes a newer generation. Only the selected report's
+//! bytes are reverified on every observation, together with its full selection predicate.
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -24,6 +28,9 @@ const PREPARED: &str = "pm-load-checks-v2";
 #[derive(Clone, Deserialize, Serialize)]
 struct Selection {
     row: String,
+    /// The rebuild epoch this pointer was written in, fixed-width.
+    #[serde(default)]
+    epoch: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -42,8 +49,12 @@ struct Issue {
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 struct RunState {
-    /// Number of this run's artifacts ingested, fixed-width for work-byte equality.
-    through: String,
+    /// The run's accepted-proof artifact revision this checkpoint describes.
+    #[serde(default)]
+    revision: String,
+    /// Incremented by every rebuild, fixed-width for work-byte equality.
+    #[serde(default)]
+    epoch: String,
     issue: Option<Issue>,
 }
 
@@ -75,8 +86,36 @@ fn generation_failure(generation: &str, head: &str) -> Result<String> {
     Ok(format!("{generation}/{}", key(&head)?))
 }
 
-fn through(count: u64) -> String {
-    format!("{count:020}")
+fn epoch(n: u64) -> String {
+    format!("{n:020}")
+}
+
+fn next_epoch(previous: Option<&RunState>) -> String {
+    epoch(
+        previous
+            .and_then(|s| s.epoch.parse::<u64>().ok())
+            .map_or(1, |n| n + 1),
+    )
+}
+
+/// The head summary's accepted-proof revision for `run`, folded the same way.
+fn revision<'a>(artifacts: impl Iterator<Item = &'a Artifact>, run: &str) -> String {
+    let mut proof = corral_core::accepted_proof::AcceptedProof::default();
+    for artifact in artifacts.filter(|a| a.run == run) {
+        proof.fold(artifact);
+    }
+    proof.revision
+}
+
+/// db316644's selection predicate for one registration and head.
+fn matches(artifact: &Artifact, check: &LoadCheck, task: &str, run: &str, head: &str) -> bool {
+    artifact.title == TITLE
+        && artifact.run == run
+        && check.version == 1
+        && check.task == task
+        && check.run == run
+        && check.head == head
+        && check.under_load_exit != 0
 }
 
 fn read_check(ctx: &Ctx, artifact: &Artifact) -> Result<LoadCheck> {
@@ -131,6 +170,7 @@ fn fold(
     if let Some(head) = &report.failure {
         let selected = failures.entry(head.clone()).or_insert_with(|| Selection {
             row: row.to_owned(),
+            epoch: state.epoch.clone(),
         });
         if selected.row.as_str() < row {
             selected.row = row.to_owned();
@@ -150,16 +190,17 @@ fn fold(
 }
 
 /// Called under the publisher's storage lock and task transaction. Every attachment advances
-/// its run's checkpoint, including unrelated titles, so a normal evaluation never scans.
+/// its run's checkpoint, including unrelated titles, so a normal evaluation never scans. When
+/// the stored checkpoint does not describe the run as it was before this publication (any edit
+/// outside publication, a revival or a superseded Diff), the run is rebuilt in a new epoch.
 pub(crate) fn published(ctx: &Ctx, task: &Task, index: usize, added: bool) -> Result<()> {
     let artifact = &task.artifacts[index];
-    let count = u64::try_from(
-        task.artifacts
-            .iter()
-            .filter(|a| a.run == artifact.run)
-            .count(),
-    )?;
-    let before = count.saturating_sub(u64::from(added));
+    let after = revision(task.artifacts.iter(), &artifact.run);
+    let before = if added {
+        revision(task.artifacts[..index].iter(), &artifact.run)
+    } else {
+        after.clone()
+    };
     let name = run_key(&task.id, &artifact.run)?;
     let previous: Option<RunState> = ctx.store.record(RUNS, &name)?;
     let row = corral_core::store::codec::ordinal_key(index + 1);
@@ -175,14 +216,23 @@ pub(crate) fn published(ctx: &Ctx, task: &Task, index: usize, added: bool) -> Re
         && current
             .as_ref()
             .is_some_and(|report| report.issue.is_none());
-    let recover = previous
-        .as_ref()
-        .map_or(before != 0, |s| s.through != through(before))
-        || repair_issue;
-    let mut state = previous.unwrap_or_default();
+    let unchanged = previous.as_ref().is_some_and(|s| s.revision == before);
+    let fresh_run = previous.is_none() && before == revision([].iter(), &artifact.run);
     let mut failures = BTreeMap::new();
-    if recover {
-        state = RunState::default();
+    let mut state = if (unchanged || fresh_run) && !repair_issue {
+        let mut state = previous.unwrap_or_default();
+        if state.epoch.is_empty() {
+            state.epoch = epoch(1);
+        }
+        if let Some(report) = &current {
+            fold(&mut state, &mut failures, &row, report);
+        }
+        state
+    } else {
+        let mut state = RunState {
+            epoch: next_epoch(previous.as_ref()),
+            ..RunState::default()
+        };
         for (index, a) in task
             .artifacts
             .iter()
@@ -195,17 +245,16 @@ pub(crate) fn published(ctx: &Ctx, task: &Task, index: usize, added: bool) -> Re
                 .save_record(REPORTS, &report_key(&task.id, &row), &report)?;
             fold(&mut state, &mut failures, &row, &report);
         }
-    } else if let Some(report) = &current {
-        fold(&mut state, &mut failures, &row, report);
-    }
+        state
+    };
     for (head, selected) in failures {
         let name = failure_key(&task.id, &artifact.run, &head)?;
         let old: Option<Selection> = ctx.store.record(FAILURES, &name)?;
-        if old.is_none_or(|old| old.row <= selected.row) {
+        if old.is_none_or(|old| old.epoch != state.epoch || old.row <= selected.row) {
             ctx.store.save_record(FAILURES, &name, &selected)?;
         }
     }
-    state.through = through(count);
+    state.revision = after;
     ctx.store.save_record(RUNS, &name, &state)
 }
 
@@ -231,20 +280,22 @@ fn stage(
     Ok(())
 }
 
-fn backfill(ctx: &Ctx, head: &TaskHead, run: &str, count: u64) -> Result<PreparedRun> {
+fn backfill(ctx: &Ctx, head: &TaskHead, run: &str, revision: &str) -> Result<PreparedRun> {
     // Publishers hold this same lock before opening their task transaction. No publication
     // can race checkpoint seeding; generic task writes cannot make an old revision current.
     let _lock = crate::artifact_storage::storage_lock(ctx)?;
     let writer = ctx.store.reopen_unobserved()?;
-    let generation = key(&(&head.id, run, count, head.rev))?;
+    let generation = key(&(&head.id, run, revision, head.rev))?;
     if let Some(state) = writer.record(GENERATIONS, &generation)? {
         return Ok(PreparedRun {
             state,
             generation: Some((writer, generation)),
         });
     }
+    let live: Option<RunState> = writer.record(RUNS, &run_key(&head.id, run)?)?;
     let mut state = RunState {
-        through: through(count),
+        revision: revision.to_owned(),
+        epoch: next_epoch(live.as_ref()),
         issue: None,
     };
     let mut failures = BTreeMap::new();
@@ -273,7 +324,7 @@ fn backfill(ctx: &Ctx, head: &TaskHead, run: &str, count: u64) -> Result<Prepare
     let current = writer.head(&head.id)?;
     let seed_current = current.rev == head.rev
         && current.current_run.as_ref().is_some_and(|r| r.id == run)
-        && current.summary.current_artifacts.count == count;
+        && current.summary.current_artifacts.accepted_proof.revision == revision;
     let mut writes = Vec::new();
     for (candidate, selected) in failures {
         stage(
@@ -331,15 +382,15 @@ pub(crate) fn prepare(ctx: &Ctx) -> Result<()> {
                 continue;
             }
             if let Some(run) = &head.current_run {
-                let count = head.summary.current_artifacts.count;
+                let revision = &head.summary.current_artifacts.accepted_proof.revision;
                 let state: Option<RunState> =
                     ctx.store.record(RUNS, &run_key(&head.id, &run.id)?)?;
                 let checked = match state {
-                    Some(state) if state.through == through(count) => PreparedRun {
+                    Some(state) if &state.revision == revision => PreparedRun {
                         state,
                         generation: None,
                     },
-                    _ => backfill(ctx, head, &run.id, count)?,
+                    _ => backfill(ctx, head, &run.id, revision)?,
                 };
                 prepared.insert((head.id.clone(), run.id.clone()), checked);
             }
@@ -364,7 +415,10 @@ pub(super) fn load(ctx: &Ctx, task: &str, run: &str, head: &str) -> Result<Optio
         Some((writer, generation)) => {
             writer.record(GENERATION_FAILURES, &generation_failure(generation, head)?)?
         }
-        None => ctx.store.record(FAILURES, &failure_key(task, run, head)?)?,
+        None => ctx
+            .store
+            .record::<Selection>(FAILURES, &failure_key(task, run, head)?)?
+            .filter(|selected| selected.epoch == checked.state.epoch),
     };
     if let Some(issue) = &checked.state.issue
         && selected
@@ -381,6 +435,12 @@ pub(super) fn load(ctx: &Ctx, task: &str, run: &str, head: &str) -> Result<Optio
         .artifact_row(task, &selected.row)?
         .context("selected PM load report is missing")?;
     let check = read_check(ctx, &artifact)?;
+    if !matches(&artifact, &check, task, run, head) {
+        bail!(
+            "selected PM load report {} no longer matches its selection",
+            artifact.path
+        );
+    }
     let path = ctx.store.dir().join(&artifact.path);
     Ok(Some(PmObservation::LoadFailure {
         task: task.to_owned(),
