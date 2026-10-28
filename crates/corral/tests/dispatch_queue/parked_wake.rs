@@ -24,8 +24,9 @@ fn park(f: &Fixture, id: &str, wait: &str, on: &str, deadline: Timestamp, now: T
     corral_ops::register_wait(&f.ctx, id, serde_json::from_value(request).unwrap(), now).unwrap();
 }
 
-fn receipt(f: &Fixture, id: &str, wait: &str) {
-    let now = Timestamp::now();
+fn receipt(f: &Fixture, id: &str, wait: &str, registered: Timestamp) {
+    // Keep the observation inside the controlled lifetime even if wall time steps back.
+    let now = registered + SignedDuration::from_secs(1);
     let receipt = json!({
         "version": 1, "id": format!("{wait}-landed"), "run": "R1", "outcome": "ready",
         "delivery": "acknowledged", "observed_at": now, "answer": null,
@@ -103,6 +104,46 @@ fn grant(f: &Fixture, id: &str, at: Timestamp) {
 }
 
 #[test]
+fn receipt_clock_follows_registration_and_rejects_an_earlier_observation() {
+    let f = Fixture::new();
+    let a = running(&f, "app");
+    // Model a registration ahead of the wall clock after a backwards clock step.
+    let registered = Timestamp::now() + SignedDuration::from_hours(1);
+    park(
+        &f,
+        &a,
+        "landing",
+        "T-999",
+        registered + SignedDuration::from_hours(1),
+        registered,
+    );
+    let early = json!({
+        "version": 1, "id": "early", "run": "R1", "outcome": "ready",
+        "delivery": "acknowledged",
+        "observed_at": registered - SignedDuration::from_secs(1), "answer": null,
+    });
+    let err = corral_ops::resume_run(
+        &f.ctx,
+        &a,
+        corral_ops::ResumeTarget::Wait("landing"),
+        serde_json::from_value(early).unwrap(),
+        registered + SignedDuration::from_secs(1),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("outside this registration's lifetime")
+    );
+    let task = f.ctx.store.get(&a).unwrap();
+    assert!(
+        task.current_run().unwrap().obligations.waits[0]
+            .receipt
+            .is_none()
+    );
+    receipt(&f, &a, "landing", registered);
+}
+
+#[test]
 fn native_wake_from_a_receipt_waits_for_the_slot_grant_then_fires_once() {
     // Given A parked on X, B holding the only slot, and A bound to a native worker.
     let f = Fixture::new();
@@ -120,7 +161,7 @@ fn native_wake_from_a_receipt_waits_for_the_slot_grant_then_fires_once() {
     bind_native(&f, &a, &["landing"]);
 
     // When A's wait fires while no slot is free.
-    receipt(&f, &a, "landing");
+    receipt(&f, &a, "landing", now);
 
     // Then the wake stays owed: the selector skips it and a stale selection posts nothing.
     let task = f.ctx.store.get(&a).unwrap();
@@ -141,7 +182,7 @@ fn native_wake_from_a_receipt_waits_for_the_slot_grant_then_fires_once() {
 
     // When B finishes and sync grants A the slot.
     finish(&f, &b);
-    grant(&f, &a, Timestamp::now());
+    grant(&f, &a, now + SignedDuration::from_secs(2));
 
     // Then exactly one wake is delivered.
     post_due(&f, &a);
@@ -235,7 +276,7 @@ fn saturated_project_claimants_do_not_reserve_another_projects_slot() {
             Ok(())
         })
         .unwrap();
-    receipt(&f, &woken, "landing");
+    receipt(&f, &woken, "landing", now);
     assert!(
         f.ctx
             .store
@@ -328,8 +369,8 @@ fn slot_wait_command_sees_a_grant_logged_before_or_after_it_starts() {
         now,
     );
     let b = running(&f, "other");
-    receipt(&f, &a, "landing");
-    receipt(&f, &c, "landing");
+    receipt(&f, &a, "landing", now);
+    receipt(&f, &c, "landing", now);
     let (a_since, c_since) = (slot_since(&f, &a), slot_since(&f, &c));
 
     // Then events other than the grant (run_resumed, wait_transition) never release the wait.
@@ -343,10 +384,10 @@ fn slot_wait_command_sees_a_grant_logged_before_or_after_it_starts() {
         .spawn()
         .unwrap();
     finish(&f, &b);
-    grant(&f, &a, Timestamp::now());
+    grant(&f, &a, now + SignedDuration::from_secs(2));
     let a_out = f.ok(&wait_args(&a, &a_since, "60s"));
     finish(&f, &a);
-    grant(&f, &c, Timestamp::now());
+    grant(&f, &c, now + SignedDuration::from_secs(3));
     let c_out = subscribed.wait_with_output().unwrap();
 
     // Then both waits return that run's grant.
