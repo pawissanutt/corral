@@ -53,6 +53,7 @@ pub(crate) fn storage_lock(ctx: &Ctx) -> Result<StorageGuard> {
         return Ok(StorageGuard::enter(None));
     }
     let file = open_lock(ctx)?;
+    crate::agent::effects::failpoint("artifact_storage_wait");
     file.lock().context("locking artifact storage")?;
     Ok(StorageGuard::enter(Some(file)))
 }

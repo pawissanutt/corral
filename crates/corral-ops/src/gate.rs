@@ -760,6 +760,7 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         // Collecting attaches artifacts and may wait for storage: release the lease first (T-509).
         drop(listed);
         if gone {
+            crate::agent::effects::failpoint("gate_wait_collect");
             // The script may have finished just before the pane closed.
             if let Some(record) = gate_collect(ctx, id)? {
                 return Ok(record);
