@@ -380,6 +380,10 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
                 let state = AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
                 AgentPm::new(pane.into(), state)
             });
+            // Only the pane `adopt_pm_pane` just recorded keeps an adoption across the move.
+            if pm.adopted_pane.as_deref() != Some(pane) {
+                pm.adopted_pane = None;
+            }
             pm.pane = pane.into();
             pm.state.binding.project = project.clone();
             Ok((next_generation(&mut pm.state, &digest, pane)?, true))
@@ -428,6 +432,21 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
         container,
         generation,
         bind_nonce: nonce,
+    })
+}
+
+/// Records `pane` as the owner's own pane adopted by `corral pi`, before the generation that
+/// moves the PM there opens. It takes effect atomically with that move, because adoption holds
+/// only while it names the saved PM pane; a fresh store gets an unbound generation-0 PM record.
+pub fn adopt_pm_pane(store: &Store, project: &str, pane: &str) -> Result<()> {
+    let store_id = paths::store_id(store);
+    pm_state::update(store, |pm| {
+        let pm = pm.get_or_insert_with(|| {
+            let state = AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
+            AgentPm::new(pane.into(), state)
+        });
+        pm.adopted_pane = Some(pane.into());
+        Ok(((), true))
     })
 }
 

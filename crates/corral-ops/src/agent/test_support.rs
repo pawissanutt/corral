@@ -271,3 +271,20 @@ pub(crate) fn events(fx: &Fx, kind: &str) -> usize {
     let events = fx.ctx.store.events().unwrap();
     events.iter().filter(|e| e.kind == kind).count()
 }
+
+/// A receipt of `host`'s Pi session call `call`, for the recovery tests.
+#[cfg(target_os = "linux")]
+pub(crate) fn receipt(
+    host: &Host,
+    call: &str,
+    op: &str,
+    state: &str,
+    result: Value,
+) -> corral_core::agent::RequestReceipt {
+    serde_json::from_value(json!({
+        "version": 1, "request_id": tool_request_id(super::bridge::fixture::SESSION, call),
+        "op": op, "payload_sha256": "00", "identity": host.identity, "state": state,
+        "result": result, "at": "2026-10-25T00:00:00Z",
+    }))
+    .unwrap()
+}

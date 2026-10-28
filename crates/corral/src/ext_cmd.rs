@@ -25,6 +25,7 @@ pub const RESERVED: &[&str] = &[
     "inbox",
     "attention",
     "agent",
+    "pi",
     "question",
     "automation",
     "selection",

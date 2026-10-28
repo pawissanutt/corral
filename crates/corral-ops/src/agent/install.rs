@@ -468,6 +468,11 @@ pub(crate) fn state_value(ctx: &Ctx, target: &AgentTarget, installation: &Value)
         ),
     };
     let mut container = json!({"key": key, "harness": harness});
+    if matches!(target, AgentTarget::Pm)
+        && pm_state::load(&ctx.store)?.is_some_and(|pm| pm.adopted())
+    {
+        container["adopted"] = Value::Bool(true);
+    }
     if let Some(state) = &host {
         container
             .as_object_mut()
@@ -488,6 +493,8 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
         "role": state.binding.role.as_str(),
         "health": state.binding.health,
         "generation": state.binding.generation,
+        "pane": state.current_generation().map(|g| &g.pane),
+        "bound": state.current_generation().is_some_and(|g| g.bound.is_some()),
         "generations": state.generations.len(),
         "receipts": state.receipts.len(),
         "open_questions": open,
