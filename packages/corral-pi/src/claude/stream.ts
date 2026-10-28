@@ -7,7 +7,7 @@ import { mkdirSync } from "node:fs";
 import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
 import {
   type AssistantMessageEventStream, type Model, type SimpleStreamOptions, type TranscriptContext,
-  createAssistantMessageEventStream, getCurrentSystemPrompt, getCurrentTools,
+  type Message, createAssistantMessageEventStream, getCurrentSystemMessage, getCurrentTools,
 } from "@earendil-works/pi-ai";
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 
@@ -32,6 +32,26 @@ export interface ClaudeLaneConfig {
 const ADAPTIVE_MARKERS = ["opus-4-6", "opus-4-7", "opus-4-8", "opus-5", "sonnet-4-6", "sonnet-5", "fable-5", "mythos-5"];
 const XHIGH_MARKERS = ["opus-4-7", "opus-4-8", "opus-5", "sonnet-5", "fable-5", "mythos-5"];
 const THINKING_BUDGETS = { minimal: 2048, low: 8192, medium: 16384, high: 31999 } as const;
+/** Pi's own harness sections; Claude Code's preset already covers identity, tools and rules. */
+const PI_HARNESS_SECTIONS = new Set(["preamble", "tools", "rules", "docs"]);
+
+/**
+ * Claude Code's `claude_code` preset plus only corral's own prompt sections (the role contract,
+ * the working directory), with the harness name neutralised, as senpi's preset-append mode does.
+ * A request whose system prompt presents a third-party harness is billed as extra usage, not plan
+ * usage (live T-493 smoke: HTTP 400 "Third-party apps now draw from your extra usage").
+ */
+export function claudeSystemPrompt(messages: readonly Message[]): Options["systemPrompt"] {
+  const system = getCurrentSystemMessage(messages);
+  const base = typeof system?.content === "string" ? system.content
+    : (system?.content ?? []).map((block) => block.text).join("");
+  const sections = Object.entries(system?.sections ?? {})
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && !PI_HARNESS_SECTIONS.has(entry[0]))
+    .map(([, text]) => text);
+  const append = [base, ...sections].map((text) => text.trim()).filter(Boolean).join("\n\n")
+    .replace(/\s*\(Pi-native\)/g, "").replace(/\bPi-native\b/g, "corral");
+  return { type: "preset", preset: "claude_code", ...(append ? { append } : {}) };
+}
 
 /**
  * The subprocess environment: the host's, without any ambient Anthropic or Claude Code auth, with
@@ -112,7 +132,7 @@ export function streamClaudeSdk(
         includePartialMessages: true,
         canUseTool,
         hooks: HOST_TOOL_DENIAL_HOOKS,
-        systemPrompt: getCurrentSystemPrompt(messages),
+        systemPrompt: claudeSystemPrompt(messages),
         settingSources: [],
         strictMcpConfig: true,
         persistSession: false,
