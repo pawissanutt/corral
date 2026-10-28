@@ -678,6 +678,9 @@ fn a_silent_reviewer_turn_is_no_verdict_gets_one_nudge_then_escalates_without_th
 #[path = "review_proof_tests.rs"]
 mod proof;
 
+#[path = "review_moved_tests.rs"]
+mod moved;
+
 /// Store setup for the reviewer cross-lane fixture
 /// (packages/corral-pi/src/roles/reviewer/cross-lane.test.ts): a Review task whose done R1 has a
 /// pending review and a pi-native review child in the fixture's private herdr pane, a review
