@@ -48,6 +48,7 @@ async function main(): Promise<void> {
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider,
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
+    ...(config.ui ? { ui: config.ui } : {}),
     modules, client, events, network,
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
   });
