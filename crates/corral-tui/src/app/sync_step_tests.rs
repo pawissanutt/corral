@@ -135,7 +135,7 @@ struct Fixture {
 }
 
 #[test]
-fn unknown_inventory_defers_even_a_completed_gate_receipt_until_inventory_recovers() {
+fn unknown_inventory_collects_completed_receipt_without_pane_reconciliation() {
     // Given a gate whose result arrives between board updates.
     let mut fx = Fixture::new();
     fx.ctx.store.config.review.gate = Some(vec!["true".into()]);
@@ -158,8 +158,30 @@ fn unknown_inventory_defers_even_a_completed_gate_receipt_until_inventory_recove
     std::fs::write(fx.root.path().join("inventory-mode"), "empty\n").unwrap();
     fx.step();
 
-    // Then that tick performs no task mutation or capacity release.
-    assert_eq!(fx.persisted(&id), before);
+    // Then authenticated receipt collection is independent of pane observations.
+    let completed = fx.persisted(&id);
+    let gate = completed.current_run().unwrap().gate.as_ref().unwrap();
+    assert_eq!(gate.result, GateResult::Pass);
+    assert_eq!(gate.commands.len(), 1);
+    assert_eq!(gate.commands[0].exit_code, 0);
+    assert_eq!(completed.artifacts.len(), before.artifacts.len() + 2);
+    assert!(completed.artifacts.iter().any(|a| a.title == "Gate: pass"));
+
+    // Only the gate receipt, its artifacts and the task write timestamp change:
+    // UNKNOWN still cannot authorize pane liveness decisions or autopilot launches.
+    let mut without_receipt = completed.clone();
+    without_receipt.updated = before.updated;
+    without_receipt.artifacts = before.artifacts.clone();
+    without_receipt.current_run_mut().unwrap().gate = before.current_run().unwrap().gate.clone();
+    assert_eq!(without_receipt, before);
+    fx.assert_no_false_events(&id);
+    fx.step();
+    assert_eq!(
+        fx.persisted(&id),
+        completed,
+        "receipt is collected only once"
+    );
+
     std::fs::remove_file(fx.root.path().join("inventory-mode")).unwrap();
     fx.step();
     assert_eq!(
@@ -168,9 +190,9 @@ fn unknown_inventory_defers_even_a_completed_gate_receipt_until_inventory_recove
             .unwrap()
             .gate
             .as_ref()
-            .unwrap()
-            .result,
-        GateResult::Pass
+            .unwrap(),
+        gate,
+        "inventory recovery must reuse the authenticated receipt"
     );
 }
 
