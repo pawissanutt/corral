@@ -14,6 +14,8 @@ mod isolation;
 mod live;
 #[path = "dispatch_queue/pending_plans.rs"]
 mod pending_plans;
+#[path = "dispatch_queue/post_land.rs"]
+mod post_land;
 mod queue_support;
 #[path = "dispatch_queue/ready.rs"]
 mod ready;

@@ -28,6 +28,8 @@ mod ops;
 pub mod pm_wake;
 mod receipts;
 #[cfg(test)]
+pub(crate) use receipts::FAILPOINT;
+#[cfg(test)]
 mod receipts_tests;
 pub mod recovery;
 #[cfg(test)]
