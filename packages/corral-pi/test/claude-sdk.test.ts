@@ -11,7 +11,7 @@ import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { type AssistantMessage, type Context, type Credential, Type, normalizeContext } from "@earendil-works/pi-ai";
 
 import { type SdkBoundary, overrideSdk, resolveClaudeCode } from "../src/claude/sdk.ts";
-import { CLAUDE_SDK_API } from "../src/claude/stream.ts";
+import { CLAUDE_SDK_API, claudeSystemPrompt } from "../src/claude/stream.ts";
 import { PRE_TOOL_USE_DENIAL, TOOL_EXECUTION_DENIED_MESSAGE } from "../src/claude/tools.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { restrictProvider } from "../src/host/session.ts";
@@ -114,12 +114,28 @@ test("a streamed text reply becomes one Pi assistant message", async () => {
   expect([message.usage.input, message.usage.output]).toEqual([12, 5]);
   const options = run.options[0]!;
   expect([options.model, options.systemPrompt, options.permissionMode, options.persistSession, options.settingSources])
-    .toEqual(["claude-sonnet-5-5", "You are a corral worker.", "dontAsk", false, []]);
+    .toEqual(["claude-sonnet-5-5", { type: "preset", preset: "claude_code", append: "You are a corral worker." }, "dontAsk",
+      false, []]);
   expect(options.pathToClaudeCodeExecutable).toBe("/synthetic/claude");
   expect(JSON.stringify(run.prompts)).toContain("hi");
   // The host process itself made no request.
   expect(guard.ledger()).toEqual({ allowed: 0, refused: 0, refusedDestinations: [] });
   expect(run.closes).toBe(1);
+});
+
+test("the system prompt keeps Claude Code's preset and appends only corral's sections, without Pi's harness identity", () => {
+  const system = {
+    role: "system" as const, content: "", timestamp: 0,
+    sections: {
+      preamble: "You are an expert coding assistant operating inside pi, a coding agent harness.",
+      tools: "<tools>- read</tools>", rules: "<rules>- Use read</rules>", docs: "<docs>Pi documentation</docs>",
+      addendum: "<addendum>\n# corral worker contract (Pi-native)\nRun the gate.\n</addendum>", cwd: "<cwd>\n/w\n</cwd>",
+    },
+  };
+  expect(claudeSystemPrompt([system])).toEqual({
+    type: "preset", preset: "claude_code",
+    append: "<addendum>\n# corral worker contract\nRun the gate.\n</addendum>\n\n<cwd>\n/w\n</cwd>",
+  });
 });
 
 test("streamed tool_use blocks become Pi tool calls that Claude Code is denied from executing", async () => {
