@@ -649,6 +649,12 @@ pub(crate) fn capacity_reason(
     if let Some(reason) = crate::slots::capacity_reason(store, task, credit)? {
         return Ok(Some(reason));
     }
+    if let Some(reason) = crate::parked::precedence_reason(store, task, credit)? {
+        return Ok(Some(reason));
+    }
+    if corral_core::red_main(task) {
+        return Ok(None);
+    }
     crate::slots::finishing_first(store, &task.id)
 }
 
@@ -663,7 +669,8 @@ pub(crate) fn sort_candidates(tasks: &mut [Task]) {
                 _ => 4,
             }
         }
-        (rank(&a.priority), a.created, &a.id).cmp(&(rank(&b.priority), b.created, &b.id))
+        let key = |t: &Task| (!corral_core::red_main(t), rank(&t.priority), t.created);
+        (key(a), &a.id).cmp(&(key(b), &b.id))
     });
 }
 
@@ -675,6 +682,8 @@ pub struct QueueEntry {
     pub queued: bool,
     pub reason: String,
     pub plan: Option<DispatchPlan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parked: Option<crate::ParkedRun>,
 }
 
 pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
@@ -685,14 +694,15 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
         ..ctx.clone()
     };
     let resource_wait = crate::resources::read_admission(&fresh)?;
-    let mut tasks: Vec<_> = store
-        .list_shared()?
+    let board = store.list_shared()?;
+    let (woken, parked) = crate::parked::queue_entries(&board);
+    let mut tasks: Vec<_> = board
         .iter()
         .filter(|t| t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some())
         .cloned()
         .collect();
     sort_candidates(&mut tasks);
-    tasks
+    let queued: Vec<QueueEntry> = tasks
         .into_iter()
         .map(|task| {
             let reason = if let Some(park) = &task.park {
@@ -767,7 +777,9 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                 queued: task.status == Status::Ready,
                 reason,
                 plan: task.dispatch_plan,
+                parked: None,
             })
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok(woken.into_iter().chain(queued).chain(parked).collect())
 }

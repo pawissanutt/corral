@@ -84,7 +84,9 @@ fn wait_inner(
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
         }
+        let own = t.id.clone();
         let run = live_run(t, &request.run)?;
+        let parked = run.parked_on(&own);
         if let Some(old) = run
             .obligations
             .waits
@@ -127,6 +129,7 @@ fn wait_inner(
             },
             receipt: None,
         });
+        run.obligations.settle_parking(&parked, &own, now);
         if let Some(origin) = origin {
             let commit = effects::Commit {
                 result: json!({
@@ -174,7 +177,9 @@ pub fn register_decision(
     );
     ensure!(!request.owner.trim().is_empty(), "decision owner is empty");
     let written = ctx.store.try_update(id, |t| {
+        let own = t.id.clone();
         let run = live_run(t, &request.run)?;
+        let parked = run.parked_on(&own);
         if let Some(old) = run
             .obligations
             .decisions
@@ -199,6 +204,7 @@ pub fn register_decision(
             },
             receipt: None,
         });
+        run.obligations.settle_parking(&parked, &own, now);
         run.blocked_excerpt = Some(format!(
             "{}\nAction: {}",
             request.question, request.requested_action
@@ -233,7 +239,9 @@ pub fn resume_run(
 ) -> Result<Task> {
     identity(receipt.version, &receipt.id)?;
     let written = ctx.store.try_update(id, |t| {
+        let own = t.id.clone();
         let run = live_run(t, &receipt.run)?;
+        let parked = run.parked_on(&own);
         let existing = run.obligations.waits.iter().filter_map(|w| w.receipt.as_ref())
             .chain(run.obligations.decisions.iter().filter_map(|d| d.receipt.as_ref()))
             .find(|r| r.id == receipt.id).cloned();
@@ -262,6 +270,7 @@ pub fn resume_run(
         ensure!(receipt.observed_at >= registered && receipt.observed_at <= now, "receipt observation is outside this registration's lifetime");
         *observation = receipt_observation(&receipt, now);
         *slot = Some(receipt.clone());
+        run.obligations.settle_parking(&parked, &own, now);
         if let Some(pending) = run.obligations.pending_decision() {
             run.blocked_excerpt = Some(format!("{}\nAction: {}", pending.request.question, pending.request.requested_action));
             t.status = Status::NeedsMe;
@@ -280,6 +289,7 @@ pub fn resume_run(
             json!({"run":receipt.run,"receipt":receipt.id,"outcome":receipt.outcome,"delivery":receipt.delivery,
                 "decision":match target { ResumeTarget::Decision(decision) => Some(decision), ResumeTarget::Wait(_) => None }}),
         )?;
+        crate::parked::reacquire(ctx, &task.id)?;
     }
     ctx.store.get(id)
 }

@@ -21,6 +21,7 @@ fn slot_parts(u: &SlotUsage, limits: &Limits, short: bool) -> Vec<String> {
         (u.reviews, "review", "reviews", 'r', limits.count_reviews),
         (u.gates, "gate", "gates", 'g', limits.count_gates),
         (u.reservations, "reserved", "reserved", 'q', true),
+        (u.parked, "parked", "parked", 'p', false),
     ];
     parts
         .into_iter()
@@ -40,7 +41,7 @@ fn slot_parts(u: &SlotUsage, limits: &Limits, short: bool) -> Vec<String> {
 /// slot, the breakdown - long when it fits in `avail` cells, else short, else just the fraction.
 pub(super) fn slot_badge(u: &SlotUsage, limits: &Limits, avail: usize) -> String {
     let frac = format!(" {}/{} ", u.total(), limits.running);
-    if u.reviews + u.gates + u.reservations == 0 {
+    if u.reviews + u.gates + u.reservations + u.parked == 0 {
         return frac;
     }
     [

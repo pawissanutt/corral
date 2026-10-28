@@ -11,6 +11,8 @@ pub struct SlotUsage {
     pub reviews: usize,
     pub gates: usize,
     pub reservations: usize,
+    /// Open runs parked on another task (or woken and queued): shown, never counted.
+    pub parked: usize,
     count_reviews: bool,
     count_gates: bool,
     #[serde(skip)]
@@ -48,6 +50,12 @@ impl SlotUsage {
         for task in tasks {
             let sharing = gate_shares_dispatch_slot(task);
             usage.tasks += usize::from(task.status.holds_slot() && task.holds_dispatch_slot());
+            usage.parked += usize::from(
+                task.status.holds_slot()
+                    && task
+                        .current_run()
+                        .is_some_and(|r| r.releases_slot(&task.id)),
+            );
             usage.reservations += usize::from(
                 !task.status.holds_slot() && task.launch.as_ref().is_some_and(|l| l.reserved),
             );

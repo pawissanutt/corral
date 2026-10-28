@@ -3,7 +3,7 @@ name: corral-worker
 description: Procedure for a dispatched corral coding run - implement one task in its worktree, run the gate, attach evidence and finish with corral done. Use when your prompt carries a corral Run contract.
 ---
 <!-- managed by `corral skill install`; local edits are overwritten -->
-<!-- corral-skill: corral-worker version=0.3.0 sha256=bf7ce92d201d8fc16045d72642e8334df08c4f88f0d70d61001efd12d49e94f3 -->
+<!-- corral-skill: corral-worker version=0.3.0 sha256=513eb93f90cc7ec8c235c432e8149895068e286e01a1a625fb5e001dae0ddcfe -->
 
 # corral worker
 
@@ -59,7 +59,10 @@ This does not authorize an extra gate or a different tier.
    `corral run decision <id> --file <json>`. To declare that the run waits on something external (CI,
    another task landing), use `corral run wait <id> --file <json>` and record the outcome with
    `corral run resume <id> --wait <wait-id> --file <receipt-json>`. Payloads are in
-   docs/guide/automation.md, "Explicit waits and owner decisions".
+   docs/guide/automation.md, "Explicit waits and owner decisions". Name the task in a landing wait's
+   channel ID (`task:T-512:landed`): the run then releases its coding slot while parked. If
+   `corral run resume` reports the run queued for a slot, wait with
+   `corral wait --for wait_transition --task <id>` until the slot is reacquired before resuming work.
 
 ## Variants by task kind
 

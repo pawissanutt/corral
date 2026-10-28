@@ -12,6 +12,8 @@ mod filing;
 mod isolation;
 #[path = "dispatch_queue/live.rs"]
 mod live;
+#[path = "dispatch_queue/parked.rs"]
+mod parked;
 #[path = "dispatch_queue/pending_plans.rs"]
 mod pending_plans;
 #[path = "dispatch_queue/post_land.rs"]

@@ -943,9 +943,9 @@ impl Task {
         let worker = planning.map_or_else(
             || {
                 self.status.holds_slot()
-                    && self
-                        .current_run()
-                        .is_none_or(|r| r.outcome != Some(RunOutcome::Failed))
+                    && self.current_run().is_none_or(|r| {
+                        r.outcome != Some(RunOutcome::Failed) && !r.releases_slot(&self.id)
+                    })
                     && !(self.current_run().is_none_or(|r| r.outcome.is_some())
                         && self.plans.last().is_some_and(|p| {
                             p.approval.is_none()
