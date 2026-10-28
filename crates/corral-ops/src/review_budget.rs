@@ -350,7 +350,13 @@ impl<'a> ReviewLaunch<'a> {
         let task = ctx.store.get(id)?;
         let run = task.current_run().context("task has no run")?;
         crate::operating::require_origin(&ctx.store, &task, submission::action_kind(kind), origin)?;
-        let retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
+        let mut retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
+        if let Some(pending) = &retained
+            && recovery::stale(ctx, pending)?
+        {
+            recovery::supersede(ctx, pending)?;
+            retained = None;
+        }
         let pending = if let Some(pending) = retained {
             recovery::prepare(ctx, pending, origin)?
         } else {
@@ -507,6 +513,27 @@ impl<'a> ReviewLaunch<'a> {
         self.committed = true;
         Ok(())
     }
+}
+
+/// Retained preparations are evidence, not an active capacity claim. They must be
+/// re-admitted before receiving finishing priority; even an unreplayable preparation
+/// must not prevent unrelated work from making progress.
+pub(crate) fn retained_preparation(
+    store: &corral_core::Store,
+    task: &str,
+    run: &str,
+    kind: Kind,
+) -> Result<bool> {
+    let key = match kind {
+        Kind::Gate => "gate",
+        Kind::Reviewer => "review",
+    };
+    store
+        .state_dir()
+        .join("review-prepared")
+        .join(format!("{task}-{run}-{key}.json"))
+        .try_exists()
+        .context("checking retained auxiliary preparation")
 }
 
 mod attempt;

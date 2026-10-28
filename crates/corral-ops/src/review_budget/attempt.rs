@@ -115,6 +115,11 @@ pub(crate) fn retained_attempt(ctx: &Ctx, task: &str, run: &str) -> Result<Optio
         Some(pending) => Some(pending),
         None => submission::load_retained(ctx, task, run, Kind::Gate)?,
     };
+    if let Some(pending) = &retained
+        && super::recovery::stale(ctx, pending)?
+    {
+        return Ok(None);
+    }
     Ok(retained.and_then(|p| p.authorization.map(|a| a.action.attempt)))
 }
 

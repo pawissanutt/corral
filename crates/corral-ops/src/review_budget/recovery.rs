@@ -7,6 +7,61 @@ use serde_json::json;
 use super::{Kind, Pending, ReviewLaunch, submission};
 use crate::{Ctx, operating, verification};
 
+/// Only definitely unsubmitted claims may be superseded. Unknown/submitted launches
+/// retain their existing recovery semantics; a changed worktree is not proof of exit.
+pub(super) fn stale(ctx: &Ctx, pending: &Pending) -> Result<bool> {
+    if pending.submitted != Some(false) {
+        return Ok(false);
+    }
+    let Some(authorization) = &pending.authorization else {
+        return Ok(false);
+    };
+    if !matches!(
+        ctx.store
+            .authorized_submission(&authorization.id)?
+            .disposition,
+        corral_core::SubmissionDisposition::Prepared
+            | corral_core::SubmissionDisposition::AuthorizationRefused { .. }
+    ) {
+        return Ok(false);
+    }
+    let task = ctx.store.get(&pending.task)?;
+    let Some(run) = task.current_run().filter(|r| r.id == pending.run) else {
+        return Ok(true);
+    };
+    let candidate = authorization
+        .action
+        .candidate
+        .as_ref()
+        .context("prepared candidate missing")?;
+    Ok(
+        verification::identity(ctx, &task, run, candidate)? != *candidate
+            || !corral_git::is_clean(&run.worktree)?,
+    )
+}
+
+/// Persist the full preparation as immutable task evidence before removing the replay
+/// pointer. Artifact deduplication makes recovery safe if interrupted before removal.
+pub(super) fn supersede(ctx: &Ctx, pending: &Pending) -> Result<()> {
+    let path = submission::retained_path(ctx, &pending.task, &pending.run, pending.kind);
+    let artifact = crate::artifacts::add_artifact_to_run(
+        ctx,
+        &pending.task,
+        &pending.run,
+        &path,
+        Some(corral_core::ArtifactKind::Evidence),
+        Some("Superseded unsubmitted auxiliary preparation: candidate changed"),
+    )?;
+    ctx.store.log_event(
+        Some(&pending.task),
+        "review_preparation_superseded",
+        json!({"run": pending.run, "kind": pending.kind,
+            "authorization": pending.authorization, "artifact": artifact,
+            "reason": "prepared candidate changed"}),
+    )?;
+    clear_retained(ctx, pending)
+}
+
 pub(super) fn prepare(
     ctx: &Ctx,
     mut pending: Pending,
