@@ -205,6 +205,27 @@ impl Legacy {
         path
     }
 
+    /// Adds the real legacy task file `name` (kept beside this module) to the board, without
+    /// its artifact registrations (their snapshots are not part of the fixture) and with a
+    /// dashboard schedule.
+    pub fn add_real_task(&self, name: &str) {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/migrate_support")
+            .join(name);
+        let path = self.corral.join("tasks").join(name);
+        let mut task = corral_core::parse_task_record(&fs::read_to_string(source).unwrap(), &path)
+            .unwrap()
+            .task;
+        task.artifacts.clear();
+        task.dashboard = Some(
+            serde_json::from_value(serde_json::json!({
+                "interval_secs": 3600, "next_due": "2026-10-01T00:00:00Z", "paused": false
+            }))
+            .unwrap(),
+        );
+        write(&path, corral_core::render_task(&task).as_bytes());
+    }
+
     /// Writes a legacy file under `.corral`.
     pub fn put(&self, rel: &str, bytes: &[u8]) {
         write(&self.corral.join(rel), bytes);
@@ -258,6 +279,83 @@ pub fn alter_in_place(corral: &Path, rel: &str, from: &str, to: &str) {
     fs::write(&path, text.replacen(from, to, 1)).unwrap();
     let file = fs::File::options().write(true).open(&path).unwrap();
     file.set_modified(mtime).unwrap();
+}
+
+/// A gate log as `main`'s runner writes it, with its receipts: each command's range starts
+/// with `\n$ <command>\n` and ends where the next begins; the footer `\ncorral gate: <result>\n`
+/// follows the last range. `commands` is `(command, output, exit code)`.
+pub fn gate_log(commands: &[(&str, &str, i64)], result: &str) -> (Vec<u8>, serde_json::Value) {
+    let mut log = Vec::new();
+    let mut receipts = Vec::new();
+    for (command, output, exit_code) in commands {
+        let start = log.len();
+        log.extend_from_slice(format!("\n$ {command}\n{output}").as_bytes());
+        receipts.push(serde_json::json!({
+            "command": command, "exit_code": exit_code, "log_start": start,
+            "log_end": log.len(), "started": "2026-10-01T01:45:00Z",
+            "ended": "2026-10-01T01:50:00Z"
+        }));
+    }
+    log.extend_from_slice(format!("\ncorral gate: {result}\n").as_bytes());
+    (log, serde_json::Value::Array(receipts))
+}
+
+/// The command-log contract of corral-ops `gate::command_log_valid`, which `gate_log_valid` and
+/// the aggregate `passed` apply to an attempt's keyed log after matching its `log_sha256`:
+/// receipts name the commands in order with contiguous ranges each starting with the command's
+/// header, only a failing result's last command may exit non-zero, and the final range ends
+/// right before the single runner footer.
+pub fn command_log_valid(
+    log: &[u8],
+    commands: &[String],
+    receipts: &[corral_core::CommandReceipt],
+    result: corral_core::GateResult,
+) -> bool {
+    use corral_core::GateResult;
+    let marker: &[u8] = match result {
+        GateResult::Pass => b"corral gate: pass",
+        GateResult::Fail => b"corral gate: fail",
+        GateResult::Running => return false,
+    };
+    if receipts.is_empty()
+        || receipts.len() > commands.len()
+        || (result == GateResult::Pass && receipts.len() != commands.len())
+    {
+        return false;
+    }
+    let mut end = 0;
+    for (index, (receipt, command)) in receipts.iter().zip(commands).enumerate() {
+        let (Ok(start), Ok(next)) = (
+            usize::try_from(receipt.log_start),
+            usize::try_from(receipt.log_end),
+        ) else {
+            return false;
+        };
+        let Some(range) = log.get(start..next) else {
+            return false;
+        };
+        let header = format!("\n$ {command}\n");
+        if receipt.command != *command
+            || start != end
+            || !range.starts_with(header.as_bytes())
+            || (receipt.exit_code != 0
+                && (result != GateResult::Fail || index + 1 != receipts.len()))
+        {
+            return false;
+        }
+        end = next;
+    }
+    if result == GateResult::Fail && receipts.last().is_none_or(|r| r.exit_code == 0) {
+        return false;
+    }
+    let mut results = log
+        .split(|b| *b == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .filter(|line| line.starts_with(b"corral gate:"));
+    log.get(end..)
+        .is_some_and(|tail| tail.trim_ascii() == marker)
+        && results.next() == Some(marker)
+        && results.next().is_none()
 }
 
 /// A barrier that "kills" the command at `at` (the step returns an error, as a kill would end

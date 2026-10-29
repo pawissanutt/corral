@@ -6,6 +6,7 @@ mod support;
 
 use std::fs;
 
+use corral_core::backend::HistoryRow;
 use corral_core::migrate::JournalState;
 use support::{FENCE, Legacy, kill_at, killed};
 
@@ -352,11 +353,10 @@ fn apply_refuses_the_journal_review_and_authorization_families_and_changes_nothi
     }
 }
 
-/// Every task's rows and summary in `corral`'s database, by `(part, key)`.
+/// Every task's header fields (without `updated`), summary and rows in `corral`'s database.
 fn task_rows(
     corral: &std::path::Path,
-) -> std::collections::BTreeMap<String, (serde_json::Value, Vec<corral_core::backend::HistoryRow>)>
-{
+) -> std::collections::BTreeMap<String, (serde_json::Value, serde_json::Value, Vec<HistoryRow>)> {
     use corral_core::backend::{StoreBackend, TaskNum, TaskParts};
     let backend = corral_core::sqlite::SqliteBackend::open(
         corral,
@@ -365,27 +365,45 @@ fn task_rows(
     .unwrap();
     let view = backend.view().unwrap();
     let mut out = std::collections::BTreeMap::new();
-    for (id, num) in [("T-001", 1), ("T-002", 2), ("T-003", 3)] {
+    for (id, num) in [
+        ("T-001", 1),
+        ("T-002", 2),
+        ("T-003", 3),
+        ("T-072", 72),
+        ("T-227", 227),
+    ] {
         let doc = view.task(TaskNum(num), &TaskParts::All).unwrap().unwrap();
+        let mut fields = serde_json::to_value(&doc.head.header.fields).unwrap();
+        fields.as_object_mut().unwrap().remove("updated");
         let mut rows = doc.rows;
-        rows.sort_by(|a, b| {
-            (format!("{:?}", a.part), &a.key).cmp(&(format!("{:?}", b.part), &b.key))
-        });
-        out.insert(id.to_owned(), (doc.head.summary, rows));
+        rows.sort_by(|a, b| (a.part, &a.key).cmp(&(b.part, &b.key)));
+        out.insert(id.to_owned(), (fields, doc.head.summary, rows));
     }
     out
 }
 
 #[test]
 fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
-    use corral_core::backend::TaskPart;
-    // Given the legacy board, migrated, and the same task records saved by a fresh v2 store
-    // through the ordinary write path.
+    use corral_core::backend::{EventQuery, HeadQuery, PageReq, StoreBackend, TaskPart};
+    // Given the fixture board plus two real legacy tasks (T-072 with a retried run, so its
+    // first run is history; T-227 with a changes review), each with a dashboard schedule.
     let legacy = Legacy::new();
+    legacy.add_real_task("T-072-legacy.md");
+    legacy.add_real_task("T-227-legacy.md");
+    let path = legacy.corral.join("tasks/T-072-legacy.md");
+    let mut retried = corral_core::parse_task_record(&fs::read_to_string(&path).unwrap(), &path)
+        .unwrap()
+        .task;
+    let mut again = retried.runs[0].clone();
+    again.id = "R2".to_owned();
+    retried.runs.push(again);
+    fs::write(&path, corral_core::render_task(&retried)).unwrap();
     let records: Vec<corral_core::Task> = [
         "T-001-finished-work.md",
         "T-002-backlog.md",
         "T-003-flat.md",
+        "T-072-legacy.md",
+        "T-227-legacy.md",
     ]
     .iter()
     .map(|file| {
@@ -395,6 +413,7 @@ fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
             .task
     })
     .collect();
+    // When it is migrated, and the same records are saved by a fresh v2 store's ordinary write.
     legacy.migrate().apply().unwrap();
     let fresh = tempfile::tempdir().unwrap();
     let store = corral_core::Store::init(fresh.path()).unwrap();
@@ -402,29 +421,46 @@ fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
         store.save(task).unwrap();
     }
     drop(store);
-    // When both databases' rows are read.
     let migrated = task_rows(&legacy.corral);
     let written = task_rows(&fresh.path().join(".corral"));
-    for (id, (summary, rows)) in &migrated {
-        let (written_summary, written_rows) = &written[id];
-        // Then the summary and every derived row (findings, nested children, facts, pane refs,
-        // checkpoints) equal the ordinary write's, the event-only ledger rows aside.
+    // Then every header field, summary and derived row equals the ordinary write's.
+    let derived = |rows: &[HistoryRow]| -> Vec<HistoryRow> {
+        rows.iter()
+            .filter(|r| !matches!(r.part, TaskPart::CleanupPane | TaskPart::GateAttempt))
+            .cloned()
+            .collect()
+    };
+    for (id, (fields, summary, rows)) in &migrated {
+        let (written_fields, written_summary, written_rows) = &written[id];
+        assert_eq!(fields, written_fields, "{id} header fields");
         assert_eq!(summary, written_summary, "{id} summary");
-        let ledger =
-            |rows: &[corral_core::backend::HistoryRow]| -> Vec<corral_core::backend::HistoryRow> {
-                rows.iter()
-                    .filter(|r| r.part != TaskPart::CleanupPane)
-                    .cloned()
-                    .collect()
-            };
-        assert_eq!(ledger(rows), ledger(written_rows), "{id} rows");
-        let extra: Vec<(String, serde_json::Value)> = rows
+        assert_eq!(derived(rows), derived(written_rows), "{id} rows");
+        assert!(!written_rows.iter().any(|r| r.part == TaskPart::GateAttempt));
+        // And the migration adds only what the ordinary write never derives: one gate attempt
+        // per gate identity a run records, and the panes only legacy events name (T-001 R1's
+        // gate pane from gate_started and fallback workspace from run_workspace_created).
+        let gates: Vec<String> = records
+            .iter()
+            .find(|t| &t.id == id)
+            .unwrap()
+            .runs
+            .iter()
+            .filter_map(|run| {
+                let identity = run.gate.as_ref()?.identity.as_ref()?;
+                Some(format!("{}/{}", run.id, identity.attempt))
+            })
+            .collect();
+        let imported: Vec<String> = rows
+            .iter()
+            .filter(|r| r.part == TaskPart::GateAttempt)
+            .map(|r| r.key.clone())
+            .collect();
+        assert_eq!(imported, gates, "{id} gate attempts");
+        let panes: Vec<(String, serde_json::Value)> = rows
             .iter()
             .filter(|r| r.part == TaskPart::CleanupPane && !written_rows.contains(r))
             .map(|r| (r.key.clone(), r.doc.clone()))
             .collect();
-        // And the only additions are the panes the legacy events alone name: T-001 R1's gate
-        // pane from gate_started and its fallback workspace from run_workspace_created.
         let expected: Vec<(String, serde_json::Value)> = if id == "T-001" {
             vec![
                 (
@@ -439,6 +475,104 @@ fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
         } else {
             Vec::new()
         };
-        assert_eq!(extra, expected, "{id} event-only panes");
+        assert_eq!(panes, expected, "{id} event-only panes");
     }
+    // And the real tasks' separately derived rows are populated: usage, switches, review
+    // children, a finding, and checkpoint metas each naming a stored payload.
+    let count = |id: &str, part: TaskPart| migrated[id].2.iter().filter(|r| r.part == part).count();
+    assert_eq!(
+        [
+            TaskPart::Run,
+            TaskPart::RunUsage,
+            TaskPart::RunSwitch,
+            TaskPart::ReviewRun,
+            TaskPart::RunCheckpoint,
+            TaskPart::CheckpointPayload
+        ]
+        .map(|part| count("T-072", part)),
+        [2, 118, 2, 2, 2, 1]
+    );
+    assert_eq!(
+        [
+            TaskPart::Finding,
+            TaskPart::ReviewRun,
+            TaskPart::RunUsage,
+            TaskPart::RunCheckpoint,
+            TaskPart::CheckpointPayload
+        ]
+        .map(|part| count("T-227", part)),
+        [1, 2, 88, 2, 2]
+    );
+    for id in ["T-072", "T-227"] {
+        let rows = &migrated[id].2;
+        for meta in rows.iter().filter(|r| r.part == TaskPart::RunCheckpoint) {
+            let digest = meta.doc["payload_digest"].as_str().unwrap();
+            assert!(
+                rows.iter()
+                    .any(|r| r.part == TaskPart::CheckpointPayload && r.key == digest),
+                "{id} checkpoint {} names a missing payload",
+                meta.key
+            );
+        }
+    }
+    // And the HistorySummary counts T-072's earlier run, which only the history holds.
+    assert!(!migrated["T-072"].1["last_ended_run"].is_null());
+    // And the indexes outside the task document: dashboard_due serves the due-schedule query,
+    // and the events' run keys serve a run-scoped event read.
+    assert_eq!(
+        migrated["T-072"].0["dashboard_due"],
+        serde_json::json!("2026-10-01T00:00:00Z")
+    );
+    let backend = corral_core::sqlite::SqliteBackend::open(
+        &legacy.corral,
+        corral_core::sqlite::SqliteOptions::default(),
+    )
+    .unwrap();
+    let view = backend.view().unwrap();
+    let due: Vec<String> = view
+        .heads(
+            &HeadQuery::DashboardDue {
+                now: "2026-10-02T00:00:00Z".parse().unwrap(),
+            },
+            PageReq::first(10),
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|head| head.header.id)
+        .collect();
+    assert_eq!(due, ["T-072", "T-227"]);
+    let query = EventQuery {
+        after: None,
+        task: Some("T-001".to_owned()),
+        kinds: Vec::new(),
+        run: Some("R1".to_owned()),
+        newest_first: false,
+        valid_only: true,
+    };
+    let kinds: Vec<String> = view
+        .events(&query, PageReq::first(10))
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|e| e.event.kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        ["dispatched", "gate_started", "run_workspace_created"]
+    );
+    drop(view);
+    drop(backend);
+    // And the T-252 run state survives on the assembled tasks: agent state and the run inbox's
+    // observe cursor.
+    let store = corral_core::Store::open(&legacy.root).unwrap();
+    for id in ["T-072", "T-227"] {
+        let task = store.get(id).unwrap();
+        assert!(
+            task.runs.iter().all(|run| run.agent_state.is_some()),
+            "{id}"
+        );
+    }
+    let t227 = store.get("T-227").unwrap();
+    assert!(serde_json::to_value(&t227.runs[0]).unwrap()["inbox"]["observe_cursor"].is_object());
 }
