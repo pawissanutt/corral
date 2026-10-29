@@ -22,6 +22,11 @@ should not authorize removal of the rejected groups below on the evidence in
 this report. Relaxing "same scenario and same checked outcome" to permit
 scenario consolidation would be a new decision, not an implication of this audit.
 
+**Changes round 1: the required before/after test CPU totals remain unresolved.**
+The negative audit result does not waive that requirement. This report must not
+be resubmitted as acceptance-complete without traceable CPU accounting or an
+explicit owner adjustment of that acceptance criterion.
+
 ## Method and coverage
 
 The deletion rule required a named retained test with the same scenario and at
@@ -431,9 +436,18 @@ the binary; group 4 is the test name. The progress ordinal is not a binary.
 ^\s*(PASS|FAIL)\s+\[\s*([\d.]+)s\]\s+\(\s*\d+/\d+\)\s+(\S+)\s+(.+)$
 ```
 
-| Accounting item | Before | After this report-only change |
+The comparison below isolates T-553's own delta. It is not an inventory or
+performance measurement of the integrated candidate. Between the historical
+baseline `bfd3382f` and reviewed candidate `81d03e51`, main commit `38ff814f`
+(T-548) added `pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck`
+and `foreign_processes_in_a_pi_native_pane_are_still_stuck` in
+`crates/corral-ops/tests/sync/watchdog.rs`. Those additions are outside T-553
+and outside the five audited families. The historical inventory therefore
+must not be presented as the integrated candidate's inventory.
+
+| Accounting item | Historical baseline at `bfd3382f` | Isolated T-553 delta, not an integrated after measurement |
 | --- | ---: | ---: |
-| Registered nextest inventory in historical full pass | 3,946 including 11 skips | Unchanged; no test/module edits |
+| Registered nextest inventory in historical full pass | 3,946 including 11 skips | 0 tests added or removed by T-553; intervening T-548 adds two |
 | Historical executed test count | 3,935 | No fresh full-suite measurement |
 | Historical full-suite summed test elapsed | 1,261.858 s | Expected unchanged at fixed per-test costs; not remeasured |
 | Screened subset summed test elapsed | 575.312 s | Expected unchanged at fixed per-test costs; not remeasured |
@@ -447,6 +461,35 @@ wall time either. The retained logs do not provide process CPU totals.
 Consequently this report cannot state measured CPU totals before/after or a
 controlled speedup. The estimated CPU delta is zero because no work was removed;
 it is not a measured CPU result.
+
+### Changes round 1: CPU evidence search and unresolved requirement
+
+The reviewer independently reproduced the elapsed totals and correctly rejected
+them as fulfillment of "total test CPU-seconds before/after stated." Rework
+searched retained T-552 and T-553 artifacts for `CPU` and `user=` before
+considering any new measurement. The one concrete user/system lead is
+`T-552:R1:44d754a9-changes-1-restored-memo.log`, also described by
+`T-552:R1:2e263a1f-changes-1-report.md`:
+
+```text
+wall=41.51 user=37.69 sys=12.34 exit=0
+```
+
+That is **50.03 user-plus-system CPU-seconds for one targeted memo-test
+command, including a 3.17-second build**. The test itself reports 38.162
+elapsed seconds. It is neither a whole-suite CPU measurement nor an isolated
+test-only CPU sample. It also measures corral-git, not the five corral-ops
+families. Scaling its CPU/elapsed ratio over 3,935 heterogeneous tests would
+assume an unvalidated workload model and retain the build contamination.
+No such extrapolation is used as an estimate.
+
+The existing whole-suite gate records and CSVs contain elapsed durations,
+not user/system counters. Zero removed work establishes only a zero isolated
+deletion delta; it supplies neither required total. Under the current
+acceptance wording, CPU accounting is therefore an **open blocker**, not an
+accepted limitation. Resolution requires traceable accounting from available
+evidence or an explicit owner adjustment. No extra full gate, other tier or
+whole-repository measurement is authorized for this review.
 
 No extra timing suite, load generation or manual full gate was started for the
 audit. The R2 contract authorizes only its one receipted quick gate after final
@@ -462,8 +505,9 @@ this historical full pass.
   Do not interpret this research submission as approval for a deletion phase.
 - Full-tier pass: the source baseline has the historical full pass above.
   The current candidate's full landing gate remains corral's responsibility.
-- CPU totals: unavailable from retained logs; the elapsed proxy and unchanged
-  estimated work are stated explicitly rather than mislabeled as CPU.
+- CPU totals: unresolved blocking acceptance criterion. The elapsed proxy and
+  zero isolated removal delta do not satisfy it; an explicit owner adjustment
+  or defensible accounting is required before acceptance-complete resubmission.
 - Scope: the requested five starting families and their shared attention
   source, not every corral-ops test or corral-git's memo tests.
 
