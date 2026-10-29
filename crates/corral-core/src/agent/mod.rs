@@ -3,6 +3,7 @@
 //! closure predicate. Every shape, bound and storage class is listed in
 //! docs/records/pi-native-records.md for T-253, which owns their schema and migration.
 
+mod browser;
 mod capabilities;
 mod jobs;
 mod live;
@@ -16,6 +17,7 @@ pub mod rejections;
 mod tests;
 mod todo;
 
+pub use browser::canonical_origin;
 pub use capabilities::*;
 pub use jobs::*;
 pub use live::*;
