@@ -92,6 +92,7 @@ fn approved(fx: &Fx, id: &str) {
         Some(&token),
     )
     .unwrap();
+    pin_verdict(fx, id);
 }
 
 /// An earlier review round of the run: a review that requested changes, the worker's fix and
@@ -110,6 +111,7 @@ fn earlier_round(fx: &Fx, id: &str) {
         Some(&token),
     )
     .unwrap();
+    pin_verdict(fx, id);
     fx.ctx
         .store
         .update(id, |t| {
@@ -122,6 +124,31 @@ fn earlier_round(fx: &Fx, id: &str) {
         })
         .unwrap();
     fx.done(id, "fixed.txt");
+}
+
+/// A verdict stamps its record and the finished child with the process wall clock, whose
+/// fraction serializes at a varying width: pin them as [`pin_receipts`] pins a gate's.
+fn pin_verdict(fx: &Fx, id: &str) {
+    let pin = |at: &mut jiff::Timestamp| *at = (*at).min(fixture::now());
+    fx.ctx
+        .store
+        .update(id, |t| {
+            let run = t.current_run_mut().unwrap();
+            if let Some(review) = run.review.as_mut() {
+                pin(&mut review.at);
+            }
+            for child in &mut run.review_runs {
+                pin(&mut child.started);
+                if let Some(ended) = child.ended.as_mut() {
+                    pin(ended);
+                }
+                if let Some(review) = child.review.as_mut() {
+                    pin(&mut review.at);
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// The gate script stamps its command receipts with its own process clock, whose fraction
@@ -267,6 +294,7 @@ pub(super) fn setup(kind: super::action_budget_fixture::Kind) -> (Fx, String) {
                 Some(&token),
             )
             .unwrap();
+            pin_verdict(&fx, &id);
             (fx, id)
         }
         other => panic!("{other:?} is not a hot-actions kind"),

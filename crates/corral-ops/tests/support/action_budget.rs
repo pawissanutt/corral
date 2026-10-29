@@ -300,6 +300,14 @@ pub(super) fn mask_clock_ids(text: &str) -> String {
             continue;
         }
         if digits.len() >= 12 && !joined && !c.is_ascii_alphanumeric() {
+            // A gate attempt's `<pid>-<nanos>`: each cold store runs in its own process.
+            if let Some(stem) = out.strip_suffix('-') {
+                let pid = stem.len() - stem.trim_end_matches(|d: char| d.is_ascii_digit()).len();
+                if pid > 0 {
+                    out.truncate(stem.len() - pid);
+                    out.push_str("<pid>-");
+                }
+            }
             out.push_str("<nanos>");
         } else {
             out.push_str(&digits);
