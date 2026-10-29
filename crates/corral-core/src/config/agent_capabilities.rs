@@ -688,7 +688,9 @@ pub(crate) fn browser_settings(table: &CapabilitySettings) -> Result<CapabilityS
                             "origins entry {origin} must be scheme://host[:port] without a path"
                         ));
                     }
-                    origins.push(serde_json::Value::from(text));
+                    origins.push(serde_json::Value::from(crate::agent::canonical_origin(
+                        text,
+                    )));
                 }
             }
             "timeout_ms" => match value.as_u64() {

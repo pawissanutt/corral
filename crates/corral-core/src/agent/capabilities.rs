@@ -230,6 +230,60 @@ fn lsp_defaults(role: AgentRole) -> Option<[bool; 3]> {
     }
 }
 
+/// The WHATWG `URL.origin` serialization of a validated, lowercase `http(s)://host[:port]`: no
+/// default or zero-padded port and compressed IPv6, so the host's origin comparison matches.
+pub fn canonical_origin(origin: &str) -> String {
+    let (scheme, authority) = origin.split_once("://").unwrap_or(("http", origin));
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(rest) => {
+            let (ip, tail) = rest.split_once(']').unwrap_or((rest, ""));
+            let host = ip
+                .parse::<std::net::Ipv6Addr>()
+                .map_or_else(|_| ip.to_owned(), whatwg_ipv6);
+            (format!("[{host}]"), tail.strip_prefix(':'))
+        }
+        None => match authority.rsplit_once(':') {
+            Some((host, port)) => (host.to_owned(), Some(port)),
+            None => (authority.to_owned(), None),
+        },
+    };
+    let default = if scheme == "https" { 443 } else { 80 };
+    match port.and_then(|port| port.parse::<u16>().ok()) {
+        Some(port) if port != default => format!("{scheme}://{host}:{port}"),
+        _ => format!("{scheme}://{host}"),
+    }
+}
+
+/// Lowercase hex pieces with the first longest run of two or more zero pieces compressed.
+fn whatwg_ipv6(ip: std::net::Ipv6Addr) -> String {
+    let pieces = ip.segments();
+    let (mut best, mut run) = ((0, 0), (0, 0));
+    for (at, piece) in pieces.iter().enumerate() {
+        run = if *piece == 0 {
+            (if run.1 == 0 { at } else { run.0 }, run.1 + 1)
+        } else {
+            (0, 0)
+        };
+        if run.1 > best.1 {
+            best = run;
+        }
+    }
+    let hex = |part: &[u16]| {
+        part.iter()
+            .map(|p| format!("{p:x}"))
+            .collect::<Vec<_>>()
+            .join(":")
+    };
+    if best.1 < 2 {
+        return hex(&pieces);
+    }
+    format!(
+        "{}::{}",
+        hex(&pieces[..best.0]),
+        hex(&pieces[best.0 + best.1..])
+    )
+}
+
 fn browser_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker => Some([false, true, true]),

@@ -648,6 +648,25 @@ fn browser_is_worker_only_and_records_validated_origins() {
             "timeout_ms": 900, "executable": "/usr/bin/chromium",
         })
     );
+    // And origins record the WHATWG URL origin the host compares, so equivalents collapse.
+    let canonical: AgentCapabilities = toml::from_str(
+        "[worker.browser]\norigins = ['http://localhost:80', 'https://localhost:443', \
+         'http://localhost:05173', 'http://[0:0:0:0:0:0:0:1]:5173', 'http://localhost', \
+         'http://[2001:DB8:0:0:1:0:0:1]', 'http://[1:0:0:2:0:0:0:3]', 'http://[::ffff:7f00:1]:0080']",
+    )
+    .unwrap();
+    assert_eq!(
+        canonical.resolve(AgentRole::Worker, None).features["browser"].settings["origins"],
+        serde_json::json!([
+            "http://[1:0:0:2::3]",
+            "http://[2001:db8::1:0:0:1]",
+            "http://[::1]:5173",
+            "http://[::ffff:7f00:1]",
+            "http://localhost",
+            "http://localhost:5173",
+            "https://localhost",
+        ])
+    );
     let mut strict = AgentCapabilities::default();
     strict.set_preset(Preset::Strict);
     assert!(!strict.resolve(AgentRole::Worker, None).enabled("browser"));
