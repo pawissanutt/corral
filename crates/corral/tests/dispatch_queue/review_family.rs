@@ -8,6 +8,9 @@ use crate::queue_support::Fixture;
 
 const PLAN: &str = "---\ngoal: Ship widget\nnon_goals: []\ndecisions: []\naffected_paths: [widget.rs]\ncontracts: []\ndependencies: []\nacceptance: [{scenario: spin, expected: clockwise}]\nverification: [check]\nowner_decisions: []\n---\n";
 
+const BEDROCK_GPT: &str = "amazon-bedrock/openai.gpt-oss-120b-1:0";
+const BEDROCK_CLAUDE: &str = "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
 fn fixture() -> Fixture {
     let mut f = crate::queue_fixture();
     let config = &mut f.ctx.store.config;
@@ -36,6 +39,8 @@ fn fixture() -> Fixture {
         ("same-model", "openai/gpt-fixture", "openai"),
         ("same-vendor", "openai/other-fixture", "openai"),
         ("different-vendor", "anthropic/claude-fixture", "anthropic"),
+        ("bedrock-gpt", BEDROCK_GPT, "amazon-bedrock"),
+        ("bedrock-claude", BEDROCK_CLAUDE, "amazon-bedrock"),
     ] {
         config.profiles.insert(
             name.into(),
@@ -57,7 +62,7 @@ fn fixture() -> Fixture {
         "detected_at": jiff::Timestamp::now(),
         "harnesses": [{
             "key": "generic", "program": "echo", "path": null, "version": null,
-            "models": ["openai/gpt-fixture", "openai/other-fixture", "anthropic/claude-fixture"],
+            "models": ["openai/gpt-fixture", "openai/other-fixture", "anthropic/claude-fixture", BEDROCK_GPT, BEDROCK_CLAUDE],
             "model_source": "listed", "efforts": [], "takes_effort": false, "notes": []
         }]
     });
@@ -450,6 +455,31 @@ fn cross_vendor_selector_stays_opted_in_when_boolean_is_false() {
                 "different-vendor",
                 !explicit,
             );
+        }
+    }
+}
+
+#[test]
+fn required_policy_judges_bedrock_reviewers_by_model_family() {
+    for target in [Target::Plan, Target::Implementation] {
+        for explicit in [false, true] {
+            // Given an OpenAI author: Bedrock gpt-oss shares its family, Bedrock Claude does not.
+            for reviewer in ["bedrock-gpt", "bedrock-claude"] {
+                let f = fixture();
+                set(&f, "review.require_cross_family", "true");
+                if !explicit {
+                    set(&f, "review.reviewer", reviewer);
+                }
+                let id = prepared(&f, target);
+                assert_launch(
+                    &f,
+                    target,
+                    &id,
+                    explicit.then_some(reviewer),
+                    reviewer,
+                    reviewer == "bedrock-claude",
+                );
+            }
         }
     }
 }

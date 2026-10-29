@@ -154,14 +154,10 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
             if review.reviewer == "owner" {
                 mapping.profile = None;
             } else {
-                match review_routing::resolve(config, &selected, run.vendor.as_deref()) {
+                let family = corral_core::model_family(run.vendor.as_deref(), run.model.as_deref());
+                match review_routing::resolve(config, &selected, family.as_ref()) {
                     Ok((_, profile)) => {
-                        review_routing::fill(
-                            &mut mapping,
-                            profile,
-                            run.vendor.as_deref(),
-                            "planner",
-                        );
+                        review_routing::fill(&mut mapping, profile, family.as_ref(), "planner");
                     }
                     Err(error) => mapping.warnings.push(format!("{error:#}")),
                 }
@@ -199,12 +195,13 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
         explanation.review.reviewer.source = "recorded_run".into();
         explanation.review.reviewer.rule = None;
         explanation.review.reviewer.warnings.clear();
-        if reviewer.vendor.is_some() && reviewer.vendor == run.vendor {
+        let family = reviewer.family(reviewer.vendor.as_deref());
+        if family.is_some() && family == run.family(run.vendor.as_deref()) {
             explanation
                 .review
                 .reviewer
                 .warnings
-                .push("reviewer uses the same vendor as the implementer".into());
+                .push("reviewer uses the same model family as the implementer".into());
         }
     }
     Ok(explanation)
@@ -254,8 +251,13 @@ fn explain_route(
     };
     let vendor =
         recorded_vendor.unwrap_or_else(|| resolved.as_ref().and_then(|r| r.vendor.as_deref()));
+    let model = resolved
+        .as_ref()
+        .and_then(|r| r.model.as_deref())
+        .or(implementer.model.as_deref());
+    let family = corral_core::model_family(vendor, model);
     let mut review = ReviewExplanation {
-        reviewer: review_routing::explain(config, task, vendor),
+        reviewer: review_routing::explain(config, task, family.as_ref()),
         planner: None,
         plan_reviewer: None,
     };
@@ -292,10 +294,11 @@ fn explain_route(
             model: planner.model.as_deref(),
             vendor: planner.vendor.as_deref(),
         });
-        let reference_vendor = match identity {
-            Some(planner) => planner.vendor,
-            None => vendor,
+        let reference_family = match identity {
+            Some(planner) => planner.family(),
+            None => family.clone(),
         };
+        let reference_family = reference_family.as_ref();
         let reference_role = if identity.is_some() {
             "planner"
         } else {
@@ -306,7 +309,7 @@ fn explain_route(
         let expected = if submitted_plan {
             crate::plan::expected_reviewer(config, task)
         } else {
-            crate::plan::expected_reviewer_for(config, task, identity, vendor)
+            crate::plan::expected_reviewer_for(config, task, identity, family.as_ref())
         };
         match expected {
             Ok(name) if name == "owner" => {
@@ -327,13 +330,13 @@ fn explain_route(
                 if selected == Reviewer::None {
                     mapping.source = "independent_profile".into();
                 }
-                match review_routing::resolve(config, &reviewer, reference_vendor) {
+                match review_routing::resolve(config, &reviewer, reference_family) {
                     Ok((name, profile)) => {
                         mapping.selection = name;
                         review_routing::fill(
                             &mut mapping,
                             profile,
-                            reference_vendor,
+                            reference_family,
                             reference_role,
                         );
                     }
@@ -343,9 +346,9 @@ fn explain_route(
             Err(error) => {
                 if selected != Reviewer::None
                     && let Ok((_, profile)) =
-                        review_routing::resolve(config, &selected, reference_vendor)
+                        review_routing::resolve(config, &selected, reference_family)
                 {
-                    review_routing::fill(&mut mapping, profile, reference_vendor, reference_role);
+                    review_routing::fill(&mut mapping, profile, reference_family, reference_role);
                 }
                 mapping.warnings.push(format!("{error:#}"));
             }

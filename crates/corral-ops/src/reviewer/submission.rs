@@ -69,6 +69,7 @@ pub(crate) fn current_assessment(
     {
         policy.require_cross_family = true;
     }
+    let author = parent.family(parent.vendor.as_deref());
     let (_, resolved) = crate::review_routing::resolve(
         &store.config,
         &if record.reviewer == "pm" {
@@ -76,7 +77,7 @@ pub(crate) fn current_assessment(
         } else {
             corral_core::Reviewer::Profile(record.reviewer.clone())
         },
-        parent.vendor.as_deref(),
+        author.as_ref(),
     )?;
     // An availability fallback reviews on its own model; check the family that actually ran.
     let actual = parent
@@ -84,7 +85,12 @@ pub(crate) fn current_assessment(
         .iter()
         .rev()
         .find(|child| child.review.as_ref().is_some_and(|r| r.at == record.at))
-        .and_then(|child| child.vendor.clone())
-        .or(resolved.vendor);
-    policy.check_reviewer_family(parent.vendor.as_deref(), actual.as_deref())
+        .and_then(|child| {
+            child
+                .vendor
+                .as_deref()
+                .map(|vendor| child.family(Some(vendor)))
+        })
+        .unwrap_or_else(|| resolved.family());
+    policy.check_reviewer_family(author.as_ref(), actual.as_ref())
 }

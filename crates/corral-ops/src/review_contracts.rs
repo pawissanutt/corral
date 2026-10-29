@@ -222,19 +222,16 @@ pub(crate) fn implementation_route(
     } else {
         (None, None)
     };
-    let author_model = run
-        .execution
-        .as_ref()
-        .and_then(|e| e.resolved.model.clone())
-        .or_else(|| run.model.clone());
+    let family = run.family(vendor);
     let mut selected = select(
         config,
         task,
         reviewer,
         explicit,
         Author {
+            family: family.as_ref(),
             vendor,
-            model: author_model.as_deref(),
+            model: run.executed_model(),
             profile: None,
         },
         Floor {
@@ -261,6 +258,8 @@ pub(crate) fn plan_route(
     let signals = ReviewSignals::for_task(task, ReviewSubjectKind::Plan);
     let requirement = corral_core::review_requirement(&signals);
     let planner = corral_core::plan_policy::planner(task)?;
+    let family =
+        planner.and_then(|p| corral_core::model_family(p.vendor.as_deref(), p.model.as_deref()));
     let reviewer = if name == "pm" {
         Reviewer::Pm
     } else if !explicit && config.task_review_policy(task).reviewer == Reviewer::Auto {
@@ -274,6 +273,7 @@ pub(crate) fn plan_route(
         &reviewer,
         explicit,
         Author {
+            family: family.as_ref(),
             vendor: planner.and_then(|p| p.vendor.as_deref()),
             model: planner.and_then(|p| p.model.as_deref()),
             profile: planner.map(|p| p.profile.as_str()),
@@ -291,12 +291,12 @@ pub(crate) fn plan_route(
 }
 
 /// Select the reviewer of a tracker Plan's combined candidate from the effective policy,
-/// including `auto` through `routing.review_profiles`. `vendor` is the members' implementer.
+/// including `auto` through `routing.review_profiles`. `family` is the members' implementer's.
 pub(crate) fn aggregate_route(
     config: &Config,
     tracker: &Task,
     reviewer: &Reviewer,
-    vendor: Option<&str>,
+    family: Option<&corral_core::ModelFamily>,
 ) -> Result<Selected> {
     let signals = ReviewSignals::for_task(tracker, ReviewSubjectKind::Implementation);
     let requirement = corral_core::review_requirement(&signals);
@@ -306,7 +306,8 @@ pub(crate) fn aggregate_route(
         reviewer,
         false,
         Author {
-            vendor,
+            family,
+            vendor: None,
             model: None,
             profile: None,
         },
@@ -320,6 +321,7 @@ pub(crate) fn aggregate_route(
 
 #[derive(Clone, Copy)]
 struct Author<'a> {
+    family: Option<&'a corral_core::ModelFamily>,
     vendor: Option<&'a str>,
     model: Option<&'a str>,
     profile: Option<&'a str>,
@@ -388,7 +390,7 @@ fn select(
         }
         other => other.clone(),
     };
-    let (name, resolved) = crate::review_routing::resolve(config, &effective, author.vendor)?;
+    let (name, resolved) = crate::review_routing::resolve(config, &effective, author.family)?;
     let mut warnings = Vec::new();
     let capability_mismatch =
         !config.review_capability_ok(&resolved.profile, requirement.capability);
@@ -498,20 +500,27 @@ pub(crate) fn plan_route_changes(
     changes
 }
 
+/// Cross-family policy for a code review: the run's executed family under `vendor` against the
+/// reviewer model that starts.
+pub(crate) fn check_family(
+    policy: &corral_core::ReviewPolicy,
+    run: &Run,
+    vendor: Option<&str>,
+    reviewer: &ResolvedProfile,
+) -> Result<()> {
+    policy.check_reviewer_family(run.family(vendor).as_ref(), reviewer.family().as_ref())
+}
+
 fn independence(author: Author<'_>, reviewer: &ResolvedProfile) -> ReviewIndependence {
-    let model_name = |model: &str| {
-        model
-            .rsplit(['/', ':'])
-            .next()
-            .unwrap_or(model)
-            .to_ascii_lowercase()
-    };
-    match (author.vendor, reviewer.vendor.as_deref()) {
-        (Some(a), Some(b)) if a != b => return ReviewIndependence::DifferentVendor,
+    match (author.family, reviewer.family()) {
+        (Some(a), Some(b)) if *a != b => return ReviewIndependence::DifferentVendor,
         _ => {}
     }
+    let key = corral_core::model_key;
     match (author.model, reviewer.model.as_deref()) {
-        (Some(a), Some(b)) if model_name(a) != model_name(b) => ReviewIndependence::DifferentModel,
+        (Some(a), Some(b)) if key(author.vendor, a) != key(reviewer.vendor.as_deref(), b) => {
+            ReviewIndependence::DifferentModel
+        }
         (Some(_), Some(_)) => ReviewIndependence::SameModelFreshSession,
         _ if author.profile.is_some_and(|p| p == reviewer.profile) => {
             ReviewIndependence::SameModelFreshSession

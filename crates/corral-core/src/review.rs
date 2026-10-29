@@ -281,24 +281,24 @@ impl ReviewPolicy {
         self.require_cross_family || self.reviewer == Reviewer::CrossVendor
     }
 
-    /// Checks the selected reviewer's vendor only when diversity is required.
+    /// Checks the selected reviewer's model family only when diversity is required.
     pub fn check_reviewer_family(
         &self,
-        author_vendor: Option<&str>,
-        reviewer_vendor: Option<&str>,
+        author: Option<&crate::ModelFamily>,
+        reviewer: Option<&crate::ModelFamily>,
     ) -> Result<()> {
         if !self.cross_family_required() {
             return Ok(());
         }
-        let author = author_vendor
-            .filter(|v| !v.trim().is_empty())
-            .context("cross-family review is required but author vendor is unknown")?;
-        let reviewer = reviewer_vendor
-            .filter(|v| !v.trim().is_empty())
-            .context("cross-family review is required but reviewer vendor is unknown")?;
+        let author = author.filter(|v| !v.as_str().trim().is_empty()).context(
+            "cross-family review is required but author vendor or model family is unknown",
+        )?;
+        let reviewer = reviewer.filter(|v| !v.as_str().trim().is_empty()).context(
+            "cross-family review is required but reviewer vendor or model family is unknown",
+        )?;
         if author == reviewer {
             bail!(
-                "cross-family review is required: reviewer vendor '{reviewer}' matches author vendor '{author}'"
+                "cross-family review is required: reviewer model family '{reviewer}' matches author model family '{author}' (a different routing vendor, such as amazon-bedrock, does not change the family)"
             );
         }
         Ok(())
@@ -399,12 +399,13 @@ impl Config {
         }
     }
 
-    /// Selects an independent reviewer by the reviewer's vendor, without a same-vendor fallback.
-    pub fn cross_vendor_reviewer(&self, implementer_vendor: &str) -> Result<String> {
-        if implementer_vendor.trim().is_empty() {
+    /// Selects an independent reviewer by model family (`reviewer_by_vendor` keys are families),
+    /// without a same-family fallback.
+    pub fn cross_vendor_reviewer(&self, author: &crate::ModelFamily) -> Result<String> {
+        if author.as_str().trim().is_empty() {
             bail!("cross-vendor review requires a known implementer vendor");
         }
-        let vendor = match implementer_vendor {
+        let vendor = match author.as_str() {
             "anthropic" => "openai",
             "openai" => "anthropic",
             other => {
@@ -442,13 +443,12 @@ impl Config {
             None,
             None,
         )?;
-        let actual = resolved
-            .vendor
-            .filter(|value| !value.trim().is_empty())
-            .with_context(|| format!("reviewer profile '{name}' has unknown vendor"))?;
-        if actual != vendor {
+        let actual = resolved.family().with_context(|| {
+            format!("reviewer profile '{name}' has unknown vendor or model family")
+        })?;
+        if actual.as_str() != vendor {
             bail!(
-                "reviewer profile '{name}' vendor '{actual}' does not match mapping vendor '{vendor}'"
+                "reviewer profile '{name}' model family '{actual}' does not match mapping vendor '{vendor}'"
             );
         }
         Ok(name.clone())

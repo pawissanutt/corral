@@ -1,6 +1,8 @@
 //! Shared code-review selection and its read-only explanation.
 use anyhow::{Context, Result, bail};
-use corral_core::{Config, PolicySource, ProfileChoice, ResolvedProfile, Reviewer, Task};
+use corral_core::{
+    Config, ModelFamily, PolicySource, ProfileChoice, ResolvedProfile, Reviewer, Task,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -47,7 +49,7 @@ pub(crate) fn auto_profile(config: &Config, task: &Task) -> Result<String> {
 pub(crate) fn resolve(
     config: &Config,
     reviewer: &Reviewer,
-    implementer_vendor: Option<&str>,
+    implementer: Option<&ModelFamily>,
 ) -> Result<(String, ResolvedProfile)> {
     let name = match reviewer {
         Reviewer::None => bail!("no reviewer configured"),
@@ -56,8 +58,7 @@ pub(crate) fn resolve(
         }
         Reviewer::Pm => "pm".into(),
         Reviewer::CrossVendor => config.cross_vendor_reviewer(
-            implementer_vendor
-                .context("cross-vendor review requires a known implementer vendor")?,
+            implementer.context("cross-vendor review requires a known implementer vendor")?,
         )?,
         Reviewer::Profile(name) => {
             if !config.profile_names().contains(name) {
@@ -132,12 +133,12 @@ pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> Revi
 pub(crate) fn fill(
     mapping: &mut ReviewMapping,
     profile: ResolvedProfile,
-    vendor: Option<&str>,
+    family: Option<&ModelFamily>,
     reference_role: &str,
 ) {
-    if profile.vendor.as_deref().is_some_and(|v| Some(v) == vendor) {
+    if profile.family().is_some_and(|f| Some(&f) == family) {
         mapping.warnings.push(format!(
-            "reviewer uses the same vendor as the {reference_role}"
+            "reviewer uses the same model family as the {reference_role}"
         ));
     }
     mapping.profile = Some(profile.profile);
@@ -146,7 +147,7 @@ pub(crate) fn fill(
     mapping.vendor = profile.vendor;
 }
 
-pub(crate) fn explain(config: &Config, task: &Task, vendor: Option<&str>) -> ReviewMapping {
+pub(crate) fn explain(config: &Config, task: &Task, family: Option<&ModelFamily>) -> ReviewMapping {
     let reviewer = choice(config, task, None);
     let mut mapping = mapping(config, task, &reviewer);
     if reviewer != Reviewer::None {
@@ -154,15 +155,15 @@ pub(crate) fn explain(config: &Config, task: &Task, vendor: Option<&str>) -> Rev
             Reviewer::Auto => auto_profile(config, task).map(Reviewer::Profile),
             other => Ok(other.clone()),
         };
-        match effective.and_then(|effective| resolve(config, &effective, vendor)) {
+        match effective.and_then(|effective| resolve(config, &effective, family)) {
             Ok((_, profile)) => {
                 if let Err(error) = config
                     .task_review_policy(task)
-                    .check_reviewer_family(vendor, profile.vendor.as_deref())
+                    .check_reviewer_family(family, profile.family().as_ref())
                 {
                     mapping.warnings.push(format!("{error:#}"));
                 }
-                fill(&mut mapping, profile, vendor, "implementer");
+                fill(&mut mapping, profile, family, "implementer");
             }
             Err(error) => mapping.warnings.push(format!("{error:#}")),
         }

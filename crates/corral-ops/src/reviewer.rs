@@ -333,7 +333,7 @@ fn review_run_origin(
         resolved =
             crate::availability::bind_review(ctx, &task, &run, resolved, exclude.as_deref())?;
     }
-    policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
+    crate::review_contracts::check_family(&policy, &run, vendor.as_deref(), &resolved)?;
     crate::agent::hooks::review::preflight(ctx, &resolved)?;
     instruction_guard::check(
         ctx,

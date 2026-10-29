@@ -456,7 +456,7 @@ pub(crate) fn before_start(
         if skipped.len() > usize::try_from(policy.max_switches).unwrap_or(usize::MAX) {
             break;
         }
-        let refusal = if exclude_provider == Some(candidate.provider.as_str()) {
+        let refusal = if corral_core::excluded_family(exclude_provider, candidate) {
             Some("it would violate the cross-family review policy".to_owned())
         } else if let Err(error) = policy.admits(candidate) {
             Some(format!("{error:#}"))

@@ -118,7 +118,7 @@ pub(crate) fn check_plan(
                     None,
                 )?;
                 policy
-                    .check_reviewer_family(actual.vendor.as_deref(), reviewer.vendor.as_deref())?;
+                    .check_reviewer_family(actual.family().as_ref(), reviewer.family().as_ref())?;
             }
         }
         if plan.run.is_none()
@@ -126,9 +126,8 @@ pub(crate) fn check_plan(
         {
             let actual = implementation_profile(&config, task, route)?;
             let reviewer = config.cross_vendor_reviewer(
-                actual
-                    .vendor
-                    .as_deref()
+                &actual
+                    .family()
                     .context("plan approval requires a known dispatch vendor")?,
             )?;
             if !plan

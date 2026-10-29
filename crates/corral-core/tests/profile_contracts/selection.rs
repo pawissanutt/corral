@@ -51,7 +51,7 @@ fn review_journal_requires_exact_context_and_retains_task_pm_override() {
     let context = ReviewSelectionContext {
         task: &task,
         subject: &expected,
-        author_vendor: Some("openai"),
+        author_family: Some(&"openai".into()),
     };
     let mut receipt = auto_selection(&store.config, &task);
     receipt.role = ProfileRole::PlanReview;
@@ -141,7 +141,7 @@ fn review_identity_keeps_contract_profile_and_plan_attempt_separate() {
     let context = ReviewSelectionContext {
         task: &task,
         subject: &expected,
-        author_vendor: Some("openai"),
+        author_family: Some(&"openai".into()),
     };
     // When the selection round-trips and validates against the exact plan/attempt.
     let decoded: ProfileReviewSelection =
@@ -168,7 +168,7 @@ fn review_rejects_rebound_plan_attempt_and_forged_policy_provenance() {
     let context = ReviewSelectionContext {
         task: &task,
         subject: &expected,
-        author_vendor: Some("openai"),
+        author_family: Some(&"openai".into()),
     };
     for case in ["attempt", "source", "selector", "policy", "profile", "none"] {
         let mut selection = review_selection(&config, &task);
@@ -231,7 +231,7 @@ fn implementation_identity_and_cross_family_requirement_survive_profile_selectio
         &ReviewSelectionContext {
             task: &task,
             subject: &expected,
-            author_vendor: Some("openai"),
+            author_family: Some(&"openai".into()),
         },
     );
     let other = selection.validate(
@@ -239,7 +239,7 @@ fn implementation_identity_and_cross_family_requirement_survive_profile_selectio
         &ReviewSelectionContext {
             task: &task,
             subject: &expected,
-            author_vendor: Some("anthropic"),
+            author_family: Some(&"anthropic".into()),
         },
     );
     // Then explicit cross-family policy still constrains the actual reviewer.
