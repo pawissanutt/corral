@@ -29,7 +29,7 @@ decisions:
   - "The assistant is a sixth Pi-native role (`AgentRole::Assistant`) with its own container record, generations and usage, not a fake worker run or PM alias. It consumes T-563's resolver with its own column."
   - "Workspace-scoped, not project-bound: reads span the workspace; every mutation names its project and is checked against that project at commit."
   - "Reads and filing use the existing CLI from the assistant's shell. The host exports `CORRAL_ASSISTANT=A-<n>`; one exhaustive command classification in the CLI entry point allows read and filing commands, attributes them to `assistant:A-<n>`, and refuses every other mutation with a pointer to the typed owner operation or the PM inbox."
-  - "Owner-level actions use one typed operation, `owner_action`, over the existing authenticated receipt client. Rust verifies a binding to a host-journaled owner input from the current turn (literal quote naming the target) or a host-rendered confirmation of the exact action; destructive actions always need the confirmation."
+  - "Owner-level actions use one typed operation, `owner_action`, over the existing authenticated receipt client. Rust verifies the complete typed action (kind, target and every effect-changing argument) against either a whole line of current-turn owner input that parses as that exact corral command, or a host-rendered confirmation of the exact action; each instruction is consumed by one action digest, and destructive actions always need the confirmation."
   - "The PM inbox is a separate store from the corral-to-agent agent inbox. Items are revisioned Markdown records; the PM sees them as `pm next` cards and resolves them through audited commands or Pi PM tools."
   - "Co-work finishing materializes a task record (origin assistant, label cowork) at finish time so the existing gate, approve, history, stats and search keep one data model; no task exists before or during the work."
   - "Implementation children depend on T-563 (capability-framework) in addition to their local edges; this plan does not wait on later T-460 waves. Features that later waves ship appear in the assistant column only when their child lands."
@@ -41,14 +41,14 @@ acceptance:
     scenario: "Assistant A-1 runs `corral show T-5 --json`, `corral stats --json`, `corral new \"Fix X\" -p corral --idea`, `corral comment T-5 ...` and `corral artifact add --session A-1 report.md --kind report`, then tries `corral approve T-5`, `corral move T-5 ready` and `corral config set ...` from its shell."
     expected: "Reads succeed; the idea, comment and artifact are recorded with actor assistant via `assistant:A-1`; each refused command exits non-zero with `assistant_refused` naming `corral_owner_action` or `corral pm inbox post`, and changes nothing."
   - criterion: C3
-    scenario: "The owner types `approve T-5` in A-1's pane; the model calls owner_action approve T-5 quoting that text. Separately the model calls owner_action approve T-6 citing the same turn, and calls it again after the turn has ended."
-    expected: "T-5 lands through the normal approve path with an `approved` event attributed owner via `assistant:A-1` carrying session, generation, turn ID, input digest and quote. The T-6 call refuses `instruction_unbound` (target not in the instruction) and the stale call refuses `turn_closed`; neither changes the board."
+    scenario: "The owner types the line `approve T-5` in A-1's pane; the model calls owner_action approve T-5 citing that input line. Then, citing the same line, it calls approve T-6, then approve T-5 again, and after the turn has ended approve T-5 once more."
+    expected: "T-5 lands through the normal approve path with an `approved` event attributed owner via `assistant:A-1` carrying session, generation, input ID, line, input digest, the parsed command and the action digest. approve T-6 refuses `instruction_mismatch` (the parsed line is a different action) and the host offers an exact-action confirmation instead; the repeated approve T-5 returns the first receipt without a second effect; the post-turn call refuses `turn_closed`."
   - criterion: C4
     scenario: "A corral wake, a PM outcome message and a recovery notice arrive in A-1's session; the model cites each as an owner turn."
     expected: "Each refuses `not_owner_input`: only pane-typed input and host-rendered confirmations are journaled as owner input."
   - criterion: C5
     scenario: "The owner says `do it` after the assistant proposed `dispatch T-9`; then asks it to discard task T-3."
-    expected: "The literal binding fails, so the host renders `Run: corral dispatch T-9? [y/N]`; y executes once with binding `confirmed`. The discard is destructive and requires its own confirmation even though the owner named T-3; N records a declined receipt and executes nothing."
+    expected: "`do it` is not a command line, so the host renders `Run: corral dispatch T-9? [y/N]`; y executes once with binding `confirmed`. The discard is destructive and requires its own confirmation even though the owner named T-3; N records a declined receipt and executes nothing."
   - criterion: C6
     scenario: "The owner asks A-1 to `land whatever is ready` and separately to `approve T-5` while autopilot holds T-5's approval lock."
     expected: "The ambiguous request becomes PM inbox item PMI-1 with the verbatim quote and the assistant's reading; the assistant tells the owner `routed to the PM as PMI-1; follow with corral pm inbox show PMI-1`. The T-5 approval refuses `conflict_in_flight` naming the autopilot lock and is reported, not retried or overridden."
@@ -67,6 +67,9 @@ acceptance:
   - criterion: C11
     scenario: "`corral pi --task T-42` opens; the model reads the brief and then `corral run transcript T-42 R1 --lines 1-200` and the review child transcript."
     expected: "The brief (at most 24 KiB) carries spec, plan summary, runs, review notes and artifact refs; the transcript reader returns bounded text for OmO, Claude and Pi transcripts or a named diagnostic; focus grants no task authority."
+  - criterion: C13
+    scenario: "From A-1's shell: `corral assistant scratch discard` on a scratch with a commit beyond its base, on one with only an uncommitted (tracked or untracked) edit, and on an empty one; then owner_action discard_scratch on the first, declined and then confirmed."
+    expected: "The first two refuse `scratch_has_work` naming the confirmed owner action and change nothing; the empty scratch is removed with its branch. The declined confirmation removes nothing; the confirmed one first saves a diff artifact covering committed, tracked and untracked changes, then removes the worktree and branch."
   - criterion: C12
     scenario: "Five assistants are live with `assistant.max_live = 4`; the machine-load probe reports critical."
     expected: "The fifth `corral pi` warns and needs `--over-cap`; at critical load the launch refuses `machine_load` with the probe values. `corral stats` shows assistant cost by session and in a role row."
@@ -108,7 +111,7 @@ contracts:
   - "AssistantSession record v1 (.corral/assistants/A-<n>.md) and container (.corral/state/agent-assistant/A-<n>.json)"
   - "CommandClass table: Read | File | Refused, exhaustive over Cmd"
   - "OwnerInput journal entry v1 and OwnerAuthority {Shell, Tui, ViaAssistant(receipt)}"
-  - "AgentOp::OwnerAction with OwnerActionKind (closed enum) and OwnerBinding {Literal, Confirmed}"
+  - "AgentOp::OwnerAction with OwnerActionKind (closed enum, one CLI command per kind), OwnerBinding {CommandLine, Confirmed}, canonical action digest and the instruction-consumption record"
   - "PmInboxItem v1 (.corral/pm-inbox/PMI-<n>.md) and its state machine"
   - "Scratch v1 inside AssistantSession, branch corral/A-<n>/<slug>"
   - "Task.cowork {session, scratch, review: none|required}"
@@ -150,12 +153,14 @@ dependencies:
     acceptance:
       - scenario: "C3, C4, C5 and C6, plus host crash between confirmation and execution, and a replayed call."
         expected: "Bindings verify as specified; events carry the receipt; a replay returns the first receipt without a second effect; a crash leaves the receipt recoverable as executed or not-executed, never guessed."
+      - scenario: "Table-driven binding cases for every ordinary kind: a read-only mention (`show T-5` for approve T-5), a negation (`do not approve T-5`), a question (`should I approve T-5?`), the same target with a different operation (`park T-5` for approve), changed arguments (`move T-5 backlog` for move T-5 ready; `dispatch T-9` for dispatch T-9 --plan; `review-run T-5` for review-run T-5 with a different profile; `config set a.b 1` for value 2), reuse of one consumed line for a second action digest, and one input with two command lines authorizing two actions."
+        expected: "Only an exact canonical match binds; every other case refuses `instruction_mismatch` (or `instruction_consumed` for the reused line) before any effect and is eligible only for an exact-action confirmation; the two-line input yields exactly two receipts, one per line."
   - task: scratch-worktrees
-    write_scope: [crates/corral-ops/src/assistant, crates/corral-ops/src/cleanup_worktree.rs, crates/corral-ops/src/stats.rs, crates/corral/src/assistant_cmd.rs, crates/corral/src/doctor, packages/corral-pi/src/roles/assistant]
-    depends_on: [assistant-entry-guard, assistant-artifacts]
+    write_scope: [crates/corral-ops/src/assistant, crates/corral-ops/src/agent/ops/assistant.rs, crates/corral-ops/src/cleanup_worktree.rs, crates/corral-ops/src/stats.rs, crates/corral/src/assistant_cmd.rs, crates/corral/src/doctor, packages/corral-pi/src/roles/assistant]
+    depends_on: [assistant-entry-guard, assistant-artifacts, owner-authority]
     acceptance:
-      - scenario: "C8 and the promote half of C10; edit/write tools aimed at the main checkout or a task worktree."
-        expected: "Lifecycle, accounting and GC behave as C8; promotion files a task with the diff; the host refuses edits outside the session's scratch and artifact roots."
+      - scenario: "C8, C13 and the promote half of C10; edit/write tools aimed at the main checkout or a task worktree."
+        expected: "Lifecycle, accounting and GC behave as C8; shell discard removes only empty scratch and confirmed discard preserves work as C13; promotion files a task with the diff; the host refuses edits outside the session's scratch and artifact roots."
   - task: cowork-landing
     write_scope: [crates/corral-ops/src/assistant, crates/corral-core/src/model.rs, crates/corral-ops/src/review.rs, crates/corral-ops/src/stats.rs, docs/guide/assistants.md]
     depends_on: [scratch-worktrees, owner-authority]
@@ -183,7 +188,7 @@ verification:
 owner_decisions:
   - "OD1 `corral pi` default: recommend the assistant in a workspace and `--pm` for the PM (changes T-490's default; the launch prints which one opened)."
   - "OD2 Threat model: recommend accepting owner binding as a misattribution and audit guard now, with a hard boundary only once T-460's deferred sandbox idea exists; reject delaying owner actions until then."
-  - "OD3 Binding strength: recommend literal current-turn quote or host confirmation, with confirmation always for destructive actions; alternative is a confirmation for every owner action."
+  - "OD3 Binding strength: recommend a current-turn owner line that parses as the exact command, or a host confirmation of the exact action, with confirmation always for destructive actions; alternative is a confirmation for every owner action."
   - "OD4 PM wake for inbox items: recommend a native, deduplicated wake for a Pi-native PM and sweep-only for an OmO PM; alternative is sweep-only everywhere."
   - "OD5 Co-work record: recommend materializing a task at finish; alternative is a new non-task history entity read by every board, history and stats reader."
   - "OD6 Defaults: recommend assistant.max_live 4 (soft), assistant.scratch_max 8, scratch idle GC after 7 days with a diff artifact saved, owner-input binding limited to the current turn."
@@ -192,7 +197,10 @@ owner_decisions:
 
 # Plan: assistant sessions
 
-Status: revision 1 (2026-10-29), design for T-544. Implementation waits for owner acceptance
+Status: revision 2 (2026-10-29), design for T-544. Revision 2 answers review round 1:
+F1 binds the complete typed action and consumes each instruction once ("Binding");
+F2 limits shell discard to empty scratch and routes every other discard through the
+confirmed owner action ("Discard" under Scratch worktrees). Implementation waits for owner acceptance
 and for T-563 (capability-framework) to land; see "Members and waves".
 
 ## Problem
@@ -281,12 +289,12 @@ Trade-offs and rejected alternatives are listed under "Alternatives" below.
 
 ## Done scenarios
 
-The YAML acceptance list (C1 to C12) is canonical. In short: sessions open and resume
+The YAML acceptance list (C1 to C13) is canonical. In short: sessions open and resume
 without slots (C1, C12); reads and filing work and other mutations are refused with a
 route (C2); explicit owner instructions execute once with a receipt, and anything else is
 refused (C3 to C5); ambiguity and conflicts go to the PM or are reported (C6); the PM
 consumes and resolves inbox items without pane typing (C7); scratch worktrees are
-accounted and collected without losing work (C8); co-work lands through the normal path
+accounted, collected and discarded without losing work (C8, C13); co-work lands through the normal path
 and spikes never do (C9, C10); focus and transcripts are bounded (C11).
 
 ## Implementation
@@ -396,7 +404,9 @@ then applies `fn class(cmd: &Cmd) -> CommandClass`:
   pm readbacks, artifact list/show, lessons, events, `run transcript`, doctor, etc.
 - `File`: `new` (Idea or Backlog only; a Ready or dispatching target is refused), `idea` capture,
   `comment`, `artifact add --session <own>`, `pm inbox post|withdraw` (own items),
-  `assistant scratch new|list|discard|promote` and `assistant summary` (own session).
+  `assistant scratch new|list|promote` and `assistant summary` (own session), and
+  `assistant scratch discard` only for an **empty** own scratch (see Discard); a scratch with
+  work refuses `scratch_has_work` and names `corral_owner_action discard_scratch`.
 - `Refused`: everything else, with exit code 2 and
   `assistant_refused: <cmd> needs the owner; use corral_owner_action or corral pm inbox post`.
 
@@ -416,34 +426,58 @@ recovery notices, extension `sendUserMessage` and RPC prompts are never journale
 `event` op is not in the model's tool list.
 
 **Operation.** `corral_owner_action` maps to the new `AgentOp::OwnerAction`, allowed for
-the assistant role only. Payload: `{kind, target, args, expected_revision?, input, quote}`.
-`kind` is a closed `OwnerActionKind`:
+the assistant role only. Payload: `{kind, target, args, expected_revision?, input?, line?}`.
+`kind` is a closed `OwnerActionKind`. Each kind is defined as exactly one existing CLI
+command (or, for the assistant-only kinds, one new `corral assistant` subcommand), so
+its arguments are that command's clap arguments:
 
-| Class | Kinds |
+| Class | Kinds (CLI command) |
 |---|---|
-| Ordinary owner actions | approve (land), verdict, review-run, dispatch (incl. plan), queue/unqueue, move, plan accept/verdict/review, plan member-gate/add-member/move-member, config set (one key), park/unpark, cowork, finish |
-| Destructive (always confirmed) | discard (drop) a task, revert, force or keep-branch overrides, automation grant changes, discard of a scratch with unlanded commits, any tag or release push |
+| Ordinary owner actions | approve (`approve`), verdict (`verdict`), review-run (`review-run`), dispatch (`dispatch`, incl. `--plan`), queue and unqueue (`queue`), move (`move`), park and unpark, plan accept/verdict/review (`plan ...`), plan member-gate/add-member/move-member, config set (`config set`, one key), cowork and finish (`assistant scratch cowork|finish`) |
+| Destructive (always confirmed) | discard a task (`discard`), revert (`revert`), keep-branch or force-style overrides, automation grant changes (`automation ...`), discard_scratch for a scratch with any work (`assistant scratch discard`), any tag or release push |
 
 Anything not in the enum is refused `unsupported_action` and the assistant routes it.
 
+**Canonical action and digest.** Rust parses the payload into the kind's typed command
+with clap defaults made explicit, then renders one canonical command line from it. The
+**action digest** is the SHA-256 of `{kind, target, every effect-changing argument}`. Guard
+fields that can only narrow the effect (`expected_revision`) are excluded from the digest
+but recorded in the receipt. The same renderer produces the confirmation text, so the
+owner always sees the exact command that will run.
+
 **Binding.** Rust accepts one of:
 
-1. *Literal*: `input` names a journaled owner input of the **current turn** (opened since
-   the model last went idle), `quote` is an exact substring of its text, and the quote
-   contains the target ID; for `config set` it also contains the key and the value.
-2. *Confirmed*: the host renders a confirmation for the exact action (command line and,
-   for finish, diffstat and review choice) through Pi's UI. The owner's answer is itself
-   journaled as an owner input of kind `confirmation` bound to the action digest.
+1. *Command line*: `input` names a journaled owner input of the **current turn** (opened
+   since the model last went idle) and `line` one of its lines. That whole line, trimmed,
+   must parse with the CLI's own clap grammar as exactly one command of this kind, either
+   as `corral <command> ...` or without the `corral` prefix (`approve T-5`). The parsed
+   command is canonicalized the same way, and its action digest must **equal** the
+   payload's. Prose never binds: `show T-5` parses as a read, `do not approve T-5` and
+   `should I approve T-5?` do not parse, and `move T-5 backlog` has a different digest
+   from `move T-5 ready`. All of these refuse `instruction_mismatch`.
+2. *Confirmed*: for any natural-language request (or a failed command-line binding) the
+   model asks the host to confirm; the host renders the canonical command line (plus, for
+   finish, cowork and discard_scratch, the diffstat including uncommitted and untracked
+   counts, and for finish the review choice) through Pi's UI. The owner's answer is
+   journaled as an owner input of kind `confirmation` carrying that action digest, and
+   binds only that digest.
 
 Destructive kinds need (2) even when (1) holds. Failures: `not_owner_input`,
-`turn_closed`, `instruction_unbound` (the host then offers a confirmation instead),
-`declined`. One action per binding: the receipt key is `(input id, action digest)`, so a
-replay returns the first receipt and a second target needs its own words or confirmation.
+`turn_closed`, `instruction_mismatch`, `instruction_consumed`, `declined`.
+
+**One action per instruction.** An instruction is one `(input id, line)` or one
+confirmation. Under the board writer lock, the first `owner_action` that binds an
+instruction writes a consumption record `instruction -> action digest` in the container
+before any effect. A later call on the same instruction with the **same** digest returns
+the first receipt (idempotent replay, also after a crash); a **different** digest refuses
+`instruction_consumed`. Two actions therefore need two command lines or two
+confirmations, and a confirmation for one action can never authorize another.
 
 **Execution.** Rust executes through the same ops function as the CLI command, with a new
 `OwnerAuthority::ViaAssistant(receipt)` argument accepted by the owner guards in place of
 the shell check. Events are attributed actor `owner`, via `assistant:A-<n>`, and carry
-`owner_authority {session, generation, input, sha256, quote, binding}`. Each action
+`owner_authority {session, generation, input, line, sha256, canonical_command,
+action_digest, binding}`. Each action
 re-reads current state under the same locks (task lock, `autopilot-<id>`, landing lock)
 and refuses:
 
@@ -510,6 +544,17 @@ and refuses `scratch_cap` above `assistant.scratch_max` (OD6, default 8 per work
 
 **Kinds.** New scratch is a `spike`. The owner-bound `cowork` action (confirmation shows the
 diffstat) marks it co-work; only co-work scratch can finish.
+
+**Discard.** A scratch has *work* when it has any commit beyond its recorded base, any
+tracked modification (staged or not) or any untracked, non-ignored file; corral checks
+this under the session lock at execution, not from a cached measurement. From the
+assistant's shell, `corral assistant scratch discard <slug>` removes only a scratch
+without work; otherwise it refuses `scratch_has_work` and changes nothing. Removing a
+scratch with work is the destructive `discard_scratch` owner action, always confirmed
+with the diffstat; on yes, corral first saves the committed range and a patch of tracked
+and untracked changes as a `diff` artifact on the session, and only then removes the
+worktree and branch. A save failure aborts the removal. The owner-only GC below keeps its
+own classification and the same preservation rule.
 
 **Accounting.** `corral stats --storage` adds per-scratch bytes measured by a bounded walk
 that skips the shared Cargo target and records `node_modules`-like trees separately; the
@@ -582,12 +627,13 @@ plan scope cannot name an existing task (the same handoff pattern T-460 used for
 | 1 | assistant-artifacts | backend | m | assistant-sessions |
 | 2 | pm-inbox | backend | l | assistant-entry-guard, assistant-launch |
 | 3 | owner-authority | backend | l | assistant-launch, assistant-entry-guard, pm-inbox |
-| 4 | scratch-worktrees | backend | l | assistant-entry-guard, assistant-artifacts |
+| 4 | scratch-worktrees | backend | l | assistant-entry-guard, assistant-artifacts, owner-authority |
 | 4 | cowork-landing | backend | l | scratch-worktrees, owner-authority |
 | 5 | task-focus-transcripts | backend | m | assistant-launch |
 | 6 | assistant-board | ui | m | pm-inbox, cowork-landing, task-focus-transcripts |
 
-scratch-worktrees and task-focus-transcripts can start as soon as wave 1 lands. Each
+task-focus-transcripts can start as soon as wave 1 lands; scratch-worktrees waits for
+owner-authority because its destructive discard is an owner action. Each
 member documents its own surface in `docs/guide/assistants.md` (new) or the guide it
 changes; T-490's `corral pi` section changes in assistant-launch.
 
