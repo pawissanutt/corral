@@ -169,3 +169,96 @@ fn classification_never_claims_not_executed_without_proof() {
         assert_eq!(class, ResumeClass::InterruptedNoEffect);
     }
 }
+
+#[test]
+fn hook_attribution_makes_possibly_affected_reads_and_unfinished_hooks_unknown() {
+    // Given a lost generation whose session recorded hooks around reads and at turn ends.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hooks.jsonl");
+    let hook = |invocation: &str, phase: &str, call: Option<&str>, turn: u64, state: &str| {
+        json!({"type":"custom", "customType": interrupted::HOOK_ENTRY, "data": {
+            "invocation": invocation, "phase": phase, "hook": "touch", "tool_call_id": call,
+            "turn": turn, "state": state}})
+    };
+    let call = |id: &str, name: &str| {
+        json!({"type":"message", "message":{"role":"assistant",
+        "content":[{"type":"toolCall","id":id,"name":name}]}})
+    };
+    let result =
+        |id: &str| json!({"type":"message", "message":{"role":"toolResult","toolCallId":id}});
+    let entries = [
+        json!({"type":"custom", "customType":"corral_host_bound",
+            "data":{"generation":1,"session_id":"s","bind_nonce_sha256":"bind"}}),
+        call("done-read", "read"),
+        hook("hk-1-1", "pre_tool", Some("done-read"), 1, "prepared"),
+        hook("hk-1-1", "pre_tool", Some("done-read"), 1, "completed"),
+        result("done-read"),
+        hook("hk-1-2", "turn_end", None, 1, "started"),
+        hook("hk-1-2", "turn_end", None, 1, "completed"),
+        call("hooked-read", "read"),
+        hook("hk-1-3", "pre_tool", Some("hooked-read"), 2, "started"),
+        call("plain-read", "grep"),
+        call("edit-call", "edit"),
+        call("todo", "corral_todo"),
+        hook("hk-1-4", "turn_end", None, 2, "started"),
+    ];
+    std::fs::write(
+        &path,
+        entries.iter().map(|e| format!("{e}\n")).collect::<String>(),
+    )
+    .unwrap();
+    // When the scan runs, then completed hooks of finished calls and turns are pruned.
+    let scan = interrupted::dangling_calls(&path, 1, "s", "bind").unwrap();
+    let invocations: Vec<&str> = scan.hooks.iter().map(|h| h.invocation.as_str()).collect();
+    assert_eq!(invocations, ["hk-1-3", "hk-1-4"]);
+    // And a recorded hook makes its read unknown; a read no hook recorded or wraps stays no-effect.
+    let settings = corral_core::agent::HookSettings {
+        pre_tool: vec![corral_core::agent::HookCommand {
+            name: "touch".into(),
+            argv: vec!["touch".into()],
+            tools: vec!["read".into()],
+        }],
+        ..Default::default()
+    };
+    let classify = |id: &str, settings| {
+        let call = scan.calls.iter().find(|c| c.id == id).unwrap();
+        interrupted::classify_local(call, (Some("saved.diff"), &scan.hooks, settings))
+    };
+    let (class, detail) = classify("hooked-read", None);
+    assert_eq!(class, ResumeClass::OutcomeUnknown);
+    let detail = detail.unwrap();
+    assert!(detail.contains("hk-1-3 (pre_tool touch, started)") && detail.contains("saved.diff"));
+    assert_eq!(
+        classify("plain-read", None),
+        (ResumeClass::InterruptedNoEffect, None)
+    );
+    assert_eq!(
+        classify("plain-read", Some(&settings)).0,
+        ResumeClass::InterruptedNoEffect
+    );
+    // And configured hooks that wrap a tool make it unknown even without a surviving record.
+    let wrapped = interrupted::DanglingCall {
+        id: "lost".into(),
+        name: "read".into(),
+    };
+    let (class, detail) =
+        interrupted::classify_local(&wrapped, (None, &scan.hooks, Some(&settings)));
+    assert_eq!(class, ResumeClass::OutcomeUnknown);
+    assert!(detail.unwrap().contains("may have run"));
+    assert_eq!(classify("edit-call", None).0, ResumeClass::OutcomeUnknown);
+    // And the interrupted turn-end hook is reported unknown by invocation, never as a replay.
+    let unfinished = interrupted::unfinished_hooks(&scan);
+    assert_eq!(unfinished.len(), 1);
+    assert_eq!(unfinished[0].tool_call_id, "hk-1-4");
+    assert_eq!(unfinished[0].tool, "hook:turn_end:touch");
+    assert_eq!(unfinished[0].class, ResumeClass::OutcomeUnknown);
+    let note = unfinished[0].detail.as_deref().unwrap();
+    assert!(note.contains("for turn 2") && note.contains("does not replay"));
+    // And Corral calls are never hook-attributed: no hook names them, so receipts decide.
+    assert!(
+        scan.hooks
+            .iter()
+            .all(|h| h.tool_call_id.as_deref() != Some("todo"))
+    );
+    assert!(!settings.wraps("corral_todo"));
+}

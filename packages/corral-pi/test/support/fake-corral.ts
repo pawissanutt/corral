@@ -31,7 +31,9 @@ if (existsSync(fail)) { process.stderr.write("fake corral refused\\n"); process.
 const envelope = JSON.parse(stdin);
 process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_id, op: envelope.op,
   payload_sha256: envelope.payload_sha256, identity: envelope.identity, state: "committed",
-  result: { op: envelope.op }, at: new Date().toISOString() }) + "\\n");
+  result: { op: envelope.op, ...(envelope.op === "ask"
+    ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q1" } : {}) },
+  at: new Date().toISOString() }) + "\\n");
 `;
 
 export function writeFakeCorral(dir: string): FakeCorral {

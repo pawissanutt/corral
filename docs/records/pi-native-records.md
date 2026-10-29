@@ -155,10 +155,35 @@ open them with an older binary.
 
 `ResumeClass` is one of `result`, `rejected`, `prepared`, `in_progress`, `outcome_unknown`,
 `not_committed`, `not_executed` and `interrupted_no_effect`; only upstream read, grep, find
-and ls take `interrupted_no_effect`. `InterruptedCall` is
-`{tool_call_id, tool, request_id?, class, detail?}`. Both reach a new generation inside one
+and ls take `interrupted_no_effect`, and none of them does when a hook ran or may have
+run around it (below). `InterruptedCall` is
+`{tool_call_id, tool, request_id?, class, detail?}`. An unfinished hook is reported as one
+with `tool_call_id` = its invocation ID and `tool` = `hook:<phase>:<name>`. Both reach a new generation inside one
 `recovery_notice` inbox message and are never written into a Pi session file. Storage class:
 canonical as inbox message content. Shape: request-receipts. Writer: recovery.
+
+### `corral_hook` session entry (T-572)
+
+A Pi custom entry the worker host appends to its bound session file before launching a
+configured hook, then once it has started and once it has completed. Storage class:
+recovery-critical, in the container's session file (`paths::container_sessions_dir`), read
+by recovery with the same byte bounds as tool calls and never written by corral.
+
+| Field | Type | Bound / notes |
+|---|---|---|
+| `invocation` | string | `hk-<generation>-<seq>`, ≤ 128 |
+| `phase` | `pre_tool` \| `post_tool` \| `turn_end` | |
+| `hook` | string | the configured name, ≤ 64 |
+| `state` | `prepared` \| `started` \| `completed` | `prepared` is written before the process is spawned |
+| `tool`, `tool_call_id` | string? | pre/post hooks: the wrapped top-level call |
+| `turn` | u64? | the host turn |
+| `pid`, `exit_code`, `signal`, `timed_out`, `error` | | `started` / `completed` details |
+
+After the generation's binding marker, recovery keeps the records of calls still without a
+result and every invocation that never completed (at most 256, else scan limit `hooks`).
+A recorded hook, or a pre/post hook in the lost generation's `hooks` snapshot settings that
+wraps the tool, makes that call `outcome_unknown`; unfinished hooks are listed
+`outcome_unknown`. Nothing is replayed.
 
 ### AgentTurn, TurnOrigin, TurnClass
 

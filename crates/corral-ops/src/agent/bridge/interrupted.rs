@@ -6,13 +6,19 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::agent::{ReceiptState, RequestReceipt, ResumeClass};
+use corral_core::agent::{
+    HookSettings, InterruptedCall, ReceiptState, RequestReceipt, ResumeClass,
+};
 use serde::Serialize;
 use serde_json::Value;
 
 const SESSION_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const LINE_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const CALLS_MAX: usize = 256;
+const HOOKS_MAX: usize = 256;
+/// The custom session entry the host appends before, at and after each hook launch (T-572).
+pub const HOOK_ENTRY: &str = "corral_hook";
+const HOOK_PHASES: [&str; 3] = ["pre_tool", "post_tool", "turn_end"];
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
 const TWO_PHASE: [&str; 3] = ["gate", "capture", "reply"];
@@ -55,6 +61,7 @@ pub enum ScanLimit {
     LineBytes,
     SessionBytes,
     Calls,
+    Hooks,
     GenerationBoundary,
 }
 
@@ -64,6 +71,7 @@ impl ScanLimit {
             Self::LineBytes => "a line was skipped at the line byte limit",
             Self::SessionBytes => "the scan stopped at the session byte limit",
             Self::Calls => "calls were omitted at the call limit",
+            Self::Hooks => "hook records were omitted at the hook limit",
             Self::GenerationBoundary => {
                 "legacy session has no generation boundary; unmatched calls may belong to older generations"
             }
@@ -71,11 +79,77 @@ impl ScanLimit {
     }
 }
 
+/// One hook invocation the host recorded in the bound session before launching it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookRecord {
+    pub invocation: String,
+    pub phase: String,
+    pub hook: String,
+    pub tool_call_id: Option<String>,
+    pub turn: Option<u64>,
+    pub state: String,
+}
+
+impl HookRecord {
+    fn parse(data: &Value) -> Option<Self> {
+        let text = |key: &str, max: usize| {
+            data[key]
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= max)
+                .map(str::to_owned)
+        };
+        let phase = text("phase", 16).filter(|phase| HOOK_PHASES.contains(&phase.as_str()))?;
+        let state = text("state", 16)
+            .filter(|state| ["prepared", "started", "completed"].contains(&state.as_str()))?;
+        Some(Self {
+            invocation: text("invocation", 128)?,
+            phase,
+            hook: text("hook", 64)?,
+            tool_call_id: text("tool_call_id", 512),
+            turn: data["turn"].as_u64(),
+            state,
+        })
+    }
+
+    fn completed(&self) -> bool {
+        self.state == "completed"
+    }
+
+    fn reference(&self) -> String {
+        format!(
+            "{} ({} {}, {})",
+            self.invocation, self.phase, self.hook, self.state
+        )
+    }
+}
+
 /// Observed unmatched calls; bounds may have hidden additional calls or their results.
+/// `hooks` holds the invocations of open calls and every hook that never completed.
 #[derive(Debug, Default)]
 pub struct DanglingScan {
     pub calls: Vec<DanglingCall>,
     pub limits: Vec<ScanLimit>,
+    pub hooks: Vec<HookRecord>,
+}
+
+fn observe_hook(hooks: &mut Vec<HookRecord>, limits: &mut Vec<ScanLimit>, data: &Value) {
+    let Some(record) = HookRecord::parse(data) else {
+        return;
+    };
+    let finished_turn_hook = record.completed() && record.tool_call_id.is_none();
+    match hooks.iter().position(|h| h.invocation == record.invocation) {
+        Some(at) if finished_turn_hook => {
+            hooks.remove(at);
+        }
+        Some(at) => hooks[at] = record,
+        None if finished_turn_hook => {}
+        None if hooks.len() < HOOKS_MAX => hooks.push(record),
+        None => {
+            if !limits.contains(&ScanLimit::Hooks) {
+                limits.push(ScanLimit::Hooks);
+            }
+        }
+    }
 }
 
 fn skip_line(reader: &mut impl BufRead) -> Result<()> {
@@ -124,6 +198,7 @@ pub fn dangling_calls(
     let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES));
     let mut limits = Vec::new();
     let mut open: Vec<DanglingCall> = Vec::new();
+    let mut hooks: Vec<HookRecord> = Vec::new();
     let mut active = true; // Conservative legacy scan until the first binding marker.
     let mut saw_marker = false;
     let mut found_generation = false;
@@ -161,6 +236,11 @@ pub fn dangling_calls(
             found_generation |= matches;
             active = matches;
             open.clear();
+            hooks.clear();
+            continue;
+        }
+        if active && entry["type"] == "custom" && entry["customType"] == HOOK_ENTRY {
+            observe_hook(&mut hooks, &mut limits, &entry["data"]);
             continue;
         }
         if !active || entry["type"] != "message" {
@@ -186,6 +266,7 @@ pub fn dangling_calls(
             Some("toolResult") => {
                 if let Some(id) = message["toolCallId"].as_str() {
                     open.retain(|c| c.id != id);
+                    hooks.retain(|h| !h.completed() || h.tool_call_id.as_deref() != Some(id));
                 }
             }
             _ => {}
@@ -205,9 +286,16 @@ pub fn dangling_calls(
     {
         limits.push(ScanLimit::SessionBytes);
     }
+    hooks.retain(|h| {
+        !h.completed()
+            || h.tool_call_id
+                .as_ref()
+                .is_some_and(|id| open.iter().any(|c| &c.id == id))
+    });
     Ok(DanglingScan {
         calls: open,
         limits,
+        hooks,
     })
 }
 
@@ -318,6 +406,81 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
             Some(format!("unknown tool; {detail}")),
         )
     }
+}
+
+/// `classify_upstream` with the hook overlay: a hook recorded around the call, or a configured
+/// pre/post-tool hook of the lost generation that wraps it, may have changed the worktree, so
+/// even a read is `outcome_unknown`. Hook scripts are never replayed.
+pub fn classify_local(
+    call: &DanglingCall,
+    (snapshot, hooks, settings): (Option<&str>, &[HookRecord], Option<&HookSettings>),
+) -> (ResumeClass, Option<String>) {
+    let (class, detail) = classify_upstream(&call.name, snapshot);
+    let attributed: Vec<String> = hooks
+        .iter()
+        .filter(|hook| hook.tool_call_id.as_deref() == Some(call.id.as_str()))
+        .map(HookRecord::reference)
+        .collect();
+    if attributed.is_empty() && !settings.is_some_and(|hooks| hooks.wraps(&call.name)) {
+        return (class, detail);
+    }
+    let note = if attributed.is_empty() {
+        "a configured pre/post-tool hook may have run around it".to_owned()
+    } else {
+        format!(
+            "hook invocations {} ran around it; corral does not replay hook scripts",
+            attributed.join(", ")
+        )
+    };
+    let detail = match detail {
+        Some(detail) => format!("{detail}; {note}"),
+        None => match snapshot {
+            Some(snapshot) => format!("{note}; the worktree may have changed; see {snapshot}"),
+            None => format!("{note}; the worktree may have changed"),
+        },
+    };
+    (ResumeClass::OutcomeUnknown, Some(bounded(detail)))
+}
+
+/// Whether recovery should cite a worktree snapshot: a mutating call, a recorded hook, or a call
+/// a configured hook of the lost generation wraps.
+pub fn needs_snapshot(scan: &DanglingScan, hooks: Option<&HookSettings>) -> bool {
+    !scan.hooks.is_empty()
+        || scan.calls.iter().any(|call| {
+            MUTATING.contains(&call.name.as_str()) || hooks.is_some_and(|h| h.wraps(&call.name))
+        })
+}
+
+/// Hooks that never completed and belong to no open call (turn-end hooks, or hooks around a
+/// call that has a result): each is reported `outcome_unknown` under its invocation ID.
+pub fn unfinished_hooks(scan: &DanglingScan) -> Vec<InterruptedCall> {
+    scan.hooks
+        .iter()
+        .filter(|hook| {
+            !hook
+                .tool_call_id
+                .as_ref()
+                .is_some_and(|id| scan.calls.iter().any(|call| &call.id == id))
+        })
+        .map(|hook| {
+            let around = match (&hook.tool_call_id, hook.turn) {
+                (Some(id), _) => format!(" around tool call {id}"),
+                (None, Some(turn)) => format!(" for turn {turn}"),
+                (None, None) => String::new(),
+            };
+            InterruptedCall {
+                tool_call_id: hook.invocation.clone(),
+                tool: format!("hook:{}:{}", hook.phase, hook.hook),
+                request_id: None,
+                class: ResumeClass::OutcomeUnknown,
+                detail: Some(bounded(format!(
+                    "{} hook {} was {}{around} and did not complete; its effects are unknown and \
+                     corral does not replay hook scripts",
+                    hook.phase, hook.hook, hook.state
+                ))),
+            }
+        })
+        .collect()
 }
 
 pub fn update_body(receipt: &RequestReceipt, class: ResumeClass, detail: &str) -> String {

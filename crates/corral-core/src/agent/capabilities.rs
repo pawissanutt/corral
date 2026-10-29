@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::AgentRole;
+use super::local_controls::{bash_rule_settings, hook_settings};
 use super::paths::sha256_hex;
 use crate::config::agent_capabilities::{compaction_settings, skill_settings, template_settings};
 
@@ -105,7 +106,35 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: None,
     },
+    CapabilityDef {
+        key: "hooks",
+        summary: "configured pre/post-tool and turn-end argv hooks",
+        defaults: hooks_defaults,
+        host: true,
+        settings: Some(hook_settings),
+    },
+    CapabilityDef {
+        key: "bash_rules",
+        summary: "bash allow/ask/deny command rules",
+        defaults: bash_rules_defaults,
+        host: true,
+        settings: Some(bash_rule_settings),
+    },
 ];
+
+fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker => Some([false, false, true]),
+        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+    }
+}
+
+fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker | AgentRole::Reviewer => Some([false, false, true]),
+        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+    }
+}
 
 fn optional_text(_: AgentRole) -> Option<[bool; 3]> {
     Some([false, true, true])

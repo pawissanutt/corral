@@ -9,12 +9,14 @@ import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts
 import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
+import { parseControls } from "./tool-controls.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search",
+  "hooks", "bash_rules",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -178,6 +180,11 @@ export function parseLaunchMessage(text: string): HostConfig {
     throw new LaunchMessageInvalid("web.enabled is not available to the pm role");
   }
   const guidance = capabilityGuidance(message.capabilities);
+  try {
+    parseControls(role as Role, capabilities?.enabled ?? [], guidance?.settings);
+  } catch (error) {
+    throw new LaunchMessageInvalid(error instanceof Error ? error.message : String(error));
+  }
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {
