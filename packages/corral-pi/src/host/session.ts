@@ -37,6 +37,7 @@ import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts"
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
+import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { webTools } from "../extensions/web/index.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
@@ -262,6 +263,12 @@ export class HostSession {
     if (webEnabled && (options.identity.role === "pm" || !options.network.web || !options.capabilities?.web)) {
       throw new Error("module_invalid: web.enabled needs an eligible role and its generation-bound web transport");
     }
+    let browser: ReturnType<typeof browserSettings>;
+    try {
+      browser = browserSettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+    } catch (error) {
+      throw new Error(`module_invalid: ${error instanceof Error ? error.message : error}`);
+    }
     const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
       ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
     if (lspEnabled && options.identity.role !== "worker" && options.identity.role !== "pm") {
@@ -270,7 +277,8 @@ export class HostSession {
     this.jobs = this.jobRuntime();
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
-      ...(this.jobs ? jobTools(this.jobs) : [])];
+      ...(this.jobs ? jobTools(this.jobs) : []),
+      ...(browser ? browserTools(browser, { cwd: options.cwd }) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {

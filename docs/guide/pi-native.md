@@ -92,6 +92,7 @@ error. The catalog today, as strict / standard / full:
 | `bash_rules` | worker off / off / on; not available to PM | reviewer off / off / on; not available to planning roles |
 | `background_shell` | worker off / on / on; not available to PM | not available |
 | `role_enabled` | not available | planner and plan reviewer off / on / on; not available to reviewer |
+| `browser` | worker off / on / on; not available to PM | not available |
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -400,6 +401,37 @@ to that question choosing `allow`, the identical command runs once; it is decide
 from the start, so a deny rule still wins. The PM cannot answer permission questions, and
 a correction to another option revokes an unused grant. Grants live in the host process:
 after recovery, ask again.
+
+### Browser
+
+Workers get `browser_navigate` and `browser_screenshot` under standard and full. They load
+only a top-level target the generation allows: an exact configured dev origin, or an `.html`/
+`.htm` file inside the worktree (a relative or absolute path or a `file:` URL; symlinks may not
+leave the worktree). Data, `javascript:`, other schemes and unconfigured origins are refused
+before any browser starts:
+
+```toml
+[agent.capabilities.worker.browser]
+origins = ["http://127.0.0.1:5173"]   # default []: worktree HTML only; scheme://host[:port], no path
+timeout_ms = 30000                    # default; per call, 1..600000
+# executable = "/usr/bin/chromium"    # default: google-chrome, chromium or chrome on PATH
+```
+
+Each call starts one headless Chrome or Chromium with a fresh temporary profile and HOME, so
+no owner cookies, logins or extensions are visible and nothing carries over between calls.
+It waits for the page's load event, then checks the URL it landed on: a redirect or scripted
+navigation to a target outside the allowed set fails the call without returning the page.
+`browser_navigate` returns the final URL, title and visible text (64 KiB, with `truncated`).
+`browser_screenshot` returns a PNG inline (optional `width`, `height`, `full_page`); with
+`save_as` (a worktree-relative `.png` path) it also writes the file, ready for
+`corral artifact add`. Nothing is uploaded.
+
+Only the top-level document is checked. Page scripts run, and their subrequests are neither
+intercepted nor routed through the in-process network guard; like bash, the browser
+subprocess's network is outside it. The browser speaks DevTools over a private pipe: a
+finished, failed, timed-out or cancelled call kills its process group, waits for the exit
+and removes the profile, and if the host dies the pipe closes and the browser exits. An
+interrupted browser call is `outcome_unknown`; it is never replayed.
 
 ### Todo progress
 
@@ -1121,6 +1153,7 @@ resumes the PM's host in its saved pane, retaining its project scope and durable
    | `read`, `grep`, `find`, `ls` | `interrupted_no_effect`, unless a hook ran or may have run around it: then `outcome_unknown` naming the hook invocations |
    | LSP tools | `outcome_unknown`: a language server subprocess may have started or acted, even for built-in servers |
    | a hook that never completed (`hook:<phase>:<name>`) | `outcome_unknown`; hook scripts are never replayed |
+   | `browser_navigate`, `browser_screenshot` | `outcome_unknown`; page scripts may have sent requests, and nothing is replayed |
 
    A definitely unsubmitted gate or reviewer preparation whose candidate changed (for
    example, after a rebase) is superseded on the next admission. Its complete preparation

@@ -625,3 +625,56 @@ fn background_shell_is_worker_only_with_recorded_bounds() {
         );
     }
 }
+
+#[test]
+fn browser_is_worker_only_and_records_validated_origins() {
+    // Given the default standard preset and an explicit worker browser table.
+    let standard = AgentCapabilities::default().resolve(AgentRole::Worker, None);
+    let text = "[worker.browser]\norigins = ['http://127.0.0.1:5173/', 'HTTPS://Dev.Example:8443', \
+                'http://127.0.0.1:5173']\ntimeout_ms = 900\nexecutable = '/usr/bin/chromium'";
+    let config: AgentCapabilities = toml::from_str(text).unwrap();
+    // When roles resolve.
+    let worker = config.resolve(AgentRole::Worker, None);
+    // Then standard enables it with no origins, and explicit origins are canonical and sorted.
+    assert!(standard.enabled("browser"));
+    assert_eq!(
+        serde_json::to_value(&standard.features["browser"].settings).unwrap(),
+        serde_json::json!({"origins": [], "timeout_ms": 30000})
+    );
+    assert_eq!(
+        serde_json::to_value(&worker.features["browser"].settings).unwrap(),
+        serde_json::json!({
+            "origins": ["http://127.0.0.1:5173", "https://dev.example:8443"],
+            "timeout_ms": 900, "executable": "/usr/bin/chromium",
+        })
+    );
+    let mut strict = AgentCapabilities::default();
+    strict.set_preset(Preset::Strict);
+    assert!(!strict.resolve(AgentRole::Worker, None).enabled("browser"));
+    for role in [
+        AgentRole::Reviewer,
+        AgentRole::Pm,
+        AgentRole::Planner,
+        AgentRole::PlanReviewer,
+    ] {
+        assert!(!config.resolve(role, None).features.contains_key("browser"));
+    }
+    // And other roles, paths, credentials, non-HTTP schemes and bad values are refused.
+    for invalid in [
+        "[reviewer]\nbrowser = true",
+        "[pm.browser]\nenabled = true",
+        "[worker.browser]\norigins = ['http://localhost:3000/app']",
+        "[worker.browser]\norigins = ['http://localhost:3000?x=1']",
+        "[worker.browser]\norigins = ['http://user:pw@localhost:3000']",
+        "[worker.browser]\norigins = ['file:///tmp']",
+        "[worker.browser]\norigins = ['http://localhost:99999']",
+        "[worker.browser]\ntimeout_ms = 0",
+        "[worker.browser]\nexecutable = 'chromium'",
+        "[worker.browser]\nprofile = '/home/owner/.config/google-chrome'",
+    ] {
+        assert!(
+            toml::from_str::<AgentCapabilities>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}

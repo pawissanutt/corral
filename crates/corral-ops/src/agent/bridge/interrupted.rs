@@ -416,6 +416,12 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
             ResumeClass::OutcomeUnknown,
             Some("the MCP connection may have started or the server may have acted; reconcile before retrying".into()),
         )
+    } else if tool.starts_with("browser_") {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some("the browser may have loaded the page and run its scripts, which can send requests; \
+                  its subprocess exits with the host and nothing is replayed".into()),
+        )
     } else if MUTATING.contains(&tool) {
         (ResumeClass::OutcomeUnknown, Some(detail))
     } else {

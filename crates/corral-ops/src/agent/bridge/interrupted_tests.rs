@@ -262,3 +262,17 @@ fn hook_attribution_makes_possibly_affected_reads_and_unfinished_hooks_unknown()
     );
     assert!(!settings.wraps("corral_todo"));
 }
+
+#[test]
+fn interrupted_browser_calls_are_outcome_unknown() {
+    // Given browser navigation and screenshot calls lost with their host.
+    for tool in ["browser_navigate", "browser_screenshot"] {
+        // When classifying them, with or without a worktree snapshot.
+        for snapshot in [None, Some("saved.diff")] {
+            let (class, detail) = interrupted::classify_upstream(tool, snapshot);
+            // Then page scripts may have acted, so no outcome is claimed and nothing replays.
+            assert_eq!(class, ResumeClass::OutcomeUnknown, "{tool}");
+            assert!(detail.unwrap().contains("nothing is replayed"));
+        }
+    }
+}
