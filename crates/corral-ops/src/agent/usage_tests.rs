@@ -337,3 +337,49 @@ fn bedrock_models_price_from_the_bedrock_catalog_with_provenance() {
         assert_eq!(entry.price_source.as_deref(), Some(source));
     }
 }
+
+#[test]
+fn bedrock_million_token_session_prices_at_catalog_input_plus_output() {
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-bedrock-1m");
+    let session = host.sessions.join("session.jsonl");
+    std::fs::create_dir_all(&host.sessions).unwrap();
+    let model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    // Given a session whose only response used exactly 1,000,000 input and output tokens:
+    let (lines, responses) = fixture_lines();
+    let mut kept: Vec<String> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        if responses.contains(&i) && i != responses[0] {
+            continue;
+        }
+        let mut line = l.replace("gpt-6.1-sol", model);
+        if i == responses[0] {
+            let mut v: Value = serde_json::from_str(&line).unwrap();
+            v["message"]["usage"] = serde_json::json!({
+                "input": 1_000_000, "output": 1_000_000, "cacheRead": 0, "cacheWrite": 0,
+                "reasoning": 0, "totalTokens": 2_000_000,
+                "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0}
+            });
+            line = v.to_string();
+        }
+        kept.push(format!("{line}\n"));
+    }
+    std::fs::write(&session, kept.concat()).unwrap();
+    let run = task(&fx, &id).runs[0].clone();
+    let usage = collect(&run, &fx.ctx.store).unwrap();
+    // Then the totals are exact, and the estimate is catalog input plus output with provenance.
+    assert_eq!(tokens(&usage), [1_000_000, 1_000_000, 0, 0]);
+    assert!(
+        (usage.estimated_usd.unwrap() - 19.8).abs() < 1e-9,
+        "{usage:?}"
+    );
+    assert_eq!(usage.unpriced_tokens, 0);
+    assert!(!usage.entries.is_empty());
+    for entry in &usage.entries {
+        assert_eq!(
+            entry.price_source.as_deref(),
+            Some("catalog-bedrock@pi-ai-1.3.0")
+        );
+    }
+}
