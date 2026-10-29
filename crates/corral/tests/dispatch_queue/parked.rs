@@ -44,9 +44,24 @@ fn park(f: &Fixture, id: &str, on: &str) {
 }
 
 fn wake(f: &Fixture, id: &str) -> std::process::Output {
+    // Derive the observation from the registration the subprocess recorded, not the wall clock.
+    let registered = f
+        .ctx
+        .store
+        .get(id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .obligations
+        .waits
+        .iter()
+        .find(|w| w.request.id == "landing")
+        .unwrap()
+        .registered_at;
     let receipt = json!({
         "version": 1, "id": "landed", "run": "R1", "outcome": "ready",
-        "delivery": "acknowledged", "observed_at": jiff::Timestamp::now(), "answer": null,
+        "delivery": "acknowledged",
+        "observed_at": registered, "answer": null,
     });
     let file = json_file(f, &format!("receipt-{id}.json"), &receipt);
     f.ok(&["run", "resume", id, "--wait", "landing", "--file", &file])
