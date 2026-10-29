@@ -3,7 +3,8 @@
 // with the fixture provider scripted from a steps file, in the private plugin-free herdr server of
 // scripts/test-herdr.sh. Its kickoff asks a real question; the host is killed and explicitly
 // resumed; the owner's answer then reaches it through the bridge and inbox alone, and it reports
-// done. Nothing is ever typed into its pane.
+// done. A headless pi-native reviewer of that run then does the same and commits its verdict.
+// Nothing is ever typed into either pane.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +12,7 @@ import { join } from "node:path";
 import { connect } from "./support/bridge-client.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
+import { sha256Hex } from "../src/tools/corral.ts";
 import {
   EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
 } from "./support/workspace.ts";
@@ -27,8 +29,7 @@ const cli = (...args: string[]) => ok([corral, "--root", workspace, ...args], { 
 const show = (task: string): any => JSON.parse(cli("show", task, "--json"));
 const agentState = (): any => JSON.parse(cli("agent", "state", "T-001", "--json")).container;
 
-async function hostState(generation: number): Promise<any> {
-  const dir = generationDir(workspace, "T-001", "R1", generation);
+async function hostState(generation: number, dir = generationDir(workspace, "T-001", "R1", generation)): Promise<any> {
   const client = await connect(join(dir, "host.sock"));
   try {
     const cap = readFileSync(join(dir, "ctl.cap"), "utf8");
@@ -91,6 +92,7 @@ export default {
 };
 `);
   const config = join(workspace, ".corral/corral.toml");
+  // review-run has no --force, so the shared host's load must not hold this fixture's reviewer.
   writeFileSync(config, `${readFileSync(config, "utf8")}
 [profiles.pi]
 harness = "pi-native"
@@ -103,7 +105,11 @@ assets_dir = ${JSON.stringify(assets.dir)}
 
 [agent.capabilities.worker]
 headless = true
-`);
+
+[agent.capabilities.reviewer]
+headless = true
+`.replace("max_load_per_core = 1.0", "max_load_per_core = 1000.0")
+    .replace('min_mem_available = "8GB"', 'min_mem_available = "1KB"').replace('min_disk_free = "50GB"', 'min_disk_free = "1KB"'));
   cli("new", "Pi headless worker asks, resumes and completes", "-p", "app", "--ready");
   events = new EventFollower(join(workspace, ".corral/events.jsonl"));
 }, 900_000);
@@ -134,7 +140,8 @@ test("a headless worker asks, survives host loss through explicit resume and com
   expect([agentState().mode, agentState().generation]).toEqual(["headless", 1]);
   expect(cli("agent", "state", "T-001")).toContain("mode: headless");
   const live = await hostState(1);
-  expect([live.mode, live.interactive, live.capabilities.enabled]).toEqual(["headless", false, ["headless", "todo"]]);
+  expect([live.mode, live.interactive]).toEqual(["headless", false]);
+  expect(["headless", "todo"].every((key) => live.capabilities.enabled.includes(key))).toBeTrue();
   const screen = ok(["herdr", "--session", "corral-test", "pane", "read", pane, "--source", "recent"]);
   expect(screen).toContain("headless: no terminal input");
 
@@ -201,4 +208,97 @@ test("a headless worker asks, survives host loss through explicit resume and com
   const turns = finished.agent_host.turns.filter((turn: any) => turn.generation === 2);
   expect(turns.some((turn: any) => turn.origin.kind === "bridge" && turn.class === "completed")).toBeTrue();
   expect(finished.agent_host.turns.every((turn: any) => turn.origin.kind !== "owner_terminal")).toBeTrue();
+}, 600_000);
+
+/** `agent::launch::generation_dir` for the review child R1-review1 of T-001/R1. */
+function reviewDir(generation: number): string {
+  return join(generationDir(workspace, "T-001", "R1", 1), "..", "..",
+    sha256Hex("T-001_R1_rv-R1-review1").slice(0, 16), `g${generation}`);
+}
+
+test("a headless reviewer asks, survives host loss through explicit resume and commits its verdict", async () => {
+  if (!isolated) return;
+  // Given the worker's done run in Review and a headless pi-native reviewer whose kickoff asks:
+  expect(show("T-001").status).toBe("review");
+  writeFileSync(steps, JSON.stringify([
+    { toolCalls: [{ callId: "call_review_ask", name: "corral_ask", arguments: {
+      kind: "clarification", text: "Is the inbox adapter acceptable?", blocking: true, options: ["yes", "no"],
+    } }] },
+  ]));
+  const kickoff = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
+    && event.detail?.role === "reviewer");
+  cli("review-run", "T-001", "--reviewer", "pi");
+  await kickoff;
+  const child = () => show("T-001").runs.at(-1).review_runs.at(-1);
+  const review: string = child().id;
+  const pane: string = child().herdr.pane_id;
+  const first = child().agent_host.generations[0].bound;
+  const callback: string = child().agent_host.binding.callback;
+  const open = JSON.parse(cli("question", "list", "--task", "T-001", "--json")).map((q: any) => q.question)
+    .filter((q: any) => q.state === "open");
+  expect(open).toHaveLength(1);
+  const question = open[0];
+  expect(question.asked.session_id).toBe(first.session_id);
+
+  // Then state names headless mode for the review child and its pane shows only the log:
+  const state = (): any => JSON.parse(cli("agent", "state", "T-001", "--review", review, "--json")).container;
+  expect([state().role, state().mode, state().generation]).toEqual(["reviewer", "headless", 1]);
+  const live = await hostState(1, reviewDir(1));
+  expect([live.role, live.mode, live.interactive]).toEqual(["reviewer", "headless", false]);
+  expect(ok(["herdr", "--session", "corral-test", "pane", "read", pane, "--source", "recent"]))
+    .toContain("headless: no terminal input");
+
+  // When its host dies and the owner explicitly resumes the review child:
+  const exits = join(workspace, ".corral/state/launch-exits");
+  mkdirSync(exits, { recursive: true });
+  const exited = fileAppears(exits, `T-001-R1-${review}.exited`);
+  process.kill(first.pid, "SIGKILL");
+  await exited;
+  const lost = events!.next((event) => event.kind === "agent_lost" && event.task === "T-001"
+    && event.detail?.container === `T-001/R1/${review}`);
+  cli("sync");
+  expect((await lost).detail?.reason).toBe("host_exited");
+  const bound = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001"
+    && event.detail?.role === "reviewer" && event.detail?.generation === 2);
+  const resumed = JSON.parse(cli("agent", "resume", "T-001", "--review", review));
+  expect([resumed.fenced, resumed.generation, resumed.pane]).toEqual([1, 2, pane]);
+  await bound;
+  await within(hostState(2, reviewDir(2)), 30_000, "reviewer generation 2 to bind");
+
+  // Then generation 2 keeps the review child, callback, pane, transcript and headless mode:
+  const second = child().agent_host.generations[1];
+  expect([second.bound.session_file, second.bound.session_id, second.pane, child().agent_host.binding.callback])
+    .toEqual([first.session_file, first.session_id, pane, callback]);
+  expect(second.capability_transition ?? null).toBeNull();
+  expect([state().mode, state().generation]).toEqual(["headless", 2]);
+
+  // When the owner answers and sync delivers it (with the resume notice) by bridge:
+  writeFileSync(steps, JSON.stringify([
+    { toolCalls: [{ callId: "call_verdict", name: "corral_verdict", arguments: {
+      verdict: "approve", notes: "Approved after the owner's answer.",
+    } }] },
+  ]));
+  const answered = JSON.parse(cli("question", "answer", question.key, "--rev", String(question.revision),
+    "--text", "Yes, the inbox adapter is acceptable.", "--option", "yes", "--owner", "--json"));
+  expect(answered.delivery).toBe("queued");
+  const verdict = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
+    && event.detail?.role === "reviewer" && event.detail?.generation === 2, 120_000);
+  cli("sync");
+  await verdict;
+  cli("sync");
+
+  // Then the answer was observed from the bound transcript and the verdict committed from
+  // generation 2 under the same review child and callback, with no terminal-origin turn:
+  const [container, seq] = String(answered.message_id).split("#");
+  const inbox = join(workspace, ".corral/inbox", container ?? "");
+  const receipt = JSON.parse(readFileSync(join(inbox, `${String(seq).padStart(6, "0")}.receipt.observed.json`), "utf8"));
+  expect(receipt.via).toBe("pi_native");
+  const host = child().agent_host;
+  const committed = host.receipts.find((r: any) => r.op === "verdict");
+  expect([committed.state, committed.identity.generation, committed.identity.review, committed.identity.callback])
+    .toEqual(["committed", 2, review, callback]);
+  expect(host.turns.some((turn: any) => turn.generation === 2 && turn.origin.kind === "bridge"
+    && turn.class === "completed")).toBeTrue();
+  expect(host.turns.every((turn: any) => turn.origin.kind !== "owner_terminal")).toBeTrue();
+  expect(show("T-001").runs.at(-1).review.verdict).toBe("approve");
 }, 600_000);

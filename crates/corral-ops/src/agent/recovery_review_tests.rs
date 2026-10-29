@@ -139,6 +139,42 @@ fn a_lost_reviewer_waits_in_needs_me_for_resume_and_its_next_generation_is_admit
 }
 
 #[test]
+fn a_reviewer_host_exit_recorded_by_its_pane_wrapper_is_a_resumable_loss_not_a_closure() {
+    // Given a bound reviewer whose host is killed while its pane stays, and whose pane wrapper
+    // records the exit in the review child's launch-exit receipt:
+    let fx = f::fixture(false, 5);
+    let mut host = HostProc::spawn(true);
+    let (child, _) = reviewing(&fx, &host, Timestamp::now());
+    host.kill();
+    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1-R1-review1");
+    std::fs::create_dir_all(exit.parent().unwrap()).unwrap();
+    std::fs::write(&exit, "137\n").unwrap();
+
+    // When the agent hook and then a full sync (including the review slot reconcile) run:
+    sync(&fx);
+    crate::sync_at(&fx.ctx, Timestamp::now()).unwrap();
+
+    // Then the receipt became one host_exited loss and the review waits in Needs me for resume,
+    // its child open and its review neither released nor process_lost:
+    assert!(!exit.exists());
+    let lost = fx.events("agent_lost");
+    assert_eq!(lost.len(), 1);
+    assert_eq!(lost[0].detail["reason"], "host_exited");
+    assert!(fx.events("review_released").is_empty());
+    let task = fx.task();
+    assert_eq!(task.status, Status::NeedsMe);
+    let excerpt = task.runs[0].blocked_excerpt.clone().unwrap_or_default();
+    assert!(excerpt.starts_with(LOST_PREFIX), "{excerpt}");
+    assert!(!task.runs[0].review.as_ref().unwrap().process_lost);
+    assert_eq!(agent::container_closure(&task, &child), None);
+
+    // And the owner's explicit resume returns the task to Review with generation 2 opened:
+    resume(&fx, &child, false).unwrap();
+    assert_eq!(fx.task().status, Status::Review);
+    assert_eq!(state(&fx, &child).binding.generation, 2);
+}
+
+#[test]
 fn a_reviewer_whose_provider_authentication_fails_goes_to_the_owner() {
     // Given a healthy reviewer whose turn failed provider authentication:
     let fx = f::fixture(false, 5);
