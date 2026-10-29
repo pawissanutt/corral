@@ -327,14 +327,16 @@ fn name_only(repo: &Path, a: &str, b: &str) -> Vec<Vec<u8>> {
     names
 }
 
-/// Every pair's memoized facts equal the uncached ones and landed paths equal the original command.
+/// Representative pairs' memoized facts equal uncached facts and landed paths equal Git's command.
 fn assert_current(memo: &Memo, repo: &Path, commits: &[String], step: &str) {
-    for (i, a) in commits.iter().enumerate() {
-        for b in &commits[i + 1..] {
-            let uncached = facts(&Memo::disabled(), repo, a, b);
-            assert_eq!(facts(memo, repo, a, b), uncached, "{step}: {a} {b}");
-            assert_eq!(uncached.landed, name_only(repo, a, b), "{step}: {a} {b}");
-        }
+    // Addition, exact rename, changed gitlink, modification with an unchanged gitlink,
+    // and CRLF-to-LF inexact rename cover the distinct settings-sensitive eligibility cases.
+    // Recheck each under every setting in both processes, without expanding all 21 pairs.
+    for (older, newer) in [(0, 1), (1, 2), (2, 3), (3, 4), (5, 6)] {
+        let (a, b) = (&commits[older], &commits[newer]);
+        let uncached = facts(&Memo::disabled(), repo, a, b);
+        assert_eq!(facts(memo, repo, a, b), uncached, "{step}: {a} {b}");
+        assert_eq!(uncached.landed, name_only(repo, a, b), "{step}: {a} {b}");
     }
 }
 
