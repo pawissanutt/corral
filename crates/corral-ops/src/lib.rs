@@ -221,7 +221,7 @@ pub use pm_policy::{pm_policy_health, reconcile_pm_policy};
 pub use pm_questions::set_transcript_settle_window;
 pub use pm_workset::{
     OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
-    ScopedProgress, pm_act, pm_workset, pm_workset_with_policy,
+    ScopedProgress, pm_act, pm_workset, pm_workset_with_attention, pm_workset_with_policy,
 };
 pub use pricing::{
     CacheRateFallback, PriceShadow, PricingCheck, UnpricedModel, pricing_check, pricing_coverage,

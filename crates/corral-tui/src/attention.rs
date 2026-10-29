@@ -62,6 +62,13 @@ pub(crate) fn refresh_context(ctx: &Ctx) -> Ctx {
 
 /// Called by refresh/load, never by draw. A failed read is not an empty assessment.
 pub(crate) fn load(ctx: &Ctx, now: Timestamp) -> Snapshot {
+    load_board(ctx, now).and_then(from_board)
+}
+
+pub(crate) fn load_board(
+    ctx: &Ctx,
+    now: Timestamp,
+) -> Result<corral_ops::attention::AttentionBoard, String> {
     // Store listings intentionally skip malformed tasks. Do not turn such a partial
     // listing into a successful attention read (and a falsely reassuring count).
     let (sender, messages) = std::sync::mpsc::channel();
@@ -80,9 +87,7 @@ pub(crate) fn load(ctx: &Ctx, now: Timestamp) -> Snapshot {
     if let Some(error) = unavailable {
         return Err(error);
     }
-    result
-        .map_err(|error| format!("{error:#}"))
-        .and_then(from_board)
+    result.map_err(|error| format!("{error:#}"))
 }
 
 fn age(condition: &Condition, now: Timestamp) -> Option<i64> {

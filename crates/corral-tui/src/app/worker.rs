@@ -9,10 +9,10 @@ pub(super) enum WorkerMsg {
 impl WorkerMsg {
     pub(super) fn synced_with_attention(ctx: &Ctx, messages: &Sender<Message>) -> Self {
         Self::Synced(sync_step::run_with_attention(ctx, messages).and_then(
-            |(changes, attention)| {
+            |(changes, attention, operating_header)| {
                 crate::board::BoardSnapshot::load_with_attention(ctx, attention)
                     .map(|mut snapshot| {
-                        snapshot.operating_header = operating::readback(ctx);
+                        snapshot.operating_header = operating_header;
                         (changes, Box::new(snapshot))
                     })
                     .map_err(|error| corral_herdr::friendly_error(&error))
