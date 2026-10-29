@@ -201,16 +201,19 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
 
     // Given a board and two task files that become malformed while it owns the terminal.
     let fx = seeded();
-    // Avoid an unrelated missing-worktree diagnostic from the synthetic review.
+    // Keep unavailable-projection column membership stable and avoid the synthetic worktree.
     fx.ctx
         .store
         .update("T-006", |task| {
+            task.status = corral_core::Status::NeedsMe;
             task.dispatch_hold = true;
             Ok(())
         })
         .unwrap();
+    let attention = crate::attention::load(&fx.ctx, fx.now.get()).unwrap();
     let mut app = fx.app(Mode::Board);
-    let baseline: Vec<_> = [(160, 45), (80, 24)]
+    // Keep complete cards visible for cell equality; the small viewport is checked below.
+    let baseline: Vec<_> = [(160, 45), (80, 45)]
         .into_iter()
         .map(|(width, height)| capture(&mut app, width, height))
         .collect();
@@ -245,15 +248,22 @@ fn malformed_task_files_are_captured_and_deduplicated_without_garbling_the_board
         "unchanged files do not re-toast after dismissal"
     );
     for ((width, height), (before, mut expected_cards)) in
-        [(160, 45), (80, 24)].into_iter().zip(baseline)
+        [(160, 45), (80, 45)].into_iter().zip(baseline)
     {
         let (after, cards) = capture(&mut app, width, height);
-        // A failed projection deliberately replaces these two owner attention rows
+        // A failed projection deliberately replaces these two cards' attention rows
         // with the unavailable header. Every other cell in every card must survive.
         for id in ["T-005", "T-006"] {
-            let row = expected_cards.get_mut(id).unwrap().pop().unwrap();
+            let task = fx.ctx.store.get(id).unwrap();
+            let condition =
+                corral_core::attention::blocked(&task, attention.get(id).unwrap()).unwrap();
+            let rows = expected_cards.get_mut(id).unwrap();
+            let width = unicode_width::UnicodeWidthStr::width(rows[0].as_str()).saturating_sub(2);
+            let count = crate::attention::blocked_lines(condition, width, fx.now.get()).len();
+            let removed = rows.drain(2..2 + count).collect::<Vec<_>>();
+            let row = removed.last().unwrap();
             assert!(
-                row.contains("Owner"),
+                row.contains("By Owner"),
                 "expected attention row for {id}: {row}"
             );
         }
