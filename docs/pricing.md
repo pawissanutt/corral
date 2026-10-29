@@ -163,3 +163,21 @@ and `CATALOG_SOURCE` in `crates/corral-core/src/pricing.rs` along with this tabl
 The `Store::init` date comment uses `CATALOG_DATE`. Do not map an unpriced
 subscription ID to a merely similar API model. Keep unknown models unpriced
 until verified.
+
+## Amazon Bedrock catalog
+
+Bedrock runs (`vendor = "amazon-bedrock"`) are priced from a second frozen
+layer, `crates/corral-core/src/pricing_bedrock.json`, consulted after the
+built-in catalog. It holds the input, output, cache read and cache write rates
+(USD per million tokens) of all 193 chat models in pi-ai 1.3.0
+`dist/providers/data/amazon-bedrock.json`, keyed by the bare Bedrock model ID
+that Pi records (for example `us.anthropic.claude-sonnet-4-5-20250929-v1:0`).
+Lookups are exact: Bedrock IDs are not mapped onto the `claude-*` keys because
+regional and global Bedrock rates differ. Provenance is
+`catalog-bedrock@pi-ai-1.3.0`; config prices still override it.
+
+To regenerate after a Pi upgrade, rewrite the file from the new pi-ai JSON
+(`type == "chat"` entries, `cost.cacheRead`/`cacheWrite` as
+`cache_read`/`cache_write`), update the source constant, and run
+`bun test test/bedrock-prices.test.ts` in `packages/corral-pi`, which checks
+equality and that no extra IDs remain.
