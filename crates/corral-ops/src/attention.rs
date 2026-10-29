@@ -22,6 +22,9 @@ mod classify;
 #[cfg(test)]
 mod classify_tests;
 mod delivery;
+mod dependency_labels;
+#[cfg(test)]
+mod dependency_tests;
 mod handling;
 pub mod metrics;
 mod outbox;
@@ -461,18 +464,16 @@ fn ready(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) 
         if n.task(dependency)
             .is_none_or(|task| task.status != Status::Done)
         {
+            let label = dependency_labels::label(n, dependency);
             let mut condition = wait(
                 task,
                 now,
                 "prerequisite",
                 WaitClass::Prerequisite,
                 Responsible::Executor,
-                format!(
-                    "Waiting on {dependency} ({})",
-                    n.task(dependency)
-                        .map_or("missing", |task| task.status.as_str())
-                ),
+                format!("Waiting on {label}"),
             );
+            condition.next_action.recipient = Some(label);
             condition
                 .resume
                 .push(check("task_status", dependency, Some("done".into()), false));
@@ -733,21 +734,20 @@ fn aggregate(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessme
         .filter(|child| n.task(child).is_none_or(|task| task.status != Status::Done))
         .collect::<Vec<_>>();
     if !pending.is_empty() {
+        let labels = pending
+            .iter()
+            .map(|id| dependency_labels::label(n, id))
+            .collect::<Vec<_>>()
+            .join(", ");
         let mut condition = wait(
             task,
             now,
             "aggregate_prerequisite",
             WaitClass::Prerequisite,
             Responsible::Executor,
-            format!(
-                "Waiting for Plan members: {}",
-                pending
-                    .iter()
-                    .map(|id| id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            format!("Waiting for Plan members: {labels}"),
         );
+        condition.next_action.recipient = Some(labels);
         condition.resume.extend(
             pending
                 .into_iter()

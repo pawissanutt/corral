@@ -1,7 +1,11 @@
 //! Complete stopping evidence using only the already-frozen neighborhood.
 use super::*;
 use corral_core::agent::HostHealth;
-use corral_core::{Run, awaited_task};
+use corral_core::{GateResult, Run, WaitHandle, awaited_task};
+
+#[cfg(test)]
+#[path = "stopping_tests.rs"]
+mod tests;
 
 pub(super) fn planner_owns_stop(task: &Task, run: &corral_core::PlanRun) -> bool {
     run.state == PlanRunState::AwaitingOwner
@@ -61,29 +65,50 @@ pub(super) fn conditions(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &
         classify::escalation(task, now, &mut a.conditions);
     }
     // An old working observation is not evidence of progress past a native suspension.
-    if let Some(run) = task.current_run().filter(|run| run.outcome.is_none()) {
-        let question = run.agent_host.as_ref().is_some_and(|host| {
-            host.questions
-                .iter()
-                .any(|question| question.blocking && question.recorded_pending())
-        });
-        if question || unavailable(run, n) {
-            a.progress = None;
-        }
-        if unavailable(run, n) && !a.conditions.iter().any(|row| row.kind == "agent_lost") {
-            let mut condition = row(
-                task,
-                now,
-                "agent_lost",
-                WaitClass::PmAction,
-                Responsible::Pm,
-                (Some(run.id.clone()), task.status_since.or(run.idle_since)),
-                format!("Run {} has recorded lost host or pane evidence", run.id),
-            );
-            condition
-                .resume
-                .push(check("run_recovered", &run.id, None, false));
-            a.conditions.push(condition);
+    if let Some(parent) = task.current_run() {
+        for run in std::iter::once(parent)
+            .filter(|run| run.outcome.is_none())
+            .chain(
+                parent
+                    .review_runs
+                    .iter()
+                    .filter(|run| run.outcome.is_none() && run.ended.is_none()),
+            )
+        {
+            let question = run.agent_host.as_ref().is_some_and(|host| {
+                host.questions
+                    .iter()
+                    .any(|question| question.blocking && question.recorded_pending())
+            });
+            let lost = unavailable(run, n);
+            if question || lost {
+                a.progress = None;
+            }
+            if lost && !a.conditions.iter().any(|row| row.kind == "agent_lost") {
+                let since = run
+                    .herdr
+                    .as_ref()
+                    .and_then(|herdr| {
+                        n.missing_reviewers
+                            .get(&format!("{}@{}", herdr.pane_id, run.started))
+                    })
+                    .copied()
+                    .or(task.status_since)
+                    .or(run.idle_since);
+                let mut condition = row(
+                    task,
+                    now,
+                    "agent_lost",
+                    WaitClass::PmAction,
+                    Responsible::Pm,
+                    (Some(run.id.clone()), since),
+                    format!("Run {} has recorded lost host or pane evidence", run.id),
+                );
+                condition
+                    .resume
+                    .push(check("run_recovered", &run.id, None, false));
+                a.conditions.push(condition);
+            }
         }
     }
     if a.conditions
@@ -116,34 +141,65 @@ fn native_waits(task: &Task, n: &Neighborhood<'_>, a: &mut Assessment) {
                 .iter()
                 .filter(|run| run.outcome.is_none() && run.ended.is_none()),
         )
-        .flat_map(|run| &run.obligations.waits)
-        .filter(|wait| wait.receipt.is_none());
-    for (condition, wait) in a
+        .flat_map(|run| {
+            run.obligations
+                .waits
+                .iter()
+                .filter(|wait| wait.receipt.is_none())
+                .map(move |wait| (run, wait))
+        });
+    for (condition, (waiting_run, wait)) in a
         .conditions
         .iter_mut()
         .filter(|condition| condition.kind == "obligation_wait")
         .zip(waits)
     {
-        let Some(dependency) = awaited_task(&wait.request.handle) else {
+        let completed = if let Some(dependency) = awaited_task(&wait.request.handle) {
+            let status = n
+                .task(dependency)
+                .map_or("missing", |task| task.status.as_str());
+            let done = n
+                .task(dependency)
+                .is_some_and(|task| task.status == Status::Done);
+            condition.next_action.recipient = Some(format!("{dependency} ({status})"));
+            condition
+                .resume
+                .push(check("task_status", dependency, Some("done".into()), done));
+            condition.reason = format!(
+                "{}; {dependency} ({status}); {}receipt {}",
+                wait.request.condition,
+                if done { "missing " } else { "awaiting " },
+                wait.request.id
+            );
+            done
+        } else if let WaitHandle::Gate { sha, pane } = &wait.request.handle {
+            let Some(gate) = waiting_run.gate.as_ref().filter(|gate| {
+                &gate.sha == sha
+                    && gate.pane.as_ref() == Some(pane)
+                    && matches!(
+                        gate.result,
+                        GateResult::Pass | GateResult::Fail | GateResult::Stale
+                    )
+            }) else {
+                continue;
+            };
+            condition.resume.push(check(
+                "gate_result",
+                &format!("{sha}@{pane}"),
+                Some(gate.result.as_str().into()),
+                true,
+            ));
+            condition.reason = format!(
+                "{}; gate {sha} ({}); missing receipt {}",
+                wait.request.condition,
+                gate.result.as_str(),
+                wait.request.id
+            );
+            true
+        } else {
             continue;
         };
-        let status = n
-            .task(dependency)
-            .map_or("missing", |task| task.status.as_str());
-        let done = n
-            .task(dependency)
-            .is_some_and(|task| task.status == Status::Done);
-        condition.next_action.recipient = Some(format!("{dependency} ({status})"));
-        condition
-            .resume
-            .push(check("task_status", dependency, Some("done".into()), done));
-        condition.reason = format!(
-            "{}; {dependency} ({status}); {}receipt {}",
-            wait.request.condition,
-            if done { "missing " } else { "awaiting " },
-            wait.request.id
-        );
-        if done {
+        if completed {
             condition.reason_code = "wait_receipt_missing".into();
             condition.responsible = Responsible::Pm;
             condition.next_action.command = Some("corral sync".into());
