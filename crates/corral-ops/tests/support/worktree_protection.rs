@@ -277,3 +277,45 @@ fn an_unprotected_resident_is_stopped_and_the_worktree_removed() {
     assert!(!stray.alive());
     assert!(!fx.worktree.exists());
 }
+
+#[test]
+fn an_earlier_runs_unreleased_pane_harness_is_protected() {
+    let fx = fixture(1, 0);
+    let peer = fx
+        .ctx
+        .store
+        .create("peer", Some("app"), Status::Done, "")
+        .unwrap();
+    let older: Run = serde_json::from_value(run(
+        "R1",
+        &fx.repo.join("older"),
+        "older-custom-harness",
+        true,
+    ))
+    .unwrap();
+    let newer: Run =
+        serde_json::from_value(run("R2", &fx.repo.join("newer"), "newer-harness", false)).unwrap();
+    fx.ctx
+        .store
+        .update(&peer.id, |t| {
+            t.runs.push(older);
+            t.runs.push(newer);
+            Ok(())
+        })
+        .unwrap();
+    let unreleased = fx
+        .ctx
+        .store
+        .head(&peer.id)
+        .unwrap()
+        .unreleased_panes(false)
+        .unwrap();
+    assert_eq!(unreleased.len(), 1, "{unreleased:?}");
+    let mut resident = Resident::start(&fx.worktree, "older-custom-harness");
+    let (error, _) = attempt(&fx);
+    assert!(
+        error.contains(&format!("protected process {}", resident.0.id())),
+        "{error}"
+    );
+    assert!(resident.alive() && fx.worktree.exists());
+}

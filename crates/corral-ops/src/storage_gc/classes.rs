@@ -293,18 +293,35 @@ fn session_files(dir: &Path) -> Result<Option<Vec<(String, PathBuf)>>> {
     Ok(Some(files))
 }
 
-/// Why a terminal task's sessions are still in use: one of its unreleased panes is still
-/// working, or its state cannot be read.
+/// Why a terminal task's sessions may still be in use: an unreleased pane recorded on another
+/// server (its state is not ours to read), or one this server reports in any state but idle or
+/// done, or cannot report. Only a pane this server confirms absent, idle or done is settled.
 fn pane_busy(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<Option<String>> {
+    let socket = ctx
+        .herdr
+        .socket_path()
+        .map(|path| path.to_string_lossy().into_owned())
+        .ok();
     for pane in head.unreleased_panes(false)? {
         if pane.pane.is_empty() {
             continue;
         }
+        if pane.socket.is_empty() || socket.as_deref() != Some(pane.socket.as_str()) {
+            return Ok(Some(format!(
+                "pane {} was recorded on another or unknown server",
+                pane.pane
+            )));
+        }
         match ctx.herdr.pane_get(&pane.pane) {
-            Ok(Some(info)) if info.status == corral_herdr::AgentStatus::Working => {
-                return Ok(Some(format!("pane {} is still working", pane.pane)));
+            Ok(None) => {}
+            Ok(Some(info))
+                if matches!(
+                    info.status,
+                    corral_herdr::AgentStatus::Idle | corral_herdr::AgentStatus::Done
+                ) => {}
+            Ok(Some(info)) => {
+                return Ok(Some(format!("pane {} is {:?}", pane.pane, info.status)));
             }
-            Ok(_) => {}
             Err(error) => {
                 return Ok(Some(format!(
                     "pane {} cannot be checked: {error:#}",
@@ -375,6 +392,14 @@ fn promote_and_remove(
             "{} was reopened",
             head.id
         );
+        let head = ctx.store.head(&head.id)?;
+        let busy = match worktrees::in_use(path)? {
+            Some(reason) => Some(reason),
+            None => pane_busy(ctx, &head)?,
+        };
+        if let Some(reason) = busy {
+            anyhow::bail!("{reason}");
+        }
         let missing = unpromoted(ctx, &head.id, files)?;
         anyhow::ensure!(
             missing.is_empty(),

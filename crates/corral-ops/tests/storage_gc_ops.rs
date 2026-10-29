@@ -14,3 +14,5 @@ mod gc;
 mod lifecycle;
 #[path = "storage_gc_ops/round1.rs"]
 mod round1;
+#[path = "storage_gc_ops/round2.rs"]
+mod round2;
