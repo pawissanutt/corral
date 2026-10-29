@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{ActionAuthorization, PlanRecord, PlanReview, SubmissionDisposition};
+use corral_core::{ActionAuthorization, HerdrRef, PlanRecord, PlanReview, SubmissionDisposition};
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
@@ -47,6 +47,19 @@ impl Prepared {
             "prepared review plan identity changed"
         );
         Ok(())
+    }
+
+    /// The retained reviewer pane, when it is still open in this session. A suspended attempt
+    /// never started its agent, so a pane closed since then is replaced rather than failing.
+    pub fn live_pane(&self, ctx: &Ctx) -> Result<Option<HerdrRef>> {
+        let Some(herdr) = &self.review.herdr else {
+            return Ok(None);
+        };
+        ensure!(
+            herdr.socket.as_ref() == Some(&ctx.herdr.socket_path()?),
+            "prepared reviewer belongs to another session"
+        );
+        Ok(ctx.herdr.pane_get(&herdr.pane_id)?.map(|_| herdr.clone()))
     }
 
     pub fn suspend(&self, ctx: &Ctx, task: &str) -> Result<()> {

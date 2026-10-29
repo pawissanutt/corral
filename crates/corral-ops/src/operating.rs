@@ -130,12 +130,17 @@ pub(crate) fn authorize(
                     origin == Origin::Owner,
                     "automatic caller cannot use owner approval"
                 );
-                return Ok(previous);
+                // A fresh owner request is fresh consent: it supersedes a refused or stale
+                // approval in place, and the old one stays in the authorization history.
+                if !ctx.store.operating_authorization_stale(&previous)? {
+                    return Ok(previous);
+                }
+            } else {
+                ensure!(
+                    origin == Origin::Automatic,
+                    "cannot convert automatic preparation to owner authority"
+                );
             }
-            ensure!(
-                origin == Origin::Automatic,
-                "cannot convert automatic preparation to owner authority"
-            );
         }
     }
     let provenance = match origin {
