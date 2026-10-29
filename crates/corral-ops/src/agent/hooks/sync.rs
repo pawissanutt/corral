@@ -84,7 +84,7 @@ fn owes(task: &Task, container: &ContainerRef, run: &Run) -> bool {
     run.inbox.settled.is_none()
         || container_state(task, container).is_some_and(|state| {
             state.questions.iter().any(|q| q.recorded_pending())
-                || state.jobs.iter().any(|job| job.state.live())
+                || state.jobs.iter().any(|job| job.needs_reap())
                 || state.receipts.iter().any(|r| {
                     matches!(
                         r.state,

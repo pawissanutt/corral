@@ -1,10 +1,12 @@
-// Background jobs of a Pi-native worker (T-565). A job is recorded with corral before it is
-// spawned and its process identity (pid, kernel start time) right after, so corral can reap
-// exactly the processes this host owns once its generation ends. Output goes to a runtime file
-// capped at max_output_bytes plus an in-memory tail that survives the file's loss. Line monitors
-// match in this process; corral settles every monitor's wait and posts its one wake.
+// Background jobs of a Pi-native worker (T-565). A job is its whole process group. It is recorded
+// with corral before it is spawned, and its process identity (pid, kernel start time) is
+// committed before the command runs: the spawned launcher waits on its stdin for "run", so a host
+// that dies first leaves no executable work behind. When the leader exits, every remaining
+// verified member of its group is killed before the exit is reported. Output goes to a runtime
+// file capped at max_output_bytes plus an in-memory tail that survives the file's loss. Line
+// monitors match in this process; corral settles every monitor's wait and posts its one wake.
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 import type { JobSettings } from "./settings.ts";
@@ -16,6 +18,11 @@ const LINE_MATCH_MAX = 4096;
 const KILL_GRACE_MS = 2000;
 const REPORT_ATTEMPTS = 4;
 const REPORT_BACKOFF_MS = 250;
+/** How long the host waits for SIGKILLed group members to disappear before reporting. */
+const SWEEP_WAIT_MS = 5000;
+const SWEEP_STEP_MS = 20;
+/** `$0` is the shell and `$1` the command; nothing runs unless the host writes "run". */
+const LAUNCHER = 'IFS= read -r go || exit 125; [ "$go" = run ] || exit 125; exec </dev/null; exec "$0" -c "$1"';
 
 export interface JobReceipt {
   readonly state: string;
@@ -25,6 +32,15 @@ export interface JobReceipt {
 /** One corral call: `key` is the stable request key the caller turns into a request ID. */
 export type JobCall = (op: "job" | "job_monitor", key: string, payload: Record<string, unknown>) => Promise<JobReceipt>;
 
+/** Schedules `run` after `ms` and returns its cancellation; tests drive the runtime limit with it. */
+export type Schedule = (run: () => void, ms: number) => () => void;
+
+const realSchedule: Schedule = (run, ms) => {
+  const timer = setTimeout(run, ms);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
+
 export interface JobRuntimeOptions {
   readonly cwd: string;
   readonly runtimeDir: string;
@@ -32,6 +48,7 @@ export interface JobRuntimeOptions {
   readonly settings: JobSettings;
   readonly call: JobCall;
   readonly shell?: string;
+  readonly schedule?: Schedule;
   /** Bridge events: `job_started` once identity is recorded, `job_exited` once the exit is. */
   readonly onEvent?: (kind: "job_started" | "job_exited", data: Record<string, unknown>) => void;
 }
@@ -51,9 +68,11 @@ interface Job {
   readonly file: string;
   readonly child: ChildProcess;
   readonly pid: number;
+  readonly start: string | undefined;
   state: "running" | "exited";
   exitCode: number | null;
   signal: string | null;
+  groupClear: boolean;
   bytes: number;
   stored: number;
   fd: number | undefined;
@@ -67,21 +86,49 @@ interface Job {
   readonly watchers: Watcher[];
   readonly closed: Promise<void>;
   readonly exited: Promise<void>;
-  killTimer?: ReturnType<typeof setTimeout>;
+  cancelKill?: () => void;
+}
+
+interface Stat {
+  readonly state: string;
+  readonly pgrp: number;
+  readonly start: string;
+}
+
+function stat(pid: number): Stat | undefined {
+  try {
+    const text = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+    const [state, pgrp, start] = [fields[0], Number(fields[2]), fields[19]];
+    return state && start && /^\d+$/.test(start) ? { state, pgrp, start } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Kernel start time of `pid` in clock ticks since boot; `undefined` once it is gone. */
 export function startTimeOf(pid: number): string | undefined {
   if (!existsSync("/proc/self/stat")) return "0";
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    if (fields[0] === "Z" || fields[0] === "X") return undefined;
-    const value = fields[19];
-    return value && /^\d+$/.test(value) ? value : undefined;
-  } catch {
-    return undefined;
+  const found = stat(pid);
+  return found && found.state !== "Z" && found.state !== "X" ? found.start : undefined;
+}
+
+/**
+ * The job's process group now. Linux never reuses a pid while it is still some group's ID, so
+ * live members of a group whose leader is gone are the job's descendants; a live leader must
+ * still have the recorded start time. Without /proc a group is never claimed.
+ */
+export function processGroup(pgid: number, start: string | undefined): "empty" | "owned" | "reused" {
+  if (start === undefined || !existsSync("/proc/self/stat")) return "reused";
+  let members = 0;
+  for (const name of readdirSync("/proc")) {
+    if (!/^\d+$/.test(name)) continue;
+    const found = stat(Number(name));
+    if (!found || found.pgrp !== pgid || found.state === "Z" || found.state === "X") continue;
+    if (Number(name) === pgid && found.start !== start) return "reused";
+    members++;
   }
+  return members === 0 ? "empty" : "owned";
 }
 
 export class JobError extends Error {}
@@ -89,8 +136,11 @@ export class JobError extends Error {}
 export class JobRuntime {
   private readonly jobs = new Map<string, Job>();
   private seq = 0;
+  private readonly schedule: Schedule;
 
-  constructor(private readonly options: JobRuntimeOptions) {}
+  constructor(private readonly options: JobRuntimeOptions) {
+    this.schedule = options.schedule ?? realSchedule;
+  }
 
   private live(): number {
     return [...this.jobs.values()].filter((job) => job.state === "running").length;
@@ -132,8 +182,9 @@ export class JobRuntime {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, `${id}.log`);
     const fd = openSync(file, "w", 0o600);
-    const child = spawn(this.options.shell ?? "/bin/bash", ["-c", command], {
-      cwd: this.options.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"],
+    const shell = this.options.shell ?? "/bin/bash";
+    const child = spawn(shell, ["-c", LAUNCHER, shell, command], {
+      cwd: this.options.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"],
     });
     const spawned = await new Promise<Error | undefined>((resolve) => {
       child.once("spawn", () => resolve(undefined));
@@ -141,35 +192,25 @@ export class JobRuntime {
     });
     if (spawned || child.pid === undefined) {
       closeSync(fd);
-      await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127 });
+      await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
       throw new JobError(`job ${id} did not start: ${spawned?.message ?? "no pid"}`);
     }
     let finish!: () => void;
     let close!: () => void;
     const job: Job = {
-      id, command, file, child, pid: child.pid, state: "running", exitCode: null, signal: null,
-      bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0, monitors: 0, inflight: 0,
-      drained: [], reports: Promise.resolve(), watchers: [],
+      id, command, file, child, pid: child.pid, start: startTimeOf(child.pid), state: "running", exitCode: null,
+      signal: null, groupClear: false, bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0,
+      monitors: 0, inflight: 0, drained: [], reports: Promise.resolve(), watchers: [],
       closed: new Promise((resolve) => { close = resolve; }),
       exited: new Promise((resolve) => { finish = resolve; }),
     };
     this.jobs.set(id, job);
+    child.stdin?.on("error", () => undefined);
     child.stdout?.on("data", (chunk: Buffer) => this.capture(job, chunk));
     child.stderr?.on("data", (chunk: Buffer) => this.capture(job, chunk));
-    const deadline = setTimeout(() => void this.kill(id), settings.max_runtime_secs * 1000);
-    deadline.unref();
-    const start = startTimeOf(child.pid);
-    // A process that is already gone has no identity to record; its exit report follows.
-    if (start !== undefined) {
-      job.reports = this.options.call("job", `${key}/started`, {
-        action: "started", job: id, pid: child.pid, start_time: start,
-      }).then((receipt) => {
-        if (receipt.state !== "committed") this.signal(job, "SIGKILL");
-      }, () => this.signal(job, "SIGKILL"));
-    }
+    const cancelDeadline = this.schedule(() => void this.kill(id), settings.max_runtime_secs * 1000);
     child.once("close", (code, signal) => {
-      clearTimeout(deadline);
-      if (job.killTimer) clearTimeout(job.killTimer);
+      cancelDeadline();
       if (job.partial) this.line(job, job.partial);
       job.partial = "";
       job.state = "exited";
@@ -177,18 +218,56 @@ export class JobRuntime {
       job.signal = signal;
       if (job.fd !== undefined) closeSync(job.fd);
       job.fd = undefined;
-      close();
-      void this.whenDrained(job).then(() => {
+      void this.sweep(job).then(() => {
+        close();
+        return this.whenDrained(job);
+      }).then(() => {
         const payload: Record<string, unknown> = { action: "exited", job: id };
         if (code !== null) payload.exit_code = code;
         if (signal !== null) payload.signal = signal;
+        if (job.groupClear) payload.group_clear = true;
         this.enqueue(job, `job:${id}:exited`, payload);
         return job.reports;
       }).then(() => this.options.onEvent?.("job_exited", { job: id, exit_code: code, signal })).finally(finish);
     });
-    await job.reports;
+    // The launcher is blocked on stdin: the command runs only once corral holds its identity.
+    let recorded = false;
+    if (job.start !== undefined) {
+      try {
+        const receipt = await this.options.call("job", `${key}/started`, {
+          action: "started", job: id, pid: child.pid, start_time: job.start,
+        });
+        recorded = receipt.state === "committed";
+      } catch {
+        recorded = false;
+      }
+    }
+    await new Promise<void>((resolve) => {
+      if (!child.stdin) resolve();
+      else if (recorded) child.stdin.end("run\n", () => resolve());
+      else child.stdin.end(() => resolve());
+    });
+    if (!recorded) return { job: id, state: "not_started", reason: "corral did not record the job's process identity" };
     this.options.onEvent?.("job_started", { job: id, pid: child.pid });
     return { job: id, state: job.state, pid: child.pid, output_file: file };
+  }
+
+  /**
+   * After the leader exits, kills every remaining verified member of its group and waits for
+   * them to go, so a descendant that ignored SIGTERM or redirected its output cannot outlive
+   * the job. A group that cannot be verified is never signalled.
+   */
+  private async sweep(job: Job): Promise<void> {
+    let group = processGroup(job.pid, job.start);
+    if (group === "owned") {
+      this.groupSignal(job, "SIGKILL");
+      for (let waited = 0; waited < SWEEP_WAIT_MS && group === "owned"; waited += SWEEP_STEP_MS) {
+        await new Promise((resolve) => setTimeout(resolve, SWEEP_STEP_MS));
+        group = processGroup(job.pid, job.start);
+      }
+    }
+    job.groupClear = group === "empty";
+    job.cancelKill?.();
   }
 
   private whenDrained(job: Job): Promise<void> {
@@ -302,8 +381,9 @@ export class JobRuntime {
     }
   }
 
-  private signal(job: Job, signal: NodeJS.Signals): void {
-    if (job.state !== "running") return;
+  /** Signals the job's group only while it is verifiably the job's: never a reused pid. */
+  private groupSignal(job: Job, signal: NodeJS.Signals): void {
+    if (processGroup(job.pid, job.start) !== "owned") return;
     try {
       process.kill(-job.pid, signal);
     } catch {
@@ -313,23 +393,23 @@ export class JobRuntime {
 
   async kill(id: string): Promise<Record<string, unknown>> {
     const job = this.job(id);
-    if (job.state === "running") {
-      this.signal(job, "SIGTERM");
-      job.killTimer = setTimeout(() => this.signal(job, "SIGKILL"), KILL_GRACE_MS);
-      job.killTimer.unref();
+    if (!job.groupClear) {
+      this.groupSignal(job, "SIGTERM");
+      job.cancelKill?.();
+      job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);
       await job.exited;
     }
-    return { job: id, state: job.state, exit_code: job.exitCode, signal: job.signal };
+    return { job: id, state: job.state, exit_code: job.exitCode, signal: job.signal, group_clear: job.groupClear };
   }
 
   shutdown(): void {
-    for (const job of this.jobs.values()) this.signal(job, "SIGKILL");
+    for (const job of this.jobs.values()) if (!job.groupClear) this.groupSignal(job, "SIGKILL");
   }
 
   state(): Record<string, unknown>[] {
     return [...this.jobs.values()].map((job) => ({
       job: job.id, pid: job.pid, state: job.state, exit_code: job.exitCode, signal: job.signal,
-      bytes_total: job.bytes, monitors: job.monitors,
+      group_clear: job.groupClear, bytes_total: job.bytes, monitors: job.monitors,
     }));
   }
 
@@ -337,7 +417,7 @@ export class JobRuntime {
     return this.job(id).exited;
   }
 
-  /** Resolves when the process has exited and its output streams closed, before any report. */
+  /** Resolves when the process has exited and its group was swept, before any report. */
   closed(id: string): Promise<void> {
     return this.job(id).closed;
   }

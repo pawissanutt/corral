@@ -368,3 +368,146 @@ fn interrupted_job_tools_are_classified_conservatively() {
     assert_eq!(kill, ResumeClass::OutcomeUnknown);
     assert!(detail.unwrap().contains("reaps"));
 }
+
+/// A group whose leader waits on stdin while a SIGTERM-ignoring descendant sleeps, with a pidfd
+/// on the descendant opened before anything is released.
+struct Orphaning {
+    leader: Child,
+    start: String,
+    descendant: rustix::fd::OwnedFd,
+}
+
+fn orphaning_group() -> Orphaning {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    let mut leader = Command::new("bash")
+        .args([
+            "-c",
+            "(trap '' TERM; exec sleep 30) & echo $!; read -r _; exit 0",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let start = process_start(leader.id()).unwrap().unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(leader.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let pid = rustix::process::Pid::from_raw(line.trim().parse().unwrap()).unwrap();
+    let descendant =
+        rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
+    Orphaning {
+        leader,
+        start,
+        descendant,
+    }
+}
+
+impl Orphaning {
+    /// Lets the leader exit and reaps it; the descendant stays in the group.
+    fn release_leader(&mut self) {
+        drop(self.leader.stdin.take());
+        assert!(self.leader.wait().unwrap().success());
+    }
+
+    fn descendant_exited(&self) -> bool {
+        use rustix::event::{PollFd, PollFlags, poll};
+        let mut ready = [PollFd::new(&self.descendant, PollFlags::IN)];
+        let timeout = rustix::time::Timespec {
+            tv_sec: 30,
+            tv_nsec: 0,
+        };
+        poll(&mut ready, Some(&timeout)).unwrap() == 1
+    }
+}
+
+#[test]
+fn a_group_whose_leader_exited_is_still_reaped_whole() {
+    // Given a recorded running job whose leader exits, leaving a TERM-ignoring descendant.
+    let w = Worker::new();
+    let mut group = orphaning_group();
+    w.start("j1", &group.leader, &group.start);
+    committed(&w.monitor("j1.m1", "j1", "exit"));
+    group.release_leader();
+    assert_eq!(
+        super::jobs::owned_group(group.leader.id(), &group.start).unwrap(),
+        super::jobs::Group::Owned(1)
+    );
+    // When the generation is fenced and the reaper runs.
+    let g = w.host.identity.generation;
+    fence_generation(&w.fx.ctx.store, &w.container(), g, "resume").unwrap();
+    super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap();
+    // Then the descendant is killed through the verified group and the monitor settles lost.
+    assert!(group.descendant_exited());
+    let state = ts::state(&w.fx, &w.container());
+    assert_eq!(state.jobs[0].state, JobState::Reaped);
+    assert!(state.jobs[0].group_clear);
+    assert_eq!(w.wait_state("j1.m1"), WaitState::Lost);
+}
+
+#[test]
+fn an_exit_reported_without_a_clear_group_is_swept_once() {
+    // Given an exit report that did not verify the group empty, with a descendant still alive.
+    let w = Worker::new();
+    let mut group = orphaning_group();
+    w.start("j1", &group.leader, &group.start);
+    committed(&w.monitor("j1.m1", "j1", "exit"));
+    group.release_leader();
+    committed(&w.job(
+        "j1/exited",
+        json!({"action": "exited", "job": "j1", "exit_code": 0}),
+    ));
+    assert_eq!(w.wait_state("j1.m1"), WaitState::Ready);
+    // When the run ends and sync visits it twice.
+    w.fx.ctx
+        .store
+        .update(&w.task, |t| {
+            t.status = Status::Done;
+            t.runs[0].outcome = Some(corral_core::RunOutcome::Done);
+            Ok(())
+        })
+        .unwrap();
+    let ended = w.fx.ctx.store.get(&w.task).unwrap();
+    assert!(crate::agent::hooks::sync::wants(&ended));
+    crate::agent::hooks::sync::task(&w.fx.ctx, &ended, Timestamp::now()).unwrap();
+    let again = super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap();
+    // Then the remaining member is killed, the exit and its monitor keep their outcome, and the
+    // second pass has nothing left to do.
+    assert!(group.descendant_exited());
+    let state = ts::state(&w.fx, &w.container());
+    assert_eq!(
+        (
+            state.jobs[0].state,
+            state.jobs[0].exit_code,
+            state.jobs[0].group_clear
+        ),
+        (JobState::Exited, Some(0), true)
+    );
+    assert_eq!(w.wait_state("j1.m1"), WaitState::Ready);
+    assert_eq!(again, 0);
+    assert_eq!(w.wakes(), 1);
+}
+
+#[test]
+fn a_host_verified_clear_group_is_never_signalled_again() {
+    // Given an exit report whose host verified the group empty.
+    let w = Worker::new();
+    let (mut child, start) = spawn_group();
+    w.start("j1", &child, &start);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    committed(&w.job(
+        "j1/exited",
+        json!({"action": "exited", "job": "j1", "signal": "SIGKILL", "group_clear": true}),
+    ));
+    // When the generation is fenced, then the reaper has nothing to sweep.
+    let g = w.host.identity.generation;
+    fence_generation(&w.fx.ctx.store, &w.container(), g, "resume").unwrap();
+    assert_eq!(
+        super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap(),
+        0
+    );
+    assert_eq!(ts::events(&w.fx, "agent_job_reaped"), 0);
+}

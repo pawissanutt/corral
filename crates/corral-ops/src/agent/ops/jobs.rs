@@ -43,6 +43,9 @@ enum JobAction {
         exit_code: Option<i32>,
         #[serde(default)]
         signal: Option<String>,
+        /// The host verified the whole process group gone after the leader's exit.
+        #[serde(default)]
+        group_clear: bool,
     },
     Line {
         job: String,
@@ -151,6 +154,7 @@ fn apply(
                 exit_code: None,
                 signal: None,
                 detail: None,
+                group_clear: false,
                 monitors: Vec::new(),
             });
             evict_jobs(&mut state.jobs);
@@ -184,6 +188,7 @@ fn apply(
             job,
             exit_code,
             signal,
+            group_clear,
         } => {
             if let Some(signal) = &signal {
                 word(signal, "signal")?;
@@ -196,6 +201,7 @@ fn apply(
             record.ended_at = Some(now);
             record.exit_code = exit_code;
             record.signal = signal;
+            record.group_clear = group_clear;
             let ended = record.clone();
             let outcome = if ended.exit_code == Some(0) {
                 ReceiptOutcome::Ready

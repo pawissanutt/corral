@@ -110,14 +110,26 @@ pub struct JobRecord {
     pub signal: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// The whole process group is verified gone, not only its leader: the host's exit report
+    /// says so after its sweep, or the reaper sets it after killing what remained.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group_clear: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub monitors: Vec<JobMonitor>,
+}
+
+impl JobRecord {
+    /// Live, or exited with a known group that nobody has verified empty.
+    pub fn needs_reap(&self) -> bool {
+        self.state.live()
+            || (self.state == JobState::Exited && self.pid.is_some() && !self.group_clear)
+    }
 }
 
 /// Evicts ended jobs, oldest first, until the container is within `JOBS_MAX`.
 pub fn evict_jobs(jobs: &mut Vec<JobRecord>) {
     while jobs.len() > JOBS_MAX {
-        let Some(oldest) = jobs.iter().position(|job| !job.state.live()) else {
+        let Some(oldest) = jobs.iter().position(|job| !job.needs_reap()) else {
             return;
         };
         jobs.remove(oldest);
