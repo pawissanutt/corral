@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +20,9 @@ function config(models: readonly { readonly id: string; readonly api?: string }[
 }
 
 function writeConfig(path: string, models: readonly { readonly id: string; readonly api?: string }[]): void {
-  writeFileSync(path, JSON.stringify({
+  // Replace atomically: a reader of an existing models.json must never see a truncated file.
+  const staged = `${path}.${process.pid}.tmp`;
+  writeFileSync(staged, JSON.stringify({
     providers: {
       "openai-codex": {
         apiKey: "paid-config-key",
@@ -34,6 +36,7 @@ function writeConfig(path: string, models: readonly { readonly id: string; reado
       },
     },
   }));
+  renameSync(staged, path);
 }
 
 describe("shared model catalog", () => {
