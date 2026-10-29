@@ -710,7 +710,7 @@ pub(crate) fn lsp_settings(table: &CapabilitySettings) -> Result<CapabilitySetti
                     || ext.len() < 2
                     || ext.contains('/')
                     || !extensions.insert(ext.clone())
-                    || !language.as_str().is_some_and(|s| !s.trim().is_empty())
+                    || language.as_str().is_none_or(|s| s.trim().is_empty())
                 {
                     return Err(format!("{id}: invalid or duplicate extension {ext}"));
                 }
