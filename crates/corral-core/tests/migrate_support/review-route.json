@@ -1,0 +1,45 @@
+{
+ "version": 1,
+ "requirement": {
+  "contract": {
+   "kind": "implementation",
+   "version": 1
+  },
+  "capability": "routine",
+  "checks": [
+   "complete_object",
+   "criterion_evidence",
+   "candidate_evidence",
+   "full_diff",
+   "relevant_code",
+   "exhaustive_class_sweep"
+  ],
+  "reasons": [
+   {
+    "code": "routine_implementation",
+    "detail": "implementation against its spec"
+   }
+  ]
+ },
+ "contract_digest": "0971a6fb57871b7114d7a5a2fcfab0121b2417cb14f620f2320c080070e5d10f",
+ "signals": {
+  "subject": "implementation",
+  "design": false,
+  "kind": "logic",
+  "size": "m",
+  "hotfix": false,
+  "flaky": false,
+  "risks": [],
+  "stronger_requested": false
+ },
+ "profile": "gpt-sol",
+ "profile_revision": "legacy",
+ "profile_source": "workspace_review_config",
+ "independence": "different_vendor",
+ "capability_mismatch": false,
+ "round": 3,
+ "scope": "prior_findings_and_fixes",
+ "packet_digest": "cdbfcb5392e952ea1e9f49133a136ae756155837dd8db3985618753c565a171f",
+ "attempt": "R1-review3",
+ "callback": "R1-review3"
+}

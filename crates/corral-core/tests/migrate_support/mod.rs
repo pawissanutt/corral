@@ -29,6 +29,18 @@ fn write(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
 }
 
+/// An artifact holding `content`, whose snapshot (when given) is `stored`: gzip bytes when
+/// `compressed`.
+pub struct NewArtifact<'a> {
+    pub task_file: &'a str,
+    pub kind: &'a str,
+    pub file: &'a str,
+    pub content: &'a [u8],
+    pub stored: Option<&'a [u8]>,
+    pub compressed: bool,
+    pub purged: bool,
+}
+
 pub const REPORT: &[u8] = b"# Report\n\nThe work is done.\n";
 
 pub fn done_task(id: &str, artifact_path: &str) -> String {
@@ -154,6 +166,50 @@ impl Legacy {
         fs::write(&path, rendered).unwrap();
     }
 
+    /// Registers `a` on its task's run R1 and writes its snapshot when it has one. Returns the
+    /// snapshot path.
+    pub fn register_artifact(&self, a: NewArtifact<'_>) -> String {
+        let NewArtifact {
+            task_file,
+            kind,
+            file,
+            content,
+            stored,
+            compressed,
+            purged,
+        } = a;
+        let task_path = self.corral.join("tasks").join(task_file);
+        let raw = fs::read_to_string(&task_path).unwrap();
+        let mut record = corral_core::parse_task_record(&raw, &task_path).unwrap();
+        let digest = sha(content);
+        let path = format!("artifacts/{}/R1/{}-{file}", record.task.id, &digest[..8]);
+        let mut doc = serde_json::json!({
+            "run": "R1", "kind": kind, "title": file, "path": path,
+            "source": format!("/tmp/{file}"), "sha256": digest, "bytes": content.len(),
+            "added": "2026-10-01T01:40:00Z"
+        });
+        if compressed {
+            doc["compressed_bytes"] = serde_json::json!(stored.map_or(0, <[u8]>::len));
+        }
+        if purged {
+            doc["purged_at"] = serde_json::json!("2026-10-02T00:00:00Z");
+        }
+        record
+            .task
+            .artifacts
+            .push(serde_json::from_value(doc).unwrap());
+        fs::write(&task_path, corral_core::render_task(&record.task)).unwrap();
+        if let Some(stored) = stored {
+            write(&self.corral.join(&path), stored);
+        }
+        path
+    }
+
+    /// Writes a legacy file under `.corral`.
+    pub fn put(&self, rel: &str, bytes: &[u8]) {
+        write(&self.corral.join(rel), bytes);
+    }
+
     pub fn invariant(&self) {
         let journal = corral_core::migrate::Journal::read(&self.corral).unwrap();
         let problems = directory_problems(&self.corral, journal.as_ref()).unwrap();
@@ -189,6 +245,19 @@ fn collect(corral: &Path, path: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
             .into_owned();
         out.insert(rel, fs::read(path).unwrap());
     }
+}
+
+/// Replaces `from` with `to` (same length) in a legacy file and restores its mtime, so only the
+/// content hash tells the change apart.
+pub fn alter_in_place(corral: &Path, rel: &str, from: &str, to: &str) {
+    assert_eq!(from.len(), to.len());
+    let path = corral.join(rel);
+    let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains(from), "{rel} lacks {from:?}");
+    fs::write(&path, text.replacen(from, to, 1)).unwrap();
+    let file = fs::File::options().write(true).open(&path).unwrap();
+    file.set_modified(mtime).unwrap();
 }
 
 /// A barrier that "kills" the command at `at` (the step returns an error, as a kill would end

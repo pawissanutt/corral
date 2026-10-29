@@ -9,8 +9,11 @@ use serde::Serialize;
 use super::journal::{Journal, JournalState};
 use super::scan::walk;
 use super::{FENCE_PATH, MANIFEST, Migrate, durable, locks};
-use crate::backend::{ApplyError, Claim, Operation, ReleaseClaim, STORAGE_GC_CLAIM, StoreBackend};
-use crate::blob::ProcessIdentity;
+use crate::backend::{
+    ApplyError, Claim, ClaimRow, Operation, PageReq, ReleaseClaim, STORAGE_GC_CLAIM, StorageQuery,
+    StorageRow, StoreBackend,
+};
+use crate::blob::{ProcessIdentity, proven_dead};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Finalized {
@@ -101,7 +104,32 @@ pub(super) fn finalize(m: &Migrate) -> Result<Finalized> {
     })
 }
 
+/// Takes the `storage-gc` claim, first releasing it from a holder proven dead (a finalize or
+/// storage gc killed while holding it); a live or unrecognized holder keeps it.
 fn claim(backend: &dyn StoreBackend, me: &ProcessIdentity) -> Result<()> {
+    if let Some(held) = gc_claim(backend)? {
+        let dead = match serde_json::from_value::<ProcessIdentity>(held.doc.clone()) {
+            Ok(holder) if holder.owner() == held.owner => proven_dead(&holder)?,
+            _ => false,
+        };
+        if !dead {
+            bail!(
+                "{} holds the storage-gc claim; rerun corral migrate --finalize --yes after it exits",
+                held.owner
+            );
+        }
+        let release = Operation::ReleaseClaim(ReleaseClaim {
+            name: STORAGE_GC_CLAIM.to_owned(),
+            owner: held.owner.clone(),
+        });
+        match backend.apply(release) {
+            Ok(_) | Err(ApplyError::Precondition(_)) => {}
+            Err(error) => bail!(
+                "releasing the storage-gc claim of dead holder {}: {error}",
+                held.owner
+            ),
+        }
+    }
     let op = Operation::Claim(Claim {
         name: STORAGE_GC_CLAIM.to_owned(),
         owner: me.owner(),
@@ -115,6 +143,30 @@ fn claim(backend: &dyn StoreBackend, me: &ProcessIdentity) -> Result<()> {
             "storage gc holds the storage-gc claim ({conflict:?}); rerun corral migrate --finalize --yes after it exits"
         ),
         Err(error) => Err(anyhow::anyhow!("taking the storage-gc claim: {error}")),
+    }
+}
+
+fn gc_claim(backend: &dyn StoreBackend) -> Result<Option<ClaimRow>> {
+    let view = backend.view()?;
+    let mut req = PageReq::first(256);
+    loop {
+        let page = view.storage_rows(&StorageQuery::Claims, req)?;
+        for row in page.items {
+            if let StorageRow::Claim(claim) = row
+                && claim.name == STORAGE_GC_CLAIM
+            {
+                return Ok(Some(claim));
+            }
+        }
+        match page.next {
+            Some(next) => {
+                req = PageReq {
+                    after: Some(next),
+                    limit: 256,
+                }
+            }
+            None => return Ok(None),
+        }
     }
 }
 

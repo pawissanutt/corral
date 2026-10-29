@@ -225,8 +225,9 @@ impl Manifest {
         serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
     }
 
-    /// Differences of the current tree from this manifest by path, kind, size and mtime, outside
-    /// CACHEDIR.TAG trees; empty when the legacy files are unchanged.
+    /// Differences of the current tree (captured with content hashes) from this manifest by path,
+    /// kind, size, mtime and content hash, outside CACHEDIR.TAG trees; empty when the legacy
+    /// files are unchanged.
     pub(crate) fn differences(&self, now: &Manifest) -> Vec<String> {
         let before: BTreeMap<&str, &ManifestEntry> =
             self.entries.iter().map(|e| (e.path.as_str(), e)).collect();
@@ -245,6 +246,9 @@ impl Manifest {
                         "{path}: changed ({} bytes -> {} bytes)",
                         was.size, is.size
                     ));
+                }
+                Some(is) if is.sha256 != was.sha256 => {
+                    out.push(format!("{path}: content changed"));
                 }
                 Some(_) => {}
             }
@@ -294,6 +298,8 @@ pub struct DryRun {
     /// Records that look live but are history (process-lost gate markers), reported only.
     pub history: Vec<Blocker>,
     pub unclassified: Vec<String>,
+    /// Live registered artifacts without a snapshot to import.
+    pub missing_artifacts: Vec<String>,
     pub tasks_by_schema: BTreeMap<String, u64>,
     pub runs: u64,
     pub review_runs: u64,
@@ -381,6 +387,8 @@ pub(crate) fn dry_run(corral: &Path) -> Result<DryRun> {
     let (live, history) = legacy.blockers(corral)?;
     out.blockers = live;
     out.history = history;
-    out.ok = out.blockers.is_empty() && out.unclassified.is_empty();
+    out.missing_artifacts = legacy.missing_snapshots(corral);
+    out.ok =
+        out.blockers.is_empty() && out.unclassified.is_empty() && out.missing_artifacts.is_empty();
     Ok(out)
 }

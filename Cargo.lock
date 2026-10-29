@@ -338,6 +338,7 @@ name = "corral-core"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "jiff",
  "libc",
  "regex",

@@ -110,6 +110,21 @@ impl LegacyBoard {
     }
 
     /// The live blockers and the history records reported beside them.
+    /// Live (non-purged) registered artifacts whose snapshot is not a regular file.
+    pub fn missing_snapshots(&self, corral: &Path) -> Vec<String> {
+        self.tasks
+            .iter()
+            .flat_map(|(t, _)| t.task.artifacts.iter().map(move |a| (t, a)))
+            .filter(|(_, a)| a.purged_at.is_none() && !corral.join(&a.path).is_file())
+            .map(|(t, a)| {
+                format!(
+                    "{} {} artifact {:?} ({})",
+                    t.task.id, a.run, a.title, a.path
+                )
+            })
+            .collect()
+    }
+
     pub fn blockers(&self, corral: &Path) -> Result<(Vec<Blocker>, Vec<Blocker>)> {
         let mut live = Vec::new();
         let mut history = Vec::new();

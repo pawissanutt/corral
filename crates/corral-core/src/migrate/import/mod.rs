@@ -4,6 +4,7 @@
 
 mod events;
 mod evidence;
+mod gates;
 mod inbox;
 mod records;
 mod tasks;
@@ -37,9 +38,19 @@ pub struct ImportReport {
     pub blobs_reused: u64,
     pub blob_raw_bytes: u64,
     pub blob_stored_bytes: u64,
-    /// Content hashes of the artifacts, checked against their recorded sha256.
+    pub gate_attempts: u64,
     #[serde(skip)]
-    pub(crate) artifact_blobs: Vec<(String, BlobHash)>,
+    pub(crate) gate_rows: gates::GateRows,
+    /// Each live artifact registration with its imported content.
+    #[serde(skip)]
+    pub(crate) artifact_blobs: Vec<ArtifactBlob>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ArtifactBlob {
+    pub task: String,
+    pub path: String,
+    pub hash: BlobHash,
 }
 
 /// Blobs the import stored, by hash, ready for one `ImportBatch`.
@@ -58,11 +69,12 @@ impl<'a> Blobs<'a> {
         }
     }
 
-    /// Stores `content` (deduplicated by hash) and returns its hash.
-    pub(crate) fn put(&mut self, content: &mut dyn std::io::Read) -> Result<BlobHash> {
+    /// Stores `content` (deduplicated by hash) and returns its hash and length.
+    pub(crate) fn put(&mut self, content: &mut dyn std::io::Read) -> Result<(BlobHash, u64)> {
         use crate::backend::BlobStore;
         let staged = self.store.stage(content)?;
         let hash = staged.hash.clone();
+        let bytes = staged.raw_bytes;
         let existed = self.store.path_of(&hash).is_file();
         let row = ImportedBlob {
             hash: hash.clone(),
@@ -74,13 +86,14 @@ impl<'a> Blobs<'a> {
         if self.rows.insert(hash.clone(), row).is_none() && existed {
             self.reused += 1;
         }
-        Ok(hash)
+        Ok((hash, bytes))
     }
 
     pub(crate) fn put_file(&mut self, path: &Path) -> Result<BlobHash> {
         let mut file =
             std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
         self.put(&mut file)
+            .map(|(hash, _)| hash)
             .with_context(|| format!("storing {}", path.display()))
     }
 }
@@ -163,6 +176,12 @@ pub(crate) fn run(
     )?;
     records::import(corral, &classified, &mut collected, &mut report)?;
     inbox::import(corral, &board, &classified, &mut collected)?;
+    report.gate_rows = gates::import(corral, &board, &lines, &mut blobs, &collected)?;
+    report.gate_attempts = report
+        .gate_rows
+        .values()
+        .map(|rows| rows.len() as u64)
+        .sum();
     report.blobs = blobs.rows.len() as u64;
     report.blobs_reused = blobs.reused;
     report.blob_raw_bytes = blobs.rows.values().map(|b| b.raw_bytes).sum();
@@ -219,8 +238,9 @@ pub(crate) fn verify(
 ) -> Result<()> {
     let board = LegacyBoard::read(corral)?;
     tasks::verify(backend, &board)?;
+    gates::verify(backend, &report.gate_rows)?;
     events::verify(corral, backend)?;
-    evidence::verify(backend, store, m0, report)
+    evidence::verify(backend, store, &board, m0, report)
 }
 
 pub(crate) fn legacy_file(

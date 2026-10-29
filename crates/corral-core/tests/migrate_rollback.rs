@@ -318,6 +318,73 @@ fn finalize_deletes_legacy_paths_and_ends_the_rollback_window() {
     }
 }
 
+fn hold_gc_claim(legacy: &Legacy, owner: &str, doc: serde_json::Value) {
+    use corral_core::backend::{Claim, Operation, STORAGE_GC_CLAIM, StoreBackend};
+    let backend = corral_core::sqlite::SqliteBackend::open(
+        &legacy.corral,
+        corral_core::sqlite::SqliteOptions::default(),
+    )
+    .unwrap();
+    let claim = Operation::Claim(Claim {
+        name: STORAGE_GC_CLAIM.to_owned(),
+        owner: owner.to_owned(),
+        acquired: jiff::Timestamp::now(),
+        doc,
+        reservations: Vec::new(),
+    });
+    backend.apply(claim).unwrap();
+}
+
+fn release_gc_claim(legacy: &Legacy, owner: &str) {
+    use corral_core::backend::{Operation, ReleaseClaim, STORAGE_GC_CLAIM, StoreBackend};
+    let backend = corral_core::sqlite::SqliteBackend::open(
+        &legacy.corral,
+        corral_core::sqlite::SqliteOptions::default(),
+    )
+    .unwrap();
+    let release = Operation::ReleaseClaim(ReleaseClaim {
+        name: STORAGE_GC_CLAIM.to_owned(),
+        owner: owner.to_owned(),
+    });
+    backend.apply(release).unwrap();
+}
+
+#[test]
+fn finalize_takes_over_a_dead_holders_storage_gc_claim_and_refuses_a_live_one() {
+    use corral_core::blob::ProcessIdentity;
+    // Given a published store whose storage-gc claim an unrecognized document holds.
+    let legacy = Legacy::new();
+    legacy.migrate().apply().unwrap();
+    hold_gc_claim(&legacy, "someone", serde_json::json!({"pid": 1}));
+    // When finalize runs, it refuses naming the holder; the store stays finalizing.
+    let error = legacy.migrate().finalize().unwrap_err();
+    assert!(format!("{error:#}").contains("someone"), "{error:#}");
+    assert_eq!(legacy.journal().unwrap()["state"], "finalizing");
+    release_gc_claim(&legacy, "someone");
+    // Given a live process holding the claim (a running storage gc).
+    let mut gc = std::process::Command::new("sleep")
+        .arg("600")
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let holder = ProcessIdentity::of(gc.id()).unwrap().unwrap();
+    hold_gc_claim(
+        &legacy,
+        &holder.owner(),
+        serde_json::to_value(&holder).unwrap(),
+    );
+    // When finalize runs while it lives, it refuses naming that holder and deletes nothing.
+    let error = legacy.migrate().finalize().unwrap_err();
+    assert!(format!("{error:#}").contains(&holder.owner()), "{error:#}");
+    assert!(legacy.exists("tasks") && legacy.exists("events.jsonl"));
+    // When that process dies holding the claim, the rerun takes the claim over and finalizes.
+    gc.kill().unwrap();
+    gc.wait().unwrap();
+    let done = legacy.migrate().finalize().unwrap();
+    assert_eq!(done.state, "finalized");
+    assert!(!legacy.exists("tasks"));
+}
+
 #[test]
 fn reapply_after_rollback_deduplicates_blobs_and_reports_reclaimed_build_output() {
     // Given a published store whose legacy build output storage gc reclaimed.
@@ -335,4 +402,27 @@ fn reapply_after_rollback_deduplicates_blobs_and_reports_reclaimed_build_output(
     let second = legacy.migrate().apply().unwrap().import.unwrap();
     assert_eq!(second.blobs, first.blobs);
     assert_eq!(second.blobs_reused, first.blobs);
+}
+
+#[test]
+fn rollback_refuses_a_same_size_same_mtime_content_change() {
+    // Given a published store whose legacy task file changed, keeping its size and mtime.
+    let legacy = Legacy::new();
+    legacy.migrate().apply().unwrap();
+    support::alter_in_place(
+        &legacy.corral,
+        "tasks/T-002-backlog.md",
+        "Body of",
+        "Text of",
+    );
+    // When it is rolled back, the M0 comparison (R1) refuses naming the file.
+    let error = legacy.migrate().rollback(None).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("tasks/T-002-backlog.md: content changed"),
+        "{error:#}"
+    );
+    // Then nothing changed: still published at fence 4 with the database in place.
+    assert_eq!(legacy.journal().unwrap()["state"], "published");
+    assert_eq!(legacy.fence().as_deref(), Some("4\n"));
+    assert!(legacy.exists("db") && !legacy.exists("rollback"));
 }
