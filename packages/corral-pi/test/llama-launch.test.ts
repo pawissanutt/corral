@@ -33,6 +33,24 @@ test("a local route requires its enabled capability and resolved settings", () =
   }))).toThrow();
 });
 
+test("one launch snapshot preserves both local inference and project MCP settings", () => {
+  // Given a local profile with independent MCP permissions and an explicit project server.
+  const mcp = { servers: {
+    docs: { projects: ["demo"], url: "http://127.0.0.1:8787/mcp", args: [], tools: { search: "read" }, resources: [] },
+  } };
+  // When the composed launch boundary parses the generation snapshot.
+  const config = parseLaunchMessage(JSON.stringify({
+    ...message, capabilities: {
+      ...message.capabilities, enabled: ["llama_cpp.enabled", "mcp.enabled", "tool_search"], mcp,
+    },
+  }));
+  // Then both policies remain intact without replacing the selected inference provider.
+  expect(config.provider).toBe("llama.cpp");
+  expect(config.capabilities?.llama_cpp).toEqual(message.capabilities.llama_cpp);
+  expect(config.capabilities?.mcp).toEqual(mcp);
+  expect(config.capabilities?.enabled).toEqual(["llama_cpp.enabled", "mcp.enabled", "tool_search"]);
+});
+
 for (const role of ["worker", "reviewer", "pm"] as const) {
   for (const provider of ["openai-codex", "anthropic", "amazon-bedrock"] as const) {
     test(`${role}/${provider} accepts the role's local permission without changing its cloud selection`, () => {

@@ -881,11 +881,8 @@ mod llama_cpp_tests {
             ))
             .unwrap();
             let snapshot = bootstrap.capabilities.as_mut().unwrap();
-            snapshot
-                .features
-                .get_mut("llama_cpp.enabled")
-                .unwrap()
-                .enabled = enabled;
+            let feature = snapshot.features.get_mut("llama_cpp.enabled").unwrap();
+            feature.enabled = enabled;
             let local = snapshot.llama_cpp.clone().unwrap();
             bootstrap.provider = host_provider(Some("llama.cpp"), "openai/x");
             let ready = Ready {
