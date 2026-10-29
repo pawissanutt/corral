@@ -1,5 +1,5 @@
 mod admission;
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 mod metered_tests;
 mod pane;
 #[cfg(test)]
