@@ -229,6 +229,25 @@ fetch. Every other request, the other provider's endpoints and bug-report upload
 refused. The same holds after a reload and
 after the session is replaced.
 
+### Model catalog
+
+Launch and model listing share a corral-owned catalog, including models added in
+`$XDG_DATA_HOME/corral/pi-native/models.json`, or
+`~/.local/share/corral/pi-native/models.json` when `XDG_DATA_HOME` is unset or relative.
+Ambient Pi configuration (`~/.pi/agent` and `PI_CODING_AGENT_DIR`) is not loaded.
+Add a model under an existing subscription provider with that provider's model API;
+no corral source change is needed. Pi's model refresh reloads this file offline.
+Remote catalog requests remain disabled and model endpoint restrictions remain in force.
+Metadata uses an in-memory catalog store, not an ambient `models-store.json`.
+Invalid JSON or model configuration fails startup with `model_catalog_invalid`
+and the SDK's diagnostic, including the file path. A failed refresh retains the
+last valid catalog and reports the configuration error.
+
+The catalog exposes only the providers approved for the current host. Configuration
+can add or change model metadata, but cannot enable another provider, API-key auth,
+custom auth headers or an alternate streaming implementation. Parent-installed
+subscription and guarded-stream restrictions survive model refresh.
+
 ### The bridge
 
 corral talks to a live host over its generation's Unix socket. Any corral process can connect
@@ -456,8 +475,12 @@ hello, role or delivery module, and no `corral_*` tool: only Pi's own read, edit
 grep, find and ls. It runs the installed assets' pinned Pi SDK: a release installation's compiled
 host runs its own bare mode (`corral-pi-host bare`) with its embedded Bun and bundled auth module,
 so no Bun is needed on PATH, and a source installation runs under Bun after the same Bun range
-and lock checks. It uses the corral-owned login of `--provider` (default `openai-codex`; run `corral agent
-login --provider <p>` first) and the same guarded fetch, restrictions and model lanes as the
+and lock checks. `--provider` chooses the initial provider (default `openai-codex`; run `corral agent
+login --provider <p>` first), not the session's provider boundary. The model picker exposes every
+supported provider with a corral-owned subscription login, so you can switch between OpenAI
+and Claude in the same session. Missing optional logins are explained at startup; log in and
+restart to include them. Bound runs retain the provider selected by their run contract.
+Bare mode uses the same guarded fetch, restrictions and model lanes as the
 bound host: Anthropic runs through the Claude Agent SDK lane, with Claude Code's private config
 directory in `$XDG_DATA_HOME/corral/pi-native/bare/agent/claude-code/`. `--model` defaults to
 Pi's own default for the provider. Sessions are kept in

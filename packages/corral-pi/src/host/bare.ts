@@ -17,7 +17,9 @@ import { loadAuth } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictEnvironment, restrictedSettings } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
-import { authContext, restrictProvider } from "./session.ts";
+import { restrictProvider } from "./session.ts";
+import { providerCapabilities, providerTransport, type ProviderAvailability } from "./capabilities.ts";
+import { createModelCatalog } from "./catalog.ts";
 
 /** Pi 1.3.0's own default model of each provider (`defaultModelPerProvider`, not exported). */
 export const BARE_DEFAULT_MODEL: Readonly<Record<ProviderId, string>> = {
@@ -77,6 +79,7 @@ export interface BareSession {
   readonly runtime: AgentSessionRuntime;
   readonly sessionDir: string;
   readonly network: GuardedFetch;
+  readonly providers: readonly ProviderAvailability[];
 }
 
 /**
@@ -85,9 +88,9 @@ export interface BareSession {
  */
 export async function openBare(options: BareOptions, loadSdk: () => Promise<typeof Sdk>): Promise<BareSession> {
   const auth = await loadAuth(options.assets, options.provider);
-  const context = authContext(options.provider);
-  const send = auth.transport?.(context) ?? globalThis.fetch.bind(globalThis);
-  const network = guardedFetch(send, undefined, options.provider);
+  const capabilities = await providerCapabilities(auth, options.provider, auth.providers ?? [auth.provider]);
+  const send = providerTransport(auth, capabilities.providers, globalThis.fetch.bind(globalThis));
+  const network = guardedFetch(send, undefined, capabilities.providers);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await loadSdk();
   const root = join(options.dataRoot, "bare");
@@ -95,15 +98,17 @@ export async function openBare(options: BareOptions, loadSdk: () => Promise<type
   const agentDir = join(root, "agent");
   for (const dir of [sessionDir, agentDir]) mkdirSync(dir, { recursive: true, mode: 0o700 });
   const route = PROVIDERS[options.provider];
-  const models = await sdk.ModelRuntime.create({
-    credentials: auth.credentials(context), modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
+  const models = await createModelCatalog(capabilities.credentials, {
+    providers: capabilities.providers, modelsPath: join(options.dataRoot, "models.json"),
   });
   const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
   const model = models.getModel(route.id, modelId);
   if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
   // The same model lanes as the bound host: Anthropic runs through the Claude Agent SDK lane (T-493).
-  restrictProvider(models, route.id, network.fetch as typeof globalThis.fetch,
-    { configDir: join(agentDir, "claude-code"), cwd: options.cwd });
+  for (const provider of capabilities.providers) {
+    restrictProvider(models, provider, network.fetch as typeof globalThis.fetch,
+      { configDir: join(agentDir, "claude-code"), cwd: options.cwd });
+  }
   const thinkingLevel = options.effort && THINKING.has(options.effort)
     ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
   const tools = [...UPSTREAM_TOOLS];
@@ -115,14 +120,14 @@ export async function openBare(options: BareOptions, loadSdk: () => Promise<type
     const result = await sdk.createAgentSessionFromServices({
       services, sessionManager, model, tools,
       ...(sessionStartEvent ? { sessionStartEvent } : {}),
-      ...(thinkingLevel ? { thinkingLevel, scopedModels: [{ model, thinkingLevel }] } : { scopedModels: [{ model }] }),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     });
     return { ...result, services, diagnostics: services.diagnostics };
   };
   const runtime = await sdk.createAgentSessionRuntime(factory, {
     cwd: options.cwd, agentDir, sessionManager: sdk.SessionManager.create(options.cwd, sessionDir),
   });
-  return { runtime, sessionDir, network };
+  return { runtime, sessionDir, network, providers: capabilities.availability };
 }
 
 /** Runs bare Pi from `argv` on `assets` (this source tree, or a compiled host's directory). */
@@ -139,6 +144,9 @@ export async function runBare(argv: readonly string[], assets: string): Promise<
   if (!sdk) throw new Error("the Pi SDK did not load");
   const terminal = new sdk.InteractiveMode(bare.runtime, { verbose: false });
   await terminal.init();
+  for (const provider of bare.providers) {
+    if (!provider.available) terminal.showWarning(provider.reason ?? `${provider.provider} is unavailable`);
+  }
   await terminal.run();
 }
 

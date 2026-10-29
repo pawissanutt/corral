@@ -88,9 +88,10 @@ export interface GuardedFetch {
  * redirects. Every other provider's endpoints are refused like any other destination.
  */
 export function guardedFetch(
-  send: Fetch, onRefused?: (destination: string) => void, provider: ProviderId = "openai-codex",
+  send: Fetch, onRefused?: (destination: string) => void,
+  provider: ProviderId | readonly ProviderId[] = "openai-codex",
 ): GuardedFetch {
-  const destinations = hostDestinations(provider);
+  const destinations = typeof provider === "string" ? hostDestinations(provider) : provider.flatMap(hostDestinations);
   let allowed = 0;
   let refused = 0;
   const refusedDestinations: string[] = [];

@@ -26,6 +26,7 @@ import { corralRenderers } from "../ui/render.ts";
 import type { UiMode } from "./config.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
+import { createModelCatalog } from "./catalog.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -163,9 +164,8 @@ export class HostSession {
     const host = new HostSession(options);
     const { sdk } = options;
     const route = PROVIDERS[host.provider];
-    const models = await sdk.ModelRuntime.create({
-      credentials: options.modules.auth.credentials(authContext(route.id)),
-      modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
+    const models = await createModelCatalog(options.modules.auth.credentials(authContext(route.id)), {
+      providers: [route.id],
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = models.getModel(route.id, modelId);
