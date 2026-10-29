@@ -26,6 +26,7 @@ import argparse
 import collections
 import datetime as dt
 import glob
+import hashlib
 import json
 import os
 import re
@@ -671,12 +672,17 @@ def run_metrics(run, ts_facts, gates_by_task, artifacts_root):
         s_.get("rebase_cause") == "main_moved_after_submit" and s_["kind"] in ("rebase_main_moved_after_submit", "rebase_and_evidence")
         for s_ in sb))
     resolutions = sorted(ev.get("done", []) + ev.get("approved", []), key=lambda e: e["_t"])
-    m["escalations"] = [
-        classify_escalation((e.get("detail") or {}).get("notes")) | {
+    m["escalations"] = []
+    for e in sorted(ev.get("verdict", []), key=lambda e: e["_t"]):
+        detail = e.get("detail") or {}
+        if detail.get("verdict") != "escalate":
+            continue
+        notes = detail.get("notes")
+        if isinstance(notes, str) and notes.startswith("blob:sha256:"):
+            notes = note_body(notes, artifacts_root)
+        m["escalations"].append(classify_escalation(notes) | {
             "task": run["task"], "run": run["run"], "ts": e.get("ts"),
-            "latency_s": secs(e["_t"], next((x["_t"] for x in resolutions if x["_t"] > e["_t"]), None))}
-        for e in sorted(ev.get("verdict", []), key=lambda e: e["_t"])
-        if (e.get("detail") or {}).get("verdict") == "escalate"]
+            "latency_s": secs(e["_t"], next((x["_t"] for x in resolutions if x["_t"] > e["_t"]), None))})
     t = ts_facts
     if t is None:
         m["transcript"] = False
@@ -949,11 +955,28 @@ def main():
     for e in events:
         if e.get("kind") == "gate":
             gates_by_task[e["task"]].append(e)
+    # Full show records preserve the original notes, including historical review
+    # children. Match exact content, not a run's latest verdict or a lossy summary.
+    stored_notes = {}
+    pending = list(tasks)
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            notes = value.get("notes")
+            if isinstance(notes, str):
+                digest = hashlib.sha256(notes.encode("utf-8")).hexdigest()
+                stored_notes["blob:sha256:" + digest] = notes
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+
     def read_note(path: str) -> str:
         # Stored paths are logical references, including after legacy mirrors go.
         # Offline fixture copies can retain the original workspace's absolute path.
         reference = path.split("/.corral/", 1)[-1]
-        if reference.startswith(("artifacts/", "blob:")):
+        if reference.startswith("blob:sha256:"):
+            return stored_notes[reference]
+        if reference.startswith("artifacts/"):
             return subprocess.run(
                 [args.corral, "--root", root, "artifact", "show", reference, "--raw"],
                 capture_output=True, text=True, stdin=subprocess.DEVNULL, check=True,
