@@ -89,6 +89,7 @@ containers too.
 | `reports` | AgentReport[] | ≤ 64 (`REPORTS_MAX`) | op-receipts |
 | `todo` | RunProgress? | PM-only canonical ledger; absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
 | `jobs` | JobRecord[] | worker only; ≤ 64 (`JOBS_MAX`), the oldest ended job evicted first, live jobs never | background-shell |
+| `rewinds` | RewindRecord[] | worker only; ≤ 32 (`REWINDS_MAX`), the oldest finished rewind evicted first, a pending one never | checkpoints-rewind |
 
 `JobRecord` holds `id`, the owning `generation`, `command` (≤ 4 KiB), `state`
 (`prepared`, `running`, `exited`, `reaped`, `lost`), the process-group leader `pid` and its kernel
@@ -223,6 +224,24 @@ result and every invocation that never completed (at most 256, else scan limit `
 A recorded hook, or a pre/post hook in the lost generation's `hooks` snapshot settings that
 wraps the tool, makes that call `outcome_unknown`; unfinished hooks are listed
 `outcome_unknown`. Nothing is replayed.
+
+### `corral_checkpoint` session entry and RewindRecord (T-575)
+
+`corral_checkpoint` is a Pi custom entry the worker host appends to its bound session file after
+each turn-start and turn-end snapshot. Storage class: recovery-critical, in the container's
+session file, read by `corral agent rewind` (lines over 64 KiB are skipped, at most 4096 entries)
+and never written by corral. Fields: `id` (`g<generation>-t<turn>`), `phase` (`start` | `end`),
+`generation`, `turn`, and either `commit` (the snapshot), `head` (its parent), `ref` (its private
+`refs/worktree/` ref) and, on a start, `leaf` (the last session entry before the turn), or
+`error` (≤ 512 characters). The timeline drops the checkpoints a launched rewind abandoned.
+
+`RewindRecord` (`AgentRunState.rewinds`) holds `id` (`rw-<n>`), `checkpoint`, its `commit`,
+`head` and `leaf`, `from_generation`, `stage` (`prepared`, `fenced`, `saved`, `restoring`,
+`restored`, `launched`, `aborted`), the saved `before` commit and `before_ref`, the launched
+`generation`, `restored` (≤ 64 paths, `REWIND_PATHS_MAX`) with `restored_count`, `kept`, `detail`,
+`at` and `updated`. Storage class: canonical. Writer: checkpoints-rewind. At most one rewind is
+unfinished per container; launch reads its `leaf` only at stage `restored` (bootstrap
+`resume_leaf`).
 
 ### AgentTurn, TurnOrigin, TurnClass
 

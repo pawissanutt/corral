@@ -165,6 +165,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: None,
     },
+    CapabilityDef {
+        key: "checkpoints",
+        summary: "worker turn checkpoints for owner rewinds",
+        defaults: |role| (role == AgentRole::Worker).then_some([false, false, true]),
+        host: true,
+        settings: None,
+    },
 ];
 
 /// Validates configured servers and preserves their generation-bound settings.

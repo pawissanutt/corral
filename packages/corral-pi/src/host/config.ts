@@ -19,7 +19,7 @@ export const LAUNCH_VERSION = 1;
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled",
+  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled", "checkpoints",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -47,6 +47,8 @@ export interface HostConfig {
   readonly sessionDir: string;
   readonly resumeSession?: string;
   readonly freshSession?: boolean;
+  /** A restored rewind's session entry; the resumed session branches there (T-575). */
+  readonly resumeLeaf?: string;
   readonly todo?: boolean;
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
@@ -212,6 +214,13 @@ export function parseLaunchMessage(text: string): HostConfig {
       throw new LaunchMessageInvalid("background_shell requires its resolved settings");
     }
   }
+  if (capabilities?.enabled.includes("checkpoints") && role !== "worker") {
+    throw new LaunchMessageInvalid(`checkpoints is not available to the ${role} role`);
+  }
+  const resumeLeaf = optional(message, "resume_leaf", /^[A-Za-z0-9._:-]{1,128}$/);
+  if (resumeLeaf !== undefined && message.resume_session == null) {
+    throw new LaunchMessageInvalid("resume_leaf requires resume_session");
+  }
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {
@@ -235,6 +244,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     sessionDir: path(message, "session_dir"),
     resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
     freshSession: message.fresh_session === true,
+    ...(resumeLeaf ? { resumeLeaf } : {}),
     todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
     ...(capabilities ? { capabilities } : {}),
     ...(guidance ? { guidance } : {}),

@@ -13,6 +13,7 @@ pub mod pm_state;
 mod question;
 mod records;
 pub mod rejections;
+mod rewind;
 #[cfg(test)]
 mod tests;
 mod todo;
@@ -25,4 +26,5 @@ pub use local_controls::*;
 pub use pm_state::AgentPm;
 pub use question::*;
 pub use records::*;
+pub use rewind::*;
 pub use todo::*;

@@ -68,6 +68,9 @@ pub struct Bootstrap {
     pub resume_session: Option<PathBuf>,
     #[serde(default)]
     pub fresh_session: bool,
+    /// A restored rewind's session entry: the host branches `resume_session` there (T-575).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_leaf: Option<String>,
     pub model: String,
     /// The Pi provider whose credential the host loads; absent means `openai-codex`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -297,6 +300,7 @@ pub fn prepare_bootstrap(
     let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
     let mut resume_session = None;
     let mut fresh_session = false;
+    let mut resume_leaf = None;
     let latest_bound = |state: &AgentRunState| {
         state
             .generations
@@ -331,6 +335,8 @@ pub fn prepare_bootstrap(
                     resume_session = session.transcript.clone();
                 }
             }
+            let state = run.agent_host.as_deref();
+            resume_leaf = state.and_then(|s| s.rewind_cursor()).map(str::to_owned);
             (
                 task.project
                     .clone()
@@ -416,6 +422,7 @@ pub fn prepare_bootstrap(
         session_dir,
         resume_session,
         fresh_session,
+        resume_leaf,
         model: spec.model.clone(),
         provider: spec.provider.clone(),
         aws,
@@ -788,7 +795,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "corral": bootstrap.corral, "assets": ready.assets,
         "runtime_dir": ready.generation_dir, "session_dir": bootstrap.session_dir,
         "resume_session": bootstrap.resume_session,
-        "fresh_session": bootstrap.fresh_session,
+        "fresh_session": bootstrap.fresh_session, "resume_leaf": bootstrap.resume_leaf,
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
         "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
