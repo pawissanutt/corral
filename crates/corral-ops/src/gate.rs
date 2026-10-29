@@ -400,8 +400,10 @@ fn gate_start_origin(
     }
     let sha = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let attempt = launch.bound_attempt().or(requested).unwrap_or_else(|| {
+        // A fixed-width pid (Linux pids have at most seven digits): attempt ids, and the records
+        // that carry them, keep one size whichever process starts the gate.
         format!(
-            "{}-{}",
+            "{:07}-{}",
             std::process::id(),
             jiff::Timestamp::now().as_nanosecond()
         )
