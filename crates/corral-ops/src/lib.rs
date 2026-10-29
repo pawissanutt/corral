@@ -272,10 +272,10 @@ pub use routing::{
 };
 pub use search::{SearchData, search_tasks};
 pub use skill::{
-    MODEL_SELECTION_PROCEDURE, MODEL_SELECTION_VERSION, PLANNER_SKILL, PM_SKILL, ROLE_SKILLS,
-    SKILL_HARNESSES, SKILL_MARKER, SKILL_SHARED, SUBMIT_SKILL, SkillAction, SkillWrite, VERBS,
-    WORKER_SKILL, duplicate_skills, ensure_skills, install_harness_skills, install_role_skills,
-    role_skill_markdown, skill_markdown, skills_dir_for, verbs_block,
+    MODEL_SELECTION_PROCEDURE, MODEL_SELECTION_VERSION, PI_SKILLS, PLANNER_SKILL, PM_SKILL,
+    ROLE_SKILLS, SKILL_HARNESSES, SKILL_MARKER, SKILL_SHARED, SUBMIT_SKILL, SkillAction,
+    SkillWrite, VERBS, WORKER_SKILL, duplicate_skills, ensure_skills, install_harness_skills,
+    install_role_skills, role_skill_markdown, skill_markdown, skills_dir_for, verbs_block,
 };
 pub use slots::{SlotUsage, slot_usage, soft_target};
 pub use sprint::{
