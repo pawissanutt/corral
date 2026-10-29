@@ -112,7 +112,9 @@ lint configuration file changed). Nextest runs the declared tests, joined with
 `or`, or else the tests of the touched modules, chosen by `scripts/gate_select.py`:
 
 - A changed library source file selects its module's unit tests (test names under
-  its module path, or a sibling `<module>_tests` module) and every integration
+  its module path, or a sibling `<module>_tests` module), the tests of every other
+  library file that holds tests and names the module (its own tests, not those of
+  its child module files), and every integration
   test target whose sources name that module: as `crate::module`, through a
   crate-root re-export, or after a glob import of the crate. Within a target,
   only the test modules whose files name it are selected, or the whole target
@@ -124,7 +126,9 @@ lint configuration file changed). Nextest runs the declared tests, joined with
   as the including module.
 - A changed file under `tests/` selects its test module in the targets whose
   module trees include it (counting files shared through `#[path]`), or those
-  whole targets when it is their root or a fixture module.
+  whole targets when it is their root or a fixture module. When the library
+  also includes that file through `#[path]`, it is selected as a library module
+  as well.
 - A crate root made only of `mod` and `use` declarations adds nothing when the
   crate's other changed paths select tests.
 - Anything the mapping cannot decide selects the whole crate, and the log names
