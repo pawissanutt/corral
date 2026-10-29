@@ -59,6 +59,15 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
     }
     consulted("preflight");
     corral_core::check_pi_native_vendor(&resolved.profile, resolved.vendor.as_deref())?;
+    corral_core::check_pi_native_metered_opt_in(
+        &resolved.profile,
+        ctx.store
+            .config
+            .profiles
+            .get(&resolved.profile)
+            .and_then(|profile| profile.vendor.as_deref()),
+        resolved.vendor.as_deref(),
+    )?;
     let explicit = ctx.store.config.agent.assets_dir.clone();
     let dir = match explicit.clone() {
         Some(dir) => dir,
@@ -83,7 +92,59 @@ pub fn check(ctx: &Ctx, role: AgentRole, resolved: &ResolvedProfile) -> Result<(
             resolved.vendor.as_deref(),
         )?;
     }
+    if resolved.vendor.as_deref() == Some("amazon-bedrock") {
+        let home = std::env::var_os("HOME")
+            .ok_or_else(|| refuse("credentials_unavailable", "HOME is not set".into()))?;
+        bedrock(&super::super::install::data_root()?, Path::new(&home))?;
+    }
     Ok(())
+}
+
+/// Read-only AWS readiness, shared with doctor and fixture checks. A development host still
+/// needs the owner's explicit, non-secret Bedrock binding.
+pub(crate) fn bedrock(
+    root: &Path,
+    home: &Path,
+) -> Result<super::super::aws_profile::AwsBinding, Refusal> {
+    let checked = || -> Result<super::super::aws_profile::AwsBinding> {
+        let binding = super::super::aws_profile::read_binding(root)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "amazon-bedrock not logged in; run `corral agent login --provider amazon-bedrock`"
+            )
+        })?;
+        super::super::aws_profile::inspect_profile(home, &binding.profile)?
+            .check_ready(jiff::Timestamp::now())?;
+        Ok(binding)
+    };
+    checked().map_err(|error| {
+        let detail = format!("{error:#}");
+        let code = if detail.starts_with("network_refused:") {
+            "network_refused"
+        } else {
+            "credentials_unavailable"
+        };
+        refuse(code, detail)
+    })
+}
+
+/// Builds the notice only. Readiness checks never present metered messages or events.
+pub fn metered_notice(
+    role: &str,
+    resolved: &ResolvedProfile,
+    binding: &super::super::aws_profile::AwsBinding,
+) -> Option<String> {
+    (is_pi_native(&resolved.harness) && resolved.vendor.as_deref() == Some("amazon-bedrock")).then(
+        || {
+            format!(
+                "metered: {role} profile {} runs on Amazon Bedrock (per-token AWS billing; \
+             AWS profile {}, region {}, model {})",
+                resolved.profile,
+                binding.profile,
+                binding.region,
+                resolved.model.as_deref().unwrap_or("(unset)")
+            )
+        },
+    )
 }
 
 /// Refuses a vendor whose provider has no usable corral-owned login, naming the provider and the

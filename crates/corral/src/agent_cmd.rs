@@ -45,8 +45,14 @@ enum AgentCmd {
     /// Provision the corral-owned Pi credentials with one interactive owner login
     Login {
         /// Provider to log in; without it a terminal shows an arrow-key picker
-        #[arg(long, value_parser = ["openai-codex", "anthropic"])]
+        #[arg(long, value_parser = ["openai-codex", "anthropic", "amazon-bedrock"])]
         provider: Option<String>,
+        /// Named AWS profile for Amazon Bedrock (never ambient credentials)
+        #[arg(long)]
+        aws_profile: Option<String>,
+        /// Standard AWS region for Amazon Bedrock
+        #[arg(long)]
+        region: Option<String>,
     },
     /// Report the Bun runtime, installed assets, GO manifest, roles and credential presence
     Doctor {
@@ -130,7 +136,18 @@ pub fn run(start: &Path, args: AgentArgs, entry: &Entry) -> Result<()> {
             cli::launch(start, &cli::LaunchArgs { bootstrap, assets })
         }
         AgentCmd::Install { from, json } => cli::install(start, &cli::InstallArgs { from, json }),
-        AgentCmd::Login { provider } => match cli::login(start, provider.as_deref()) {
+        AgentCmd::Login {
+            provider,
+            aws_profile,
+            region,
+        } => match corral_ops::agent::credentials::login_with_aws(
+            start,
+            provider.as_deref(),
+            &corral_ops::agent::credentials::AwsLoginOptions {
+                profile: aws_profile.as_deref(),
+                region: region.as_deref(),
+            },
+        ) {
             Err(error) if error.is::<corral_ops::agent::credentials::LoginCancelled>() => {
                 eprintln!("{error}");
                 std::process::exit(130);

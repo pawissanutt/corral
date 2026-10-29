@@ -2,8 +2,8 @@
 //! harness. Owner: T-252 child host-install (adds the Bun version, installed digest,
 //! credential presence and wake route).
 //!
-//! Credential presence comes from file metadata only: no doctor or state line ever reads the
-//! bytes of the corral-owned auth file.
+//! OAuth credential presence comes from file metadata only. Bedrock reads its non-secret binding
+//! and profile metadata offline; no doctor line exposes credential values.
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -189,6 +189,18 @@ pub(crate) fn checks_with(
         let each = credentials::PROVIDERS
             .iter()
             .map(|p| {
+                if p.id == "amazon-bedrock" {
+                    return match crate::agent::aws_profile::read_binding(root) {
+                        Ok(Some(binding)) => {
+                            format!(
+                                "amazon-bedrock bound: profile {}, region {}, metered",
+                                binding.profile, binding.region
+                            )
+                        }
+                        Ok(None) => "amazon-bedrock not logged in".into(),
+                        Err(error) => format!("amazon-bedrock unusable: {error:#}"),
+                    };
+                }
                 let state = if credentials::provider_status(root, p.id).present {
                     "logged in"
                 } else {
@@ -239,7 +251,7 @@ pub(crate) fn checks_with(
             ctx.store.config.agent.question_unattended_secs
         ),
     };
-    Ok(vec![
+    let mut checks = vec![
         line(
             "pi_native_bun",
             runtime.0,
@@ -254,7 +266,50 @@ pub(crate) fn checks_with(
             "Run `corral agent login` in a pane to log in each provider your pi-native profiles use.",
         ),
         line("pi_native_question_wake", true, wake, ""),
-    ])
+    ];
+    let bedrock_configured = ctx.store.config.profiles.values().any(|profile| {
+        corral_core::is_pi_native(&profile.harness)
+            && profile
+                .vendor
+                .clone()
+                .or_else(|| profile.model.as_deref().and_then(corral_core::infer_vendor))
+                .as_deref()
+                == Some("amazon-bedrock")
+    });
+    if bedrock_configured
+        || root
+            .as_deref()
+            .is_some_and(|root| credentials::provider_status(root, "amazon-bedrock").present)
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        checks.push(bedrock_check(root.as_deref(), home.as_deref()));
+    }
+    Ok(checks)
+}
+
+/// Offline readiness with explicit roots so a fixture never inspects the owner's AWS files.
+pub(crate) fn bedrock_check(root: Option<&Path>, home: Option<&Path>) -> DoctorCheck {
+    let readiness = || -> Result<String> {
+        let root = root.ok_or_else(|| anyhow::anyhow!("no data directory"))?;
+        let home = home.ok_or_else(|| anyhow::anyhow!("HOME is not set"))?;
+        let binding = super::preflight::bedrock(root, home)?;
+        let profile = crate::agent::aws_profile::inspect_profile(home, &binding.profile)?;
+        Ok(format!(
+            "amazon-bedrock bound: profile {}, region {}, {}, metered",
+            binding.profile,
+            binding.region,
+            profile.description()
+        ))
+    };
+    match readiness() {
+        Ok(message) => line("pi_native_bedrock", true, message, ""),
+        Err(error) => line(
+            "pi_native_bedrock",
+            false,
+            format!("amazon-bedrock: {error:#}"),
+            &format!("{error:#}"),
+        ),
+    }
 }
 
 #[cfg(all(test, unix))]

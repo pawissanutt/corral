@@ -1,4 +1,5 @@
 use corral_core::{Config, FlagMap, Harness, Profile, ProfileChoice};
+use std::path::Path;
 use tempfile::tempdir;
 
 /// The workspace `.corral/corral.toml` written before profiles existed (agents only).
@@ -294,12 +295,17 @@ fn pi_native_profiles_resolve_for_listed_vendors_and_refuse_unlisted_ones() {
     // Given opt-in pi-native profiles for anthropic, openai and an unlisted vendor.
     let d = tempdir().unwrap();
     let mut c = Config::default_for(d.path());
-    for vendor in ["anthropic", "openai", "mistral"] {
+    for vendor in ["anthropic", "openai", "amazon-bedrock", "mistral"] {
         let mut p = profile("pi-native", Some("some-model"), None);
         p.vendor = Some(vendor.into());
         c.profiles.insert(vendor.into(), p);
     }
-    for (name, allowed) in [("anthropic", true), ("openai", true), ("mistral", false)] {
+    for (name, allowed) in [
+        ("anthropic", true),
+        ("openai", true),
+        ("amazon-bedrock", true),
+        ("mistral", false),
+    ] {
         // When the profile resolves and its vendor meets the allowlist.
         let r = c
             .resolve_profile(&choice(Some(name), None, None), None, None)
@@ -334,4 +340,96 @@ fn profiles_round_trip_through_toml() {
     let f = d.path().join("c.toml");
     std::fs::write(&f, c.to_toml()).unwrap();
     assert_eq!(Config::load(&f).unwrap(), c);
+}
+
+#[test]
+fn metered_vendor_requires_explicit_opt_in_but_subscriptions_do_not() {
+    // Given raw vendor fields and the vendor resolved from the effective model.
+    for (explicit, resolved, allowed) in [
+        (Some("amazon-bedrock"), Some("amazon-bedrock"), true),
+        (None, Some("amazon-bedrock"), false),
+        (Some("anthropic"), Some("amazon-bedrock"), false),
+        (None, Some("anthropic"), true),
+        (None, Some("openai"), true),
+        (None, None, true),
+    ] {
+        // When the metered opt-in is checked, then only explicit metered routes pass.
+        let checked = corral_core::check_pi_native_metered_opt_in("p", explicit, resolved);
+        assert_eq!(checked.is_ok(), allowed, "{explicit:?} {resolved:?}");
+        if !allowed {
+            assert!(
+                checked
+                    .unwrap_err()
+                    .to_string()
+                    .starts_with("metered_vendor_not_explicit:")
+            );
+        }
+    }
+}
+
+#[test]
+fn bedrock_catalog_ids_infer_vendor_without_losing_version_colons() {
+    // Given qualified and bare Bedrock IDs, and existing subscription model IDs.
+    for (model, vendor) in [
+        (
+            "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "amazon-bedrock",
+        ),
+        (
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "amazon-bedrock",
+        ),
+        (
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "amazon-bedrock",
+        ),
+        (
+            "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "amazon-bedrock",
+        ),
+        ("us.meta.llama3-3-70b-instruct-v1:0", "amazon-bedrock"),
+        ("gpt-5.5", "openai"),
+        ("claude-opus-5.5", "anthropic"),
+        ("o3.1", "openai"),
+        ("openai-codex/gpt-5.5", "openai"),
+    ] {
+        // When inference runs, then model version separators never become the vendor.
+        assert_eq!(
+            corral_core::infer_vendor(model).as_deref(),
+            Some(vendor),
+            "{model}"
+        );
+    }
+}
+
+#[test]
+fn pi_native_bedrock_candidates_require_metered_cost() {
+    use corral_core::{CandidateCost, ExecutionCandidate};
+    // Given the same explicit Bedrock candidate with each cost classification.
+    let c = Config::default_for(Path::new("/nonexistent"));
+    for (cost, allowed) in [
+        (CandidateCost::Unknown, false),
+        (CandidateCost::Subscription, false),
+        (
+            CandidateCost::Metered {
+                currency: "USD".into(),
+                maximum_micros: 10_000,
+            },
+            true,
+        ),
+    ] {
+        let candidate = ExecutionCandidate {
+            id: "bedrock".into(),
+            harness: "pi-native".into(),
+            connection: "aws-profile".into(),
+            provider: "amazon-bedrock".into(),
+            model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0".into(),
+            effort: None,
+            args: Vec::new(),
+            evidence: "fixture".into(),
+            cost,
+        };
+        // When validated, then only a metered declaration is accepted.
+        assert_eq!(candidate.validate(&c).is_ok(), allowed);
+    }
 }

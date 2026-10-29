@@ -51,12 +51,18 @@ pub fn command(
     resolved: &ResolvedProfile,
     pane: &str,
 ) -> Option<Result<String>> {
-    super::is_pi_native(&resolved.harness).then(|| pi_command(ctx, task, parent, pane))
+    super::is_pi_native(&resolved.harness).then(|| pi_command(ctx, task, parent, pane, resolved))
 }
 
 /// The launcher binds the parent run, the review child and the callback token from the saved
 /// record, never from the model.
-fn pi_command(ctx: &Ctx, task: &Task, parent: &Run, pane: &str) -> Result<String> {
+fn pi_command(
+    ctx: &Ctx,
+    task: &Task,
+    parent: &Run,
+    pane: &str,
+    resolved: &ResolvedProfile,
+) -> Result<String> {
     consulted("review");
     let saved = ctx.store.get(&task.id)?;
     let run = saved
@@ -93,7 +99,24 @@ fn pi_command(ctx: &Ctx, task: &Task, parent: &Run, pane: &str) -> Result<String
         review: child.id.clone(),
         callback,
     };
-    prepare(ctx, &target, pane, &spec)
+    let command = prepare(ctx, &target, pane, &spec)?;
+    if resolved.vendor.as_deref() == Some("amazon-bedrock") {
+        let binding =
+            crate::agent::aws_profile::read_binding(&crate::agent::install::data_root()?)?
+                .context("credentials_unavailable: Amazon Bedrock login binding is missing")?;
+        if let Some(text) = super::preflight::metered_notice("reviewer", resolved, &binding) {
+            corral_core::messages::report(Some(&task.id), "metered", text);
+            ctx.store.log_event(
+                Some(&task.id),
+                "metered_notice",
+                json!({
+                    "role": "reviewer", "profile": resolved.profile, "model": resolved.model,
+                    "aws_profile": binding.profile, "region": binding.region,
+                }),
+            )?;
+        }
+    }
+    Ok(command)
 }
 
 /// The review prompt review-run wrote for the run's current review.

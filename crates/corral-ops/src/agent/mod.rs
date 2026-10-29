@@ -9,6 +9,7 @@
 mod admission;
 #[cfg(test)]
 mod admission_tests;
+pub mod aws_profile;
 pub mod bridge;
 mod call;
 pub mod cli;

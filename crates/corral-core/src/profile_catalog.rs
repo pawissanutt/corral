@@ -148,6 +148,11 @@ impl ExecutionCandidate {
             // Built in and argument-free: model and effort travel in the host bootstrap, so the
             // flag map's effort check above and the vendor allowlist are its rules.
             crate::check_pi_native_vendor(&self.id, Some(&self.provider))?;
+            ensure!(
+                !crate::PI_NATIVE_METERED_VENDORS.contains(&self.provider.as_str())
+                    || matches!(self.cost, CandidateCost::Metered { .. }),
+                "pi-native metered candidate requires metered cost"
+            );
             ensure!(self.args.is_empty(), "pi-native candidate takes no args");
         } else {
             ensure!(

@@ -142,7 +142,24 @@ pub fn prepared(
         prompt_file: Some(ctx.store.prompts_dir().join("pm.md")),
         adopt,
     };
-    super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)
+    let prepared = super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
+    if resolved.vendor.as_deref() == Some("amazon-bedrock") {
+        let binding =
+            crate::agent::aws_profile::read_binding(&crate::agent::install::data_root()?)?
+                .context("credentials_unavailable: Amazon Bedrock login binding is missing")?;
+        if let Some(text) = super::preflight::metered_notice("pm", resolved, &binding) {
+            corral_core::messages::report(None, "metered", text);
+            ctx.store.log_event(
+                None,
+                "metered_notice",
+                serde_json::json!({
+                    "role": "pm", "profile": resolved.profile, "model": resolved.model,
+                    "aws_profile": binding.profile, "region": binding.region,
+                }),
+            )?;
+        }
+    }
+    Ok(prepared)
 }
 
 #[cfg(all(test, target_os = "linux"))]

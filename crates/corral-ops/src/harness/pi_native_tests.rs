@@ -7,7 +7,8 @@ use crate::agent::install::tests::package;
 const LISTING: &str = r#"{"models":[
   {"selector":"openai-codex/gpt-6.1-sol","provider":"openai-codex","id":"gpt-6.1-sol"},
   {"selector":"openai-codex/gpt-5.5","provider":"openai-codex","id":"gpt-5.5"},
-  {"selector":"anthropic/claude-opus-5-5","provider":"anthropic","id":"claude-opus-5-5"}
+  {"selector":"anthropic/claude-opus-5-5","provider":"anthropic","id":"claude-opus-5-5"},
+  {"selector":"amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0","provider":"amazon-bedrock","id":"us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
 ]}"#;
 
 /// A stand-in `bun` that installs like `install::tests::fake_bun` and answers the model listing
@@ -214,5 +215,71 @@ fn a_profile_sees_and_accepts_only_its_own_providers_models() {
         "pi-native",
         None,
         "anthropic/claude-opus-5-5"
+    ));
+}
+
+#[test]
+fn bedrock_listing_requires_a_valid_named_profile_binding() {
+    // Given a host declaring Bedrock, and a valid subscription login.
+    for binding in [
+        None,
+        Some(r#"{"type":"oauth"}"#),
+        Some(r#"{"type":"aws_profile","profile":"dev","region":"us-west-2"}"#),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("data");
+        let host = listing_host(&tmp.path().join("release"));
+        install::install_compiled(&host, &root).unwrap();
+        login(&root, "openai-codex");
+        if let Some(binding) = binding {
+            let path = credentials::auth_dir(&root).join("amazon-bedrock.json");
+            std::fs::write(&path, binding).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        // When the offline catalog is requested.
+        let info = detect_with(&config(), Some(root), None);
+
+        // Then only a validated binding admits Bedrock to the request and returned selectors.
+        let bound = binding.is_some_and(|b| b.contains("aws_profile"));
+        assert_eq!(info.model_source, ModelSource::Listed, "{:?}", info.notes);
+        let argv = std::fs::read_to_string(tmp.path().join("release/listing-argv")).unwrap();
+        assert_eq!(argv.contains("--provider amazon-bedrock"), bound, "{argv}");
+        let scoped = models_for_profile("pi-native", Some("amazon-bedrock"), None, &info.models);
+        assert_eq!(
+            scoped,
+            if bound {
+                vec!["amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"]
+            } else {
+                Vec::new()
+            }
+        );
+    }
+}
+
+#[test]
+fn bedrock_selectors_bind_to_bedrock_even_for_anthropic_models() {
+    // Given a bare Bedrock ID with an Anthropic publisher.
+    let model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    let selector = format!("amazon-bedrock/{model}");
+    let models = vec![selector.clone(), "anthropic/claude-sonnet-4-5".into()];
+    // When catalog selection runs, then it uses the transport vendor, not the publisher.
+    assert_eq!(
+        models_for_profile("pi-native", None, Some(model), &models),
+        [selector.clone()]
+    );
+    assert_eq!(
+        catalog_selector("pi-native", Some("amazon-bedrock"), model),
+        selector
+    );
+    assert!(!foreign_selector(
+        "pi-native",
+        Some("amazon-bedrock"),
+        &selector
+    ));
+    assert!(foreign_selector(
+        "pi-native",
+        Some("amazon-bedrock"),
+        "anthropic/claude-sonnet-4-5"
     ));
 }
