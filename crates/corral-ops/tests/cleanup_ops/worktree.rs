@@ -70,7 +70,6 @@ fn approval_closes_every_pane_before_removing_worktree() {
     fx.assert_closed(&panes, &run.herdr.unwrap().workspace_id);
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn approval_stops_resident_nested_cwd_but_leaves_outside_process() {
     let fx = Fx::new();
@@ -79,7 +78,7 @@ fn approval_stops_resident_nested_cwd_but_leaves_outside_process() {
     let nested = run.worktree.join("nested");
     std::fs::create_dir(&nested).unwrap();
     let marker = fx.marker();
-    let mut inside = Resident::start(&nested, None, Some(&marker));
+    let mut inside = Resident::start(&nested, None, cfg!(target_os = "linux").then_some(&marker));
     let mut outside = Resident::start(&fx.app, None, None);
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
@@ -136,6 +135,7 @@ fn foreign_harness_retains_worktree_and_branch_with_warning() {
     assert!(harness.0.try_wait().unwrap().is_none());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn unrelated_editor_is_protected() {
     let fx = Fx::new();
@@ -220,7 +220,6 @@ fn another_tasks_custom_reviewer_harness_is_never_signalled() {
     assert!(harness.0.try_wait().unwrap().is_none());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn discard_explicitly_deletes_unmerged_branch_and_dirty_worktree() {
     let fx = Fx::new();
@@ -229,7 +228,11 @@ fn discard_explicitly_deletes_unmerged_branch_and_dirty_worktree() {
     assert!(!corral_git::is_ancestor(&fx.app, &run.branch, "main").unwrap());
     std::fs::write(run.worktree.join("untracked"), "discard me").unwrap();
     let marker = fx.marker();
-    let mut child = Resident::start(&run.worktree, None, Some(&marker));
+    let mut child = Resident::start(
+        &run.worktree,
+        None,
+        cfg!(target_os = "linux").then_some(&marker),
+    );
     corral_ops::discard(&fx.ctx, &fx.id).unwrap();
     assert!(child.0.wait().unwrap().code().is_none());
     assert!(!run.worktree.exists());
