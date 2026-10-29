@@ -155,3 +155,18 @@ describe("shared model catalog", () => {
     }
   });
 });
+
+describe("supplemental models", () => {
+  test("resolves gpt-6.1-terra without models.json and still refuses unknown models", async () => {
+    // Given
+    const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: ["openai-codex"], modelsPath: null });
+    // When
+    const terra = runtime.getModel("openai-codex", "gpt-6.1-terra");
+    // Then
+    expect(terra?.contextWindow).toBe(500000);
+    expect(terra?.reasoning).toBe(true);
+    expect(runtime.getModel("openai-codex", "gpt-9-missing")).toBeUndefined();
+    expect((await listModels(["openai-codex"], { modelsPath: null })).map((m) => m.selector))
+      .toContain("openai-codex/gpt-6.1-terra");
+  });
+});

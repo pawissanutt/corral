@@ -5,6 +5,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { piNativeRoot } from "../auth/paths.ts";
 import { PROVIDERS, type ProviderId, isProviderId } from "../auth/providers.ts";
+import { SUPPLEMENTAL_MODELS } from "./supplemental-models.ts";
 
 export interface CatalogPolicy {
   /** Only these subscription providers can expose models or resolve credentials. */
@@ -82,7 +83,12 @@ export async function createModelCatalog(
   for (const provider of runtime.getProviders()) {
     if (isProviderId(provider.id) && approved.has(provider.id)) {
       const id = provider.id;
-      const getModels = () => metadata.getModels(id).filter((model) => model.api === PROVIDERS[id].modelApi);
+      const getModels = () => {
+        const listed = metadata.getModels(id).filter((model) => model.api === PROVIDERS[id].modelApi);
+        const extra = SUPPLEMENTAL_MODELS[id]
+          .filter((model) => model.api === PROVIDERS[id].modelApi && !listed.some((entry) => entry.id === model.id));
+        return [...listed, ...extra];
+      };
       runtime.registerNativeProvider({
         ...provider,
         auth: provider.auth.oauth ? { oauth: provider.auth.oauth } : {},
