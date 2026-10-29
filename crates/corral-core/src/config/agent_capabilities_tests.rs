@@ -358,7 +358,7 @@ fn home_skill_directories_default_for_every_role_and_can_be_added_or_disabled() 
     for role in ALL {
         assert_eq!(
             user_dirs(&standard.resolve(role, None), "skills"),
-            serde_json::json!(["~/.agents/skills"])
+            serde_json::json!(["~/.agents/skills", "~/.corral/skills/pi-native"])
         );
         assert_eq!(
             user_dirs(&standard.resolve(role, None), "prompt_templates"),
@@ -385,7 +385,7 @@ fn home_skill_directories_default_for_every_role_and_can_be_added_or_disabled() 
     );
     assert_eq!(
         user_dirs(&caps.resolve(AgentRole::PlanReviewer, None), "skills"),
-        serde_json::json!(["~/.agents/skills"])
+        serde_json::json!(["~/.agents/skills", "~/.corral/skills/pi-native"])
     );
     // And the settings round-trip through TOML and change the digest.
     let text = toml::to_string(caps).unwrap();

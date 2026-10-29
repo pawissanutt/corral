@@ -196,6 +196,44 @@ test("every role loads home skills, trusted project text and templates, never am
   }
 }, 120_000);
 
+test("Pi pack lists and loads all five skills in a standard worker without OmO roots", async () => {
+  const packHome = join(work, "pack-home");
+  const pack = join(packHome, ".corral/skills/pi-native");
+  const names = ["frontend", "visual-qa", "programming", "debugging", "git-master"];
+  cpSync(join(PACKAGE_ROOT, "../../crates/corral-ops/assets/skills/pi-native"), pack, { recursive: true });
+  const started = await start("worker", STANDARD, {
+    settings: { skills: { user_dirs: ["~/.agents/skills", "~/.corral/skills/pi-native"] } },
+    projectText: false,
+  }, { home: packHome });
+  try {
+    await bind(started);
+    const resources = started.host.runtime.services.resourceLoader.getSkills();
+    expect(resources.diagnostics).toEqual([]);
+    expect(loaded(started.host).skills).toEqual(["corral-worker", ...names].sort());
+    const tools = new Set(started.host.session.getActiveToolNames());
+    for (const name of names) {
+      const found = resources.skills.find((item) => item.name === name);
+      expect(found).toBeDefined();
+      if (!found) throw new Error(`missing skill ${name}`);
+      expect(found.filePath).toBe(join(pack, name, "SKILL.md"));
+      // Load through the same explicit skill command a new session offers the owner.
+      await turn(started, `/skill:${name}`, `pack-${name}`);
+      expect(userTexts(started.host).some((text) => text.includes(`<skill name="${name}"`))).toBeTrue();
+      const text = readFileSync(found.filePath, "utf8");
+      // Pack convention: allowed-tools declares every tool, and bare inline identifiers or
+      // call-shaped expressions denote tools. Shell commands have arguments inside backticks.
+      // Validate against the actual standard worker registry, not a hand-maintained allowlist.
+      const declared = text.match(/^allowed-tools: (.+)$/m)?.[1]?.split(/\s+/) ?? [];
+      expect(declared.length).toBeGreaterThan(0);
+      const mentioned = [...text.matchAll(/`([a-z_][\w.-]*)`|\b([a-z_][\w.]*)\(/g)]
+        .map((match) => match[1] ?? match[2]).filter((item) => item !== undefined);
+      for (const tool of [...declared, ...mentioned]) expect(tools.has(tool)).toBeTrue();
+    }
+  } finally {
+    started.host.session.dispose();
+  }
+}, 120_000);
+
 test("home and repository skills never replace the role's packaged skill, before or after reload", async () => {
   // Given a home and a trusted repository that each ship an impostor corral-worker skill:
   const impostorHome = join(work, "impostor-home");

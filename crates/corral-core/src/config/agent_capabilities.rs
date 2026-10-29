@@ -618,8 +618,11 @@ fn unknown(name: &str, known: &str) -> String {
 }
 
 /// `user_dirs`: absolute or `~/` directories, read as text only; `[]` loads none.
-fn user_dirs(table: &CapabilitySettings, default: &str) -> Result<CapabilitySettings, String> {
-    let mut dirs = vec![serde_json::Value::from(default)];
+fn user_dirs(table: &CapabilitySettings, defaults: &[&str]) -> Result<CapabilitySettings, String> {
+    let mut dirs: Vec<_> = defaults
+        .iter()
+        .map(|dir| serde_json::Value::from(*dir))
+        .collect();
     for (name, value) in table {
         if name != "user_dirs" {
             return Err(unknown(name, "user_dirs"));
@@ -641,11 +644,11 @@ fn user_dirs(table: &CapabilitySettings, default: &str) -> Result<CapabilitySett
 }
 
 pub(crate) fn skill_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
-    user_dirs(table, "~/.agents/skills")
+    user_dirs(table, &["~/.agents/skills", "~/.corral/skills/pi-native"])
 }
 
 pub(crate) fn template_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
-    user_dirs(table, "~/.agents/prompts")
+    user_dirs(table, &["~/.agents/prompts"])
 }
 
 /// Compaction keeps upstream's defaults for every value left out, so only configured values

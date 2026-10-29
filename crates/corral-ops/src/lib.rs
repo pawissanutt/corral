@@ -109,6 +109,8 @@ mod setup_discovery;
 mod setup_structure;
 mod setup_validation;
 mod skill;
+#[cfg(test)]
+mod skill_pack_tests;
 mod slots;
 mod sprint;
 mod stats;

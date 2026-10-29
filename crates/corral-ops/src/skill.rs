@@ -11,6 +11,7 @@ pub const SKILL_HARNESSES: &[(&str, &str, &str)] = &[
     ("omp", ".omp", ".omp/agent/skills"),
     ("claude", ".claude", ".claude/skills"),
     ("agents", ".agents", ".agents/skills"),
+    ("pi-native", ".corral", ".corral/skills/pi-native"),
 ];
 
 /// (harness, shared harness): the harness's loader also reads the shared harness's skills dir, so when that
@@ -300,6 +301,15 @@ pub const SUBMIT_SKILL: &str = "corral-submit";
 /// their guidance lives in the versioned review contracts.
 pub const ROLE_SKILLS: [&str; 4] = [PM_SKILL, WORKER_SKILL, PLANNER_SKILL, SUBMIT_SKILL];
 
+/// Pi-only pack: never install into the Agent Skills roots OmO also discovers.
+pub const PI_SKILLS: [&str; 5] = [
+    "frontend",
+    "visual-qa",
+    "programming",
+    "debugging",
+    "git-master",
+];
+
 /// What installing one role skill did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillAction {
@@ -342,7 +352,7 @@ pub fn ensure_skills(home: &Path, harness: &str) -> Result<Vec<SkillWrite>> {
     let Some((_, marker, _)) = SKILL_HARNESSES.iter().find(|(name, ..)| *name == harness) else {
         return Ok(Vec::new());
     };
-    if !home.join(marker).is_dir() {
+    if harness != "pi-native" && !home.join(marker).is_dir() {
         return Ok(Vec::new());
     }
     install_harness_skills(home, harness, false)
@@ -377,6 +387,9 @@ pub fn install_harness_skills(home: &Path, harness: &str, force: bool) -> Result
         return Ok(Vec::new());
     };
     let serving = shared_row(home, harness).unwrap_or(own);
+    if harness == "pi-native" {
+        return install_skills(&home.join(serving.2), force, &PI_SKILLS);
+    }
     let mut writes = install_role_skills(&home.join(serving.2), force)?;
     let mut removed = Vec::new();
     let consumers = SKILL_SHARED
@@ -447,7 +460,15 @@ fn corral_owned(path: &Path) -> bool {
 
 /// Installs every role skill under `skills_dir`. A file without `SKILL_MARKER` is left alone unless `force`.
 pub fn install_role_skills(skills_dir: &Path, force: bool) -> Result<Vec<SkillWrite>> {
-    ROLE_SKILLS
+    install_skills(skills_dir, force, &ROLE_SKILLS)
+}
+
+fn install_skills(
+    skills_dir: &Path,
+    force: bool,
+    skills: &[&'static str],
+) -> Result<Vec<SkillWrite>> {
+    skills
         .iter()
         .map(|&role| {
             let dir = skills_dir.join(role);
@@ -503,6 +524,13 @@ pub fn role_skill_markdown(role: &str) -> Option<String> {
         WORKER_SKILL => include_str!("../assets/skills/corral-worker.md").to_string(),
         PLANNER_SKILL => include_str!("../assets/skills/corral-planner.md").to_string(),
         SUBMIT_SKILL => include_str!("../assets/skills/corral-submit.md").to_string(),
+        "frontend" => include_str!("../assets/skills/pi-native/frontend/SKILL.md").to_string(),
+        "visual-qa" => include_str!("../assets/skills/pi-native/visual-qa/SKILL.md").to_string(),
+        "programming" => {
+            include_str!("../assets/skills/pi-native/programming/SKILL.md").to_string()
+        }
+        "debugging" => include_str!("../assets/skills/pi-native/debugging/SKILL.md").to_string(),
+        "git-master" => include_str!("../assets/skills/pi-native/git-master/SKILL.md").to_string(),
         _ => return None,
     };
     let unstamped = body.replace("{{marker}}", SKILL_MARKER);

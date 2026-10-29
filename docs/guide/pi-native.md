@@ -74,7 +74,7 @@ A compound key also takes a table with an optional `enabled` and its settings:
 trusted_projects = ["*"]        # default: every registered project; [] trusts none
 
 [agent.capabilities.worker.skills]
-user_dirs = ["~/.agents/skills", "/opt/team-skills"]   # default ["~/.agents/skills"]; [] loads none
+user_dirs = ["~/.agents/skills", "~/.corral/skills/pi-native", "/opt/team-skills"] # [] loads no home skills
 
 [agent.capabilities.reviewer.prompt_templates]
 user_dirs = []                   # default ["~/.agents/prompts"]
@@ -93,7 +93,8 @@ separate from these capability defaults.
 
 Under standard and full every role loads, as text only:
 
-- Agent Skills from its `skills.user_dirs` (by default `~/.agents/skills`), plus the
+- Agent Skills from its `skills.user_dirs` (by default `~/.agents/skills` and
+  `~/.corral/skills/pi-native`), plus the
   project's `.agents/skills` directories from the working directory up to the repository root;
 - prompt templates from its `prompt_templates.user_dirs` (by default `~/.agents/prompts`), plus
   the project's `.agents/prompts`, as `/name` commands; skills also expand with `/skill:name`;
@@ -137,6 +138,40 @@ unavailable and left off, while an explicit `true` for it refuses the launch unt
 `corral agent install` or remove the override. Capabilities never grant Corral authority;
 Corral tools also refuse to run from inside another tool. See
 [the capability record](../records/pi-native-capabilities.md).
+
+### Curated Pi-native skill pack
+
+`corral agent install` also installs five lean, Pi-compatible Agent Skills. To install or refresh
+just the pack, run `corral skill install --harness pi-native`. Worker dispatch also ensures the
+pack is current. A fresh standard/full session lists these skills and can load them by reading
+its listed `SKILL.md` or with `/skill:name`:
+
+| Skill | Guidance |
+|---|---|
+| `frontend` | Web UI build, style, responsive layout, accessibility and polish |
+| `visual-qa` | Fresh screenshot comparisons and interaction checks, with explicit blocked checks |
+| `programming` | Typed boundaries/errors, exhaustive variants and tests that can fail |
+| `debugging` | Competing hypotheses, discriminating probes and a reproduced fix |
+| `git-master` | Atomic commits, safe rebases and evidence-led history search |
+
+The pack lives only in `~/.corral/skills/pi-native/<name>/SKILL.md`, outside OmO's bundled,
+`.omo` and shared `.agents` discovery roots, so it does not duplicate OmO's own skills. Do not
+copy it into shared roots if you also use OmO. Each managed file carries corral's version and
+content digest; reinstall refreshes managed files. Local edits inside managed `SKILL.md` files
+are overwritten. Unmanaged skill files and extra owner files beside them are left alone (unless
+you explicitly request `--force` for the skill file).
+
+To disable only the pack for a role, set its `skills.user_dirs = ["~/.agents/skills"]`, omitting
+the Pi-only root. To extend it, add a personal/team directory to the list while keeping both
+default roots; entries replace, rather than append to, the defaults. Put custom skills in that
+separate directory and use distinct names. `user_dirs = []` disables home skills but not trusted
+project skills; `skills = false` disables optional skill loading entirely (the worker's packaged
+corral-worker remains). Strict has optional skills off by default. Changes apply to the next
+generation. Repeat per role as needed.
+
+The pack grants no new tools. Visual QA uses an available Pi browser integration or a repository
+capture harness; without either it reports blocked visual checks, never a fabricated visual PASS.
+The pack's tests check tool references against the standard worker's actual tool registry.
 
 ### Web access
 

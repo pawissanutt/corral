@@ -71,6 +71,8 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
             None => install_into(&default_source()?, &root, find_bun())?,
         },
     };
+    let home = std::env::var_os("HOME").context("HOME is unset; cannot install Pi skills")?;
+    crate::skill::install_harness_skills(Path::new(&home), "pi-native", false)?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&record)?);
     } else {
