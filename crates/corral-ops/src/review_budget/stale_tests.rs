@@ -25,6 +25,136 @@ fn candidate_branch(fx: &Fixture, id: &str) {
         .unwrap();
 }
 
+fn move_main_without_replaying(fx: &Fixture) {
+    let app = fx.tmp.path().join("app");
+    git(&app, &["checkout", "main"]);
+    std::fs::write(app.join("upstream"), "task B landed\n").unwrap();
+    git(&app, &["add", "."]);
+    git(&app, &["commit", "-qm", "Land task B"]);
+    git(&app, &["checkout", "candidate"]);
+}
+
+#[test]
+fn automatic_preparation_rebinds_only_the_moved_integration_base() {
+    for kind in [Kind::Gate, Kind::Reviewer] {
+        let mut fx = Fixture::new(1);
+        let id = fx.task();
+        grant(&mut fx, std::slice::from_ref(&id));
+        candidate_branch(&fx, &id);
+        let mut launch = prepared(&fx, &id, kind);
+        let old = launch.pending.authorization.clone().unwrap();
+
+        // Task B lands after A prepared, but before it submitted anything.
+        move_main_without_replaying(&fx);
+        let task = fx.ctx.store.get(&id).unwrap();
+        let candidate = crate::verification::identity(
+            &fx.ctx,
+            &task,
+            task.current_run().unwrap(),
+            old.action.candidate.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert_ne!(
+            candidate.integration_base,
+            old.action.candidate.as_ref().unwrap().integration_base
+        );
+        launch.bind(&candidate, &old.action.attempt, None).unwrap();
+        let new = launch.pending.authorization.as_ref().unwrap();
+        assert_eq!(
+            new.id, old.id,
+            "refresh must keep the single submission slot"
+        );
+        assert_ne!(new, &old, "stale authorization must not be reused");
+        assert_eq!(new.action.candidate.as_ref(), Some(&candidate));
+        assert_eq!(fx.ctx.store.get(&id).unwrap().rounds, 0);
+        let journal = fx.ctx.store.authorized_submission(&old.id).unwrap();
+        assert_eq!(journal.authorization, *new);
+        assert_eq!(
+            journal.authorization_history.last().unwrap().authorization,
+            old
+        );
+        let sent = std::cell::Cell::new(false);
+        assert!(
+            crate::operating::submit(
+                &fx.ctx,
+                &old,
+                |_, _| Ok(()),
+                || {
+                    sent.set(true);
+                    Ok(())
+                }
+            )
+            .is_err()
+        );
+        assert!(!sent.get(), "the superseded preparation must never submit");
+        launch.commit().unwrap();
+    }
+}
+
+#[test]
+fn automatic_preparation_still_refuses_candidate_or_policy_conflicts() {
+    for field in ["head", "tree", "policy", "inputs", "environment"] {
+        let mut fx = Fixture::new(1);
+        let id = fx.task();
+        grant(&mut fx, std::slice::from_ref(&id));
+        candidate_branch(&fx, &id);
+        let mut launch = prepared(&fx, &id, Kind::Gate);
+        let old = launch.pending.authorization.clone().unwrap();
+        move_main_without_replaying(&fx);
+        let mut candidate = old.action.candidate.clone().unwrap();
+        candidate.integration_base = git(&fx.tmp.path().join("app"), &["rev-parse", "main"]);
+        match field {
+            "head" => candidate.head.push_str("changed"),
+            "tree" => candidate.tree.push_str("changed"),
+            "policy" => candidate.policy_digest.push_str("changed"),
+            "inputs" => candidate.inputs_digest.push_str("changed"),
+            _ => candidate.environment.push(("OTHER".into(), None)),
+        }
+        let error = launch
+            .bind(&candidate, &old.action.attempt, None)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("prepared action identity changed"),
+            "{field}: {error:#}"
+        );
+        launch.commit().unwrap();
+    }
+}
+
+#[test]
+fn moved_base_cannot_renew_submitted_or_policy_refused_preparation() {
+    for submitted in [false, true] {
+        let mut fx = Fixture::new(1);
+        let id = fx.task();
+        grant(&mut fx, std::slice::from_ref(&id));
+        candidate_branch(&fx, &id);
+        let mut launch = prepared(&fx, &id, Kind::Gate);
+        let old = launch.pending.authorization.clone().unwrap();
+        if submitted {
+            crate::operating::submit(&fx.ctx, &old, |_, _| Ok(()), || Ok(())).unwrap();
+        } else {
+            let mut config = Store::open(fx.ctx.store.root()).unwrap();
+            config.config.automation = Default::default();
+            config.save_config().unwrap();
+        }
+        move_main_without_replaying(&fx);
+        let mut candidate = old.action.candidate.clone().unwrap();
+        candidate.integration_base = git(&fx.tmp.path().join("app"), &["rev-parse", "main"]);
+        assert!(launch.bind(&candidate, &old.action.attempt, None).is_err());
+        assert_eq!(
+            fx.ctx
+                .store
+                .authorized_submission(&old.id)
+                .unwrap()
+                .authorization,
+            old
+        );
+        launch.commit().unwrap();
+    }
+}
+
 #[test]
 fn rebase_supersedes_preparation_and_next_automatic_gate_launches() {
     let mut fx = Fixture::new(1);

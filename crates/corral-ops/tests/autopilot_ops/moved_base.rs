@@ -46,6 +46,36 @@ fn moved_event(fx: &Fx) -> serde_json::Value {
 }
 
 #[test]
+fn a_prepared_gate_overtaken_by_another_landing_is_reprepared_without_a_round() {
+    let fx = Fx::new(|r| {
+        r.gate = gate(&["true"]);
+        r.reviewer = Some("rev".into());
+        r.accept = Some(Accept::Auto);
+        r.remove_worktree = Some(false);
+    });
+    fx.change("widget.txt", "w\n");
+    fx.done();
+    // Prepare A's gate on the original base; B lands before autopilot consumes it.
+    corral_ops::gate_start(&fx.ctx, &fx.id).unwrap();
+    let old = fx.run().gate.unwrap().identity.unwrap();
+    fx.commit_on_main("unrelated.txt", "task B\n", "Land task B");
+
+    let task = fx.sync();
+    assert_eq!(task.status, Status::Review, "{}", fx.reason());
+    assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
+    assert_eq!(task.rounds, 0);
+    assert_eq!(fx.events("review_escalated"), 0);
+    let run = fx.run();
+    let new = run.gate.unwrap().identity.unwrap();
+    assert_ne!(new.integration_base, old.integration_base);
+    assert_eq!(new.integration_base, git(&fx.app, &["rev-parse", "main"]));
+    assert_eq!(fx.events("candidate_rebased"), 1);
+    fx.verdict(Verdict::Approve, "Fresh candidate approved.");
+    assert_eq!(fx.sync().status, Status::Done, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 0);
+}
+
+#[test]
 fn an_approval_given_while_main_moved_is_recorded_and_carried_without_a_second_review() {
     let (fx, reviewed) = reviewing_then_main_moves("unrelated.txt", "other task\n");
     let head = fx.run().review.unwrap().sha;

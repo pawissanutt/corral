@@ -121,10 +121,14 @@ pub(crate) fn authorize(
     {
         let previous = load(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
         if previous.action.plan == action.plan && previous.action.round == action.round {
-            ensure!(
-                previous.action == action,
-                "prepared action identity changed"
-            );
+            if previous.action != action {
+                ensure!(
+                    rederivable(ctx, &previous, &action, origin)?,
+                    "prepared action identity changed"
+                );
+                // This was never submitted. Replace its authorization below, retaining the
+                // old preparation in history; never reuse its consent or verification result.
+            }
             if !is_automatic(&previous) {
                 ensure!(
                     origin == Origin::Owner,
@@ -176,6 +180,26 @@ pub(crate) fn authorize(
         .context("writing executor authorization reference")?;
     std::fs::rename(&tmp, &path).context("publishing executor authorization reference")?;
     Ok(authorization)
+}
+
+/// Only a definitely unsubmitted automatic action may be rebound to a moved base.
+/// All other candidate inputs (including policy, environment and source bytes) stay fenced.
+fn rederivable(
+    ctx: &Ctx,
+    previous: &ActionAuthorization,
+    action: &OperatingActionIdentity,
+    origin: Origin,
+) -> Result<bool> {
+    if origin != Origin::Automatic || !is_automatic(previous) {
+        return Ok(false);
+    }
+    if !previous.action.only_integration_base_changed(action) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        ctx.store.authorized_submission(&previous.id)?.disposition,
+        SubmissionDisposition::Prepared | SubmissionDisposition::AuthorizationRefused { .. }
+    ))
 }
 
 /// Persist intent before IPC and keep policy writers excluded through that one attempt.
