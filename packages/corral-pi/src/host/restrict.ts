@@ -1,9 +1,10 @@
-// Restricted resources: no MCP, inherited skills, prompt templates, context files, themes,
-// telemetry, bug-report upload, cache warmer or remote catalog, and a guarded fetch that
-// reaches only the bound provider's model API and that provider's token-refresh endpoint (or, for
-// Bedrock, the bound ConverseStream URL and the STS and SSO portal endpoints its profile needs).
+// Ambient resources stay disabled. Global fetch retains provider-only endpoints; optional
+// web tools use a separate public-fetch/configured-search transport with the same ledger.
 import { type DestinationRule, PROVIDERS, type ProviderId, hostDestinations, hostRules } from "../auth/providers.ts";
 import type { Fetch } from "../auth/types.ts";
+import { createWebAccess, type WebAccess } from "../extensions/web/client.ts";
+import type { Lookup } from "../extensions/web/policy.ts";
+import type { WebSettings } from "../extensions/web/settings.ts";
 
 export const PROVIDER_API = PROVIDERS["openai-codex"].api;
 export const TOKEN_REFRESH = PROVIDERS["openai-codex"].refresh;
@@ -84,11 +85,19 @@ function redact(url: string): string {
 
 export interface GuardedFetch {
   readonly fetch: Fetch;
+  /** Purpose-specific GET tools; never grants provider fetch the search-origin exception. */
+  readonly web?: WebAccess;
   ledger(): NetworkLedger;
   /** The allowed destinations get_state shows; absent means the provider's default rules. */
   readonly destinations?: readonly string[];
   /** Records a refusal made outside fetch (the socket tripwire) and returns the error to throw. */
   refuse?(destination: string): NetworkRefused;
+}
+
+export interface WebNetworkOptions {
+  readonly settings: WebSettings;
+  readonly send: Fetch;
+  readonly lookup?: Lookup;
 }
 
 /**
@@ -100,6 +109,7 @@ export function guardedFetch(
   send: Fetch, onRefused?: (destination: string) => void,
   provider: ProviderId | readonly ProviderId[] = "openai-codex",
   rules: readonly DestinationRule[] = (typeof provider === "string" ? [provider] : provider).flatMap((id) => hostRules(id)),
+  web?: WebNetworkOptions,
 ): GuardedFetch {
   let allowed = 0;
   let refused = 0;
@@ -120,6 +130,11 @@ export function guardedFetch(
   };
   return {
     fetch, refuse, destinations: rules.map((rule) => rule.display),
+    ...(web ? { web: createWebAccess(web.settings, web.send, {
+      ...(web.lookup ? { lookup: web.lookup } : {}),
+      allowed: () => { allowed++; },
+      refused: (where) => { refuse(where); },
+    }) } : {}),
     ledger: () => ({ allowed, refused, refusedDestinations: [...refusedDestinations] }),
   };
 }

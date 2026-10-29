@@ -50,7 +50,9 @@ todo = true        # optional per-role override, including under strict
 
 Role tables are `worker`, `reviewer`, `pm`, `planner` and `plan_reviewer`. A key that is
 not in the catalog, or that the role may not use (todo for a reviewer), is a configuration
-error. Today the catalog has `todo`, on for worker and PM under standard and full.
+error. The catalog includes `todo` (worker and PM) and `web.enabled` (worker,
+reviewer, planner and plan-reviewer), on under standard and full. Native planning
+role availability is separate from these capability defaults.
 
 Each generation records its resolved settings and their digest once. `corral agent state`
 shows them with where each value came from, and, after an explicit resume with changed
@@ -61,6 +63,53 @@ unavailable and left off, while an explicit `true` for it refuses the launch unt
 `corral agent install` or remove the override. Capabilities never grant Corral authority;
 Corral tools also refuse to run from inside another tool. See
 [the capability record](../records/pi-native-capabilities.md).
+
+### Web access
+
+Enabled worker and reviewer generations expose `web_fetch` and `web_search`; the same
+capability is available to native planning roles when installed. PM cannot enable it.
+Strict disables web unless the role explicitly opts in:
+
+```toml
+[agent.capabilities.worker.web]
+enabled = true
+hosts = ["*"]             # default: all public HTTP(S) hosts
+max_bytes = 1048576        # default: response body byte limit
+timeout_ms = 15000        # default: whole request, including DNS, redirects and body
+max_redirects = 5         # default; supported range 0..10
+# searxng_url = "http://127.0.0.1:8888/" # optional base URL or /search endpoint
+```
+
+The same table works under `reviewer`, `planner` and `plan_reviewer`. Omitting
+`enabled` retains the preset's value. `hosts = ["docs.rust-lang.org", "example.org"]`
+narrows fetch to exact hostnames (not subdomains); `[]` denies every fetch target.
+The host receives these resolved settings from the generation snapshot, never ambient
+Pi configuration. Explicit resume adapts settings, records their difference, and
+preserves previous generations and their digests.
+
+`web_fetch` takes `url`. It sends only GET, without caller-supplied headers,
+authorization, a cookie jar or provider credentials. It returns the final URL, HTTP
+status, content type, raw body text, byte count and a `truncated` flag. It does not
+execute scripts or render HTML. The byte limit applies to the response body, not
+the JSON envelope. Time and byte limits also apply to search responses.
+
+Public fetch refuses localhost, private, loopback, link-local, metadata and other
+non-public addresses using normalized URLs, IP literals and ordinary DNS resolution,
+including IPv6 and mapped forms. Every redirect repeats the same cheap host/address
+check and stays within the redirect cap. Connections are not pinned to a checked IP;
+this is not DNS-rebinding protection.
+
+`web_search` takes `query` and optional `num_results` (1..20, default 5). It returns
+SearXNG titles, URLs and snippets. Configure `searxng_url` separately and enable JSON
+output on that service. Without it, search returns `configured: false` and setup
+instructions while public fetch remains usable. A configured SearXNG endpoint may
+be local, independently of `hosts`; search does not follow redirects. This exception
+never authorizes private `web_fetch` or broadens the provider's global fetch policy.
+
+Both tools share the host network ledger and execution check, including nested calls
+and reloads. Interrupted calls are `interrupted_no_effect` for this GET-only contract;
+network activity is still counted. Subprocess networking remains outside the
+in-process guard.
 
 ### Todo progress
 

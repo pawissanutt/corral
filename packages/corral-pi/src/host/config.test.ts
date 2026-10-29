@@ -45,6 +45,25 @@ test("compat.json advertises exactly the capabilities this host implements", () 
   expect(compat.capabilities).toEqual([...HOST_CAPABILITIES]);
 });
 
+test("web settings come from the generation snapshot and require an eligible enabled capability", () => {
+  // Given resolved values deliberately different from Rust's defaults.
+  const web = { hosts: ["docs.example.org"], max_bytes: 700, timeout_ms: 2200, max_redirects: 1,
+    searxng_url: "http://127.0.0.1:8888/" };
+  const capabilities = { catalog: 2, digest: "e".repeat(64), preset: "standard", enabled: ["web.enabled"], web };
+  // When parsed, then every setting is retained without host-side default resolution.
+  expect(parseLaunchMessage(JSON.stringify({ ...message, capabilities })).capabilities?.web).toEqual(web);
+  // And missing settings, malformed settings, disabled mismatches and the PM ceiling refuse launch.
+  for (const invalid of [
+    { ...capabilities, web: undefined }, { ...capabilities, enabled: [] },
+    { ...capabilities, web: { ...web, max_bytes: 0 } },
+    { ...capabilities, web: { ...web, max_redirects: 11 } },
+    { ...capabilities, web: { ...web, searxng_url: "https://user:password@example.org" } },
+  ]) {
+    expect(() => parseLaunchMessage(JSON.stringify({ ...message, capabilities: invalid }))).toThrow(LaunchMessageInvalid);
+  }
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, role: "pm", capabilities }))).toThrow(LaunchMessageInvalid);
+});
+
 test("the optional exact resume path survives launch parsing; older launch messages remain valid", () => {
   expect(parseLaunchMessage(JSON.stringify(message)).resumeSession).toBeUndefined();
   expect(parseLaunchMessage(JSON.stringify({ ...message, resume_session: null })).resumeSession).toBeUndefined();

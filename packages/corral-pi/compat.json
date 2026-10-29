@@ -49,6 +49,7 @@
     "amazon-bedrock"
   ],
   "capabilities": [
-    "todo"
+    "todo",
+    "web.enabled"
   ]
 }

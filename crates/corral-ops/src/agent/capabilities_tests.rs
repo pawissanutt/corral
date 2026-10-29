@@ -161,7 +161,7 @@ fn explicit_resume_adapts_changed_settings_and_keeps_each_generation_snapshot() 
     assert_eq!(message["todo"], true);
     assert_eq!(
         message["capabilities"],
-        json!({"catalog": 1, "digest": snapshot.digest, "preset": "standard", "enabled": ["todo"]})
+        json!({"catalog": corral_core::agent::CAPABILITY_CATALOG_VERSION, "digest": snapshot.digest, "preset": "standard", "enabled": ["todo"]})
     );
     // When the owner disables worker todo and the run is explicitly resumed.
     fx.ctx
@@ -284,5 +284,93 @@ fn an_older_installed_host_omits_unavailable_defaults_and_refuses_explicit_reque
             .fix
             .unwrap()
             .contains("[agent.capabilities.worker] todo")
+    );
+}
+
+#[test]
+fn web_settings_resume_preserves_prior_snapshot_and_delivers_resolved_policy() {
+    // Given an installed web host and a standard generation with default policy.
+    let mut fx = fixture(Some(&["todo", "web.enabled"]));
+    let first = fx.open().unwrap();
+    let snapshot = first.capabilities.clone().unwrap();
+    assert_eq!(
+        fx.message(&first)["capabilities"]["web"],
+        json!({"hosts": ["*"], "max_bytes": 1048576, "timeout_ms": 15000, "max_redirects": 5})
+    );
+    let mut config = std::fs::read_to_string(fx.ctx.store.config_path()).unwrap();
+    config.push_str(
+        "\n[agent.capabilities.worker.web]\nhosts = ['docs.example.org']\n\
+         max_bytes = 4096\ntimeout_ms = 2000\nmax_redirects = 0\n\
+         searxng_url = 'http://localhost:8080/search'\n",
+    );
+    std::fs::write(fx.ctx.store.config_path(), config).unwrap();
+    fx.ctx = Ctx::from_store(Store::open(fx.tmp.path()).unwrap());
+    // When an explicit resume resolves the changed policy.
+    let second = fx.open().unwrap();
+    // Then only the new generation and launch policy change, with a visible settings diff.
+    let resumed = second.capabilities.as_ref().unwrap();
+    assert_ne!(snapshot.digest, resumed.digest);
+    assert_eq!(
+        fx.message(&second)["capabilities"]["web"],
+        json!({"hosts": ["docs.example.org"], "max_bytes": 4096, "timeout_ms": 2000,
+            "max_redirects": 0, "searxng_url": "http://localhost:8080/search"})
+    );
+    let host = fx.host();
+    assert_eq!(
+        host.generation(1).unwrap().capabilities.as_ref(),
+        Some(&snapshot)
+    );
+    let change = host
+        .generation(2)
+        .unwrap()
+        .capability_transition
+        .as_ref()
+        .unwrap();
+    assert!(change.changes.is_empty());
+    let web = change.web_change.as_ref().unwrap();
+    assert_eq!(web.from, snapshot.web);
+    assert_eq!(web.to, resumed.web);
+    assert_eq!(
+        fx.state()["capability_change"]["web_change"]["to"]["max_bytes"],
+        4096
+    );
+}
+
+#[test]
+fn disabled_unsupported_and_historical_web_settings_are_omitted_from_launch() {
+    // Given a host without web support and a historical snapshot without settings.
+    let mut fx = fixture(Some(&["todo"]));
+    let mut historical = fx.open().unwrap();
+    let mut value = serde_json::to_value(historical.capabilities.as_ref().unwrap()).unwrap();
+    value.as_object_mut().unwrap().remove("web");
+    value["catalog"] = json!(1);
+    value["digest"] = json!("historical-digest");
+    value["features"]
+        .as_object_mut()
+        .unwrap()
+        .remove("web.enabled");
+    historical.capabilities = Some(serde_json::from_value(value).unwrap());
+    // When launch payloads are generated for unsupported, historical, and disabled settings.
+    assert!(fx.message(&historical)["capabilities"].get("web").is_none());
+    let unsupported = fx.open().unwrap();
+    assert!(unsupported.capabilities.as_ref().unwrap().web.is_none());
+    assert!(
+        fx.message(&unsupported)["capabilities"]
+            .get("web")
+            .is_none()
+    );
+    fx.ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set(AgentRole::Worker, "web.enabled", false)
+        .unwrap();
+    let disabled = fx.open().unwrap();
+    // Then no policy is delivered and the historical digest remains usable unchanged.
+    assert!(fx.message(&disabled)["capabilities"].get("web").is_none());
+    assert_eq!(
+        historical.capabilities.as_ref().unwrap().digest,
+        "historical-digest"
     );
 }
