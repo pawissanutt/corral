@@ -7,7 +7,7 @@ import type { ProviderId } from "../auth/providers.ts";
  * only for their own provider and model API, so the network guard and lane checks still apply.
  * A model the models.json file or the bundled catalog defines wins over an entry here.
  */
-export const SUPPLEMENTAL_MODELS: Readonly<Record<ProviderId, readonly Model<any>[]>> = {
+export const SUPPLEMENTAL_MODELS: Readonly<Partial<Record<ProviderId, readonly Model<any>[]>>> = {
   "openai-codex": [{
     id: "gpt-6.1-terra",
     name: "GPT-6.1 Terra",
