@@ -70,6 +70,7 @@
     "llama_cpp.enabled",
     "checkpoints",
     "subagents",
-    "oracle"
+    "oracle",
+    "headless"
   ]
 }

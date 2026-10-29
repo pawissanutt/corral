@@ -1,6 +1,7 @@
 // The Bun host entry point, exec'd by `corral agent launch` with `--launch-fd <n>`. It reads
 // the launch message from that inherited pipe, refuses an unpinned runtime or a missing module,
-// starts the bridge, binds the generation with hello and hands the pane to InteractiveMode.
+// starts the bridge, binds the generation with hello and hands the pane to InteractiveMode, or,
+// when the generation enables headless, attaches without a terminal UI (`./headless.ts`).
 // A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
 // tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
@@ -19,6 +20,7 @@ import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts
 import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
+import { attachHeadless, headlessEnabled } from "./headless.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { exportAssistantSession } from "../roles/assistant/env.ts";
@@ -127,9 +129,13 @@ async function main(): Promise<void> {
     },
   });
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
+  if (headlessEnabled(config.capabilities)) {
+    await attachHeadless(session, events, (line) => process.stdout.write(line));
+    return;
+  }
   terminal = new sdk.InteractiveMode(session.runtime, { verbose: false });
   await terminal.init();
-  session.markInteractive();
+  session.markAttached("interactive");
   try { await terminal.run(); }
   finally { await session.close(); await bridge.close(); }
 }

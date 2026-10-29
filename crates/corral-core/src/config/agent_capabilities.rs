@@ -836,6 +836,10 @@ pub(crate) fn compaction_settings(
 mod tests;
 
 #[cfg(test)]
+#[path = "agent_capabilities_headless_tests.rs"]
+mod headless_tests;
+
+#[cfg(test)]
 mod codemode_config_tests {
     use super::*;
 

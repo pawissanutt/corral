@@ -27,6 +27,12 @@ validates a compound key's configured table and returns its effective settings.
 | `session_export` (T-564) | off / on / on | not available | off / on / on | none |
 | `mcp.enabled` (T-567) | off / on / on | off / on / on | off / on / on | own `mcp` table and `snapshot.mcp` |
 | `tool_search` (T-567) | off / on / on | off / on / on | off / on / on | none |
+| `headless` (T-577) | off / off / off | not available | reviewer off / off / off; planning roles not available | none |
+
+`headless` is an operational choice: only a role override turns it on. The host then binds
+its extensions without InteractiveMode (`packages/corral-pi/src/host/headless.ts`), reads no
+terminal input and reports `mode: "headless"` in `get_state`; `corral agent state` derives
+`mode` from the current generation's snapshot.
 
 An enabled key's effective settings are recorded in its feature state (`settings`) and covered
 by the digest. `trusted_projects` (default `["*"]`) is the one project-text trust decision;

@@ -242,7 +242,8 @@ export class HostSession {
   private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
   private sessionsCreated = 0;
-  private interactive = false;
+  /** How the bound host is attached: InteractiveMode in its pane, or headless (T-577). */
+  private attached: "interactive" | "headless" | undefined;
   private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
   private readonly controls: HostControls;
@@ -683,9 +684,9 @@ export class HostSession {
     this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
   }
 
-  markInteractive(): void {
-    this.interactive = true;
-    this.options.events.emit("interactive");
+  markAttached(mode: "interactive" | "headless"): void {
+    this.attached = mode;
+    this.options.events.emit(mode);
   }
 
   drained(): Promise<unknown> {
@@ -798,7 +799,8 @@ export class HostSession {
       mcp: this.mcp?.state() ?? null,
       generation: this.options.identity.generation,
       bound: this.bound,
-      interactive: this.interactive,
+      interactive: this.attached === "interactive",
+      mode: this.attached ?? null,
       session: { bound_id: this.boundSessionId ?? null, current_id: session.sessionId, file: session.sessionFile ?? null,
         created: this.sessionsCreated },
       streaming: session.isStreaming,

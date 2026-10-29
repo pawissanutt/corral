@@ -211,6 +211,71 @@ fn explicit_resume_adapts_changed_settings_and_keeps_each_generation_snapshot() 
 }
 
 #[test]
+fn a_headless_worker_names_its_mode_and_keeps_it_and_its_identity_across_resume() {
+    // Given a host that implements headless and a worker opted into it.
+    let mut fx = fixture(Some(&["todo", "headless"]));
+    fx.ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set(AgentRole::Worker, "headless", true)
+        .unwrap();
+    // When the run opens and is then explicitly resumed under the same settings.
+    let first = fx.open().unwrap();
+    assert_eq!(fx.state()["mode"], "headless");
+    let second = fx.open().unwrap();
+    // Then both launch messages ask the host for headless, state names the mode, and the
+    // resumed generation keeps the container, pane and session directory without a change.
+    for bootstrap in [&first, &second] {
+        let enabled = fx.message(bootstrap)["capabilities"]["enabled"].clone();
+        assert_eq!(enabled, json!(["headless", "todo"]));
+    }
+    assert_eq!(
+        (second.generation, second.pane.as_str(), &second.session_dir),
+        (2, "p1", &first.session_dir)
+    );
+    assert_eq!(
+        (second.task.as_deref(), second.run.as_deref()),
+        (Some(fx.task.as_str()), Some("R1"))
+    );
+    let host = fx.host();
+    assert!(host.generation(2).unwrap().capability("headless"));
+    assert!(host.generation(2).unwrap().capability_transition.is_none());
+    let state = fx.state();
+    assert_eq!(
+        (state["mode"].as_str(), state["generation"].as_u64()),
+        (Some("headless"), Some(2))
+    );
+    // And without the override the next generation is interactive, with the change recorded.
+    fx.ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set(AgentRole::Worker, "headless", false)
+        .unwrap();
+    fx.open().unwrap();
+    assert_eq!(fx.state()["mode"], "interactive");
+    let change = fx
+        .host()
+        .generation(3)
+        .unwrap()
+        .capability_transition
+        .clone()
+        .unwrap();
+    assert_eq!(
+        change.changes,
+        vec![CapabilityChange {
+            key: "headless".into(),
+            from: Some(true),
+            to: Some(false),
+            settings: false,
+        }]
+    );
+}
+
+#[test]
 fn a_legacy_generation_is_labeled_and_resumes_without_reconstruction() {
     // Given a generation recorded before the catalog (no snapshot, todo off).
     let fx = fixture(Some(&["todo"]));

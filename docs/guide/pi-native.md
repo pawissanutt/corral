@@ -95,6 +95,9 @@ error. The catalog today, as strict / standard / full:
 | `role_enabled` | not available | planner and plan reviewer off / on / on; not available to reviewer |
 | `browser` | worker off / on / on; not available to PM | not available |
 | `checkpoints` | worker off / off / on; not available to PM | not available |
+| `headless` | worker off / off / off; not available to PM | reviewer off / off / off; not available to planning roles |
+
+`headless` is never a preset default; set it per role (see [Headless runs](#headless-runs)).
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -618,6 +621,33 @@ them or invalidate old receipts. Legacy generations and launch messages without 
 setting keep the tool disabled. Todo is progress bookkeeping, never gate or acceptance
 evidence and never permission to finish a Corral task.
 
+### Headless runs
+
+```toml
+[agent.capabilities.worker]
+headless = true
+
+[agent.capabilities.reviewer]
+headless = true
+```
+
+A headless worker or reviewer host does not start Pi's interactive terminal and never reads
+what is typed into its pane. Everything reaches it the way an interactive host's automatic
+input already does: its kickoff turn starts when it binds, and answers, gate wakes, nudges and
+recovery notices arrive from its durable inbox through the authenticated bridge when `corral
+sync` delivers them. Its `corral_*` calls are receipted exactly as before, and its questions go
+to the board, `corral question`, the PM wake and Needs me as usual. The pane shows only a plain
+log: the headless notice, each turn's start and end, denied tools and refused network calls.
+
+The host still runs in the run's herdr pane, which remains the process container: pane loss,
+the launch-exit record, `corral agent resume` into the same pane, and closing the run work
+unchanged. `corral agent state` shows `mode: headless` (JSON `mode`), and the bridge `get_state`
+result reports `mode: "headless"` with `interactive: false`. Because each generation resolves
+its settings anew, an explicit resume keeps the run's container, pane and bound session and
+stays headless while the setting is on; turning it off makes the next generation interactive
+and records the change. The setting is read at dispatch and resume, so it applies to hosts
+launched after the change.
+
 `[agent] ui` sets how the run pane looks (default `"rich"`). In rich mode the pane uses the
 Dracula palette (a dark theme; on a light terminal background use `plain`) and shows a
 two-line header (role, task and run, generation, model, effort and worktree), names the
@@ -806,8 +836,9 @@ configured:
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Blocked after `question_unattended_secs`. |
 
 `corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
-container's binding: harness, role, host health, current generation, generation, receipt and
-turn counts, open question keys, and the same installation summary.
+container's binding: harness, role, mode (`interactive` or `headless`), host health, current
+generation, generation, receipt and turn counts, open question keys, and the same installation
+summary.
 
 ## What is checked before a run starts
 
@@ -862,7 +893,7 @@ never on a command line, in the environment or in `.corral/`. The host refuses a
 release other than the ones `compat.json` pins, loads the role, delivery and auth modules from
 their fixed paths, starts its bridge socket and binds the generation by calling
 `corral agent call --op hello`. Then it hands the pane to Pi's own interactive terminal, where
-you can watch and type.
+you can watch and type, unless the generation is headless (see Headless runs).
 
 ### What the host leaves out
 
