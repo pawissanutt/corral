@@ -102,12 +102,15 @@ fn process_marker(process: &StuckProcess) -> Option<Vec<u8>> {
         .find_map(|entry| entry.strip_prefix(b"CORRAL_PROCESS_OWNER=").map(Vec::from))
 }
 
+// Native ownership inspection and termination have not been verified. Until they are,
+// conservatively protect every resident on non-Linux platforms, even a marked orphan.
 #[cfg(not(target_os = "linux"))]
-fn process_marker(process: &StuckProcess) -> Option<Vec<u8>> {
-    crate::native_process::ownership_marker(process)
-        .ok()
-        .flatten()
-        .map(String::into_bytes)
+fn process_marker(_process: &StuckProcess) -> Option<Vec<u8>> {
+    None
+}
+
+fn may_terminate(linux: bool, owned: bool) -> bool {
+    linux && owned
 }
 
 fn owned(ctx: &Ctx, task: &Task, run: &Run, process: &StuckProcess) -> bool {
@@ -228,7 +231,9 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
     let protected_set = protected_pids()?;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
-        if protected_set.contains(&process.pid) || !owned(ctx, task, run, &process) {
+        if protected_set.contains(&process.pid)
+            || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process))
+        {
             warnings.push(format!(
                 "protected process {} still uses worktree",
                 process.pid
