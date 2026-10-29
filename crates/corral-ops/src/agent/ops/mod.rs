@@ -3,6 +3,7 @@
 //! (reviewer-role) and `pm` (pm-role). `call.rs` routes every op to one of them.
 mod event;
 mod hello;
+pub(crate) mod jobs;
 mod lookup;
 pub(crate) mod pm;
 pub(crate) mod reviewer;

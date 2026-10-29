@@ -132,7 +132,9 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "evidence",
                 "artifact",
                 "gate",
-                "done"
+                "done",
+                "job",
+                "job_monitor"
             ]),
             BindTarget::Reviewer { .. } => {
                 json!([

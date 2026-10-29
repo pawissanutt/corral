@@ -11,7 +11,9 @@ use serde_json::Value;
 use super::AgentRole;
 use super::local_controls::{bash_rule_settings, hook_settings};
 use super::paths::sha256_hex;
-use crate::config::agent_capabilities::{compaction_settings, skill_settings, template_settings};
+use crate::config::agent_capabilities::{
+    compaction_settings, job_settings, skill_settings, template_settings,
+};
 
 /// A configured settings table, or the effective settings a snapshot records.
 pub type CapabilitySettings = BTreeMap<String, Value>;
@@ -120,6 +122,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: Some(bash_rule_settings),
     },
+    CapabilityDef {
+        key: "background_shell",
+        summary: "worker background jobs and receipted job monitors",
+        defaults: background_shell_defaults,
+        host: true,
+        settings: Some(job_settings),
+    },
 ];
 
 fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
@@ -133,6 +142,13 @@ fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker | AgentRole::Reviewer => Some([false, false, true]),
         AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+    }
+}
+
+fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker => Some([false, true, true]),
+        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 

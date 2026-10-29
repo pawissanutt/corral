@@ -59,6 +59,7 @@
     "mcp.enabled",
     "tool_search",
     "hooks",
-    "bash_rules"
+    "bash_rules",
+    "background_shell"
   ]
 }

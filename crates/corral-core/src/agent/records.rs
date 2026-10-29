@@ -72,6 +72,9 @@ pub struct AgentRunState {
     /// PM's own progress; workers use the existing Run.progress instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo: Option<crate::RunProgress>,
+    /// Worker background jobs: durable process identity and monitor subscriptions (T-565).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jobs: Vec<super::JobRecord>,
 }
 
 impl AgentRunState {
@@ -86,6 +89,7 @@ impl AgentRunState {
             wakes: Vec::new(),
             reports: Vec::new(),
             todo: None,
+            jobs: Vec::new(),
         }
     }
 

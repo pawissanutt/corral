@@ -4,6 +4,7 @@
 //! docs/records/pi-native-records.md for T-253, which owns their schema and migration.
 
 mod capabilities;
+mod jobs;
 mod live;
 mod local_controls;
 pub mod paths;
@@ -16,6 +17,7 @@ mod tests;
 mod todo;
 
 pub use capabilities::*;
+pub use jobs::*;
 pub use live::*;
 pub use local_controls::*;
 pub use pm_state::AgentPm;

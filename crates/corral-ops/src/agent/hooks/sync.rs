@@ -84,6 +84,7 @@ fn owes(task: &Task, container: &ContainerRef, run: &Run) -> bool {
     run.inbox.settled.is_none()
         || container_state(task, container).is_some_and(|state| {
             state.questions.iter().any(|q| q.recorded_pending())
+                || state.jobs.iter().any(|job| job.state.live())
                 || state.receipts.iter().any(|r| {
                     matches!(
                         r.state,
@@ -113,6 +114,7 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
     probe_hosts(ctx, &ctx.store.get(id)?);
     super::super::recovery::post_updates(ctx, id)?;
     settle_lost(ctx, id)?;
+    super::super::jobs::reap(ctx, id, now)?;
     super::review::hold_lost(ctx, id)?;
     super::review::release_lost(ctx, id)?;
     let current = ctx.store.get(id)?;

@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
     ...(config.guidance ? { guidance: config.guidance } : {}),
-    root: config.root, exportDir: join(config.sessionDir, "exports"),
+    root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
   });

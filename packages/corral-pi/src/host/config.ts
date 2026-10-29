@@ -10,13 +10,14 @@ import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../role
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { parseControls } from "./tool-controls.ts";
+import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search",
-  "hooks", "bash_rules",
+  "hooks", "bash_rules", "background_shell",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -184,6 +185,12 @@ export function parseLaunchMessage(text: string): HostConfig {
     parseControls(role as Role, capabilities?.enabled ?? [], guidance?.settings);
   } catch (error) {
     throw new LaunchMessageInvalid(error instanceof Error ? error.message : String(error));
+  }
+  if (capabilities?.enabled.includes("background_shell")) {
+    if (role !== "worker") throw new LaunchMessageInvalid(`background_shell is not available to the ${role} role`);
+    if (!JobSettingsSchema.safeParse(guidance?.settings.background_shell).success) {
+      throw new LaunchMessageInvalid("background_shell requires its resolved settings");
+    }
   }
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");

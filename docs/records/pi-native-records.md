@@ -65,6 +65,17 @@ containers too.
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |
 | `reports` | AgentReport[] | ≤ 64 (`REPORTS_MAX`) | op-receipts |
 | `todo` | RunProgress? | PM-only canonical ledger; absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
+| `jobs` | JobRecord[] | worker only; ≤ 64 (`JOBS_MAX`), the oldest ended job evicted first, live jobs never | background-shell |
+
+`JobRecord` holds `id`, the owning `generation`, `command` (≤ 4 KiB), `state`
+(`prepared`, `running`, `exited`, `reaped`, `lost`), the process-group leader `pid` and its kernel
+`start_time`, timestamps, `exit_code`/`signal`, a reaper `detail` and ≤ 16 `monitors`. Each
+`JobMonitor` names its run wait (`wait`), `on` (`exit` or `line`), the line `pattern` and the
+registering `request_id`. The monitor's wait is an ordinary `Run.obligations` wait with a
+`job:<id>` channel handle and a deadline. Its wake subscription commits in the same
+transaction, and a `-job` resume receipt settles it once. Output files under the generation
+runtime directory are caches; these records are the recovery evidence. A live job of a fenced
+or superseded generation, or of an ended run, keeps the container in sync until it is reaped.
 
 Workers continue to use `Run.progress`; `agent_host.todo` is not a worker shadow copy.
 The PM ledger is stored in `AgentPm.state.todo` and read through `agent::pm_state`.
@@ -344,6 +355,7 @@ container.
 | `agent_session_reclassified` | `container`, `class` (`terminal_transcript`), `dir`, `sessions`, `closure` | recovery (`crates/corral-ops/src/agent/hooks/sync.rs`, `reclassify`) |
 | `delivery_fenced` | `envelope`, `endpoint`, `members` (each with `id` and `observed`) | recovery (`crates/corral-ops/src/agent/bridge/notice.rs`, `settle_unconfirmed`) |
 | `agent_wake_posted` | wake key | worker-role, pm-role |
+| `agent_job_reaped` | `run`, `job`, `state` (`reaped` or `lost`), `detail` | background-shell |
 
 ## Wire formats (not stored)
 
