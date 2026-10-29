@@ -44,7 +44,7 @@ export function browserTarget(input: string, origins: readonly string[], cwd: st
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
     throw new BrowserError("browser_target_refused", "use a configured http(s) dev origin without credentials, or a worktree HTML file");
   }
-  if (!origins.includes(url.origin)) {
+  if (!origins.some((origin) => URL.parse(origin)?.origin === url.origin)) {
     throw new BrowserError("browser_target_refused", `${url.origin} is not a configured browser origin`);
   }
   return url;

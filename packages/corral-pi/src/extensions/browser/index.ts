@@ -1,6 +1,6 @@
 // Worker-only browser navigation and screenshots (T-574). Each call launches one fresh-profile
 // headless browser, checks the top-level target before and after loading, and always cleans up.
-import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -77,18 +77,31 @@ async function visit<T>(
   }
 }
 
-/** A worktree-relative .png path, created inside the canonical worktree; symlinks may not leave it. */
+/**
+ * A worktree-relative .png path inside the canonical worktree. The deepest existing ancestor is
+ * resolved before any directory is created, so a symlink out of the worktree is refused untouched.
+ */
 function savePath(path: string, cwd: string): string {
   const root = realpathSync(cwd);
   const file = resolve(root, path);
-  if (extname(file).toLowerCase() !== ".png") throw new BrowserError("browser_save_refused", "save_as must end in .png");
-  if (!inside(root, file)) throw new BrowserError("browser_save_refused", `${path} is outside the worktree`);
-  mkdirSync(dirname(file), { recursive: true });
-  const real = join(realpathSync(dirname(file)), basename(file));
-  if (!inside(root, real) || lstatSync(real, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    throw new BrowserError("browser_save_refused", `${path} leaves the worktree through a symlink`);
+  const refuse = (reason: string) => new BrowserError("browser_save_refused", `${path} ${reason}`);
+  if (extname(file).toLowerCase() !== ".png") throw refuse("must end in .png");
+  if (!inside(root, file)) throw refuse("is outside the worktree");
+  let existing = dirname(file);
+  while (lstatSync(existing, { throwIfNoEntry: false }) === undefined) existing = dirname(existing);
+  let real: string;
+  try {
+    real = realpathSync(existing);
+  } catch {
+    throw refuse("passes through a dangling symlink");
   }
-  return real;
+  if (!inside(root, real) || !statSync(real).isDirectory()) throw refuse("leaves the worktree through a symlink");
+  mkdirSync(dirname(file), { recursive: true });
+  const target = join(realpathSync(dirname(file)), basename(file));
+  if (!inside(root, target) || lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw refuse("leaves the worktree through a symlink");
+  }
+  return target;
 }
 
 const urlParam = Type.String({ minLength: 1, maxLength: 8192,
