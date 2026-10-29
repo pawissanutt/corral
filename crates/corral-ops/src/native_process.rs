@@ -98,6 +98,29 @@ pub(crate) fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
     Ok(result)
 }
 
+/// Read a marker only while the resident's creation identity still matches. Failure to
+/// inspect an environment is not proof of ownership and callers protect that process.
+pub(crate) fn ownership_marker(process: &StuckProcess) -> Result<Option<String>> {
+    if platform::identity(process.pid)?.as_ref() != Some(&process.started) {
+        return Ok(None);
+    }
+    let pid = Pid::from_u32(process.pid);
+    let mut system = System::new();
+    refresh(&mut system, &[pid]);
+    let marker = system.process(pid).and_then(|p| {
+        p.environ().iter().find_map(|value| {
+            value
+                .to_str()?
+                .strip_prefix("CORRAL_PROCESS_OWNER=")
+                .map(str::to_owned)
+        })
+    });
+    if platform::identity(process.pid)?.as_ref() != Some(&process.started) {
+        return Ok(None);
+    }
+    Ok(marker)
+}
+
 pub(crate) fn has_token(token: &str) -> Result<bool> {
     let mut system = inventory()?;
     let pids: Vec<_> = system.processes().keys().copied().collect();

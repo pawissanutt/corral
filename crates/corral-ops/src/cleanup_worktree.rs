@@ -96,14 +96,24 @@ fn protected_pids() -> Result<BTreeSet<u32>> {
 }
 
 #[cfg(target_os = "linux")]
+fn process_marker(process: &StuckProcess) -> Option<Vec<u8>> {
+    let env = std::fs::read(format!("/proc/{}/environ", process.pid)).ok()?;
+    env.split(|b| *b == 0)
+        .find_map(|entry| entry.strip_prefix(b"CORRAL_PROCESS_OWNER=").map(Vec::from))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_marker(process: &StuckProcess) -> Option<Vec<u8>> {
+    crate::native_process::ownership_marker(process)
+        .ok()
+        .flatten()
+        .map(String::into_bytes)
+}
+
 fn owned(ctx: &Ctx, task: &Task, run: &Run, process: &StuckProcess) -> bool {
-    let Ok(env) = std::fs::read(format!("/proc/{}/environ", process.pid)) else {
+    let Some(marker) = process_marker(process) else {
         return false;
     };
-    let marker = env
-        .split(|b| *b == 0)
-        .find_map(|entry| entry.strip_prefix(b"CORRAL_PROCESS_OWNER="));
-    let Some(marker) = marker else { return false };
     task.runs
         .iter()
         .chain(std::iter::once(run))
@@ -121,11 +131,6 @@ fn owned(ctx: &Ctx, task: &Task, run: &Run, process: &StuckProcess) -> bool {
                 std::fs::read(path).is_ok_and(|saved| saved.len() == 64 && saved == marker)
             })
         })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn owned(_ctx: &Ctx, _task: &Task, _run: &Run, _process: &StuckProcess) -> bool {
-    false
 }
 
 #[cfg(not(target_os = "linux"))]
