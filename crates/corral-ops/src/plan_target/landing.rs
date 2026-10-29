@@ -250,6 +250,9 @@ impl Target {
                 "acceptance_mode":if receipt.identity.is_some() {"autonomous"} else {"owner_override"},
                 "identity":receipt.identity, "started":receipt.started,
             });
+            // The requested worktree cleanup, read by lifecycle GC (T-334): a failed removal is
+            // retried, a requested keep is not.
+            detail["cleanup"] = json!({ "v": 1, "remove_worktree": receipt.remove_worktree });
             if let Some(tier) = &receipt.gate_tier {
                 detail["gate_tier"] = json!(tier);
             }

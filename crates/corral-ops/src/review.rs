@@ -783,7 +783,8 @@ pub(crate) fn approve_landed(
     ctx.store.log_event(
         Some(&task.id),
         "approved",
-        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
+        // `cleanup` records the requested worktree cleanup for lifecycle GC (T-334).
+        json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "cleanup": { "v": 1, "remove_worktree": remove_worktree }, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
     )?;
     ctx.store.clear_condition(Some(&task.id), "landing_stale")?;
     Ok((

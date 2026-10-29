@@ -1,15 +1,23 @@
 //! The sync-time lifecycle pass over finished worktrees (plan T-253 section 10). Rows are keyed
 //! `(task, generation, target)`: the generation is the run that owned the worktree, so a task
 //! reopened and finished again gets a new row. Each pass is bounded by new work, never history:
-//! tasks that left the open board since the pass's change-feed cursor, then at most one batch of
-//! deferred rows due by now (`lifecycle_due`), then at most one batch of rows recorded under
-//! another policy digest (`lifecycle_policy`). A row already recorded under the current digest
-//! and not due costs no filesystem work.
+//! tasks that left the open board since the pass's change-feed cursor plus at most one batch of
+//! durably pending tasks, then at most one batch of deferred rows due by now (`lifecycle_due`),
+//! then at most one batch of rows recorded under another policy digest (`lifecycle_policy`). A
+//! row already recorded under the current digest and not due costs no filesystem work.
+//!
+//! Recovery runs only without a followable cursor (the first pass, or one behind the change
+//! feed's retention), outside the measured pass like the settling recovery: it reads the
+//! terminal tasks once and records as pending each whose current worktree still exists and has
+//! no row, so work that predates the cursor is still discovered.
 
 use std::time::Duration;
 
+use std::collections::BTreeSet;
+
 use anyhow::Result;
-use corral_core::backend::{ChangeSeq, LifecycleOutcome, LifecycleRow, LifecycleWrite};
+use corral_core::Status;
+use corral_core::backend::{ChangeSeq, HeadQuery, LifecycleOutcome, LifecycleRow, LifecycleWrite};
 use corral_core::records::RecordArea;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -22,18 +30,17 @@ const BATCH: u32 = 16;
 const FIRST_DEFER: Duration = Duration::from_secs(60);
 const MAX_DEFER: Duration = Duration::from_secs(3600);
 
-/// The change-feed position, zero-padded so its stored size never grows with history.
-#[derive(Serialize, Deserialize)]
+/// The change-feed position, zero-padded so its stored size never grows with history, and the
+/// tasks discovered but not yet settled.
+#[derive(Serialize, Deserialize, Default, PartialEq)]
 struct Cursor {
     seq: String,
+    #[serde(default)]
+    pending: BTreeSet<String>,
 }
 
-impl Cursor {
-    fn at(seq: u64) -> Cursor {
-        Cursor {
-            seq: format!("{seq:020}"),
-        }
-    }
+fn padded(seq: ChangeSeq) -> String {
+    format!("{:020}", seq.0)
 }
 
 const CURSOR: RecordArea<Cursor> = RecordArea::new("lifecycle-gc");
@@ -61,10 +68,24 @@ pub fn lifecycle_pass(ctx: &Ctx, now: Timestamp) -> Result<()> {
         return Ok(());
     };
     let digest = policy_digest(ctx)?;
-    for task in newly_left(ctx)? {
-        if let Err(error) = settle(ctx, &task, None, &digest, now) {
-            report(&task, &error);
+    let mut cursor = discover(ctx)?;
+    let batch: Vec<String> = cursor
+        .pending
+        .iter()
+        .take(BATCH as usize)
+        .cloned()
+        .collect();
+    let before = cursor.pending.len();
+    for task in batch {
+        match settle(ctx, &task, None, &digest, now) {
+            Ok(()) => {
+                cursor.pending.remove(&task);
+            }
+            Err(error) => report(&task, &error),
         }
+    }
+    if cursor.pending.len() != before {
+        CURSOR.save(&ctx.store, "board", &cursor)?;
     }
     for row in ctx.store.lifecycle_due(now, BATCH)? {
         if let Err(error) = settle(ctx, &row.task, Some(&row), &digest, now) {
@@ -87,28 +108,64 @@ fn report(task: &str, error: &anyhow::Error) {
     );
 }
 
-/// Tasks that left the open board since the saved cursor. The first pass, and a pass whose
-/// cursor fell behind the change feed's retention, starts at the current position.
-fn newly_left(ctx: &Ctx) -> Result<Vec<String>> {
+/// The saved cursor advanced past every task that left the open board since it, with those
+/// tasks added to the pending set before the position is saved, so a crash or a failed
+/// settlement never loses them. Without a followable cursor, recovery rebuilds it first.
+fn discover(ctx: &Ctx) -> Result<Cursor> {
     let saved = CURSOR.load(&ctx.store, "board")?;
-    let start = |ctx: &Ctx| -> Result<Vec<String>> {
-        let seq = ctx.store.view()?.seq().0;
-        CURSOR.save(&ctx.store, "board", &Cursor::at(seq))?;
-        Ok(Vec::new())
+    let mut cursor = match saved {
+        Some(saved) => saved,
+        None => recover(ctx)?,
     };
-    let Some(saved) = saved else {
-        return start(ctx);
-    };
-    let board = match ctx.store.board(Some(ChangeSeq(saved.seq.parse()?))) {
+    let board = match ctx.store.board(Some(ChangeSeq(cursor.seq.parse()?))) {
         Ok(board) => board,
-        Err(error) if is_gap(&error) => return start(ctx),
+        Err(error) if is_gap(&error) => return recover(ctx),
         Err(error) => return Err(error),
     };
     // Only task changes move the cursor; its own save is not one.
     if !board.left.is_empty() || !board.heads.is_empty() {
-        CURSOR.save(&ctx.store, "board", &Cursor::at(board.seq.0))?;
+        cursor.pending.extend(board.left);
+        cursor.seq = padded(board.seq);
+        CURSOR.save(&ctx.store, "board", &cursor)?;
     }
-    Ok(board.left)
+    Ok(cursor)
+}
+
+/// Rebuilds the cursor at the current position with every terminal task whose current
+/// worktree still exists and has no lifecycle row pending (plus what was already pending).
+/// Outside the measured pass: this one-time read follows the board's terminal history.
+fn recover(ctx: &Ctx) -> Result<Cursor> {
+    let _preparation = corral_core::work::Preparation::enter();
+    let seq = ctx.store.view()?.seq();
+    let mut pending = CURSOR
+        .load(&ctx.store, "board")?
+        .map(|saved| saved.pending)
+        .unwrap_or_default();
+    for status in [Status::Done, Status::Dropped] {
+        let status = serde_json::to_value(status)?
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        for head in ctx.store.heads(&HeadQuery::RecentByStatus { status })? {
+            let Some(run) = head.current_run.as_deref() else {
+                continue;
+            };
+            if std::fs::symlink_metadata(&run.worktree).is_ok()
+                && ctx
+                    .store
+                    .lifecycle_row(&head.id, &run.id, TARGET)?
+                    .is_none()
+            {
+                pending.insert(head.id.clone());
+            }
+        }
+    }
+    let cursor = Cursor {
+        seq: padded(seq),
+        pending,
+    };
+    CURSOR.save(&ctx.store, "board", &cursor)?;
+    Ok(cursor)
 }
 
 fn is_gap(error: &anyhow::Error) -> bool {
@@ -129,10 +186,7 @@ fn settle(
     now: Timestamp,
 ) -> Result<()> {
     let head = ctx.store.head(task)?;
-    let finished = matches!(
-        head.status,
-        corral_core::Status::Done | corral_core::Status::Dropped
-    );
+    let finished = matches!(head.status, Status::Done | Status::Dropped);
     let current = head.current_run.as_deref().map(|run| run.id.as_str());
     if let Some(row) = due
         && (!finished || current != Some(row.generation.as_str()))
@@ -155,11 +209,7 @@ fn settle(
     };
     let stored = match due {
         Some(row) => Some(row.clone()),
-        None => ctx
-            .store
-            .lifecycle_rows(task)?
-            .into_iter()
-            .find(|row| row.generation == generation && row.target == TARGET),
+        None => ctx.store.lifecycle_row(task, generation, TARGET)?,
     };
     if let Some(row) = &stored {
         let due_now = row.outcome == LifecycleOutcome::Deferred

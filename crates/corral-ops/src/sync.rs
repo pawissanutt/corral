@@ -196,6 +196,7 @@ fn sync_scoped(
     if !herdr_available {
         crate::hooks::reconcile_post_land(ctx)?;
         crate::gate::collect_finished(ctx, now)?;
+        crate::storage_gc::lifecycle_pass(ctx, now)?;
         let search_stamp = crate::content_refresh::task_stamp(ctx)?;
         for head in open_heads(ctx)? {
             crate::obligations_sync::reconcile_head(ctx, &head, now, None)?;

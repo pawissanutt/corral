@@ -17,6 +17,8 @@ use serde_json::Value;
 
 use serde_json::json;
 
+#[path = "cleanup_ops/cleanup_intent.rs"]
+mod cleanup_intent;
 #[path = "cleanup_ops/failure.rs"]
 mod failure;
 #[path = "cleanup_ops/lifecycle.rs"]

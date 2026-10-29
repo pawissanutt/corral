@@ -1,5 +1,6 @@
 //! The indexed lifecycle reads the lifecycle-gc sync pass relies on (T-334): deferred rows due
-//! by a time and rows recorded under another policy digest, on the fake and on SQLite.
+//! by a time, rows recorded below or above a policy digest, and one row by key, on the fake and
+//! on SQLite.
 
 use anyhow::Result;
 use corral_core::backend::conformance::fake_fixture;
@@ -85,16 +86,39 @@ fn exercise(backend: &dyn StoreBackend) {
         "a row due exactly now is due"
     );
 
-    let other = StorageQuery::LifecyclePolicyOtherThan {
+    let below = StorageQuery::LifecyclePolicyBelow {
         digest: "p1".into(),
     };
     assert_eq!(
-        tasks(backend, &other, PageReq::first(10)),
-        (vec!["T-3".into(), "T-4".into(), "T-5".into()], false),
-        "rows under any other digest, in digest order"
+        tasks(backend, &below, PageReq::first(10)),
+        (vec!["T-3".into(), "T-4".into()], false),
+        "the range below the digest, in index order"
     );
-    let none = StorageQuery::LifecyclePolicyOtherThan { digest: "p".into() };
-    assert_eq!(tasks(backend, &none, PageReq::first(10)).0.len(), 5);
+    let above = StorageQuery::LifecyclePolicyAbove {
+        digest: "p1".into(),
+    };
+    assert_eq!(tasks(backend, &above, PageReq::first(10)).0, vec!["T-5"]);
+    let (first, more) = tasks(backend, &below, PageReq::first(1));
+    assert_eq!(
+        (first, more),
+        (vec!["T-3".to_owned()], true),
+        "a bounded batch"
+    );
+
+    let key = |task: &str, generation: &str| StorageQuery::LifecycleKey {
+        task: task.into(),
+        generation: generation.into(),
+        target: "worktree".into(),
+    };
+    assert_eq!(
+        tasks(backend, &key("T-2", "R1"), PageReq::first(5)).0,
+        vec!["T-2"]
+    );
+    assert!(
+        tasks(backend, &key("T-2", "R2"), PageReq::first(5))
+            .0
+            .is_empty()
+    );
 }
 
 #[test]

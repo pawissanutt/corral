@@ -217,6 +217,18 @@ impl ReadView for FakeView {
                 });
                 self.page(found.into_iter(), &page)
             }
+            HeadQuery::UnreleasedPanes => self.page(
+                self.state
+                    .tasks
+                    .values()
+                    .filter(|task| {
+                        task.rows
+                            .iter()
+                            .any(|((part, _), row)| *part == TaskPart::CleanupPane && row.open)
+                    })
+                    .map(|task| task.head.clone()),
+                &page,
+            ),
             HeadQuery::DashboardDue { now } => self.page(
                 heads
                     .filter(|head| {
@@ -483,6 +495,19 @@ impl ReadView for FakeView {
                     .map(StorageRow::Lifecycle),
                 &page,
             ),
+            StorageQuery::LifecycleKey {
+                task,
+                generation,
+                target,
+            } => self.page(
+                state
+                    .lifecycle
+                    .get(&(task.clone(), generation.clone(), target.clone()))
+                    .cloned()
+                    .map(StorageRow::Lifecycle)
+                    .into_iter(),
+                &page,
+            ),
             StorageQuery::LifecycleDue { outcome, now } => {
                 let mut rows: Vec<&LifecycleRow> = state
                     .lifecycle
@@ -495,11 +520,19 @@ impl ReadView for FakeView {
                 });
                 self.page(rows.into_iter().cloned().map(StorageRow::Lifecycle), &page)
             }
-            StorageQuery::LifecyclePolicyOtherThan { digest } => {
+            StorageQuery::LifecyclePolicyBelow { digest }
+            | StorageQuery::LifecyclePolicyAbove { digest } => {
+                let below = matches!(q, StorageQuery::LifecyclePolicyBelow { .. });
                 let mut rows: Vec<&LifecycleRow> = state
                     .lifecycle
                     .values()
-                    .filter(|row| row.policy_digest != *digest)
+                    .filter(|row| {
+                        if below {
+                            row.policy_digest < *digest
+                        } else {
+                            row.policy_digest > *digest
+                        }
+                    })
                     .collect();
                 rows.sort_by_key(|row| {
                     (&row.policy_digest, &row.task, &row.generation, &row.target)

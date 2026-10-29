@@ -15,6 +15,17 @@ use super::codec::*;
 use super::load;
 use crate::backend::*;
 
+/// The lifecycle reads' filters and orders. Each reads one index range in index order
+/// (`rowid` completes it), so no sort runs before the page limit and a page costs only its rows.
+pub(super) const LIFECYCLE_DUE: &str =
+    "WHERE outcome = ? AND next_check_at <= ? ORDER BY next_check_at, rowid";
+pub(super) const LIFECYCLE_BELOW: &str = "WHERE policy_digest < ? ORDER BY policy_digest, rowid";
+pub(super) const LIFECYCLE_ABOVE: &str = "WHERE policy_digest > ? ORDER BY policy_digest, rowid";
+
+#[cfg(test)]
+#[path = "view_lifecycle_tests.rs"]
+mod lifecycle_tests;
+
 pub(super) struct SqliteView {
     conn: Option<Connection>,
     pool: Arc<Mutex<Vec<Connection>>>,
@@ -333,6 +344,15 @@ impl ReadView for SqliteView {
                      AND dashboard_due <= ? ORDER BY num"
                 ),
                 vec![Sql::Text(ts(*now))],
+                head_query,
+            ),
+            HeadQuery::UnreleasedPanes => self.page(
+                &page,
+                &format!(
+                    "SELECT {cols} FROM tasks WHERE num IN (SELECT task FROM task_rows \
+                     WHERE open = 1 AND part = ?) ORDER BY num"
+                ),
+                vec![Sql::Text(name(&TaskPart::CleanupPane).or_view()?)],
                 head_query,
             ),
         }
@@ -679,10 +699,27 @@ impl ReadView for SqliteView {
                     Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
                 })
             }
+            StorageQuery::LifecycleKey {
+                task,
+                generation,
+                target,
+            } => {
+                let sql = format!(
+                    "SELECT {} FROM lifecycle WHERE task = ? AND generation = ? AND target = ?",
+                    load::LIFECYCLE_COLUMNS
+                );
+                let args = vec![
+                    Sql::Text(task.clone()),
+                    Sql::Text(generation.clone()),
+                    Sql::Text(target.clone()),
+                ];
+                self.page(&page, &sql, args, |_, row| {
+                    Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
+                })
+            }
             StorageQuery::LifecycleDue { outcome, now } => {
                 let sql = format!(
-                    "SELECT {} FROM lifecycle WHERE outcome = ? AND next_check_at <= ? \
-                     ORDER BY next_check_at, task, generation, target",
+                    "SELECT {} FROM lifecycle {LIFECYCLE_DUE}",
                     load::LIFECYCLE_COLUMNS
                 );
                 let args = vec![Sql::Text(name(outcome).or_view()?), Sql::Text(ts(*now))];
@@ -690,15 +727,14 @@ impl ReadView for SqliteView {
                     Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
                 })
             }
-            StorageQuery::LifecyclePolicyOtherThan { digest } => {
-                // Two index ranges; `<>` alone would not use `lifecycle_policy`.
-                let sql = format!(
-                    "SELECT {} FROM lifecycle WHERE policy_digest < ?1 OR policy_digest > ?1 \
-                     ORDER BY policy_digest, task, generation, target",
-                    load::LIFECYCLE_COLUMNS
-                );
-                let args = vec![Sql::Text(digest.clone())];
-                self.page(&page, &sql, args, |_, row| {
+            StorageQuery::LifecyclePolicyBelow { digest }
+            | StorageQuery::LifecyclePolicyAbove { digest } => {
+                let range = match q {
+                    StorageQuery::LifecyclePolicyBelow { .. } => LIFECYCLE_BELOW,
+                    _ => LIFECYCLE_ABOVE,
+                };
+                let sql = format!("SELECT {} FROM lifecycle {range}", load::LIFECYCLE_COLUMNS);
+                self.page(&page, &sql, vec![Sql::Text(digest.clone())], |_, row| {
                     Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
                 })
             }
