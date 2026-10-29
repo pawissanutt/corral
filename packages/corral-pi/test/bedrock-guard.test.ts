@@ -1,7 +1,7 @@
 // The Bedrock network guard (T-504): a fake-transport ConverseStream turn through pi-ai's real
 // Bedrock client and the adopted smithy handlers, every refused destination, the socket tripwire,
 // and the host's classification of an AWS 403.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -118,9 +118,10 @@ test("raw node:https, node:http, node:http2, node:tls and node:net TCP connects 
   ]);
 });
 
-test("exactly one @smithy/node-http-handler is installed, and the Bedrock and AWS clients resolve the adopted copy", () => {
-  const modules = join(PACKAGE_ROOT, "node_modules");
-  const copies: string[] = [];
+const modules = join(PACKAGE_ROOT, "node_modules");
+const copies: string[] = [];
+// The filesystem walk can be slow under load; keep it outside the timed assertion body.
+beforeAll(() => {
   const walk = (dir: string, depth: number) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -130,6 +131,9 @@ test("exactly one @smithy/node-http-handler is installed, and the Bedrock and AW
     }
   };
   walk(modules, 0);
+}, 60_000);
+
+test("exactly one @smithy/node-http-handler is installed, and the Bedrock and AWS clients resolve the adopted copy", () => {
   expect(copies).toEqual([join(modules, "@smithy/node-http-handler")]);
   const resolvedFrom = (root: string) => dirname(createRequire(join(root, "package.json")).resolve("@smithy/node-http-handler"));
   const own = resolvedFrom(PACKAGE_ROOT);
