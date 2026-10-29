@@ -619,6 +619,21 @@ fn the_host_provider_follows_the_bound_vendor_else_the_model() {
         (None, "claude-sonnet-5-5", Some("anthropic")),
         (Some("openai"), "gpt-6.1-sol", Some("openai-codex")),
         (None, "gpt-6.1-sol", Some("openai-codex")),
+        (
+            Some("amazon-bedrock"),
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            Some("amazon-bedrock"),
+        ),
+        (
+            None,
+            "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            Some("amazon-bedrock"),
+        ),
+        (
+            None,
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            Some("amazon-bedrock"),
+        ),
         (None, "mystery-model", None),
     ] {
         assert_eq!(
@@ -626,5 +641,132 @@ fn the_host_provider_follows_the_bound_vendor_else_the_model() {
             provider,
             "{vendor:?} {model}"
         );
+    }
+}
+
+#[test]
+fn bedrock_bootstrap_captures_binding_and_launch_message_keeps_that_snapshot() {
+    // Given a private binding and a Bedrock host spec.
+    let _data = crate::agent::test_support::private_data_root();
+    let root = crate::agent::install::data_root().unwrap();
+    let auth = crate::agent::credentials::auth_dir(&root);
+    crate::agent::credentials::ensure_auth_dir(&auth).unwrap();
+    let binding = auth.join("amazon-bedrock.json");
+    write(
+        &binding,
+        r#"{"type":"aws_profile","profile":"dev","region":"us-west-2"}"#,
+    );
+    std::fs::set_permissions(&binding, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let fx = fixture(&ALL_MODULES, true);
+    let mut spec = fx.spec();
+    spec.provider = Some("amazon-bedrock".into());
+    spec.model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0".into();
+    let target = BindTarget::Worker {
+        task: fx.task.clone(),
+        run: "R1".into(),
+    };
+    // When dispatch captures the binding and the owner later changes it.
+    let prepared = prepare_bootstrap(&fx.ctx, &target, "p1", &spec).unwrap();
+    let bootstrap = consume_bootstrap(&prepared.bootstrap).unwrap();
+    write(
+        &binding,
+        r#"{"type":"aws_profile","profile":"other","region":"us-east-1"}"#,
+    );
+    let ready = check_with(
+        &bootstrap,
+        &fx.generation_dir(),
+        None,
+        Some(fake_bun(fx._tmp.path(), "1.4.2")),
+    )
+    .unwrap();
+    let message: Value = serde_json::from_slice(
+        &launch_message(&bootstrap, &ready, &Secrets::generate().unwrap()).unwrap(),
+    )
+    .unwrap();
+    // Then the host gets the original, non-secret binding, not the changed file.
+    assert_eq!(
+        message["aws"],
+        json!({"profile":"dev","region":"us-west-2"})
+    );
+    assert_eq!(bootstrap.aws.unwrap().profile, "dev");
+}
+
+#[test]
+fn subscription_bootstrap_ignores_invalid_bedrock_binding_and_old_bootstraps_load() {
+    // Given an invalid Bedrock binding and an ordinary subscription launch.
+    let _data = crate::agent::test_support::private_data_root();
+    let root = crate::agent::install::data_root().unwrap();
+    write(&root.join("auth/amazon-bedrock.json"), "not json");
+    let fx = fixture(&ALL_MODULES, true);
+    // When its bootstrap is created and decoded without the new optional field.
+    let (_, _, bootstrap) = fx.dispatch();
+    let mut encoded = serde_json::to_value(&bootstrap).unwrap();
+    encoded.as_object_mut().unwrap().remove("aws");
+    let decoded: Bootstrap = serde_json::from_value(encoded).unwrap();
+    // Then unrelated AWS configuration does not affect it and the old shape still works.
+    assert_eq!(decoded.aws, None);
+    assert_eq!(decoded, bootstrap);
+}
+
+#[test]
+fn bedrock_strips_all_ambient_aws_variables_but_codex_keeps_them() {
+    const CHILD: &str = "CORRAL_AWS_ENV_TEST";
+    if std::env::var_os(CHILD).is_none() {
+        // Given canaries isolated in a subprocess, without changing this test runner's environment.
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "agent::launch::tests::bedrock_strips_all_ambient_aws_variables_but_codex_keeps_them"])
+            .env(CHILD, "1")
+            .env("AWS_ACCESS_KEY_ID", "fixture-canary")
+            .env("AWS_BEARER_TOKEN_BEDROCK", "fixture-token")
+            .env("AWS_UNRECOGNIZED_FUTURE_SETTING", "fixture-setting")
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        assert!(String::from_utf8_lossy(&result.stdout).contains("1 passed"));
+        return;
+    }
+    for provider in ["amazon-bedrock", "openai-codex"] {
+        let fx = fixture(&ALL_MODULES, true);
+        let (_, _, mut bootstrap) = fx.dispatch();
+        bootstrap.provider = Some(provider.into());
+        let ready = check_with(
+            &bootstrap,
+            &fx.generation_dir(),
+            None,
+            Some(fake_bun(fx._tmp.path(), "1.4.2")),
+        )
+        .unwrap();
+        let out = fx._tmp.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        // When the actual host command starts.
+        let (mut command, reader) =
+            host_command(&bootstrap, &ready, &Secrets::generate().unwrap()).unwrap();
+        assert!(
+            command
+                .env("CORRAL_FAKE_BUN_OUT", &out)
+                .status()
+                .unwrap()
+                .success()
+        );
+        drop(reader);
+        // Then Bedrock strips even unknown future AWS settings; Codex inherits all of them.
+        let env = std::fs::read_to_string(out.join("env")).unwrap();
+        assert_eq!(
+            env.lines().any(|line| line.starts_with("AWS_")),
+            provider != "amazon-bedrock"
+        );
+        if provider == "openai-codex" {
+            assert!(
+                env.lines()
+                    .any(|line| line == "AWS_ACCESS_KEY_ID=fixture-canary")
+            );
+            assert!(
+                env.lines()
+                    .any(|line| line == "AWS_UNRECOGNIZED_FUTURE_SETTING=fixture-setting")
+            );
+        }
     }
 }

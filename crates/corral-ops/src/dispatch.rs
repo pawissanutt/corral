@@ -1,4 +1,6 @@
 mod admission;
+#[cfg(all(test, unix))]
+mod metered_tests;
 mod pane;
 #[cfg(test)]
 mod pending_plan_tests;
@@ -23,6 +25,7 @@ mod setup;
 use setup::carried_changes;
 pub(crate) use setup::check_plan;
 pub(crate) use setup::install_skill;
+pub(crate) use setup::metered_notice;
 
 #[derive(Debug, Clone, Default)]
 pub struct DispatchOpts {

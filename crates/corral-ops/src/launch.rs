@@ -477,6 +477,9 @@ fn prepare_prompt(ctx: &Ctx, task: &Task) -> Result<()> {
         Ok(())
     })?;
     crate::dispatch::install_skill(ctx, &task.id, run.harness.as_deref().unwrap_or(&run.agent))?;
+    if let Some(snapshot) = &run.execution {
+        crate::dispatch::metered_notice(ctx, &task.id, "worker", &snapshot.resolved)?;
+    }
     let prompts = ctx.store.prompts_dir();
     std::fs::create_dir_all(&prompts).with_context(|| format!("creating {}", prompts.display()))?;
     let prompt_file = prompts.join(format!("{}-{}.md", task.id, run.id));

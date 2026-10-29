@@ -3,9 +3,9 @@
 //! Owner: T-252 child host-install; per-provider credentials and the picker: T-479.
 //!
 //! The directory is `<data root>/auth/` (0700) holding one `<provider>.json` (0600) per
-//! provider, written only by the installed `src/auth/` modules. A Codex login from before T-479
-//! is still the shared `auth.json` until its first refresh moves it. corral itself reads only
-//! their metadata, never their bytes.
+//! OAuth provider, written by the installed `src/auth/` modules. A Codex login from before T-479
+//! is still the shared `auth.json` until its first refresh moves it. corral reads only OAuth
+//! metadata. Bedrock instead uses Rust to read and write a non-secret named-profile binding.
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -27,7 +27,7 @@ pub const LOGIN_ENTRY: &str = "src/auth/login.ts";
 /// Present only in assets whose login honors `--provider` (T-479).
 pub const PROVIDERS_ENTRY: &str = "src/auth/providers.ts";
 
-/// A subscription OAuth provider pi-native can log in (`src/auth/providers.ts` lists the same).
+/// A pi-native login provider (subscription OAuth or a metered AWS profile binding).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Provider {
     pub id: &'static str,
@@ -35,7 +35,7 @@ pub struct Provider {
     pub label: &'static str,
 }
 
-pub const PROVIDERS: [Provider; 2] = [
+pub const PROVIDERS: [Provider; 3] = [
     Provider {
         id: "openai-codex",
         vendor: "openai",
@@ -45,6 +45,11 @@ pub const PROVIDERS: [Provider; 2] = [
         id: "anthropic",
         vendor: "anthropic",
         label: "Anthropic Claude (Pro/Max)",
+    },
+    Provider {
+        id: "amazon-bedrock",
+        vendor: "amazon-bedrock",
+        label: "Amazon Bedrock (AWS profile, metered)",
     },
 ];
 
@@ -209,7 +214,8 @@ pub fn ensure_auth_dir(_dir: &Path) -> Result<()> {
 
 pub const USAGE: &str = "usage_error: `corral agent login` picks a provider interactively only on a \
      terminal; run `corral agent login --provider openai-codex` or `corral agent login --provider \
-     anthropic`";
+     anthropic`, or `corral agent login --provider amazon-bedrock --aws-profile <name> --region \
+     <region>`";
 
 /// The provider to log in: `--provider` when given, else the owner's pick on a terminal. Without
 /// a terminal it never prompts, so a scripted call cannot hang.
@@ -221,7 +227,9 @@ pub fn choose_provider(
 ) -> Result<&'static Provider> {
     if let Some(id) = explicit {
         return provider(id).with_context(|| {
-            format!("usage_error: unknown provider '{id}'; use openai-codex or anthropic")
+            format!(
+                "usage_error: unknown provider '{id}'; use openai-codex, anthropic or amazon-bedrock"
+            )
         });
     }
     if !terminal {
@@ -253,14 +261,36 @@ fn pick_on_terminal(_rows: &[picker::Row<'_>]) -> Result<Option<usize>> {
     bail!("the Pi-native host runs on Unix only")
 }
 
-/// Runs `bun --no-env-file <assets>/src/auth/login.ts --auth-dir <dir> --provider <id>` in this
-/// terminal: the owner completes that provider's Pi OAuth login and the credential lands in its
-/// file in the auth directory, replacing an earlier one atomically under the directory's lock.
+/// Log in through Pi OAuth, or Rust-only AWS line prompts for Amazon Bedrock.
 pub fn login(start: &Path, provider: Option<&str>) -> Result<()> {
+    login_with_aws(start, provider, &AwsLoginOptions::default())
+}
+
+/// Bedrock-only options. OAuth callers can keep using `login`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AwsLoginOptions<'a> {
+    pub profile: Option<&'a str>,
+    pub region: Option<&'a str>,
+}
+
+pub fn login_with_aws(
+    start: &Path,
+    provider: Option<&str>,
+    aws: &AwsLoginOptions<'_>,
+) -> Result<()> {
     use std::io::IsTerminal;
+    if (aws.profile.is_some() || aws.region.is_some()) && provider != Some("amazon-bedrock") {
+        bail!("usage_error: --aws-profile and --region require --provider amazon-bedrock");
+    }
     let root = data_root()?;
     let terminal = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     let chosen = choose_provider(&root, provider, terminal, pick_on_terminal)?;
+    if chosen.id == "amazon-bedrock" {
+        let home = std::env::var_os("HOME").context("credentials_unavailable: HOME is not set")?;
+        super::aws_profile::login(&root, Path::new(&home), aws.profile, aws.region, terminal)?;
+        println!("pi-native amazon-bedrock AWS profile binding stored (metered)");
+        return Ok(());
+    }
     let explicit = match Store::find_root(start) {
         Ok(root) => Store::open_unobserved(&root)?.config.agent.assets_dir,
         Err(_) => None,

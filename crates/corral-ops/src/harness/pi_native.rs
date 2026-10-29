@@ -151,6 +151,10 @@ fn list(
         .iter()
         .filter(|p| vendors.iter().any(|v| v == p.vendor))
         .filter(|p| {
+            p.id != "amazon-bedrock"
+                || matches!(crate::agent::aws_profile::read_binding(root), Ok(Some(_)))
+        })
+        .filter(|p| {
             let status = credentials::provider_status(root, p.id);
             status.present && status.problem.is_none()
         })

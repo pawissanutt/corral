@@ -72,6 +72,9 @@ pub struct Bootstrap {
     /// The Pi provider whose credential the host loads; absent means `openai-codex`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Non-secret named-profile binding captured at launch, not re-read by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aws: Option<super::aws_profile::AwsBinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,6 +349,11 @@ pub fn prepare_bootstrap(
             .to_path_buf();
         resume_session = Some(file);
     }
+    let aws = if spec.provider.as_deref() == Some("amazon-bedrock") {
+        super::aws_profile::read_binding(&super::install::data_root()?)?
+    } else {
+        None
+    };
     let grant = open_generation_with(&ctx.store, target, pane, spec.adopt)?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
@@ -389,6 +397,7 @@ pub fn prepare_bootstrap(
         fresh_session,
         model: spec.model.clone(),
         provider: spec.provider.clone(),
+        aws,
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
         ui: ctx.store.config.agent.ui,
@@ -757,6 +766,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "resume_session": bootstrap.resume_session,
         "fresh_session": bootstrap.fresh_session,
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
+        "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
     });
     let bytes = serde_json::to_vec(&message)?;
@@ -795,6 +805,12 @@ pub fn host_command(
         .arg("--launch-fd")
         .arg(reader.as_raw_fd().to_string())
         .current_dir(&ready.assets);
+    if bootstrap.provider.as_deref() == Some("amazon-bedrock") {
+        use std::os::unix::ffi::OsStrExt;
+        for (key, _) in std::env::vars_os().filter(|(key, _)| key.as_bytes().starts_with(b"AWS_")) {
+            command.env_remove(key);
+        }
+    }
     Ok((command, reader))
 }
 

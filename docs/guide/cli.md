@@ -561,9 +561,11 @@ Provision the corral-owned Pi credentials with one interactive owner login
 Usage: corral agent login [OPTIONS]
 
 Options:
-      --provider <PROVIDER>  Provider to log in; without it a terminal shows an arrow-key picker [possible values: openai-codex, anthropic]
-      --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -h, --help                 Print help
+      --provider <PROVIDER>        Provider to log in; without it a terminal shows an arrow-key picker [possible values: openai-codex, anthropic, amazon-bedrock]
+      --root <ROOT>                Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --aws-profile <AWS_PROFILE>  Named AWS profile for Amazon Bedrock (never ambient credentials)
+      --region <REGION>            Standard AWS region for Amazon Bedrock
+  -h, --help                       Print help
 ```
 
 ### `corral agent doctor`

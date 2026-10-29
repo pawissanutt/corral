@@ -190,6 +190,9 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
     let output = run.output_dir.join("plan.md");
     let corral = prompt::corral_bin()?;
     crate::dispatch::install_skill(ctx, &task.id, &run.harness)?;
+    if let Some(snapshot) = &run.execution {
+        crate::dispatch::metered_notice(ctx, &task.id, "planner", &snapshot.resolved)?;
+    }
     let mut text = format!(
         "# {} {}\n\n{}\n\n## Plan run contract\n\n\
          Load the `{}` skill for this session. \

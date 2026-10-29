@@ -15,6 +15,9 @@ pub mod surfaces;
 pub mod sync;
 pub mod usage;
 
+#[cfg(all(test, unix))]
+pub(crate) mod metered_tests;
+
 use corral_core::{Config, Run, Task};
 
 pub use corral_core::{PI_NATIVE_HARNESS, is_pi_native};
