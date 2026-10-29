@@ -188,7 +188,8 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
             }
         }
     }
-    if crate::dispatch_policy::free_slots(ctx)? > 0 {
+    // Each candidate's own soft/hard cap is checked below; P0 and red-main Ideas may use headroom.
+    if crate::dispatch_policy::headroom_slots(ctx)? > 0 {
         let mut shortlist = Vec::new();
         for candidate in crate::promotion::promotion_shortlist(ctx)? {
             let mode = ctx
