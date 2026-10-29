@@ -48,6 +48,11 @@ pub(crate) fn free_slots(ctx: &Ctx) -> Result<usize> {
     free_slots_below(ctx, crate::soft_target(&ctx.store.config.limits))
 }
 
+/// Automatic capacity below the hard limit: what P0 and red-main candidates may still use.
+pub(crate) fn headroom_slots(ctx: &Ctx) -> Result<usize> {
+    free_slots_below(ctx, ctx.store.config.limits.running)
+}
+
 fn free_slots_below(ctx: &Ctx, cap: usize) -> Result<usize> {
     if ctx.store.config.dispatch.paused || crate::resources::read_admission(ctx)?.is_some() {
         return Ok(0);
@@ -226,7 +231,8 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     }
     // Recompute after each promotion: a newly running task may conflict with the next idea.
     let mut considered = std::collections::BTreeSet::new();
-    while free_slots(ctx)? > 0 {
+    // P0 and red-main Ideas may use headroom up to hard; each candidate's own cap is checked.
+    while free_slots_below(ctx, hard)? > 0 {
         let next = crate::promotion::promotion_shortlist(ctx)?
             .into_iter()
             .find(|candidate| {
@@ -251,6 +257,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         let policy = ctx.store.config.dispatch_policy(task.project.as_deref());
         if promotions_today(ctx.store.events_shared()?.as_slice(), now)
             >= policy.max_auto_promotions_per_day
+            || automatic_capacity_reason(&ctx.store, &task)?.is_some()
         {
             continue;
         }
