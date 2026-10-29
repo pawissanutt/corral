@@ -292,9 +292,10 @@ that never completed (a turn-end hook included) is listed as `hook:<phase>:<name
 its invocation ID. Hook scripts are never replayed.
 
 Bash rules decide every bash call, nested ones too, before it runs. A command is split on
-`;`, `&&`, `||`, `|`, `&` and newlines, and the bodies of `$(...)`, backticks and
-`sh -c`/`bash -c` arguments are checked as well; quotes are not parsed, so splitting errs
-toward more pieces. Patterns are globs (`*` any text, `?` one character) matching a whole
+`;`, `&&`, `||`, `|`, `&` and newlines, and the bodies of `$(...)`, backticks and the
+command string of an `sh`, `bash`, `dash`, `zsh` or `ksh` invocation whose options include
+`c` (`-c`, `-lc`, `-ec`, `-o pipefail -c`) are checked as well; quotes are not parsed, so
+splitting errs toward more pieces. Patterns are globs (`*` any text, `?` one character) matching a whole
 piece. Deny wins over ask, ask over allow; under `default = "ask"` or `"deny"` every piece
 must match `allow`. A denied command fails with the rule and nothing runs.
 
