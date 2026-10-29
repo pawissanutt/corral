@@ -132,8 +132,9 @@ does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-bound
   protected paths and review-round guards still apply and can send work to Needs me.
   `corral mode pause` (alias `corral autopilot off`) stops every new automatic action across the
   workspace without killing running agents.
-- **Safe branch deletion.** Merged task branches use `git branch -d`, which refuses unmerged work.
-  Worktrees and branches can be retained. See [cleanup](docs/guide/cleanup.md).
+- **Bounded scratch and retained evidence.** Finished clean worktrees can be reclaimed with their
+  branches kept; dirty, deliberately kept or still-used scratch is left alone. Evidence lives in
+  content-addressed compressed blobs. See [cleanup](docs/guide/cleanup.md).
 
 ## Status and limitations
 
@@ -226,7 +227,15 @@ Pin artifacts you revisit. [Artifact storage](docs/guide/storage.md) covers rete
 `corral review-sprint` pins a seven-section report of recent work. Owner ideas cannot be dropped or
 narrowed without explicit consent; see [sprint reviews](docs/guide/sprint-review.md).
 
-PMs can subscribe with `corral wait --json --print-cursor` and re-arm using its returned offset.
+The database under `.corral/db/` is authoritative for tasks, events and records; there is no
+Markdown or JSONL mirror. `corral list --json` returns summaries with `current_run`, without
+paths or history. Use `corral show T-001 --json` for a full task, `corral export tasks DIR`
+for Markdown snapshots, and `corral export events --json` for stored Event JSONL.
+`corral log T-001 --all --json` returns TimelineEntry JSONL instead, wrapping each event.
+Existing file stores require an owner-run migration on an empty board with the old binary
+kept for rollback; see [storage and migration](docs/guide/storage.md).
+
+PMs can subscribe with `corral wait --json --print-cursor` and re-arm with `--after` using `cursor.seq`.
 Opt-in `[pm] push_events` sends selected events only to a live PM pane. Notifications are awareness,
 not authorization. See [board events](docs/guide/events.md) for filters, cursors and harness-specific
 subscriptions, and the [CLI reference](docs/guide/cli.md) for the full command surface.
@@ -257,8 +266,11 @@ workspace. Regenerate them with `scripts/screenshots.sh` (needs `herdr`, `git`, 
 
 ## Development
 
-See [AGENTS.md](AGENTS.md). Run the full review gate before `corral done`, using the isolated,
-plugin-free test server described there:
+See [AGENTS.md](AGENTS.md). Dispatched runs follow their authoritative gate contract:
+commit, rebase onto the named target, then run `corral gate T-001 --wait` once for that
+round. Corral selects the tier and records the receipt; a reduced-tier member does not
+start the full gate. The full repository gate for release/aggregate verification uses
+the isolated, plugin-free test server described there:
 
 ```bash
 (

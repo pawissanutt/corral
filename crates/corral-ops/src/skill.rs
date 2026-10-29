@@ -96,7 +96,7 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     (
         "list --json [--all]",
-        "open tasks with status, project and runs",
+        "task summaries with current_run, no path or history; use show --json for full records",
     ),
     (
         "search <query> --in artifacts|specs|reviews|all [--task <id>] [--kind <kind>] [--tier <tier>] [--since 7d] [--project <project>] [--limit 20] [--context 2] [--json] [--reindex]",
@@ -110,6 +110,14 @@ pub const VERBS: &[(&str, &str)] = &[
     (
         "log <id> [--all] [--json]",
         "task lifecycle timeline, oldest first; --all includes noise; --json emits one entry per line",
+    ),
+    (
+        "export tasks <dir>",
+        "write full task Markdown snapshots; exports are not a writable mirror",
+    ),
+    (
+        "export events [--since <seq>] [--with-conditions] --json",
+        "stored Event JSONL after a sequence; log --all --json wraps each event in a TimelineEntry instead",
     ),
     (
         "comment <id> \"<text>\" [--author owner|pm] [--send]",
@@ -136,7 +144,7 @@ pub const VERBS: &[(&str, &str)] = &[
         "read or save a portable handoff including next action, waits and cleanup obligations",
     ),
     (
-        "wait [--for <kinds>] [--task <id>] [--project <project>] [--since <timestamp>] [--after-offset <bytes>] [--timeout <duration>] [--json] [--print-cursor]",
+        "wait [--for <kinds>] [--task <id>] [--project <project>] [--since <timestamp>] [--after <seq>] [--timeout <duration>] [--json] [--print-cursor]",
         "wait for an actionable board event without polling; re-arm after each wake",
     ),
     (
@@ -257,16 +265,18 @@ approve, recover a process, or change the owner's review policy.
 
 OmO and Claude Code: use the harness's `monitor` to subscribe to `{bin} wait --json --print-cursor`.
 Let the subscription wake you while you do independent work; when none remains, end the turn.
-After each wake, inspect the task and re-arm with `--after-offset` using the returned `after_offset`.
-A continuous alternative is `tail -n0 -F .corral/events.jsonl | grep --line-buffered <pattern>`
-through `monitor`; this is a raw event stream, so filter actionable events and inspect their tasks.
+After each wake, inspect the task and re-arm with `--after` using the returned `cursor.seq`.
+Read history with `{bin} log <id> --all --json` (TimelineEntry JSONL, raw event in `event`)
+or `{bin} export events --json` (stored Event JSONL). The database is authoritative; do not
+watch legacy event files or read task Markdown paths. Use `{bin} show <id> --json` for a full task
+or `{bin} export tasks <dir>` for Markdown snapshots.
 Do not run a foreground polling or sleep loop.
 
 omp and other harnesses without `monitor`: start `{bin} wait --json --print-cursor` as a background
 command using that harness's completion notification. After wake, re-arm a fresh background wait
-with `--after-offset` from the returned `after_offset` so events arriving between waits are not lost.
+with `--after` from the returned `cursor.seq` so events arriving between waits are not lost.
 Timeout exits 124 with no output, not a board failure. Re-arm from the previous successful
-`after_offset` (or `cursor.offset`); before the first success retain an original `--since` timestamp
+`seq` (or `cursor.seq`); before the first success retain an original `--since` timestamp
 for catch-up after timeout. A timeout does not print or advance your saved cursor.
 Use task/project/kind filters to scope the subscription, and `--since` for timestamp-based catch-up.
 

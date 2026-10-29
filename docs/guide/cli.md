@@ -1900,10 +1900,11 @@ Write stored events as JSONL in ascending sequence order
 Usage: corral export events [OPTIONS] --json
 
 Options:
-      --since <SINCE>  Export events strictly after this sequence (0 exports all events) [default: 0]
-      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --json           Emit one stored Event JSON object per line
-  -h, --help           Print help
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --since <SINCE>    Export events strictly after this sequence (0 exports all events) [default: 0]
+      --with-conditions  After the events, one `{"condition_run": ...}` line per condition run that is open or opened or closed after `--since`, in opened order
+      --json             Emit one stored Event JSON object per line
+  -h, --help             Print help
 ```
 
 Each JSONL record includes its stored `seq`; resume with `--since <seq>`.

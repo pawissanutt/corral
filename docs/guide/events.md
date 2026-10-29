@@ -39,6 +39,27 @@ starting a fresh default wait at the tail could skip events between subscription
 Sequences are durable, increasing database positions. Readers resume from the stored sequence;
 they do not depend on a JSONL file's size, rotation or byte boundaries.
 
+## Export and readback contracts
+
+The database is the only authority. Legacy `.corral/events.jsonl` and `.corral/tasks/`
+are migration input, not live read surfaces; corral does not maintain mirrors.
+
+| Need | Supported command | Output |
+|---|---|---|
+| Board/task selection | `corral list --json` | JSON array of task summaries, with bounded `current_run`, no `path` or history vectors |
+| Include terminal tasks | `corral list --all --json` or `corral list --done --json` | Summary pages assembled for the requested history, not full task records |
+| One complete task | `corral show T-041 --json` | JSON object with body and full nested history assembled from child rows |
+| Portable task snapshot | `corral export tasks DIR` | `<id>.md` files with YAML frontmatter and Markdown body; editing an export does not update the database |
+| Stored event stream | `corral export events --json` | Event JSONL: `seq`, `ts`, `kind`, optional task/actor/via, `detail` |
+| One task's timeline | `corral log T-041 --all --json` | TimelineEntry JSONL; raw stored event under `event`, presentation and wait metadata alongside it |
+| Live notification | `corral wait --after 12345 --json --print-cursor` | First matching stored event, with `cursor.seq` for re-arming |
+
+Both event commands emit one JSON object per line, not an array. `log` without `--all`
+filters noise; `--all` retains it. Timeline entries have `at`, `kind`, `class`, normalized
+`actor`/`via`/`run`, `summary`, wait metadata and optional `repeats`; their sequence is
+`event.seq`. Raw export preserves stored details rather than reconstructing the old file.
+Use `jq '.event'` on timeline JSONL only when raw events for that one task are wanted.
+
 Export retained history as stored Event JSONL, ordered by sequence:
 
 ```bash
@@ -94,6 +115,25 @@ Verdict notes of 16 KiB or more are stored once as a blob, and the `verdict` eve
 holds its `blob:sha256:<hex>` reference. `log`, `review-sprint` and the other reports read the
 text back from the blob; `export events` emits the reference as stored.
 
+### Gate events and measurement compatibility
+
+Legacy events are imported verbatim (with a sequence assigned in original file order);
+they are not slimmed and no condition runs are synthesized from them. New `gate_started`
+and `gate` events carry the attempt, tier, context digest, carry method and
+`behind_at_start`, plus the result and failed command on completion. Full candidate
+identity, command receipts and exact-byte log/result/context documents live in the gate
+attempt row and blobs, not duplicated in every event. `artifact` events keep their fields.
+
+For gate counts, durations, stale-result classes, behind-at-start, carries and comparison
+metrics, use `corral stats --gates --json`. Its store-backed projection reads attempt
+logs and result receipts for slim events while accepting legacy and tiered event shapes.
+Raw `export events --json` is not that projection, and `log --all --json` is a timeline,
+not an expanded gate row. Historical baseline measurement scripts and their hashes
+remain historical evidence; unchanged file-reading baselines cannot be run against v2
+by substituting timeline JSONL. A before/after adapter must compare the declared metrics
+surface on the same legacy/tiered/native fixture, including counts, durations, stale
+classes, behind-at-start and carries.
+
 Workspace PMs on OmO or Claude Code should subscribe through their harness's `monitor`, not
 foreground polling. Monitor the completion of `corral wait --json --print-cursor`.
 On omp or other harnesses, run `wait --json --print-cursor` in the background and use the
@@ -118,7 +158,7 @@ to `wait` and config history but is not a PM push kind.
 
 Sync sends selected events as `[corral]` messages only to the remembered, live PM pane, using
 the same `agent_prompt` and terminal fallback as replies. It does not start a PM or send to
-coding-agent panes. Position persists in `.corral/state/pm-events.json`. Disabled push,
+coding-agent panes. Position persists in the database's `pm-events` records. Disabled push,
 unavailable herdr, and an absent PM checkpoint the event tail during sync: skipped events are
 not replayed later. A first-ever enabled sync with a live PM and no saved cursor considers the
 retained history from sequence zero. To skip old history, run one sync with push disabled first.
@@ -134,10 +174,10 @@ current effective policy at every side effect.
 |---|---|---|
 | `operating_policy_confirmed` | preview ID, grant digest, revision, confirmed task IDs and delegated authority | no |
 | `automation_blocked` / `automation_resumed` | per task and run: why automation stopped (logged once per reason) and when it may continue | no |
-| `pm_decision_resolved` | decision ID; the owner's answer is kept in `.corral/state/pm-decisions.json` | yes |
+| `pm_decision_resolved` | decision ID; the owner's answer is kept in database `pm-decisions` records | yes |
 
 A resolved owner decision can unblock work, so it wakes subscriptions. Decision presentation
-receipts live in `.corral/state/automation.json` and per-pane effective-policy delivery in
+receipts live in database `automation` records and per-pane effective-policy delivery in
 `pm brief` health (`policy_delivery`); neither is an event, and the `pm_decision_presented` and
 `pm_policy_delivery` kinds are never actionable. Effective-policy replacement to a remembered
 live PM is mandatory and independent of `push_events`/`push_kinds`; see
