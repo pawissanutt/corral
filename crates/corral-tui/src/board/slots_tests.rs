@@ -40,6 +40,28 @@ fn summary_marks_work_kept_off_the_count() {
 }
 
 #[test]
+fn soft_target_below_the_hard_limit_is_shown() {
+    let limits = Limits {
+        running: 5,
+        running_target: Some(3),
+        ..Limits::default()
+    };
+    assert_eq!(
+        slot_summary(&usage(2, 0, 0, 0), &limits),
+        "2/5 used (soft target 3): 2 tasks"
+    );
+    assert_eq!(
+        slot_badge(&usage(2, 0, 0, 0), &limits, 80),
+        " 2/5 (soft target 3) "
+    );
+    let equal = Limits {
+        running_target: Some(3),
+        ..Limits::default()
+    };
+    assert_eq!(slot_summary(&usage(0, 0, 0, 0), &equal), "0/3 used");
+}
+
+#[test]
 fn badge_shrinks_to_the_space_it_has() {
     let limits = Limits::default();
     let tasks_only = usage(2, 0, 0, 0);

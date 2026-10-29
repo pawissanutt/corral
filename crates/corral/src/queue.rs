@@ -75,11 +75,15 @@ pub fn run(ctx: &Ctx, command: QueueCmd) -> Result<()> {
             if json {
                 println!("{}", serde_json::to_string_pretty(&entries)?);
             } else {
+                let limits = &ctx.store.config.limits;
+                let usage = corral_ops::slot_usage(ctx)?;
                 println!(
-                    "coding slots: {} ({} released by parked runs); review process budget: {}",
-                    ctx.store.config.limits.running,
-                    corral_ops::slot_usage(ctx)?.parked,
-                    ctx.store.config.limits.review
+                    "coding slots: running {} / soft {} / hard {} ({} released by parked runs); review process budget: {}",
+                    usage.total(),
+                    corral_ops::soft_target(limits),
+                    limits.running,
+                    usage.parked,
+                    limits.review
                 );
                 for entry in entries {
                     println!(

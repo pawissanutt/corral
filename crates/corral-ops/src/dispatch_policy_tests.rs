@@ -486,6 +486,60 @@ fn concurrent_policy_passes_cannot_exceed_the_daily_cap() {
 }
 
 #[test]
+fn automatic_admission_stops_at_soft_target_while_p0_and_manual_use_headroom() {
+    // Given hard limit 5, soft target 4 and two reserved finishing slots: 2 automatic slots.
+    let mut fx = Fixture::new();
+    fx.ctx.store.config.limits.running_target = Some(4);
+    fx.save();
+    let first = fx.task("First", Status::Backlog);
+    let second = fx.task("Second", Status::Backlog);
+    let third = fx.task("Third", Status::Backlog);
+    fx.grant(&[&first, &second, &third]);
+    // When automatic admission runs.
+    advance(&fx.ctx, Fixture::now()).unwrap();
+    // Then it fills only up to the soft target and explains why the rest waits.
+    let running = |fx: &Fixture| {
+        fx.ctx
+            .store
+            .list()
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.status == Status::Running)
+            .map(|t| t.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(running(&fx), [first.id.clone(), second.id.clone()]);
+    assert_eq!(free_slots(&fx.ctx).unwrap(), 0);
+    let waiting = fx.ctx.store.get(&third.id).unwrap();
+    assert_eq!(waiting.status, Status::Backlog);
+    let reason = automatic_capacity_reason(&fx.ctx.store, &waiting)
+        .unwrap()
+        .unwrap();
+    assert!(reason.contains("at soft target"), "{reason}");
+    // When a P0 task becomes eligible, it takes headroom up to the hard limit.
+    let urgent = fx.task("Urgent", Status::Backlog);
+    fx.ctx
+        .store
+        .update(&urgent.id, |t| {
+            t.priority = "P0".into();
+            Ok(())
+        })
+        .unwrap();
+    fx.grant(&[&third, &urgent]);
+    advance(&fx.ctx, Fixture::now()).unwrap();
+    assert_eq!(
+        fx.ctx.store.get(&urgent.id).unwrap().status,
+        Status::Running
+    );
+    assert_eq!(fx.ctx.store.get(&third.id).unwrap().status, Status::Backlog);
+    // And manual dispatch may also use the headroom.
+    let manual = fx.task("Manual", Status::Ready);
+    crate::dispatch(&fx.ctx, &manual.id, &DispatchOpts::default()).unwrap();
+    assert_eq!(crate::slot_usage(&fx.ctx).unwrap().total(), 4);
+    assert_eq!(fx.ctx.store.get(&third.id).unwrap().status, Status::Backlog);
+}
+
+#[test]
 fn completed_coding_work_is_replaced_on_the_next_sync() {
     // Given one coding slot, an active run, and one waiting backlog task.
     let mut fx = Fixture::new();

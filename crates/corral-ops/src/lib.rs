@@ -275,7 +275,7 @@ pub use skill::{
     WORKER_SKILL, duplicate_skills, ensure_skills, install_harness_skills, install_role_skills,
     role_skill_markdown, skill_markdown, skills_dir_for, verbs_block,
 };
-pub use slots::{SlotUsage, slot_usage};
+pub use slots::{SlotUsage, slot_usage, soft_target};
 pub use sprint::{
     SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,
     SprintTotals, collect_sprint_review, review_sprint,

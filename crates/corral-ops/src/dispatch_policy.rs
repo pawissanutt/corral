@@ -11,8 +11,9 @@ use crate::{Change, Ctx, DispatchOutcome, SlotUsage};
 #[path = "dispatch_policy_tests.rs"]
 mod tests;
 
-/// Headroom is reserved even before the next finishing process starts.
-fn available(store: &Store, tasks: &[Task], credit: usize) -> usize {
+/// Coding slots free below `cap` (the soft target or the hard limit). Finishing headroom is
+/// reserved even before the next finishing process starts.
+fn available(store: &Store, tasks: &[Task], credit: usize, cap: usize) -> usize {
     let limits = &store.config.limits;
     let usage = SlotUsage::from_tasks(tasks, limits);
     // A gate sharing its worker's slot occupies neither the pool nor the finishing reserve.
@@ -38,18 +39,20 @@ fn available(store: &Store, tasks: &[Task], credit: usize) -> usize {
                 })
             })
             .count();
-    limits
-        .running
-        .saturating_sub(usage.total().saturating_sub(credit))
+    cap.saturating_sub(usage.total().saturating_sub(credit))
         .saturating_sub(limits.review.saturating_sub(finishing))
 }
 
-/// Read-only capacity used by PM cards and the automatic admission pass.
+/// Read-only automatic capacity below the soft target, used by PM cards and idea promotion.
 pub(crate) fn free_slots(ctx: &Ctx) -> Result<usize> {
+    free_slots_below(ctx, crate::soft_target(&ctx.store.config.limits))
+}
+
+fn free_slots_below(ctx: &Ctx, cap: usize) -> Result<usize> {
     if ctx.store.config.dispatch.paused || crate::resources::read_admission(ctx)?.is_some() {
         return Ok(0);
     }
-    Ok(available(&ctx.store, &ctx.store.list_shared()?, 0))
+    Ok(available(&ctx.store, &ctx.store.list_shared()?, 0, cap))
 }
 
 /// Rechecked under the same board lock as dispatch's durable reservation.
@@ -69,12 +72,31 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
             ));
         }
     }
+    let limits = &store.config.limits;
+    let target = crate::soft_target(limits);
+    if target < limits.running && !crate::slots::uses_headroom(task) {
+        let tasks = store.list_shared()?;
+        let credit = usize::from(task.holds_dispatch_slot());
+        if available(store, &tasks, credit, target) == 0
+            && available(store, &tasks, credit, limits.running) > 0
+        {
+            let used = SlotUsage::from_tasks(&tasks, limits)
+                .total()
+                .saturating_sub(credit);
+            return Ok(Some(format!(
+                "waiting: at soft target ({used} used, target {target}, hard {}); headroom reserved for manual, P0 and red-main work",
+                limits.running
+            )));
+        }
+    }
     queued_capacity_reason(store, task)
 }
 
+/// Explicitly authorized queue work may use the headroom up to the hard limit.
 pub(crate) fn queued_capacity_reason(store: &Store, task: &Task) -> Result<Option<String>> {
     let credit = usize::from(task.holds_dispatch_slot());
-    if available(store, &store.list_shared()?, credit) == 0 {
+    let running = store.config.limits.running;
+    if available(store, &store.list_shared()?, credit, running) == 0 {
         return Ok(Some(format!(
             "waiting for automatic coding capacity ({} review slots reserved)",
             store.config.limits.review
@@ -169,7 +191,9 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
     fresh.reload_config()?;
     let ctx = &fresh;
-    if free_slots(ctx)? == 0 {
+    // Backlog candidates may reach the hard limit only when P0 or red-main; each is rechecked.
+    let hard = ctx.store.config.limits.running;
+    if free_slots_below(ctx, hard)? == 0 {
         return Ok(vec![]);
     }
     let mut changes = Vec::new();
@@ -181,7 +205,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         .collect();
     crate::queue::sort_candidates(&mut backlog);
     for (index, task) in backlog.iter().enumerate() {
-        if free_slots(ctx)? == 0 {
+        if free_slots_below(ctx, hard)? == 0 {
             break;
         }
         match crate::queue::blocked_reason(ctx, &ctx.store, task, false) {

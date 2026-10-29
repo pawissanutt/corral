@@ -584,8 +584,10 @@ guard still apply. A malformed dependency graph is reported without blocking unr
 
 Automatic claims leave `limits.review` headroom in the shared running pool. Live counted gates,
 reviewers, and their reservations use that headroom instead of reserving it twice. Consequently,
-`limits.running <= limits.review` leaves no automatic coding capacity. Direct manual dispatch
-retains its existing capacity rules; all sync-driven Ready admission reserves headroom. Claims recheck headroom under
+`limits.running <= limits.review` leaves no automatic coding capacity. With
+`limits.running_target` set below `limits.running`, automatic claims stop at that soft target
+except for P0 tasks and red-main fixes, which may use the headroom up to the hard limit. Direct manual dispatch
+and the owner-authorized queue retain their existing capacity rules; all sync-driven Ready admission reserves headroom. Claims recheck headroom under
 the board lock, including recovery of an interrupted automatic launch.
 
 `promote_ideas` defaults to `"suggest"`:

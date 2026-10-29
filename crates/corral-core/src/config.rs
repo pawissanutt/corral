@@ -180,8 +180,12 @@ impl Defaults {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
-    /// Global run slots (Running + NeedsMe). Default 3.
+    /// Global run slots (Running + NeedsMe): the hard limit. Default 3.
     pub running: usize,
+    /// Soft target automatic coding admission fills up to; unset means `running`. The gap up to
+    /// `running` is headroom for manual and authorized-queue dispatch, P0 and red-main fixes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_target: Option<usize>,
     /// Independent concurrent gate/reviewer process budget.
     #[serde(default = "default_review_limit")]
     pub review: usize,
@@ -198,6 +202,7 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             running: 3,
+            running_target: None,
             review: default_review_limit(),
             count_reviews: true,
             count_gates: true,
@@ -746,6 +751,13 @@ impl Config {
         out.extend(self.resources.problems());
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
+        }
+        if self
+            .limits
+            .running_target
+            .is_some_and(|t| t == 0 || t > self.limits.running)
+        {
+            out.push("limits.running_target must be within 1..=limits.running".to_string());
         }
         if self.sync.startup_grace_secs == 0 {
             out.push("sync.startup_grace_secs must be > 0".to_string());
