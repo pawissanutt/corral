@@ -15,6 +15,8 @@ export interface LspServerSpec {
   readonly command: readonly string[];
   /** The LSP language ID of each file extension (with the dot) this server answers for. */
   readonly languages: Readonly<Record<string, string>>;
+  /** Find the nearest ancestor containing one of these names, bounded by the worktree. */
+  readonly rootMarkers?: readonly string[];
   readonly initializationOptions?: Record<string, unknown>;
   /** The `workspace/configuration` section answered with `initializationOptions`. */
   readonly configSection?: string;
