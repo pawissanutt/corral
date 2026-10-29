@@ -67,15 +67,15 @@ pub struct PlanProgress {
     pub aggregate: Option<crate::AggregateProgress>,
 }
 
-/// Read one coherent board snapshot without reconciling or accepting the Plan.
+/// Read current board progress without reconciling or accepting the Plan.
+///
+/// This advisory view does not take the dispatch lock: workers may be updating the
+/// board, and a later refresh will pick up their changes. Membership validation
+/// still reports real errors; this projection never authorizes a mutation.
 ///
 /// # Errors
 /// Rejects non-trackers, missing members or dependencies, cycles, and invalid membership.
 pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
-    let _board = ctx
-        .store
-        .try_lock("dispatch")?
-        .context("board is being updated; retry Plan progress")?;
     let store = Store::open_unobserved(ctx.store.root())?;
     let tracker = store.get(id)?;
     ensure!(tracker.tracker, "{} is not a tracker Plan", tracker.id);
