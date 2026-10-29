@@ -3,7 +3,8 @@
 // logout must leave the provider without auth, and no request may carry anything but the OAuth
 // token. Since T-493 requests run through the Claude Agent SDK lane (a fake `query` here), so the
 // token is what the Claude Code subprocess receives.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,7 +59,6 @@ async function anthropicHost(ambient: Record<string, string>) {
     createSdkMcpServer: () => { throw new Error("no custom tools in this test"); },
   });
   const guard = guardedFetch(async () => new Response("synthetic", { status: 400 }), undefined, "anthropic");
-  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const models = await ModelRuntime.create({
     credentials: auth.credentials({ provider: "anthropic", apiEndpoint: PROVIDERS.anthropic.api,
       refreshEndpoint: PROVIDERS.anthropic.refresh }),
@@ -82,23 +82,28 @@ async function request(models: Awaited<ReturnType<typeof anthropicHost>>["models
 }
 
 for (const [source, ambient] of Object.entries(AMBIENT)) {
-  test(`after logout an ambient ${source} never authenticates an Anthropic request`, async () => {
-    const { models, sent, guard } = await anthropicHost(ambient);
-    // Given the stored subscription login, requests carry only its OAuth token:
-    const before = await models.getAuth("anthropic");
-    expect([before?.source, before?.auth.apiKey]).toEqual(["OAuth", OAUTH]);
-    expect(await request(models, { apiKey: before?.auth.apiKey })).toBe("sent");
-    expect(sent).toEqual([`CLAUDE_CODE_OAUTH_TOKEN=${OAUTH} ambient=[]`]);
-    // When the owner logs out in the pane:
-    await models.logout("anthropic");
-    // Then no auth resolves from the environment, and any non-OAuth request is refused unsent:
-    expect(await models.getAuth("anthropic")).toBeUndefined();
-    for (const options of [{}, { apiKey: PAID }, { headers: { Authorization: `Bearer ${PAID}` } },
-      { apiKey: OAUTH, headers: { "x-api-key": PAID } }]) {
-      expect(await request(models, options)).toMatch(/^credentials_unavailable: anthropic requests must use the subscription/);
-    }
-    expect(sent).toHaveLength(1);
-    expect(guard.ledger().allowed).toBe(0);
+  describe(`ambient ${source}`, () => {
+    let host: Awaited<ReturnType<typeof anthropicHost>>;
+    // Fixture construction and cold SDK initialization are not part of the logout assertion.
+    beforeAll(async () => { host = await anthropicHost(ambient); });
+    test(`after logout an ambient ${source} never authenticates an Anthropic request`, async () => {
+      const { models, sent, guard } = host;
+      // Given the stored subscription login, requests carry only its OAuth token:
+      const before = await models.getAuth("anthropic");
+      expect([before?.source, before?.auth.apiKey]).toEqual(["OAuth", OAUTH]);
+      expect(await request(models, { apiKey: before?.auth.apiKey })).toBe("sent");
+      expect(sent).toEqual([`CLAUDE_CODE_OAUTH_TOKEN=${OAUTH} ambient=[]`]);
+      // When the owner logs out in the pane:
+      await models.logout("anthropic");
+      // Then no auth resolves from the environment, and any non-OAuth request is refused unsent:
+      expect(await models.getAuth("anthropic")).toBeUndefined();
+      for (const options of [{}, { apiKey: PAID }, { headers: { Authorization: `Bearer ${PAID}` } },
+        { apiKey: OAUTH, headers: { "x-api-key": PAID } }]) {
+        expect(await request(models, options)).toMatch(/^credentials_unavailable: anthropic requests must use the subscription/);
+      }
+      expect(sent).toHaveLength(1);
+      expect(guard.ledger().allowed).toBe(0);
+    });
   });
 }
 
@@ -114,7 +119,6 @@ test("an OpenAI Codex host keeps its OAuth-only provider unchanged", async () =>
   const root = mkdtempSync(join(tmpdir(), "corral-pi-oauth-only-"));
   temps.push(root);
   writeFileSync(join(root, "unused"), "");
-  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
   const models = await ModelRuntime.create({
     credentials: new FileCredentialStore(join(root, "auth")),
     modelsPath: null, refreshOnCreate: false, allowModelNetwork: false,
