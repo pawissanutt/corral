@@ -154,6 +154,15 @@ const TRANSIENT: &[&str] = &[
 /// A failed provider turn's error text -> its availability class; None is not availability.
 /// `at` anchors relative reset hints ("retry after 30s"). Only the harness's structured error
 /// field is classified, never an idle pane, a worker's prose or a failing test.
+/// Under cross-family review (`exclude` is the author's model family), a candidate of that family
+/// or of an unknown family is skipped.
+pub fn excluded_family(exclude: Option<&str>, candidate: &ExecutionCandidate) -> bool {
+    exclude.is_some_and(|family| {
+        crate::model_family(Some(&candidate.provider), Some(&candidate.model))
+            .is_none_or(|candidate| candidate.as_str() == family)
+    })
+}
+
 pub fn classify(message: &str, at: Timestamp) -> Option<AvailabilityClass> {
     let lower = message.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
@@ -461,6 +470,7 @@ impl AvailabilityEpisode {
     }
 
     /// Host policy: the next eligible approved candidate, never one already attempted.
+    /// `exclude_provider` holds the author's model family under cross-family review.
     pub fn select(
         &self,
         config: &Config,
@@ -517,7 +527,7 @@ impl AvailabilityEpisode {
             }
             let refusal = if exhausted_accounts.contains(candidate.connection.as_str()) {
                 Some("its connection shares the exhausted account quota".to_owned())
-            } else if exclude_provider == Some(candidate.provider.as_str()) {
+            } else if excluded_family(exclude_provider, candidate) {
                 Some("it would violate the cross-family review policy".to_owned())
             } else if let Err(error) = fallback.admits(candidate) {
                 Some(format!("{error:#}"))

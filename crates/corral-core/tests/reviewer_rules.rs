@@ -119,7 +119,7 @@ fn require_cross_family_survives_rule_selection() {
     assert!(policy.cross_family_required());
     assert!(
         policy
-            .check_reviewer_family(Some("openai"), Some("openai"))
+            .check_reviewer_family(Some(&"openai".into()), Some(&"openai".into()))
             .is_err()
     );
     // An unmatched task keeps the workspace cross-vendor selector itself.

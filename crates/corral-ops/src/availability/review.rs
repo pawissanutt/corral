@@ -17,7 +17,7 @@ pub(crate) fn review_episode(task: &str, run: &Run, profile: &str) -> String {
     format!("{task}-{}-review-{profile}", run.id)
 }
 
-/// The implementer's provider when review independence requires another model family.
+/// The implementer's model family when review independence requires another family.
 pub(crate) fn review_exclusion(ctx: &Ctx, task: &Task, run: &Run) -> Option<String> {
     let config = &ctx.store.config;
     let policy = config.task_review_policy(task);
@@ -26,6 +26,8 @@ pub(crate) fn review_exclusion(ctx: &Ctx, task: &Task, run: &Run) -> Option<Stri
     (cross_vendor || policy.cross_family_required())
         .then(|| crate::reviewer::implementer_vendor(ctx, task, run).ok())
         .flatten()
+        .and_then(|vendor| run.family(Some(&vendor)))
+        .map(|family| family.to_string())
 }
 
 fn unavailable(reason: String, at: Timestamp) -> AttemptFailure {
@@ -160,14 +162,14 @@ pub(crate) fn plan_reviewer(
         let author = config
             .task_review_policy(task)
             .cross_family_required()
-            .then(|| corral_core::plan_policy::plan_author_vendor(config, task))
+            .then(|| corral_core::plan_policy::plan_author_family(config, task))
             .transpose()?
             .flatten();
         resolve_before_start(
             ctx,
             ProfileRole::PlanReview,
             resolved.clone(),
-            author.as_deref(),
+            author.as_ref().map(|family| family.as_str()),
         )?
     };
     let planner = corral_core::plan_policy::planner(task)?

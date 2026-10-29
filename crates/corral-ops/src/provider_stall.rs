@@ -334,7 +334,8 @@ pub(crate) struct Target<'a> {
     pub scope: provider_session::Scope,
     /// The availability episode this run's candidate belongs to; None keeps legacy handling.
     pub episode: Option<String>,
-    /// The implementer's provider, when review independence requires another family.
+    /// The implementer's model family (the vendor for every non-Bedrock vendor), when review
+    /// independence requires another family.
     pub exclude_provider: Option<String>,
 }
 

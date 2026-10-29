@@ -103,3 +103,28 @@ fn reviewer_fallback_never_downgrades_required_independence() {
     let excerpt = run.blocked_excerpt.clone().unwrap();
     assert!(excerpt.contains("cross-family"), "{excerpt}");
 }
+
+#[test]
+fn reviewer_fallback_skips_a_bedrock_candidate_of_the_author_family() {
+    // Given an OpenAI-family author and a Bedrock-hosted OpenAI model next in line.
+    let fx = in_review(reviewer_candidates(&[
+        ("rv-claude", "anthropic"),
+        ("openai.gpt-oss", "amazon-bedrock"),
+        ("rv-gemini", "google"),
+    ]));
+    let first = fx.run().review_runs[0].clone();
+    // When the first reviewer's quota is exhausted.
+    fx.fail_turn(&first, "r1.jsonl", "quota exceeded for model rv-claude", 10);
+    let task = fx.sync(900);
+    // Then the Bedrock candidate is skipped by family and the next family reviews.
+    let second = &task.current_run().unwrap().review_runs[1];
+    assert_eq!(second.model.as_deref(), Some("google/rv-gemini-fixture"));
+    let selected = fx.events("availability_fallback_selected");
+    assert_eq!(selected[0]["skipped"][0]["candidate"], "openai.gpt-oss");
+    assert!(
+        selected[0]["skipped"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("cross-family")
+    );
+}

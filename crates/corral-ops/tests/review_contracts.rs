@@ -534,3 +534,99 @@ fn legacy_profile_policy_keeps_its_reviewer_with_a_task_aware_contract() {
     assert_eq!(route.profile_source, "workspace_review_config");
     assert_eq!(route.mapping, None);
 }
+
+const BEDROCK_CLAUDE: &str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+const BEDROCK_LLAMA: &str = "us.meta.llama3-3-70b-instruct-v1:0";
+
+fn bedrock_fixture(cross_family: bool, configure: impl FnOnce(&mut Config)) -> Fx {
+    fixture(|config| {
+        use ProfileRole::ImplementationReview;
+        for (name, model) in [
+            ("bedrock-claude", BEDROCK_CLAUDE),
+            ("bedrock-llama", BEDROCK_LLAMA),
+        ] {
+            config.profiles.insert(
+                name.into(),
+                reviewer(model, "amazon-bedrock", &[ImplementationReview]),
+            );
+        }
+        config.review.require_cross_family = Some(cross_family);
+        configure(config);
+    })
+}
+
+#[test]
+fn bedrock_claude_is_the_anthropic_family_on_every_implementation_review_path() {
+    let auto = |config: &mut Config| {
+        config
+            .routing
+            .review_profiles
+            .insert(ReviewContractKind::Implementation, "bedrock-claude".into());
+    };
+    let pinned = |config: &mut Config| config.review.reviewer = Some("bedrock-claude".into());
+    let pm = |config: &mut Config| {
+        config.review.reviewer = Some("pm".into());
+        config.pm.agent = "bedrock-claude".into();
+    };
+    for (path, configure) in [
+        ("auto", &auto as &dyn Fn(&mut Config)),
+        ("profile", &pinned),
+        ("pm", &pm),
+    ] {
+        // Given an Anthropic author and a Bedrock Claude reviewer under cross-family policy.
+        let fx = bedrock_fixture(true, configure);
+        let id = candidate(&fx, "logic", &[], "src/widget.rs");
+        // When the reviewer starts, then the shared anthropic family is refused.
+        let error = corral_ops::review_run(&fx.ctx, &id, None).unwrap_err();
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("cross-family review is required"),
+            "{path}: {error}"
+        );
+        assert!(error.contains("'anthropic'"), "{path}: {error}");
+    }
+    // With the policy off the same pairing reviews, as a different model of one family.
+    let fx = bedrock_fixture(false, auto);
+    let id = candidate(&fx, "logic", &[], "src/widget.rs");
+    let record = corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    assert_eq!(record.reviewer, "bedrock-claude");
+    assert_eq!(
+        route(&record).independence,
+        ReviewIndependence::DifferentModel
+    );
+}
+
+#[test]
+fn explicit_bedrock_override_is_judged_by_family() {
+    let fx = bedrock_fixture(true, |_| {});
+    let id = candidate(&fx, "logic", &[], "src/widget.rs");
+    // An explicit Bedrock Claude override against the Anthropic author is refused.
+    let error = corral_ops::review_run(&fx.ctx, &id, Some("bedrock-claude")).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("cross-family review is required"),
+        "{error:#}"
+    );
+    // Bedrock Llama is another family and reviews.
+    let record = corral_ops::review_run(&fx.ctx, &id, Some("bedrock-llama")).unwrap();
+    assert_eq!(record.reviewer, "bedrock-llama");
+    assert_eq!(
+        route(&record).independence,
+        ReviewIndependence::DifferentVendor
+    );
+}
+
+#[test]
+fn cross_vendor_selector_reads_mapping_keys_as_families() {
+    let fx = bedrock_fixture(false, |config| {
+        config.review.reviewer = Some("cross-vendor".into());
+        config.routing.reviewer_by_vendor = [
+            ("anthropic".to_string(), "bedrock-claude".to_string()),
+            ("openai".to_string(), "impl".to_string()),
+        ]
+        .into();
+    });
+    let id = candidate(&fx, "logic", &[], "src/widget.rs");
+    // The Anthropic author maps to the openai family, never to the Bedrock Claude mapping.
+    let record = corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    assert_eq!(record.reviewer, "impl");
+}

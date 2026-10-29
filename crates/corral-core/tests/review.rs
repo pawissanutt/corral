@@ -333,8 +333,8 @@ fn family_checks_apply_only_to_explicit_diversity_requirements() {
         let c = config(&format!("[review]\n{setting}"));
         let p = c.review_policy(None, None);
         // When validating same-family, cross-family, and unknown identities.
-        let same = p.check_reviewer_family(Some("openai"), Some("openai"));
-        let different = p.check_reviewer_family(Some("openai"), Some("anthropic"));
+        let same = p.check_reviewer_family(Some(&"openai".into()), Some(&"openai".into()));
+        let different = p.check_reviewer_family(Some(&"openai".into()), Some(&"anthropic".into()));
         let unknown = p.check_reviewer_family(None, None);
         // Then only explicit opt-in requires known and distinct families.
         assert_eq!(same.is_err(), p.require_cross_family);
@@ -345,7 +345,7 @@ fn family_checks_apply_only_to_explicit_diversity_requirements() {
         .review_policy(None, None);
     assert!(p.cross_family_required());
     assert!(
-        p.check_reviewer_family(Some("openai"), Some("openai"))
+        p.check_reviewer_family(Some(&"openai".into()), Some(&"openai".into()))
             .is_err()
     );
 }

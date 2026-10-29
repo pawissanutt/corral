@@ -270,7 +270,7 @@ fn reviewer_probe_plan_none_preserves_existing_independent_review_policy() {
     let context = ReviewSelectionContext {
         task: &task,
         subject: &selection.subject,
-        author_vendor: Some("openai"),
+        author_family: Some(&"openai".into()),
     };
     // When preview supplies the same actual prospective planner to receipt validation.
     let result = selection.validate_with_planner(&config, &context, Some(planner));
@@ -358,7 +358,7 @@ fn recorded_planner_default_review_uses_existing_policy_through_store_restart() 
     let context = ReviewSelectionContext {
         task: &task,
         subject: &selection.subject,
-        author_vendor: Some("openai"),
+        author_family: Some(&"openai".into()),
     };
     assert!(selection.validate(&store.config, &context).is_ok());
     assert!(
@@ -379,7 +379,7 @@ fn recorded_planner_default_review_uses_existing_policy_through_store_restart() 
             Some(&ReviewSelectionContext {
                 task: &task,
                 subject: &expected,
-                author_vendor: Some("openai"),
+                author_family: Some(&"openai".into()),
             }),
         )
         .unwrap();
@@ -425,7 +425,7 @@ fn implementation_none_still_disables_independent_reviewer_selection() {
         &ReviewSelectionContext {
             task: &task,
             subject: &selection.subject,
-            author_vendor: None,
+            author_family: None,
         },
     );
     // Then independent review remains disabled for implementation.
@@ -457,7 +457,7 @@ fn planner_review_keeps_cross_family_and_exact_planner_context_checks() {
     let context = ReviewSelectionContext {
         task: &task,
         subject: &selection.subject,
-        author_vendor: Some("openai"),
+        author_family: Some(&"openai".into()),
     };
     // When the selected opposite-family reviewer is validated, versus a changed planner vendor.
     let accepted = selection.validate_with_planner(&config, &context, Some(planner));
@@ -551,4 +551,156 @@ fn stale_historical_mapping_remains_inspectable_after_harness_settings_change() 
         reopened.profile_setup_history().unwrap().last(),
         Some(&record)
     );
+}
+
+const BEDROCK_CLAUDE: &str = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+const BEDROCK_LLAMA: &str = "us.meta.llama3-3-70b-instruct-v1:0";
+
+fn family_profile(vendor: &str, model: &str) -> Profile {
+    let model = &if model.contains('/') {
+        model.to_string()
+    } else {
+        format!("{vendor}/{model}")
+    };
+    let mut profile = custom_profile();
+    profile.vendor = Some(vendor.into());
+    profile.model = Some(model.into());
+    let candidate = &mut profile.metadata.as_mut().unwrap().candidates[0];
+    candidate.provider = vendor.into();
+    candidate.model = model.into();
+    profile
+}
+
+fn family_config(cross_family: bool) -> (tempfile::TempDir, Config) {
+    let (dir, mut config) = config();
+    for (name, vendor, model) in [
+        ("opus", "anthropic", "anthropic/claude-opus-4-1"),
+        ("sol", "openai", "openai/gpt-6.1-sol"),
+        ("bedrock-claude", "amazon-bedrock", BEDROCK_CLAUDE),
+        ("bedrock-llama", "amazon-bedrock", BEDROCK_LLAMA),
+    ] {
+        config
+            .profiles
+            .insert(name.into(), family_profile(vendor, model));
+    }
+    config.routing.reviewer_by_vendor = [
+        ("anthropic".into(), "opus".into()),
+        ("openai".into(), "sol".into()),
+    ]
+    .into();
+    config.review.require_cross_family = Some(cross_family);
+    (dir, config)
+}
+
+#[test]
+fn cross_vendor_selector_and_mapping_compare_model_families() {
+    let (_dir, mut config) = family_config(true);
+    // A Bedrock Claude author is the anthropic family, so the selector picks the openai reviewer.
+    let author = model_family(Some("amazon-bedrock"), Some(BEDROCK_CLAUDE)).unwrap();
+    assert_eq!(config.cross_vendor_reviewer(&author).unwrap(), "sol");
+    // reviewer_by_vendor.anthropic may name a Bedrock Claude profile, but not Bedrock Llama.
+    config
+        .routing
+        .reviewer_by_vendor
+        .insert("anthropic".into(), "bedrock-claude".into());
+    assert_eq!(
+        config.cross_vendor_reviewer(&"openai".into()).unwrap(),
+        "bedrock-claude"
+    );
+    config
+        .routing
+        .reviewer_by_vendor
+        .insert("anthropic".into(), "bedrock-llama".into());
+    let error = config.cross_vendor_reviewer(&"openai".into()).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("does not match mapping vendor"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn plan_review_independence_compares_families_and_bedrock_model_keys() {
+    for cross_family in [true, false] {
+        let (dir, mut config) = family_config(cross_family);
+        let store = Store::init(dir.path()).unwrap();
+        let task = store
+            .create("Fixture", None, Status::Backlog, "Bounded work")
+            .unwrap();
+        config.review.reviewer = Some("opus".into());
+        let resolve = |name: &str| {
+            config
+                .resolve_profile(
+                    &ProfileChoice {
+                        profile: Some(name.into()),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap()
+        };
+        let planner = |profile, model| plan_policy::PlannerProfile {
+            profile,
+            model: Some(model),
+            vendor: Some("amazon-bedrock"),
+        };
+        let check = |p: plan_policy::PlannerProfile<'_>, reviewer: &str| {
+            plan_policy::independent_resolved_reviewer(&config, &task, Some(p), &resolve(reviewer))
+        };
+        // A Bedrock Claude planner reviewed by an Anthropic profile shares the anthropic family.
+        let same = check(planner("bedrock-claude", BEDROCK_CLAUDE), "opus");
+        // A Bedrock Llama planner is another family and another model, though both IDs end in :0.
+        let llama = check(planner("bedrock-llama", BEDROCK_LLAMA), "bedrock-claude");
+        assert!(llama.is_ok(), "{llama:?}");
+        if cross_family {
+            let error = format!("{:#}", same.unwrap_err());
+            assert!(error.contains("cross-family review is required"), "{error}");
+            assert!(error.contains("'anthropic'"), "{error}");
+        } else {
+            assert!(same.is_ok(), "{same:?}");
+        }
+    }
+}
+
+#[test]
+fn availability_exclusion_skips_same_or_unknown_family_candidates() {
+    let bedrock = |model: &str| ExecutionCandidate {
+        provider: "amazon-bedrock".into(),
+        model: model.into(),
+        ..candidate("fallback")
+    };
+    assert!(excluded_family(Some("anthropic"), &bedrock(BEDROCK_CLAUDE)));
+    assert!(!excluded_family(Some("anthropic"), &bedrock(BEDROCK_LLAMA)));
+    assert!(excluded_family(
+        Some("anthropic"),
+        &bedrock("arn:aws:bedrock:us-east-1:123456789012:inference-profile/x")
+    ));
+    assert!(!excluded_family(None, &bedrock(BEDROCK_CLAUDE)));
+    assert!(excluded_family(Some("openai"), &candidate("fallback")));
+}
+
+#[test]
+fn setup_time_family_check_sees_bedrock_claude_as_anthropic() {
+    for (reviewer, cross_family, refused) in [
+        (BEDROCK_CLAUDE, true, true),
+        (BEDROCK_LLAMA, true, false),
+        (BEDROCK_CLAUDE, false, false),
+    ] {
+        // Given an Anthropic default implementer and a proposed Bedrock implementation reviewer.
+        let (_dir, mut config) = family_config(cross_family);
+        config.defaults.profile = Some("opus".into());
+        let mut proposal = proposal();
+        proposal.profiles.insert(
+            "custom.database".into(),
+            family_profile("amazon-bedrock", reviewer),
+        );
+        proposal.roles = [(ProfileRole::ImplementationReview, "custom.database".into())].into();
+        // When the setup is checked, then only a same-family pairing under the policy fails.
+        let result = config.with_profile_setup(&proposal);
+        assert_eq!(
+            result.is_err(),
+            refused,
+            "{reviewer} {cross_family}: {result:?}"
+        );
+    }
 }

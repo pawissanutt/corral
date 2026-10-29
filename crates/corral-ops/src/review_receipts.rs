@@ -86,12 +86,13 @@ pub(crate) fn check(
         .context("review receipt lacks its review contract")?;
     if let Some(subject) = subject {
         let vendor = run.vendor.clone().or_else(|| config.run_vendor(run).ok());
+        let family = run.family(vendor.as_deref());
         review.validate(
             config,
             &ReviewSelectionContext {
                 task,
                 subject,
-                author_vendor: vendor.as_deref(),
+                author_family: family.as_ref(),
             },
         )?;
     }

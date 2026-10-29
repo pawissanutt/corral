@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
-    AggregateAttempt, AggregateReview, ArtifactKind, GateResult, HerdrRef, ResolvedProfile,
-    ReviewRoute, Reviewer, Store, Task, Verdict,
+    AggregateAttempt, AggregateReview, ArtifactKind, GateResult, HerdrRef, ModelFamily,
+    ResolvedProfile, ReviewRoute, Reviewer, Store, Task, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -41,8 +41,8 @@ fn expected(store: &Store, tracker: &Task) -> Result<Option<Selected>> {
     if policy.reviewer == Reviewer::CrossVendor {
         policy.require_cross_family = true;
     }
-    let vendor = if policy.cross_family_required() {
-        Some(implementer_vendor(store, tracker)?)
+    let family = if policy.cross_family_required() {
+        Some(implementer_family(store, tracker)?)
     } else {
         None
     };
@@ -50,30 +50,37 @@ fn expected(store: &Store, tracker: &Task) -> Result<Option<Selected>> {
         config,
         tracker,
         &policy.reviewer,
-        vendor.as_deref(),
+        family.as_ref(),
     )?;
-    policy.check_reviewer_family(vendor.as_deref(), selected.resolved.vendor.as_deref())?;
+    policy.check_reviewer_family(family.as_ref(), selected.resolved.family().as_ref())?;
     Ok(Some(selected))
 }
 
-/// Cross-vendor selection needs the one vendor that implemented every member.
-fn implementer_vendor(store: &Store, tracker: &Task) -> Result<String> {
-    let mut vendors = std::collections::BTreeSet::new();
+/// Cross-vendor selection needs the one model family that implemented every member.
+fn implementer_family(store: &Store, tracker: &Task) -> Result<ModelFamily> {
+    let mut families = std::collections::BTreeSet::new();
     for id in &tracker.children {
         let child = store.get(id)?;
         let run = child
             .current_run()
             .with_context(|| format!("{id} has no run"))?;
-        vendors.insert(match &run.vendor {
+        let vendor = match &run.vendor {
             Some(vendor) => vendor.clone(),
             None => store.config.run_vendor(run)?,
-        });
+        };
+        let family = run
+            .family(Some(&vendor))
+            .with_context(|| format!("{id} has an unknown model family"))?;
+        families.insert(family.to_string());
     }
     ensure!(
-        vendors.len() == 1,
-        "cross-vendor aggregate review needs one known implementer vendor, found {vendors:?}"
+        families.len() == 1,
+        "cross-vendor aggregate review needs one known implementer model family, found {families:?}"
     );
-    vendors.pop_first().context("no implementer vendor")
+    let family = families
+        .pop_first()
+        .context("no implementer model family")?;
+    Ok(ModelFamily::from(family.as_str()))
 }
 
 /// The configured review receipt both acceptance origins need. The owner may override a

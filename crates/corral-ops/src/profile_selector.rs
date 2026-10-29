@@ -119,9 +119,10 @@ pub fn selection_save(
     selectable(&fresh, &task, receipt.role, &receipt.profile)?;
     let view = review_view(&fresh, &task, receipt.role)?;
     let run = crate::review::current_run(&task).ok();
-    let vendor = run
-        .as_ref()
-        .and_then(|r| r.vendor.clone().or_else(|| fresh.config.run_vendor(r).ok()));
+    let family = run.as_ref().and_then(|r| {
+        let vendor = r.vendor.clone().or_else(|| fresh.config.run_vendor(r).ok());
+        r.family(vendor.as_deref())
+    });
     if let Some(view) = &view {
         let ctx = crate::Ctx::from_store(fresh.clone());
         if receipt.role == ProfileRole::PlanReview {
@@ -143,7 +144,7 @@ pub fn selection_save(
         .map(|view| corral_core::ReviewSelectionContext {
             task: &task,
             subject: &view.subject,
-            author_vendor: vendor.as_deref(),
+            author_family: family.as_ref(),
         });
     if let Some(alternative) = &receipt.closest_alternative {
         selectable(&fresh, &task, receipt.role, alternative)?;

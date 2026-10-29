@@ -133,14 +133,9 @@ impl Config {
                     Reviewer::None | Reviewer::Auto => None,
                     Reviewer::Pm => Some(self.pm.agent.clone()),
                     Reviewer::Profile(name) => Some(name.clone()),
-                    Reviewer::CrossVendor => Some(
-                        self.cross_vendor_reviewer(
-                            author
-                                .vendor
-                                .as_deref()
-                                .context("unknown setup author vendor")?,
-                        )?,
-                    ),
+                    Reviewer::CrossVendor => Some(self.cross_vendor_reviewer(
+                        &author.family().context("unknown setup author vendor")?,
+                    )?),
                 };
                 let automatic = self
                     .routing
@@ -159,8 +154,8 @@ impl Config {
                 {
                     let reviewer = resolve(name)?;
                     policy.check_reviewer_family(
-                        author.vendor.as_deref(),
-                        reviewer.vendor.as_deref(),
+                        author.family().as_ref(),
+                        reviewer.family().as_ref(),
                     )?;
                 }
             }
