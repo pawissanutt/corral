@@ -374,7 +374,10 @@ fn approve_case(strategy: ApproveStrategy, remove_worktree: bool, policy_keeps: 
     fx.reset_calls();
     corral_ops::approve(&fx.ctx, &fx.id, strategy, remove_worktree, false).unwrap();
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().status, Status::Done);
-    assert_eq!(run.worktree.exists(), !remove_worktree || policy_keeps);
+    assert_eq!(
+        run.worktree.exists(),
+        !remove_worktree || policy_keeps || strategy == ApproveStrategy::KeepBranch
+    );
     assert_eq!(
         fx.app.join("feature.txt").exists(),
         strategy != ApproveStrategy::KeepBranch

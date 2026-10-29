@@ -10,6 +10,10 @@ use serde_json::json;
 
 use crate::Ctx;
 
+#[cfg(test)]
+#[path = "launch_exit_tests.rs"]
+mod tests;
+
 /// The receipt the pane shell writes when the command of `attempt` returns.
 pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> PathBuf {
     ctx.store
@@ -38,15 +42,46 @@ pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
             return Err(error).with_context(|| format!("clearing {}", receipt.display()));
         }
     }
+    let marker = ownership_marker(receipt)?;
     let path = crate::prompt::sh_escape(&crate::prompt::shell_path(receipt));
     let script = format!(
-        "/bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
+        "CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
     );
     Ok(format!(
         "/bin/sh -c {} corral-launch {}",
         pane_quote(&script),
         pane_quote(command)
     ))
+}
+
+/// Persist a per-attempt random marker outside the worktree. Repeated launches of the same
+/// attempt retain it so that descendants of an earlier launch remain attributable.
+pub(crate) fn ownership_marker(receipt: &Path) -> Result<String> {
+    use std::io::Write;
+    let path = receipt.with_extension("owner");
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("generating process marker: {e}"))?;
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(&path) {
+        Ok(mut file) => file
+            .write_all(token.as_bytes())
+            .context("writing process marker")?,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error).context("creating process marker"),
+    }
+    let marker = std::fs::read_to_string(&path).context("reading process marker")?;
+    anyhow::ensure!(
+        marker.len() == 64 && marker.bytes().all(|b| b.is_ascii_hexdigit()),
+        "invalid process marker"
+    );
+    Ok(marker)
 }
 
 /// The generic harness exactly: `cat '<prompt file>'` shows the prompt and hands the pane to a
