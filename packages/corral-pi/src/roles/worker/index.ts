@@ -19,7 +19,10 @@ const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "bash", "gre
 const TOOLS: readonly CorralToolSpec[] = [
   askTool, withdrawTool, waitTool, progressTool, checkpointTool, evidenceTool, artifactTool, gateTool, doneTool,
 ];
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op), "todo"];
+// job and job_monitor back the host's background_shell tools; Rust checks the capability.
+const OPS: readonly CorralOp[] = [
+  "hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op), "todo", "job", "job_monitor",
+];
 
 /** The first user message of a fresh worker session: the run prompt and how its commands map. */
 export function kickoff(context: RoleContext): string | undefined {

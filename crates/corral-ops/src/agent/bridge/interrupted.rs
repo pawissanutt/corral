@@ -22,8 +22,9 @@ const HOOK_PHASES: [&str; 3] = ["pre_tool", "post_tool", "turn_end"];
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
 const TWO_PHASE: [&str; 3] = ["gate", "capture", "reply"];
-// Web tools are GET-only; tool_search reads only the host's local cached catalog.
-const NO_EFFECT: [&str; 7] = [
+// Web tools are GET-only; tool_search reads only the host's local cached catalog; job_output
+// reads the host's output cache.
+const NO_EFFECT: [&str; 8] = [
     "read",
     "grep",
     "find",
@@ -31,8 +32,9 @@ const NO_EFFECT: [&str; 7] = [
     "web_fetch",
     "web_search",
     "tool_search",
+    "job_output",
 ];
-pub const MUTATING: [&str; 3] = ["edit", "write", "bash"];
+pub const MUTATING: [&str; 5] = ["edit", "write", "bash", "job_start", "job_kill"];
 
 pub fn class_name(class: ResumeClass) -> &'static str {
     match class {
@@ -390,6 +392,9 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
     );
     if tool == "bash" {
         detail.push_str("; processes it started may still run");
+    }
+    if tool == "job_start" || tool == "job_kill" {
+        detail.push_str("; corral reaps a recorded job of the lost generation");
     }
     if NO_EFFECT.contains(&tool) || tool.starts_with("lsp_") {
         (ResumeClass::InterruptedNoEffect, None)

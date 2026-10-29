@@ -643,6 +643,21 @@ fn user_dirs(table: &CapabilitySettings, defaults: &[&str]) -> Result<Capability
     Ok([("user_dirs".to_owned(), dirs.into())].into())
 }
 
+/// `max_jobs`, `max_output_bytes` and `max_runtime_secs`; every bound is recorded effective.
+pub(crate) fn job_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    let object = serde_json::Value::Object(table.clone().into_iter().collect());
+    let settings: crate::agent::JobSettings = serde_json::from_value(object).map_err(|error| {
+        format!(
+            "has invalid settings ({error}); known: max_jobs, max_output_bytes, max_runtime_secs"
+        )
+    })?;
+    settings.validate()?;
+    match serde_json::to_value(&settings) {
+        Ok(serde_json::Value::Object(map)) => Ok(map.into_iter().collect()),
+        _ => Err("background_shell settings did not serialize as a table".into()),
+    }
+}
+
 pub(crate) fn skill_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
     user_dirs(table, &["~/.agents/skills", "~/.corral/skills/pi-native"])
 }

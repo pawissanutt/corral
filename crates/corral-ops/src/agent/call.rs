@@ -49,6 +49,8 @@ pub enum AgentOp {
     ReadRoute,
     ReadArtifacts,
     ReadLessons,
+    Job,
+    JobMonitor,
 }
 
 const ALL_ROLES: &[AgentRole] = &[
@@ -65,7 +67,7 @@ const PM: &[AgentRole] = &[AgentRole::Pm];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 28] = [
+    pub const ALL: [AgentOp; 30] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -94,6 +96,8 @@ impl AgentOp {
         AgentOp::ReadRoute,
         AgentOp::ReadArtifacts,
         AgentOp::ReadLessons,
+        AgentOp::Job,
+        AgentOp::JobMonitor,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -126,6 +130,8 @@ impl AgentOp {
             AgentOp::ReadRoute => "read_route",
             AgentOp::ReadArtifacts => "read_artifacts",
             AgentOp::ReadLessons => "read_lessons",
+            AgentOp::Job => "job",
+            AgentOp::JobMonitor => "job_monitor",
         }
     }
 
@@ -140,7 +146,7 @@ impl AgentOp {
             AgentOp::Todo => TODO,
             AgentOp::Ask | AgentOp::Withdraw | AgentOp::Evidence | AgentOp::Artifact => AGENTS,
             AgentOp::Wait | AgentOp::Progress | AgentOp::Checkpoint => WORKER,
-            AgentOp::Gate | AgentOp::Done => WORKER,
+            AgentOp::Gate | AgentOp::Done | AgentOp::Job | AgentOp::JobMonitor => WORKER,
             AgentOp::Verdict => REVIEWER,
             _ => PM,
         }
@@ -162,7 +168,7 @@ impl AgentOp {
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
-            AgentOp::Todo => None,
+            AgentOp::Todo | AgentOp::Job | AgentOp::JobMonitor => None,
             AgentOp::Ask | AgentOp::Withdraw => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
@@ -448,6 +454,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Event => super::ops::event(ctx, &envelope),
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
+            AgentOp::Job | AgentOp::JobMonitor => super::ops::jobs::call(ctx, &envelope, op),
             AgentOp::Ask => ask(ctx, &envelope),
             AgentOp::Withdraw => withdraw(ctx, &envelope),
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {

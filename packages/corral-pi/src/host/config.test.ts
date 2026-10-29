@@ -108,6 +108,25 @@ test("MCP and cached search parse independently without enabling codemode", () =
   }
 });
 
+test("background_shell launches only a worker, with its resolved bounds", () => {
+  // Given a worker snapshot with background_shell and its resolved settings.
+  const capabilities = { catalog: 2, digest: "f".repeat(64), preset: "standard", enabled: ["background_shell"] };
+  const bounds = { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 };
+  const worker = { ...message, role: "worker", review: undefined, callback: undefined };
+  const launch = (role: object, settings: object) =>
+    JSON.stringify({ ...role, capabilities: { ...capabilities, settings, project_text: false } });
+  // When parsed, then the worker keeps them; other roles, missing or malformed bounds refuse.
+  expect(parseLaunchMessage(launch(worker, { background_shell: bounds })).guidance?.settings.background_shell)
+    .toEqual(bounds);
+  for (const [role, settings] of [
+    [message, { background_shell: bounds }], [{ ...message, role: "pm" }, { background_shell: bounds }],
+    [worker, {}], [worker, { background_shell: { ...bounds, max_jobs: 0 } }],
+    [worker, { background_shell: { ...bounds, shell: "zsh" } }],
+  ] as const) {
+    expect(() => parseLaunchMessage(launch(role, settings))).toThrow(LaunchMessageInvalid);
+  }
+});
+
 test("the optional exact resume path survives launch parsing; older launch messages remain valid", () => {
   expect(parseLaunchMessage(JSON.stringify(message)).resumeSession).toBeUndefined();
   expect(parseLaunchMessage(JSON.stringify({ ...message, resume_session: null })).resumeSession).toBeUndefined();

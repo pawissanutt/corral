@@ -40,6 +40,10 @@ import { webTools } from "../extensions/web/index.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
 import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
+import { JOB_MONITOR_TOOL, jobTools } from "../extensions/jobs/index.ts";
+import { JobRuntime } from "../extensions/jobs/runtime.ts";
+import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
+import { toolRequestId } from "../tools/corral.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -64,6 +68,8 @@ export interface HostSessionOptions {
   readonly home?: string;
   /** The private directory `/corral-export` writes into; absent disables the command. */
   readonly exportDir?: string;
+  /** The generation's runtime directory; background job output files live under it. */
+  readonly runtimeDir?: string;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
   readonly ui?: UiMode;
   readonly modules: LoadedModules;
@@ -209,6 +215,7 @@ export class HostSession {
   private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
   private readonly localTools: readonly ToolDefinition[];
+  private readonly jobs: JobRuntime | undefined;
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
@@ -251,7 +258,11 @@ export class HostSession {
     if (webEnabled && (options.identity.role === "pm" || !options.network.web || !options.capabilities?.web)) {
       throw new Error("module_invalid: web.enabled needs an eligible role and its generation-bound web transport");
     }
-    this.localTools = [...roleLocal, ...(webEnabled && options.network.web ? webTools(options.network.web) : [])];
+    this.jobs = this.jobRuntime();
+    this.localTools = [
+      ...roleLocal, ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
+      ...(this.jobs ? jobTools(this.jobs) : []),
+    ];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -276,6 +287,29 @@ export class HostSession {
       record: (entry) => this.session.sessionManager.appendCustomEntry(HOOK_ENTRY, entry),
     });
     this.permissions = this.controls.bashRules && new BashPermissions();
+  }
+
+  /**
+   * background_shell: worker only, with its generation-bound settings and runtime directory. Like
+   * todo, the role module decides its loadout: a role that allows no job ops offers no job tools.
+   */
+  private jobRuntime(): JobRuntime | undefined {
+    const { options } = this;
+    if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
+    const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
+    if (options.identity.role !== "worker" || !settings.success || !options.runtimeDir) {
+      throw new Error("module_invalid: background_shell needs the worker role, its settings and a runtime directory");
+    }
+    const ops = options.modules.role.corralOps;
+    if (!ops.includes("job") || !ops.includes("job_monitor")) return undefined;
+    return new JobRuntime({
+      cwd: options.cwd, runtimeDir: options.runtimeDir, generation: options.identity.generation,
+      settings: settings.data,
+      onEvent: (kind, data) => options.events.emit(kind, data),
+      call: (op, key, payload) => options.client.call(op, {
+        requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
+      }),
+    });
   }
 
   private exportable(): boolean {
@@ -373,7 +407,7 @@ export class HostSession {
     }
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
-    const corral = new Set(corralToolNames(specs));
+    const corral = new Set([...corralToolNames(specs), ...(this.jobs ? [JOB_MONITOR_TOOL] : [])]);
     const rich = this.options.ui !== "plain";
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
@@ -454,6 +488,7 @@ export class HostSession {
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
+    pi.on("session_shutdown", () => this.jobs?.shutdown());
   }
 
   private watch(session: AgentSession): void {
@@ -657,6 +692,7 @@ export class HostSession {
         prompts: resources.getPrompts().prompts.length,
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
+      jobs: this.jobs?.state() ?? null,
       guidance: {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],

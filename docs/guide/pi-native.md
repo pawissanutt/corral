@@ -66,6 +66,7 @@ error. The catalog today, as strict / standard / full:
 | `tool_search` | off / on / on | off / on / on |
 | `hooks` | worker off / off / on; not available to PM | not available |
 | `bash_rules` | worker off / off / on; not available to PM | reviewer off / off / on; not available to planning roles |
+| `background_shell` | worker off / on / on; not available to PM | not available |
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -84,6 +85,9 @@ reserve_tokens = 16384           # omitted values keep Pi's defaults
 keep_recent_tokens = 20000
 branch_summary = { reserve_tokens = 16384, skip_prompt = false }
 ```
+
+`[agent.capabilities.worker.background_shell]` takes `max_jobs` (default 4, at most 16),
+`max_output_bytes` (retained per job, default 8 MiB) and `max_runtime_secs` (default 3600).
 
 `user_dirs` entries are absolute or `~/` directories; a missing directory is skipped. Web takes
 its own `[agent.capabilities.<role>.web]` table (below). Native planning role availability is
@@ -364,6 +368,35 @@ without another update. The receipt includes `revision` and full `progress`, bou
 by the existing 8 KiB receipt-result limit. Worker progress appears in board cards and
 `corral show`; the PM ledger appears in `corral agent state --pm` and its JSON output.
 The compact host transcript shows the operation, step and resulting revision.
+
+### Background jobs
+
+Worker generations with `background_shell` expose `job_start`, `job_output`, `job_kill` and
+`corral_job_monitor`. `job_start` runs `bash -c <command>` in the worktree in its own process
+group and returns a job ID (`j<generation>-<n>`) at once. Before spawning, the host records
+the job with corral; right after, it records the pid and kernel start time. A refused record
+means nothing was started. `job_output` returns state, exit code and up to 64 KiB of output
+per call, paging with `offset`/`next_offset`. Output is written to the generation's runtime
+directory up to `max_output_bytes`; if that file is lost, the last 64 KiB still come from
+memory. `job_kill` sends SIGTERM to the group, then SIGKILL after two seconds; the runtime
+limit kills the same way.
+
+`corral_job_monitor` takes `job`, `on` (`exit` or `line` with a JavaScript `pattern`) and
+`timeout_secs` (default 3600). It is a receipted corral operation, callable only at top level,
+that registers a run wait with a deadline and its wake in one transaction. Exactly one inbox
+wake answers each monitor: when the job exits (ready for exit code 0, failed otherwise), when
+a matching line is printed after registration, when the job is reaped (lost), or at the
+deadline. A monitor on a job that already ended wakes at once. While a monitor is armed, an
+ended turn is classified `waiting_external`. End the turn after the call instead of polling.
+
+Jobs belong to their generation. Sync reaps a running job whose generation was fenced or
+replaced (an explicit resume after host loss) or whose run ended. It kills the recorded
+process group only when the pid still has the recorded start time; a reused pid is left alone
+and the job is reported `lost`. Bash, jobs and their network traffic run outside the
+in-process network guard, as `bash` always has. Recovery reports an interrupted `job_start`
+or `job_kill` as `outcome_unknown` and `job_output` as `interrupted_no_effect`. The durable
+records live in the run's `agent_host.jobs`; the host's bridge state lists its live jobs and
+emits `job_started` and `job_exited` events.
 
 Capability settings are frozen for an active generation and resolved again on explicit resume.
 Ledgers and drop reasons survive host loss and resume; disabling todo does not delete

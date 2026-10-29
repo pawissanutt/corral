@@ -24,13 +24,13 @@ export type CorralOp =
   | "checkpoint" | "evidence" | "artifact" | "gate" | "done" | "verdict" | "todo"
   | "question_answer" | "question_escalate" | "question_cancel" | "reply" | "comment"
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
-  | "read_route" | "read_artifacts" | "read_lessons";
+  | "read_route" | "read_artifacts" | "read_lessons" | "job" | "job_monitor";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
   "evidence", "artifact", "gate", "done", "verdict", "question_answer", "question_escalate",
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
-  "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "todo",
+  "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "todo", "job", "job_monitor",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */

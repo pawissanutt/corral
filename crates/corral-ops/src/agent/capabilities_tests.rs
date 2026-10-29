@@ -462,3 +462,34 @@ fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
     // The worker's launch message pins "project_dir": null in the exact-message test above.
     assert_eq!(worker.project_dir, None);
 }
+
+#[test]
+fn background_shell_bounds_reach_the_worker_launch_only_when_installed() {
+    // Given an installed host with background_shell and one without it.
+    let fx = fixture(Some(&["todo", "background_shell"]));
+    let current = fx.open().unwrap();
+    // Then the resolved bounds travel with the snapshot settings only where the host has the key.
+    assert_eq!(
+        fx.message(&current)["capabilities"]["settings"]["background_shell"],
+        json!({"max_jobs": 4, "max_output_bytes": 8388608, "max_runtime_secs": 3600})
+    );
+    assert!(
+        fx.message(&current)["capabilities"]["enabled"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("background_shell"))
+    );
+    let older = fixture(Some(&["todo"]));
+    let omitted = older.open().unwrap();
+    let message = older.message(&omitted);
+    assert!(
+        message["capabilities"]["settings"]
+            .get("background_shell")
+            .is_none()
+    );
+    assert!(
+        omitted.capabilities.as_ref().unwrap().features["background_shell"]
+            .unavailable
+            .is_some()
+    );
+}

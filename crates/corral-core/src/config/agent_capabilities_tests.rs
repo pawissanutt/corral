@@ -576,3 +576,52 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
         );
     }
 }
+
+#[test]
+fn background_shell_is_worker_only_with_recorded_bounds() {
+    // Given each preset, then only the worker resolves background_shell, off in strict.
+    for (index, preset) in [Preset::Strict, Preset::Standard, Preset::Full]
+        .into_iter()
+        .enumerate()
+    {
+        let mut config = AgentCapabilities::default();
+        config.set_preset(preset);
+        for role in ALL {
+            let snapshot = config.resolve(role, None);
+            let worker = role == AgentRole::Worker;
+            assert_eq!(snapshot.features.contains_key("background_shell"), worker);
+            assert_eq!(snapshot.enabled("background_shell"), worker && index > 0);
+        }
+    }
+    // When a worker narrows the bounds, they are recorded effective and change the digest.
+    let config: crate::config::AgentCfg = toml::from_str(
+        "[capabilities.worker.background_shell]\nmax_jobs = 2\nmax_runtime_secs = 600",
+    )
+    .unwrap();
+    let narrowed = config.capabilities.resolve(AgentRole::Worker, None);
+    assert_eq!(
+        serde_json::Value::Object(
+            narrowed.features["background_shell"]
+                .settings
+                .clone()
+                .into_iter()
+                .collect()
+        ),
+        serde_json::json!({"max_jobs": 2, "max_output_bytes": 8388608, "max_runtime_secs": 600})
+    );
+    let standard = AgentCapabilities::default().resolve(AgentRole::Worker, None);
+    assert_ne!(narrowed.digest, standard.digest);
+    // And other roles, unknown settings and out-of-range bounds are configuration errors.
+    for text in [
+        "[capabilities.reviewer]\nbackground_shell = true",
+        "[capabilities.pm.background_shell]\nmax_jobs = 1",
+        "[capabilities.worker.background_shell]\nmax_jobs = 0",
+        "[capabilities.worker.background_shell]\nmax_output_bytes = 10",
+        "[capabilities.worker.background_shell]\nshell = \"zsh\"",
+    ] {
+        assert!(
+            toml::from_str::<crate::config::AgentCfg>(text).is_err(),
+            "{text}"
+        );
+    }
+}
