@@ -18,15 +18,20 @@ cd "$(dirname "$0")/../.."
 test -d "$src/.corral"
 case "$out" in "$src"*) echo "OUT_DIR must be outside the source workspace" >&2; exit 2 ;; esac
 
+corral=${CORRAL:-$(cargo metadata --no-deps --format-version=json | jq -r .target_directory)/debug/corral}
 rm -rf "$out"
-mkdir -p "$out/ws/.corral" "$out/herdr"
-# A live store's temporary files may vanish mid-copy (rsync status 24).
-rsync -a --exclude /artifacts --exclude /lock "$src/.corral/" "$out/ws/.corral/" || [[ $? == 24 ]]
-mkdir -p "$out/ws/.corral/artifacts" "$out/ws/.corral/lock"
+mkdir -p "$out/ws" "$out/herdr"
+# The backup API checkpoints a consistent database image and verifies its referenced blobs;
+# rsync of a live SQLite database and WAL would not provide a coherent offline fixture.
+"$corral" --root "$src" storage backup "$out/ws" --json >"$out/backup.json"
+# Keep relative project paths for the read-only binds below. Isolate all rebuildable writes.
+cp "$src/.corral/corral.toml" "$out/ws/.corral/corral.toml"
+"$corral" --root "$out/ws" config set storage.cache_root "\"$out/cache\"" --workspace
+"$corral" --root "$out/ws" config set storage.scratch_root "\"$out/scratch\"" --workspace
 # Landing needs the read-only project repositories; only the copy's review autopilot is turned
 # off, so everything else in the tick (reconcile, movement, dispatch, search index) still runs.
 sed -i '/^\[review\]/,/^\[/s/^autopilot = true/autopilot = false/' "$out/ws/.corral/corral.toml"
-python3 -I scripts/qa/fake_herdr_inventory.py "$out/ws/.corral/tasks" "$out/herdr"
+python3 -I scripts/qa/fake_herdr_inventory.py "$corral" "$out/ws" "$out/herdr"
 cp scripts/qa/fake-herdr.sh "$out/herdr/herdr"
 chmod +x "$out/herdr/herdr"
 
@@ -38,7 +43,12 @@ cp "$binary" "$out/corral-tui-tests"
 binary="$out/corral-tui-tests"
 
 # Project repositories stay visible (read-only) at the copied workspace's relative paths.
-binds=(--ro-bind "$src/.corral/artifacts" "$out/ws/.corral/artifacts")
+binds=()
+# Legacy snapshots and derived thumbnails are optional; a finalized v2 store needs neither.
+if [[ -d "$src/.corral/artifacts" ]]; then
+  mkdir -p "$out/ws/.corral/artifacts"
+  binds+=(--ro-bind "$src/.corral/artifacts" "$out/ws/.corral/artifacts")
+fi
 while IFS= read -r project; do
   if [[ -d "$src/$project" ]]; then
     mkdir -p "$out/ws/$project"

@@ -91,8 +91,10 @@ try {
   await run("git", ["init", "-q", "-b", "main", repo]);
   await writeFile(join(repo, "protected.txt"), "original\n");
   await cli(["init"]);
-  await set("harnesses.plan-fixture", `{command = "touch '{prompt_file}.seen'; printf changed > '{worktree}/protected.txt'; true {model_args}; read -r fixture_input < /dev/tty", flags = "generic", model_flag = "--model"}`);
-  await set("harnesses.plan-review-fixture", `{command = "touch '{prompt_file}.seen'; true {model_args}", flags = "generic", model_flag = "--model"}`);
+  const plannerMarker = join(root, "planner-prompt.seen");
+  const reviewMarker = join(root, "review-prompt.seen");
+  await set("harnesses.plan-fixture", `{command = "printf '%s\\\\n' '{prompt_file}' > '${plannerMarker}.tmp'; mv '${plannerMarker}.tmp' '${plannerMarker}'; printf changed > '{worktree}/protected.txt'; true {model_args}; read -r fixture_input < /dev/tty", flags = "generic", model_flag = "--model"}`);
+  await set("harnesses.plan-review-fixture", `{command = "printf '%s\\\\n' '{prompt_file}' > '${reviewMarker}.tmp'; mv '${reviewMarker}.tmp' '${reviewMarker}'; true {model_args}", flags = "generic", model_flag = "--model"}`);
   for (const [name, model] of [["gpt-sol", "fixture-planner"], ["gpt-review", "fixture-reviewer"]]) {
     await set(`profiles.${name}`, `{harness = "${name === "gpt-sol" ? "plan-fixture" : "plan-review-fixture"}", model = "${model}", vendor = "openai"}`);
   }
@@ -104,9 +106,11 @@ try {
   await set("resources.min_mem_available", '"1B"');
   await set("resources.min_disk_free", '"1B"');
   const id = (await cli(["new", "Design widget", "-p", "app", "--ready", "--design"])).stdout.trim();
-  const output = join(root, ".corral/state/plans", id, "D1");
-  await marker(join(output, "prompt.md.seen"), () => cli(["dispatch", id]));
+  await marker(plannerMarker, () => cli(["dispatch", id]));
+  const prompt = (await readFile(plannerMarker, "utf8")).trim();
+  const output = dirname(prompt);
   let task = await show(id);
+  assert.equal(output, task.plan_runs[0].output_dir, "Harness prompt belongs to the actual planner scratch");
   check("automatic design dispatch records only plan history", !task.runs?.length && task.plan_runs.length === 1);
   check("planner profile is routed gpt-sol", task.plan_runs[0].profile === "gpt-sol");
   check("no worktree or branch is created", !existsSync(join(repo, ".worktrees"))
@@ -126,8 +130,8 @@ try {
     s => s.includes("◎ plan") && s.includes("round 1"), submit);
   else await submit();
   check("plan artifact is associated with D1 rather than an implementation", submitted.artifact.run === "D1");
-  const reviewMarker = join(root, ".corral/prompts", `${id}-P1-PR1-plan-review.md.seen`);
   if (!existsSync(reviewMarker)) await marker(reviewMarker, () => cli(["sync"]));
+  assert(existsSync((await readFile(reviewMarker, "utf8")).trim()), "Reviewer captured its actual prompt");
   task = await show(id);
   const review = task.plans[0].reviews[0];
   check("autopilot launches the configured different-model reviewer", review.reviewer === "gpt-review"
@@ -165,7 +169,7 @@ try {
   }
   await writeFile(join(evidence, "parent.json"), `${JSON.stringify(task, null, 2)}\n`);
   await writeFile(join(evidence, "children.json"), `${JSON.stringify([api, command], null, 2)}\n`);
-  await writeFile(join(evidence, "events.jsonl"), await readFile(join(root, ".corral/events.jsonl")));
+  await writeFile(join(evidence, "events.jsonl"), (await cli(["export", "events", "--json"])).stdout);
   console.log(`PASS: ${checks.length} real CLI checks; no implementation run, worktree, gate or landing.`);
   passed = true;
 } finally {

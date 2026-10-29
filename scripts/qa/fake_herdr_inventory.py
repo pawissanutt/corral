@@ -1,24 +1,15 @@
 """Synthesize a steady herdr inventory for a copied store: every open run, review, plan run and
 running gate pane is listed with its last recorded agent state (working when unknown).
 
-Usage: fake_herdr_inventory.py TASKS_DIR OUT_DIR
+Usage: fake_herdr_inventory.py CORRAL WORKSPACE OUT_DIR
 """
 
 import json
 import pathlib
+import subprocess
 import sys
 
-import yaml
-
 STATES = {"working", "idle", "blocked", "done"}
-
-
-def frontmatter(path):
-    text = path.read_text()
-    if not text.startswith("---\n"):
-        return None
-    end = text.find("\n---\n", 4)
-    return yaml.safe_load(text[4:end]) if end > 0 else None
 
 
 def runs(task):
@@ -31,13 +22,14 @@ def runs(task):
         yield run
 
 
-def main(tasks_dir, out):
+def main(binary, workspace, out):
     panes = {}
-    for path in sorted(pathlib.Path(tasks_dir).glob("*.md")):
-        task = frontmatter(path)
-        if not isinstance(task, dict):
-            continue
-        task = task.get("task", task)
+    command = [binary, "--root", workspace]
+    summaries = json.loads(subprocess.check_output(
+        [*command, "list", "--all", "--json"], text=True))
+    for summary in summaries:
+        task = json.loads(subprocess.check_output(
+            [*command, "show", summary["id"], "--json"], text=True))
         for run in runs(task):
             herdr = run.get("herdr")
             if herdr and not run.get("ended") and not run.get("outcome"):
@@ -65,4 +57,4 @@ def main(tasks_dir, out):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    main(*sys.argv[1:4])

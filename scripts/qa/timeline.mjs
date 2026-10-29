@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { fixtureWriter } from "./store-fixture.mjs";
 
 const binary = resolve(process.argv[2] ?? "target/debug/corral");
 const evidence = resolve(process.argv[3] ?? ".omo/evidence/T-164/live-120");
@@ -12,6 +13,7 @@ assert([80, 120].includes(columns));
 assert(process.env.HOME?.startsWith("/tmp/"), "Use the private test-herdr environment");
 await mkdir(evidence, { recursive: true });
 const fixture = await mkdtemp("/tmp/corral-timeline-");
+const writer = await fixtureWriter(fixture);
 const env = { ...process.env, CORRAL_ROOT: fixture, CORRAL_HERDR_SESSION: "corral-test" };
 for (const key of ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID",
   "CORRAL_GATE_ATTEMPT", "CORRAL_CANDIDATE_HEAD", "CORRAL_INTEGRATION_BASE"]) delete env[key];
@@ -124,7 +126,7 @@ try {
   const id = (await cli("new", "Task history log", "-p", "app", "--idea")).trim();
   // Seed only this disposable store with the same historical scenario as the render tests.
   const scenario = await readFile(resolve("crates/corral-ops/tests/fixtures/task-history.jsonl"), "utf8");
-  await writeFile(join(fixture, ".corral", "events.jsonl"), scenario.replaceAll("T-123", id));
+  await writer.replaceEvents(scenario.replaceAll("T-123", id));
   const created = JSON.parse(await herdr("workspace", "create", "--cwd", fixture,
     "--label", "T-164 Timeline acceptance", "--no-focus")).result;
   workspace = created.workspace.workspace_id;
@@ -183,7 +185,7 @@ try {
       .map((event) => JSON.stringify({ ...event, task: id })).join("\n") + "\n";
     const refreshed = `REVIEW-${task.slice(2)}`;
     await stage(scene, refreshed, (s) => s.includes(refreshed) && s.includes(marker) && check(s), async () => {
-      await writeFile(join(fixture, ".corral", "events.jsonl"), events);
+      await writer.replaceEvents(events);
       await cli("comment", id, refreshed);
     });
     const paired = (await cli("log", id, "--json")).trim().split("\n")

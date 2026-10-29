@@ -390,7 +390,7 @@ async function scenario() {
       !afterOrdinaryMessages.some(message => message.role === "user" &&
         [block, "Unrelated short input", "Still unrelated input"].some(text => messageWords(message).includes(text))));
     // Read only: the CLI alone created and mutated this store.
-    const events = (await readFile(join(root, ".corral/events.jsonl"), "utf8"))
+    const events = (await cli(["export", "events", "--json"])).stdout
       .trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     snapshots.deliveryEvents = events.filter(e => e.kind === "replied");
     check("Successful delivery metadata is stored",

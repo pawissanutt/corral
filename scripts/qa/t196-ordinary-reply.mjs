@@ -347,7 +347,7 @@ async function scenario() {
     check("Authenticated native endpoint lists run cwd",
       sessions.data.sessions.some(s => s.cwd === run.worktree));
     snapshots.sessions = sessions;
-    const events = async () => (await readFile(join(root, ".corral/events.jsonl"), "utf8"))
+    const events = async () => (await cli(["export", "events", "--json"])).stdout
       .trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
     const lastDelivery = async text => (await events()).filter(event =>
       event.kind === "replied" && event.detail.text === text).at(-1)?.detail;

@@ -9,11 +9,12 @@
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import { createHash } from "node:crypto";
-import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters as plain } from "node:util";
+import { fixtureWriter } from "./store-fixture.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
@@ -63,6 +64,7 @@ for (const dir of [".omo", ".omo/evidence", ".omo/evidence/T-112"]) {
 const evidence = await mkdtemp(join(repo, ".omo/evidence/T-112/routes-"));
 const fixture = join(evidence, "fixture");
 await mkdir(fixture);
+const writer = await fixtureWriter(fixture);
 const env = { ...process.env, CORRAL_ROOT: fixture };
 for (const key of ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_WORKSPACE_ID",
   "HERDR_SESSION", "HERDR_ENV", "HERDR_BIN_PATH",
@@ -98,7 +100,6 @@ async function command(program, argv, timeout = 30000) {
 const herdr = (...argv) => command("herdr", ["--session", "corral-test", ...argv]);
 const cli = (binary, ...argv) => command(binary, ["--root", fixture, ...argv]);
 const configPath = join(fixture, ".corral/corral.toml");
-const taskPath = id => join(fixture, ".corral/tasks", `${id}-routes.md`);
 let tasks;
 
 function config(density) {
@@ -146,12 +147,11 @@ async function prepare() {
   const binary = binaries.find(b => b.label === "candidate").binary;
   await cli(binary, "init");
   await writeFile(configPath, config("rich"));
-  await cli(binary, "new", "Synthetic route seed", "-p", "app", "--body", "T-112 disposable QA only");
-  const seed = JSON.parse(await cli(binary, "list", "--all", "--json"))[0];
+  const id = (await cli(binary, "new", "Synthetic route seed", "-p", "app", "--body", "T-112 disposable QA only")).trim();
+  const seed = JSON.parse(await cli(binary, "show", id, "--json"));
   assert(seed?.id, "Candidate must expose task JSON");
-  const files = await readdir(join(fixture, ".corral/tasks"));
-  assert.equal(files.length, 1, "Only the freshly created seed may be removed");
-  await rm(join(fixture, ".corral/tasks", files[0]));
+  assert.equal(JSON.parse(await cli(binary, "list", "--all", "--json")).length, 1);
+  await writer.removeTask(seed.id);
   const specs = [
     ["T-001", "OpenAI route", "backlog", "gpt-sol", null, false],
     ["T-002", "Anthropic route", "ready", "sonnet", "none", false],
@@ -178,12 +178,14 @@ async function prepare() {
 
 async function reset(density) {
   await writeFile(configPath, config(density));
-  for (const task of tasks) await writeFile(taskPath(task.id),
-    `---\n${JSON.stringify(task, null, 2)}\n---\n# Synthetic route acceptance\nNo owner data; no dispatch.\n`);
-  await writeFile(join(fixture, ".corral/events.jsonl"), "");
+  for (const task of tasks) await writer.putTask(task,
+    "# Synthetic route acceptance\nNo owner data; no dispatch.\n");
+  await writer.replaceEvents("");
   await mkdir(join(fixture, ".corral/state"), { recursive: true });
-  await writeFile(join(fixture, ".corral/state/tour-seen"), "");
-  await writeFile(join(fixture, ".corral/state/harnesses.json"), JSON.stringify({
+  await writer.tourSeen();
+  const cache = await writer.cacheRoot();
+  await mkdir(cache, { recursive: true });
+  await writeFile(join(cache, "harnesses.json"), JSON.stringify({
     detected_at: "2026-10-17T00:00:00Z",
     harnesses: [{ key: "qa", program: "false", path: "/usr/bin/false", version: null,
       models: ["openai/fixture-gpt-sol", "anthropic/fixture-sonnet"],
@@ -424,7 +426,7 @@ class Capture {
   }
 
   async assertField(id, key, expected) {
-    const task = JSON.parse(await cli(this.binary, "list", "--all", "--json")).find(t => t.id === id);
+    const task = JSON.parse(await cli(this.binary, "show", id, "--json"));
     assert.equal(task[key] ?? null, expected, `${id}.${key} must persist`);
   }
 
@@ -515,7 +517,9 @@ try {
           if (entry.label === "candidate") await capture.routes();
           else await capture.stage("16-board-return", board, () => capture.raw("\x1b"));
         }
-        const current = JSON.parse(await cli(entry.binary, "list", "--all", "--json"));
+        const summaries = JSON.parse(await cli(entry.binary, "list", "--all", "--json"));
+        const current = await Promise.all(summaries.map(task =>
+          cli(entry.binary, "show", task.id, "--json").then(JSON.parse)));
         assert.equal(current.length, tasks.length);
         assert(current.every(t => !t.runs?.length && !t.plan_runs?.length && !t.launch && !t.queued),
           "Route editing must never reserve or launch an agent");

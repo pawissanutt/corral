@@ -257,7 +257,8 @@ try {
   await opened;
   const openedPath = await readFile(join(root, "opened"), "utf8");
   assert(openedPath.endsWith("dashboard-report.html") && !openedPath.endsWith(".thumbnail.png"));
-  assert.equal(await readFile(openedPath, "utf8"), await readFile(join(root, ".corral", second.path), "utf8"));
+  assert.equal(await readFile(openedPath, "utf8"),
+    await cli("artifact", "show", `T-001:${second.run}:${second.path.split("/").at(-1)}`, "--raw"));
   result.checks.push("PASS: Enter opens immutable original HTML, not its thumbnail");
   result.status = "PASS";
 } catch (error) {

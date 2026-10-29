@@ -4,8 +4,9 @@
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
+import { fixtureWriter } from "./store-fixture.mjs";
 
 const binary = resolve(process.argv[2] ?? "target/debug/corral");
 const evidence = resolve(process.argv[3] ?? ".omo/evidence/T-110/live");
@@ -21,6 +22,7 @@ for (const key of ["HERDR_SOCKET_PATH", "HERDR_PANE_ID", "HERDR_TAB_ID", "HERDR_
   "CORRAL_GATE_ATTEMPT", "CORRAL_CANDIDATE_HEAD", "CORRAL_INTEGRATION_BASE"]) delete env[key];
 await mkdir(evidence, { recursive: true });
 await mkdir(fixture, { recursive: true });
+const writer = await fixtureWriter(fixture);
 const deadline = performance.now() + 900_000;
 const transcript = [];
 const result = { status: "FAIL", binary, evidence, fixture, columns: 160, rows: 36,
@@ -158,12 +160,7 @@ const wheel = (down, x = 8, y = 12, count = 1) =>
   raw(`\x1b[<${down ? 65 : 64};${x};${y}M`.repeat(count));
 const board = (t) => t.includes("Backlog") && t.includes("/ search") &&
   !t.includes("‹ back") && !t.includes("Cancel");
-const taskPath = (id) => join(fixture, ".corral/tasks", id + "-fixture.md");
-async function saveTask(task, body) {
-  const path = taskPath(task.id);
-  await writeFile(path + ".tmp", `---\n${JSON.stringify(task, null, 2)}\n---\n${body}`);
-  await rename(path + ".tmp", path);
-}
+const saveTask = (task, body) => writer.putTask(task, body);
 
 async function prepare() {
   const manifestPath = join(fixture, "workload.json");
@@ -175,10 +172,10 @@ async function prepare() {
     await command("git", ["init", "-q", "-b", "main", join(fixture, "app")]);
     await cli("init");
     const id = (await cli("new", "Fixture seed", "-p", "app", "--body", "Synthetic latency QA")).trim();
-    const seed = JSON.parse(await cli("list", "--json"))[0];
+    const seed = JSON.parse(await cli("show", id, "--json"));
     assert.equal(seed.id, id);
     await writeFile(join(fixture, "cli-seed.json"), JSON.stringify(seed, null, 2));
-    const seedEvents = (await readFile(join(fixture, ".corral/events.jsonl"), "utf8"))
+    const seedEvents = (await cli("export", "events", "--json"))
       .trim().split("\n").map(JSON.parse);
     const tasks = [];
     for (let i = 1; i <= 110; i++) {
@@ -251,21 +248,23 @@ async function prepare() {
     return prefix + "x".repeat(Buffer.byteLength(body) - Buffer.byteLength(prefix));
   });
   // Only our marked workload may be reset; never inspect or reuse the owner's board.
-  for (const name of await readdir(join(fixture, ".corral/tasks"))) {
-    assert(/^T-\d+-.*\.md$/.test(name), `Unexpected fixture task file: ${name}`);
-    await rm(join(fixture, ".corral/tasks", name));
+  for (const task of JSON.parse(await cli("list", "--all", "--json"))) {
+    assert(/^T-\d+$/.test(task.id), `Unexpected fixture task: ${task.id}`);
+    await writer.removeTask(task.id);
   }
   for (let i = 0; i < 110; i++) await saveTask(workload.tasks[i], workload.bodies[i]);
-  await writeFile(join(fixture, ".corral/events.jsonl"), workload.events);
+  await writer.replaceEvents(workload.events);
   await mkdir(join(fixture, ".corral/state"), { recursive: true });
-  await rm(join(fixture, ".corral/state/tour-seen"), { force: true });
-  await writeFile(join(fixture, ".corral/state/reviewed-artifacts.json"), "[]");
+  await writer.tourReset();
+  await writer.reviewedArtifacts([]);
   // Validation requires a PM profile. Its only command is false, never an agent.
   await writeFile(join(fixture, ".corral/corral.toml"), `[projects.app]\npath = ${JSON.stringify(join(fixture, "app"))}\n[dispatch]\npaused = true\nauto_backlog = false\npromote_ideas = "never"\n[review]\nautopilot = false\n[herdr]\nsession = "corral-test"\n[agents.fixture]\ncommand = "false"\n[pm]\nagent = "fixture"\n`);
-  const parsed = JSON.parse(await cli("list", "--all", "--json"));
+  const summaries = JSON.parse(await cli("list", "--all", "--json"));
+  const parsed = [];
+  for (const task of summaries) parsed.push(JSON.parse(await cli("show", task.id, "--json")));
   assert.equal(parsed.length, 110);
   result.workload = { taskCount: parsed.length, taskBytes: workload.taskBytes,
-    eventBytes: (await stat(join(fixture, ".corral/events.jsonl"))).size,
+    eventBytes: Buffer.byteLength(await cli("export", "events", "--json")),
     artifacts: parsed.reduce((n, t) => n + (t.artifacts?.length ?? 0), 0),
     frontmatterBytes: workload.tasks.reduce((n, t) => n + Buffer.byteLength(JSON.stringify(t, null, 2)), 0),
     redistribution: workload.redistribution,
@@ -309,7 +308,7 @@ try {
     task.title = `Pulse ${++pulse}`;
     task.runs[2].review.notes = `Concurrent review change ${pulse}`;
     await saveTask(task, workload.bodies[109]);
-    await appendFile(join(fixture, ".corral/events.jsonl"), JSON.stringify({
+    await writer.appendEvents(JSON.stringify({
       ts: at, task: task.id, kind: "review_started", detail: { run: "R3", reviewer: "fixture", pulse },
     }) + "\n");
   };
@@ -362,12 +361,12 @@ try {
         task.title = `Fresh ${condition}`;
         await saveTask(task, workload.bodies[109]);
       }, condition);
-    // State + event only, no task-file edit. Verify the Review card's unseen-artifact count.
+    // State + event only, no task edit. Verify the Review card's unseen-artifact count.
     await stage(`${condition}-background-review-refresh`, (t) => board(t) &&
       t.includes(condition === "idle" ? "3 new" : "6 new"), async () => {
-      await writeFile(join(fixture, ".corral/state/reviewed-artifacts.json"),
-        JSON.stringify(condition === "idle" ? workload.tasks[109].artifacts.slice(0, 3).map((a) => a.path) : []));
-      await appendFile(join(fixture, ".corral/events.jsonl"), JSON.stringify({
+      await writer.reviewedArtifacts(
+        condition === "idle" ? workload.tasks[109].artifacts.slice(0, 3).map((a) => a.path) : []);
+      await writer.appendEvents(JSON.stringify({
         ts: at, task: "T-110", kind: "review_started",
         detail: { run: "R3", reviewer: "fixture", condition },
       }) + "\n");

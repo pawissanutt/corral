@@ -1,8 +1,9 @@
 // Real tracker Plan readback and navigation. Use scripts/test-herdr.sh's private server.
 import assert from "node:assert/strict";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { PlanBoardCapture } from "./plan-board-capture.mjs";
+import { fixtureWriter } from "./store-fixture.mjs";
 
 assert(process.env.HOME?.startsWith("/tmp/corral-herdr-")
   && process.env.CORRAL_HERDR_SESSION === "corral-test", "Use the private plugin-free test server");
@@ -11,6 +12,7 @@ assert([80, 160].includes(columns));
 const evidence = resolve(process.argv[4] ?? `.omo/evidence/T-179/live-${columns}`);
 await mkdir(evidence, { recursive: true });
 const root = await mkdtemp("/tmp/corral-tracker-plan-");
+const writer = await fixtureWriter(root);
 const binary = join(root, "corral");
 await copyFile(resolve(process.argv[2] ?? "target/debug/corral"), binary);
 const env = { ...process.env };
@@ -60,7 +62,7 @@ Tracker Plan fixture.
   assert.equal(before.unmapped_criteria[0].criterion, "C1");
   await writeFile(join(evidence, "projection-before.json"), JSON.stringify(before, null, 2));
   await mkdir(join(root, ".corral/state"), { recursive: true });
-  await writeFile(join(root, ".corral/state/tour-seen"), "");
+  await writer.tourSeen();
   capture = new PlanBoardCapture({ binary, root, evidence, columns, run });
   await capture.start({ tour: false, boardMarker: "2 missing", boardReady: s => s.includes(id) && s.includes("missing") });
   await capture.stage("03-tracker-overview", "Task overview", s => s.includes("Task overview"),
@@ -129,17 +131,15 @@ Tracking only.
   const sha = (await run("git", ["-C", repo, "rev-parse", "main"])).stdout.trim();
   await cli("config", "set", "projects.app.path", JSON.stringify(repo));
   const externalId = (await cli("new", "Accepted external prerequisite", "-p", "app", "--origin", "agent")).stdout.trim();
-  const external = (await json("list", "--all", "--json")).find(task => task.id === externalId);
+  const external = await json("show", externalId, "--json");
   assert(external);
   external.status = "done";
   external.runs = [{
     id: "R1", agent: "fixture", worktree: join(root, "accepted-worktree"), branch: "external", base: "main",
     base_sha: sha, started: "2026-10-20T00:00:00Z", ended: "2026-10-20T00:00:00Z", outcome: "done",
   }];
-  const taskFile = (await readdir(join(root, ".corral/tasks"))).find(name => name.startsWith(`${externalId}-`));
-  assert(taskFile);
-  await writeFile(join(root, ".corral/tasks", taskFile), `---\n${JSON.stringify(external, null, 2)}\n---\nSynthetic accepted prerequisite.\n`);
-  await appendFile(join(root, ".corral/events.jsonl"), JSON.stringify({
+  await writer.putTask(external, "Synthetic accepted prerequisite.\n");
+  await writer.appendEvents(JSON.stringify({
     ts: "2026-10-20T00:00:00Z", task: externalId, kind: "approved",
     detail: { run: "R1", sha, strategy: "fast_forward", base: "main" },
   }) + "\n");

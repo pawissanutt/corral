@@ -1,6 +1,6 @@
 // T-105 review regressions. Run in scripts/test-herdr.sh's private server.
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -133,6 +133,6 @@ try {
 } finally {
   await writeFile(join(evidence, "commands.json"), JSON.stringify(commands, null, 2) + "\n");
   await writeFile(join(evidence, "observed.json"), JSON.stringify({ passed, checks, observed }, null, 2) + "\n");
-  await writeFile(join(evidence, "events.jsonl"), await readFile(join(root, ".corral/events.jsonl"), "utf8").catch(() => ""));
+  await writeFile(join(evidence, "events.jsonl"), (await cli(["export", "events", "--json"])).stdout);
   await rm(root, { recursive: true, force: true });
 }
