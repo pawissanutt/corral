@@ -1316,7 +1316,9 @@ with its reason:
 | `host_mismatch` | The socket answers for another generation or session. |
 
 A lost host never ends its run. The run keeps its questions, messages and receipts, and messages
-for it stay queued, unsent, for the next generation. A live worker's task moves to Blocked with
+for it stay queued, unsent, for the next generation. A worker or reviewer host that exits to its
+pane shell after hello is such a loss (`host_exited`): sync consumes the pane wrapper's exit
+record, so it is never treated as a launch failure or a closed review. A live worker's task moves to Blocked with
 an excerpt that starts `Pi-native host lost:` and names the three ways on: `corral agent resume`,
 `corral retry` or `corral discard`. A lost reviewer whose pane stays keeps its review open and
 its child live: the review watchdog never times it out on its idle pane, and the task moves to

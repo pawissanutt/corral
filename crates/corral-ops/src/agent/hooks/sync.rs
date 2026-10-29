@@ -235,18 +235,21 @@ fn probe_hosts(ctx: &Ctx, task: &Task) {
     }
 }
 
-/// A worker host that exits leaves its pane wrapper's launch-exit receipt. For a generation that
-/// completed hello that is a host loss, resumable, not a launch failure: the receipt is consumed
-/// into `agent_lost`, so sync's launch-exit rule never ends the run. A generation that exited
+/// A worker or reviewer host that exits leaves its pane wrapper's launch-exit receipt. For a
+/// generation that completed hello that is a host loss, resumable, not a launch failure: the
+/// receipt is consumed into `agent_lost`, so neither sync's launch-exit rule nor the review
+/// slot's reviewer-exit rule ends the run or closes the review child. A generation that exited
 /// before hello keeps its receipt and fails at launch as before.
 fn consume_exit(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Result<()> {
-    let ContainerRef::Worker { task, run } = container else {
-        return Ok(());
+    let (task, attempt) = match container {
+        ContainerRef::Worker { task, run } => (task, run.clone()),
+        ContainerRef::Reviewer { task, run, review } => (task, format!("{run}-{review}")),
+        _ => return Ok(()),
     };
     let Some(generation) = state.current_generation().filter(|g| g.bound.is_some()) else {
         return Ok(());
     };
-    let receipt = crate::launch_exit::receipt(ctx, task, run);
+    let receipt = crate::launch_exit::receipt(ctx, task, &attempt);
     let status = match std::fs::read_to_string(&receipt) {
         Ok(status) => status,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
