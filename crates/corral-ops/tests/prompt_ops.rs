@@ -277,20 +277,22 @@ fn actions(writes: &[corral_ops::SkillWrite]) -> Vec<(&'static str, corral_ops::
 
 #[test]
 fn fresh_install_writes_every_role_for_installed_harnesses_only() {
-    use corral_ops::{ROLE_SKILLS, SKILL_HARNESSES, SkillAction};
+    use corral_ops::{PI_SKILLS, ROLE_SKILLS, SKILL_HARNESSES, SkillAction};
     let home = tempfile::tempdir().unwrap();
     let home = home.path();
     std::fs::create_dir_all(home.join(".omp")).unwrap();
     std::fs::create_dir_all(home.join(".claude")).unwrap();
     for (harness, marker, skills) in SKILL_HARNESSES {
         let writes = corral_ops::ensure_skills(home, harness).unwrap();
-        if home.join(marker).is_dir() {
-            let expected: Vec<_> = ROLE_SKILLS
-                .iter()
-                .map(|r| (*r, SkillAction::Wrote))
-                .collect();
+        if *harness == "pi-native" || home.join(marker).is_dir() {
+            let roles: &[&str] = if *harness == "pi-native" {
+                &PI_SKILLS
+            } else {
+                &ROLE_SKILLS
+            };
+            let expected: Vec<_> = roles.iter().map(|r| (*r, SkillAction::Wrote)).collect();
             assert_eq!(actions(&writes), expected, "{harness}");
-            for role in ROLE_SKILLS {
+            for role in roles {
                 let text = std::fs::read_to_string(skill_file(home, skills, role)).unwrap();
                 assert_eq!(Some(text), corral_ops::role_skill_markdown(role));
                 assert!(

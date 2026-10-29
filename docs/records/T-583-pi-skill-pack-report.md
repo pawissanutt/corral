@@ -31,6 +31,11 @@ defaults; disabling optional skills and strict behavior remain unchanged.
 - `cd packages/corral-pi && bun test test/guidance-session.test.ts`: 8 passed, 151 assertions.
 - Unknown-tool mutation: pack test failed as intended (1 failure); mutation removed and the complete guidance-session file passed again.
 - `cargo fmt --all`: completed.
+- First quick gate identified the existing all-harness installer test's assumption that every
+  harness installs the four role skills. Updated it to verify the five Pi pack skills for the
+  Pi-native harness while preserving the four-role assertions for other harnesses.
+- `cargo test -p corral-ops --test prompt_ops fresh_install_writes_every_role_for_installed_harnesses_only`:
+  passed after that correction (the gate provides its failing-before proof).
 
 The run's receipted quick gate is recorded separately after commit/rebase.
 
