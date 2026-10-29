@@ -189,8 +189,8 @@ export function parseLaunchMessage(text: string): HostConfig {
   }
   const aws = awsBinding(message.aws);
   const capabilities = capabilitySet(message.capabilities);
-  if ((provider === "llama.cpp") !== (capabilities?.enabled.includes("llama_cpp.enabled") === true)) {
-    throw new LaunchMessageInvalid("the llama.cpp provider requires llama_cpp.enabled and cannot replace a cloud route");
+  if (provider === "llama.cpp" && capabilities?.enabled.includes("llama_cpp.enabled") !== true) {
+    throw new LaunchMessageInvalid("the llama.cpp provider requires llama_cpp.enabled");
   }
   if (role === "pm" && capabilities?.enabled.includes("web.enabled")) {
     throw new LaunchMessageInvalid("web.enabled is not available to the pm role");

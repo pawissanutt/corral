@@ -353,9 +353,9 @@ export class HostSession {
     const host = new HostSession(options);
     const { sdk } = options;
     const route = PROVIDERS[host.provider];
-    const local = options.capabilities?.enabled.includes("llama_cpp.enabled") === true
+    const local = host.provider === "llama.cpp" && options.capabilities?.enabled.includes("llama_cpp.enabled") === true
       ? options.capabilities.llama_cpp : undefined;
-    if ((host.provider === "llama.cpp") !== (local !== undefined)) {
+    if (host.provider === "llama.cpp" && local === undefined) {
       throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;

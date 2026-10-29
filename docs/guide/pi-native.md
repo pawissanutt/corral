@@ -258,8 +258,10 @@ timeout_ms = 15000
 Select this profile through the normal routing configuration. Configure the corresponding
 `reviewer`, `pm`, `planner` or `plan_reviewer` capability table for another role; role
 availability and Corral authority are unchanged. Local inference is explicitly off in
-strict, standard and full. An enabled local capability requires a `llama.cpp` profile,
-not a cloud profile, and that profile requires the capability. No cloud login is needed.
+strict, standard and full. A `llama.cpp` profile requires the role's local capability.
+Enabling it also permits the same role's cloud profiles: the selected profile still
+determines its catalog, credentials and transport, without contacting the local endpoint.
+No cloud login is needed for a local profile.
 `corral pi --bare` has no bound capability configuration and does not offer this route.
 
 `endpoint` is one HTTP(S) origin, optionally with a trailing slash, without a path,
