@@ -104,18 +104,37 @@ fn orphaned(task: &Task, container: &ContainerRef, job: &JobRecord) -> bool {
                 .is_none_or(|g| g.fenced.is_some()))
 }
 
-/// The job's process group as seen now. Linux never reuses a pid while it is still some
-/// group's ID, so live members of a group whose leader is gone are this job's descendants;
-/// a live leader must still have its recorded start time.
+/// The job's process group as seen now. Ownership is anchored on the recorded leader: its pid
+/// must still exist (running or an unreaped zombie) with the recorded start time, which also
+/// keeps the group ID from being reused. A group whose leader is gone cannot be told apart from
+/// a later group that reused the ID, so it is never claimed, whatever its members.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Group {
     Empty,
     Owned(usize),
     Reused,
+    Unanchored(usize),
+}
+
+#[cfg(target_os = "linux")]
+fn stat_fields(pid: u32) -> Option<(String, u32, String)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields: Vec<&str> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+    Some((
+        (*fields.first()?).to_owned(),
+        fields.get(2)?.parse().ok()?,
+        (*fields.get(19)?).to_owned(),
+    ))
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) fn owned_group(pgid: u32, start: &str) -> Result<Group> {
+    let leader = stat_fields(pgid);
+    if let Some((_, group, started)) = &leader
+        && (started != start || *group != pgid)
+    {
+        return Ok(Group::Reused);
+    }
     let mut members = 0;
     for entry in std::fs::read_dir("/proc").context("listing /proc")? {
         let Some(pid) = entry
@@ -125,27 +144,18 @@ pub(crate) fn owned_group(pgid: u32, start: &str) -> Result<Group> {
             continue;
         };
         // A process that exits while it is read is simply not a member any more.
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
-        };
-        let fields: Vec<&str> = stat
-            .rsplit_once(')')
-            .map(|(_, rest)| rest.split_whitespace().collect())
-            .unwrap_or_default();
-        if matches!(fields.first(), Some(&"Z" | &"X"))
-            || fields.get(2).and_then(|g| g.parse::<u32>().ok()) != Some(pgid)
+        if let Some((state, group, _)) = stat_fields(pid)
+            && group == pgid
+            && state != "Z"
+            && state != "X"
         {
-            continue;
+            members += 1;
         }
-        if pid == pgid && fields.get(19).copied() != Some(start) {
-            return Ok(Group::Reused);
-        }
-        members += 1;
     }
-    Ok(if members == 0 {
-        Group::Empty
-    } else {
-        Group::Owned(members)
+    Ok(match (leader, members) {
+        (_, 0) => Group::Empty,
+        (Some(_), n) => Group::Owned(n),
+        (None, n) => Group::Unanchored(n),
     })
 }
 
@@ -158,9 +168,9 @@ pub(crate) fn owned_group(pgid: u32, start: &str) -> Result<Group> {
     })
 }
 
-/// What reaping one job did: its new state and the observable reason. Every verified member
-/// of the group is killed, whether or not its leader is still running.
-fn reap_one(job: &JobRecord) -> Result<(JobState, String)> {
+/// What reaping one job did: its new state, the observable reason and whether the group is now
+/// verified empty. Only a group anchored on its recorded leader is ever signalled.
+fn reap_one(job: &JobRecord) -> Result<(JobState, String, bool)> {
     let ended = if job.state == JobState::Exited {
         JobState::Exited
     } else {
@@ -172,17 +182,28 @@ fn reap_one(job: &JobRecord) -> Result<(JobState, String)> {
             "was prepared without a recorded process identity; its gated launcher never ran the \
              command and exits once its host is gone"
                 .into(),
+            true,
         ));
     };
-    match owned_group(pid, start)? {
-        Group::Empty => Ok((
+    Ok(match owned_group(pid, start)? {
+        Group::Empty => (
             ended,
             format!("process group {pid} had already ended; nothing was killed"),
-        )),
-        Group::Reused => Ok((
+            true,
+        ),
+        Group::Reused => (
             ended,
-            format!("pid {pid} now belongs to another process; it was not killed"),
-        )),
+            format!("pid {pid} now belongs to another process; it was not signalled"),
+            false,
+        ),
+        Group::Unanchored(members) => (
+            ended,
+            format!(
+                "process group {pid} lost its leader; its {members} live members cannot be \
+                 verified as this job's and were not signalled"
+            ),
+            false,
+        ),
         Group::Owned(members) => {
             kill_group(pid)?;
             let state = if job.state == JobState::Exited {
@@ -190,12 +211,13 @@ fn reap_one(job: &JobRecord) -> Result<(JobState, String)> {
             } else {
                 JobState::Reaped
             };
-            Ok((
+            (
                 state,
                 format!("was reaped: corral killed its process group {pid} ({members} live)"),
-            ))
+                true,
+            )
         }
-    }
+    })
 }
 
 #[cfg(unix)]
@@ -226,8 +248,15 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
             continue;
         };
         for job in state.jobs.iter().filter(|j| orphaned(&task, &container, j)) {
-            let (state, detail) = reap_one(job)?;
-            reaped.push((run.id.clone(), job.id.clone(), job.state, state, detail));
+            let (state, detail, clear) = reap_one(job)?;
+            reaped.push((
+                run.id.clone(),
+                job.id.clone(),
+                job.state,
+                state,
+                detail,
+                clear,
+            ));
         }
     }
     if reaped.is_empty() {
@@ -236,7 +265,7 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
     let mut ended = 0;
     ctx.store.try_update(task_id, |task| {
         let mut changed = false;
-        for (run_id, job_id, before, after, detail) in &reaped {
+        for (run_id, job_id, before, after, detail, clear) in &reaped {
             let container = ContainerRef::Worker {
                 task: task.id.clone(),
                 run: run_id.clone(),
@@ -252,7 +281,8 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
                 continue;
             };
             job.state = *after;
-            job.group_clear = true;
+            job.group_clear = *clear;
+            job.swept = true;
             job.detail = Some(detail.clone());
             if before.live() {
                 job.ended_at = Some(now);
@@ -268,7 +298,7 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
         }
         Ok(changed)
     })?;
-    for (run, job, _, state, detail) in &reaped {
+    for (run, job, _, state, detail, _) in &reaped {
         ctx.store.log_event(
             Some(task_id),
             "agent_job_reaped",

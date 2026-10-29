@@ -114,6 +114,10 @@ pub struct JobRecord {
     /// says so after its sweep, or the reaper sets it after killing what remained.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub group_clear: bool,
+    /// The reaper has dealt with this job: it either cleared the group or found it could not
+    /// verify the group's ownership and left it alone. Either way it is not visited again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub swept: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub monitors: Vec<JobMonitor>,
 }
@@ -122,7 +126,10 @@ impl JobRecord {
     /// Live, or exited with a known group that nobody has verified empty.
     pub fn needs_reap(&self) -> bool {
         self.state.live()
-            || (self.state == JobState::Exited && self.pid.is_some() && !self.group_clear)
+            || (self.state == JobState::Exited
+                && self.pid.is_some()
+                && !self.group_clear
+                && !self.swept)
     }
 }
 

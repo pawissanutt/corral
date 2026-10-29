@@ -1,12 +1,14 @@
-// Background jobs of a Pi-native worker (T-565). A job is its whole process group. It is recorded
-// with corral before it is spawned, and its process identity (pid, kernel start time) is
-// committed before the command runs: the spawned launcher waits on its stdin for "run", so a host
-// that dies first leaves no executable work behind. When the leader exits, every remaining
-// verified member of its group is killed before the exit is reported. Output goes to a runtime
+// Background jobs of a Pi-native worker (T-565). A job is its whole process group, led by a
+// launcher whose pid and kernel start time are committed to corral before the command runs: the
+// launcher waits on its stdin for "run", so a host that dies first leaves no executable work. The
+// launcher then stays the group's leader while the command runs as its child, so the recorded
+// identity anchors ownership until the group is swept; it reports the command's status on its
+// own stdout and, if its host disappears, kills its own group. The command's output is its stderr. Output goes to a runtime
 // file capped at max_output_bytes plus an in-memory tail that survives the file's loss. Line
 // monitors match in this process; corral settles every monitor's wait and posts its one wake.
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeSync } from "node:fs";
+import { constants } from "node:os";
 import { join } from "node:path";
 
 import type { JobSettings } from "./settings.ts";
@@ -21,8 +23,17 @@ const REPORT_BACKOFF_MS = 250;
 /** How long the host waits for SIGKILLed group members to disappear before reporting. */
 const SWEEP_WAIT_MS = 5000;
 const SWEEP_STEP_MS = 20;
-/** `$0` is the shell and `$1` the command; nothing runs unless the host writes "run". */
-const LAUNCHER = 'IFS= read -r go || exit 125; [ "$go" = run ] || exit 125; exec </dev/null; exec "$0" -c "$1"';
+/**
+ * `$0` is the shell and `$1` the command. Nothing runs unless the host writes "run". SIGTERM
+ * and SIGINT only interrupt the launcher's wait (the command keeps default handlers), so the
+ * leader outlives the command; the host's group SIGKILL or its own EOF-triggered `kill 0` ends it.
+ */
+const LAUNCHER = [
+  'IFS= read -r go || exit 125', '[ "$go" = run ] || exit 125', "trap : TERM INT",
+  '"$0" -c "$1" </dev/null >&2 &', "c=$!",
+  'while :; do wait "$c"; s=$?; [ "$s" -gt 128 ] && kill -0 "$c" 2>/dev/null || break; done',
+  'printf "exit %s\\n" "$s"', "IFS= read -r _", "kill -KILL 0",
+].join("\n");
 
 export interface JobReceipt {
   readonly state: string;
@@ -87,6 +98,8 @@ interface Job {
   readonly closed: Promise<void>;
   readonly exited: Promise<void>;
   cancelKill?: () => void;
+  status: string;
+  commandStatus?: number;
 }
 
 interface Stat {
@@ -113,23 +126,34 @@ export function startTimeOf(pid: number): string | undefined {
   return found && found.state !== "Z" && found.state !== "X" ? found.start : undefined;
 }
 
+export interface GroupView {
+  /** The recorded leader still holds the pid (running or an unreaped zombie) with its start time. */
+  readonly owned: boolean;
+  /** The pid is held by a process with another start time or in another group. */
+  readonly reused: boolean;
+  /** Live (non-zombie) processes whose group ID is the job's pid; counting signals nothing. */
+  readonly members: number;
+}
+
 /**
- * The job's process group now. Linux never reuses a pid while it is still some group's ID, so
- * live members of a group whose leader is gone are the job's descendants; a live leader must
- * still have the recorded start time. Without /proc a group is never claimed.
+ * The job's process group now. Ownership is anchored on the recorded leader alone: a group whose
+ * leader is gone cannot be told apart from a later group that reused the ID, so it is never
+ * claimed, whatever its members. Without /proc nothing is claimed.
  */
-export function processGroup(pgid: number, start: string | undefined): "empty" | "owned" | "reused" {
-  if (start === undefined || !existsSync("/proc/self/stat")) return "reused";
+export function processGroup(pgid: number, start: string | undefined): GroupView {
+  if (!existsSync("/proc/self/stat")) return { owned: false, reused: false, members: 0 };
+  const leader = stat(pgid);
+  const reused = leader !== undefined && (leader.start !== start || leader.pgrp !== pgid);
   let members = 0;
   for (const name of readdirSync("/proc")) {
     if (!/^\d+$/.test(name)) continue;
     const found = stat(Number(name));
-    if (!found || found.pgrp !== pgid || found.state === "Z" || found.state === "X") continue;
-    if (Number(name) === pgid && found.start !== start) return "reused";
-    members++;
+    if (found && found.pgrp === pgid && found.state !== "Z" && found.state !== "X") members++;
   }
-  return members === 0 ? "empty" : "owned";
+  return { owned: leader !== undefined && !reused && start !== undefined, reused, members };
 }
+
+const SIGNAL_NAMES = Object.fromEntries(Object.entries(constants.signals).map(([name, number]) => [number, name]));
 
 export class JobError extends Error {}
 
@@ -199,14 +223,14 @@ export class JobRuntime {
     let close!: () => void;
     const job: Job = {
       id, command, file, child, pid: child.pid, start: startTimeOf(child.pid), state: "running", exitCode: null,
-      signal: null, groupClear: false, bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0,
+      signal: null, groupClear: false, status: "", bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0,
       monitors: 0, inflight: 0, drained: [], reports: Promise.resolve(), watchers: [],
       closed: new Promise((resolve) => { close = resolve; }),
       exited: new Promise((resolve) => { finish = resolve; }),
     };
     this.jobs.set(id, job);
     child.stdin?.on("error", () => undefined);
-    child.stdout?.on("data", (chunk: Buffer) => this.capture(job, chunk));
+    child.stdout?.on("data", (chunk: Buffer) => this.statusLine(job, chunk));
     child.stderr?.on("data", (chunk: Buffer) => this.capture(job, chunk));
     const cancelDeadline = this.schedule(() => void this.kill(id), settings.max_runtime_secs * 1000);
     child.once("close", (code, signal) => {
@@ -214,8 +238,9 @@ export class JobRuntime {
       if (job.partial) this.line(job, job.partial);
       job.partial = "";
       job.state = "exited";
-      job.exitCode = code;
-      job.signal = signal;
+      const status = job.commandStatus;
+      job.exitCode = status === undefined ? code : status < 128 ? status : null;
+      job.signal = status === undefined ? signal : status > 128 ? SIGNAL_NAMES[status - 128] ?? `SIG${status - 128}` : null;
       if (job.fd !== undefined) closeSync(job.fd);
       job.fd = undefined;
       void this.sweep(job).then(() => {
@@ -223,12 +248,12 @@ export class JobRuntime {
         return this.whenDrained(job);
       }).then(() => {
         const payload: Record<string, unknown> = { action: "exited", job: id };
-        if (code !== null) payload.exit_code = code;
-        if (signal !== null) payload.signal = signal;
+        if (job.exitCode !== null) payload.exit_code = job.exitCode;
+        if (job.signal !== null) payload.signal = job.signal;
         if (job.groupClear) payload.group_clear = true;
         this.enqueue(job, `job:${id}:exited`, payload);
         return job.reports;
-      }).then(() => this.options.onEvent?.("job_exited", { job: id, exit_code: code, signal })).finally(finish);
+      }).then(() => this.options.onEvent?.("job_exited", { job: id, exit_code: job.exitCode, signal: job.signal })).finally(finish);
     });
     // The launcher is blocked on stdin: the command runs only once corral holds its identity.
     let recorded = false;
@@ -242,9 +267,10 @@ export class JobRuntime {
         recorded = false;
       }
     }
+    // The open stdin is the launcher's lifeline: it is closed only when this host goes away.
     await new Promise<void>((resolve) => {
       if (!child.stdin) resolve();
-      else if (recorded) child.stdin.end("run\n", () => resolve());
+      else if (recorded) child.stdin.write("run\n", () => resolve());
       else child.stdin.end(() => resolve());
     });
     if (!recorded) return { job: id, state: "not_started", reason: "corral did not record the job's process identity" };
@@ -252,21 +278,27 @@ export class JobRuntime {
     return { job: id, state: job.state, pid: child.pid, output_file: file };
   }
 
+  /** The launcher reports the command's status; the still-anchored group is then cleared. */
+  private statusLine(job: Job, chunk: Buffer): void {
+    job.status = (job.status + chunk.toString("utf8")).slice(-256);
+    const found = /^exit (\d+)$/m.exec(job.status);
+    if (job.commandStatus !== undefined || !found) return;
+    job.commandStatus = Number(found[1]);
+    this.groupSignal(job, "SIGKILL");
+  }
+
   /**
-   * After the leader exits, kills every remaining verified member of its group and waits for
-   * them to go, so a descendant that ignored SIGTERM or redirected its output cannot outlive
-   * the job. A group that cannot be verified is never signalled.
+   * Once the leader has gone, waits for the members its group SIGKILL ended to disappear. This
+   * only reads /proc: with the leader gone the group can no longer be verified as this job's,
+   * so nothing is signalled here, and a group that did not empty stays for corral's reaper.
    */
   private async sweep(job: Job): Promise<void> {
-    let group = processGroup(job.pid, job.start);
-    if (group === "owned") {
-      this.groupSignal(job, "SIGKILL");
-      for (let waited = 0; waited < SWEEP_WAIT_MS && group === "owned"; waited += SWEEP_STEP_MS) {
-        await new Promise((resolve) => setTimeout(resolve, SWEEP_STEP_MS));
-        group = processGroup(job.pid, job.start);
-      }
+    let members = processGroup(job.pid, job.start).members;
+    for (let waited = 0; waited < SWEEP_WAIT_MS && members > 0; waited += SWEEP_STEP_MS) {
+      await new Promise((resolve) => setTimeout(resolve, SWEEP_STEP_MS));
+      members = processGroup(job.pid, job.start).members;
     }
-    job.groupClear = group === "empty";
+    job.groupClear = members === 0;
     job.cancelKill?.();
   }
 
@@ -381,9 +413,9 @@ export class JobRuntime {
     }
   }
 
-  /** Signals the job's group only while it is verifiably the job's: never a reused pid. */
+  /** Signals the job's group only while its recorded leader anchors it: never a reused pid. */
   private groupSignal(job: Job, signal: NodeJS.Signals): void {
-    if (processGroup(job.pid, job.start) !== "owned") return;
+    if (!processGroup(job.pid, job.start).owned) return;
     try {
       process.kill(-job.pid, signal);
     } catch {

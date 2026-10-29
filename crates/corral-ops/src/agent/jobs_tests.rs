@@ -369,12 +369,29 @@ fn interrupted_job_tools_are_classified_conservatively() {
     assert!(detail.unwrap().contains("reaps"));
 }
 
-/// A group whose leader waits on stdin while a SIGTERM-ignoring descendant sleeps, with a pidfd
-/// on the descendant opened before anything is released.
+/// A group whose leader waits on stdin while a SIGTERM-ignoring descendant sleeps, with pidfds
+/// on both opened before anything is released.
 struct Orphaning {
     leader: Child,
     start: String,
+    leader_fd: rustix::fd::OwnedFd,
     descendant: rustix::fd::OwnedFd,
+}
+
+fn pidfd(pid: u32) -> rustix::fd::OwnedFd {
+    let pid = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();
+    rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap()
+}
+
+/// Whether `fd`'s process has exited, waiting at most `secs` (0 only looks).
+fn exited(fd: &rustix::fd::OwnedFd, secs: i64) -> bool {
+    use rustix::event::{PollFd, PollFlags, poll};
+    let mut ready = [PollFd::new(fd, PollFlags::IN)];
+    let timeout = rustix::time::Timespec {
+        tv_sec: secs,
+        tv_nsec: 0,
+    };
+    poll(&mut ready, Some(&timeout)).unwrap() == 1
 }
 
 fn orphaning_group() -> Orphaning {
@@ -395,66 +412,67 @@ fn orphaning_group() -> Orphaning {
     std::io::BufReader::new(leader.stdout.take().unwrap())
         .read_line(&mut line)
         .unwrap();
-    let pid = rustix::process::Pid::from_raw(line.trim().parse().unwrap()).unwrap();
-    let descendant =
-        rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
+    let descendant = pidfd(line.trim().parse().unwrap());
+    let leader_fd = pidfd(leader.id());
     Orphaning {
         leader,
         start,
+        leader_fd,
         descendant,
     }
 }
 
 impl Orphaning {
-    /// Lets the leader exit and reaps it; the descendant stays in the group.
-    fn release_leader(&mut self) {
+    /// Lets the leader exit and observes it through its pidfd without reaping it: a zombie.
+    fn leader_exits_unreaped(&mut self) {
         drop(self.leader.stdin.take());
-        assert!(self.leader.wait().unwrap().success());
+        assert!(exited(&self.leader_fd, 30), "leader exit");
     }
 
-    fn descendant_exited(&self) -> bool {
-        use rustix::event::{PollFd, PollFlags, poll};
-        let mut ready = [PollFd::new(&self.descendant, PollFlags::IN)];
-        let timeout = rustix::time::Timespec {
-            tv_sec: 30,
-            tv_nsec: 0,
-        };
-        poll(&mut ready, Some(&timeout)).unwrap() == 1
+    fn descendant_alive(&self) -> bool {
+        !exited(&self.descendant, 0)
+    }
+
+    fn kill_descendant(&self) {
+        rustix::process::pidfd_send_signal(&self.descendant, rustix::process::Signal::KILL)
+            .unwrap();
+        assert!(exited(&self.descendant, 30));
     }
 }
 
+fn fence_and_reap(w: &Worker) -> usize {
+    let g = w.host.identity.generation;
+    fence_generation(&w.fx.ctx.store, &w.container(), g, "resume").unwrap();
+    super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap()
+}
+
 #[test]
-fn a_group_whose_leader_exited_is_still_reaped_whole() {
-    // Given a recorded running job whose leader exits, leaving a TERM-ignoring descendant.
+fn an_anchored_group_is_reaped_whole_while_its_leader_lives() {
+    // Given a running job whose recorded leader still lives beside a TERM-ignoring descendant.
     let w = Worker::new();
     let mut group = orphaning_group();
     w.start("j1", &group.leader, &group.start);
     committed(&w.monitor("j1.m1", "j1", "exit"));
-    group.release_leader();
-    assert_eq!(
-        super::jobs::owned_group(group.leader.id(), &group.start).unwrap(),
-        super::jobs::Group::Owned(1)
-    );
     // When the generation is fenced and the reaper runs.
-    let g = w.host.identity.generation;
-    fence_generation(&w.fx.ctx.store, &w.container(), g, "resume").unwrap();
-    super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap();
-    // Then the descendant is killed through the verified group and the monitor settles lost.
-    assert!(group.descendant_exited());
-    let state = ts::state(&w.fx, &w.container());
-    assert_eq!(state.jobs[0].state, JobState::Reaped);
-    assert!(state.jobs[0].group_clear);
+    assert_eq!(fence_and_reap(&w), 1);
+    // Then the whole group, descendant included, is killed and the monitor settles lost.
+    assert!(exited(&group.descendant, 30));
+    assert_eq!(group.leader.wait().unwrap().signal(), Some(9));
+    let job = ts::state(&w.fx, &w.container()).jobs[0].clone();
+    assert_eq!(
+        (job.state, job.group_clear, job.swept),
+        (JobState::Reaped, true, true)
+    );
     assert_eq!(w.wait_state("j1.m1"), WaitState::Lost);
 }
 
 #[test]
-fn an_exit_reported_without_a_clear_group_is_swept_once() {
-    // Given an exit report that did not verify the group empty, with a descendant still alive.
+fn an_exit_reported_without_a_clear_group_is_swept_while_anchored() {
+    // Given an exit report without group_clear while the leader still anchors the group.
     let w = Worker::new();
     let mut group = orphaning_group();
     w.start("j1", &group.leader, &group.start);
     committed(&w.monitor("j1.m1", "j1", "exit"));
-    group.release_leader();
     committed(&w.job(
         "j1/exited",
         json!({"action": "exited", "job": "j1", "exit_code": 0}),
@@ -473,21 +491,71 @@ fn an_exit_reported_without_a_clear_group_is_swept_once() {
     assert!(crate::agent::hooks::sync::wants(&ended));
     crate::agent::hooks::sync::task(&w.fx.ctx, &ended, Timestamp::now()).unwrap();
     let again = super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap();
-    // Then the remaining member is killed, the exit and its monitor keep their outcome, and the
-    // second pass has nothing left to do.
-    assert!(group.descendant_exited());
-    let state = ts::state(&w.fx, &w.container());
+    // Then the group is killed, the exit and its monitor keep their outcome, and nothing repeats.
+    assert!(exited(&group.descendant, 30));
+    assert_eq!(group.leader.wait().unwrap().signal(), Some(9));
+    let job = ts::state(&w.fx, &w.container()).jobs[0].clone();
     assert_eq!(
-        (
-            state.jobs[0].state,
-            state.jobs[0].exit_code,
-            state.jobs[0].group_clear
-        ),
+        (job.state, job.exit_code, job.group_clear),
         (JobState::Exited, Some(0), true)
     );
     assert_eq!(w.wait_state("j1.m1"), WaitState::Ready);
     assert_eq!(again, 0);
     assert_eq!(w.wakes(), 1);
+}
+
+#[test]
+fn a_leaderless_group_is_never_claimed_even_with_the_recorded_start() {
+    // Given a recorded running job whose leader exited and was reaped, leaving a descendant.
+    let w = Worker::new();
+    let mut group = orphaning_group();
+    w.start("j1", &group.leader, &group.start);
+    group.leader_exits_unreaped();
+    assert!(group.leader.wait().unwrap().success());
+    // When the generation is fenced and the reaper runs twice.
+    let first = fence_and_reap(&w);
+    let second = super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap();
+    // Then nothing is signalled: the group can no longer be told apart from a reused one.
+    assert!(group.descendant_alive());
+    let job = ts::state(&w.fx, &w.container()).jobs[0].clone();
+    assert_eq!(
+        (job.state, job.group_clear, job.swept),
+        (JobState::Lost, false, true)
+    );
+    assert!(job.detail.unwrap().contains("lost its leader"));
+    assert_eq!((first, second), (1, 0));
+    group.kill_descendant();
+}
+
+#[test]
+fn a_zombie_leader_anchors_only_its_own_recorded_identity() {
+    for genuine in [false, true] {
+        // Given a group whose exited leader is an unreaped zombie, recorded with its real start
+        // time or with a stale one.
+        let w = Worker::new();
+        let mut group = orphaning_group();
+        let recorded = if genuine {
+            group.start.clone()
+        } else {
+            "1".to_owned()
+        };
+        w.start("j1", &group.leader, &recorded);
+        group.leader_exits_unreaped();
+        // When the generation is fenced and the reaper runs.
+        fence_and_reap(&w);
+        // Then only the genuine identity's group is killed; the stale one is left alone.
+        let job = ts::state(&w.fx, &w.container()).jobs[0].clone();
+        if genuine {
+            assert!(exited(&group.descendant, 30));
+            assert_eq!((job.state, job.group_clear), (JobState::Reaped, true));
+        } else {
+            assert!(group.descendant_alive());
+            assert_eq!((job.state, job.group_clear), (JobState::Lost, false));
+            assert!(job.detail.unwrap().contains("another process"));
+            group.kill_descendant();
+        }
+        assert!(group.leader.wait().unwrap().success());
+    }
 }
 
 #[test]
@@ -503,11 +571,6 @@ fn a_host_verified_clear_group_is_never_signalled_again() {
         json!({"action": "exited", "job": "j1", "signal": "SIGKILL", "group_clear": true}),
     ));
     // When the generation is fenced, then the reaper has nothing to sweep.
-    let g = w.host.identity.generation;
-    fence_generation(&w.fx.ctx.store, &w.container(), g, "resume").unwrap();
-    assert_eq!(
-        super::jobs::reap(&w.fx.ctx, &w.task, Timestamp::now()).unwrap(),
-        0
-    );
+    assert_eq!(fence_and_reap(&w), 0);
     assert_eq!(ts::events(&w.fx, "agent_job_reaped"), 0);
 }
