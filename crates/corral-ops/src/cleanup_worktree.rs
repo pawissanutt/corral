@@ -10,8 +10,6 @@ use anyhow::{Context, Result, bail};
 use corral_core::{Run, StuckProcess, Task};
 
 use crate::Ctx;
-#[cfg(not(target_os = "linux"))]
-use crate::watchdog::protected;
 use crate::watchdog::{ProcessControl, SystemProcesses};
 
 #[cfg(test)]
@@ -104,23 +102,10 @@ fn process_marker(process: &StuckProcess) -> Option<Vec<u8>> {
         .find_map(|entry| entry.strip_prefix(b"CORRAL_PROCESS_OWNER=").map(Vec::from))
 }
 
-// Native marker inspection is used only to protect residents, never to authorize termination.
-// Its native runtime behavior remains unverified.
+// Native ownership inspection has not been verified; all residents remain protected.
 #[cfg(not(target_os = "linux"))]
-fn process_marker(process: &StuckProcess) -> Option<Vec<u8>> {
-    crate::native_process::ownership_marker(process)
-        .ok()
-        .flatten()
-        .map(String::into_bytes)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn harness(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
-    protected(ctx, run, argv)
-        || run
-            .review_runs
-            .iter()
-            .any(|child| harness(ctx, child, argv))
+fn process_marker(_process: &StuckProcess) -> Option<Vec<u8>> {
+    None
 }
 
 fn may_terminate(linux: bool, owned: bool) -> bool {
@@ -243,21 +228,11 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         }
     }
     let protected_set = protected_pids()?;
-    #[cfg(not(target_os = "linux"))]
-    let tasks = ctx.store.list()?;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
-        let is_owned = owned(ctx, task, run, &process);
-        #[cfg(target_os = "linux")]
-        let protect_resident = !may_terminate(true, is_owned);
-        #[cfg(not(target_os = "linux"))]
-        let protect_resident = is_owned
-            || tasks
-                .iter()
-                .chain(std::iter::once(task))
-                .flat_map(|t| &t.runs)
-                .any(|r| harness(ctx, r, &process.argv));
-        if protected_set.contains(&process.pid) || protect_resident {
+        if protected_set.contains(&process.pid)
+            || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process))
+        {
             warnings.push(format!(
                 "protected process {} still uses worktree",
                 process.pid

@@ -71,19 +71,20 @@ fn approval_closes_every_pane_before_removing_worktree() {
 }
 
 #[test]
-fn approval_stops_resident_nested_cwd_but_leaves_outside_process() {
+fn approval_protects_unowned_nested_cwd_and_outside_process() {
     let fx = Fx::new();
     fx.owner_ready();
     let run = fx.run();
     let nested = run.worktree.join("nested");
     std::fs::create_dir(&nested).unwrap();
-    let marker = fx.marker();
-    let mut inside = Resident::start(&nested, None, cfg!(target_os = "linux").then_some(&marker));
+    let mut inside = Resident::start(&nested, None, None);
     let mut outside = Resident::start(&fx.app, None, None);
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
-    assert!(line.contains("worktree removed"), "{line}");
-    assert!(inside.0.wait().unwrap().code().is_none());
+    assert!(line.contains("protected process"), "{line}");
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
+    assert!(inside.0.try_wait().unwrap().is_none());
     assert!(outside.0.try_wait().unwrap().is_none());
 }
 
@@ -135,7 +136,6 @@ fn foreign_harness_retains_worktree_and_branch_with_warning() {
     assert!(harness.0.try_wait().unwrap().is_none());
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 fn unrelated_editor_is_protected() {
     let fx = Fx::new();
@@ -221,24 +221,19 @@ fn another_tasks_custom_reviewer_harness_is_never_signalled() {
 }
 
 #[test]
-fn discard_explicitly_deletes_unmerged_branch_and_dirty_worktree() {
+fn discard_protects_unowned_resident_and_retains_worktree_and_branch() {
     let fx = Fx::new();
     fx.done();
     let run = fx.run();
     assert!(!corral_git::is_ancestor(&fx.app, &run.branch, "main").unwrap());
     std::fs::write(run.worktree.join("untracked"), "discard me").unwrap();
-    let marker = fx.marker();
-    let mut child = Resident::start(
-        &run.worktree,
-        None,
-        cfg!(target_os = "linux").then_some(&marker),
-    );
+    let mut child = Resident::start(&run.worktree, None, None);
     corral_ops::discard(&fx.ctx, &fx.id).unwrap();
-    assert!(child.0.wait().unwrap().code().is_none());
-    assert!(!run.worktree.exists());
-    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+    assert!(child.0.try_wait().unwrap().is_none());
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
     assert!(!fx.app.join("feature.txt").exists());
-    assert_eq!(git(&fx.app, &["status", "--porcelain"]), "");
+    assert!(run.worktree.join("untracked").exists());
 }
 
 #[test]
