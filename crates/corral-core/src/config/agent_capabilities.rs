@@ -666,6 +666,52 @@ pub(crate) fn template_settings(table: &CapabilitySettings) -> Result<Capability
     user_dirs(table, &["~/.agents/prompts"])
 }
 
+/// Browser: exact `http(s)://host[:port]` dev `origins` (default none: worktree HTML only), a
+/// per-call `timeout_ms` (default 30000) and an optional absolute Chrome/Chromium `executable`.
+pub(crate) fn browser_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    let mut effective = CapabilitySettings::new();
+    let mut origins = Vec::new();
+    let mut timeout_ms = 30_000;
+    for (name, value) in table {
+        match name.as_str() {
+            "origins" => {
+                for origin in value
+                    .as_array()
+                    .ok_or("origins must be a list of origins")?
+                {
+                    let lower = origin.as_str().unwrap_or_default().to_ascii_lowercase();
+                    let text = lower.trim_end_matches('/');
+                    validate_http_endpoint(text)
+                        .map_err(|error| format!("origins entry {origin} {error}"))?;
+                    if text.splitn(4, '/').nth(3).is_some() || text.contains('?') {
+                        return Err(format!(
+                            "origins entry {origin} must be scheme://host[:port] without a path"
+                        ));
+                    }
+                    origins.push(serde_json::Value::from(text));
+                }
+            }
+            "timeout_ms" => match value.as_u64() {
+                Some(ms @ 1..=600_000) => timeout_ms = ms,
+                _ => return Err("timeout_ms must be between 1 and 600000".into()),
+            },
+            "executable" => {
+                let path = value
+                    .as_str()
+                    .filter(|path| path.starts_with('/') && !path.contains('\0'))
+                    .ok_or("executable must be an absolute path")?;
+                effective.insert(name.clone(), path.into());
+            }
+            other => return Err(unknown(other, "origins, timeout_ms, executable")),
+        }
+    }
+    origins.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    origins.dedup();
+    effective.insert("origins".into(), origins.into());
+    effective.insert("timeout_ms".into(), timeout_ms.into());
+    Ok(effective)
+}
+
 /// Compaction keeps upstream's defaults for every value left out, so only configured values
 /// are recorded: `reserve_tokens`, `keep_recent_tokens` and `branch_summary.{reserve_tokens,
 /// skip_prompt}`.

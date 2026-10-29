@@ -12,7 +12,7 @@ use super::AgentRole;
 use super::local_controls::{bash_rule_settings, hook_settings};
 use super::paths::sha256_hex;
 use crate::config::agent_capabilities::{
-    compaction_settings, job_settings, skill_settings, template_settings,
+    browser_settings, compaction_settings, job_settings, skill_settings, template_settings,
 };
 
 /// A configured settings table, or the effective settings a snapshot records.
@@ -150,6 +150,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: Some(job_settings),
     },
+    CapabilityDef {
+        key: "browser",
+        summary: "fresh-profile browser navigation/screenshot of dev origins and worktree HTML",
+        defaults: browser_defaults,
+        host: true,
+        settings: Some(browser_settings),
+    },
 ];
 
 /// Validates configured servers and preserves their generation-bound settings.
@@ -220,6 +227,13 @@ fn lsp_defaults(role: AgentRole) -> Option<[bool; 3]> {
         AgentRole::Reviewer => Some([false, false, true]),
         AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
         AgentRole::Pm => None,
+    }
+}
+
+fn browser_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker => Some([false, true, true]),
+        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 

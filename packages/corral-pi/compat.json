@@ -63,6 +63,7 @@
     "bash_rules",
     "background_shell",
     "role_enabled",
-    "lsp"
+    "lsp",
+    "browser"
   ]
 }

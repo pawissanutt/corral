@@ -8,6 +8,7 @@ import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { PLANNING_ROLES, ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
+import { browserSettings } from "../extensions/browser/index.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { parseControls } from "./tool-controls.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
@@ -17,7 +18,7 @@ export const LAUNCH_VERSION = 1;
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp",
+  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -187,6 +188,7 @@ export function parseLaunchMessage(text: string): HostConfig {
   const guidance = capabilityGuidance(message.capabilities);
   try {
     parseControls(role as Role, capabilities?.enabled ?? [], guidance?.settings);
+    browserSettings(role as Role, capabilities?.enabled ?? [], guidance?.settings);
   } catch (error) {
     throw new LaunchMessageInvalid(error instanceof Error ? error.message : String(error));
   }
