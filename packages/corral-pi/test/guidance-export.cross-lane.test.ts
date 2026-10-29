@@ -126,7 +126,14 @@ test("a dispatched worker keeps its role skill, loads trusted guidance and expan
     };
     const skills = Object.fromEntries(state.guidance.skills.map((item) => [item.name, item.path]));
     expect(skills["corral-worker"]).toBe(join(install!.dir, "src/roles/worker/skills/corral-worker/SKILL.md"));
-    expect(Object.keys(skills).sort()).toEqual(["corral-worker", "xl-home", "xl-skill"]);
+    const pack = ["frontend", "visual-qa", "programming", "debugging", "git-master"];
+    expect(Object.keys(skills).sort()).toEqual(["corral-worker", "xl-home", "xl-skill", ...pack].sort());
+    for (const name of pack) {
+      expect(skills[name]).toBe(join(process.env.HOME ?? "", ".corral/skills/pi-native", name, "SKILL.md"));
+      const installed = readFileSync(skills[name]!, "utf8");
+      expect(installed).toMatch(new RegExp(`<!-- corral-skill: ${name} version=\\S+ sha256=[a-f0-9]{64} -->`));
+    }
+    console.log(`PI-PACK-DISPATCH ${JSON.stringify(Object.fromEntries(pack.map((name) => [name, skills[name]])))}`);
     expect(state.guidance.project_text).toBeTrue();
     expect(state.guidance.context_files).toEqual([join(dispatched.worktree, "AGENTS.md")]);
     expect(state.guidance.export).toBeTrue();

@@ -37,7 +37,14 @@ defaults; disabling optional skills and strict behavior remain unchanged.
 - `cargo test -p corral-ops --test prompt_ops fresh_install_writes_every_role_for_installed_harnesses_only`:
   passed after that correction (the gate provides its failing-before proof).
 
-The run's receipted quick gate is recorded separately after commit/rebase.
+- Second quick gate passed Rust checks, then identified the existing cross-lane test's exact
+  pre-pack skill list. Extended that integration assertion to include the pack and verify every
+  dispatch-installed path and version/digest header.
+- In a fresh plugin-free server from scripts/test-herdr.sh,
+  `bun test test/guidance-export.cross-lane.test.ts`: 2 passed, 36 assertions. The log's
+  PI-PACK-DISPATCH record shows all five skills in the real dispatched worker's default session.
+
+The run's receipted quick gates are recorded separately after commit/rebase.
 
 ## Limits
 
