@@ -575,16 +575,17 @@ fn approve_respects_remove_worktree_policy() {
 }
 
 #[test]
-fn approve_unmerged_strategy_keeps_branch_after_worktree_removal() {
+fn approve_unmerged_strategy_keeps_worktree_and_branch() {
     // Given a completed task with commits absent from main.
     let ws = workspace();
     let t = finish(&ws, "Do not merge");
     let branch = &t.current_run().unwrap().branch;
     let before = corral_git::rev_sha(&ws.app, branch).unwrap();
-    // When approval deliberately skips merging but removes the worktree.
-    approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, true, false).unwrap();
-    // Then the unmerged branch survives.
-    assert!(!worktree(&t).exists());
+    // When approval skips merging despite the request to remove the worktree.
+    let message = approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, true, false).unwrap();
+    // Then both the unlanded worktree and its branch survive, with a warning.
+    assert!(message.contains("unlanded branch"), "{message}");
+    assert!(worktree(&t).exists());
     assert_eq!(corral_git::rev_sha(&ws.app, branch).unwrap(), before);
     assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
 }
