@@ -58,7 +58,7 @@ function present(assetRoot: string, module: string): boolean {
 /** Every missing module of a role, in the order the launcher reports them. */
 export function missingModules(assetRoot: string, role: Role): ModuleUnavailable[] {
   const paths = modulePaths(role);
-  if (compiledBundle()) return [];
+  if (compiledBundle()?.roles) return [];
   const missing: ModuleUnavailable[] = [];
   if (!present(assetRoot, paths.role)) missing.push(new ModuleUnavailable("role", paths.role, ROLE_OWNERS[role], role));
   if (!present(assetRoot, paths.delivery)) missing.push(new ModuleUnavailable("delivery", paths.delivery, "inbox-adapter"));
@@ -156,7 +156,7 @@ export async function loadModules(
   if (first) throw first;
   const paths = modulePaths(role);
   const bundle = compiledBundle();
-  if (bundle) {
+  if (bundle?.roles && bundle.delivery !== undefined) {
     return {
       role: checkRole(bundle.roles[role](assetRoot), paths.role, role),
       delivery: checkDelivery(bundle.delivery, paths.delivery),
