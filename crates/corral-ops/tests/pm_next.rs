@@ -357,15 +357,28 @@ fn dispatch_recommendations_include_active_gate_capacity() {
 #[test]
 fn pending_review_prevents_landing_even_when_another_candidate_is_ready() {
     // Given a completed task and another task with a pending review in the same project.
-    let (_tmp, ctx, id) = fixture();
+    let (_tmp, mut ctx, id) = fixture();
+    ctx.store.config.projects.insert(
+        "app".into(),
+        serde_json::from_value(json!({"path":"."})).unwrap(),
+    );
+    ctx.store.save_config().unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.project = Some("app".into());
+            task.current_run_mut().unwrap().outcome = Some(corral_core::RunOutcome::Done);
+            Ok(())
+        })
+        .unwrap();
     let other = ctx
         .store
-        .create("Under review", None, Status::Review, "spec")
+        .create("Under review", Some("app"), Status::Review, "spec")
         .unwrap();
     let mut run = ctx.store.get(&id).unwrap().current_run().unwrap().clone();
     run.review = Some(
         serde_json::from_value(json!({
-            "reviewer":"strong","sha":run.base_sha,"at":"2026-10-15T12:00:00Z"
+            "reviewer":"strong","sha":run.base_sha,"at":"2026-10-15T12:00:00Z",
+            "pane":"recorded-reviewer"
         }))
         .unwrap(),
     );
@@ -375,10 +388,31 @@ fn pending_review_prevents_landing_even_when_another_candidate_is_ready() {
             Ok(())
         })
         .unwrap();
+    // A missing owner grant is not the blocker this fixture is testing.
+    let preview = ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [id.clone(), other.id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                accept: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    ctx.store.config = ctx
+        .store
+        .confirm_operating_policy(
+            &preview,
+            "fixture owner",
+            "2026-10-29T08:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
     // When all cards are ranked.
     let card = pm_next(&ctx).unwrap();
     // Then the only recommendation is to wait, never land.
-    assert_eq!(card.kind, PmActionKind::ReviewInFlight);
+    assert_eq!(card.kind, PmActionKind::ReviewInFlight, "{card:#?}");
     assert_eq!(card.recommended, "wait");
 }
 
