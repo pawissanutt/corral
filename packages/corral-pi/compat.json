@@ -62,6 +62,7 @@
     "hooks",
     "bash_rules",
     "background_shell",
-    "role_enabled"
+    "role_enabled",
+    "lsp"
   ]
 }

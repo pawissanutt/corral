@@ -12,7 +12,7 @@ use super::AgentRole;
 use super::local_controls::{bash_rule_settings, hook_settings};
 use super::paths::sha256_hex;
 use crate::config::agent_capabilities::{
-    compaction_settings, job_settings, skill_settings, template_settings,
+    compaction_settings, job_settings, lsp_settings, skill_settings, template_settings,
 };
 
 /// A configured settings table, or the effective settings a snapshot records.
@@ -22,7 +22,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 4;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 5;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -123,6 +123,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         settings: None,
     },
     CapabilityDef {
+        key: "lsp",
+        summary: "read-only language server operations",
+        defaults: lsp_defaults,
+        host: true,
+        settings: Some(lsp_settings),
+    },
+    CapabilityDef {
         key: "hooks",
         summary: "configured pre/post-tool and turn-end argv hooks",
         defaults: hooks_defaults,
@@ -144,6 +151,15 @@ pub const CATALOG: &[CapabilityDef] = &[
         settings: Some(job_settings),
     },
 ];
+
+fn lsp_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker => Some([true, true, true]),
+        AgentRole::Reviewer => Some([false, false, true]),
+        AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
+        AgentRole::Pm => None,
+    }
+}
 
 fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
@@ -624,6 +640,55 @@ impl CapabilityTransition {
                 changes.join(", ")
             }
         )
+    }
+}
+
+#[cfg(test)]
+mod lsp_config_tests {
+    use super::*;
+    use crate::config::agent_capabilities::{AgentCapabilities, Preset};
+
+    #[test]
+    fn lsp_configuration_is_validated_and_changes_generation_snapshot() {
+        let text = "[worker.lsp.languages.example]\ncommand = 'server'\nargs = ['--stdio']\nextensions = { '.ex' = 'example' }\nroot_markers = ['example.toml']";
+        let before: AgentCapabilities = toml::from_str(text).unwrap();
+        let after: AgentCapabilities = toml::from_str(&text.replace("--stdio", "--other")).unwrap();
+        let old = before.resolve(AgentRole::Worker, None);
+        let new = after.resolve(AgentRole::Worker, None);
+        assert_ne!(old.digest, new.digest);
+        assert!(
+            new.transition_from(1, &old)
+                .unwrap()
+                .changes
+                .iter()
+                .any(|c| c.key == "lsp" && c.settings)
+        );
+        assert!(
+            toml::from_str::<AgentCapabilities>(&text.replace("example.toml", "../escape"))
+                .is_err()
+        );
+        assert!(
+            toml::from_str::<AgentCapabilities>(
+                &text.replace("command = 'server'", "command = ''")
+            )
+            .is_err()
+        );
+        assert!(toml::from_str::<AgentCapabilities>(&text.replace("[worker.", "[pm.")).is_err());
+        for (role, defaults) in [
+            (AgentRole::Worker, [true, true, true]),
+            (AgentRole::Reviewer, [false, false, true]),
+            (AgentRole::Planner, [false, true, true]),
+            (AgentRole::PlanReviewer, [false, true, true]),
+        ] {
+            for (preset, enabled) in [Preset::Strict, Preset::Standard, Preset::Full]
+                .into_iter()
+                .zip(defaults)
+            {
+                let mut config = AgentCapabilities::default();
+                config.set_preset(preset);
+                assert_eq!(config.resolve(role, None).enabled("lsp"), enabled);
+            }
+        }
     }
 }
 

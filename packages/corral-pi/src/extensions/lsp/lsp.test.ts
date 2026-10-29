@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
-import { DEFAULT_SERVERS, LSP_TOOL_NAMES, LspError, type LspServerSpec, MAX_ITEMS, MAX_OUTPUT_BYTES, lspToolkit } from "./index.ts";
+import { DEFAULT_SERVERS, LSP_TOOL_NAMES, LspError, type LspServerSpec, MAX_ITEMS, MAX_OUTPUT_BYTES, configuredServers, lspToolkit } from "./index.ts";
 
 const FAKE = fileURLToPath(new URL("./testing/fake-server.ts", import.meta.url));
 const LIMITS = { quietMs: 0, readyTimeoutMs: 10_000, requestTimeoutMs: 10_000 };
@@ -74,6 +74,15 @@ test("the extension exposes the three tools and configures rust-analyzer by argv
   expect(lspToolkit({ root: tmpdir() }).tools.map((t) => t.name)).toEqual([...LSP_TOOL_NAMES]);
   const rust = DEFAULT_SERVERS.find((spec) => spec.languages[".rs"] === "rust");
   expect(rust?.command).toEqual(["rust-analyzer"]);
+});
+
+test("generation settings select a configured server without exposing mutating LSP tools", async () => {
+  const settings = { languages: { example: { command: process.execPath, args: [FAKE], extensions: { ".fk": "fake" }, root_markers: ["marker"] } } };
+  const made = lspToolkit({ root, servers: configuredServers(settings), limits: LIMITS });
+  toolkits.push(made);
+  expect(made.tools.map((tool) => tool.name)).toEqual([...LSP_TOOL_NAMES]);
+  expect((await call(made, "lsp_definition", { path: "src/main.fk", line: 1, column: 1 })).server).toBe("example");
+  expect(configuredServers({ languages: { changed: { ...settings.languages.example, args: [FAKE, "--exit-on-definition"] } } })[0]?.id).toBe("changed");
 });
 
 test("root markers select the nearest project and otherwise fall back to the worktree", async () => {

@@ -72,6 +72,8 @@ export interface RoleContext {
   readonly todo?: boolean;
   /** Absent when an older corral launched this host without a snapshot. */
   readonly capabilities?: CapabilitySet;
+  /** LSP server settings resolved for this generation. */
+  readonly lspSettings?: Readonly<Record<string, unknown>>;
   /** The worktree (worker, reviewer) or workspace root (pm) Pi works in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */

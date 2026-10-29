@@ -397,7 +397,7 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
     if tool == "job_start" || tool == "job_kill" {
         detail.push_str("; corral reaps a recorded job of the lost generation");
     }
-    if NO_EFFECT.contains(&tool) || tool.starts_with("lsp_") {
+    if NO_EFFECT.contains(&tool) {
         (ResumeClass::InterruptedNoEffect, None)
     } else if tool == "codemode" {
         (
@@ -405,6 +405,11 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
             Some(format!(
                 "nested tools may have run; reconcile their effects before retrying; {detail}"
             )),
+        )
+    } else if tool.starts_with("lsp_") {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some("a language server may have started or acted; reconcile before retrying".into()),
         )
     } else if tool.starts_with("mcp_") {
         (

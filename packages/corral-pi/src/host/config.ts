@@ -17,7 +17,7 @@ export const LAUNCH_VERSION = 1;
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell", "role_enabled",
+  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 

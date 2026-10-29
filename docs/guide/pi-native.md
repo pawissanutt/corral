@@ -33,6 +33,29 @@ when you dispatch, before a worktree exists.
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
+### Language servers
+
+Workers retain built-in Rust and TypeScript servers in every preset. Reviewer LSP is enabled
+in full; planner and plan-reviewer LSP in standard/full; PM has no LSP. Per-role `lsp.enabled`
+can override these defaults. Configure extra servers in the workspace configuration:
+
+```toml
+[agent.capabilities.worker.lsp]
+enabled = true
+[agent.capabilities.worker.lsp.languages.example]
+command = "example-language-server"
+args = ["--stdio"]
+extensions = { ".ex" = "example" }
+root_markers = ["example.toml", ".git"]
+```
+
+Configured extensions take precedence over built-ins. The nearest marker-containing ancestor
+inside the worktree is the server root; absent a marker the worktree is used. Servers are
+same-user subprocesses, outside the in-process network guard; only diagnostics, definition and
+references are exposed, not executeCommand or workspace edits. Config is snapshotted per
+generation and changes take effect on explicit resume. Interrupted LSP calls are conservatively
+unknown because server startup can have effects, including for built-in servers.
+
 ### Capabilities
 
 Optional Pi-native features are selected per role by one shared catalog:
@@ -1095,7 +1118,8 @@ resumes the PM's host in its saved pane, retaining its project scope and durable
    | single-phase corral tool with no receipt | `not_committed`, naming idempotent effects it may have made first (a `commit_all` commit, content-addressed blobs) |
    | two-phase corral tool (gate, capture, reply) with no reservation, or abandoned before it started | `not_executed` |
    | `edit`, `write`, `bash` | `outcome_unknown`; for bash, processes it started may still run |
-   | `read`, `grep`, `find`, `ls` and the LSP tools | `interrupted_no_effect`, unless a hook ran or may have run around it: then `outcome_unknown` naming the hook invocations |
+   | `read`, `grep`, `find`, `ls` | `interrupted_no_effect`, unless a hook ran or may have run around it: then `outcome_unknown` naming the hook invocations |
+   | LSP tools | `outcome_unknown`: a language server subprocess may have started or acted, even for built-in servers |
    | a hook that never completed (`hook:<phase>:<name>`) | `outcome_unknown`; hook scripts are never replayed |
 
    A definitely unsubmitted gate or reviewer preparation whose candidate changed (for
