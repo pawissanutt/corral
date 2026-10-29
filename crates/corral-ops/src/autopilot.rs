@@ -15,7 +15,6 @@ use serde_json::json;
 
 use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::glob_match;
-use crate::cleanup::{Cleanup, cleanup};
 use crate::dispatch::{auto_request_changes, auto_retry};
 use crate::gate::{gate_collect, gate_paths, worktree_head};
 use crate::integration::{IntegrationPacket, RepairKey};
@@ -24,11 +23,13 @@ use crate::review::{approve_landed, has_tracked_changes, main_repo};
 use crate::reviewer::review_run_automatic as review_run;
 use crate::verification;
 use crate::{ApproveStrategy, Change, Ctx, DispatchOutcome};
+use corral_core::{TaskMut as _, TaskRef as _};
 
 /// Bound on the steps one task takes in one sync. A step that changes nothing waits, so this only guards
 /// against a loop bug.
 const MAX_STEPS: usize = 16;
 
+mod handoff;
 mod output;
 mod repair;
 mod tiers;
@@ -118,12 +119,13 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
 }
 
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
-    let task = ctx.store.get(id)?;
+    let head = ctx.store.head(id)?;
+    let task = output::pilot_task(&head)?;
     let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
         return Ok(Step::Wait);
     };
     // Current authority, holds and unresolved decisions precede executor or repair work.
-    if crate::operating::require(&ctx.store, &task, kind).is_err() {
+    if crate::operating::require(&ctx.store, &head, kind).is_err() {
         return Ok(Step::Wait);
     }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
@@ -138,6 +140,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let pilot = Pilot {
         ctx,
         config,
+        head: &head,
         task: &task,
         run,
         policy,
@@ -199,6 +202,8 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
 struct Pilot<'a> {
     ctx: &'a Ctx,
     config: &'a Config,
+    head: &'a corral_core::TaskHead,
+    /// The head's fields and current run as a task: no history is read through it.
     task: &'a Task,
     run: &'a Run,
     policy: ReviewPolicy,
@@ -216,6 +221,12 @@ impl Pilot<'_> {
 
     fn stage(&self) -> Option<AutoStage> {
         self.state().map(|a| a.stage)
+    }
+
+    /// The automatic reviewer launch, attributed to its action kind.
+    fn review(&self) -> Result<ReviewRecord> {
+        let _action = corral_core::work::action(self.id(), OperatingActionKind::Review);
+        review_run(self.ctx, self.id(), None)
     }
 
     fn pane_alive(&self, pane: Option<&str>) -> Result<bool> {
@@ -297,7 +308,11 @@ impl Pilot<'_> {
             }
             return self.accept(head);
         }
-        if crate::verdict_carry::carry(self.ctx, self.id())? {
+        let carried = {
+            let _action = corral_core::work::action(self.id(), OperatingActionKind::Review);
+            crate::verdict_carry::carry(self.ctx, self.id())?
+        };
+        if carried {
             return Ok(Step::Acted);
         }
         if self.run.review.as_ref().and_then(|r| r.verdict) == Some(Verdict::Approve)
@@ -305,7 +320,7 @@ impl Pilot<'_> {
         {
             return self.accept(head);
         }
-        let review = review_run(self.ctx, self.id(), None)?;
+        let review = self.review()?;
         let note = format!("review by {} started", review.reviewer);
         self.moved(AutoStage::Reviewing, Some(head), None, &note)
     }
@@ -380,7 +395,7 @@ impl Pilot<'_> {
             return self.start();
         }
         let Some(review) = self.run.review.as_ref() else {
-            review_run(self.ctx, self.id(), None)?;
+            self.review()?;
             return Ok(Step::Acted);
         };
         let who = review.reviewer.as_str();
@@ -446,7 +461,7 @@ impl Pilot<'_> {
                 touched.join(", ")
             ));
         }
-        if crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Accept)
+        if crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Accept)
             .is_err()
         {
             if self.stage() == Some(AutoStage::Reviewed) {
@@ -510,7 +525,7 @@ impl Pilot<'_> {
         {
             return self.start();
         }
-        if crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Accept)
+        if crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Accept)
             .is_err()
         {
             return self.accept(head);
@@ -535,6 +550,7 @@ impl Pilot<'_> {
     }
 
     fn land(&self, base_head: &str) -> Result<Step> {
+        let _action = corral_core::work::action(self.id(), OperatingActionKind::Accept);
         let stat = corral_git::diff_stat(&self.run.worktree, base_head)?;
         let receipt = self
             .run
@@ -568,11 +584,15 @@ impl Pilot<'_> {
             at: self.now,
         };
         let run_id = self.run.id.clone();
-        self.ctx.store.update(self.id(), |t| {
-            if let Some(r) = t.current_run_mut().filter(|r| r.id == run_id) {
-                r.autopilot = Some(state);
+        self.ctx.store.try_update_head(self.id(), |t| {
+            if t.current_run_head()?.is_none_or(|r| r.id != run_id) {
+                return Ok(false);
             }
-            Ok(())
+            t.edit_run(&run_id, |r| {
+                r.autopilot = Some(state);
+                Ok(())
+            })?;
+            Ok(true)
         })?;
         self.log(
             AutoStage::Done,
@@ -607,20 +627,10 @@ impl Pilot<'_> {
         key: &RepairKey,
         packet: Option<&str>,
     ) -> Result<Step> {
-        key.check(&self.ctx.store.get(self.id())?)?;
+        let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
+        key.check(&self.ctx.store.head(self.id())?.shell_task()?)?;
         let digest = key.digest()?;
-        if packet.is_some()
-            && self
-                .ctx
-                .store
-                .events_of(Some(self.id()), &["integration_request"])?
-                .iter()
-                .any(|e| {
-                    e.task.as_deref() == Some(self.id())
-                        && e.kind == "integration_request"
-                        && e.detail["digest"].as_str() == Some(digest.as_str())
-                })
-        {
+        if packet.is_some() && output::requested(self.ctx, key, &digest)? {
             return Ok(Step::Wait);
         }
         let round = self.task.rounds + 1;
@@ -628,7 +638,7 @@ impl Pilot<'_> {
         if round > max {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
         }
-        crate::operating::require(&self.ctx.store, self.task, OperatingActionKind::Repair)?;
+        crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Repair)?;
         let id = self.id();
         let corral = corral_bin()?.display().to_string();
         let mut request = format!("{summary}\n");
@@ -658,8 +668,8 @@ impl Pilot<'_> {
             at: self.now,
         };
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
-        let task = self.ctx.store.get(id)?;
-        let switch = crate::escalation::escalation(self.config, &task, false)?;
+        let switch =
+            crate::escalation::escalation_head(self.config, &self.ctx.store.head(id)?, false)?;
         let sent: Result<(Status, String)> = if switch.is_none() && self.pane_alive(pane)? {
             auto_request_changes(self.ctx, id, &message, round, state, key).map(|_| {
                 (
@@ -693,7 +703,7 @@ impl Pilot<'_> {
             self.ctx.store.log_event(
                 Some(id),
                 "integration_request",
-                json!({ "key": key, "digest": digest, "packet": packet }),
+                json!({ "run": key.run, "key": key, "digest": digest, "packet": packet }),
             )?;
         }
         self.log(AutoStage::Changes, round, None, Some(summary), &note)?;
@@ -704,81 +714,6 @@ impl Pilot<'_> {
             note: format!("autopilot {note}"),
             stage: Some(AutoStage::Changes),
         }))
-    }
-
-    /// Hands the task to the owner: Needs me with the reason, a notification, one event.
-    fn escalate(&self, reason: &str) -> Result<Step> {
-        let from = self.stage();
-        let state = AutopilotState {
-            stage: AutoStage::Escalated,
-            reason: Some(reason.to_string()),
-            sha: worktree_head(self.run),
-            at: self.now,
-        };
-        if !self.write(from, state, Status::NeedsMe)? {
-            return Ok(Step::Wait);
-        }
-        cleanup(self.ctx, self.task, Cleanup::Round);
-        if let Err(e) = self.ctx.herdr.notify(
-            &format!("▲ {} needs you", self.id()),
-            &format!("autopilot: {reason}"),
-            true,
-        ) {
-            crate::messages::report(
-                Some(self.id()),
-                "notification",
-                format!("notification for {} failed: {e:#}", self.id()),
-            );
-        }
-        self.log(
-            AutoStage::Escalated,
-            self.task.rounds,
-            None,
-            Some(reason),
-            "handed to the owner",
-        )?;
-        Ok(Step::Moved(Change {
-            task: self.task.id.clone(),
-            from: Status::Review,
-            to: Status::NeedsMe,
-            note: format!("autopilot escalated: {reason}"),
-            stage: Some(AutoStage::Escalated),
-        }))
-    }
-
-    /// Landing waits for `reason` to clear; later syncs retry. Notifies once, on entering Blocked.
-    fn block(&self, reason: &str) -> Result<Step> {
-        if let Some(state) = self.state().filter(|a| a.stage == AutoStage::Blocked) {
-            if state.reason.as_deref() != Some(reason) {
-                // A different reason for the same wait: refresh it, no new transition.
-                let refreshed = AutopilotState {
-                    reason: Some(reason.to_string()),
-                    ..state.clone()
-                };
-                self.write(Some(AutoStage::Blocked), refreshed, Status::Review)?;
-            }
-            return Ok(Step::Wait);
-        }
-        let sha = self.state().and_then(|a| a.sha.clone());
-        let step = self.moved(
-            AutoStage::Blocked,
-            sha,
-            Some(reason),
-            "landing blocked; retried on later syncs",
-        )?;
-        if matches!(step, Step::Moved(_))
-            && let Err(e) =
-                self.ctx
-                    .herdr
-                    .notify(&format!("⏸ {} cannot land", self.id()), reason, false)
-        {
-            crate::messages::report(
-                Some(self.id()),
-                "notification",
-                format!("notification for {} failed: {e:#}", self.id()),
-            );
-        }
-        Ok(step)
     }
 
     fn moved(
@@ -817,26 +752,33 @@ impl Pilot<'_> {
         status: Status,
     ) -> Result<bool> {
         let run_id = self.run.id.clone();
-        let (_, written) = self.ctx.store.dispatch_update(self.id(), |store, t| {
+        let (_, written) = self.ctx.store.dispatch_update_head(self.id(), |store, t| {
             let current = Ctx {
                 store: store.clone(),
                 ..self.ctx.clone()
             };
-            let Some(kind) = crate::automation_status::next_action(&current, t)? else {
+            let shell = output::pilot_task(t)?;
+            let Some(kind) = crate::automation_status::next_action(&current, &shell)? else {
                 return Ok(false);
             };
-            if crate::operating::require(store, t, kind).is_err() {
+            if crate::operating::require(store, &*t, kind).is_err() {
                 return Ok(false);
             }
-            let Some(r) = t.current_run_mut().filter(|r| {
-                r.id == run_id
-                    && r.outcome == Some(RunOutcome::Done)
-                    && r.autopilot.as_ref().map(|a| a.stage) == from
-            }) else {
+            if t.current_run_head()?.is_none_or(|r| {
+                r.id != run_id
+                    || r.outcome != Some(RunOutcome::Done)
+                    || r.autopilot.as_ref().map(|a| a.stage) != from
+            }) {
                 return Ok(false);
-            };
-            r.autopilot = Some(state);
-            t.status = status;
+            }
+            t.edit_run(&run_id, |r| {
+                r.autopilot = Some(state);
+                Ok(())
+            })?;
+            t.edit_head_fields(|f| {
+                f.status = status;
+                Ok(())
+            })?;
             Ok(true)
         })?;
         Ok(written)

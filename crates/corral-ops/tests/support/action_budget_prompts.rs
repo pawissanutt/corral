@@ -24,6 +24,14 @@ pub(super) fn references(bench: &Bench, kind: Kind) -> BTreeMap<String, String> 
                     normalize(&crate::comments::owner_comments(&task)),
                 );
             }
+            "review_findings" => {
+                let attempt = review_attempt(&task);
+                let findings = crate::review_packet::findings_of(&task, &attempt).unwrap();
+                out.insert(
+                    "review_findings".to_owned(),
+                    serde_json::to_string(&findings).unwrap(),
+                );
+            }
             "plan_findings" => {
                 let findings: Vec<_> = task
                     .plans
@@ -47,12 +55,42 @@ pub(super) fn references(bench: &Bench, kind: Kind) -> BTreeMap<String, String> 
     out
 }
 
+/// The review child the pass launched: the packet excludes its own attempt.
+fn review_attempt(task: &corral_core::Task) -> String {
+    task.current_run()
+        .and_then(|run| run.review_runs.last())
+        .map(|child| child.id.clone())
+        .unwrap_or_default()
+}
+
+/// The packet's `previous_findings` array in `text`, as JSON, with its byte range.
+fn packet_findings(text: &str) -> Option<(std::ops::Range<usize>, serde_json::Value)> {
+    let key = "\"previous_findings\": ";
+    let start = text.find(key)? + key.len();
+    let mut depth = 0usize;
+    for (i, c) in text[start..].char_indices() {
+        match c {
+            '[' | '{' => depth += 1,
+            ']' | '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let end = start + i + 1;
+                    return Some((start..end, serde_json::from_str(&text[start..end]).ok()?));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A prompt the action itself wrote: the worker's registered copy, the planner's contract or a
 /// plan review attempt's prompt.
 fn action_prompt(header: &str) -> bool {
     header.contains("prompts/")
         || header.ends_with("/prompt.md:")
         || header.ends_with("-plan-review.md:")
+        || header.ends_with("/review.md:")
 }
 
 /// `output` with every reference section verified and removed from each action prompt.
@@ -85,6 +123,27 @@ fn strip(
                 failures.push(format!(
                     "{name} {header}: owner comments differ from the stored rows"
                 ));
+            }
+        }
+        if let Some(findings) = refs.get("review_findings") {
+            match packet_findings(text) {
+                Some((range, shown)) => {
+                    let expected: serde_json::Value = serde_json::from_str(findings).unwrap();
+                    let (shown, expected) = (
+                        normalize(&shown.to_string()),
+                        normalize(&super::action_budget::mask_clock_ids(&expected.to_string())),
+                    );
+                    if shown != expected {
+                        failures.push(format!(
+                            "{name} {header}: previous findings differ from the stored rows:\n{shown:.400}\nexpected:\n{expected:.400}"
+                        ));
+                    }
+                    text.replace_range(range, "<findings>");
+                }
+                None if header.ends_with("/review.md:") => {
+                    failures.push(format!("{name} {header}: no review packet findings"));
+                }
+                None => {}
             }
         }
         if let Some(findings) = refs.get("plan_findings") {

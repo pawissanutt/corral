@@ -7,9 +7,10 @@ use corral_core::{AutoStage, AutopilotState, Run, RunOutcome, Status, Task};
 use jiff::Timestamp;
 use serde_json::json;
 
-use super::{finish_review, notes_of};
-use crate::cleanup::{Cleanup, cleanup};
+use super::notes_of;
+use crate::cleanup::{Cleanup, cleanup_head};
 use crate::{Change, Ctx};
+use corral_core::TaskRef as _;
 
 pub(crate) fn continue_review(
     ctx: &Ctx,
@@ -25,14 +26,15 @@ pub(crate) fn continue_review(
         std::fs::rename(&notes, &kept)
             .with_context(|| format!("keeping interrupted notes at {}", kept.display()))?;
     }
-    ctx.store.update(&task.id, |t| {
-        if let Some(interrupted) = t
-            .current_run_mut()
-            .filter(|r| r.id == run.id)
-            .and_then(|r| r.review_runs.iter_mut().find(|c| c.id == child.id))
-            .filter(|c| c.outcome.is_none())
+    ctx.store.update_head(&task.id, |t| {
+        if t.current_run_head()?.is_some_and(|r| r.id == run.id)
+            && t.review_child(&run.id, &child.id)?
+                .is_some_and(|c| c.outcome.is_none())
         {
-            interrupted.outcome = Some(RunOutcome::Interrupted);
+            t.edit_review_child(&run.id, &child.id, |interrupted| {
+                interrupted.outcome = Some(RunOutcome::Interrupted);
+                Ok(())
+            })?;
         }
         ctx.store.log_event(
             Some(&task.id),
@@ -43,7 +45,11 @@ pub(crate) fn continue_review(
         Ok(())
     })?;
     // The interrupted attempt's reviewer profile, its purpose and instructions, continue.
-    match super::review_run_automatic(ctx, &task.id, Some(&child.agent)) {
+    let launched = {
+        let _action = corral_core::work::action(&task.id, corral_core::OperatingActionKind::Review);
+        super::review_run_automatic(ctx, &task.id, Some(&child.agent))
+    };
+    match launched {
         Ok(record) => {
             ctx.store.log_event(
                 Some(&task.id),
@@ -72,7 +78,7 @@ fn escalate(
     note: &str,
     now: Timestamp,
 ) -> Result<Option<Change>> {
-    let saved = ctx.store.try_update(&task.id, |t| {
+    let saved = ctx.store.try_update_head(&task.id, |t| {
         if t.status != Status::Review {
             return Ok(false);
         }
@@ -82,7 +88,7 @@ fn escalate(
         if parent.review.as_ref().is_some_and(|r| r.verdict.is_some()) {
             return Ok(false);
         }
-        finish_review(ctx, parent, now);
+        super::history::finish_review_head(parent, now);
         parent.blocked_excerpt = Some(note.to_owned());
         parent.autopilot = Some(AutopilotState {
             stage: AutoStage::Escalated,
@@ -101,7 +107,7 @@ fn escalate(
     let Some(saved) = saved else {
         return Ok(None);
     };
-    cleanup(ctx, &saved, Cleanup::Round);
+    cleanup_head(ctx, &saved, Cleanup::Round);
     if let Err(error) = ctx
         .herdr
         .notify(&format!("{} needs you", task.id), note, true)

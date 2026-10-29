@@ -167,7 +167,8 @@ pub(crate) fn record_acceptance(
     run_id: &str,
     landing: &Landing,
 ) -> Result<Artifact> {
-    let task = ctx.store.get(id)?;
+    // The landed run is the current one: its shell holds it and its own artifacts.
+    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
     let run = task
         .runs
         .iter()

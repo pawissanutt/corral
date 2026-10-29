@@ -5,6 +5,7 @@ use corral_git::RebaseOutcome;
 use serde_json::json;
 
 use crate::{ApproveStrategy, Ctx, gate_collect, gate_wait, verification};
+use corral_core::TaskMut as _;
 
 mod promotion;
 pub(crate) use promotion::{promotable, promote};
@@ -17,13 +18,25 @@ pub(crate) fn clean_replay(
     old: &str,
     new: &str,
 ) -> Result<bool> {
-    Ok(ctx.store.events_shared()?.iter().rev().any(|event| {
-        event.task.as_deref() == Some(&task.id)
-            && event.kind == "candidate_rebased"
-            && event.detail["run"] == run.id
-            && event.detail["review_sha"] == old
-            && event.detail["new_sha"] == new
-    }))
+    replayed(ctx, &task.id, &run.id, |event| {
+        event.detail["review_sha"] == old && event.detail["new_sha"] == new
+    })
+}
+
+/// Whether run `run` of task `task` recorded a `candidate_rebased` event matching `matches`:
+/// that run's own replay events, newest first.
+fn replayed(
+    ctx: &Ctx,
+    task: &str,
+    run: &str,
+    matches: impl Fn(&corral_core::Event) -> bool,
+) -> Result<bool> {
+    Ok(ctx
+        .store
+        .last_event_where(Some(task), &["candidate_rebased"], Some(run), |event| {
+            event.detail["run"] == run && matches(event)
+        })?
+        .is_some())
 }
 
 /// Records the successful replay boundary so conflict resolutions or arbitrary
@@ -57,7 +70,8 @@ pub(crate) fn rebase(ctx: &Ctx, task: &Task, run: &Run, onto: &str) -> Result<Re
 /// and completion evidence remain fixed; patch comparison is whitespace-sensitive.
 pub(crate) fn carry(ctx: &Ctx, id: &str) -> Result<bool> {
     let mut carried = None;
-    ctx.store.try_update(id, |task| {
+    ctx.store.try_update_head(id, |head| {
+        let task = &crate::reviewer::review_shell(&*head)?;
         let run = task.current_run().context("missing run for verdict carry")?;
         let Some(review) = run.review.as_ref().filter(|r| r.verdict == Some(Verdict::Approve)) else {
             return Ok(false);
@@ -112,7 +126,10 @@ pub(crate) fn carry(ctx: &Ctx, id: &str) -> Result<bool> {
         let mut review = review.clone();
         review.sha = new.head.clone();
         review.identity = Some(new);
-        task.current_run_mut().context("run disappeared")?.review = Some(review);
+        head.edit_run(&run.id, |current| {
+            current.review = Some(review);
+            Ok(())
+        })?;
         // Persist provenance before the receipt can authorize a landing.
         ctx.store.log_event(Some(id), "verdict_carried", detail.clone())?;
         carried = Some(detail);
@@ -207,17 +224,15 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
             .gate
             .as_ref()
             .is_some_and(|g| g.result == GateResult::Fail)
-        && ctx.store.events_shared()?.iter().any(|event| {
-            event.task.as_deref() == Some(id)
-                && event.kind == "candidate_rebased"
-                && event.detail["run"] == run.id
-                && run.gate.as_ref().is_some_and(|gate| {
-                    event.detail["new_sha"] == gate.sha
-                        && gate.identity.as_ref().is_some_and(|identity| {
-                            event.detail["base"] == identity.integration_base
-                        })
-                })
-        })
+        && replayed(ctx, id, &run.id, |event| {
+            run.gate.as_ref().is_some_and(|gate| {
+                event.detail["new_sha"] == gate.sha
+                    && gate
+                        .identity
+                        .as_ref()
+                        .is_some_and(|identity| event.detail["base"] == identity.integration_base)
+            })
+        })?
     {
         bail!(
             "gate failed; inspect {} and run `corral gate {id} --wait` after fixing it",

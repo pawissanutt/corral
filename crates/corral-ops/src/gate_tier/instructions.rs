@@ -194,9 +194,8 @@ pub(crate) fn report_blocked(
     };
     let run = task.current_run().map(|run| run.id.as_str());
     let reason = conflict.to_string();
-    let events = ctx.store.events_shared()?;
-    let previous = last_status(&events, task, run);
-    if previous.is_none_or(|event| {
+    let previous = last_status(ctx, task, run)?;
+    if previous.as_ref().is_none_or(|event| {
         event.kind != "automation_blocked" || event.detail["reason"].as_str() != Some(&reason)
     }) {
         ctx.store.log_event(
@@ -218,8 +217,10 @@ pub(crate) fn resolve_blocked(ctx: &Ctx, task: &Task) -> Result<()> {
         return Ok(());
     };
     let run = task.current_run().map(|run| run.id.as_str());
-    let events = ctx.store.events_shared()?;
-    if last_status(&events, task, run).is_some_and(is_conflict_block) {
+    if last_status(ctx, task, run)?
+        .as_ref()
+        .is_some_and(is_conflict_block)
+    {
         ctx.store
             .log_event(Some(&task.id), "automation_resumed", json!({"run": run}))?;
     }
@@ -231,17 +232,12 @@ pub(crate) fn is_conflict_block(event: &corral_core::Event) -> bool {
     event.kind == "automation_blocked" && event.detail.get("conflict").is_some()
 }
 
-fn last_status<'a>(
-    events: &'a [corral_core::Event],
-    task: &Task,
-    run: Option<&str>,
-) -> Option<&'a corral_core::Event> {
-    events.iter().rev().find(|event| {
-        event.task.as_deref() == Some(task.id.as_str())
-            && event.detail["run"].as_str() == run
-            && matches!(
-                event.kind.as_str(),
-                "automation_blocked" | "automation_resumed"
-            )
-    })
+/// The run's newest automation status event, read from that run's own events.
+fn last_status(ctx: &Ctx, task: &Task, run: Option<&str>) -> Result<Option<corral_core::Event>> {
+    ctx.store.last_event_where(
+        Some(&task.id),
+        &["automation_blocked", "automation_resumed"],
+        run,
+        |event| event.detail["run"].as_str() == run,
+    )
 }

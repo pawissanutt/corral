@@ -410,6 +410,7 @@ impl TaskHeadMut {
         }
         let (old, new) = (&base.seqs, &head.seqs);
         let run = |r: &RunHead| (r.id.clone(), (!restarted.run).then_some(r.started));
+        let child = |r: &RunHead| (r.id.clone(), (!restarted.child).then_some(r.started));
         let checks = [
             (
                 "the current run",
@@ -431,7 +432,7 @@ impl TaskHeadMut {
                         head.current_run
                             .as_ref()
                             .and_then(|r| r.current_child.as_deref()),
-                        run,
+                        child,
                     ),
             ),
             (
@@ -593,6 +594,24 @@ impl TaskHeadMut {
             .context("no current run to restart")?;
         run.started = at;
         self.restarted.run = true;
+        Ok(())
+    }
+
+    /// Restarts the current review child's clock in place (a recovered reviewer's resubmission).
+    ///
+    /// # Errors
+    /// Refuses a task without a current review child.
+    pub fn restart_current_child(&mut self, at: jiff::Timestamp) -> Result<()> {
+        let run = self.head.current_run.as_mut().context("no current run")?;
+        let child = run
+            .current_child
+            .as_deref_mut()
+            .context("no current review child to restart")?;
+        child.started = at;
+        if run.facts.children == 1 {
+            run.facts.first_child_started = Some(at);
+        }
+        self.restarted.child = true;
         Ok(())
     }
 

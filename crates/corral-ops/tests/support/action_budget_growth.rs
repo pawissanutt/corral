@@ -539,11 +539,22 @@ pub(super) fn emit(store: &Store, id: &str, scale: usize, kind: Kind) {
             }
             // Non-approve findings on earlier runs' review children: a review packet's
             // previous findings, which none of these kinds builds.
-            for run in t.runs.iter_mut().filter(|run| run.id.starts_with('H')) {
+            // A hot kind's failure streak reads the run before the current one by key: its
+            // facts stay as they are.
+            let previous = t.runs.len().checked_sub(2);
+            for (index, run) in t.runs.iter_mut().enumerate() {
+                if !run.id.starts_with('H') || (kind.hot() && Some(index) == previous) {
+                    continue;
+                }
                 for child in &mut run.review_runs {
                     if let Some(review) = child.review.as_mut() {
                         review.verdict = Some(corral_core::Verdict::Changes);
                         review.notes = Some(format!("Finding on {}", child.id));
+                    }
+                    // A superseded finding is emitted but leaves the unsuperseded-changes facts
+                    // a hot kind's checks read as they are.
+                    if kind.hot() {
+                        child.outcome = Some(corral_core::RunOutcome::Superseded);
                     }
                 }
             }

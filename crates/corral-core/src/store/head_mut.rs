@@ -62,6 +62,7 @@ pub struct TaskHeadMut {
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Restarted {
     pub(crate) run: bool,
+    pub(crate) child: bool,
     pub(crate) plan_run: bool,
 }
 

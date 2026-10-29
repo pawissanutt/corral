@@ -50,7 +50,7 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
     {
         retained.refused = Some(reason);
     }
-    ctx.store.update(&pending.task, |task| {
+    ctx.store.update_head(&pending.task, |task| {
         if let Some(previous) = load_retained(ctx, &pending.task, &pending.run, pending.kind)? {
             ensure!(
                 previous.authorization.as_ref().map(|a| (&a.id, &a.action))
@@ -60,7 +60,8 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
             retained.prepared_gate = previous.prepared_gate;
             retained.prepared_review = previous.prepared_review;
         }
-        if let Some(run) = task.runs.iter_mut().find(|run| run.id == pending.run) {
+        // A prepared attempt belongs to the current run and its current review child.
+        if let Some(run) = task.current_run_mut().filter(|run| run.id == pending.run) {
             let candidate = pending
                 .authorization
                 .as_ref()
@@ -80,7 +81,8 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
                         .review
                         .as_ref()
                         .is_some_and(|r| r.identity.as_ref() == candidate)
-                        && run.review_runs.last().map(|r| &r.id) == pending.review_run.as_ref()
+                        && run.current_child.as_deref().map(|r| &r.id)
+                            == pending.review_run.as_ref()
                     {
                         retained.prepared_review = run.review.clone();
                     }
@@ -99,9 +101,9 @@ pub(super) fn retain(ctx: &Ctx, pending: &Pending) -> Result<()> {
                 {
                     run.review = None;
                     if let Some(child) = run
-                        .review_runs
-                        .iter_mut()
-                        .find(|child| Some(&child.id) == pending.review_run.as_ref())
+                        .current_child
+                        .as_deref_mut()
+                        .filter(|child| Some(&child.id) == pending.review_run.as_ref())
                     {
                         child.ended = Some(corral_core::clock::now());
                     }
@@ -163,6 +165,13 @@ impl ReviewLaunch<'_> {
     /// The caller supplies fresh candidate/record checks, never a nested board mutation.
     /// A bound agent request is fenced here, the boundary both gate paths reach: its liveness
     /// check runs first under the store's locks, and every refusal carries its request token.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "kept full form (plan T-253 section 4): automatic actions use the head form"
+        )
+    )]
     pub(crate) fn submit<R>(
         &mut self,
         prepare: impl FnOnce(&Store, &mut Task) -> Result<()>,
@@ -187,13 +196,6 @@ impl ReviewLaunch<'_> {
 
     /// [`Self::submit`] with `prepare` mutating the task's head: the same fence, checks and
     /// refusal journal.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the head-form chain lands before T-253's action children convert its callers"
-        )
-    )]
     pub(crate) fn submit_head<R>(
         &mut self,
         prepare: impl FnOnce(&Store, &mut TaskHeadMut) -> Result<()>,

@@ -16,14 +16,10 @@ pub(crate) enum Cleanup {
     Round,
 }
 
-/// Terminal tasks release all runs; send-back only releases the current run's review tools.
-/// Panes come from the task's unreleased cleanup-ledger rows (plan T-253 section 4, "Pane
-/// references and cleanup"), never from a walk of its history or its creation events.
-pub(crate) fn cleanup(ctx: &Ctx, task: &Task, scope: Cleanup) {
-    cleanup_report(ctx, task, scope);
-}
-
-/// [`cleanup`] of a head. A round's agent-runtime and capture inputs are the current run with
+/// Best-effort cleanup of a head. Terminal tasks release all runs; send-back only releases the
+/// current run's review tools. Panes come from the task's unreleased cleanup-ledger rows (plan
+/// T-253 section 4, "Pane references and cleanup"), never from a walk of its history or its
+/// creation events. A round's agent-runtime and capture inputs are the current run with
 /// its current and open review children, the only ones that can still own a live tool.
 pub(crate) fn cleanup_head(ctx: &Ctx, head: &corral_core::TaskHead, scope: Cleanup) {
     let result = round_shell(head).and_then(|task| clean(ctx, &[(&task, head)], scope));

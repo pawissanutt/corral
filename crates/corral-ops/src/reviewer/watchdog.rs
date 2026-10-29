@@ -9,7 +9,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
 use super::notes_of;
-use crate::cleanup::{Cleanup, cleanup};
+use crate::cleanup::{Cleanup, cleanup_head};
 use crate::{Change, Ctx};
 
 const FAILURE_PREFIX: &str = "reviewer verdict failed: ";
@@ -231,8 +231,8 @@ pub(crate) fn reconcile_review_sampled_at(
     let (Some(_), Some(reason)) = (saved, reason) else {
         return Ok(None);
     };
-    // Escalation only: the round's panes include every review child of the run.
-    cleanup(ctx, &ctx.store.get(id)?, Cleanup::Round);
+    // Escalation only: the round's panes are the run's unreleased pane references.
+    cleanup_head(ctx, &ctx.store.head(id)?, Cleanup::Round);
     if let Err(error) = ctx
         .herdr
         .notify(&format!("{} needs you", id), &reason, true)

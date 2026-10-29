@@ -13,21 +13,7 @@ fn failed(gate: Option<&GateRecord>, review: Option<&ReviewRecord>, failures: u3
     failures.max(u32::from(failed))
 }
 
-/// Failures since this profile was selected. Historical runs may predate the counter.
-fn failures(task: &Task) -> u32 {
-    let Some(current) = task.current_run() else {
-        return 0;
-    };
-    task.runs
-        .iter()
-        .rev()
-        .take_while(|run| run.agent == current.agent)
-        .fold(0_u32, |count, run| {
-            count.saturating_add(failed(run.gate.as_ref(), run.review.as_ref(), run.failures))
-        })
-}
-
-/// [`failures`] of a head: the streak's earlier runs are read by key, newest first, until the
+/// Failures since this profile was selected, of a head: the streak's earlier runs are read by key, newest first, until the
 /// profile changes. Its cost follows the streak, not the task's history.
 fn failures_head(head: &TaskHead) -> Result<u32> {
     let Some(current) = head.current_run.as_ref() else {
@@ -49,12 +35,13 @@ fn failures_head(head: &TaskHead) -> Result<u32> {
     Ok(count)
 }
 
-pub(crate) fn escalation(
+/// The profile switch the failure streak calls for; the streak's earlier runs are read by key.
+pub(crate) fn escalation_head(
     config: &Config,
-    task: &Task,
+    head: &TaskHead,
     forced: bool,
 ) -> Result<Option<ProfileSwitch>> {
-    escalation_with(config, task, forced, || Ok(failures(task)))
+    escalation_with(config, &head.shell_task()?, forced, || failures_head(head))
 }
 
 fn escalation_with(

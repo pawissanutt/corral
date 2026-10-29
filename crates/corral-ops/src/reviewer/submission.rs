@@ -11,25 +11,25 @@ pub(super) fn submit<R>(
     pending_reply: Option<&str>,
     send: impl FnOnce() -> Result<R>,
 ) -> Result<R> {
-    launch.submit(
+    launch.submit_head(
         |store, current| {
             ensure!(
                 current.id == task.id && current.status == Status::Review,
                 "review task changed before submission"
             );
             let parent = current
-                .current_run()
+                .current_run_head()?
                 .filter(|r| r.id == run.id)
                 .context("review parent changed before submission")?;
             ensure!(
                 parent
-                    .review_runs
-                    .last()
+                    .current_child
+                    .as_deref()
                     .and_then(|r| r.pending_reply.as_deref())
                     == pending_reply,
                 "review transport request changed before submission"
             );
-            current_assessment(ctx, store, current, parent)
+            current_assessment_ref(ctx, store, &*current, &run.id)
         },
         send,
     )
@@ -37,6 +37,13 @@ pub(super) fn submit<R>(
 
 /// Every reviewer submission, new or resumed, re-checks the candidate, the recorded route
 /// and reviewer family against the fresh store under the same mutation boundary.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "kept full form (plan T-253 section 4): automatic actions use the head form"
+    )
+)]
 pub(crate) fn current_assessment(
     ctx: &Ctx,
     store: &Store,
@@ -55,20 +62,13 @@ pub(crate) fn current_assessment(
 
 /// [`current_assessment`] over a task form: the current run comes from the shell of the
 /// head fields and current containers, the reviewing child by its review time.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the head-form chain lands before T-253's action children convert its callers"
-    )
-)]
 pub(crate) fn current_assessment_ref<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     store: &Store,
     task: &T,
     parent: &str,
 ) -> Result<()> {
-    let shell = task.shell_task()?;
+    let shell = super::review_shell(task)?;
     let run = shell
         .runs
         .last()

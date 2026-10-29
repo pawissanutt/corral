@@ -52,6 +52,7 @@ pub(super) fn scenario(code: bool, automatic: bool) -> (Fx, String, String, Stri
                 "fast_forward",
                 None,
                 crate::plan_target::LandingOptions {
+                    contract: &corral_core::operating_contract_revision(&task).unwrap(),
                     remove_worktree: false,
                     keep_branch: false,
                     started: fixture::now(),

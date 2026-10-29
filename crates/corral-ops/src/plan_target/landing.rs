@@ -8,6 +8,7 @@ use serde_json::json;
 
 use super::{Target, directory};
 use crate::Ctx;
+use corral_core::TaskRef as _;
 
 /// Prepared before Git mutation; retained after publication, including cleanup obligations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,7 +44,9 @@ pub(crate) struct LandingReceipt {
 
 /// Cleanup choices and the approval start for one Plan landing.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct LandingOptions {
+pub(crate) struct LandingOptions<'a> {
+    /// The task's operating contract revision, read from its head.
+    pub(crate) contract: &'a str,
     pub(crate) remove_worktree: bool,
     pub(crate) keep_branch: bool,
     pub(crate) started: Timestamp,
@@ -63,7 +66,7 @@ impl Target {
         head: &str,
         strategy: &str,
         identity: Option<&CandidateIdentity>,
-        options: LandingOptions,
+        options: LandingOptions<'_>,
     ) -> Result<()> {
         self.check()?;
         ensure!(
@@ -89,7 +92,7 @@ impl Target {
             branch: run.branch.clone(),
             worktree: run.worktree.clone(),
             dispatch_base: run.base_sha.clone(),
-            contract: corral_core::operating_contract_revision(task)?,
+            contract: options.contract.to_owned(),
             target,
             before: self.head.clone(),
             head: head.into(),
@@ -153,26 +156,28 @@ impl Target {
             "unpublished Plan landing is no longer the target head"
         );
         corral_git::check_target_checkout(&self.repo, &self.checkout, &self.branch, &self.head)?;
-        let task = ctx.store.update(&receipt.task, |task| {
-            let plan = ctx.store.get(&self.plan)?;
+        let task = ctx.store.update_head(&receipt.task, |task| {
+            let plan = ctx.store.head(&self.plan)?;
             ensure!(
                 self.binding(&plan)? == receipt.target
                     && ctx
                         .store
-                        .execution_plan(task)?
+                        .execution_plan_ref(&*task)?
                         .as_ref()
                         .map(|plan| &plan.id)
                         == Some(&self.plan),
                 "prepared Plan scope changed; retain landing for explicit reconciliation"
             );
             ensure!(
-                corral_core::operating_contract_revision(task)? == receipt.contract,
+                task.contract_revision()? == receipt.contract,
                 "prepared task contract changed"
             );
             ensure!(
                 matches!(task.status, Status::Review | Status::Done),
                 "prepared task lifecycle changed; retain landing for explicit reconciliation"
             );
+            let now = corral_core::clock::now();
+            crate::reviewer::supersede_review_head(task, now)?;
             let run = task.current_run_mut().context("prepared run missing")?;
             ensure!(
                 run.id == receipt.run
@@ -183,8 +188,6 @@ impl Target {
                     && run.base_sha == receipt.dispatch_base,
                 "prepared task run or target changed"
             );
-            let now = corral_core::clock::now();
-            crate::reviewer::supersede_review(ctx, run, now);
             run.ended.get_or_insert(now);
             run.outcome = Some(RunOutcome::Done);
             run.agent_state = Some("done".into());
@@ -199,15 +202,17 @@ impl Target {
             Ok(())
         })?;
         // The event is idempotent under the same repository lock as the Git mutation.
-        if !ctx
+        if ctx
             .store
-            .events_of(None, &["approved"])?
-            .iter()
-            .any(|event| {
-                event.kind == "approved"
-                    && event.detail["landing_receipt"].as_str() == Some(&receipt.key)
-            })
+            .last_event_where(
+                Some(&receipt.task),
+                &["approved"],
+                Some(&receipt.run),
+                |event| event.detail["landing_receipt"].as_str() == Some(&receipt.key),
+            )?
+            .is_none()
         {
+            let task = crate::reviewer::review_shell(&task)?;
             let run = task.current_run().context("landed run missing")?;
             let mut warnings =
                 crate::cleanup::cleanup_report(ctx, &task, crate::cleanup::Cleanup::Task);

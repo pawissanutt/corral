@@ -46,6 +46,22 @@ pub(super) enum Kind {
     RepairInbox,
     AggregateCode,
     AggregateNoCode,
+    Gate,
+    ReviewerPane,
+    ReviewerPm,
+    /// A never-submitted reviewer attempt, refused once and resumed by the tick.
+    RecoveredPane,
+    RecoveredPm,
+    /// The autopilot lands an accepted candidate on main.
+    Land,
+    /// The autopilot rebinds an approval onto corral's clean replay of the approved commit.
+    Carry,
+    /// A steady tick: the autopilot waits on a running gate and takes no action.
+    Steady,
+    /// The autopilot sends a reviewer's changes back to the run's pane.
+    RepairTickLegacy,
+    /// The autopilot posts a reviewer's changes to the run's inbox.
+    RepairTickInbox,
 }
 
 impl Kind {
@@ -54,7 +70,11 @@ impl Kind {
     }
 
     pub(super) fn parse(name: &str) -> Kind {
-        KINDS.into_iter().find(|k| k.name() == name).unwrap()
+        KINDS
+            .into_iter()
+            .chain(super::action_budget_hot::HOT_KINDS)
+            .find(|k| k.name() == name)
+            .unwrap()
     }
 
     /// Whether a sync tick takes the action. Repair is measured through its real entry here
@@ -73,9 +93,28 @@ impl Kind {
             Kind::Planner => OperatingActionKind::Plan,
             Kind::PlanReviewPane | Kind::PlanReviewPm => OperatingActionKind::PlanReview,
             Kind::AcceptPlan | Kind::AcceptPlanScopes => OperatingActionKind::AcceptPlan,
-            Kind::RepairLegacy | Kind::RepairInbox => OperatingActionKind::Repair,
+            Kind::RepairLegacy
+            | Kind::RepairInbox
+            | Kind::RepairTickLegacy
+            | Kind::RepairTickInbox => OperatingActionKind::Repair,
             Kind::AggregateCode | Kind::AggregateNoCode => OperatingActionKind::AcceptAggregate,
+            Kind::Gate => OperatingActionKind::Gate,
+            Kind::ReviewerPane | Kind::ReviewerPm | Kind::RecoveredPane | Kind::RecoveredPm => {
+                OperatingActionKind::Review
+            }
+            Kind::Land => OperatingActionKind::Accept,
+            Kind::Carry => OperatingActionKind::Review,
+            Kind::Steady => OperatingActionKind::Gate,
         }
+    }
+
+    /// Land and Carry submit nothing: they keep their own durable effects.
+    pub(super) fn submits(self) -> bool {
+        !matches!(self, Kind::Land | Kind::Carry | Kind::Steady)
+    }
+
+    pub(super) fn hot(self) -> bool {
+        super::action_budget_hot::HOT_KINDS.contains(&self)
     }
 }
 
@@ -184,6 +223,10 @@ pub(super) const PSI: (Option<f64>, Option<f64>) = (Some(0.25), Some(1.5));
 
 /// The kind's acted task and its current inputs, before any growth.
 fn setup(kind: Kind) -> (Fx, String, String) {
+    if kind.hot() {
+        let (fx, id) = super::action_budget_hot::setup(kind);
+        return (fx, id, String::new());
+    }
     match kind {
         Kind::AggregateCode | Kind::AggregateNoCode => {
             let (fx, id, attempt, _) = aggregate::scenario(kind == Kind::AggregateCode, true);
@@ -428,7 +471,7 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
     if kind == Kind::Worker {
         source_run(&fx, &id, variant == Variant::Emitted);
     }
-    if kind.ticked() && kind != Kind::AcceptPlanScopes {
+    if kind.ticked() && kind != Kind::AcceptPlanScopes && !kind.hot() {
         let before = corral_core::plan_contract_revision(&store.get(&id).unwrap()).unwrap();
         dependency(&store, &id);
         // A plan written against the task as it now stands: the dependency is in its contract.
@@ -455,6 +498,11 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             .unwrap();
     }
     let scale = variant.scale();
+    if kind.hot() {
+        // History is older than the tick: an event reader that keeps the newest events finds
+        // the tick's own among them, as on a real board, instead of ties with the history.
+        corral_core::clock::pin_thread(Some(fixture::now() - jiff::SignedDuration::from_hours(1)));
+    }
     // A launch's demoted source run re-derives its review children in the content index:
     // that growth is T-529's (PM decision 2026-10-28).
     grow(&store, &root, &id, scale, true, kind != Kind::Worker);
@@ -496,6 +544,7 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             true,
         );
     }
+    corral_core::clock::pin_thread(Some(fixture::now()));
     // The grant binds the acted task's contract: it is confirmed once every input is final.
     let mut fx = fx;
     let attempt = match kind {
@@ -507,6 +556,11 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
             grant_scopes(&mut fx, &id, &attempt);
             String::new()
         }
+        _ if kind.hot() => {
+            super::action_budget_hot::grant(&mut fx, &id, kind);
+            super::action_budget_hot::prepared(&fx, &id, kind);
+            attempt
+        }
         _ => {
             fx.grant(&[&id]);
             attempt
@@ -516,6 +570,11 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
     let probe = RecordingProbe::arc();
     let Fx { temp, mut ctx, .. } = fx;
     ctx.resource_probe = probe.clone();
+    if kind == Kind::Steady {
+        // The gate starts before measuring; the measured tick only waits on it.
+        crate::sync_at(&ctx, fixture::now()).unwrap();
+        probe.take();
+    }
     Bench {
         _temp: Some(temp),
         root,
@@ -536,6 +595,9 @@ pub(super) fn settle(bench: &Bench) {
         }
         bench.ctx.store.pause_operating_policy(false).unwrap();
     }
+    // The derived lesson and approval rows are current inputs: every store follows its feed
+    // to the end before the measured pass, so the pass derives only its own changes.
+    crate::lesson_rows::prepare_evaluation(&bench.ctx).unwrap();
     bench.probe.take();
 }
 

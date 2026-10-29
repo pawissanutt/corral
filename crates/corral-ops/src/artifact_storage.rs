@@ -76,10 +76,20 @@ pub(crate) fn record_keys(
     index: usize,
     added: bool,
 ) -> Result<()> {
-    let a = &task.artifacts[index];
+    record_row_keys(ctx, &task.id, &task.artifacts[index], index, added)
+}
+
+/// [`record_keys`] of registration `index` (0-based over the task), given its artifact.
+pub(crate) fn record_row_keys(
+    ctx: &Ctx,
+    task: &str,
+    a: &Artifact,
+    index: usize,
+    added: bool,
+) -> Result<()> {
     let row = row_key(index);
     let key = KeyDoc {
-        task: task.id.clone(),
+        task: task.to_owned(),
         row: row.clone(),
         tier: a.tier(),
         purged: a.purged_at.is_some(),
@@ -91,12 +101,12 @@ pub(crate) fn record_keys(
             row,
         };
         if let Some(file) = unprefixed(corral_core::snapshot_name(a)) {
-            let name = format!("{}/{}/{file}", task.id, a.run);
+            let name = format!("{task}/{}/{file}", a.run);
             ctx.store.save_record(ARTIFACT_NAMES, &name, &to)?;
         }
-        let title = format!("{}/title/{}", task.id, a.title);
+        let title = format!("{task}/title/{}", a.title);
         ctx.store.save_record(ARTIFACT_LATEST, &title, &to)?;
-        let source = format!("{}/source/{}", task.id, a.source);
+        let source = format!("{task}/source/{}", a.source);
         ctx.store.save_record(ARTIFACT_LATEST, &source, &to)?;
     }
     Ok(())
