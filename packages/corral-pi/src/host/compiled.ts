@@ -5,7 +5,8 @@
 //   login ...                 runs `corral agent login`'s OAuth flow (src/auth/login.ts);
 //   models --provider <id>... prints Pi's offline model catalog for harness detection
 //                             (src/auth/models.ts);
-//   bare ...                  runs `corral pi --bare` (src/host/bare.ts) on the bundled auth;
+//   bare ...                  runs `corral pi --bare` (src/host/bare.ts) with only the bundled
+//                             auth: no role or delivery module is imported;
 //   anything else             runs the host (src/host/main.ts) with the bundled role, delivery and
 //                             auth modules instead of the fixed-path loader.
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -66,7 +67,8 @@ if (command === "--version") {
 } else if (command === "models") {
   (await import("../auth/models.ts")).runModels(process.argv);
 } else if (command === "bare") {
-  await installBundle();
+  const [{ setBundle }, auth] = await Promise.all([import("./bundle.ts"), import("../auth/index.ts")]);
+  setBundle({ auth: auth.default });
   // The installation directory is the one this executable was installed into.
   await (await import("./bare.ts")).bareCommand(process.argv.slice(3), dirname(process.execPath));
 } else {

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -83,8 +83,7 @@ test("bare Anthropic runs through the bound host's Claude Agent SDK lane with on
 test("a compiled installation's bare mode uses the bundled auth: its directory has no src/ tree", async () => {
   const compiled = mkdtempSync(join(work, "compiled-"));
   copyFileSync(join(PACKAGE_ROOT, "compat.json"), join(compiled, "compat.json"));
-  const unused = () => { throw new Error("bare mode builds no role"); };
-  setBundle({ roles: { worker: unused, reviewer: unused, pm: unused }, delivery: {}, auth: fixtureAuth });
+  setBundle({ auth: fixtureAuth });
   try {
     expect(existsSync(join(compiled, "src"))).toBeFalse();
     const options = parseBareArgs(["--cwd", cwd], compiled, { XDG_DATA_HOME: join(work, "data-compiled") });
@@ -106,4 +105,27 @@ test("the compiled entry routes `bare` to the bare entry, never to the bound hos
   expect(child.status).toBe(2);
   expect(stderr).toContain("usage_error: --cwd must be an absolute directory");
   expect(stderr).not.toContain("launch_message_invalid");
+}, 60_000);
+
+function compiledEntryTrace(args: readonly string[]): { status: number | null; stderr: string; loaded: string[] } {
+  const trace = join(mkdtempSync(join(work, "trace-")), "modules.log");
+  writeFileSync(trace, "");
+  const child = spawnSync(process.execPath,
+    ["--no-env-file", "--preload", "./test/support/module-trace.ts", "src/host/compiled.ts", ...args], {
+      cwd: PACKAGE_ROOT, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8",
+      env: { ...process.env, XDG_DATA_HOME: join(work, "data-trace"), CORRAL_MODULE_TRACE: trace },
+    });
+  const loaded = readFileSync(trace, "utf8").split("\n").filter(Boolean)
+    .map((path) => path.slice(path.indexOf("/src/") + 1));
+  return { status: child.status, stderr: child.stderr, loaded };
+}
+
+test("compiled bare startup initializes no role or delivery module; the bound host still loads all four", () => {
+  const bare = compiledEntryTrace(["bare", "--cwd", "relative"]);
+  expect(bare.stderr).toContain("usage_error: --cwd must be an absolute directory");
+  expect(bare.loaded).toEqual([]);
+  const bound = compiledEntryTrace(["--launch-fd", "99"]);
+  expect([...new Set(bound.loaded)].sort()).toEqual([
+    "src/delivery/index.ts", "src/roles/pm/index.ts", "src/roles/reviewer/index.ts", "src/roles/worker/index.ts",
+  ]);
 }, 60_000);
