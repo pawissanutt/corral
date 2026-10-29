@@ -134,6 +134,94 @@ fn an_escalated_review_offers_retry_but_a_pending_one_does_not() {
 }
 
 #[test]
+fn substantive_escalation_requires_resolution_then_a_new_snapshot() {
+    for verdict in [Verdict::Escalate, Verdict::Changes] {
+        let mut fx = seeded();
+        let id = planning(&mut fx);
+        let path = fx.ctx.store.root().join("initial.md");
+        std::fs::write(
+            &path,
+            PLAN.replace(
+                "owner_decisions: []",
+                "owner_decisions: ['OD-1: choose storage']",
+            ),
+        )
+        .unwrap();
+        plan_submit(&fx.ctx, &id, &path).unwrap();
+        escalate_review(&fx, &id);
+        fx.ctx
+            .store
+            .update(&id, |t| {
+                t.plans[0].reviews[0].verdict = Some(verdict);
+                t.plans[0].reviews[0].notes =
+                    Some("OD-1: choose storage; E2: revise verification".into());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(offer(&fx, &id), None);
+        let mut view = DetailView::plan(&fx.ctx, &id).unwrap();
+        let (text, hits) = draw(&mut view, &fx);
+        assert!(r_hits(&hits).is_empty(), "{text}");
+        assert!(!text.contains("Retry plan review"), "{text}");
+        assert!(
+            text.contains("Pending decision: OD-1: choose storage"),
+            "{text}"
+        );
+        assert!(text.contains("Resolve / revise plan"), "{text}");
+        assert!(
+            text.contains("Resolved: <decision> => <resolution>"),
+            "{text}"
+        );
+        let before = fx.ctx.store.get(&id).unwrap();
+        view.on_key(key('R'), &fx.ctx);
+        assert_eq!(fx.ctx.store.get(&id).unwrap().plans, before.plans);
+        // The owner changes verdict resolves OD-1 and requests the revision.
+        view.on_key(key('c'), &fx.ctx);
+        assert!(
+            draw(&mut view, &fx)
+                .0
+                .contains("request plan changes P1 of")
+        );
+        for c in "SQLite".chars() {
+            view.on_key(key(c), &fx.ctx);
+        }
+        view.on_key(crate::board::tests::code(KeyCode::Tab), &fx.ctx);
+        for c in "Revise E2".chars() {
+            view.on_key(key(c), &fx.ctx);
+        }
+        let action = view.on_key(crate::board::tests::code(KeyCode::Enter), &fx.ctx);
+        assert!(
+            matches!(action, Action::Toast(ref t) if t.tone == Tone::Info),
+            "{action:?}"
+        );
+        let resolved = fx.ctx.store.get(&id).unwrap();
+        let review = resolved.plans[0].reviews.last().unwrap();
+        assert_eq!(review.verdict, Some(Verdict::Changes));
+        assert!(
+            review
+                .notes
+                .as_deref()
+                .unwrap()
+                .contains("Resolved: OD-1: choose storage => SQLite")
+        );
+        assert_eq!(resolved.plan_runs[0].state, PlanRunState::Changes);
+        // Revision launch may be blocked by the fixture's absent project; put its
+        // planner at the submission seam. A new snapshot has its own review history.
+        fx.ctx
+            .store
+            .update(&id, |t| {
+                t.plan_runs[0].state = PlanRunState::Planning;
+                Ok(())
+            })
+            .unwrap();
+        let path = fx.ctx.store.root().join("revised.md");
+        std::fs::write(&path, PLAN).unwrap();
+        plan_submit(&fx.ctx, &id, &path).unwrap();
+        assert_eq!(offer(&fx, &id), Some(PlanReviewOffer::Run));
+    }
+}
+
+#[test]
 fn the_board_marks_a_submitted_plan_awaiting_review_without_a_grant() {
     let mut fx = seeded();
     let id = submitted(&mut fx);
