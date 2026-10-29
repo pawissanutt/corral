@@ -128,7 +128,9 @@ test("a fresh corral process reaches the host through ctl.cap alone; a wrong or 
   expect(first.hello.role).toBe("worker");
   expect(first.state.generation).toBe(1);
   expect(first.state.interactive).toBeTrue();
-  expect([...(first.state.active_tools as string[])].sort()).toEqual(["corral_receipt_lookup", "read"]);
+  expect([...(first.state.active_tools as string[])].sort()).toEqual([
+    "corral_receipt_lookup", "read", "web_fetch", "web_search",
+  ]);
   const dir = generationDir(workspace, "T-001", "R1", 1);
   for (const cap of [undefined, "f".repeat(64)]) {
     const client = await connect(join(dir, "host.sock"));
