@@ -22,10 +22,12 @@ should not authorize removal of the rejected groups below on the evidence in
 this report. Relaxing "same scenario and same checked outcome" to permit
 scenario consolidation would be a new decision, not an implication of this audit.
 
-**Changes round 1: the required before/after test CPU totals remain unresolved.**
-The negative audit result does not waive that requirement. This report must not
-be resubmitted as acceptance-complete without traceable CPU accounting or an
-explicit owner adjustment of that acceptance criterion.
+**Changes round 1 retains the accounting criterion and uses its clarified
+task-specific metric:** "CPU-seconds" here means the sum of per-test durations
+printed in gate logs, not operating-system user-plus-system CPU time. The
+before full-tier log totals **1,261.858 s**; the latest T-553 gate available at
+report preparation totals **0.000 s**, because that quick gate selected no
+tests. This selection difference is not a speedup or deletion saving.
 
 ## Method and coverage
 
@@ -436,6 +438,42 @@ the binary; group 4 is the test name. The progress ordinal is not a binary.
 ^\s*(PASS|FAIL)\s+\[\s*([\d.]+)s\]\s+\(\s*\d+/\d+\)\s+(\S+)\s+(.+)$
 ```
 
+### Required before/after totals
+
+The 2026-10-29 follow-up explicitly kept the acceptance criterion and clarified
+that its "CPU-seconds" means the sum of per-test durations from gate logs.
+The following totals use exactly that task-defined accounting metric. They do
+not relabel elapsed durations as measured operating-system CPU consumption.
+
+Both paths are relative to `/home/pawis/miti-workspace`:
+
+| Comparison | Named gate log | Tier and executed test rows | Task-defined CPU-seconds |
+| --- | --- | --- | ---: |
+| Before T-553, at `bfd3382f` | `.corral/state/gates/T-552-R1-2834484-1793265614595632667.log` | Full; 3,935 PASS, no FAIL | **1,261.858 s** |
+| Own latest gate available at report preparation, at `81d03e51` | `.corral/state/gates/T-553-R2-1848971-1793268646234143195.log` | Quick; 0 test rows, nextest explicitly skipped | **0.000 s** |
+
+The after log's retained artifact is
+`T-553:R2:c3c6068f-T-553-R2-1848971-1793268646234143195.log`,
+SHA-256 `c3c6068ff019e4e4b8542b78203569bde423d17bea0bdf210ee5c433daf284b2`.
+It explicitly says `Skipping cargo nextest (no touched crates and no declared
+tests).` The zero is therefore a measured log-duration sum over an empty
+selection, not a missing total, a full-suite estimate or evidence that tests
+became free.
+
+Sum each matching terminal test duration once, in integer milliseconds, then
+divide by 1,000. Do not add SLOW progress notices, suite wall time, compilation,
+the SLOC guard or skipped tests. This gives 1,261,858 ms before and 0 ms after.
+The raw difference is -1,261.858 s, entirely confounded by different gate
+selection: full suite versus no tests. With no deletions, attributable removal
+savings remain **0.000 s**, not that raw difference.
+
+The round's new post-rebase gate will have a later log name. Its exact path,
+test-row count and duration sum are captured in the final accounting report
+artifact attached after that gate, so the completion evidence names the latest
+own-run log without changing the already-gated tracked report.
+
+### Isolated inventory and work delta
+
 The comparison below isolates T-553's own delta. It is not an inventory or
 performance measurement of the integrated candidate. Between the historical
 baseline `bfd3382f` and reviewed candidate `81d03e51`, main commit `38ff814f`
@@ -453,43 +491,13 @@ must not be presented as the integrated candidate's inventory.
 | Screened subset summed test elapsed | 575.312 s | Expected unchanged at fixed per-test costs; not remeasured |
 | Deletion-qualified tests | 0 | 0 deleted |
 | Estimated deletion savings | -- | **0 s** |
-| Measured test-process CPU, user + system | Not recorded | Not recorded |
 
-**Elapsed test-seconds are not CPU-seconds.** They include blocked/subprocess
-time and shared-host contention; a sum across concurrent tests is not suite
-wall time either. The retained logs do not provide process CPU totals.
-Consequently this report cannot state measured CPU totals before/after or a
-controlled speedup. The estimated CPU delta is zero because no work was removed;
-it is not a measured CPU result.
-
-### Changes round 1: CPU evidence search and unresolved requirement
-
-The reviewer independently reproduced the elapsed totals and correctly rejected
-them as fulfillment of "total test CPU-seconds before/after stated." Rework
-searched retained T-552 and T-553 artifacts for `CPU` and `user=` before
-considering any new measurement. The one concrete user/system lead is
-`T-552:R1:44d754a9-changes-1-restored-memo.log`, also described by
-`T-552:R1:2e263a1f-changes-1-report.md`:
-
-```text
-wall=41.51 user=37.69 sys=12.34 exit=0
-```
-
-That is **50.03 user-plus-system CPU-seconds for one targeted memo-test
-command, including a 3.17-second build**. The test itself reports 38.162
-elapsed seconds. It is neither a whole-suite CPU measurement nor an isolated
-test-only CPU sample. It also measures corral-git, not the five corral-ops
-families. Scaling its CPU/elapsed ratio over 3,935 heterogeneous tests would
-assume an unvalidated workload model and retain the build contamination.
-No such extrapolation is used as an estimate.
-
-The existing whole-suite gate records and CSVs contain elapsed durations,
-not user/system counters. Zero removed work establishes only a zero isolated
-deletion delta; it supplies neither required total. Under the current
-acceptance wording, CPU accounting is therefore an **open blocker**, not an
-accepted limitation. Resolution requires traceable accounting from available
-evidence or an explicit owner adjustment. No extra full gate, other tier or
-whole-repository measurement is authorized for this review.
+**Metric boundary:** the task-defined duration sum includes blocked/subprocess
+time and shared-host contention; it is neither operating-system CPU consumption
+nor suite wall time. Actual user-plus-system CPU totals are not claimed, and
+the full/empty-selection comparison is not a controlled performance benchmark.
+The criterion was clarified, not waived. No extrapolation or new suite
+measurement was needed.
 
 No extra timing suite, load generation or manual full gate was started for the
 audit. The R2 contract authorizes only its one receipted quick gate after final
@@ -505,9 +513,10 @@ this historical full pass.
   Do not interpret this research submission as approval for a deletion phase.
 - Full-tier pass: the source baseline has the historical full pass above.
   The current candidate's full landing gate remains corral's responsibility.
-- CPU totals: unresolved blocking acceptance criterion. The elapsed proxy and
-  zero isolated removal delta do not satisfy it; an explicit owner adjustment
-  or defensible accounting is required before acceptance-complete resubmission.
+- Task-defined CPU totals: before **1,261.858 s**, own latest preparation-time
+  gate **0.000 s**, with both logs and the summation method named above.
+  The final accounting artifact records the later post-rebase gate separately.
+  Different test selection prevents treating the raw difference as savings.
 - Scope: the requested five starting families and their shared attention
   source, not every corral-ops test or corral-git's memo tests.
 
