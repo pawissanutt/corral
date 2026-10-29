@@ -19,11 +19,15 @@ mod self_projection_recovery;
 
 fn fixture() -> (tempfile::TempDir, Ctx, String, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let mut store = Store::init(tmp.path()).unwrap();
-    store
-        .edit_config(|doc| doc.set_str("projects.app.path", "."))
-        .unwrap();
-    store.reload_config_if_changed().unwrap();
+    // Plan recovery exercises persisted policy, not the starter routing/pricing catalog.
+    let mut store = Store::init_with(tmp.path(), |store| {
+        std::fs::write(
+            store.config_path(),
+            "[projects.app]\npath = \".\"\n[agents.omo]\ncommand = \"true\"\n",
+        )?;
+        Ok(())
+    })
+    .unwrap();
     store.config.review.plan_required = Some(true);
     store.config.agents.insert(
         "reviewer".into(),
@@ -60,29 +64,19 @@ fn pending(ctx: &Ctx, id: &str, path: &std::path::Path) -> String {
 }
 
 fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
-    let before = ctx.store.get(id).unwrap();
-    let digest = plan_verdict(
-        ctx,
-        id,
-        &PlanVerdict {
-            plan,
-            attempt: None,
-            verdict: Verdict::Changes,
-            notes: "Review fixture",
-        },
-    )
-    .unwrap()
-    .policy_digest;
-    // Seed a launched attempt at the store seam; real reviewer launch is covered by live CLI QA.
-    // The owner verdict only supplies the digest, so undo the planner it requested.
+    let task = ctx.store.get(id).unwrap();
+    let digest =
+        corral_core::plan_policy::policy_digest(&ctx.store.reopen().unwrap().config, &task)
+            .unwrap();
+    // Seed the pending reviewer at the store seam, without launching and undoing a planner
+    // merely to obtain its policy digest. Real reviewer launch is covered by live CLI QA.
     ctx.store
         .update(id, |task| {
-            task.plan_runs = before.plan_runs.clone();
-            task.status = before.status;
-            task.queued = before.queued;
-            task.dispatch_plan = before.dispatch_plan.clone();
-            task.dispatch_hold = before.dispatch_hold;
-            task.plans.last_mut().unwrap().reviews = vec![PlanReview {
+            task.plans
+                .iter_mut()
+                .find(|record| record.id == plan)
+                .unwrap()
+                .reviews = vec![PlanReview {
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 route: None,

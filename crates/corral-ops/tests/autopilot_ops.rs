@@ -99,6 +99,10 @@ struct Fx {
 
 impl Fx {
     fn new(policy: impl FnOnce(&mut ReviewOverride)) -> Fx {
+        Self::with_config(policy, None)
+    }
+
+    fn with_config(policy: impl FnOnce(&mut ReviewOverride), config: Option<&str>) -> Fx {
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("fake-herdr");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -117,7 +121,13 @@ impl Fx {
         std::fs::write(app.join("README.md"), "hello\n").unwrap();
         git(&app, &["add", "-A"]);
         git(&app, &["commit", "-q", "-m", "init"]);
-        let mut store = Store::init(tmp.path()).unwrap();
+        let mut store = Store::init_with(tmp.path(), |store| {
+            if let Some(config) = config {
+                std::fs::write(store.config_path(), config)?;
+            }
+            Ok(())
+        })
+        .unwrap();
         for name in ["fake", "rev"] {
             store.config.agents.insert(
                 name.into(),
