@@ -302,3 +302,38 @@ fn an_unterminated_last_line_is_not_yet_counted() {
     let usage = collect(&run, &fx.ctx.store).unwrap();
     assert_eq!(usage.entries.len(), responses.len() - 1);
 }
+
+#[test]
+fn bedrock_models_price_from_the_bedrock_catalog_with_provenance() {
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-bedrock");
+    let session = host.sessions.join("session.jsonl");
+    std::fs::create_dir_all(&host.sessions).unwrap();
+    let model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    // Given the fixture session recorded against a Bedrock model ID:
+    let lines: Vec<String> = FIXTURE
+        .lines()
+        .map(|l| format!("{}\n", l.replace("gpt-6.1-sol", model)))
+        .collect();
+    std::fs::write(&session, lines.concat()).unwrap();
+    let run = task(&fx, &id).runs[0].clone();
+    let usage = collect(&run, &fx.ctx.store).unwrap();
+    // Then every response is priced at the Bedrock catalog rates, with Bedrock provenance.
+    let (price, source) = fx.ctx.store.config.price_with_source(model).unwrap();
+    assert_eq!(source, "catalog-bedrock@pi-ai-1.3.0");
+    let [input, output, cache_read, cache_write] = totals().map(|n| n as f64);
+    let api = (input * price.input
+        + output * price.output
+        + cache_read * price.cache_read()
+        + cache_write * price.cache_write())
+        / 1_000_000.0;
+    assert!(
+        (usage.estimated_usd.unwrap() - api).abs() < 1e-12,
+        "{usage:?}"
+    );
+    assert_eq!(usage.unpriced_tokens, 0);
+    for entry in &usage.entries {
+        assert_eq!(entry.price_source.as_deref(), Some(source));
+    }
+}

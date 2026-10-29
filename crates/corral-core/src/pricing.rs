@@ -10,11 +10,21 @@ use crate::Config;
 /// Verification date of the built-in API-equivalent rates.
 pub const CATALOG_DATE: &str = "2026-10-15";
 pub const CATALOG_SOURCE: &str = "catalog@2026-10-15";
+/// Provenance of the frozen Amazon Bedrock rates, generated from pi-ai 1.3.0.
+pub const CATALOG_BEDROCK_SOURCE: &str = "catalog-bedrock@pi-ai-1.3.0";
 
 /// Frozen catalog, independent of the editable configuration and installed harnesses.
 pub fn catalog_prices() -> &'static BTreeMap<String, Price> {
     static CATALOG: OnceLock<BTreeMap<String, Price>> = OnceLock::new();
     CATALOG.get_or_init(starter_prices)
+}
+
+/// Frozen Bedrock catalog keyed by the bare Bedrock model ID that Pi records.
+pub fn bedrock_catalog_prices() -> &'static BTreeMap<String, Price> {
+    static CATALOG: OnceLock<BTreeMap<String, Price>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("pricing_bedrock.json")).unwrap_or_default()
+    })
 }
 
 /// Base API rates in USD per million tokens, not a subscription invoice.
@@ -48,7 +58,7 @@ impl Price {
 }
 
 impl Config {
-    /// Config exact ID, config alias, then catalog exact ID. Unknown models have no price.
+    /// Config exact ID, config alias, then catalog exact ID, then Bedrock catalog exact ID. Unknown models have no price.
     pub fn price(&self, model: &str) -> Option<&Price> {
         self.price_with_source(model).map(|(price, _)| price)
     }
@@ -67,6 +77,11 @@ impl Config {
                 catalog_prices()
                     .get(model)
                     .map(|price| (price, CATALOG_SOURCE))
+            })
+            .or_else(|| {
+                bedrock_catalog_prices()
+                    .get(model)
+                    .map(|price| (price, CATALOG_BEDROCK_SOURCE))
             })
     }
 
