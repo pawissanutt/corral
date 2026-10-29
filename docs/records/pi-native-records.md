@@ -99,13 +99,15 @@ AgentGeneration: one host process lifetime.
 | `fenced` | GenerationFence? | `{reason, at}`, permanent |
 | `nudged_at` | timestamp? | OD11's one automatic `turn_nudge` (worker-role) |
 | `event_seq` | u64 | last reconciled bridge event sequence (recovery) |
-| `todo` | bool | resolved worker/PM todo enablement for this generation; serde-default false for legacy records |
+| `todo` | bool | resolved worker/PM todo enablement for this generation; serde-default false for legacy records; still written beside `capabilities` |
+| `capabilities` | CapabilitySnapshot? | the effective per-role settings and digest resolved at open, never rewritten; absent on legacy records (`legacy_strict`) |
+| `capability_transition` | CapabilityTransition? | present when the snapshot's digest differs from the previous generation's: `from_generation`, `from_digest`, `from_preset`, `changes [{key, from, to}]` |
 
-The wave-0 resolver in `config/agent_capabilities.rs` supplies standard/full defaults,
-strict opt-out and worker/PM overrides. `open_generation` records the effective boolean;
-the launch message carries it as `todo` and hello omits the operation when disabled.
-Config edits affect the next explicit generation, not an active one's loadout. The
-full capability catalog and generation digest are later work, not a second catalog here.
+`open_generation` resolves `[agent.capabilities]` against the shared catalog and the
+installed host's `compat.json` and records the snapshot; the launch message carries it and
+hello omits todo when disabled. Config edits affect the next explicit generation, not an
+active one's loadout. See [capabilities](pi-native-capabilities.md) for the catalog,
+digest, legacy label and older-host behavior.
 
 GenerationBound: `host_cap_sha256`, `ctl_cap_sha256` (64 hex each, and different from each
 other), `session_id` (≤ 128), `session_file` (absolute, under the container's sessions

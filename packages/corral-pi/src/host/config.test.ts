@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
-import { LaunchMessageInvalid, parseLaunchMessage } from "./config.ts";
+import { HOST_CAPABILITIES, LaunchMessageInvalid, parseLaunchMessage } from "./config.ts";
 
 const message = {
   version: 1, store: "st-demo", project: "demo", role: "reviewer",
@@ -18,6 +20,29 @@ test("todo is enabled only by a boolean launch snapshot and defaults off for leg
   for (const todo of [null, "true", 1, {}, []]) {
     expect(() => parseLaunchMessage(JSON.stringify({ ...message, todo }))).toThrow(LaunchMessageInvalid);
   }
+});
+
+test("a capability snapshot decides todo and is kept whole; keys this host lacks are refused", () => {
+  // Given the snapshot corral recorded for the generation, with a legacy todo flag that disagrees:
+  const capabilities = { catalog: 1, digest: "d".repeat(64), preset: "standard", enabled: ["todo"] };
+  // When the host parses it, then the snapshot wins and is exposed unchanged.
+  const parsed = parseLaunchMessage(JSON.stringify({ ...message, todo: false, capabilities }));
+  expect(parsed.todo).toBeTrue();
+  expect(parsed.capabilities).toEqual(capabilities);
+  expect(parseLaunchMessage(JSON.stringify({ ...message, todo: true, capabilities: { ...capabilities, enabled: [] } })).todo)
+    .toBeFalse();
+  expect(parseLaunchMessage(JSON.stringify(message)).capabilities).toBeUndefined();
+  for (const invalid of [
+    { ...capabilities, enabled: ["teleport"] }, { ...capabilities, digest: "short" },
+    { ...capabilities, catalog: 0 }, { ...capabilities, enabled: "todo" }, [],
+  ]) {
+    expect(() => parseLaunchMessage(JSON.stringify({ ...message, capabilities: invalid }))).toThrow(LaunchMessageInvalid);
+  }
+});
+
+test("compat.json advertises exactly the capabilities this host implements", () => {
+  const compat = JSON.parse(readFileSync(fileURLToPath(new URL("../../compat.json", import.meta.url)), "utf8"));
+  expect(compat.capabilities).toEqual([...HOST_CAPABILITIES]);
 });
 
 test("the optional exact resume path survives launch parsing; older launch messages remain valid", () => {

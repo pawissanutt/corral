@@ -43,11 +43,24 @@ export interface HostIdentity {
   readonly generation: number;
 }
 
+/**
+ * The generation's capability snapshot as corral resolved and recorded it (T-563). The Rust
+ * catalog owns keys, defaults and role ceilings; a host only reads which keys are enabled.
+ */
+export interface CapabilitySet {
+  readonly catalog: number;
+  readonly digest: string;
+  readonly preset: string;
+  readonly enabled: readonly string[];
+}
+
 /** What a role module can see when it builds its loadout and contract. */
 export interface RoleContext {
   readonly identity: HostIdentity;
   /** Enabled only by the Rust launch snapshot; absent means disabled. */
   readonly todo?: boolean;
+  /** Absent when an older corral launched this host without a snapshot. */
+  readonly capabilities?: CapabilitySet;
   /** The worktree (worker, reviewer) or workspace root (pm) Pi works in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */

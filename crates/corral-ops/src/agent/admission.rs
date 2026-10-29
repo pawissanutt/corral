@@ -1,11 +1,13 @@
 //! Admission in contract order: bounds (envelope.rs), resolution of the NAMED container,
 //! authentication against the named generation, receipt lookup, then role liveness, current
 //! generation and saved pane for new mutations. Also the generation binding primitives.
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::agent::{
-    self, AgentBinding, AgentGeneration, AgentPm, AgentRole, AgentRunState, ContainerRef,
-    GENERATIONS_MAX, GenerationFence, HostHealth, RequestBinding, RequestIdentity, RequestOrigin,
-    RequestReceipt, paths, pm_state,
+    self, AgentBinding, AgentGeneration, AgentPm, AgentRole, AgentRunState, CapabilitySnapshot,
+    ContainerRef, GENERATIONS_MAX, GenerationFence, HostHealth, RequestBinding, RequestIdentity,
+    RequestOrigin, RequestReceipt, paths, pm_state,
 };
 use corral_core::{Store, Task};
 use jiff::Timestamp;
@@ -328,6 +330,8 @@ pub struct GenerationGrant {
     pub container: ContainerRef,
     pub generation: u32,
     pub bind_nonce: String,
+    /// The snapshot this generation recorded; the bootstrap carries the same value.
+    pub capabilities: CapabilitySnapshot,
 }
 
 impl std::fmt::Debug for GenerationGrant {
@@ -350,7 +354,7 @@ fn next_generation(
     state: &mut AgentRunState,
     nonce_digest: &str,
     pane: &str,
-    capabilities: &corral_core::config::agent_capabilities::AgentCapabilities,
+    capabilities: &CapabilitySnapshot,
 ) -> Result<u32> {
     ensure!(
         state.generations.len() < GENERATIONS_MAX,
@@ -359,6 +363,14 @@ fn next_generation(
     );
     let now = Timestamp::now();
     let n = state.generations.iter().map(|g| g.n).max().unwrap_or(0) + 1;
+    let role = state.binding.role;
+    let transition = state
+        .generations
+        .iter()
+        .max_by_key(|g| g.n)
+        .and_then(|previous| {
+            capabilities.transition_from(previous.n, &previous.effective_capabilities(role))
+        });
     for older in state.generations.iter_mut().filter(|g| g.fenced.is_none()) {
         older.fenced = Some(GenerationFence {
             reason: format!("replaced by generation {n}"),
@@ -374,7 +386,9 @@ fn next_generation(
         fenced: None,
         nudged_at: None,
         event_seq: 0,
-        todo: capabilities.todo(state.binding.role),
+        todo: capabilities.enabled("todo"),
+        capabilities: Some(capabilities.clone()),
+        capability_transition: transition,
     });
     state.binding.generation = n;
     state.binding.health = HostHealth::Unbound;
@@ -397,7 +411,19 @@ fn binding(role: AgentRole, store: &str, project: &str, callback: Option<String>
 /// Opens generation n+1 of a container in `pane`, fencing every older generation in the same
 /// commit. Dispatch, review-run, pm open and resume call this before writing the bootstrap.
 pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result<GenerationGrant> {
-    open_generation_with(store, target, pane, false)
+    open_generation_with(store, target, pane, false, None)
+}
+
+impl BindTarget {
+    pub fn role(&self) -> AgentRole {
+        match self {
+            BindTarget::Worker { .. } => AgentRole::Worker,
+            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
+            BindTarget::Planner { .. } => AgentRole::Planner,
+            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
+            BindTarget::Pm { .. } => AgentRole::Pm,
+        }
+    }
 }
 
 /// `open_generation`; with `adopt`, a PM's new pane is recorded as the owner's pane adopted by
@@ -407,7 +433,22 @@ pub fn open_generation_with(
     target: &BindTarget,
     pane: &str,
     adopt: bool,
+    supported: Option<&BTreeSet<String>>,
 ) -> Result<GenerationGrant> {
+    // Settings resolve once per generation; an explicit request the host lacks refuses
+    // before any record changes, while an unavailable default is only reported.
+    let capabilities = store
+        .config
+        .agent
+        .capabilities
+        .resolve(target.role(), supported);
+    if let Some((key, reason)) = capabilities.explicit_unavailable() {
+        bail!(
+            "capability_unavailable: [agent.capabilities.{}] {key} = true, but {reason}, or \
+             remove the override",
+            target.role().as_str()
+        );
+    }
     let nonce = random_secret()?;
     let digest = paths::sha256_hex(nonce.as_bytes());
     let store_id = paths::store_id(store);
@@ -430,12 +471,7 @@ pub fn open_generation_with(
             }
             pm.state.binding.project = project.clone();
             Ok((
-                next_generation(
-                    &mut pm.state,
-                    &digest,
-                    pane,
-                    &store.config.agent.capabilities,
-                )?,
+                next_generation(&mut pm.state, &digest, pane, &capabilities)?,
                 true,
             ))
         })?,
@@ -483,8 +519,7 @@ pub fn open_generation_with(
                     "{} is bound to another role or review attempt",
                     container.key()
                 );
-                generation =
-                    next_generation(state, &digest, pane, &store.config.agent.capabilities)?;
+                generation = next_generation(state, &digest, pane, &capabilities)?;
                 Ok(())
             })?;
             generation
@@ -495,6 +530,7 @@ pub fn open_generation_with(
         container,
         generation,
         bind_nonce: nonce,
+        capabilities,
     })
 }
 

@@ -12,6 +12,8 @@ mod admission_tests;
 pub mod aws_profile;
 pub mod bridge;
 mod call;
+#[cfg(all(test, unix))]
+mod capabilities_tests;
 pub mod cli;
 pub mod credentials;
 pub mod delivery;

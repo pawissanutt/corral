@@ -85,6 +85,9 @@ pub struct Bootstrap {
     /// Resolved wave-0 todo capability; absent in legacy bootstraps.
     #[serde(default)]
     pub todo: bool,
+    /// The generation's recorded capability snapshot; absent in legacy bootstraps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<corral_core::agent::CapabilitySnapshot>,
 }
 
 impl std::fmt::Debug for Bootstrap {
@@ -357,7 +360,11 @@ pub fn prepare_bootstrap(
     } else {
         None
     };
-    let grant = open_generation_with(&ctx.store, target, pane, spec.adopt)?;
+    // A manifest that cannot be read implements nothing optional; launch checks it separately.
+    let supported = super::bridge::assets::read_compat(&assets)
+        .map(|pins| pins.capabilities)
+        .unwrap_or_default();
+    let grant = open_generation_with(&ctx.store, target, pane, spec.adopt, Some(&supported))?;
     let (task, run, review) = match &container {
         ContainerRef::Worker { task, run } => (Some(task.clone()), Some(run.clone()), None),
         ContainerRef::Reviewer { task, run, review } => {
@@ -404,13 +411,8 @@ pub fn prepare_bootstrap(
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
         ui: ctx.store.config.agent.ui,
-        todo: ctx.store.config.agent.capabilities.todo(match target {
-            BindTarget::Worker { .. } => AgentRole::Worker,
-            BindTarget::Pm { .. } => AgentRole::Pm,
-            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
-            BindTarget::Planner { .. } => AgentRole::Planner,
-            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
-        }),
+        todo: grant.capabilities.enabled("todo"),
+        capabilities: Some(grant.capabilities),
     };
     let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
     let path = write_bootstrap(&dir, &bootstrap)?;
@@ -779,6 +781,10 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
         "todo": bootstrap.todo,
+        "capabilities": bootstrap.capabilities.as_ref().map(|snapshot| json!({
+            "catalog": snapshot.catalog, "digest": snapshot.digest,
+            "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys().collect::<Vec<_>>(),
+        })),
     });
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {
