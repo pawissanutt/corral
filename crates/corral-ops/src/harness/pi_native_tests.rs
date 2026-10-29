@@ -266,7 +266,7 @@ fn bedrock_selectors_bind_to_bedrock_even_for_anthropic_models() {
     // When catalog selection runs, then it uses the transport vendor, not the publisher.
     assert_eq!(
         models_for_profile("pi-native", None, Some(model), &models),
-        [selector.clone()]
+        [selector.as_str()]
     );
     assert_eq!(
         catalog_selector("pi-native", Some("amazon-bedrock"), model),
