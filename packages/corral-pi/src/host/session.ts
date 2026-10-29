@@ -34,6 +34,9 @@ import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { webTools } from "../extensions/web/index.ts";
+import { McpAccess } from "../capabilities/mcp.ts";
+import { MCP_CONTROLS } from "./mcp-tools.ts";
+import { toolSearch } from "./tool-search.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -199,7 +202,8 @@ export function providerErrorClass(message: string): string {
 
 export class HostSession {
   runtime!: AgentSessionRuntime;
-  readonly loadout: readonly string[];
+  private readonly baseLoadout: readonly string[];
+  private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
   private readonly localTools: readonly ToolDefinition[];
   private turn = 0;
@@ -243,7 +247,13 @@ export class HostSession {
     }
     this.localTools = [...roleLocal, ...(webEnabled && options.network.web ? webTools(options.network.web) : [])];
     const local = this.localTools.map((tool) => tool.name);
-    this.loadout = [...role.upstreamTools, ...corralToolNames(specs), ...local];
+    const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
+    if (mcp !== (options.capabilities?.mcp !== undefined)) {
+      throw new Error("module_invalid: mcp.enabled needs its generation-bound settings");
+    }
+    const search = options.capabilities?.enabled.includes("tool_search") === true;
+    this.baseLoadout = [...role.upstreamTools, ...corralToolNames(specs), ...local,
+      ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : [])];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
     this.settings = {
       ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),
@@ -262,6 +272,12 @@ export class HostSession {
     if (!this.exportable() || this.options.exportDir === undefined) throw new Error("session_export is not enabled for this role");
     if (!this.bound) throw new Error("host_not_bound");
     return exportSnapshot(this.session, this.sessionId(), this.options.exportDir, this.options.client);
+  }
+
+  get loadout(): readonly string[] { return [...this.baseLoadout, ...this.mcp?.names() ?? []]; }
+
+  private get initialTools(): readonly string[] {
+    return this.options.capabilities?.enabled.includes("tool_search") ? this.baseLoadout : this.loadout;
   }
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
@@ -296,11 +312,11 @@ export class HostSession {
         },
       });
       const result = await sdk.createAgentSessionFromServices({
-        services, sessionManager, model, tools: [...host.loadout],
+        services, sessionManager, model, tools: [...host.baseLoadout, ...host.mcp?.authorizedNames() ?? []],
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
         ...(thinkingLevel ? { thinkingLevel, scopedModels: [{ model, thinkingLevel }] } : { scopedModels: [{ model }] }),
       });
-      result.session.setActiveToolsByName([...host.loadout]);
+      result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
       host.sessionsCreated++;
       return { ...result, services, diagnostics: services.diagnostics };
@@ -327,8 +343,18 @@ export class HostSession {
     return this.open ? this.turn : undefined;
   }
 
-  private extension(pi: ExtensionAPI): void {
-    const allowed = new Set(this.loadout);
+  private async extension(pi: ExtensionAPI): Promise<void> {
+    const settings = this.options.capabilities?.mcp;
+    const search = this.options.capabilities?.enabled.includes("tool_search") === true;
+    if (settings) {
+      this.mcp = new McpAccess(settings, this.options.identity.role, this.options.identity.project,
+        this.options.cwd, this.options.network.mcp);
+      await this.mcp.refresh();
+      this.mcp.attach(pi, search);
+      const access = this.mcp;
+      pi.on("session_shutdown", async () => { await access.close(); });
+    }
+    if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
     const corral = new Set(corralToolNames(specs));
     const rich = this.options.ui !== "plain";
@@ -349,6 +375,7 @@ export class HostSession {
     // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
     // runs only at top level, where its request ID is bound to a transcript tool call.
     pi.on("tool_call", (event) => {
+      const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
       if (allowed.has(event.toolName) && !(nested && corral.has(event.toolName))) return undefined;
       this.deniedTools++;
@@ -360,7 +387,7 @@ export class HostSession {
           : `${event.toolName} is not in the ${this.options.identity.role} loadout`,
       };
     });
-    if (!allowed.has("bash")) {
+    if (!this.loadout.includes("bash")) {
       pi.on("user_bash", () => ({
         result: { output: "bash is not in this role's loadout", exitCode: 1, cancelled: false, truncated: false },
       }));
@@ -490,6 +517,11 @@ export class HostSession {
     return this.calls;
   }
 
+  async close(): Promise<void> {
+    await this.mcp?.close();
+    this.session.dispose();
+  }
+
   async hello(bindNonce: string, pane: string, ctlCapSha256: string): Promise<CorralReceipt> {
     const sessionId = this.session.sessionId;
     const sessionFile = this.session.sessionFile;
@@ -580,6 +612,7 @@ export class HostSession {
       role: this.options.identity.role,
       todo: this.loadout.includes("corral_todo"),
       capabilities: this.options.capabilities ?? null,
+      mcp: this.mcp?.state() ?? null,
       generation: this.options.identity.generation,
       bound: this.bound,
       interactive: this.interactive,

@@ -62,6 +62,8 @@ error. The catalog today, as strict / standard / full:
 | `compaction` | on / on / on (upstream defaults) | on / on / on |
 | `lessons` | worker on / on / on; not available to PM | on / on / on |
 | `session_export` | worker off / on / on; not available to PM | off / on / on |
+| `mcp.enabled` | off / on / on | off / on / on |
+| `tool_search` | off / on / on | off / on / on |
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -104,7 +106,7 @@ Project files (context files, `.agents/skills`, `.agents/prompts`) load only whe
 project is in `trusted_projects`; the decision is recorded in the generation's snapshot as
 `project_text`. Home directories do not depend on it. Pi's own discovery stays off: nothing is
 read from `~/.pi` or a project's `.pi` (settings, extensions, MCP, skills, prompts), and no
-extension, MCP server or theme loads. The worker keeps its packaged corral-worker skill in every
+ambient extension, MCP server or theme loads. The worker keeps its packaged corral-worker skill in every
 preset; a home or repository skill with the same name is skipped (the pane shows the conflict). `corral agent state` lists the selected paths under `guidance`.
 
 `lessons` is the dispatch prompt's existing project-lessons section; turning it off for the
@@ -180,6 +182,64 @@ Both tools share the host network ledger and execution check, including nested c
 and reloads. Interrupted calls are `interrupted_no_effect` for this GET-only contract;
 network activity is still counted. Subprocess networking remains outside the
 in-process guard.
+
+### Workspace MCP and tool search
+
+MCP connects only servers in Corral's workspace configuration. Each role has its own
+tool/resource policy; each server must explicitly name its enabled projects:
+
+```toml
+[agent.capabilities.worker]
+tool_search = true
+
+[agent.capabilities.worker.mcp]
+enabled = true
+
+[agent.capabilities.worker.mcp.servers.docs]
+projects = ["corral"]
+url = "http://127.0.0.1:8080/mcp"
+tools = { lookup = "read" }
+resources = ["docs://public/*"]
+
+# A stdio server uses command/args instead of url:
+# command = "/usr/local/bin/docs-mcp"
+# args = ["--stdio"]
+```
+
+The same tables work for reviewer, PM and planning roles, whose tool entries must be
+`"read"`. Worker may also configure `"write"` operations outside Corral. Known shell
+and write proxies cannot be labeled as reads for read roles. Corral proxy tool names
+are refused for every role; Corral authority still uses top-level `corral_*` bridge
+operations. Server annotations never authorize anything. Resources use exact URIs or
+a trailing `*` prefix scope; an empty resource list denies access.
+
+New standard/full generations enable MCP and cached `tool_search` independently.
+With no project servers, `mcp_connect` returns `configured: false`, not a startup
+failure. An unavailable configured server appears in host state and can be retried
+explicitly with `mcp_connect`. Strict disables both unless individually overridden.
+MCP never enables codemode or a disabled search capability.
+
+With search off, approved discovered MCP tools are directly active. With search on,
+`tool_search` returns cached names, descriptions and schemas without connecting or
+changing the active loadout. `mcp_activate` takes `server` and the returned `tools`
+names, refreshes the server and activates only permitted identities. Both paths work
+without codemode. Direct, nested and deferred execution use the same policy; denied
+calls do not reach the server. `mcp_connect` refreshes schemas for approved identities
+without schema hashes or reapproval. New unapproved names remain unavailable.
+`mcp_resources` and `mcp_read_resource` enforce the same project/server/URI policy.
+
+The host ignores repo/home `.pi/mcp.json`, ambient Pi settings and extensions, and
+foreign credential stores. Inline MCP credentials and OAuth discovery are not
+configured by this adapter. HTTP MCP uses only its configured HTTP(S) origin through
+a separate transport, refuses redirects and does not borrow provider authorization.
+Stdio servers run as trusted subprocesses outside the in-process network guard.
+Each request has a 15-second timeout and a 1 MiB transport-message cap. Reload and
+normal host shutdown close owned MCP connections and stdio process groups.
+
+The generation snapshot and digest include the resolved MCP configuration. Explicit
+resume adapts it while preserving old snapshots. An interrupted local `tool_search`
+is `interrupted_no_effect`; MCP connections, activation, tool and resource calls
+remain `outcome_unknown`, regardless of read annotations.
 
 ### Todo progress
 

@@ -25,6 +25,8 @@ validates a compound key's configured table and returns its effective settings.
 | `compaction` (T-564) | on / on / on | on / on / on | on / on / on | `reserve_tokens`, `keep_recent_tokens`, `branch_summary`; only configured values |
 | `lessons` (T-564, Rust-side) | on / on / on | not available | on / on / on | none |
 | `session_export` (T-564) | off / on / on | not available | off / on / on | none |
+| `mcp.enabled` (T-567) | off / on / on | off / on / on | off / on / on | own `mcp` table and `snapshot.mcp` |
+| `tool_search` (T-567) | off / on / on | off / on / on | off / on / on | none |
 
 An enabled key's effective settings are recorded in its feature state (`settings`) and covered
 by the digest. `trusted_projects` (default `["*"]`) is the one project-text trust decision;
@@ -34,7 +36,7 @@ a key's effective settings differ, whatever its enabled state. A legacy generati
 key's strict value (compaction and lessons on) except its recorded todo flag. The plan
 roles' guidance settings are resolved today; their native hosts arrive with plan-roles.
 
-`CAPABILITY_CATALOG_VERSION` (1) changes only when an entry's meaning or the snapshot's
+`CAPABILITY_CATALOG_VERSION` (3) changes only when an entry's meaning or the snapshot's
 canonical form changes. A later member registers its own implemented key and defaults here
 and adds it to the host's `HOST_CAPABILITIES` and `compat.json` in the same change.
 
@@ -53,7 +55,8 @@ For each catalog key the role may use, the snapshot records:
 - `unavailable`: the reason, when the key was requested but the host does not implement it.
 
 The snapshot also records `catalog`, `role` and `preset`, and `digest`, the SHA-256 of the
-canonical JSON of those fields and the feature map. Credentials are never part of it.
+canonical JSON of those fields, the feature map and enabled compound settings (`web`
+and `mcp`). Credentials are never part of it.
 
 ## Records
 
@@ -63,6 +66,11 @@ digest differs from the previous generation's: `{from_generation, from_digest, f
 changes: [{key, from, to}]}`. `AgentGeneration.todo` is still written for older readers;
 `AgentGeneration::capability(key)` reads the snapshot, or the recorded todo flag for a
 legacy generation.
+
+Compound settings have concrete `web_change` and `mcp_change` records containing the
+old and new settings. MCP settings retain exact project bindings, transports, approved
+tool identities/effect ceilings and resource URI scopes. Changing any of them changes
+the next snapshot digest; schema refreshes for an approved tool do not.
 
 A generation recorded before the catalog has no snapshot. `effective_capabilities` labels
 it `legacy_strict` with its recorded todo flag and every other optional key off. Recovery
@@ -92,7 +100,7 @@ Protocol, credential, identity and role errors keep their existing handling.
 ## Launch message and host
 
 The launch message carries `capabilities: {catalog, digest, preset, enabled, settings,
-project_text}` beside the legacy `todo` boolean; `enabled` lists host keys only and
+project_text, web?, mcp?}` beside the legacy `todo` boolean; `enabled` lists host keys only and
 `settings` maps each enabled compound key to its effective settings. When `capabilities` is present the host takes todo from `enabled`;
 an older corral that sends only `todo` still works. The host refuses a launch message that
 enables a key outside its own `HOST_CAPABILITIES`, since corral only does so when the
@@ -113,6 +121,47 @@ startup, after a reload and after every refused replacement.
 
 Bash, background jobs, stdio MCP, LSP, hooks and browser subprocesses run outside the
 in-process network guard (plan decision E1); this framework adds no containment claim.
+
+## MCP and cached discovery (T-567)
+
+`capabilities/mcp.ts` uses the pinned Pi MCP client directly, not its ambient built-in
+extension. Only the generation's workspace configuration is loaded. The adapter filters
+servers by the bound project and applies one role/tool predicate to discovery,
+registration, activation and calls. Annotations are not consulted. Resources share the
+same server binding plus exact URI or trailing-wildcard scopes. General shell/write
+proxies are denied to read roles even if labeled read; Corral proxy identities are denied
+for all roles. Configured servers remain trusted code, not certified pure services.
+
+The host's execution guard also applies to nested calls. Cached `tool_search` filters
+only currently permitted metadata and has no activation or connection side effect.
+`mcp_activate` refreshes a configured server before activating approved names; it never
+enables codemode. With search disabled, approved MCP tools are ordinary direct tools.
+`mcp_connect` exposes an empty/unavailable configuration as useful state and refreshes
+approved schemas without digest approval. Unapproved new identities stay denied.
+
+HTTP MCP has its own configured-origin transport and network-ledger entries. It cannot
+borrow provider authorization or the public-web exception, and redirects are refused.
+Stdio transport is outside that guard. Both use the existing pinned client's bounded
+requests and process-group cleanup. Reload reconstructs the adapter from the same
+snapshot; explicit resume may resolve new settings. Only exact cached `tool_search`
+is no-effect during interruption recovery; all MCP operations stay conservative.
+
+### Static cost delta
+
+Estimator `utf8-json-bytes/4-v1` serializes `{name, description, parameters}` for the
+new active tool declarations and rounds UTF-8 bytes / 4 upward. It is a reproducible
+heuristic, not a provider tokenizer or inference measurement. With standard/full and
+no project servers, the three MCP controls, activation and cached search add 1,397
+bytes (350 estimated tool tokens) for each of worker, reviewer and PM. Optional role
+prompt text changes by 0 bytes. Strict, with no explicit override, adds 0.
+
+The planning-role resolver enables the same keys and the same role-independent tool
+declarations would have that static delta, but native PL/PR host execution is not
+installed in this task's base and is not claimed as a runnable measurement. Configured
+server metadata is additional, server-dependent context; deferred tools contribute
+their schemas when activated. `test/mcp-host.test.ts` prints the raw per-role
+`MCP_STATIC_COST` records. No dynamic token saving, billing result or harness comparison
+is inferred from these estimates.
 
 ## Assistant seam (T-544)
 

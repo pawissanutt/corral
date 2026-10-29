@@ -807,6 +807,9 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
             if snapshot.enabled("web.enabled") && let Some(web) = &snapshot.web {
                 payload["web"] = json!(web);
             }
+            if snapshot.enabled("mcp.enabled") && let Some(mcp) = &snapshot.mcp {
+                payload["mcp"] = json!(mcp);
+            }
             payload
         }),
     });

@@ -81,6 +81,33 @@ test("web settings come from the generation snapshot and require an eligible ena
   expect(() => parseLaunchMessage(JSON.stringify({ ...message, role: "pm", capabilities }))).toThrow(LaunchMessageInvalid);
 });
 
+test("MCP and cached search parse independently without enabling codemode", () => {
+  // Given every pair of independent MCP/search flags and project-bound settings.
+  for (const mcpEnabled of [false, true]) {
+    for (const search of [false, true]) {
+      const capabilities = {
+        catalog: 3, digest: "f".repeat(64), preset: "standard",
+        enabled: [...(mcpEnabled ? ["mcp.enabled"] : []), ...(search ? ["tool_search"] : [])],
+        ...(mcpEnabled ? { mcp: { servers: {
+          docs: { projects: ["demo"], command: "/bin/docs", args: [], tools: { lookup: "read" }, resources: [] },
+        } } } : {}),
+      };
+      // When parsing, then the generation's exact flags and policy survive without extra keys.
+      const parsed = parseLaunchMessage(JSON.stringify({ ...message, capabilities }));
+      expect(parsed.capabilities).toEqual(capabilities);
+      expect(parsed.capabilities?.enabled).not.toContain("codemode");
+    }
+  }
+  for (const capabilities of [
+    { enabled: ["mcp.enabled"] }, { enabled: [], mcp: { servers: {} } },
+    { enabled: ["mcp.enabled"], mcp: { servers: { docs: { command: "docs" } } } },
+  ]) {
+    expect(() => parseLaunchMessage(JSON.stringify({ ...message, capabilities: {
+      catalog: 3, digest: "f".repeat(64), preset: "standard", ...capabilities,
+    } }))).toThrow(LaunchMessageInvalid);
+  }
+});
+
 test("the optional exact resume path survives launch parsing; older launch messages remain valid", () => {
   expect(parseLaunchMessage(JSON.stringify(message)).resumeSession).toBeUndefined();
   expect(parseLaunchMessage(JSON.stringify({ ...message, resume_session: null })).resumeSession).toBeUndefined();
