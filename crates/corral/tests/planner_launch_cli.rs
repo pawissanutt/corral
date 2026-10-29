@@ -47,11 +47,11 @@ impl Fixture {
             ("fixture.json", "{\"fixture\":true}"),
             (
                 "compat.json",
-                "{\"version\":1,\"verdict\":\"GO\",\"bun\":{\"range\":\"1.4.2\"},\"providers\":[\"anthropic\"]}",
+                "{\"version\":1,\"verdict\":\"GO\",\"bun\":{\"range\":\"1.4.2\"},\"providers\":[\"anthropic\"],\"capabilities\":[\"role_enabled\"]}",
             ),
             ("src/host/main.ts", "// fixture uses the compiled host\n"),
             ("src/roles/planner/index.ts", "export default {};\n"),
-            ("src/roles/plan_reviewer/index.ts", "export default {};\n"),
+            ("src/roles/plan-reviewer/index.ts", "export default {};\n"),
             ("src/delivery/index.ts", "export default {};\n"),
             ("src/auth/index.ts", "export default {};\n"),
         ] {
@@ -311,6 +311,18 @@ fn native_planner_executes_bootstrap_and_binds_the_stored_design_run() {
         run.output_dir.join("prompt.md"),
     );
     assert_eq!(proof["read_only"], true);
+    // And its typed output and submission are receipted on D1 through the existing service.
+    let ops = &proof["plan_ops"];
+    assert_eq!(ops[0]["state"], "committed", "{ops}");
+    assert_eq!(
+        ops[0]["result"]["path"],
+        run.output_dir.join("plan.md").to_str().unwrap()
+    );
+    assert_eq!(ops[1]["state"], "committed", "{ops}");
+    assert_eq!(ops[1]["result"]["outcome"], "submitted");
+    let task = fx.store.get(&fx.task).unwrap();
+    assert_eq!(task.plans[0].run.as_deref(), Some("D1"));
+    assert!(task.plans[0].approval.is_none());
     let command = std::fs::read_to_string(fx.root().join("engine/launch-command")).unwrap();
     assert!(command.contains("bwrap --bind / /"));
     assert!(command.contains(" agent launch --bootstrap "));
@@ -356,6 +368,14 @@ fn native_plan_reviewer_executes_bootstrap_and_binds_the_stored_review() {
             .join(format!("{}-P1-PR1-plan-review.md", fx.task)),
     );
     assert!(task.runs.is_empty());
+    // And its approve verdict is receipted for PR1 only: it never accepts the plan.
+    let verdict = &proof["plan_ops"][0];
+    assert_eq!(verdict["state"], "committed", "{verdict}");
+    assert_eq!(verdict["result"]["outcome"], "recorded");
+    let task = fx.store.get(&fx.task).unwrap();
+    assert!(task.plans[0].reviews[0].verdict.is_some());
+    assert!(task.plans[0].approval.is_none());
+    assert_eq!(task.plans[0].reviews.len(), 1);
 }
 
 #[test]

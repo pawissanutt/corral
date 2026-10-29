@@ -88,6 +88,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         settings: None,
     },
     CapabilityDef {
+        key: "role_enabled",
+        summary: "native planner or plan-reviewer host (off: launch is refused, never OmO)",
+        defaults: plan_role_defaults,
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
         key: "session_export",
         summary: "/corral-export offline HTML session artifact",
         defaults: |role| (role != AgentRole::Pm).then_some([false, true, true]),
@@ -243,6 +250,14 @@ fn todo_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker | AgentRole::Pm => Some([false, true, true]),
         AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => None,
+    }
+}
+
+/// Menu 19: only the native planning roles have an enable switch; other roles always run.
+fn plan_role_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm => None,
     }
 }
 

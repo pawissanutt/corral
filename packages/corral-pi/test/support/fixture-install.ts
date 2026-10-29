@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { roleDir } from "../../src/host/modules.ts";
 import { ROLES } from "../../src/roles/types.ts";
 
 export const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
@@ -62,7 +63,7 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
     const modules: string[] = [];
     if (!omit.has("role")) {
       copy(join(fixtures, "roles/fixture-role.ts"), join(dir, "src/roles/fixture-role.ts"));
-      for (const role of ROLES) {
+      for (const role of ROLES.map(roleDir)) {
         copy(join(fixtures, `roles/${role}/index.ts`), join(dir, `src/roles/${role}/index.ts`));
         modules.push(`src/roles/${role}/index.ts`);
       }

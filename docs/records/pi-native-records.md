@@ -44,6 +44,21 @@ reviewers, with no callback. These roles do not imply implementation capabilitie
 Their session directories and container keys are `<task>/plan-<D>/` and
 `<task>/plan-<P>/<PR>/`, distinct from implementation runs and reviews.
 
+T-573 adds the planning ops, whose receipts live in these containers. `plan_write`
+(`{content, offset?}`) is single-phase: under the task lock it rewrites the container's
+launcher-selected file from `offset` (the planner's `<output_dir>/plan.md`, or the plan
+reviewer's `.corral/state/reviews/<task>-<P>-<PR>-plan-notes.md`), bounded to 1 MiB, and
+commits `{path, offset, bytes, sha256}` with effect `plan_output`. `plan_submit` (planner,
+`{}`) and `plan_verdict` (plan reviewer, `{verdict, notes?}`) are two-phase. A `reserved`
+receipt naming the executor (effect `plan_submission`/`<D>` or `plan_verdict`/`<P>/<PR>`)
+commits before `plan_submit` or `plan_verdict` with the bound attempt runs. The executor
+then settles it `committed` (`{outcome: submitted, plan, sha256}` or
+`{outcome: recorded, plan, review, verdict}`) or `abandoned` (`{outcome: refused, reason}`).
+Sync reconciles a reservation whose executor is verified gone from the plan record: a
+plan of the run after `plans_before`, or the attempt's verdict whose notes begin with the
+report. If the report is unreadable but a verdict exists, the receipt is `uncertain`.
+`ask` and `withdraw` also accept both planning roles.
+
 Core lookup retains historical host state, but liveness requires the latest active
 planner (`holds_slot`, task not dropped), or the latest review of the latest plan
 without a verdict, against the current task spec revision and latest associated

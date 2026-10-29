@@ -184,7 +184,7 @@ fn planner_fixture() -> (Fx, HostProc) {
     let assets = fx.ctx.store.config.agent.assets_dir.as_ref().unwrap();
     write(
         &assets.join("compat.json"),
-        r#"{"verdict":"GO","bun":{"range":"1.4.2"},"providers":["openai","anthropic","amazon-bedrock"]}"#,
+        r#"{"verdict":"GO","bun":{"range":"1.4.2"},"providers":["openai","anthropic","amazon-bedrock"],"capabilities":["role_enabled"]}"#,
     );
     let host = assets.join("corral-pi-host");
     write(

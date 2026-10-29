@@ -51,6 +51,9 @@ pub enum AgentOp {
     ReadLessons,
     Job,
     JobMonitor,
+    PlanWrite,
+    PlanSubmit,
+    PlanVerdict,
 }
 
 const ALL_ROLES: &[AgentRole] = &[
@@ -61,13 +64,22 @@ const ALL_ROLES: &[AgentRole] = &[
     AgentRole::Pm,
 ];
 const AGENTS: &[AgentRole] = &[AgentRole::Worker, AgentRole::Reviewer];
+const ASKERS: &[AgentRole] = &[
+    AgentRole::Worker,
+    AgentRole::Reviewer,
+    AgentRole::Planner,
+    AgentRole::PlanReviewer,
+];
+const PLANNING: &[AgentRole] = &[AgentRole::Planner, AgentRole::PlanReviewer];
+const PLANNER: &[AgentRole] = &[AgentRole::Planner];
+const PLAN_REVIEWER: &[AgentRole] = &[AgentRole::PlanReviewer];
 const WORKER: &[AgentRole] = &[AgentRole::Worker];
 const REVIEWER: &[AgentRole] = &[AgentRole::Reviewer];
 const PM: &[AgentRole] = &[AgentRole::Pm];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 30] = [
+    pub const ALL: [AgentOp; 33] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -98,6 +110,9 @@ impl AgentOp {
         AgentOp::ReadLessons,
         AgentOp::Job,
         AgentOp::JobMonitor,
+        AgentOp::PlanWrite,
+        AgentOp::PlanSubmit,
+        AgentOp::PlanVerdict,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -132,6 +147,9 @@ impl AgentOp {
             AgentOp::ReadLessons => "read_lessons",
             AgentOp::Job => "job",
             AgentOp::JobMonitor => "job_monitor",
+            AgentOp::PlanWrite => "plan_write",
+            AgentOp::PlanSubmit => "plan_submit",
+            AgentOp::PlanVerdict => "plan_verdict",
         }
     }
 
@@ -144,10 +162,14 @@ impl AgentOp {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => ALL_ROLES,
             AgentOp::Todo => TODO,
-            AgentOp::Ask | AgentOp::Withdraw | AgentOp::Evidence | AgentOp::Artifact => AGENTS,
+            AgentOp::Ask | AgentOp::Withdraw => ASKERS,
+            AgentOp::Evidence | AgentOp::Artifact => AGENTS,
             AgentOp::Wait | AgentOp::Progress | AgentOp::Checkpoint => WORKER,
             AgentOp::Gate | AgentOp::Done | AgentOp::Job | AgentOp::JobMonitor => WORKER,
             AgentOp::Verdict => REVIEWER,
+            AgentOp::PlanWrite => PLANNING,
+            AgentOp::PlanSubmit => PLANNER,
+            AgentOp::PlanVerdict => PLAN_REVIEWER,
             _ => PM,
         }
     }
@@ -155,11 +177,12 @@ impl AgentOp {
     /// The T-252 child that lands the op's handler for this role; `None` once implemented.
     /// Each role module reports its own landed ops, so landing one never edits this table.
     pub fn owner(self, role: AgentRole) -> Option<&'static str> {
-        use super::ops::{pm, reviewer, worker};
+        use super::ops::{planning, pm, reviewer, worker};
         let (owner, lands): (&'static str, fn(AgentOp) -> bool) = match self.route(role)? {
             Route::Worker => (worker::OWNER, worker::lands),
             Route::Reviewer => (reviewer::OWNER, reviewer::lands),
             Route::Pm => (pm::OWNER, pm::lands),
+            Route::Planning => (planning::OWNER, planning::lands),
         };
         (!lands(self)).then_some(owner)
     }
@@ -193,6 +216,9 @@ impl AgentOp {
             | AgentOp::ReadRoute
             | AgentOp::ReadArtifacts
             | AgentOp::ReadLessons => Some(Route::Pm),
+            AgentOp::PlanWrite | AgentOp::PlanSubmit | AgentOp::PlanVerdict => {
+                Some(Route::Planning)
+            }
         }
     }
 
@@ -212,6 +238,7 @@ enum Route {
     Worker,
     Reviewer,
     Pm,
+    Planning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -464,6 +491,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
                 Some(Route::Worker) => super::ops::worker::call(ctx, &envelope, other),
                 Some(Route::Reviewer) => super::ops::reviewer::call(ctx, &envelope, other),
                 Some(Route::Pm) => super::ops::pm::call(ctx, &envelope, other),
+                Some(Route::Planning) => super::ops::planning::call(ctx, &envelope, other),
                 None => Err(anyhow::anyhow!("{} has no handler", other.as_str())),
             },
         }

@@ -61,6 +61,7 @@
     "codemode",
     "hooks",
     "bash_rules",
-    "background_shell"
+    "background_shell",
+    "role_enabled"
   ]
 }

@@ -61,6 +61,13 @@ asks for one canonical structured plan with human and technical sections, and fi
 `corral plan submit`, not `corral done`. Planner sessions and outcomes live in
 `plan_runs` / plan history, never in implementation `runs`.
 
+With a `pi-native` planning profile, the planner and the plan reviewer run as Corral's own
+read-only Pi roles. The planner writes `plan.md` through a typed tool and submits it
+through the same submission service. The plan reviewer records its verdict for its bound
+attempt only, so it can never accept a plan for the owner. With `role_enabled` off for a
+role (preset `strict`), its native launch is refused; it never falls back to another
+harness. See [Pi-native agents](pi-native.md#the-planner-and-plan-reviewer-roles).
+
 ## Reply and cancellation
 
 ```bash

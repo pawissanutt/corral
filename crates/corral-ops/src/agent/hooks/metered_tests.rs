@@ -61,7 +61,7 @@ pub(crate) fn fixture() -> (Fx, ResolvedProfile) {
     let assets = fx.ctx.store.config.agent.assets_dir.as_ref().unwrap();
     write(
         &assets.join("compat.json"),
-        r#"{"verdict":"GO","providers":["openai","anthropic","amazon-bedrock"]}"#,
+        r#"{"verdict":"GO","providers":["openai","anthropic","amazon-bedrock"],"capabilities":["role_enabled"]}"#,
     );
     for module in [
         "roles/worker",

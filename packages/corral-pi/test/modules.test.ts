@@ -6,6 +6,8 @@ import auth from "../src/auth/index.ts";
 import delivery from "../src/delivery/index.ts";
 import { setBundle } from "../src/host/bundle.ts";
 import { ModuleInvalid, ModuleUnavailable, loadModules, missingModules, modulePaths } from "../src/host/modules.ts";
+import { planReviewerRole } from "../src/roles/plan-reviewer/index.ts";
+import { plannerRole } from "../src/roles/planner/index.ts";
 import { pmRole } from "../src/roles/pm/index.ts";
 import { reviewerRole } from "../src/roles/reviewer/index.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
@@ -53,7 +55,10 @@ test("a compiled host loads its bundled modules, building each role on the insta
     return factory(root);
   };
   setBundle({
-    roles: { worker: built(workerRole), reviewer: built(reviewerRole), pm: built(pmRole) },
+    roles: {
+      worker: built(workerRole), reviewer: built(reviewerRole), pm: built(pmRole),
+      planner: built(() => plannerRole()), plan_reviewer: built(() => planReviewerRole()),
+    },
     delivery, auth,
   });
   try {

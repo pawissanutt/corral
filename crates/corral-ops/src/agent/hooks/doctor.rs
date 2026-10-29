@@ -71,7 +71,7 @@ pub fn installation(ctx: &Ctx, root: Option<PathBuf>) -> Value {
     };
     let roles: Vec<&str> = ROLES
         .iter()
-        .filter(|role| has_module(&dir, &format!("src/roles/{}/index.ts", role.as_str())))
+        .filter(|role| has_module(&dir, &format!("src/roles/{}/index.ts", role.module_dir())))
         .map(|role| role.as_str())
         .collect();
     let summary = format!(
