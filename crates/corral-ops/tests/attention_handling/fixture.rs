@@ -43,7 +43,12 @@ case "$1 $2" in
 esac
 "#).unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let store = Store::init(tmp.path()).unwrap();
+        // Keep fresh-store reconciliation real without reparsing unrelated starter catalogs.
+        let store = Store::init_with(tmp.path(), |store| {
+            std::fs::write(store.config_path(), "[agents.omo]\ncommand = \"true\"\n")?;
+            Ok(())
+        })
+        .unwrap();
         Self {
             ctx: Ctx {
                 store,

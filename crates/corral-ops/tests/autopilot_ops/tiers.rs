@@ -58,11 +58,17 @@ pub(super) fn tiered(
     audited: bool,
     policy: impl FnOnce(&mut ReviewOverride),
 ) -> (Fx, PathBuf) {
-    let mut fx = Fx::new(|r| {
-        r.reviewer = Some("rev".into());
-        r.remove_worktree = Some(false);
-        policy(r);
-    });
+    // Tier/candidate identity tests need their declared profiles, not starter catalogs.
+    let mut fx = Fx::with_config(
+        |r| {
+            r.reviewer = Some("rev".into());
+            r.remove_worktree = Some(false);
+            policy(r);
+        },
+        Some(
+            "[projects.app]\npath = \"app\"\n[pm]\nagent = \"fake\"\n[agents.fake]\ncommand = \"true\"\n",
+        ),
+    );
     corral_ops::discard(&fx.ctx, &fx.id).unwrap();
     let out = fx._tmp.path().join("out");
     std::fs::create_dir_all(&out).unwrap();

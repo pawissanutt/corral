@@ -200,18 +200,20 @@ fn s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promoti
                         }
                     };
                     let transport = Transport::new(initial);
+                    // Model one live owner through the sends; restart_and_promote reopens
+                    // the store at the actual restart boundary after the final rejection.
                     // When owner resend creates E2 (or ten total attempts), the last rejects.
                     for attempt in 1..=attempts {
                         if attempt == attempts {
                             transport.set(rejected());
                         }
                         assert_eq!(
-                            deliver(&fx.reopen(), recipient, &transport, None).unwrap(),
+                            deliver(&ctx, recipient, &transport, None).unwrap(),
                             DeliveryStatus::Sent { envelope: attempt }
                         );
-                        sync(&fx, i64::try_from(attempt).unwrap());
+                        corral_ops::sync_at(&ctx, at(i64::try_from(attempt).unwrap())).unwrap();
                         if attempt < attempts {
-                            Inbox::new(&fx.reopen().store, recipient.clone())
+                            Inbox::new(&ctx.store, recipient.clone())
                                 .unwrap()
                                 .recover(Recovery::Resend)
                                 .unwrap();

@@ -54,7 +54,15 @@ impl Fx {
                 "init",
             ],
         );
-        let mut store = Store::init(temp.path()).unwrap();
+        // Only the fake implementer/reviewer participate in these launch contracts.
+        let mut store = Store::init_with(temp.path(), |store| {
+            std::fs::write(
+                store.config_path(),
+                "[projects.app]\npath = \"app\"\n[pm]\nagent = \"fake\"\n[agents.fake]\ncommand = \"true\"\n",
+            )?;
+            Ok(())
+        })
+        .unwrap();
         for agent in ["fake", "rev"] {
             store.config.agents.insert(
                 agent.into(),
@@ -80,6 +88,11 @@ impl Fx {
         let executable = bin.join("herdr");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/operating_launch/herdr.py"),
+            bin.join("herdr.py"),
+        )
+        .unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/operating_launch/herdr.sh"),
             &executable,
         )
         .unwrap();
