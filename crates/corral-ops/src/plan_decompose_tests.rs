@@ -176,6 +176,7 @@ fn submit_reviewed_plan(
                 .unwrap()
                 .reviews
                 .push(corral_core::PlanReview {
+                    agent_host: None,
                     delivery: corral_core::inbox::DeliveryMode::Legacy,
                     inbox: Default::default(),
                     route: None,
@@ -698,6 +699,7 @@ fn scoped_fixture(labels: &[&str]) -> (tempfile::TempDir, Ctx, String) {
             plan.artifact.bytes = u64::try_from(bytes.len()).unwrap();
             plan.approval.as_mut().unwrap().policy_digest = policy_digest.clone();
             plan.reviews.push(corral_core::PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 route: None,

@@ -22,6 +22,8 @@ pub const EVIDENCE_MAX: usize = 16;
 pub enum AgentRole {
     Worker,
     Reviewer,
+    Planner,
+    PlanReviewer,
     Pm,
 }
 
@@ -30,6 +32,8 @@ impl AgentRole {
         match self {
             AgentRole::Worker => "worker",
             AgentRole::Reviewer => "reviewer",
+            AgentRole::Planner => "planner",
+            AgentRole::PlanReviewer => "plan_reviewer",
             AgentRole::Pm => "pm",
         }
     }
@@ -47,9 +51,9 @@ pub enum HostHealth {
     Fenced,
 }
 
-/// `Run.agent_host` on a worker run or a review child (the plan's `Run.agent`; `agent` already
-/// serializes the profile key).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `agent_host` on an implementation run, review child, planning run or plan review;
+/// `Run.agent` already serializes the profile key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunState {
     pub version: u32,
     pub binding: AgentBinding,
@@ -193,7 +197,7 @@ pub enum ReceiptState {
 }
 
 /// RequestReceipt v1: the durable answer to one request ID inside its named container.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestReceipt {
     pub version: u32,
     pub request_id: String,
@@ -235,7 +239,7 @@ pub struct ReceiptEffect {
     pub reference: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReceiptEvidence {
     pub state: String,
     pub source: String,

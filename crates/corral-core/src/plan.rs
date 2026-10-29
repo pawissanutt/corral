@@ -271,6 +271,8 @@ pub enum PlanRunState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_host: Option<Box<crate::agent::AgentRunState>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::ExecutionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::RouteSource>,
@@ -305,6 +307,8 @@ impl PlanRun {
 /// One independent review attempt against a plan and policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReview {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_host: Option<Box<crate::agent::AgentRunState>>,
     /// Fixed at launch; reviews predating inbox adapters retain legacy delivery.
     #[serde(default)]
     pub delivery: crate::inbox::DeliveryMode,

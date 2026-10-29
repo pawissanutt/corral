@@ -197,6 +197,7 @@ mod tests {
         let store = Store::init(tmp.path()).unwrap();
         let mut task = store.create("Plan", None, Status::Ready, "Spec").unwrap();
         task.plan_runs.push(PlanRun {
+            agent_host: None,
             execution: None,
             route: None,
             delivery: corral_core::inbox::DeliveryMode::Legacy,

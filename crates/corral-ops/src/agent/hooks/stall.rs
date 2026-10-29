@@ -180,8 +180,10 @@ fn retry(
         BACKOFF_SECS.len()
     );
     let run = match container {
-        ContainerRef::Worker { run, .. } => Some(run.clone()),
-        ContainerRef::Reviewer { review, .. } => Some(review.clone()),
+        ContainerRef::Worker { run, .. } | ContainerRef::Planner { run, .. } => Some(run.clone()),
+        ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
+            Some(review.clone())
+        }
         ContainerRef::Pm => None,
     };
     let key = format!("provider-retry:{}:{generation}:{attempt}", container.key());

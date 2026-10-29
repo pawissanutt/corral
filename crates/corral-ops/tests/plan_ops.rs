@@ -77,6 +77,7 @@ fn seed_review(ctx: &Ctx, id: &str, plan: &str) {
                 .find(|record| record.id == plan)
                 .unwrap()
                 .reviews = vec![PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 route: None,
@@ -317,6 +318,7 @@ fn planning_run(ctx: &Ctx, id: &str) {
     ctx.store
         .update(id, |task| {
             task.plan_runs.push(corral_core::PlanRun {
+                agent_host: None,
                 execution: None,
                 route: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,

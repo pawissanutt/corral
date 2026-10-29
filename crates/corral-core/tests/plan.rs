@@ -349,6 +349,18 @@ at: 2026-10-15T00:00:00Z
     assert_eq!(review.delivery, corral_core::inbox::DeliveryMode::Legacy);
     assert_eq!(planner.inbox, Default::default());
     assert_eq!(review.inbox, Default::default());
+    assert!(planner.agent_host.is_none());
+    assert!(review.agent_host.is_none());
+    assert!(
+        !serde_yaml_ng::to_string(&planner)
+            .unwrap()
+            .contains("agent_host")
+    );
+    assert!(
+        !serde_yaml_ng::to_string(&review)
+            .unwrap()
+            .contains("agent_host")
+    );
 }
 
 #[test]
@@ -388,6 +400,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     assert!(task.plans.is_empty());
     let at = "2026-10-15T00:00:00Z".parse().unwrap();
     let review = PlanReview {
+        agent_host: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,
         inbox: Default::default(),
         route: None,

@@ -96,6 +96,9 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
         let host = bind(&fx, &target, pane, &format!("s-{pane}"));
         let bound = committed(&hello(&fx, &host));
         let landed = match target {
+            BindTarget::Planner { .. } | BindTarget::PlanReviewer { .. } => {
+                json!(["hello", "event", "receipt_lookup"])
+            }
             BindTarget::Pm { .. } => json!([
                 "hello",
                 "event",

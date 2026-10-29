@@ -36,6 +36,7 @@ fn escalate_review(fx: &Fixture, id: &str) {
         .update(id, |t| {
             t.plan_runs[0].state = PlanRunState::Escalated;
             t.plans[0].reviews.push(PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 route: None,

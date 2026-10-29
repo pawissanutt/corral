@@ -51,6 +51,16 @@ pub(super) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> H
 fn bind_in(fx: &Fx, target: &BindTarget, pane: &str, session: &str, project: &str) -> Host {
     let grant = open_generation(&fx.ctx.store, target, pane).unwrap();
     let (role, task, run, review, callback) = match target {
+        BindTarget::Planner { task, run } => {
+            (AgentRole::Planner, Some(task), Some(run), None, None)
+        }
+        BindTarget::PlanReviewer { task, plan, review } => (
+            AgentRole::PlanReviewer,
+            Some(task),
+            Some(plan),
+            Some(review),
+            None,
+        ),
         BindTarget::Worker { task, run } => (AgentRole::Worker, Some(task), Some(run), None, None),
         BindTarget::Reviewer {
             task,

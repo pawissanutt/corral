@@ -50,7 +50,13 @@ pub enum AgentOp {
     ReadLessons,
 }
 
-const ALL_ROLES: &[AgentRole] = &[AgentRole::Worker, AgentRole::Reviewer, AgentRole::Pm];
+const ALL_ROLES: &[AgentRole] = &[
+    AgentRole::Worker,
+    AgentRole::Reviewer,
+    AgentRole::Planner,
+    AgentRole::PlanReviewer,
+    AgentRole::Pm,
+];
 const AGENTS: &[AgentRole] = &[AgentRole::Worker, AgentRole::Reviewer];
 const WORKER: &[AgentRole] = &[AgentRole::Worker];
 const REVIEWER: &[AgentRole] = &[AgentRole::Reviewer];

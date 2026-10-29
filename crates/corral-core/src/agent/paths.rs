@@ -36,12 +36,16 @@ pub fn sessions_dir(store: &Store) -> PathBuf {
     store.dir().join("agent").join("sessions")
 }
 
-/// `sessions/<task>/<run>[/<review>]` or `sessions/pm`.
+/// `sessions/<task>/<run>[/<review>]`, `<task>/plan-<D>`, `<task>/plan-<P>/<PR>`, or `pm`.
 pub fn container_sessions_dir(store: &Store, container: &ContainerRef) -> PathBuf {
     let base = sessions_dir(store);
     match container {
         ContainerRef::Worker { task, run } => base.join(task).join(run),
         ContainerRef::Reviewer { task, run, review } => base.join(task).join(run).join(review),
+        ContainerRef::Planner { task, run } => base.join(task).join(format!("plan-{run}")),
+        ContainerRef::PlanReviewer { task, plan, review } => {
+            base.join(task).join(format!("plan-{plan}")).join(review)
+        }
         ContainerRef::Pm => base.join("pm"),
     }
 }

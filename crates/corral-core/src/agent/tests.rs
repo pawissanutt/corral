@@ -338,3 +338,253 @@ fn records_round_trip_through_the_task_file_and_default_to_absent() {
             .contains("agent_host")
     );
 }
+
+fn planning_task() -> (Task, RequestBinding, RequestBinding) {
+    let mut task = task(Status::Ready);
+    let revision = crate::plan_contract_revision(&task).unwrap();
+    let mut planner: crate::PlanRun = serde_json::from_value(json!({
+        "id": "D1", "profile": "pi", "harness": "pi-native",
+        "spec_revision": revision, "started": "2026-10-23T00:00:00Z",
+        "output_dir": "/tmp/plan", "rounds": 0, "state": "planning",
+        "herdr": {"workspace_id": "w1", "pane_id": "p1"}
+    }))
+    .unwrap();
+    planner.agent_host = Some(state(AgentRole::Planner, None));
+    task.plan_runs.push(planner);
+    let mut plan: crate::PlanRecord = serde_json::from_value(json!({
+        "id": "P1", "run": "D1", "spec_revision": revision,
+        "artifact": {
+            "run": "D1", "kind": "plan", "title": "Plan",
+            "path": "plans/P1.md", "source": "/tmp/plan.md",
+            "sha256": "abc", "bytes": 1, "added": "2026-10-23T00:00:00Z"
+        },
+        "document": {
+            "goal": "Plan", "non_goals": [], "decisions": [],
+            "affected_paths": ["core"], "contracts": [], "dependencies": [],
+            "acceptance": [], "verification": ["test"], "owner_decisions": []
+        },
+        "reviews": [{
+            "id": "PR1", "reviewer": "pi", "policy_digest": "policy",
+            "at": "2026-10-23T00:00:00Z",
+            "herdr": {"workspace_id": "w1", "pane_id": "p2"}
+        }]
+    }))
+    .unwrap();
+    plan.reviews[0].agent_host = Some(state(AgentRole::PlanReviewer, None));
+    task.plans.push(plan);
+    let planner = RequestBinding {
+        container: ContainerRef::Planner {
+            task: task.id.clone(),
+            run: "D1".into(),
+        },
+        generation: 1,
+        callback: None,
+        settles_turn: None,
+    };
+    let reviewer = RequestBinding {
+        container: ContainerRef::PlanReviewer {
+            task: task.id.clone(),
+            plan: "P1".into(),
+            review: "PR1".into(),
+        },
+        ..planner.clone()
+    };
+    (task, planner, reviewer)
+}
+
+#[test]
+fn planning_bindings_round_trip_and_resolve_without_implementation_runs() {
+    let (mut task, planner, reviewer) = planning_task();
+    task.runs.clear();
+    for binding in [&planner, &reviewer] {
+        assert!(container_run(&task, &binding.container).is_none());
+        assert!(container_run_mut(&mut task, &binding.container).is_none());
+        assert!(container_state(&task, &binding.container).is_some());
+        assert!(container_pane(&task, &binding.container).is_some());
+        assert_eq!(code(check_live(&task, binding)), None);
+        let serialized = serde_json::to_string(&binding.container).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ContainerRef>(&serialized).unwrap(),
+            binding.container
+        );
+    }
+    let text = crate::render_task(&task);
+    let restored = crate::parse_task(&text, std::path::Path::new("/tmp/T-001-t.md")).unwrap();
+    assert_eq!(restored.plan_runs, task.plan_runs);
+    assert_eq!(restored.plans, task.plans);
+    assert_eq!(
+        task.plan_runs[0].agent_host.as_ref().unwrap().version,
+        AGENT_RECORD_VERSION
+    );
+    assert_eq!(AgentRole::Planner.as_str(), "planner");
+    assert_eq!(AgentRole::PlanReviewer.as_str(), "plan_reviewer");
+    *container_host_mut(&mut task, &planner.container).unwrap() = None;
+    assert_eq!(
+        code(check_live(&task, &planner)),
+        Some(RefusalCode::AgentFenced)
+    );
+    *container_host_mut(&mut task, &planner.container).unwrap() =
+        Some(state(AgentRole::Planner, None));
+    let wrong = ContainerRef::Planner {
+        task: "T-002".into(),
+        run: "D1".into(),
+    };
+    assert!(container_state(&task, &wrong).is_none());
+    assert!(container_host_mut(&mut task, &wrong).is_none());
+    assert!(container_pane(&task, &wrong).is_none());
+}
+
+#[test]
+fn planning_liveness_requires_current_active_unfenced_containers() {
+    let (task, planner, reviewer) = planning_task();
+    for binding in [&planner, &reviewer] {
+        let mut fenced = task.clone();
+        container_state_mut(&mut fenced, &binding.container)
+            .unwrap()
+            .generations[0]
+            .fenced = Some(GenerationFence {
+            reason: "lost".into(),
+            at: Timestamp::UNIX_EPOCH,
+        });
+        assert_eq!(
+            code(check_live(&fenced, binding)),
+            Some(RefusalCode::AgentFenced)
+        );
+        let mut stale = binding.clone();
+        stale.generation = 2;
+        assert_eq!(
+            code(check_live(&task, &stale)),
+            Some(RefusalCode::AgentFenced)
+        );
+        let mut dropped = task.clone();
+        dropped.status = Status::Dropped;
+        assert_eq!(
+            container_closure(&dropped, &binding.container),
+            Some(ClosureReason::RunEnded)
+        );
+        assert_eq!(
+            code(check_live(&dropped, binding)),
+            Some(RefusalCode::RunEnded)
+        );
+    }
+    for state in [
+        crate::PlanRunState::Submitted,
+        crate::PlanRunState::Cancelled,
+    ] {
+        let mut ended = task.clone();
+        ended.plan_runs[0].state = state;
+        assert_eq!(
+            code(check_live(&ended, &planner)),
+            Some(RefusalCode::RunEnded)
+        );
+    }
+    let mut changes = task.clone();
+    changes.plan_runs[0].state = crate::PlanRunState::Changes;
+    assert!(check_live(&changes, &planner).is_ok());
+    changes.plan_runs[0].ended = Some(Timestamp::UNIX_EPOCH);
+    assert_eq!(
+        code(check_live(&changes, &planner)),
+        Some(RefusalCode::RunEnded)
+    );
+    let mut newer = task.clone();
+    let mut run = newer.plan_runs[0].clone();
+    run.id = "D2".into();
+    newer.plan_runs.push(run);
+    assert_eq!(
+        code(check_live(&newer, &planner)),
+        Some(RefusalCode::RunEnded)
+    );
+    assert_eq!(
+        container_closure(&newer, &reviewer.container),
+        Some(ClosureReason::ReviewSuperseded)
+    );
+    // Historical bindings remain addressable for receipts even though mutations are closed.
+    assert!(container_state(&newer, &planner.container).is_some());
+}
+
+#[test]
+fn planning_review_closes_on_verdict_supersession_and_spec_change() {
+    let (task, _, reviewer) = planning_task();
+    let mut closed = task.clone();
+    closed.plans[0].reviews[0].verdict = Some(Verdict::Approve);
+    assert_eq!(
+        container_closure(&closed, &reviewer.container),
+        Some(ClosureReason::ReviewClosed)
+    );
+    assert_eq!(
+        code(check_live(&closed, &reviewer)),
+        Some(RefusalCode::ReviewClosed)
+    );
+    let mut settling = reviewer.clone();
+    settling.settles_turn = Some(1);
+    assert!(check_live(&closed, &settling).is_ok());
+    settling.settles_turn = Some(2);
+    assert_eq!(
+        code(check_live(&closed, &settling)),
+        Some(RefusalCode::ReviewClosed)
+    );
+    let mut changed = task.clone();
+    changed.body = "Changed task specification".into();
+    assert_eq!(
+        container_closure(&changed, &reviewer.container),
+        Some(ClosureReason::ReviewSuperseded)
+    );
+    let mut newer_review = task.clone();
+    let mut review = newer_review.plans[0].reviews[0].clone();
+    review.id = "PR2".into();
+    newer_review.plans[0].reviews.push(review);
+    assert_eq!(
+        container_closure(&newer_review, &reviewer.container),
+        Some(ClosureReason::ReviewSuperseded)
+    );
+    let mut newer_plan = task.clone();
+    let mut plan = newer_plan.plans[0].clone();
+    plan.id = "P2".into();
+    newer_plan.plans.push(plan);
+    assert_eq!(
+        container_closure(&newer_plan, &reviewer.container),
+        Some(ClosureReason::ReviewSuperseded)
+    );
+    let mut callback = reviewer.clone();
+    callback.callback = Some("unexpected".into());
+    assert_eq!(
+        code(check_live(&task, &callback)),
+        Some(RefusalCode::ReviewClosed)
+    );
+}
+
+#[test]
+fn planning_sessions_have_distinct_namespaces_and_inbox_closure() {
+    let (mut task, planner, reviewer) = planning_task();
+    let tmp = tempfile::tempdir().unwrap();
+    let store = crate::Store::init(tmp.path()).unwrap();
+    for (binding, suffix) in [
+        (&planner, "T-001/plan-D1"),
+        (&reviewer, "T-001/plan-P1/PR1"),
+    ] {
+        assert_eq!(binding.container.key(), suffix);
+        assert!(paths::container_sessions_dir(&store, &binding.container).ends_with(suffix));
+    }
+    let planner_inbox = crate::inbox::Inbox::new(
+        &store,
+        crate::inbox::Recipient::PlanRun {
+            task: task.id.clone(),
+            plan_run: "D1".into(),
+        },
+    )
+    .unwrap();
+    let review_inbox = crate::inbox::Inbox::new(
+        &store,
+        crate::inbox::Recipient::PlanReview {
+            task: task.id.clone(),
+            plan: "P1".into(),
+            review: "PR1".into(),
+        },
+    )
+    .unwrap();
+    assert!(!planner_inbox.recipient_ended(&task));
+    assert!(!review_inbox.recipient_ended(&task));
+    task.status = Status::Dropped;
+    assert!(planner_inbox.recipient_ended(&task));
+    assert!(review_inbox.recipient_ended(&task));
+}

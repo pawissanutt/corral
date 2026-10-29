@@ -137,6 +137,9 @@ fn origin(
     op: &str,
 ) -> RequestOrigin {
     let (role, task, run, review, callback) = match &container {
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+            panic!("planning containers do not execute implementation effects")
+        }
         ContainerRef::Worker { task, run } => {
             (AgentRole::Worker, Some(task), Some(run), None, None)
         }

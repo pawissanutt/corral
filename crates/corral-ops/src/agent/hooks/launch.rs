@@ -2,7 +2,8 @@
 //! Owner: T-252 child host-bridge (writes the bootstrap and renders `{corral} agent launch
 //! {delivery_args}`).
 use anyhow::{Context, Result};
-use corral_core::{Run, Task};
+use corral_core::{ResolvedProfile, Run, Task};
+use std::path::Path;
 
 use super::consulted;
 use crate::Ctx;
@@ -32,4 +33,29 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         run: run.id.clone(),
     };
     prepare(ctx, &target, pane, &spec)
+}
+
+/// Planning containers use their own binding; never resolve them through coding runs.
+pub fn plan_command(
+    ctx: &Ctx,
+    target: &BindTarget,
+    pane: &str,
+    resolved: &ResolvedProfile,
+    cwd: &Path,
+    prompt_file: &Path,
+) -> Result<String> {
+    consulted("launch");
+    let model = resolved
+        .model
+        .clone()
+        .context("a pi-native planner needs a model")?;
+    let spec = HostSpec {
+        cwd: cwd.to_path_buf(),
+        provider: host_provider(resolved.vendor.as_deref(), &model),
+        model,
+        effort: resolved.effort.clone(),
+        prompt_file: Some(prompt_file.to_path_buf()),
+        adopt: false,
+    };
+    prepare(ctx, target, pane, &spec)
 }
