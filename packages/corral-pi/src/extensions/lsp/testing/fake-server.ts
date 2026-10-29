@@ -28,6 +28,9 @@ function publish(uri: string): void {
     const at = text.indexOf("ERR");
     return at < 0 ? [] : [{ range: range(line, at, at + 3), severity: 1, code: "E0001", source: "fake", message: text.trim() }];
   });
+  if (flags.has("--report-cwd")) {
+    diagnostics.push({ range: range(0, 0, 0), severity: 4, code: "cwd", source: "fake", message: process.cwd() });
+  }
   if (configuration !== "unrequested") {
     diagnostics.push({ range: range(0, 0, 0), severity: 4, code: "config", source: "fake", message: JSON.stringify(configuration) });
   }

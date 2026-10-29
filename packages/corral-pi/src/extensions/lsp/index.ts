@@ -2,8 +2,8 @@
 // lsp_references for files in the worktree. Each file extension maps to one configured server,
 // started lazily by argv and kept for the session. Results are bounded in count and bytes; a
 // missing server, an unsupported file or a path outside the worktree is a tool error.
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -114,22 +114,27 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
     throw new LspError("lsp_unsupported_file", `no language server is configured for ${extension || path} (configured: ${known})`);
   };
 
-  const client = async (spec: LspServerSpec): Promise<LspClient> => {
-    const existing = clients.get(spec.id);
+  const client = async (spec: LspServerSpec, file: string): Promise<LspClient> => {
+    let serverRoot = dirname(file);
+    while (serverRoot !== root && !spec.rootMarkers?.some((marker) => existsSync(join(serverRoot, marker)))) {
+      serverRoot = dirname(serverRoot);
+    }
+    const key = JSON.stringify([spec.id, serverRoot]);
+    const existing = clients.get(key);
     if (existing) {
       const current = await existing.catch(() => undefined);
       if (current?.alive) return current;
     }
-    const started = LspClient.start(spec, root, limits);
-    clients.set(spec.id, started);
-    started.catch(() => clients.delete(spec.id));
+    const started = LspClient.start(spec, serverRoot, limits);
+    clients.set(key, started);
+    started.catch(() => { if (clients.get(key) === started) clients.delete(key); });
     return started;
   };
 
   const locationQuery = async (method: string, params: { path: string; line: number; column: number },
     extra: Record<string, unknown>) => {
     const { file, spec, languageId } = target(params.path);
-    const server = await client(spec);
+    const server = await client(spec, file);
     const capability = method === "textDocument/definition" ? "definitionProvider" : "referencesProvider";
     if (!server.supports(capability)) throw new LspError("lsp_request_failed", `${spec.id} does not support ${method}`);
     const { uri } = server.sync(file, languageId);
@@ -157,7 +162,7 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
       parameters: Type.Object({ path: PathParam }),
       async execute(_id, params: { path: string }) {
         const { file, spec, languageId } = target(params.path);
-        const server = await client(spec);
+        const server = await client(spec, file);
         const { uri, since } = server.sync(file, languageId);
         const complete = await server.settle(() => server.diagnostics(uri, since) !== undefined);
         const diagnostics = (server.diagnostics(uri, since) ?? []).map((item: Diagnostic) => ({

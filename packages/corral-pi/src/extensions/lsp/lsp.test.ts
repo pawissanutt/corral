@@ -76,6 +76,17 @@ test("the extension exposes the three tools and configures rust-analyzer by argv
   expect(rust?.command).toEqual(["rust-analyzer"]);
 });
 
+test("root markers select the nearest project and otherwise fall back to the worktree", async () => {
+  mkdirSync(join(root, "project", "src"), { recursive: true });
+  writeFileSync(join(root, "project", "marker"), "");
+  writeFileSync(join(root, "project", "src", "test.fk"), "ERR one");
+  const made = kit({ ...fake("--report-cwd"), rootMarkers: ["marker"] });
+  const nested = await call(made, "lsp_diagnostics", { path: "project/src/test.fk" });
+  const fallback = await call(made, "lsp_diagnostics", { path: "src/main.fk" });
+  expect(nested.diagnostics.find((item: { code: string }) => item.code === "cwd").message).toBe(join(root, "project"));
+  expect(fallback.diagnostics.find((item: { code: string }) => item.code === "cwd").message).toBe(root);
+});
+
 test("a missing server is an explicit lsp_server_unavailable tool error and the toolkit keeps working", async () => {
   const missing = kit({ id: "ghost", command: ["corral-no-such-language-server"], languages: { ".fk": "fake" } });
   const error = await failure(call(missing, "lsp_diagnostics", { path: "src/main.fk" }));
