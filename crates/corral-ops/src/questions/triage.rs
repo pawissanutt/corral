@@ -158,7 +158,9 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
     let (run, resting) = match container {
         ContainerRef::Worker { run, .. } => (run, Status::Running),
         ContainerRef::Reviewer { run, .. } => (run, Status::Review),
-        ContainerRef::Pm => return false,
+        ContainerRef::Pm | ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+            return false;
+        }
     };
     let waiting = agent::container_state(task, container).and_then(|state| {
         state
@@ -375,8 +377,10 @@ pub(super) fn transact(
                         body: &body,
                         binding: MessageBinding {
                             run: match &container {
-                                ContainerRef::Worker { run, .. } => Some(run.clone()),
-                                ContainerRef::Reviewer { review, .. } => Some(review.clone()),
+                                ContainerRef::Worker { run, .. }
+                                | ContainerRef::Planner { run, .. } => Some(run.clone()),
+                                ContainerRef::Reviewer { review, .. }
+                                | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
                                 ContainerRef::Pm => None,
                             },
                             // Not question-bound: that convention marks an OmO native answer
@@ -449,7 +453,7 @@ pub(super) fn transact(
 fn container_run(container: &ContainerRef) -> Option<&str> {
     match container {
         ContainerRef::Worker { run, .. } | ContainerRef::Reviewer { run, .. } => Some(run),
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => None,
     }
 }
 

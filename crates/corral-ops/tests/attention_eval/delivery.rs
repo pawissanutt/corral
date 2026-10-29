@@ -136,6 +136,7 @@ pub(super) fn world() -> (Fx, [Recipient; 4]) {
     ctx.store
         .update(&planned.id, |task| {
             task.plan_runs.push(corral_core::PlanRun {
+                agent_host: None,
                 execution: None,
                 route: None,
                 delivery: corral_core::inbox::DeliveryMode::Inbox,
@@ -161,6 +162,7 @@ pub(super) fn world() -> (Fx, [Recipient; 4]) {
                 .unwrap()
                 .reviews
                 .push(corral_core::PlanReview {
+                    agent_host: None,
                     delivery: corral_core::inbox::DeliveryMode::Inbox,
                     inbox: Default::default(),
                     route: None,

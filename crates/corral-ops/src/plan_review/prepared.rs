@@ -1,9 +1,12 @@
 //! A refused review keeps its exact attempt without reserving a live process slot.
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{ActionAuthorization, HerdrRef, PlanRecord, PlanReview, SubmissionDisposition};
+use corral_core::{
+    ActionAuthorization, HerdrRef, PlanRecord, PlanReview, ResolvedProfile, SubmissionDisposition,
+    Task,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
@@ -28,6 +31,46 @@ fn path(ctx: &Ctx, task: &str, plan: &str) -> PathBuf {
 }
 
 impl Prepared {
+    pub fn bind_native(
+        &mut self,
+        ctx: &Ctx,
+        task: &Task,
+        resolved: &ResolvedProfile,
+        herdr: &HerdrRef,
+    ) -> Result<()> {
+        let target = crate::agent::BindTarget::PlanReviewer {
+            task: task.id.clone(),
+            plan: self.plan.clone(),
+            review: self.review.id.clone(),
+        };
+        let cwd = ctx
+            .store
+            .project_path(task.project.as_deref().context("plan project missing")?)?;
+        let command = crate::agent::hooks::launch::plan_command(
+            ctx,
+            &target,
+            &herdr.pane_id,
+            resolved,
+            &cwd,
+            &self.prompt,
+        )?;
+        let receipt = crate::launch_exit::receipt(
+            ctx,
+            &task.id,
+            &format!("{}-{}", self.plan, self.review.id),
+        );
+        self.command = crate::launch_exit::arm(&command, &receipt)?;
+        self.review = ctx
+            .store
+            .get(&task.id)?
+            .plans
+            .last()
+            .and_then(|p| p.reviews.last())
+            .context("plan review missing")?
+            .clone();
+        self.save(ctx, &task.id)
+    }
+
     pub fn save(&self, ctx: &Ctx, task: &str) -> Result<()> {
         let path = path(ctx, task, &self.plan);
         let mut file = tempfile::NamedTempFile::new_in(ctx.store.state_dir())
@@ -81,6 +124,33 @@ impl Prepared {
         })?;
         Ok(())
     }
+}
+
+/// Native commands cannot be constructed until their saved pane has a binding.
+pub(super) fn command(
+    ctx: &Ctx,
+    resolved: &ResolvedProfile,
+    task: &Task,
+    prompt_file: &Path,
+    native: bool,
+) -> Result<String> {
+    if native {
+        crate::agent::hooks::preflight::check(
+            ctx,
+            corral_core::agent::AgentRole::PlanReviewer,
+            resolved,
+        )?;
+        return Ok(String::new());
+    }
+    crate::prompt::render_template(
+        resolved,
+        &[
+            ("prompt_file", prompt_file.display().to_string()),
+            ("name", format!("{} plan review", task.id)),
+            ("task", task.id.clone()),
+            ("worktree", ctx.store.root().display().to_string()),
+        ],
+    )
 }
 
 pub(super) fn load(ctx: &Ctx, task: &str) -> Result<Option<Prepared>> {

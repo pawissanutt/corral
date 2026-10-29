@@ -20,6 +20,9 @@ use crate::agent::launch::{ensure_private_dir, runtime_dir, runtime_root, write_
 use crate::agent::test_support::{self as ts, Fx};
 use crate::delivery::{DeliveryStatus, deliver, owner};
 
+#[path = "planning_tests.rs"]
+mod planning;
+
 #[derive(Default)]
 struct Script {
     /// Close the next submit_input connection after admitting it, without a reply.

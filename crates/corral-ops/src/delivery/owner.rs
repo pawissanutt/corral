@@ -109,6 +109,22 @@ pub(crate) fn kick(ctx: &Ctx, recipient: &Recipient) -> Result<DeliveryStatus, S
 /// The registered adapter when the recipient is a pi-native run or review child.
 fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn DeliveryAdapter>> {
     let task = ctx.store.get(recipient.task()?).ok()?;
+    let native_plan = match recipient {
+        Recipient::PlanRun { plan_run, .. } => task.plan_runs.iter().any(|r| {
+            r.id == *plan_run
+                && (r.agent_host.is_some() || crate::agent::hooks::is_pi_native(&r.harness))
+        }),
+        Recipient::PlanReview { plan, review, .. } => task
+            .plans
+            .iter()
+            .find(|p| p.id == *plan)
+            .and_then(|p| p.reviews.iter().find(|r| r.id == *review))
+            .is_some_and(|r| r.agent_host.is_some()),
+        _ => false,
+    };
+    if native_plan {
+        return Some(crate::agent::hooks::delivery::adapter());
+    }
     let run = match recipient {
         Recipient::Run { run, .. } => task.runs.iter().find(|r| r.id == *run),
         Recipient::ReviewRun { run, review, .. } => task
@@ -467,10 +483,31 @@ pub(crate) fn reconcile_all_with(ctx: &Ctx, adapter: &dyn DeliveryAdapter) -> Re
             .iter()
             .filter(|r| r.delivery == DeliveryMode::Inbox)
         {
-            recipients.push(Recipient::PlanRun {
+            let recipient = Recipient::PlanRun {
                 task: task.id.clone(),
                 plan_run: run.id.clone(),
-            });
+            };
+            match pi_native_adapter(ctx, &recipient) {
+                Some(own) => registered.push((recipient, own)),
+                None => recipients.push(recipient),
+            }
+        }
+        for plan in &task.plans {
+            for review in plan
+                .reviews
+                .iter()
+                .filter(|r| r.delivery == DeliveryMode::Inbox)
+            {
+                let recipient = Recipient::PlanReview {
+                    task: task.id.clone(),
+                    plan: plan.id.clone(),
+                    review: review.id.clone(),
+                };
+                match pi_native_adapter(ctx, &recipient) {
+                    Some(own) => registered.push((recipient, own)),
+                    None => recipients.push(recipient),
+                }
+            }
         }
         let all = recipients
             .into_iter()

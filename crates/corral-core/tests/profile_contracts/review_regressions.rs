@@ -292,6 +292,7 @@ fn recorded_planner_default_review_uses_existing_policy_through_store_restart() 
     store.save_config().unwrap();
     let revision = plan_contract_revision(&task).unwrap();
     task.plan_runs.push(PlanRun {
+        agent_host: None,
         execution: None,
         route: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,

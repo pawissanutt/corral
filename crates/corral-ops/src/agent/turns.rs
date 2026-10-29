@@ -72,7 +72,7 @@ pub fn classify_ended(state: &mut AgentRunState, closure: Option<ClosureReason>,
     let class = match state.binding.role {
         AgentRole::Worker => class_at_end(state, closure, &state.turns[index]),
         AgentRole::Reviewer => super::hooks::review::classify(state, closure, &state.turns[index]),
-        AgentRole::Pm => return,
+        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => return,
     };
     state.turns[index].class = Some(class);
 }

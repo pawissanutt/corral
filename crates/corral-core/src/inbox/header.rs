@@ -289,16 +289,45 @@ impl Inbox<'_> {
                 },
             )
             .is_some(),
-            Recipient::PlanRun { plan_run, .. } => task
-                .plan_runs
-                .last()
-                .is_none_or(|record| record.id != *plan_run || !record.holds_slot()),
-            Recipient::PlanReview { plan, review, .. } => task
-                .plans
-                .iter()
-                .find(|record| record.id == *plan)
-                .and_then(|record| record.reviews.last())
-                .is_none_or(|record| record.id != *review || record.verdict.is_some()),
+            Recipient::PlanRun { task: id, plan_run } => {
+                let current = task.plan_runs.last();
+                if current.is_some_and(|r| r.agent_host.is_some()) {
+                    container_closure(
+                        task,
+                        &ContainerRef::Planner {
+                            task: id.clone(),
+                            run: plan_run.clone(),
+                        },
+                    )
+                    .is_some()
+                } else {
+                    current.is_none_or(|r| r.id != *plan_run || !r.holds_slot())
+                }
+            }
+            Recipient::PlanReview {
+                task: id,
+                plan,
+                review,
+            } => {
+                let current = task
+                    .plans
+                    .iter()
+                    .find(|p| p.id == *plan)
+                    .and_then(|p| p.reviews.last());
+                if current.is_some_and(|r| r.agent_host.is_some()) {
+                    container_closure(
+                        task,
+                        &ContainerRef::PlanReviewer {
+                            task: id.clone(),
+                            plan: plan.clone(),
+                            review: review.clone(),
+                        },
+                    )
+                    .is_some()
+                } else {
+                    current.is_none_or(|r| r.id != *review || r.verdict.is_some())
+                }
+            }
             Recipient::Pm => false,
         }
     }

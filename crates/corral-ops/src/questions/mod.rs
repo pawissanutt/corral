@@ -333,6 +333,15 @@ pub(crate) fn transition(
 /// The inbox recipient of a container's messages: the worker run, or the exact review child.
 pub(crate) fn recipient(container: &ContainerRef) -> Option<Recipient> {
     match container {
+        ContainerRef::Planner { task, run } => Some(Recipient::PlanRun {
+            task: task.clone(),
+            plan_run: run.clone(),
+        }),
+        ContainerRef::PlanReviewer { task, plan, review } => Some(Recipient::PlanReview {
+            task: task.clone(),
+            plan: plan.clone(),
+            review: review.clone(),
+        }),
         ContainerRef::Worker { task, run } => Some(Recipient::Run {
             task: task.clone(),
             run: run.clone(),

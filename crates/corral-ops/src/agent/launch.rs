@@ -112,6 +112,18 @@ impl Bootstrap {
                     .clone()
                     .context("the bootstrap names no review")?,
             },
+            AgentRole::Planner => Recipient::PlanRun {
+                task: task()?,
+                plan_run: run()?,
+            },
+            AgentRole::PlanReviewer => Recipient::PlanReview {
+                task: task()?,
+                plan: run()?,
+                review: self
+                    .review
+                    .clone()
+                    .context("the bootstrap names no review")?,
+            },
             AgentRole::Pm => Recipient::Pm,
         })
     }
@@ -310,6 +322,17 @@ pub fn prepare_bootstrap(
                 run.agent_host.as_deref().and_then(latest_bound),
             )
         }
+        BindTarget::Planner { .. } | BindTarget::PlanReviewer { .. } => {
+            let task = ctx
+                .store
+                .get(container.task().context("planner task missing")?)?;
+            (
+                task.project
+                    .clone()
+                    .context("a Pi-native planner needs a task project")?,
+                agent::container_state(&task, &container).and_then(latest_bound),
+            )
+        }
     };
     // A host recovery resumes its latest hello-bound file, not the session selected before
     // this container's first generation (which may belong to a previous review child).
@@ -329,6 +352,10 @@ pub fn prepare_bootstrap(
         ContainerRef::Reviewer { task, run, review } => {
             (Some(task.clone()), Some(run.clone()), Some(review.clone()))
         }
+        ContainerRef::Planner { task, run } => (Some(task.clone()), Some(run.clone()), None),
+        ContainerRef::PlanReviewer { task, plan, review } => {
+            (Some(task.clone()), Some(plan.clone()), Some(review.clone()))
+        }
         ContainerRef::Pm => (None, None, None),
     };
     let bootstrap = Bootstrap {
@@ -339,6 +366,8 @@ pub fn prepare_bootstrap(
         role: match target {
             BindTarget::Worker { .. } => AgentRole::Worker,
             BindTarget::Reviewer { .. } => AgentRole::Reviewer,
+            BindTarget::Planner { .. } => AgentRole::Planner,
+            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
             BindTarget::Pm { .. } => AgentRole::Pm,
         },
         task,

@@ -86,6 +86,7 @@ mod operating_plan_decisions {
                     spec_revision: corral_core::plan_contract_revision(task).unwrap(),
                     document: PlanDocument::parse(PLAN).unwrap(),
                     reviews: vec![PlanReview {
+                        agent_host: None,
                         delivery: corral_core::inbox::DeliveryMode::Legacy,
                         inbox: Default::default(),
                         route: None,

@@ -36,6 +36,24 @@ record is stored as `agent_host` (`Option<Box<AgentRunState>>`, absent by defaul
 appears on worker runs (`task.runs[*]`) and on review children (`task.runs[*].review_runs[*]`).
 Storage class: canonical. Shape: request-receipts.
 
+T-556 also stores the same optional, version-1 `agent_host` on `PlanRun` and
+`PlanReview`. Old planning records deserialize with no host state and omit the field
+when saved. Planning hosts use roles `planner` and `plan_reviewer`; their generic
+identity maps D1 to `run` for planners, or P1 to `run` and PR1 to `review` for plan
+reviewers, with no callback. These roles do not imply implementation capabilities.
+Their session directories and container keys are `<task>/plan-<D>/` and
+`<task>/plan-<P>/<PR>/`, distinct from implementation runs and reviews.
+
+Core lookup retains historical host state, but liveness requires the latest active
+planner (`holds_slot`, task not dropped), or the latest review of the latest plan
+without a verdict, against the current task spec revision and latest associated
+planning run. Only an already-open final review turn may settle after a verdict.
+Policy freshness and artifact-byte freshness require config/store context and remain
+the caller's responsibility; the core task-record predicate cannot establish them.
+`container_run[_mut]` remains implementation-only. `container_state[_mut]`,
+`container_host_mut` (including empty slots), and `container_pane` cover planning
+containers too.
+
 | Field | Type | Bound | Writer |
 |---|---|---|---|
 | `version` | u32 | 1 | request-receipts |
@@ -51,7 +69,7 @@ AgentBinding: launcher-bound, never model-supplied.
 
 | Field | Type | Notes |
 |---|---|---|
-| `role` | `worker` \| `reviewer` \| `pm` | must equal `identity.role` |
+| `role` | `worker` \| `reviewer` \| `planner` \| `plan_reviewer` \| `pm` | must equal `identity.role` |
 | `store` | string | `paths::store_id` |
 | `project` | string | the task's project; for the PM, its one authorized scope |
 | `generation` | u32 | the current generation; 0 before the first |

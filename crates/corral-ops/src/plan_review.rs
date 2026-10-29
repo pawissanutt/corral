@@ -234,15 +234,8 @@ fn review_with_origin(
     text.push_str(&crate::comments::owner_comments(&task));
     // The renderer sizes the prompt to decide how `{prompt_file}` may reach the reviewer.
     std::fs::write(&prompt_file, &text).context("writing plan review prompt")?;
-    let command = prompt::render_template(
-        &resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", format!("{} plan review", task.id)),
-            ("task", task.id.clone()),
-            ("worktree", ctx.store.root().display().to_string()),
-        ],
-    )?;
+    let native = crate::agent::hooks::is_pi_native(&resolved.harness) && name != "pm";
+    let command = prepared::command(ctx, &resolved, &task, &prompt_file, native)?;
     let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"));
     let command = crate::launch_exit::arm(&command, &receipt)?;
     let mut preparation = match retained {
@@ -256,7 +249,12 @@ fn review_with_origin(
             spec_revision: selected.spec_revision.clone(),
             previous_reviews: selected.reviews.len(),
             review: PlanReview {
-                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                agent_host: None,
+                delivery: if native {
+                    crate::agent::hooks::delivery::launch_mode()
+                } else {
+                    corral_core::inbox::DeliveryMode::Legacy
+                },
                 inbox: Default::default(),
                 id: attempt.clone(),
                 reviewer: name.clone(),
@@ -370,6 +368,9 @@ fn review_with_origin(
                 ctx.herdr.workspace_close(&herdr.workspace_id)?;
             }
             return Err(error);
+        }
+        if native {
+            preparation.bind_native(ctx, &task, &resolved, &herdr)?;
         }
         let pressure = crate::resources::read_admission(ctx)?;
         let prepare = |store: &corral_core::Store, task: &mut Task| {
@@ -636,6 +637,7 @@ pub fn plan_verdict_report(
             None => {
                 terminalize_pending(p, "Superseded by an owner decision.");
                 p.reviews.push(PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 id: format!("PR{}", p.reviews.len() + 1),

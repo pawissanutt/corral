@@ -68,7 +68,15 @@ fn container(recipient: &Recipient) -> Option<ContainerRef> {
             review: review.clone(),
         }),
         Recipient::Pm => Some(ContainerRef::Pm),
-        Recipient::PlanRun { .. } | Recipient::PlanReview { .. } => None,
+        Recipient::PlanRun { task, plan_run } => Some(ContainerRef::Planner {
+            task: task.clone(),
+            run: plan_run.clone(),
+        }),
+        Recipient::PlanReview { task, plan, review } => Some(ContainerRef::PlanReviewer {
+            task: task.clone(),
+            plan: plan.clone(),
+            review: review.clone(),
+        }),
     }
 }
 

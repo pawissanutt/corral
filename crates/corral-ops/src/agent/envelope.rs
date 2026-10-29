@@ -196,11 +196,14 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
         identity.callback.as_deref(),
     );
     let shaped = match identity.role {
-        AgentRole::Worker => {
+        AgentRole::Worker | AgentRole::Planner => {
             task.is_some() && run.is_some() && review.is_none() && callback.is_none()
         }
         AgentRole::Reviewer => {
             task.is_some() && run.is_some() && review.is_some() && callback.is_some()
+        }
+        AgentRole::PlanReviewer => {
+            task.is_some() && run.is_some() && review.is_some() && callback.is_none()
         }
         AgentRole::Pm => task.is_none() && run.is_none() && review.is_none() && callback.is_none(),
     };
@@ -209,8 +212,9 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
             "identity for role {} must name {}",
             identity.role.as_str(),
             match identity.role {
-                AgentRole::Worker => "task and run only",
+                AgentRole::Worker | AgentRole::Planner => "task and run only",
                 AgentRole::Reviewer => "task, run, review and callback",
+                AgentRole::PlanReviewer => "task, plan in run, and review only",
                 AgentRole::Pm => "no task, run, review or callback",
             }
         )));
@@ -222,12 +226,17 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
             "identity.task must be a canonical task ID such as T-001",
         ));
     }
+    let prefix = match identity.role {
+        AgentRole::Planner => 'D',
+        AgentRole::PlanReviewer => 'P',
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm => 'R',
+    };
     if let Some(run) = run
         && !run
-            .strip_prefix('R')
+            .strip_prefix(prefix)
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
     {
-        return Err(bad("identity.run must be R<n>"));
+        return Err(bad(format!("identity.run must be {prefix}<n>")));
     }
     if let Some(review) = review {
         token("identity.review", review, 64, "._-")?;

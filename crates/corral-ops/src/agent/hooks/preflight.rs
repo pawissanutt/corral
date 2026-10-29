@@ -39,6 +39,7 @@ pub fn role_owner(role: AgentRole) -> &'static str {
     match role {
         AgentRole::Worker => "worker-role",
         AgentRole::Reviewer => "reviewer-role",
+        AgentRole::Planner | AgentRole::PlanReviewer => "T-460 planner capability loadouts",
         AgentRole::Pm => "pm-role",
     }
 }

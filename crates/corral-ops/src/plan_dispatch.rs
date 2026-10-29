@@ -49,6 +49,7 @@ pub(crate) fn dispatch(
     let id = format!("D{}", task.plan_runs.len() + 1);
     let output_dir = ctx.store.state_dir().join("plans").join(&task.id).join(&id);
     let resolved = ctx.store.config.resolve_route(&plan.route)?;
+    crate::agent::hooks::preflight::check(ctx, corral_core::agent::AgentRole::Planner, &resolved)?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?
@@ -100,6 +101,7 @@ pub(crate) fn dispatch(
             current.dispatch_plan = Some(queued);
         } else {
             current.plan_runs.push(PlanRun {
+                agent_host: None,
                 execution: Some(corral_core::ExecutionSnapshot {
                     candidate: plan.route.availability.clone(),
                     ..corral_core::ExecutionSnapshot::new(&ctx.store.config, resolved.clone())
@@ -221,12 +223,6 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
     text.push_str(&crate::comments::owner_comments(task));
     crate::prompt::append_working_instructions(&mut text, run.execution.as_ref());
     std::fs::write(&prompt_file, text).context("writing planning contract")?;
-    let command = render_command(ctx, task, run, repo, &prompt_file)?;
-    // Source stays read-only; the board store and its plan-output directory are
-    // explicitly writable so the planner can submit through the normal CLI.
-    let command = crate::plan_sandbox::command(repo, ctx.store.dir(), &command);
-    let smoke = crate::plan_lifecycle::Smoke::new(run)?;
-    let command = crate::plan_lifecycle::record_exit(run, &command);
     let herdr = match &claim.herdr {
         Some(herdr) => {
             ensure!(
@@ -251,7 +247,6 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
         }
     };
     claim.herdr = Some(herdr.clone());
-    claim.command = Some(command.clone());
     claim.save(task)?;
     let saved = ctx.store.update(&task.id, |t| {
         claim.check(t)?;
@@ -274,6 +269,15 @@ fn launch(ctx: &Ctx, task: &Task, repo: &Path, mut claim: claim::Claim) -> Resul
             return Err(error);
         }
     };
+    prepared.herdr = Some(herdr.clone());
+    let run = &prepared;
+    let command = render_command(ctx, &saved, run, repo, &prompt_file)?;
+    // Source stays read-only; only the board store and plan output are writable.
+    let command = crate::plan_sandbox::command(repo, ctx.store.dir(), &command);
+    let smoke = crate::plan_lifecycle::Smoke::new(run)?;
+    let command = crate::plan_lifecycle::record_exit(run, &command);
+    claim.command = Some(command.clone());
+    claim.save(&saved)?;
     let round = claim.round.to_string();
     ctx.herdr.pane_report_metadata(
         &herdr.pane_id,
@@ -364,6 +368,26 @@ fn render_command(
             None,
         )?,
     };
+    if crate::agent::hooks::is_pi_native(&resolved.harness) {
+        crate::agent::hooks::preflight::check(
+            ctx,
+            corral_core::agent::AgentRole::Planner,
+            resolved,
+        )?;
+        let target = crate::agent::BindTarget::Planner {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        let pane = &run.herdr.as_ref().context("planner pane missing")?.pane_id;
+        return crate::agent::hooks::launch::plan_command(
+            ctx,
+            &target,
+            pane,
+            resolved,
+            repo,
+            prompt_file,
+        );
+    }
     prompt::render_template(
         resolved,
         &[

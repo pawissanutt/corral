@@ -67,6 +67,12 @@ pub(crate) fn container_of(identity: &RequestIdentity) -> ContainerRef {
             run,
             review: review.clone(),
         },
+        (AgentRole::Planner, _) => ContainerRef::Planner { task, run },
+        (AgentRole::PlanReviewer, Some(review)) => ContainerRef::PlanReviewer {
+            task,
+            plan: run,
+            review: review.clone(),
+        },
         _ => ContainerRef::Worker { task, run },
     }
 }
@@ -204,12 +210,9 @@ fn saved_pane(state: &AgentRunState, generation: u32, saved: Option<&str>) -> Re
 /// Liveness, fence and saved pane, repeated by every final transaction under the task lock.
 pub(crate) fn recheck_task(task: &Task, binding: &RequestBinding) -> Result<()> {
     agent::check_live(task, binding)?;
-    let run = agent::container_run(task, &binding.container);
     let state = agent::container_state(task, &binding.container)
         .context("the container lost its agent binding")?;
-    let pane = run
-        .and_then(|r| r.herdr.as_ref())
-        .map(|h| h.pane_id.as_str());
+    let pane = agent::container_pane(task, &binding.container).map(|h| h.pane_id.as_str());
     saved_pane(state, binding.generation, pane)
 }
 
@@ -267,6 +270,15 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
 /// What a launcher binds: never chosen by the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindTarget {
+    Planner {
+        task: String,
+        run: String,
+    },
+    PlanReviewer {
+        task: String,
+        plan: String,
+        review: String,
+    },
     Worker {
         task: String,
         run: String,
@@ -285,6 +297,15 @@ pub enum BindTarget {
 impl BindTarget {
     pub fn container(&self) -> ContainerRef {
         match self {
+            BindTarget::Planner { task, run } => ContainerRef::Planner {
+                task: task.clone(),
+                run: run.clone(),
+            },
+            BindTarget::PlanReviewer { task, plan, review } => ContainerRef::PlanReviewer {
+                task: task.clone(),
+                plan: plan.clone(),
+                review: review.clone(),
+            },
             BindTarget::Worker { task, run } => ContainerRef::Worker {
                 task: task.clone(),
                 run: run.clone(),
@@ -403,6 +424,8 @@ pub fn open_generation_with(
         })?,
         (_, Some(task_id)) => {
             let (role, callback) = match target {
+                BindTarget::Planner { .. } => (AgentRole::Planner, None),
+                BindTarget::PlanReviewer { .. } => (AgentRole::PlanReviewer, None),
                 BindTarget::Reviewer { callback, .. } => {
                     (AgentRole::Reviewer, Some(callback.clone()))
                 }
@@ -419,9 +442,18 @@ pub fn open_generation_with(
                 {
                     bail!("only the current run can bind a Pi-native worker");
                 }
-                let run = agent::container_run_mut(task, &container)
+                if matches!(
+                    container,
+                    ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+                ) {
+                    ensure!(
+                        agent::container_closure(task, &container).is_none(),
+                        "only a current open planning container can bind a Pi-native host"
+                    );
+                }
+                let host = agent::container_host_mut(task, &container)
                     .with_context(|| format!("{} does not exist", container.key()))?;
-                let state = run.agent_host.get_or_insert_with(|| {
+                let state = host.get_or_insert_with(|| {
                     Box::new(AgentRunState::new(binding(
                         role,
                         &store_id,

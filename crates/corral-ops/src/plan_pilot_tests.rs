@@ -96,6 +96,7 @@ fn fixture_with(plan: &str) -> (tempfile::TempDir, Ctx, String, std::path::PathB
         .update(&task.id, |t| {
             t.plan_required = Some(true);
             t.plan_runs.push(PlanRun {
+                agent_host: None,
                 execution: None,
                 route: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,

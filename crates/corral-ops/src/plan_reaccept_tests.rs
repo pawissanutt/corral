@@ -31,6 +31,7 @@ fn rereview(ctx: &Ctx, id: &str, plan: &str, reviewer: &str) {
         .update(id, |task| {
             let record = task.plans.last_mut().unwrap();
             record.reviews.push(corral_core::PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 route: None,

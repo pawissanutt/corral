@@ -45,18 +45,7 @@ const REPLACE_TERM: Duration = Duration::from_secs(10);
 const REPLACE_KILL: Duration = Duration::from_secs(5);
 
 fn recipient(container: &ContainerRef) -> Recipient {
-    match container {
-        ContainerRef::Worker { task, run } => Recipient::Run {
-            task: task.clone(),
-            run: run.clone(),
-        },
-        ContainerRef::Reviewer { task, run, review } => Recipient::ReviewRun {
-            task: task.clone(),
-            run: run.clone(),
-            review: review.clone(),
-        },
-        ContainerRef::Pm => Recipient::Pm,
-    }
+    crate::questions::recipient(container).unwrap_or(Recipient::Pm)
 }
 
 /// The container a command names: the task's current run unless `--run` names another.
@@ -217,6 +206,9 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
             crate::launch_exit::receipt(ctx, task, &format!("{run}-{review}")),
             run.clone(),
         ),
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+            bail!("planning hosts relaunch through the plan pipeline");
+        }
         ContainerRef::Pm => unreachable!("the PM has no task"),
     };
     let spec = HostSpec {
@@ -737,8 +729,10 @@ fn post_notice(
 
 fn binding(container: &ContainerRef) -> MessageBinding {
     let run = match container {
-        ContainerRef::Worker { run, .. } => Some(run.clone()),
-        ContainerRef::Reviewer { review, .. } => Some(review.clone()),
+        ContainerRef::Worker { run, .. } | ContainerRef::Planner { run, .. } => Some(run.clone()),
+        ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
+            Some(review.clone())
+        }
         ContainerRef::Pm => None,
     };
     MessageBinding {
