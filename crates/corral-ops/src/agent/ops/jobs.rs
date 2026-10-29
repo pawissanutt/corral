@@ -155,6 +155,7 @@ fn apply(
                 signal: None,
                 detail: None,
                 group_clear: false,
+                swept: false,
                 monitors: Vec::new(),
             });
             evict_jobs(&mut state.jobs);

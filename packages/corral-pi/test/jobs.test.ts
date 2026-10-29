@@ -195,7 +195,7 @@ for (const path of ["job_kill", "runtime limit", "leader exit", "shutdown"] as c
     const { job } = await fx.runtime.start(stubborn(ready, leader), "c1");
     expect(await up).toBe("up\n");
     const { pid, start } = fx.identity(job as string);
-    expect(processGroup(pid, start)).toBe("owned");
+    expect(processGroup(pid, start).owned).toBeTrue();
     // When the job is ended through this path.
     if (path === "job_kill") await fx.runtime.kill(job as string);
     if (path === "runtime limit") deadlines.splice(0).forEach((run) => run());
@@ -203,7 +203,7 @@ for (const path of ["job_kill", "runtime limit", "leader exit", "shutdown"] as c
     if (path === "shutdown") fx.runtime.shutdown();
     await fx.runtime.settled(job as string);
     // Then the whole group is gone and the exit report says so.
-    expect(processGroup(pid, start)).toBe("empty");
+    expect(processGroup(pid, start).members).toBe(0);
     expect(fx.sent.at(-1)?.payload.group_clear).toBeTrue();
   });
 }
@@ -247,4 +247,40 @@ test("a host killed between spawn and the identity commit leaves no command runn
   // Then the gated launcher exits by itself and the command never ran.
   expect(await next(/^(EXITED|TIMEOUT)$/)).toBe("EXITED");
   expect(existsSync(marker)).toBeFalse();
+});
+
+test("only the recorded leader anchors a group; a leaderless or stale identity is never owned", async () => {
+  // Given a disposable group whose leader blocks on stdin beside a TERM-ignoring descendant.
+  const leader = spawn("/bin/bash", ["-c", "(trap '' TERM; exec sleep 300) & echo $!; read -r _; exit 0"], {
+    detached: true, stdio: ["pipe", "pipe", "inherit"],
+  });
+  const descendant = Number(await lines(leader.stdout)(/^(\d+)$/));
+  const pgid = leader.pid as number;
+  const real = startTimeOf(pgid);
+  try {
+    // Then while the leader lives only its real start time owns the group.
+    expect(processGroup(pgid, real)).toEqual({ owned: true, reused: false, members: 2 });
+    expect(processGroup(pgid, "1")).toEqual({ owned: false, reused: true, members: 2 });
+    // When the leader exits and is reaped, leaving the descendant in the group.
+    // "exit", not "close": the descendant still holds the leader's stdout pipe.
+    const gone = new Promise((resolve) => leader.once("exit", resolve));
+    leader.stdin.end();
+    await gone;
+    // Then neither the real nor a stale identity owns it any more, and the descendant lives on.
+    expect(processGroup(pgid, real)).toEqual({ owned: false, reused: false, members: 1 });
+    expect(processGroup(pgid, "1")).toEqual({ owned: false, reused: false, members: 1 });
+    expect(startTimeOf(descendant)).toBeDefined();
+  } finally {
+    try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ }
+  }
+});
+
+test("a command's own output never stands in for the launcher's status line", async () => {
+  // Given a command that prints a status-shaped line and exits with another code.
+  const fx = fixture();
+  const { job } = await fx.runtime.start('echo "exit 7"; exit 3', "c1");
+  await fx.runtime.settled(job as string);
+  // Then the launcher's status wins and the line is ordinary job output.
+  expect(fx.sent.at(-1)?.payload).toEqual({ action: "exited", job: "j3-1", exit_code: 3, group_clear: true });
+  expect(fx.runtime.output(job as string).text).toBe("exit 7\n");
 });

@@ -375,16 +375,18 @@ Worker generations with `background_shell` expose `job_start`, `job_output`, `jo
 `corral_job_monitor`. `job_start` runs `bash -c <command>` in the worktree in its own process
 group and returns a job ID (`j<generation>-<n>`) at once. A job is that whole process group.
 Before spawning, the host records the job with corral. The spawned launcher then waits on its
-stdin while the host records the pid and kernel start time; only after that commit does the
+stdin while the host records its pid and kernel start time; only after that commit does the
 host release it to run the command. A host that dies in between leaves no running command, and
-a refused record means nothing ran. `job_output` returns state, exit code and up to 64 KiB of output
+a refused record means nothing ran. The launcher stays the group's leader while the command
+runs as its child, so the recorded identity keeps anchoring the group; it reports the command's
+exit status to the host on its own stdout, and the command's stdout and stderr both become the
+job's output. If the host goes away after the command finished, the launcher kills its group. `job_output` returns state, exit code and up to 64 KiB of output
 per call, paging with `offset`/`next_offset`. Output is written to the generation's runtime
 directory up to `max_output_bytes`; if that file is lost, the last 64 KiB still come from
 memory. `job_kill` sends SIGTERM to the group, then SIGKILL after two seconds; the runtime
-limit kills the same way. Whenever the leader exits (normally, killed, or at the runtime
-limit), the host SIGKILLs every remaining member of the group, including descendants that
-ignore SIGTERM or redirect their output. It reports the exit only after the group is gone
-(`group_clear`).
+limit kills the same way. Whenever the command ends (normally, killed, or at the runtime
+limit), the host SIGKILLs the still-anchored group, including descendants that ignore SIGTERM
+or redirect their output, and reports the exit only after the group is gone (`group_clear`).
 
 `corral_job_monitor` takes `job`, `on` (`exit` or `line` with a JavaScript `pattern`) and
 `timeout_secs` (default 3600). It is a receipted corral operation, callable only at top level,
@@ -396,10 +398,11 @@ ended turn is classified `waiting_external`. End the turn after the call instead
 
 Jobs belong to their generation. Sync reaps a running job whose generation was fenced or
 replaced (an explicit resume after host loss) or whose run ended. It also sweeps an exited job
-whose group was never verified empty. The group is the job's while its leader still has the
-recorded start time, or, once the leader is gone, while any member remains: Linux never reuses
-a pid that is still a group ID. A group led by a reused pid is left alone and the job is
-reported `lost`. Bash, jobs and their network traffic run outside the
+whose group was never verified empty. A group is the job's only while its recorded leader still
+holds the pid (running or an unreaped zombie) with the recorded start time. A group whose leader
+is gone cannot be told apart from a later group that reused the ID, so it is never signalled,
+whatever its members; neither is a group led by a reused pid. Such jobs are reported `lost`
+with the reason, and are not revisited. Bash, jobs and their network traffic run outside the
 in-process network guard, as `bash` always has. Recovery reports an interrupted `job_start`
 or `job_kill` as `outcome_unknown` and `job_output` as `interrupted_no_effect`. The durable
 records live in the run's `agent_host.jobs`; the host's bridge state lists its live jobs and
