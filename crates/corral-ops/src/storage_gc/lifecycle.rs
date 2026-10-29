@@ -7,9 +7,9 @@
 //! row already recorded under the current digest and not due costs no filesystem work.
 //!
 //! Recovery runs only without a followable cursor (the first pass, or one behind the change
-//! feed's retention), outside the measured pass like the settling recovery: it reads the
-//! terminal tasks once and records as pending each whose current worktree still exists and has
-//! no row, so work that predates the cursor is still discovered.
+//! feed's retention): it lists the worktree directories that exist under each project's
+//! `.worktrees` and records as pending each finished task's that has no row, so work that
+//! predates the cursor is still discovered, at a cost bounded by the directories on disk.
 
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use corral_core::Status;
-use corral_core::backend::{ChangeSeq, HeadQuery, LifecycleOutcome, LifecycleRow, LifecycleWrite};
+use corral_core::backend::{ChangeSeq, LifecycleOutcome, LifecycleRow, LifecycleWrite};
 use corral_core::records::RecordArea;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -131,26 +131,37 @@ fn discover(ctx: &Ctx) -> Result<Cursor> {
     Ok(cursor)
 }
 
-/// Rebuilds the cursor at the current position with every terminal task whose current
-/// worktree still exists and has no lifecycle row pending (plus what was already pending).
-/// Outside the measured pass: this one-time read follows the board's terminal history.
+/// Rebuilds the cursor at the current position with every finished task whose worktree
+/// directory still exists under a project's `.worktrees` and has no lifecycle row pending (plus
+/// what was already pending). The work follows the worktree directories on disk, never the
+/// board's history: a task without a directory there costs nothing.
 fn recover(ctx: &Ctx) -> Result<Cursor> {
-    let _preparation = corral_core::work::Preparation::enter();
     let seq = ctx.store.view()?.seq();
     let mut pending = CURSOR
         .load(&ctx.store, "board")?
         .map(|saved| saved.pending)
         .unwrap_or_default();
-    for status in [Status::Done, Status::Dropped] {
-        let status = serde_json::to_value(status)?
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
-        for head in ctx.store.heads(&HeadQuery::RecentByStatus { status })? {
+    for project in ctx.store.config.projects.keys() {
+        let dir = ctx.store.project_path(project)?.join(".worktrees");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            let Some(id) = name.and_then(|n| corral_core::Store::normalize_id(&n).ok()) else {
+                continue;
+            };
+            let Ok(head) = ctx.store.head(&id) else {
+                continue;
+            };
             let Some(run) = head.current_run.as_deref() else {
                 continue;
             };
-            if std::fs::symlink_metadata(&run.worktree).is_ok()
+            if matches!(head.status, Status::Done | Status::Dropped)
+                && run.worktree == path
                 && ctx
                     .store
                     .lifecycle_row(&head.id, &run.id, TARGET)?

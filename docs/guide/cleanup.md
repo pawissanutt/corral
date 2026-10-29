@@ -37,8 +37,9 @@ Each sync pass, headless or not, settles the worktree of every task that became 
 or Dropped since the previous pass and a small batch of earlier discoveries, then at
 most a small batch of earlier decisions that are due for a recheck or were made under
 a different cleanup policy. It never walks the board's history: only the first pass,
-or one that fell behind the change feed's retention, reads the finished tasks once to
-discover worktrees that still exist without a record. One lifecycle record per task, run and target remembers the decision, so a
+or one that fell behind the change feed's retention, lists the directories under each
+project's `.worktrees/` to discover finished worktrees that still exist without a
+record. One lifecycle record per task, run and target remembers the decision, so a
 later sync does no filesystem work for it:
 
 - a clean worktree is removed whole with `git worktree remove` (never `--force`);
@@ -74,7 +75,8 @@ never followed.
 
 `corral storage gc --yes` removes clean finished worktrees (branches kept),
 closed scratch nothing uses, terminal tasks' agent sessions once no process uses them,
-no pane of theirs is working and every transcript file's exact current bytes have a
+every unreleased pane of theirs is idle, done or absent on the server that recorded it,
+and every transcript file's exact current bytes have a
 live log artifact (it promotes the rest first), legacy build output, and evidence blobs
 unreferenced for longer than `blob_grace_hours` (and stray blob files as old). It
 leaves dirty, kept, open, non-terminal, unmanaged and unknown entries alone, never

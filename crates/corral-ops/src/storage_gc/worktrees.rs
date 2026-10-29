@@ -281,13 +281,23 @@ pub(crate) fn reclaim(ctx: &Ctx, found: &Assessment, via: &str) -> Result<()> {
         .file_name()
         .map(PathBuf::from)
         .context("worktree path has no name")?;
+    // The no-follow root handle is opened first: a symlinked `.worktrees` or ancestor refuses
+    // before anything, Git included, deletes.
+    let handle = corral_core::fs_guard::DirHandle::open(&root)?;
     if build_only {
-        remove_below(&root, &name, &unchanged)?;
+        handle.remove_entry(&name, &unchanged)?;
     } else {
         unchanged()?;
+        handle.revalidate()?;
+        anyhow::ensure!(
+            std::fs::symlink_metadata(&found.path)?.is_dir(),
+            "{} is not a real directory",
+            found.path.display()
+        );
         corral_git::worktree_remove(repo, &found.path, false)?;
-        // Git can unregister the worktree and still fail to unlink its directory.
-        remove_below(&root, &name, &|| Ok(()))?;
+        // Git can unregister the worktree and still fail to unlink its directory; what it left
+        // is removed through the same handle, with no further eligibility check.
+        handle.remove_entry(&name, &|| Ok(()))?;
     }
     ctx.store.log_event(
         Some(&found.task),

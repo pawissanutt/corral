@@ -113,8 +113,9 @@ fn identities(container: &impl serde::Serialize, into: &mut BTreeSet<String>) ->
 
 /// The runs whose harness processes stay protected while a worktree is removed: one shell of
 /// the removed run per harness identity recorded by the removed run (its own and its review
-/// children's, from the `harnesses` fact) and by every container of every task, open or
-/// finished, that still holds an unreleased pane. Owners come from the cleanup ledger's open
+/// children's, from the `harnesses` fact), by the container each unreleased cleanup-ledger
+/// pane names (an earlier run or plan run included), and by the current containers of every
+/// task, open or finished, that still holds an unreleased pane. Owners come from the cleanup ledger's open
 /// rows, never from a walk of the board or of any task's history.
 fn protecting_runs(ctx: &Ctx, own_run: &RunHead) -> Result<Vec<Run>> {
     let mut names = BTreeSet::new();
@@ -131,6 +132,24 @@ fn protecting_runs(ctx: &Ctx, own_run: &RunHead) -> Result<Vec<Run>> {
         .store
         .heads(&corral_core::backend::HeadQuery::UnreleasedPanes)?;
     for head in owners {
+        // Each unreleased ledger row names the container that owns its pane: an earlier run or
+        // plan run is read by key, never by walking the task's history.
+        for pane in head.unreleased_panes(false)? {
+            let suffix = format!("/{}/{}", pane.kind, pane.pane);
+            let owner = pane.key.strip_suffix(&suffix).unwrap_or(&pane.key);
+            if let Some(run_seq) = owner
+                .strip_prefix("run:")
+                .and_then(|rest| rest.split('/').next())
+                .and_then(|n| n.parse::<u64>().ok())
+                && let Some(run) = head.run_head(&format!("R{run_seq}"))?
+            {
+                add_run(&run, &mut names)?;
+            } else if let Some(id) = owner.strip_prefix("plan_run:")
+                && let Some(plan_run) = head.plan_run_head(id)?
+            {
+                identities(&plan_run, &mut names)?;
+            }
+        }
         if let Some(run) = head.current_run.as_deref() {
             add_run(run, &mut names)?;
         }
