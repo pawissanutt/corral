@@ -149,3 +149,25 @@ fn legacy_observations_keep_sightings_but_not_unordered_missing_evidence() {
     let second = fixture.ticket();
     assert!(fixture.observe(second, false, 3));
 }
+
+#[test]
+fn retained_missing_projection_neither_advances_samples_nor_probes_panes() {
+    // Given two causal missing samples after a sighting.
+    let fixture = Fixture::new();
+    assert!(!fixture.observe(fixture.ticket(), true, 1));
+    assert!(!fixture.observe(fixture.ticket(), false, 2));
+    assert!(fixture.observe(fixture.ticket(), false, 3));
+    let before = fixture.bytes();
+    let started = fixture.task.current_run().unwrap().started;
+    // When the read-only projection loads confirmed absence.
+    let missing = recorded_missing(&fixture.ctx).unwrap();
+    // Then it identifies this launch only and leaves causal observation state unchanged.
+    assert_eq!(
+        missing,
+        BTreeMap::from([(
+            format!("w1:p1@{started}"),
+            started + SignedDuration::from_secs(3)
+        )])
+    );
+    assert_eq!(fixture.bytes(), before);
+}

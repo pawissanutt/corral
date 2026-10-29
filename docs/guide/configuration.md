@@ -81,7 +81,7 @@ How many agents run at once.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `running` | `3` | Global slots: each Running/Needs me task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. This is the hard limit. |
+| `running` | `3` | Global slots: each Running/Blocked task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. This is the hard limit. |
 | `running_target` | `running` | Soft target that automatic coding admission fills up to; see below. Must be within `1..=running`. |
 | `per_project.<project>` | none | Optional cap for one project. Must name a configured project and be above 0. |
 | `count_reviews` | `true` | Include active reviewer processes in global and project slots. |
@@ -145,7 +145,7 @@ This override bypasses only machine pressure, never slot, dependency, or candida
 `corral dispatch T-042 --queue` instead authorizes the task to wait for recovery.
 
 Memory or disk pressure also raises one owner notification and `escalated` event per episode,
-with the largest per-task worktree and target sizes. If a task is Running, one is shown in Needs me
+with the largest per-task worktree and target sizes. If a task is Running, one is shown in Blocked
 until the resource alert clears; its previous state is restored if it still belongs to that alert.
 Ready and Review work retains its admission state and waiting explanation, without taking a slot
 for resource attention. With no Running task, the workspace notification and the header's
@@ -280,7 +280,7 @@ before reporting. The command runs in its own child shell, so a trailing `;`, `&
 `set -e`, or a fish pane shell cannot skip the receipt.
 On the next sync:
 
-- A worker run ends as `failed`, keeps the pane's error lines and waits in Needs me without holding a run slot.
+- A worker run ends as `failed`, keeps the pane's error lines and waits in Blocked without holding a run slot.
 - An implementation reviewer's slot is released, and the autopilot escalates.
 - A plan-review attempt gets an `escalate` verdict that carries the error.
 - An aggregate review is abandoned with the error. This includes one assigned to a PM that has exited.
@@ -773,7 +773,7 @@ commands, and saving uses the normal validated config path. Repository scripts a
 have read-only content previews.
 
 An empty gate never passes: `corral gate` and approval's re-gate report
-`project <p> has no gate configured`; the autopilot hands configured review policies to Needs me
+`project <p> has no gate configured`; the autopilot hands configured review policies to Blocked
 with that reason. A workspace with no review policy at all retains the manual review flow.
 
 ```toml
@@ -809,7 +809,7 @@ How `corral sync` (and the board's background sync) reads agent activity.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `startup_grace_secs` | `30` | Positive startup window for a dispatched pane to appear in herdr's pane list. Missing panes become **Needs me** after this window, or immediately if previously listed (even idle). |
+| `startup_grace_secs` | `30` | Positive startup window for a dispatched pane to appear in herdr's pane list. Missing panes become **Blocked** after this window, or immediately if previously listed (even idle). |
 | `idle_after_secs` | `120` | A run that looks idle without calling `corral done` gets an `idle_no_report` badge after this many seconds. It never moves the card. |
 | `review_idle_after_secs` | `1800` | Positive idle bound for a pending reviewer, separate from worker warnings so quiet monitor/background waits can finish. The persisted deadline survives syncs and restarts; expiry escalates with the saved notes path. |
 | `stuck_after_secs` | `300` | Seconds of raw herdr idle, and foreground-process age, before a run gets the `stuck:` warning (see [the watchdog](automation.md#the-watchdog-stuck-commands)). |
@@ -837,7 +837,7 @@ omo_agent_dir = "/home/me/.omo/agent"
 | `accent` | `"cyan"` | Focus, link and shortcut color: `cyan`, `blue`, `magenta`, `green`, or `orange`. Status colors remain unchanged. |
 | `compact_cards` | `false` | One-line cards; off restores the density in `board.card`. |
 | `route_warnings` | `false` | Show the yellow route warning triangle on board cards (all densities). Only the glyph is hidden when off; route pairs, other warnings and `review.require_cross_family` enforcement are unchanged. Boolean only. |
-| `notify_needs_me` | `false` | Desktop alert when a task is observed entering Needs me. |
+| `notify_needs_me` | `false` | Desktop alert when a task is observed entering Blocked. |
 | `notify_review` | `false` | Desktop alert when a task is observed entering Review. |
 | `keys` | `{}` | Board action to single printable ASCII character; omitted actions use their defaults. Digits, arrows, Enter and Ctrl+C are fixed. Duplicate bindings are rejected. |
 
@@ -882,11 +882,11 @@ Which fields a board card shows beyond its id, title and status line. Cost is on
 
 | Key | Default | Meaning |
 |---|---|---|
-| `fields` | `["cost"]` | Fields in priority order; at narrow widths the last ones are dropped first. Available: `cost`, `tokens`, `profile`, `model`, `effort`, `harness`, `stage`, `progress`, `rounds`, `age`, `depends_on`, `priority`, `artifacts`, `pinned`, `lines`, `needs_me`. |
+| `fields` | `["cost"]` | Fields in priority order; at narrow widths the last ones are dropped first. Available: `cost`, `tokens`, `profile`, `model`, `effort`, `harness`, `stage`, `progress`, `rounds`, `age`, `depends_on`, `priority`, `artifacts`, `pinned`, `lines`, `blocked` (legacy alias: `needs_me`). |
 | `density` | `"comfortable"` | `compact` is one line per card (id, title, fields; it has no menu glyph, so the whole card is the click and drag target, and right-click or the keyboard opens the card menu); `comfortable` adds the status lines; `rich` adds a progress bar. |
 | `cost_warn` | unset | Cards whose cost is at or above this many USD show it in the warning color. |
 | `column_cost` | `false` | Show the summed cost of a column in its header when there is room. |
-| `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `needs_me`, `review` or `done`. |
+| `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `blocked`, `review` or `done`. The legacy `needs_me` override remains accepted; `blocked` wins when both are present. |
 
 Cost is the task total across every run, review and gate, summed per usage entry so nothing known is lost, and
 the board refreshes unfinished runs from their harness transcripts on every sync (no need to open the task). The

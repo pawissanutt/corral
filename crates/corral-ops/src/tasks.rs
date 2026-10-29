@@ -133,7 +133,7 @@ pub fn move_task_with_decision(
         let allowed = to == Status::Dropped || (manual_status(to) && manual_status(t.status));
         if !allowed && !force {
             bail!(
-                "cannot move {} from {} to {}: only dispatch, herdr state and `corral done` move tasks into Running, Needs me and Review; approve moves Review to Done",
+                "cannot move {} from {} to {}: only dispatch, herdr state and `corral done` move tasks into Running, Blocked and Review; approve moves Review to Done",
                 t.id,
                 t.status.label(),
                 to.label()

@@ -255,7 +255,7 @@ fn blocked_moves_to_needs_me_and_notifies() {
         t.current_run().unwrap().blocked_excerpt.as_deref(),
         Some("QUESTION: ship it?")
     );
-    assert_eq!(fx.notifications(), "▲ T-001 needs you\n");
+    assert_eq!(fx.notifications(), "▲ T-001 blocked\n");
     assert_eq!(fx.events("needs_me"), 1);
 }
 

@@ -30,6 +30,7 @@ impl BoardIndex {
         tasks: &[Task],
         finishes: &HashMap<String, Finish>,
         pinned: &HashSet<String>,
+        attention: &crate::attention::Snapshot,
     ) -> Self {
         record(Work::BoardVisit, tasks.len() as u64);
         let mut index = BoardIndex::default();
@@ -39,7 +40,7 @@ impl BoardIndex {
                     .done
                     .push((i, finishes.get(&t.id).map_or(t.updated, |f| f.at)));
                 index.done_ids.insert(t.id.clone());
-            } else if let Some(slot) = t.status.column().and_then(slot) {
+            } else if let Some(slot) = crate::attention::column(t, attention).and_then(slot) {
                 index.columns[slot].push(i);
             }
         }
@@ -52,6 +53,16 @@ impl BoardIndex {
             .map(|(position, _)| position)
             .collect();
         index
+    }
+
+    pub(super) fn counts(&self) -> [usize; 6] {
+        std::array::from_fn(|i| {
+            if Status::COLUMNS[i] == Status::Done {
+                self.done.len()
+            } else {
+                self.columns[i].len()
+            }
+        })
     }
 
     /// The tasks of column `col` (not Done) by priority; Backlog keeps only ideas when `ideas_only`.

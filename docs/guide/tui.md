@@ -12,11 +12,11 @@ artifacts).
 
 ## Board
 
-Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me**, **Review** and **Done**.
+Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Blocked**, **Review** and **Done**.
 Preferences selects visible columns and WIP display. `D` temporarily toggles Done, which shows
 the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
 their landed commit; the column foot `+N older ›` opens the history view; ideas are Backlog cards you can filter with `i`. A card shows the id, project, priority,
-title and the profile that will (or did) run it; Needs me cards show the agent's question, and Review cards show
+title and the profile that will (or did) run it; Blocked cards show the agent's question, and Review cards show
 the autopilot state (`⧗ gating`, `👁 reviewing`, `↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`); a run whose foreground command is stuck shows `⚠ stuck: <command>`
 (see [the watchdog](automation.md#the-watchdog-stuck-commands)). The header counts what needs you and shows
 Assist or scoped Autopilot, with the same Working, Waiting, Needs your decision or Complete status
@@ -41,7 +41,7 @@ commands still print diagnostics to stderr.
 
 With `profile` enabled in `[board.card].fields` (or a column override), cards show
 `implementer -> reviewer` from Backlog onward in rich and compact density. Before plan
-approval the pair is planner -> plan reviewer. Running and Needs me cards retain the
+approval the pair is planner -> plan reviewer. Running and Blocked cards retain the
 run's recorded implementer and vendor; a launched reviewer's recorded identity takes
 precedence over a newly configured reviewer. Route warning triangles are hidden by default.
 Set `[ui] route_warnings = true` to show the yellow `⚠` for same-vendor review, an
@@ -80,7 +80,7 @@ effort (`e`) for this run only, or save the combination as a new profile (`p`). 
 will be sent.
 
 **Drop** (`X`, or **drop…** in the card menu): available for Idea, Backlog, Ready, Running,
-Needs me and Review cards, never Done or Dropped. The popup explains the consequences before
+Blocked and Review cards, never Done or Dropped. The popup explains the consequences before
 anything changes. `⏎` or `y` confirms; `esc` or `n` cancels. Press `Tab` or click the optional
 reason field to edit it; while editing, `y` and `n` are ordinary text. `Tab` returns to
 confirmation, `⏎` confirms with the reason, and `esc` still cancels.
@@ -325,7 +325,7 @@ harness's, extra args, and a preview of the command a dispatch would run.
 **Mouse:** click sections, fields, pills and `+ add` rows; the wheel scrolls the form, or switches section over
 the section list.
 
-**Preferences** includes accent, compact cards, WIP usage, desktop alerts for Needs me and Review,
+**Preferences** includes accent, compact cards, WIP usage, desktop alerts for Blocked and Review,
 automatic queue dispatch, visible columns, Done history bounds and remappable board keys.
 The controls use the same staged Save and discard flow. Personal `[ui]` preferences can be saved
 to the user layer (`u`); auto-dispatch is workspace-only (`w`). Key edits accept one printable ASCII

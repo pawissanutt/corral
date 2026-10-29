@@ -171,7 +171,7 @@ their model, then their current named profile (`profile`, or the legacy `agent` 
 explicit vendor wins over inference from its model. Known bare `claude-*`, `gpt-*` and `o`-series model
 IDs work as well as provider-qualified IDs. The first resolved vendor is saved on the run so later
 profile edits cannot rewrite it. If no vendor can be resolved, autopilot hands the task to you once,
-in Needs me with the reason, instead of retrying every sync.
+in Blocked with the reason, instead of retrying every sync.
 
 ```bash
 corral review-run T-042                    # use the configured reviewer
@@ -190,7 +190,7 @@ corral verdict T-042 escalate --notes "Touches billing; needs the owner."
 |---|---|
 | `approve` | continues to acceptance |
 | `changes` | sends the notes back to the task agent as a new round |
-| `escalate` | hands the task to you (Needs me) with the notes as the reason |
+| `escalate` | hands the task to you (Blocked) with the notes as the reason |
 
 A verdict belongs to one commit. If the worktree moved on after the review started, or the reviewer closed
 without recording a verdict, the task goes to you instead of being trusted.
@@ -207,7 +207,7 @@ A pending reviewer uses `[sync] review_idle_after_secs` (default 1800, or 30 min
 not the worker's 120-second idle warning. This longer bound accommodates quiet monitor
 and background-check waits without closing the review pane. Its first idle observation
 is persisted; repeated syncs and restarts do not extend the bound. Genuine activity
-resets it, and a reviewer still idle at the bound goes to Needs me with its saved notes
+resets it, and a reviewer still idle at the bound goes to Blocked with its saved notes
 path. A completed verdict stops the watchdog. A failed verdict submission escalates on the next idle sample;
 an idle legacy review missing its candidate identity escalates immediately. This liveness check
 continues with autopilot off, and activity resets the persisted idle deadline.
@@ -232,7 +232,7 @@ facts after a restart without repeating the external notification. A missing
 notification outcome means unknown, including a crash immediately before the call
 or immediately after it. `owner_notified` means the transport returned success,
 not that the owner read the message. Unclassified preflight failures still
-escalate to Needs me; their autopilot event identifies review runs released by
+escalate to Blocked; their autopilot event identifies review runs released by
 round cleanup.
 
 ## Daily digests
@@ -310,7 +310,7 @@ Each run carries an autopilot state, shown on its card and review screen, and ev
 | `reviewed` | gate and review passed and the run waits in Review for you (`accept = "owner"`); the card says `✓ reviewed` |
 | `changes` | sent back to the task agent with the reason |
 | `blocked` | landing waits for a precondition (the main checkout is dirty or not on the base branch); retried on later syncs and notified once |
-| `escalated` | handed to you (Needs me) with the reason |
+| `escalated` | handed to you (Blocked) with the reason |
 
 The path is `gating`, then `reviewing`, then either `reviewed` (you accept) or `landing` and `done`
 (`accept = "auto"`).
@@ -321,7 +321,7 @@ Before starting a gate or reviewer, the autopilot simulates integration with `gi
 the exact candidate and current base SHAs. It distinguishes a clean merge, a conflict, and a Git
 infrastructure error by exit status and structured output. The simulation leaves branches, the index
 and the worktree unchanged. Conflicts use the existing change-request rounds; infrastructure errors
-escalate to Needs me instead of asking the worker to rebase.
+escalate to Blocked instead of asking the worker to rebase.
 
 An **Integration repair packet** JSON artifact records the dispatch base, merge base, candidate and
 current base SHAs; every base commit since dispatch; commits still missing from the candidate;
@@ -350,7 +350,7 @@ request-changes or retry resets the count.
 
 ### Early main-movement notices
 
-Sync also watches recorded landings for active Running/Needs me runs on the same project and base.
+Sync also watches recorded landings for active Running/Blocked runs on the same project and base.
 After two seconds without another observed landing, it compares the batch's changed paths with the
 worker's committed changes, staged/unstaged/untracked paths, and optional `write_scope` globs.
 Both rename endpoints count. Git status supplies uncommitted path names; corral does not read their
@@ -390,7 +390,7 @@ conflicting requirements. Keep a normal sync driver running to construct and del
 
 ### What always needs you
 
-With `accept = "auto"`, these guards stop the autopilot and put the task in Needs me with the reason spelled
+With `accept = "auto"`, these guards stop the autopilot and put the task in Blocked with the reason spelled
 out and a notification:
 
 - the change touches a path matching `owner_paths`;
@@ -404,7 +404,7 @@ Diff size is not a guard: a large diff goes through the same gate, independent r
 small one. The former `max_diff_lines` key is deprecated; existing configs that still set it load, the value
 is ignored, and corral warns once.
 
-From Needs me you can approve, request changes, retry or discard like any other Review task.
+From Blocked you can approve, request changes, retry or discard like any other Review task.
 
 ### Landing
 
@@ -509,7 +509,7 @@ task again.
 queue intent, and prevent `auto_backlog` from immediately readmitting it. Move to Ready or
 explicit enqueue clears that hold. Promoting an Idea to Backlog does not set a withdrawal
 hold: it remains eligible for configured `auto_backlog` admission. Queue removal rejects
-Running, Needs me, Review, Done, and Dropped tasks; it does not stop agents or finishing work.
+Running, Blocked, Review, Done, and Dropped tasks; it does not stop agents or finishing work.
 Ready cards show the current dependency, capacity/headroom, machine-busy, paused, or
 admission-restriction reason.
 
@@ -548,13 +548,13 @@ the run identity.
 
 Shell submission has an unavoidable ambiguous boundary: the IPC may succeed immediately before the
 launcher dies. Corral never sends that command a second time. It retains the one attached run/pane in
-Needs me, releases the temporary reservation into that occupied task slot, and asks the owner to inspect
+Blocked, releases the temporary reservation into that occupied task slot, and asks the owner to inspect
 the pane before retrying. This is at-most-once submission, not a claim of exactly-once arbitrary shell
 execution. An ordinary task retry or explicit reply is the owner's recovery action.
 
 ### Finishing work and capacity
 
-Running/Needs me tasks, running gates and live reviewer records each use one global and project slot by
+Running/Blocked tasks, running gates and live reviewer records each use one global and project slot by
 default. A gate started while its coding task is still Running therefore needs another slot.
 `limits.review` is an additional gate/reviewer cap; `limits.count_reviews` and `limits.count_gates`
 can explicitly exclude those process types from the shared pool (both default on).
@@ -692,7 +692,7 @@ PASS through resume. Finished gates produce one receipt per wait, even across sy
 Their delivery is `unknown`: collecting a result does not prove the harness received a wake.
 
 A decision uses `version`, `id`, `run`, `owner`, `source`, optional `deadline`, `question` and
-`requested_action`. It moves the task to Needs me with that exact question and action, even if
+`requested_action`. It moves the task to Blocked with that exact question and action, even if
 herdr says idle or working. A valid external wait stays Running, distinct from an unanswered
 owner question. Cards show the condition and diagnostic state; the detail Runs tab includes the
 request, handle, observation and receipt. An expired decision still requires an owner answer.

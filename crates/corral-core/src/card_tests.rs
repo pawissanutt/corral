@@ -80,6 +80,22 @@ fn every_field_round_trips_its_key() {
 }
 
 #[test]
+fn blocked_configuration_accepts_new_and_legacy_keys() {
+    // Given a saved legacy override and a newer Blocked override.
+    let mut cfg = CardCfg::default();
+    cfg.columns.insert("needs_me".into(), vec!["age".into()]);
+    cfg.columns.insert("blocked".into(), vec!["cost".into()]);
+    // When selecting the rendered column's fields, then the new key wins without losing old parsing.
+    assert_eq!(cfg.fields_for(Status::NeedsMe), [CardField::Cost]);
+    assert_eq!(CardField::parse("needs_me"), Some(CardField::NeedsMe));
+    assert_eq!(CardField::parse("blocked"), Some(CardField::NeedsMe));
+    assert!(cfg.problems().is_empty());
+    assert_eq!(Status::parse("blocked"), Some(Status::NeedsMe));
+    assert_eq!(Status::parse("needs_me"), Some(Status::NeedsMe));
+    assert_eq!(serde_json::to_value(Status::NeedsMe).unwrap(), "needs_me");
+}
+
+#[test]
 fn ideas_use_the_backlog_override_because_they_render_in_that_column() {
     let mut cfg = CardCfg::default();
     cfg.columns.insert("backlog".into(), vec!["tokens".into()]);

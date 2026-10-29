@@ -171,7 +171,7 @@ pub(crate) fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
 fn parse_status(s: &str) -> Result<Status> {
     Status::parse(s).ok_or_else(|| {
         anyhow!(
-            "unknown status '{s}' (idea, backlog, ready, running, needs_me, review, done, dropped)"
+            "unknown status '{s}' (idea, backlog, ready, running, blocked, review, done, dropped)"
         )
     })
 }

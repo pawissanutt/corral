@@ -26,8 +26,10 @@ pub use slots::slot_summary;
 
 mod autopilot;
 #[cfg(test)]
+pub(crate) mod blocked_tests;
+#[cfg(test)]
 pub(crate) mod card_tests;
-mod cards;
+pub(crate) mod cards;
 mod columns;
 mod compact;
 mod drop;
@@ -59,7 +61,7 @@ mod tracker_tests;
 mod usage_refresh_tests;
 
 const MOVE_RULE: &str = "H/L moves cards between Backlog and Ready. Dispatch, herdr state and `corral done` move tasks into \
-Running, Needs me and Review; approve moves Review to Done.";
+Running, Blocked and Review; approve moves Review to Done.";
 
 /// The kanban board (see mock "Board" scene).
 pub struct BoardView {

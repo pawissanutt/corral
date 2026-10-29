@@ -16,6 +16,8 @@ use serde::Serialize;
 
 use crate::Ctx;
 
+#[cfg(test)]
+mod blocked_tests;
 mod classify;
 #[cfg(test)]
 mod classify_tests;
@@ -23,6 +25,7 @@ mod delivery;
 mod handling;
 pub mod metrics;
 mod outbox;
+mod stopping;
 pub use handling::{attend, guard};
 pub(crate) use handling::{reconcile, reconcile_projected};
 #[cfg(test)]
@@ -38,6 +41,8 @@ pub struct Neighborhood<'a> {
     pub inventory_known: bool,
     pub resource_wait: Option<String>,
     pub availability: BTreeMap<String, AvailabilityEpisode>,
+    pub missing_reviewers: BTreeMap<String, Timestamp>,
+    pub prepared_refusals: BTreeMap<String, (Timestamp, String)>,
     by_id: BTreeMap<&'a str, &'a Task>,
     slots: usize,
     review_slots: usize,
@@ -64,6 +69,8 @@ impl<'a> Neighborhood<'a> {
             inventory_known: false,
             resource_wait: None,
             availability: BTreeMap::new(),
+            missing_reviewers: BTreeMap::new(),
+            prepared_refusals: BTreeMap::new(),
             by_id: tasks.iter().map(|task| (task.id.as_str(), task)).collect(),
             slots,
             review_slots,
@@ -123,6 +130,7 @@ pub struct TaskAssessment {
     pub title: String,
     pub project: Option<String>,
     pub status: Status,
+    pub blocked: Option<Condition>,
     #[serde(flatten)]
     pub assessment: Assessment,
 }
@@ -142,6 +150,7 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
     let mut assessment = Assessment::default();
     classify::conditions(task, neighborhood, now, &mut assessment);
     delivery::conditions(task, neighborhood, now, &mut assessment.conditions);
+    stopping::conditions(task, neighborhood, now, &mut assessment);
     if assessment.progress.is_none() && assessment.conditions.is_empty() {
         let run = task.current_run();
         let stage = run.and_then(|run| run.autopilot.as_ref());
@@ -267,6 +276,7 @@ pub(super) fn board_snapshot(
         return board_snapshot(ctx, now, false);
     }
     let mut neighborhood = Neighborhood::new(&tasks, &ctx.store.config, &policy);
+    stopping::load(ctx, &mut neighborhood)?;
     neighborhood.resource_wait = crate::resources::read_admission(ctx)?;
     for task in tasks
         .iter()
@@ -291,12 +301,16 @@ pub(super) fn board_snapshot(
         version: 1,
         tasks: tasks
             .iter()
-            .map(|task| TaskAssessment {
-                task: task.id.clone(),
-                title: task.title.clone(),
-                project: task.project.clone(),
-                status: task.status,
-                assessment: assess(task, &neighborhood, now),
+            .map(|task| {
+                let assessment = assess(task, &neighborhood, now);
+                TaskAssessment {
+                    task: task.id.clone(),
+                    title: task.title.clone(),
+                    project: task.project.clone(),
+                    status: task.status,
+                    blocked: corral_core::attention::blocked(task, &assessment).cloned(),
+                    assessment,
+                }
             })
             .collect(),
     };
@@ -560,7 +574,7 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
                 | PlanRunState::Escalated
                 | PlanRunState::Cancelled
                 | PlanRunState::AwaitingOwner
-        )
+        ) && stopping::planner_owns_stop(task, run)
     }) {
         let awaiting = run.state == PlanRunState::AwaitingOwner;
         let since = task

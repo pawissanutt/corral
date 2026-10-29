@@ -152,7 +152,7 @@ configured:
 | `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
 | `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles and each role's readiness with the refusal it would get. |
 | `pi_native_credentials` | Whether any provider is logged in, each provider's state (`openai-codex`, `anthropic`) and whether the files' permissions are safe, from file metadata only; their contents are never read into the output. |
-| `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Needs me after `question_unattended_secs`. |
+| `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Blocked after `question_unattended_secs`. |
 
 `corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
 container's binding: harness, role, host health, current generation, generation, receipt and
@@ -324,7 +324,7 @@ the host declares `wait_v1` for. A wait without a deadline is refused `unobserva
 because its deadline is the only wake corral can guarantee. When the wait leaves `pending`, sync posts one `wait_wake` for it.
 
 **Questions.** `corral_ask` returns at once, blocking or not, and the worker may keep working;
-the task reaches Needs me only when a question is escalated or becomes unattended. While any of
+the task reaches Blocked only when a question is escalated or becomes unattended. While any of
 the run's questions is pending, `corral_done` is refused `question_state` with the question keys,
 and the run stays live.
 
@@ -336,7 +336,7 @@ that turn), `cancelled` (a turn `corral agent cancel` stopped), `provider_failed
 into the pane while the turn ran, which upstream Pi steers into that turn), `awaiting_answer` (a
 question of the run was pending), `waiting_external` (a gate or wait would wake the worker) or
 `no_report`. The latest `no_report` turn of a host generation gets one automatic `turn_nudge`
-message; a later one puts the task in Needs me with `turn_ended_without_report`, which clears when
+message; a later one puts the task in Blocked with `turn_ended_without_report`, which clears when
 another turn starts. The nudge is tied to the turn that spent it, an earlier report never counts
 for a later turn, and a nudge spent before a change request is not given back. Turns you typed in
 are never nudged.
@@ -400,7 +400,7 @@ those keys is refused `question_closed`, so an answer never reaches another atte
 **Turns.** A reviewer turn is classified like a worker's, with `completed` meaning a
 `corral_verdict` committed in that turn and `no_verdict` in place of `no_report`. The latest
 `no_verdict` turn of a host generation gets one `turn_nudge`; a later one escalates the review to
-Needs me at once with `turn_ended_without_report`, as the idle watchdog would after
+Blocked at once with `turn_ended_without_report`, as the idle watchdog would after
 `review_idle_after_secs`. A healthy reviewer host is never judged by its pane's idle status.
 
 ## The PM role
@@ -429,7 +429,7 @@ requires the host's `corral_delivery` entry.
 PM replacement and project changes are rechecked before publication and at the delivery
 boundary, so an old project's wake is never sent to a new project's PM. OmO question push
 keeps its existing opt-in configuration; without triage, waiting questions still reach
-Needs me after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
+Blocked after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
 
 ## Starting Pi yourself: `corral pi`
 
@@ -497,7 +497,7 @@ agent install`), and `credentials_unavailable` without the provider's login.
   `pi_native` adapter, and every sync gives each open one a delivery pass. They are never typed
   into the pane.
 - **Questions that need you.** While a Pi-native question is escalated or marked unattended,
-  the task stays in Needs me with the question as its excerpt, even if the agent keeps working
+  the task stays in Blocked with the question as its excerpt, even if the agent keeps working
   on something else, until the question is answered, cancelled or withdrawn. A reviewer's
   question does the same for a task in Review: its review stays open and the reviewer stays
   live, and the task returns to Review once the question is settled.
@@ -532,11 +532,11 @@ with its reason:
 | `host_mismatch` | The socket answers for another generation or session. |
 
 A lost host never ends its run. The run keeps its questions, messages and receipts, and messages
-for it stay queued, unsent, for the next generation. A live worker's task moves to Needs me with
+for it stay queued, unsent, for the next generation. A live worker's task moves to Blocked with
 an excerpt that starts `Pi-native host lost:` and names the three ways on: `corral agent resume`,
 `corral retry` or `corral discard`. A lost reviewer whose pane stays keeps its review open and
 its child live: the review watchdog never times it out on its idle pane, and the task moves to
-Needs me with an excerpt that starts `Pi-native reviewer host lost:` and names
+Blocked with an excerpt that starts `Pi-native reviewer host lost:` and names
 `corral agent resume <task> --review <id>`. A reviewer whose pane is gone is left to the existing
 process-lost path, which closes the child; retry the review as a new review child. That holds
 when the pane goes away while the reviewer waits for resume too: once the process-lost path
@@ -596,7 +596,7 @@ resumes the PM's host in its saved pane, retaining its project scope and durable
 6. It opens the next generation in the same pane, posts one `recovery_notice` message listing
    every classified call (its subject carries them as data), runs `corral agent launch` there,
    logs `agent_call_reconciled` for each corral call and `agent_resumed`, and returns a task it
-   held in Needs me to Running. The new host
+   held in Blocked to Running. The new host
    continues the old generation's Pi session, so the conversation and the tool-call request IDs
    carry over; Pi gives the calls left open synthetic results only in what it sends the model.
    A reviewer's task returns to Review before its new host launches, so that host is admitted.
@@ -627,13 +627,13 @@ instead.
 is kept as a terminal transcript.
 
 **Provider errors.** The host reports each provider error with a class. An `auth` failure puts
-the task in Needs me with an excerpt that starts `Pi-native provider authentication failed:` and
+the task in Blocked with an excerpt that starts `Pi-native provider authentication failed:` and
 asks you to run `corral agent login`; for a worker it clears when another turn starts, and a
 reviewer's review is escalated by the review watchdog (`provider_escalated`, class `auth`), to be
 restarted after the login. There is no paid fallback. A transient failure (`overload`,
 `rate_limit` or another `provider` error) follows the provider-stall backoff: the host gets one
 `turn_nudge` to continue after 60, 120 and 300 seconds (labelled "corral automatic retry n/3", each logged
-`provider_retry`), and once those are used up the task goes to Needs me with the reason
+`provider_retry`), and once those are used up the task goes to Blocked with the reason
 (`provider_escalated`). A retry's turn that is still running keeps the episode and the retries it
 spent; a turn that ends without a provider error ends the stall (`provider_recovered`).
 

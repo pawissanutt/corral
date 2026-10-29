@@ -466,7 +466,7 @@ fn exhausted_rounds_escalate_to_needs_me_and_the_owner_can_still_approve() {
         "{}",
         fx.reason()
     );
-    assert_eq!(fx.herdr_log("notify.log"), "▲ T-001 needs you\n");
+    assert_eq!(fx.herdr_log("notify.log"), "▲ T-001 blocked\n");
     assert_eq!(fx.sync().status, Status::NeedsMe, "waits for the owner");
     assert_eq!(fx.events("autopilot"), 4);
 

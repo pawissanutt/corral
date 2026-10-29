@@ -43,7 +43,8 @@ impl App {
                         snapshot.ctx.store.config_path().display().to_string(),
                     ));
                 }
-                self.counts = Counts::from_tasks(&snapshot.tasks, &snapshot.ctx.store.config);
+                self.counts = Counts::from_tasks(&snapshot.tasks, &snapshot.ctx.store.config)
+                    .with_attention(&snapshot.tasks, &snapshot.attention);
                 self.resources = snapshot.resources.clone();
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
@@ -102,6 +103,19 @@ impl App {
             return;
         };
         self.counts = Counts::from_tasks(&tasks, &self.ctx.store.config);
+        if let Some(columns) = self.stack.first().and_then(|view| view.column_counts()) {
+            for (status, count) in Status::COLUMNS.into_iter().zip(columns) {
+                match status {
+                    Status::NeedsMe => self.counts.needs = count,
+                    Status::Review => self.counts.review = count,
+                    Status::Ready => self.counts.ready = count,
+                    _ => {}
+                }
+            }
+        } else {
+            let attention = crate::attention::load(&self.ctx, jiff::Timestamp::now());
+            self.counts = self.counts.with_attention(&tasks, &attention);
+        }
     }
 
     pub(super) fn reload_config(&mut self) {
@@ -133,6 +147,23 @@ impl App {
 }
 
 impl Counts {
+    fn with_attention(
+        mut self,
+        tasks: &[corral_core::Task],
+        attention: &crate::attention::Snapshot,
+    ) -> Self {
+        let count = |status| {
+            tasks
+                .iter()
+                .filter(|task| crate::attention::column(task, attention) == Some(status))
+                .count()
+        };
+        self.needs = count(Status::NeedsMe);
+        self.review = count(Status::Review);
+        self.ready = count(Status::Ready);
+        self
+    }
+
     fn from_tasks(tasks: &[corral_core::Task], config: &corral_core::Config) -> Self {
         let count = |status: Status| tasks.iter().filter(|task| task.status == status).count();
         let slots = corral_ops::SlotUsage::from_tasks(tasks, &config.limits);
@@ -182,7 +213,7 @@ pub(crate) fn change_toast(c: &Change, reason: Option<String>) -> Option<Toast> 
         Status::NeedsMe => Some(
             Toast::new(
                 Tone::Attention,
-                format!("▲ {} needs you", c.task),
+                format!("▲ {} blocked", c.task),
                 c.note.clone(),
             )
             .about(&c.task),

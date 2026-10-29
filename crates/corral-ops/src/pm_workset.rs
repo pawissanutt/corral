@@ -236,13 +236,15 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
     };
     let policy = ctx.store.effective_operating_policy()?;
     let tasks = ctx.store.list()?;
+    let board = crate::attention::board(ctx, jiff::Timestamp::now())?;
     let assessments: Vec<_> = if policy.tasks.is_empty() {
         Vec::new()
     } else {
-        crate::attention::board(ctx, jiff::Timestamp::now())?
+        board
             .tasks
-            .into_iter()
+            .iter()
             .filter(|row| policy.tasks.contains_key(&row.task))
+            .cloned()
             .collect()
     };
     let bin = format!(
@@ -250,7 +252,7 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         crate::gate_script::q(&crate::prompt::corral_bin()?.display().to_string()),
         crate::gate_script::q(&ctx.store.root().display().to_string())
     );
-    let mut observations = crate::pm_next::observe::observations(ctx)?;
+    let mut observations = crate::pm_next::observe::with_assessments(ctx, &board.tasks)?;
     observations.sort_by_key(crate::pm_next::rank);
     let mut actions = Vec::new();
     let mut decisions = Vec::new();
@@ -462,6 +464,9 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
             policy.tasks.contains_key(&task.id)
                 && task.holds_dispatch_slot()
                 && !decisions.iter().any(|d| d.task == task.id)
+                && !assessments
+                    .iter()
+                    .any(|row| row.task == task.id && row.blocked.is_some())
         });
     let status = if !decisions.is_empty() || policy.paused || !progress.missing.is_empty() {
         OperatingStatus::NeedsYourDecision
@@ -483,7 +488,25 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         })
         .or_else(|| waits.first().cloned())
         .unwrap_or_else(|| crate::pm_next::pm_select(&[], &bin));
-    let next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
+    let mut next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
+    if let Some(condition) = board
+        .tasks
+        .iter()
+        .find(|row| next.task.as_deref() == Some(&row.task))
+        .and_then(|row| row.blocked.as_ref())
+    {
+        next.why = format!("Blocked: {}", condition.reason);
+        let unblocker = format!("unblocks: {}", condition.unblocker());
+        if !next.evidence.contains(&unblocker) {
+            next.evidence.push(unblocker);
+            next.evidence.push(format!(
+                "blocked since: {}",
+                condition
+                    .since
+                    .map_or_else(|| "unknown".into(), |at| at.to_string())
+            ));
+        }
+    }
     let workset = PmWorkset {
         policy_revision: policy.revision.clone(),
         mode: policy.mode,

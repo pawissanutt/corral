@@ -314,7 +314,7 @@ fn cards_follow_the_plan_stage_and_awaiting_plans_need_you() {
     assert_eq!(task_stage(&fx, &id), Some(PlanStage::Planning { round: 0 }));
     let text = app_screen(&fx);
     assert!(text.contains("✎ planning"), "{text}");
-    assert!(text.contains("▲ 1 needs you"), "{text}");
+    assert!(text.contains("▲ 2 blocked"), "{text}");
 
     // When the plan is submitted, then the card shows the review round and reviewer.
     reviewing(&fx, &id);
@@ -323,7 +323,7 @@ fn cards_follow_the_plan_stage_and_awaiting_plans_need_you() {
     assert!(text.contains("◎ plan review round 1"), "{text}");
     assert!(text.contains("reviewer reviewer"), "{text}");
 
-    // When the reviewer approves, then the plan waits for the owner in Needs me and the header counts it.
+    // When the reviewer approves, then the plan waits for the owner in Blocked and the header counts it.
     awaiting(&fx, &id);
     let task = fx.ctx.store.get(&id).unwrap();
     assert_eq!(task.status, Status::NeedsMe);
@@ -331,17 +331,18 @@ fn cards_follow_the_plan_stage_and_awaiting_plans_need_you() {
     let text = app_screen(&fx);
     assert!(text.contains("awaiting your"), "{text}");
     assert!(text.contains("→ r decide the plan"), "{text}");
-    assert!(text.contains("▲ 2 needs you"), "{text}");
+    assert!(text.contains("▲ 3 blocked"), "{text}");
 
     // And Enter opens the plan instead of an implementation review.
     let mut board = fx.board();
+    for _ in 0..3 {
+        board.on_key(key('l'), &fx.ctx);
+    }
     for _ in 0..12 {
-        let selected = board.selected_task().map(|t| (t.id.clone(), t.status));
-        match selected {
-            Some((sel, _)) if sel == id => break,
-            Some((_, Status::NeedsMe)) => board.on_key(key('j'), &fx.ctx),
-            _ => board.on_key(key('l'), &fx.ctx),
-        };
+        if board.selected_task().is_some_and(|task| task.id == id) {
+            break;
+        }
+        board.on_key(key('j'), &fx.ctx);
     }
     assert_eq!(
         board.on_key(key('r'), &fx.ctx),

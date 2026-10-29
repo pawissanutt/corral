@@ -137,6 +137,7 @@ fn reconcile_inner(
             }
         }
         super::refresh_overflow(&task, &mut row.assessment, now);
+        row.blocked = corral_core::attention::blocked(&task, &row.assessment).cloned();
     }
     Ok(Some(board))
 }

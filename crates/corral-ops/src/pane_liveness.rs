@@ -101,6 +101,28 @@ fn read(ctx: &Ctx) -> Result<Option<Stored>> {
     Ok(Some(stored))
 }
 
+/// Confirmed absence from retained observations; never probes or advances inventory.
+pub(crate) fn recorded_missing(ctx: &Ctx) -> Result<BTreeMap<String, Timestamp>> {
+    let observations = match read(ctx)? {
+        Some(Stored::Current(state)) => state.observations,
+        Some(Stored::Legacy(_)) | None => return Ok(BTreeMap::new()),
+    };
+    let grace = i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX);
+    Ok(observations
+        .into_iter()
+        .filter_map(|(identity, observation)| {
+            let (_, started) = identity.rsplit_once('@')?;
+            let started: Timestamp = started.parse().ok()?;
+            let absent = if observation.seen {
+                observation.misses >= 2
+            } else {
+                observation.at.duration_since(started).as_secs() >= grace
+            };
+            absent.then_some((identity, observation.at))
+        })
+        .collect())
+}
+
 fn save(ctx: &Ctx, state: &State) -> Result<()> {
     std::fs::create_dir_all(ctx.store.state_dir())
         .context("creating pane observation directory")?;

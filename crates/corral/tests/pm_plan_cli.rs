@@ -404,6 +404,11 @@ fn current_review_wait_survives_unrelated_terminal_planner() {
     ctx.store
         .update(&id, |t| {
             t.plans[2].reviews[0].verdict = None;
+            t.plans[2].reviews[0].herdr = Some(corral_core::HerdrRef {
+                workspace_id: "live-review".into(),
+                pane_id: "live-review:p1".into(),
+                socket: None,
+            });
             t.status = Status::Review;
             Ok(())
         })

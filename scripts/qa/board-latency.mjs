@@ -390,7 +390,7 @@ try {
   const current = JSON.parse(await cli("list", "--all", "--json"));
   assert.equal(current.find((t) => t.id === "T-012").status, "ready");
   assert.equal(current.find((t) => t.id === "T-107").status, "needs_me");
-  result.currentStatusChecks = "PASS: Ready and Needs me transitions visible and persisted";
+  result.currentStatusChecks = "PASS: Ready and Blocked transitions visible and persisted";
   await raw("q");
   result.status = "PASS";
 } catch (error) {

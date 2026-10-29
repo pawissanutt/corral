@@ -131,7 +131,7 @@ fn popup_closes_on_outside_click_and_x_unless_text_is_typed() {
 
     app.handle_key(key('?'));
     render(&mut app);
-    let (x, y) = find(&render(&mut app), 0, "needs you");
+    let (x, y) = find(&render(&mut app), 0, "blocked");
     click(&mut app, x, y);
     assert!(
         !render(&mut app).contains("move selection"),
@@ -163,13 +163,13 @@ fn header_counter_focuses_its_column() {
     let fx = seeded();
     let mut app = fx.app(Mode::Board);
     let text = render(&mut app);
-    let (x, y) = find(&text, 0, "◆ 1 review");
+    let (x, y) = find(&text, 0, "▲ 2 blocked");
     click(&mut app, x + 2, y);
     render(&mut app);
     let hints = app.stack[0].hints();
     assert!(
         hints.contains(&("⏎", "overview")),
-        "Review card selected: {hints:?}"
+        "Blocked card selected: {hints:?}"
     );
 }
 

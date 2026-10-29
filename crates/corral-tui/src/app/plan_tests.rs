@@ -46,7 +46,7 @@ fn mouse_alone_opens_and_approves_an_awaiting_plan_then_opens_a_child() {
     let mut fx = seeded();
     let (mut app, now, id) = awaiting_app(&mut fx);
     let text = render(&mut app);
-    assert!(text.contains("▲ 2 needs you"), "{text}");
+    assert!(text.contains("▲ 3 blocked"), "{text}");
 
     // When the card overview is opened, its Plan link leads to the owner actions.
     open_card(&mut app, &now, "awaiting your");

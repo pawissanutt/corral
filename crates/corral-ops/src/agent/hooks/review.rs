@@ -205,7 +205,7 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
     crate::owner_notice::notify(
         ctx,
         crate::owner_notice::newly_committed(&saved, batch)?,
-        &format!("{task_id} needs you"),
+        &format!("{task_id} blocked"),
         &reason,
         true,
     )?;
@@ -482,7 +482,7 @@ fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> 
         crate::owner_notice::notify(
             ctx,
             crate::owner_notice::newly_committed(&saved, batch)?,
-            &format!("{task_id} needs you"),
+            &format!("{task_id} blocked"),
             &reason,
             true,
         )?;

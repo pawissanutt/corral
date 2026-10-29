@@ -138,7 +138,7 @@ try {
   if (board) await board.stage("04-awaiting-owner", "approval", s => s.includes("▲ 1") && s.includes("approval"), approveReview);
   else await approveReview();
   task = await show(id);
-  check("reviewer approval waits for owner in Needs me", task.status === "needs_me"
+  check("reviewer approval waits for owner in Blocked", task.status === "needs_me"
     && task.plan_runs[0].state === "awaiting_owner" && !task.plans[0].approval);
   check("no children exist before owner approval", !task.children?.length
     && (await json(["list", "--all", "--json"])).length === 1);

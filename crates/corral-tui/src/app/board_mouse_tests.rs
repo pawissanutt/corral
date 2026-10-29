@@ -162,7 +162,7 @@ fn card_menu_lists_actions_and_choosing_one_is_its_key() {
     let text = render(&mut app);
     assert!(
         text.contains("reply…") && text.contains("jump to agent"),
-        "⋯ opens the Needs me card's menu\n{text}"
+        "⋯ opens the Blocked card's menu\n{text}"
     );
     app.handle_key(code(KeyCode::Esc));
     app.handle_key(crate::board::tests::key('.'));
@@ -311,10 +311,13 @@ fn column_toggles_and_header_counters_are_buttons() {
         "○ ideas = i\n{text}"
     );
 
-    let needs = find(&text, 0, "▲ 1 needs you");
+    let needs = find(&text, 0, "▲ 2 blocked");
     click(&mut app, (needs.0 + 2, needs.1));
     assert_eq!(selected(&render(&mut app)), "T-005");
-    let review = find(&text, 0, "◆ 1 review");
+    let review = find(&text, 0, "◆ 0 review");
     click(&mut app, (review.0 + 2, review.1));
-    assert_eq!(selected(&render(&mut app)), "T-006");
+    assert!(
+        !render(&mut app).contains("▌ T-006"),
+        "Review is visually empty"
+    );
 }

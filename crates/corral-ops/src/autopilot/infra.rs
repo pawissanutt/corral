@@ -221,7 +221,7 @@ impl Pilot<'_> {
         owner_notice::notify(
             self.ctx,
             committed,
-            &format!("▲ {} needs you", self.id()),
+            &format!("▲ {} blocked", self.id()),
             &format!("autopilot: {reason}"),
             true,
         )?;

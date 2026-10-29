@@ -93,7 +93,7 @@ commit: a worker run's `Run` inbox, or the exact review child's `ReviewRun` inbo
 ## Owner decisions
 
 An escalated question is held indefinitely and nothing is applied automatically. On a worker run
-the task moves to Needs me, and it returns to Running once no question of that run waits on the
+the task moves to Blocked, and it returns to Running once no question of that run waits on the
 owner. A reviewer's task stays in Review. Either way, `corral pm next` shows an
 `owner_question` card with the key, revision and text.
 
@@ -113,7 +113,7 @@ question ever expires without one.
 
 Consider a blocking question, or one whose run's last turn ended `awaiting_answer`. If it gets no
 PM triage for `[agent] question_unattended_secs` (default 600), `questions::unattended` marks it
-once per revision and raises Needs me with the reason `question_unattended`. The sync call site
+once per revision and raises Blocked with the reason `question_unattended`. The sync call site
 lands with integration-seams.
 
 ## Configuration and events
@@ -135,7 +135,7 @@ watcher therefore wakes on `question_opened` even with push off. `question_answe
 other question events never wake a wait or push. With no Pi-native PM bound and no push of
 `question_opened`, `corral agent doctor` reports that no push route exists, that OmO PM
 watchers wake through `corral wait` on `question_opened`, and that a blocking question reaches
-Needs me after `agent.question_unattended_secs`. Question events reference keys
+Blocked after `agent.question_unattended_secs`. Question events reference keys
 and revisions only, and are derived from the committed question record: every operation, replay
 and sweep appends any that a crash or failed write left out (`questions::reconcile_events`).
 The kinds are `question_opened`, `question_answered` (with `supersedes_revision` for a

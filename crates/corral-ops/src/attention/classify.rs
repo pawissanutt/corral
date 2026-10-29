@@ -469,7 +469,7 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
         out.push(condition);
     }
     if run.idle_no_report {
-        let since = task.status_since.or(run.idle_since);
+        let since = run.idle_since.or(task.status_since);
         let (kind, reason) = if review {
             (
                 "review_turn_without_verdict",
@@ -535,7 +535,7 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
     }
 }
 
-fn escalation(task: &Task, now: Timestamp, out: &mut Vec<Condition>) {
+pub(super) fn escalation(task: &Task, now: Timestamp, out: &mut Vec<Condition>) {
     let Some(stage) = task
         .current_run()
         .and_then(|run| run.autopilot.as_ref())

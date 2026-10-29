@@ -89,7 +89,7 @@ impl App {
                 if narrow {
                     format!("▲ {}", c.needs)
                 } else {
-                    format!("▲ {} needs you", c.needs)
+                    format!("▲ {} blocked", c.needs)
                 },
                 Style::new().fg(theme::YELLOW),
             ),
