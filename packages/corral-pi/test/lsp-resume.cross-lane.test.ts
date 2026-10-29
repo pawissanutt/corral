@@ -88,10 +88,21 @@ test("explicit lost-host resume uses changed LSP settings and retains the prior 
     await within((async () => { for (;;) {
       if ((await client.request(frame(cap, generation, "hello", {}))).result?.bound === true) return;
     } })(), 30_000, "bound host");
-    const end = events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation,
-      90_000, `LSP turn ${generation}`);
-    await client.request(frame(cap, generation, "submit_input", { text: "/fixture-lsp", busy_policy: "follow_up", idempotency_key: `script-${generation}`, origin: "test" }));
-    await client.request(frame(cap, generation, "submit_input", { text: "Run the lookup.", busy_policy: "follow_up", idempotency_key: `query-${generation}`, origin: "test" }));
+    // Drain any kickoff turn before scripting; subscribe to the exact next turn before submission.
+    let state = await client.request(frame(cap, generation, "get_state", {}));
+    const turn = state.result?.turn as { current: number; open: boolean };
+    if (turn.open) {
+      await events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation && e.detail?.turn === turn.current,
+        90_000, `kickoff turn ${generation}`);
+    }
+    const scripted = await client.request(frame(cap, generation, "submit_input", { text: "/fixture-lsp", busy_policy: "follow_up", idempotency_key: `script-${generation}`, origin: "test" }));
+    expect(scripted.result?.disposition).toBe("handled");
+    state = await client.request(frame(cap, generation, "get_state", {}));
+    const next = (state.result?.turn as { current: number }).current + 1;
+    const end = events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation && e.detail?.turn === next,
+      90_000, `LSP turn ${generation}/${next}`);
+    const submitted = await client.request(frame(cap, generation, "submit_input", { text: "Run the lookup.", busy_policy: "follow_up", idempotency_key: `query-${generation}`, origin: "test" }));
+    expect([submitted.result?.disposition, submitted.result?.turn]).toEqual(["started", next]);
     await end;
     client.close();
   };
