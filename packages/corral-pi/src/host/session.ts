@@ -19,6 +19,7 @@ import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
 import { codemode } from "../capabilities/codemode.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
+import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
@@ -240,6 +241,7 @@ export class HostSession {
   private readonly hooks: Hooks | undefined;
   private readonly additionalLsp: LspToolkit | undefined;
   private readonly permissions: BashPermissions | undefined;
+  private readonly checkpoints: Checkpoints | undefined;
 
   readonly provider: ProviderId;
 
@@ -305,6 +307,14 @@ export class HostSession {
       record: (entry) => this.session.sessionManager.appendCustomEntry(HOOK_ENTRY, entry),
     });
     this.permissions = this.controls.bashRules && new BashPermissions();
+    const run = options.identity.run;
+    if (options.capabilities?.enabled.includes("checkpoints") === true) {
+      if (options.identity.role !== "worker" || !run) throw new Error("module_invalid: checkpoints needs a worker run");
+      this.checkpoints = new Checkpoints({
+        cwd: options.cwd, generation: options.identity.generation, run,
+        record: (entry) => this.session.sessionManager.appendCustomEntry(CHECKPOINT_ENTRY, entry),
+      });
+    }
   }
 
   /**
@@ -543,6 +553,8 @@ export class HostSession {
     this.nextTurnOrigin = undefined;
     this.lastInputSource = undefined;
     this.ownerInput = false;
+    // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
+    if (this.bound) this.checkpoint("start");
     this.report("turn_started", { origin });
   }
 
@@ -553,7 +565,17 @@ export class HostSession {
     this.cancelRequested = undefined;
     const ownerInput = this.ownerInput;
     this.ownerInput = false;
+    if (this.bound) this.checkpoint("end");
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
+  }
+
+  private checkpoint(phase: "start" | "end"): void {
+    if (!this.checkpoints) return;
+    const leaf = phase === "start" ? this.session.sessionManager.getLeafId() : undefined;
+    const entry = this.checkpoints.capture(phase, this.turn, leaf);
+    this.options.events.emit(entry.error ? "checkpoint_failed" : "checkpoint", {
+      id: entry.id, phase, ...(entry.commit ? { commit: entry.commit } : {}), ...(entry.error ? { error: entry.error } : {}),
+    });
   }
 
   private providerError(errorClass: string): void {
@@ -723,6 +745,7 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       jobs: this.jobs?.state() ?? null,
+      checkpoints: this.checkpoints !== undefined,
       guidance: {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],

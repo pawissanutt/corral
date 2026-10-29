@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use corral_core::Task;
 use corral_core::agent::{
     self, AgentRunState, ContainerRef, Executor, HookSettings, HostHealth, InterruptedCall,
     ReceiptState, RequestReceipt, ResumeClass, pm_state,
 };
 use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Recipient, Urgency};
-use corral_core::{ArtifactKind, Task};
 use serde_json::{Value, json};
 
 use super::admission::{BindTarget, fence_generation};
@@ -241,7 +241,27 @@ pub(crate) fn recover(
     replace: bool,
     adopt: Option<(&str, &corral_core::ResolvedProfile)>,
 ) -> Result<(Value, Prepared)> {
+    recover_with(ctx, container, replace, adopt, None)
+}
+
+/// `recover` with a rewind's restore stages run after the fence, the drain and the
+/// classification of the lost generation's calls, before the next generation opens (T-575).
+pub(crate) fn recover_with(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    replace: bool,
+    adopt: Option<(&str, &corral_core::ResolvedProfile)>,
+    mut restore: Option<&mut dyn FnMut() -> Result<()>>,
+) -> Result<(Value, Prepared)> {
     let (state, _) = open(ctx, container)?;
+    if let (None, Some(pending)) = (&restore, state.pending_rewind()) {
+        bail!(
+            "rewind_pending: rewind {} to {} is unfinished; `corral agent rewind` continues it \
+             or `--abort` abandons it",
+            pending.id,
+            pending.checkpoint
+        );
+    }
     let n = state.binding.generation;
     ensure!(n > 0, "{} has no generation to resume", container.key());
     // Refuse unavailable assets, profiles or scope without stopping or fencing the old host.
@@ -282,7 +302,12 @@ pub(crate) fn recover(
         stop_host(host)?;
         replaced = true;
     }
-    fence_generation(&ctx.store, container, n, "resume")?;
+    let reason = if restore.is_some() {
+        "rewind"
+    } else {
+        "resume"
+    };
+    fence_generation(&ctx.store, container, n, reason)?;
     remove_control(ctx, container, n)?;
     effects::failpoint("resume_fenced");
     let deadline = Instant::now() + Duration::from_secs(ctx.store.config.agent.drain_secs);
@@ -290,6 +315,9 @@ pub(crate) fn recover(
     reconcile(ctx, container, n)?;
     let interrupted = classify_lost(ctx, container, n, &plan)?;
     let unconfirmed = settle_unconfirmed(ctx, container, n, &state)?;
+    if let Some(restore) = restore.as_mut() {
+        restore()?;
+    }
     let prepared = match (&plan.target, pm_profile) {
         (Some((target, spec)), _) => prepare_bootstrap(ctx, target, &plan.pane, spec)?,
         (None, Some(resolved)) => {
@@ -544,7 +572,13 @@ fn classify_lost(
     let all = receipts(ctx, container)?;
     let hooks = generation.capabilities.as_ref().and_then(HookSettings::of);
     let snapshot = match interrupted::needs_snapshot(&dangling, hooks.as_ref()) {
-        true => Some(worktree_snapshot(ctx, container, n, plan)?),
+        true => Some(super::rewind::worktree_evidence(
+            ctx,
+            container,
+            n,
+            &plan.worktree,
+            plan.artifact_run.as_deref(),
+        )?),
         false => None,
     };
     let (mut calls, mut running) = (interrupted::unfinished_hooks(&dangling), Vec::new());
@@ -586,62 +620,6 @@ fn classify_lost(
         scan_limits: dangling.limits,
         running,
     })
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .output();
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).into_owned(),
-        Ok(out) => format!(
-            "git {} exited {}: {}",
-            args.join(" "),
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
-        ),
-        Err(error) => format!("git {} could not run: {error}", args.join(" ")),
-    }
-}
-
-/// `git status --porcelain=v2` and `git diff --stat` of the container's worktree, kept as a run
-/// artifact (the PM's as a file): the evidence for every upstream call reported unknown.
-fn worktree_snapshot(
-    ctx: &Ctx,
-    container: &ContainerRef,
-    n: u32,
-    plan: &Relaunch,
-) -> Result<String> {
-    let dir = ctx.store.state_dir().join("agent-recovery");
-    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let name = container.key().replace('/', "-");
-    let path = dir.join(format!("{name}-g{n}-worktree.txt"));
-    let text = format!(
-        "worktree {}\n\n$ git status --porcelain=v2\n{}\n$ git diff --stat\n{}",
-        plan.worktree.display(),
-        git(&plan.worktree, &["status", "--porcelain=v2"]),
-        git(&plan.worktree, &["diff", "--stat"])
-    );
-    std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
-    let (Some(task), Some(run)) = (container.task(), plan.artifact_run.as_deref()) else {
-        return Ok(path.display().to_string());
-    };
-    let title = format!(
-        "Worktree after host loss ({} generation {n})",
-        container.key()
-    );
-    let artifact = crate::artifacts::add_artifact_for_run(
-        ctx,
-        task,
-        run,
-        &path,
-        Some(ArtifactKind::Evidence),
-        Some(&title),
-    )?;
-    Ok(format!("artifact {}", artifact.path))
 }
 
 /// The envelope generation `n` was sent and never confirmed, settled without a resend so the

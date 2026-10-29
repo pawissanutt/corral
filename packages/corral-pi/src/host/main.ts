@@ -94,7 +94,8 @@ async function main(): Promise<void> {
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
-    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
+    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
+      config.resumeLeaf),
   });
   const session = host;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;

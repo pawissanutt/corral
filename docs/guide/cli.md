@@ -505,6 +505,7 @@ Commands:
   state    Show a Pi-native binding: generations, host health, receipts, questions and turns
   cancel   Cancel a Pi-native host turn; the run, its questions and receipts stay live
   resume   Fence a lost Pi-native generation and start the next one in the same pane
+  rewind   Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -636,6 +637,26 @@ Options:
       --pm               The bound Pi-native PM instead of a task
       --replace          Replace a host that is still alive after verifying its pid, start time and command
   -h, --help             Print help
+```
+
+### `corral agent rewind`
+
+```text
+Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
+
+Usage: corral agent rewind [OPTIONS] <TASK>
+
+Arguments:
+  <TASK>  Task of the worker run
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>    Run ID (default: the task's current run)
+      --to <TO>      Checkpoint to restore (`g<generation>-t<turn>`, see --list); without it, continue the pending rewind
+      --list         List the run's checkpoints and rewinds
+      --abort        Abandon the pending rewind, putting back any files it restored
+      --replace      Replace a host that is still alive after verifying its pid, start time and command
+  -h, --help         Print help
 ```
 
 ## `corral pi`

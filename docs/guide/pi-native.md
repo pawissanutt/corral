@@ -94,6 +94,7 @@ error. The catalog today, as strict / standard / full:
 | `background_shell` | worker off / on / on; not available to PM | not available |
 | `role_enabled` | not available | planner and plan reviewer off / on / on; not available to reviewer |
 | `browser` | worker off / on / on; not available to PM | not available |
+| `checkpoints` | worker off / off / on; not available to PM | not available |
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -549,6 +550,51 @@ in-process network guard, as `bash` always has. Recovery reports an interrupted 
 or `job_kill` as `outcome_unknown` and `job_output` as `interrupted_no_effect`. The durable
 records live in the run's `agent_host.jobs`; the host's bridge state lists its live jobs and
 emits `job_started` and `job_exited` events.
+
+### Checkpoints and rewind
+
+Worker generations with `checkpoints` snapshot the worktree twice per turn: when the turn
+starts, before its prompt is recorded or any request is sent, and when it settles. A snapshot
+commits every non-ignored file (staged, unstaged and untracked) over HEAD through a private
+index, so the worktree's own index is untouched, and points a per-worktree ref at it
+(`refs/worktree/corral/checkpoints/<run>/g<generation>-t<turn>-<start|end>`; other worktrees and
+the main checkout never see it). The host then appends one `corral_checkpoint` entry to its
+bound Pi session; a start entry also names the last session entry before the turn. Ignored
+files (build output, `node_modules`) are not in snapshots and are never restored. A snapshot
+that fails is recorded with its error and the turn goes on; it cannot be a rewind target.
+
+`corral agent rewind <task> [--run <id>] --list` lists the run's checkpoints on its current
+timeline and its rewinds. `corral agent rewind <task> --to g<n>-t<m> [--replace]` puts the
+worktree and the Pi session back to the start of that turn:
+
+1. It refuses, changing nothing, a run that is not a worker in a linked worktree
+   (`not_worker`, `not_isolated`), an unknown checkpoint or one whose ref moved
+   (`checkpoint_unknown`, `checkpoint_missing`), and a conflict (`rewind_conflict`). Only paths
+   the agent changed in its turns since the checkpoint are restored. Changes between two turns,
+   or after the last turn ended, are not the agent's: they stay, and a path changed both ways,
+   or a HEAD moved outside the agent's turns, refuses the rewind with the paths named. A turn
+   with no end checkpoint (its host died inside it) counts as the agent's up to the rewind.
+2. It records the rewind `prepared`, then runs `corral agent resume`'s path: the old host must
+   be dead or `--replace` stops it (a refusal here, such as `host_alive`, closes the record
+   `aborted`), the generation is fenced with reason `rewind`, executors drain and the lost
+   generation's calls are classified for the `recovery_notice` exactly as on a resume.
+3. `fenced`: the fenced generation's background jobs are reaped. `saved`: the worktree as the
+   fence left it is committed under `refs/worktree/corral/rewind/<run>/<rewind>`.
+   `restoring`: each planned path still as saved is written back (or removed), a path already
+   restored is skipped, and a path that changed since the save is left as it is and listed as
+   `kept`. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
+   restored paths' index entries are reset to it. `restored`: the next generation's launch
+   continues the same Pi session file from the checkpoint's entry (Pi branches there; the
+   abandoned turns stay in the file). `launched`: that generation is recorded on the rewind.
+   Each stage commits before the next starts.
+
+An interrupted rewind leaves its stage recorded, and `corral agent resume` refuses
+`rewind_pending` until it is settled: `corral agent rewind <task>` (no `--to`, or the same one)
+continues from the recorded stage, and `--abort` abandons it, putting each restored file back
+from the saved snapshot first. Nothing a rewind does rolls back records: receipts, turns,
+questions, delivered messages, usage (read from the whole session file, abandoned turns
+included) and approvals stay, and the saved snapshot keeps the pre-rewind worktree. Bash
+children the dead host started that are not background jobs are not stopped, as on a resume.
 
 Capability settings are frozen for an active generation and resolved again on explicit resume.
 Ledgers and drop reasons survive host loss and resume; disabling todo does not delete

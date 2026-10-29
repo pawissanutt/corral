@@ -39,6 +39,7 @@ pub(crate) use receipts::FAILPOINT;
 #[cfg(test)]
 mod receipts_tests;
 pub mod recovery;
+pub mod rewind;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]

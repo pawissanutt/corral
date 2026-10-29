@@ -66,6 +66,7 @@
     "role_enabled",
     "lsp",
     "browser",
-    "llama_cpp.enabled"
+    "llama_cpp.enabled",
+    "checkpoints"
   ]
 }

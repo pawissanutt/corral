@@ -87,6 +87,9 @@ pub struct AgentRunState {
     /// when it moved the task to Needs me. Worker runs keep theirs in `Run.blocked_excerpt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_hold: Option<String>,
+    /// Owner rewinds to a turn checkpoint and how far each got (T-575).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewinds: Vec<super::RewindRecord>,
 }
 
 impl AgentRunState {
@@ -103,6 +106,7 @@ impl AgentRunState {
             todo: None,
             jobs: Vec::new(),
             question_hold: None,
+            rewinds: Vec::new(),
         }
     }
 

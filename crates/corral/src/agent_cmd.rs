@@ -82,6 +82,27 @@ enum AgentCmd {
         #[arg(long)]
         replace: bool,
     },
+    /// Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
+    Rewind {
+        /// Task of the worker run
+        task: String,
+        /// Run ID (default: the task's current run)
+        #[arg(long)]
+        run: Option<String>,
+        /// Checkpoint to restore (`g<generation>-t<turn>`, see --list); without it, continue
+        /// the pending rewind
+        #[arg(long, conflicts_with_all = ["list", "abort"])]
+        to: Option<String>,
+        /// List the run's checkpoints and rewinds
+        #[arg(long, conflicts_with = "abort")]
+        list: bool,
+        /// Abandon the pending rewind, putting back any files it restored
+        #[arg(long)]
+        abort: bool,
+        /// Replace a host that is still alive after verifying its pid, start time and command
+        #[arg(long, conflicts_with_all = ["list", "abort"])]
+        replace: bool,
+    },
 }
 
 #[derive(Args)]
@@ -173,6 +194,27 @@ pub fn run(start: &Path, args: AgentArgs, entry: &Entry) -> Result<()> {
             &entry.open(start)?,
             &cli::ResumeArgs {
                 target: target.target(),
+                replace,
+            },
+        ),
+        AgentCmd::Rewind {
+            task,
+            run,
+            to,
+            list,
+            abort,
+            replace,
+        } => corral_ops::agent::rewind::rewind(
+            &entry.open(start)?,
+            &corral_ops::agent::rewind::RewindArgs {
+                target: AgentTarget::Task {
+                    task,
+                    run,
+                    review: None,
+                },
+                to,
+                list,
+                abort,
                 replace,
             },
         ),
