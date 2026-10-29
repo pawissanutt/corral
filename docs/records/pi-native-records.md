@@ -51,12 +51,17 @@ reviewer's `.corral/state/reviews/<task>-<P>-<PR>-plan-notes.md`), bounded to 1 
 commits `{path, offset, bytes, sha256}` with effect `plan_output`. `plan_submit` (planner,
 `{}`) and `plan_verdict` (plan reviewer, `{verdict, notes?}`) are two-phase. A `reserved`
 receipt naming the executor (effect `plan_submission`/`<D>` or `plan_verdict`/`<P>/<PR>`)
-commits before `plan_submit` or `plan_verdict` with the bound attempt runs. The executor
+commits before `plan_submit` or `plan_verdict` with the bound attempt runs. Each service's final
+transaction first rechecks the request binding (`recheck_task`), so a fenced generation or a
+replaced planner run is refused there. A verdict's inline notes are recorded on the review
+only; its reservation carries `notes_bytes` and `notes_sha256`, and the report file changes only
+through `plan_write`. The executor
 then settles it `committed` (`{outcome: submitted, plan, sha256}` or
 `{outcome: recorded, plan, review, verdict}`) or `abandoned` (`{outcome: refused, reason}`).
 Sync reconciles a reservation whose executor is verified gone from the plan record: a
 plan of the run after `plans_before`, or the attempt's verdict whose notes begin with the
-report. If the report is unreadable but a verdict exists, the receipt is `uncertain`.
+reserved notes digest. Normal sync visits such a planning-only task (`hooks::sync::wants`), and
+the question sweeps cover planning containers.
 `ask` and `withdraw` also accept both planning roles.
 
 Core lookup retains historical host state, but liveness requires the latest active

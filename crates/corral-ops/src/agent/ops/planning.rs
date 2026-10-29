@@ -8,14 +8,16 @@
 //! commit in their own transaction and then close the planning pane, possibly ending this very
 //! process. Each therefore reserves its receipt first (naming this executor) and settles it
 //! afterwards; a reservation whose executor is gone is settled from the plan record itself.
-//! The verdict always carries the bound review attempt, so it can never be an owner verdict.
+//! Each service's final transaction rechecks the request binding. The verdict always carries
+//! the bound review attempt, so it can never be an owner verdict, and it writes no file: the
+//! notes report changes only through plan_write.
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::agent::{
-    self, AGENT_RECORD_VERSION, ContainerRef, Executor, RECEIPTS_MAX, RESULT_MAX_BYTES,
-    ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths,
+    self, AGENT_RECORD_VERSION, AgentRunState, ContainerRef, Executor, RECEIPTS_MAX,
+    RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths,
 };
 use corral_core::{Task, Verdict};
 use jiff::Timestamp;
@@ -312,7 +314,7 @@ fn submit_outcome(
 fn verdict_outcome(
     task: &Task,
     (plan, review): (&str, &str),
-    notes: Option<&str>,
+    reserved: &Value,
     error: Option<String>,
 ) -> (ReceiptState, Value) {
     let recorded = task
@@ -321,24 +323,25 @@ fn verdict_outcome(
         .find(|p| p.id == plan)
         .and_then(|p| p.reviews.iter().find(|r| r.id == review))
         .and_then(|r| Some((r.verdict?, r.notes.as_deref().unwrap_or_default())));
-    match (recorded, notes) {
-        (Some((verdict, stored)), Some(notes)) if stored.starts_with(notes) => (
+    let len = reserved["notes_bytes"].as_u64().unwrap_or(u64::MAX) as usize;
+    let ours = |stored: &str| {
+        stored
+            .as_bytes()
+            .get(..len)
+            .map(paths::sha256_hex)
+            .as_deref()
+            == reserved["notes_sha256"].as_str()
+    };
+    match recorded {
+        Some((verdict, stored)) if ours(stored) => (
             ReceiptState::Committed,
             json!({"outcome": "recorded", "plan": plan, "review": review, "verdict": verdict}),
-        ),
-        (Some(_), None) => (
-            ReceiptState::Uncertain,
-            json!({"outcome": "outcome_unknown", "reason": "the notes report is unreadable"}),
         ),
         _ => (
             ReceiptState::Abandoned,
             json!({"outcome": "refused", "reason": error.unwrap_or_else(|| "not recorded".into())}),
         ),
     }
-}
-
-fn reserved_path(receipt: &RequestReceipt) -> Option<PathBuf> {
-    receipt.result["path"].as_str().map(PathBuf::from)
 }
 
 /// Settles one reservation whose executor is verified gone, from the plan record. Nothing
@@ -364,10 +367,7 @@ fn reconcile_one(
             submit_outcome(&task, run, &receipt.result, None)
         }
         ContainerRef::PlanReviewer { plan, review, .. } if receipt.op == "plan_verdict" => {
-            let notes = reserved_path(&receipt)
-                .and_then(|path| read_output(&path).ok())
-                .and_then(|bytes| String::from_utf8(bytes).ok());
-            verdict_outcome(&task, (plan, review), notes.as_deref(), None)
+            verdict_outcome(&task, (plan, review), &receipt.result, None)
         }
         _ => return Ok(receipt),
     };
@@ -380,31 +380,56 @@ fn reconcile_one(
     )
 }
 
-/// Sync and recovery: settles every planning reservation of the task whose executor is gone.
-pub(crate) fn reconcile(ctx: &Ctx, task_id: &str) -> Result<()> {
-    let task = ctx.store.get(task_id)?;
-    let mut held = Vec::new();
-    for run in &task.plan_runs {
+/// Every planning container of the task that ever bound a Pi-native host, with its state.
+fn hosts(task: &Task) -> Vec<(ContainerRef, &AgentRunState)> {
+    let planners = task.plan_runs.iter().filter_map(|run| {
         let container = ContainerRef::Planner {
             task: task.id.clone(),
             run: run.id.clone(),
         };
-        held.push((container, run.agent_host.as_deref()));
-    }
-    for plan in &task.plans {
-        for review in &plan.reviews {
+        Some((container, run.agent_host.as_deref()?))
+    });
+    let reviews = task.plans.iter().flat_map(|plan| {
+        plan.reviews.iter().filter_map(move |review| {
             let container = ContainerRef::PlanReviewer {
                 task: task.id.clone(),
                 plan: plan.id.clone(),
                 review: review.id.clone(),
             };
-            held.push((container, review.agent_host.as_deref()));
-        }
-    }
-    for (container, state) in held {
+            Some((container, review.agent_host.as_deref()?))
+        })
+    });
+    planners.chain(reviews).collect()
+}
+
+/// The planning containers the question sweeps visit, current or historical.
+pub(crate) fn containers(task: &Task) -> Vec<ContainerRef> {
+    hosts(task)
+        .into_iter()
+        .map(|(container, _)| container)
+        .collect()
+}
+
+/// Whether normal sync must visit the task for its planning hosts: one is open, or a closed one
+/// still holds an unsettled receipt or a recorded-pending question. Settled ones never do.
+pub(crate) fn wants_sync(task: &Task) -> bool {
+    hosts(task).iter().any(|(container, state)| {
+        agent::container_closure(task, container).is_none()
+            || state.questions.iter().any(|q| q.recorded_pending())
+            || state
+                .receipts
+                .iter()
+                .any(|r| r.state == ReceiptState::Reserved)
+    })
+}
+
+/// Sync and recovery: settles every planning reservation of the task whose executor is gone.
+pub(crate) fn reconcile(ctx: &Ctx, task_id: &str) -> Result<()> {
+    let task = ctx.store.get(task_id)?;
+    for (container, state) in hosts(&task) {
         let reserved = state
-            .into_iter()
-            .flat_map(|s| &s.receipts)
+            .receipts
+            .iter()
             .filter(|r| r.state == ReceiptState::Reserved && r.executor.is_some());
         for receipt in reserved.cloned().collect::<Vec<_>>() {
             reconcile_one(ctx, &container, receipt)?;
@@ -447,7 +472,11 @@ fn submit(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         Reserved::New(receipt) => receipt,
     };
     effects::failpoint("plan_reserved_before_effect");
-    let error = crate::plan::plan_submit(ctx, task_id, &path).err();
+    // The service's own final transaction rechecks this binding (fence, liveness and that D<n>
+    // is still the accepting run), so a fenced or replaced planner never submits.
+    let binding = &admitted.origin.binding;
+    let bound = |task: &Task| admission::recheck_task(task, binding);
+    let error = crate::plan::plan_submit_checked(ctx, task_id, &path, &bound).err();
     let error = error.map(|e| bounded(format!("{e:#}")));
     let outcome = submit_outcome(&ctx.store.get(task_id)?, run, &reserved.result, error);
     let receipt = settle(
@@ -476,14 +505,11 @@ fn verdict(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         Admission::Replay(receipt) => return stored(ctx, &container, *receipt),
         Admission::New(admitted) => admitted,
     };
+    // Inline notes are recorded on the review only; the notes report changes only through the
+    // receipted plan_write, so this operation has no effect before its reservation.
     let path = output_path(ctx, &ctx.store.get(task_id)?, &container)?;
-    // The notes report is the plan review's report artifact; a retry rewrites the same bytes.
     let notes = match input.notes {
-        Some(notes) if !notes.trim().is_empty() => {
-            write_at(&path, 0, notes.as_bytes())?;
-            notes
-        }
-        Some(_) => return Err(bad("a plan verdict needs nonempty notes")),
+        Some(notes) => notes,
         None => String::from_utf8(read_output(&path)?)
             .map_err(|_| bad(format!("{} is not UTF-8", path.display())))?,
     };
@@ -496,7 +522,10 @@ fn verdict(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         kind: "plan_verdict".into(),
         reference: format!("{plan}/{review}"),
     };
-    let detail = json!({"plan": plan, "review": review, "path": path});
+    let detail = json!({
+        "plan": plan, "review": review, "notes_bytes": notes.len(),
+        "notes_sha256": paths::sha256_hex(notes.as_bytes()),
+    });
     let reserved = match reserve(ctx, &admitted.origin, effect, detail)? {
         Reserved::Stored(receipt) => return stored(ctx, &container, receipt),
         Reserved::New(receipt) => receipt,
@@ -509,10 +538,12 @@ fn verdict(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         verdict: input.verdict,
         notes: &notes,
     };
-    let error = crate::plan_review::plan_verdict(ctx, task_id, &request).err();
+    let binding = &admitted.origin.binding;
+    let bound = |task: &Task| admission::recheck_task(task, binding);
+    let error = crate::plan_review::verdict_report_checked(ctx, task_id, &request, &bound).err();
     let error = error.map(|e| bounded(format!("{e:#}")));
     let task = ctx.store.get(task_id)?;
-    let outcome = verdict_outcome(&task, (plan, review), Some(&notes), error);
+    let outcome = verdict_outcome(&task, (plan, review), &reserved.result, error);
     let receipt = settle(
         ctx,
         &container,

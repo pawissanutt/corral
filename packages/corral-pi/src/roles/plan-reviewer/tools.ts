@@ -13,7 +13,8 @@ export const planVerdictTool: CorralToolSpec = {
   description: "Record this plan review's verdict, exactly as the prompt's `corral plan verdict` command would, for "
     + "the plan and attempt corral launched you for. approve: the plan is ready for owner acceptance (an "
     + "approval never accepts it). changes: list each required change in the notes. escalate: the owner must "
-    + "decide. notes become your notes report; omit them only after writing long notes with corral_plan_write.",
+    + "decide. notes are recorded on the review; omit them to record the notes report you wrote with "
+    + "corral_plan_write (the only way the report file changes).",
   op: "plan_verdict",
   parameters: Type.Object({
     verdict: Type.Union([Type.Literal("approve"), Type.Literal("changes"), Type.Literal("escalate")]),

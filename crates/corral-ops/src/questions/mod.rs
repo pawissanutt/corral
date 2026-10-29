@@ -172,9 +172,10 @@ pub fn question_key(container: &ContainerRef, n: usize) -> String {
     format!("{}/Q{n}", container.key())
 }
 
-/// Every Pi-native worker run and review child of a task, current or historical.
+/// Every Pi-native worker run, review child, planner run and plan review of a task, current or
+/// historical.
 pub fn containers(task: &Task) -> Vec<ContainerRef> {
-    let mut out = Vec::new();
+    let mut out = crate::agent::ops::planning::containers(task);
     for run in &task.runs {
         if run.agent_host.is_some() {
             out.push(ContainerRef::Worker {

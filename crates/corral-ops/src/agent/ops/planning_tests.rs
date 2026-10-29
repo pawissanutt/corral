@@ -217,8 +217,8 @@ fn plan_reviewer_verdicts_use_the_bound_attempt_and_never_approve_for_the_owner(
         assert_eq!(json!(review.verdict), recorded.result["verdict"]);
         assert!(task.plans[0].approval.is_none());
         assert_eq!(task.plans[0].reviews.len(), 1);
-        let notes = std::fs::read_to_string(recorded_notes(&fx, &id)).unwrap();
-        assert_eq!(notes, wording);
+        // Inline notes never touch the notes report: only the receipted plan_write does.
+        assert!(!recorded_notes(&fx, &id).exists());
         if verdict == Verdict::Changes {
             assert_eq!(task.plan_runs[0].state, PlanRunState::Changes);
         } else {
@@ -367,4 +367,234 @@ fn a_reservation_whose_executor_died_settles_from_the_plan_record() {
             assert_eq!(settled.state, ReceiptState::Abandoned);
         }
     }
+}
+
+#[test]
+fn a_verdict_without_inline_notes_records_the_written_report() {
+    // Given a plan reviewer whose notes report was written through plan_write.
+    let fx = ts::fx();
+    let (id, reviewer) = reviewing_task(&fx);
+    let report = "Changes: name the regression test.";
+    committed(&op(
+        &fx,
+        &reviewer,
+        "plan_write",
+        "n",
+        json!({"content": report}),
+    ));
+    // When it records a verdict without inline notes.
+    let recorded = committed(&op(
+        &fx,
+        &reviewer,
+        "plan_verdict",
+        "v",
+        json!({"verdict": "changes"}),
+    ));
+    // Then the review carries the report's text.
+    assert_eq!(recorded.result["outcome"], "recorded");
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert!(
+        task.plans[0].reviews[0]
+            .notes
+            .as_deref()
+            .unwrap()
+            .starts_with(report)
+    );
+}
+
+/// Runs `at_barrier` once, when the planning op reaches its reservation-to-effect barrier.
+fn at_barrier(mut at_barrier: impl FnMut() + 'static) {
+    crate::agent::FAILPOINT.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |point: &str| {
+            if point == "plan_reserved_before_effect" {
+                at_barrier();
+            }
+        }));
+    });
+}
+
+fn clear_barrier() {
+    crate::agent::FAILPOINT.with(|hook| hook.borrow_mut().take());
+}
+
+#[test]
+fn a_planner_fenced_or_replaced_after_reserving_never_submits() {
+    for replace in [false, true] {
+        // Given a planner whose plan is written and whose submission has reserved its receipt.
+        let fx = ts::fx();
+        let id = planning_task(&fx);
+        let host = planner(&fx, &id, "s-plan");
+        committed(&op(&fx, &host, "plan_write", "w", json!({"content": PLAN})));
+        let store = fx.ctx.store.reopen().unwrap();
+        let task_id = id.clone();
+        // When, at the barrier, a new generation fences it, or D1 is cancelled for a new D2.
+        at_barrier(move || {
+            let container = ContainerRef::Planner {
+                task: task_id.clone(),
+                run: "D1".into(),
+            };
+            if replace {
+                store
+                    .update(&task_id, |task| {
+                        let mut next = task.plan_runs[0].clone();
+                        task.plan_runs[0].state = PlanRunState::Cancelled;
+                        task.plan_runs[0].ended = Some(jiff::Timestamp::now());
+                        next.id = "D2".into();
+                        next.agent_host = None;
+                        task.plan_runs.push(next);
+                        Ok(())
+                    })
+                    .unwrap();
+            } else {
+                assert!(crate::agent::fence_generation(&store, &container, 1, "replaced").unwrap());
+            }
+        });
+        let settled = receipt(&op(&fx, &host, "plan_submit", "s", json!({})));
+        clear_barrier();
+        // Then the service's own transaction refuses it: no plan, D2 untouched.
+        assert_eq!(settled.state, ReceiptState::Abandoned, "replace={replace}");
+        let task = fx.ctx.store.get(&id).unwrap();
+        assert!(task.plans.is_empty(), "replace={replace}");
+        assert!(task.plan_runs.iter().all(|run| run.submitted.is_none()));
+    }
+}
+
+#[test]
+fn a_plan_reviewer_fenced_after_reserving_records_no_verdict_and_no_report() {
+    // Given a bound plan reviewer whose verdict reaches its reservation.
+    let fx = ts::fx();
+    let (id, reviewer) = reviewing_task(&fx);
+    let store = fx.ctx.store.reopen().unwrap();
+    let (task_id, notes) = (id.clone(), recorded_notes(&fx, &id));
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let observed = seen.clone();
+    // When, at the barrier, its generation is fenced.
+    at_barrier(move || {
+        let container = ContainerRef::PlanReviewer {
+            task: task_id.clone(),
+            plan: "P1".into(),
+            review: "PR1".into(),
+        };
+        let state = corral_core::agent::container_state(&store.get(&task_id).unwrap(), &container)
+            .unwrap()
+            .clone();
+        let reserved = state
+            .receipts
+            .iter()
+            .any(|r| r.op == "plan_verdict" && r.state == ReceiptState::Reserved);
+        *observed.borrow_mut() = Some((reserved, notes.exists()));
+        assert!(crate::agent::fence_generation(&store, &container, 1, "replaced").unwrap());
+    });
+    let payload = json!({"verdict": "approve", "notes": "Looks complete."});
+    let settled = receipt(&op(&fx, &reviewer, "plan_verdict", "v", payload));
+    clear_barrier();
+    // Then the reservation was durable before any effect, nothing touched the report, and the
+    // verdict service refused the fenced generation.
+    assert_eq!(*seen.borrow(), Some((true, false)));
+    assert_eq!(settled.state, ReceiptState::Abandoned);
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert!(task.plans[0].reviews[0].verdict.is_none());
+    assert!(task.plans[0].approval.is_none());
+}
+
+/// Pushes a reserved receipt of `op` whose executor is verified gone into `container`.
+fn dead_reservation(
+    fx: &ts::Fx,
+    host: &Host,
+    container: &ContainerRef,
+    op: &str,
+    result: Value,
+) -> String {
+    let id = container.task().unwrap();
+    let mut reserved: RequestReceipt = serde_json::from_value(json!({
+        "version": 1, "request_id": tool_request_id(&host.identity.session_id, "lost"), "op": op,
+        "payload_sha256": "00", "identity": host.identity, "state": "reserved",
+        "result": result, "at": "2026-10-29T00:00:00Z",
+    }))
+    .unwrap();
+    reserved.executor = Some(Executor {
+        pid: u32::MAX,
+        start_time: "0".into(),
+    });
+    let request = reserved.request_id.clone();
+    fx.ctx
+        .store
+        .update(id, |task| {
+            corral_core::agent::container_state_mut(task, container)
+                .unwrap()
+                .receipts
+                .push(reserved);
+            Ok(())
+        })
+        .unwrap();
+    request
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn normal_sync_settles_planning_reservations_and_closes_their_questions() {
+    // Given a planning-only task: a planner whose submission committed but whose executor died
+    // with its pane, and an open question that the closed run left pending.
+    let fx = ts::fx();
+    let id = planning_task(&fx);
+    let host = planner(&fx, &id, "s-plan");
+    let question = json!({"kind": "clarification", "text": "Which widget?"});
+    let asked = committed(&op(&fx, &host, "ask", "q", question));
+    committed(&op(&fx, &host, "plan_write", "w", json!({"content": PLAN})));
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("plans")
+        .join(&id)
+        .join("D1/plan.md");
+    crate::plan::plan_submit(&fx.ctx, &id, &path).unwrap();
+    let planner = ContainerRef::Planner {
+        task: id.clone(),
+        run: "D1".into(),
+    };
+    let lost = dead_reservation(
+        &fx,
+        &host,
+        &planner,
+        "plan_submit",
+        json!({"plans_before": 0}),
+    );
+    assert!(crate::agent::hooks::sync::wants(
+        &fx.ctx.store.get(&id).unwrap()
+    ));
+    // When ordinary sync runs.
+    crate::sync_at(&fx.ctx, jiff::Timestamp::now()).unwrap();
+    // Then the reservation settles from the plan record and the question is terminalized.
+    let state = ts::state(&fx, &planner);
+    assert_eq!(state.receipt(&lost).unwrap().state, ReceiptState::Committed);
+    let key = asked.result["key"].as_str().unwrap();
+    let q = state.questions.iter().find(|q| q.key == key).unwrap();
+    assert!(!q.recorded_pending());
+    // And a settled planning-only task no longer asks sync to visit it.
+    assert!(!crate::agent::hooks::sync::wants(
+        &fx.ctx.store.get(&id).unwrap()
+    ));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn normal_sync_abandons_a_dead_plan_reviewer_reservation_that_recorded_nothing() {
+    // Given a plan reviewer reservation whose executor died before the verdict committed.
+    let fx = ts::fx();
+    let (id, reviewer) = reviewing_task(&fx);
+    let container = ContainerRef::PlanReviewer {
+        task: id.clone(),
+        plan: "P1".into(),
+        review: "PR1".into(),
+    };
+    let detail = json!({"plan": "P1", "review": "PR1", "notes_bytes": 3, "notes_sha256": "00"});
+    let lost = dead_reservation(&fx, &reviewer, &container, "plan_verdict", detail);
+    // When ordinary sync runs.
+    crate::sync_at(&fx.ctx, jiff::Timestamp::now()).unwrap();
+    // Then the receipt records that this request recorded nothing, even if sync's own plan-review
+    // reconciliation closed the attempt meanwhile, and no approval exists.
+    let state = ts::state(&fx, &container);
+    assert_eq!(state.receipt(&lost).unwrap().state, ReceiptState::Abandoned);
+    assert!(fx.ctx.store.get(&id).unwrap().plans[0].approval.is_none());
 }

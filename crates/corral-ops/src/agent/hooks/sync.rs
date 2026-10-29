@@ -99,7 +99,7 @@ fn owes(task: &Task, container: &ContainerRef, run: &Run) -> bool {
 pub fn wants(task: &Task) -> bool {
     containers(task).iter().any(|(container, run)| {
         container_closure(task, container).is_none() || owes(task, container, run)
-    })
+    }) || super::super::ops::planning::wants_sync(task)
 }
 
 pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
