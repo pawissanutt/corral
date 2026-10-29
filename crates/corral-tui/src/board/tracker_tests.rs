@@ -294,7 +294,8 @@ fn scoped_tracker_board_restart_retains_shared_json_projection_and_all_buckets()
         serde_json::to_value(corral_ops::plan_progress(&fx.ctx, TRACKER).unwrap()).unwrap();
     let before = fx.ctx.store.list().unwrap();
     let events = fx.ctx.store.events().unwrap().len();
-    // When both an initial board and a restarted board read durable state.
+    // When dispatch holds the lock, both an initial and a restarted board still read progress.
+    let _dispatch = fx.ctx.store.try_lock("dispatch").unwrap().unwrap();
     for board in [fx.board(), fx.board()] {
         let progress = board.plan_progress[TRACKER].as_ref().unwrap();
         // Then the full shared projection, not just counts, agrees with JSON.
@@ -321,6 +322,12 @@ fn scoped_tracker_board_restart_retains_shared_json_projection_and_all_buckets()
                 );
                 assert!(lines.iter().all(|l| l.width() <= width + 2));
                 assert!(!lines.iter().any(|l| l.to_string().contains("done")));
+                let text = lines.iter().map(|l| l.to_string()).collect::<String>();
+                assert!(!text.contains("unavailable"), "{text}");
+                assert!(!text.contains("board is being updated"), "{text}");
+                if width == 80 {
+                    assert!(text.contains("1 accepted"), "{text}");
+                }
             }
         }
     }
