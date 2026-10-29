@@ -102,6 +102,13 @@ fn worker_projection_reaches_visible_detail_without_reclassification() {
     assert_eq!(app.stack.len(), 2);
     let update = WorkerMsg::synced_with_attention(&fx.ctx, &app.message_tx);
     assert!(matches!(&update, WorkerMsg::Synced(Ok(_))));
+    let WorkerMsg::Synced(Ok((_, snapshot))) = &update else {
+        unreachable!()
+    };
+    assert_eq!(
+        snapshot.operating_header,
+        super::operating::readback(&fx.ctx)
+    );
     let before = corral_core::work::Work::ALL.map(corral_core::work::count);
     app.on_worker(update);
     let after = corral_core::work::Work::ALL.map(corral_core::work::count);
@@ -127,6 +134,7 @@ fn worker_projection_keeps_decode_failure_unavailable_and_forwards_diagnostics()
         panic!("expected a partial board snapshot with an explicit attention error");
     };
     assert!(snapshot.attention.is_err());
+    assert!(snapshot.operating_header.contains("policy unavailable"));
     assert!(diagnostics.try_iter().any(|message| message.file.is_some()));
 }
 
@@ -174,7 +182,7 @@ fn worker_snapshot_refreshes_operating_header_after_external_policy_change() {
         .unwrap();
     let mut fresh = fx.ctx.clone();
     fresh.reload_config().unwrap();
-    let snapshot = WorkerMsg::synced(&fresh, Ok(Vec::new()));
+    let snapshot = WorkerMsg::synced_with_attention(&fresh, &app.message_tx);
     app.on_worker(snapshot);
     // Then the live header matches the same fresh readback without manual reload.
     assert_ne!(app.operating_header, before);

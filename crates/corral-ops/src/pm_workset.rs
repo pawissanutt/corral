@@ -224,6 +224,21 @@ fn task_identity(task: &Task) -> Result<Vec<u8>> {
 
 /// The workset and the effective policy it was computed from, both from one read of the board.
 pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
+    project(ctx, None)
+}
+
+/// Reuse the current refresh's assessment; executable authority still comes from fresh policy.
+pub fn pm_workset_with_attention(
+    ctx: &Ctx,
+    attention: &crate::attention::AttentionBoard,
+) -> Result<PmWorkset> {
+    project(ctx, Some(attention)).map(|(workset, _)| workset)
+}
+
+fn project(
+    ctx: &Ctx,
+    attention: Option<&crate::attention::AttentionBoard>,
+) -> Result<(PmWorkset, EffectivePolicy)> {
     let frozen;
     let ctx = if ctx.store.is_snapshot() {
         ctx
@@ -236,7 +251,13 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
     };
     let policy = ctx.store.effective_operating_policy()?;
     let tasks = ctx.store.list()?;
-    let board = crate::attention::board(ctx, jiff::Timestamp::now())?;
+    let fresh;
+    let board = if let Some(board) = attention {
+        board
+    } else {
+        fresh = crate::attention::board(ctx, jiff::Timestamp::now())?;
+        &fresh
+    };
     let assessments: Vec<_> = if policy.tasks.is_empty() {
         Vec::new()
     } else {

@@ -5,7 +5,7 @@ use corral_ops::{Change, Ctx};
 pub(crate) fn run_with_attention(
     ctx: &Ctx,
     messages: &std::sync::mpsc::Sender<corral_ops::Message>,
-) -> Result<(Vec<Change>, crate::attention::Snapshot), String> {
+) -> Result<(Vec<Change>, crate::attention::Snapshot, String), String> {
     let (sender, diagnostics) = std::sync::mpsc::channel();
     let synced = {
         let _capture = corral_core::capture_messages(sender);
@@ -24,12 +24,20 @@ pub(crate) fn run_with_attention(
     let attention = if let Some(reason) = unavailable {
         Err(reason)
     } else if let Some(board) = board {
-        crate::attention::from_board(board)
+        Ok(board)
     } else {
         // A foreign scope or busy reconciliation lease did not classify this pass.
-        crate::attention::load(ctx, jiff::Timestamp::now())
+        crate::attention::load_board(ctx, jiff::Timestamp::now())
     };
-    Ok((changes, attention))
+    let workset = attention
+        .as_ref()
+        .map_err(|error| anyhow::anyhow!(error.clone()))
+        .and_then(|board| corral_ops::pm_workset_with_attention(ctx, board));
+    Ok((
+        changes,
+        attention.and_then(crate::attention::from_board),
+        super::operating::readback_result(workset),
+    ))
 }
 
 #[cfg(test)]
