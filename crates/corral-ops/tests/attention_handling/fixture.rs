@@ -45,7 +45,10 @@ esac
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
         // Keep fresh-store reconciliation real without reparsing unrelated starter catalogs.
         let store = Store::init_with(tmp.path(), |store| {
-            std::fs::write(store.config_path(), "[agents.omo]\ncommand = \"true\"\n")?;
+            std::fs::write(
+                store.config_path(),
+                "[agents.omo]\ncommand = \"true\"\n[pm]\nagent = \"omo\"\n",
+            )?;
             Ok(())
         })
         .unwrap();
