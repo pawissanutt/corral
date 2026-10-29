@@ -17,6 +17,7 @@ import { getApiProvider } from "@earendil-works/pi-ai/compat";
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
 import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
+import { codemode } from "../capabilities/codemode.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
@@ -270,7 +271,8 @@ export class HostSession {
     }
     const search = options.capabilities?.enabled.includes("tool_search") === true;
     this.baseLoadout = [...role.upstreamTools, ...corralToolNames(specs), ...local,
-      ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : [])];
+      ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : []),
+      ...(options.capabilities?.enabled.includes("codemode") ? ["codemode"] : [])];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
     this.settings = {
       ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),
@@ -395,6 +397,9 @@ export class HostSession {
   }
 
   private async extension(pi: ExtensionAPI): Promise<void> {
+    if (this.options.capabilities?.enabled.includes("codemode")) {
+      await codemode(this.options.sdk.createCodemodeExtension)(pi);
+    }
     const settings = this.options.capabilities?.mcp;
     const search = this.options.capabilities?.enabled.includes("tool_search") === true;
     if (settings) {

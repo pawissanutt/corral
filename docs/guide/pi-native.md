@@ -64,6 +64,7 @@ error. The catalog today, as strict / standard / full:
 | `session_export` | worker off / on / on; not available to PM | off / on / on |
 | `mcp.enabled` | off / on / on | off / on / on |
 | `tool_search` | off / on / on | off / on / on |
+| `codemode` | worker off / on / on; PM off / off / on | off / on / on |
 | `hooks` | worker off / off / on; not available to PM | not available |
 | `bash_rules` | worker off / off / on; not available to PM | reviewer off / off / on; not available to planning roles |
 | `background_shell` | worker off / on / on; not available to PM | not available |
@@ -176,6 +177,31 @@ generation. Repeat per role as needed.
 The pack grants no new tools. Visual QA uses an available Pi browser integration or a repository
 capture harness; without either it reports blocked visual checks, never a fabricated visual PASS.
 The pack's tests check tool references against the standard worker's actual tool registry.
+
+### Codemode
+
+`codemode` runs JavaScript in the pinned upstream QuickJS VM. It can batch independent tool
+calls with `Promise.all`/`Promise.allSettled` and filter their results before returning context:
+
+```javascript
+const files = await Promise.all(["README.md", "AGENTS.md"].map(path => tools.read({ path })));
+text(files.map(source => source.split("\n").filter(line => line.startsWith("#"))));
+```
+
+The input is raw JavaScript, not a JSON string or code fence. Only script output and its return
+value reach the model; nested tool names/statuses remain attributed to the outer call in the
+session. Standard enables it for worker, reviewer and planning roles; PM requires full or an
+explicit `codemode = true` in its role table. Strict and `codemode = false` leave it absent.
+MCP and tool search are independent: neither enables codemode, and codemode needs neither.
+
+Scripts have no Node APIs, filesystem, network or timers of their own. Nested tools use the
+same execution check as direct calls: denied role tools cannot run, and **all Corral operations
+must be called directly**, never from a script. Classifier/image model execution and the
+`models` global are disabled; showing an existing image is still possible. Tool subprocesses
+retain their ordinary OS/network access; this is not an OS sandbox. A failed or interrupted
+script does not undo tools already run. Recovery classifies an unfinished `codemode` call as
+`outcome_unknown`, even if its source appears read-only, and preserves a worktree snapshot for
+reconciliation. Reload rebuilds the extension from the same generation snapshot.
 
 ### Web access
 

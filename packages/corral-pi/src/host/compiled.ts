@@ -18,6 +18,12 @@ import reviewerContract from "../../assets/reviewer-contract.md" with { type: "t
 import workerContract from "../../assets/worker-contract.md" with { type: "text" };
 import workerSkill from "../roles/worker/skills/corral-worker/SKILL.md" with { type: "text" };
 import { restrictEnvironment } from "./restrict.ts";
+// Bun embeds .wasm imports as readable files. Use the pinned SDK's asset setter only:
+// importing its whole Bun runtime setup would also change provider registration.
+import quickjsWasmPath from "quickjs-wasi/quickjs.wasm";
+import { setEmbeddedQuickJSWasmPath } from "../../node_modules/@earendil-works/pi-coding-agent/dist/config.js";
+
+setEmbeddedQuickJSWasmPath(quickjsWasmPath);
 
 export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "compat.json": `${JSON.stringify(compat, null, 2)}\n`,
