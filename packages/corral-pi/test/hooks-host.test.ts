@@ -60,8 +60,11 @@ test("bash rules and hooks run around worker tools with durable hook attribution
       parameters: Type.Object({}),
       async execute(_id, _params, signal, _update, ctx) {
         const denied = await ctx.executeTool("bash", { command: "rm notes.txt" }, { signal });
+        const flagged = await ctx.executeTool("bash", { command: "bash -lc 'rm notes.txt'" }, { signal });
+        const asked = await ctx.executeTool("bash", { command: "sh -ec 'touch asked.txt'" }, { signal });
         const read = await ctx.executeTool("read", { path: join(cwd, "notes.txt") }, { signal });
-        return { content: [{ type: "text", text: JSON.stringify([denied.isError, read.isError]) }], details: undefined };
+        const errors = [denied.isError, flagged.isError, asked.isError, read.isError];
+        return { content: [{ type: "text", text: JSON.stringify(errors) }], details: undefined };
       },
     };
     const role = workerRole(PACKAGE_ROOT);
@@ -97,6 +100,8 @@ test("bash rules and hooks run around worker tools with durable hook attribution
       { toolCalls: [{ callId: "t1-read", name: "read", arguments: { path: join(cwd, "notes.txt") } }] },
       { toolCalls: [{ callId: "t1-deny", name: "bash", arguments: { command: "echo hi && rm notes.txt" } }] },
       { toolCalls: [{ callId: "t1-ask", name: "bash", arguments: { command: "touch asked.txt" } }] },
+      { toolCalls: [{ callId: "t1-deny-flags", name: "bash", arguments: { command: "sh -ec 'rm notes.txt'" } }] },
+      { toolCalls: [{ callId: "t1-ask-flags", name: "bash", arguments: { command: "bash -lc 'touch asked.txt'" } }] },
       { toolCalls: [{ callId: "t1-allow", name: "bash", arguments: { command: "echo ok > allowed.txt" } }] },
       { toolCalls: [{ callId: "t1-todo", name: "corral_todo", arguments: { op: "start", step: "hooks" } }] },
       { toolCalls: [{ callId: "t1-nest", name: "fixture_nest", arguments: {} }] },
@@ -104,7 +109,10 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     ]);
     // Then deny wins (also nested), ask runs nothing yet, and the allowed command works.
     expect(result("t1-deny")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
-    expect(result("t1-nest").text).toBe("[true,false]");
+    expect(result("t1-nest").text).toBe("[true,true,true,false]");
+    expect(result("t1-deny-flags")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
+    expect(result("t1-ask-flags").isError).toBeTrue();
+    expect(result("t1-ask-flags").text).toContain(`${PERMISSION_REF}${commandDigest("bash -lc 'touch asked.txt'")}`);
     expect(existsSync(join(cwd, "notes.txt"))).toBeTrue();
     const ref = `${PERMISSION_REF}${commandDigest("touch asked.txt")}`;
     expect(result("t1-ask").isError).toBeTrue();
@@ -121,7 +129,8 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     expect([...byInvocation.values()].every((states) => states.join(",") === "prepared,started,completed")).toBeTrue();
     expect([...new Set(entries.map((entry) => entry.tool_call_id === undefined ? `turn ${entry.turn}` : String(entry.tool_call_id).split("|")[0]))])
       .toEqual(["t1-read", "t1-allow", "t1-nest", "turn 1"]);
-    expect(kinds().filter((kind) => kind === "bash_rule_denied")).toHaveLength(2);
+    expect(kinds().filter((kind) => kind === "bash_rule_denied")).toHaveLength(4);
+    expect(kinds().filter((kind) => kind === "bash_permission_required")).toHaveLength(3);
 
     // When the model asks the bound permission question and the owner's answer is delivered.
     await turn("t2", "test", "ask", [

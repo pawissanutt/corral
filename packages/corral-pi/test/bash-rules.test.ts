@@ -33,6 +33,21 @@ test("compound lines, substitutions and nested shells are decided piece by piece
     expect(decision.action).toBe("deny");
     expect(decision.segment).toContain("rm -rf target");
   }
+  // And combined shell options carrying -c expose their command string to deny and ask alike.
+  const denyRm = rules({ deny: ["rm *"] });
+  const ask = rules({ ask: ["rm *"] });
+  for (const shell of ["sh", "bash", "dash", "zsh", "/bin/bash", "env bash"]) {
+    for (const options of ["-lc", "-ec", "-c", "-e -c", "-o pipefail -c", "--login -c", "-cl", "-c -e"]) {
+      for (const quote of ["'", "\""]) {
+        const command = `${shell} ${options} ${quote}rm notes.txt${quote}`;
+        expect([command, decideBash(command, denyRm).action]).toEqual([command, "deny"]);
+        expect([command, decideBash(command, ask).action]).toEqual([command, "ask"]);
+      }
+    }
+  }
+  // And a shell running a script file, without -c, is decided by its own line only.
+  expect(decideBash("bash -l scripts/rm-notes.sh", ask).action).toBe("allow");
+  expect(decideBash("bash -o pipefail scripts/check.sh", ask).action).toBe("allow");
   // And an allow-only default needs every piece allowed.
   expect(decideBash("cargo test && echo done", allowOnly).action).toBe("allow");
   expect(decideBash("cargo test && curl example.org", allowOnly)).toEqual({ action: "deny", segment: "curl example.org" });

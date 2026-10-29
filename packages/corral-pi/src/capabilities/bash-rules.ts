@@ -29,6 +29,12 @@ export interface BashDecision {
 
 export const PERMISSION_REF = "bash-permission:";
 const NESTING_MAX = 4;
+/**
+ * A shell invocation: its options (`-o name`, `--long`, short clusters such as `-lc`), then the
+ * first operand. The operand is a command string whenever any short cluster contains `c`.
+ */
+const SHELL = /(?:^|[\s;&|(`])(?:\S*\/)?(?:ba|z|da|k)?sh\s+((?:[+-]o\s+\S+\s+|--[a-z-]+\s+|[+-][A-Za-z]+\s+)*)(?:'([^']*)'|"([^"]*)"|(\S+))/g;
+const COMMAND_OPTION = /(?:^|\s)-[A-Za-z]*c[A-Za-z]*(?=\s)/;
 
 function normalize(text: string): string {
   return text.replace(/\s+/g, " ").replace(/^[({\s]+|[)}\s]+$/g, "").trim();
@@ -58,8 +64,8 @@ function pieces(command: string, depth = 0): string[] {
   if (depth < NESTING_MAX) {
     const nested = [
       ...[...command.matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)].map((match) => match[1] ?? match[2] ?? ""),
-      ...[...command.matchAll(/\b(?:ba|z|da)?sh\s+(?:-[a-z]+\s+)*-c\s+(?:'([^']*)'|"([^"]*)"|(\S+))/g)]
-        .map((match) => match[1] ?? match[2] ?? match[3] ?? ""),
+      ...[...command.matchAll(SHELL)].filter((match) => COMMAND_OPTION.test(` ${match[1] ?? ""}`))
+        .map((match) => match[2] ?? match[3] ?? match[4] ?? ""),
     ];
     for (const body of nested) for (const piece of pieces(body, depth + 1)) found.add(piece);
   }
