@@ -836,7 +836,7 @@ impl Store {
             "action task contract or project identity changed"
         );
         ensure!(
-            authorization.policy_revision == self.policy_revision(config)?,
+            self.policy_revision_current(config, &authorization.policy_revision)?,
             "action policy revision changed"
         );
         match &authorization.origin {

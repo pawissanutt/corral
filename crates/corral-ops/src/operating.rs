@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     ActionAuthorization, OperatingActionIdentity, OperatingActionKind, OperatingOrigin, Store,
-    SubmissionOutcome, Task,
+    SubmissionDisposition, SubmissionOutcome, Task,
 };
 use jiff::Timestamp;
 
@@ -232,6 +232,37 @@ pub(crate) fn require_origin(
         Origin::Owner => Ok(()),
         Origin::Automatic => require(store, task, kind),
     }
+}
+
+/// Why an unsubmitted owner approval no longer matches the task contract or policy revision.
+/// Only an explicit owner request may renew it (T-204); automatic authority is never stale here.
+pub(crate) fn owner_consent_drift(
+    ctx: &Ctx,
+    authorization: &ActionAuthorization,
+) -> Result<Option<&'static str>> {
+    if is_automatic(authorization) {
+        return Ok(None);
+    }
+    match ctx
+        .store
+        .authorized_submission(&authorization.id)?
+        .disposition
+    {
+        SubmissionDisposition::Prepared | SubmissionDisposition::AuthorizationRefused { .. } => {
+            ctx.store.operating_consent_drift(authorization)
+        }
+        SubmissionDisposition::Submitting
+        | SubmissionDisposition::Submitted
+        | SubmissionDisposition::Uncertain { .. } => Ok(None),
+    }
+}
+
+/// The one stable Blocked reason a stale owner-queued launch shows instead of retrying (T-560).
+pub(crate) fn stale_owner_queue(task: &str, reason: &str) -> String {
+    format!(
+        "queued owner consent is stale ({reason}); re-authorize with `corral dispatch {task}` \
+         (d on the card)"
+    )
 }
 
 pub(crate) fn refused(error: &anyhow::Error) -> bool {
