@@ -61,7 +61,10 @@ then settles it `committed` (`{outcome: submitted, plan, sha256}` or
 Sync reconciles a reservation whose executor is verified gone from the plan record: a
 plan of the run after `plans_before`, or the attempt's verdict whose notes begin with the
 reserved notes digest. Normal sync visits such a planning-only task (`hooks::sync::wants`), and
-the question sweeps cover planning containers.
+the question sweeps cover planning containers. Planning question keys are
+`<task>/plan-<D>/Q<n>` and `<task>/plan-<P>/<PR>/Q<n>`. A planning container's owner-waiting
+question records its Needs me hold in `AgentRunState.question_hold` (absent when empty), the
+planning counterpart of `Run.blocked_excerpt`. Only that hold is cleared when the question settles.
 `ask` and `withdraw` also accept both planning roles.
 
 Core lookup retains historical host state, but liveness requires the latest active

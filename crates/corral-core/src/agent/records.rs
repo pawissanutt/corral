@@ -83,6 +83,10 @@ pub struct AgentRunState {
     /// Worker background jobs: durable process identity and monitor subscriptions (T-565).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jobs: Vec<super::JobRecord>,
+    /// A planning container's question hold: the excerpt its own owner-waiting question set
+    /// when it moved the task to Needs me. Worker runs keep theirs in `Run.blocked_excerpt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_hold: Option<String>,
 }
 
 impl AgentRunState {
@@ -98,6 +102,7 @@ impl AgentRunState {
             reports: Vec::new(),
             todo: None,
             jobs: Vec::new(),
+            question_hold: None,
         }
     }
 
