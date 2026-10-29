@@ -29,7 +29,7 @@ pub(crate) struct Sheet {
     kind: Kind,
     task: String,
     plan: String,
-    /// Owner decisions an approval must resolve; one input each, then the note.
+    /// Owner decisions: approval requires all answers; changes may resolve any of them.
     decisions: Vec<String>,
     inputs: Vec<String>,
     focus: usize,
@@ -48,16 +48,13 @@ pub(crate) enum Outcome {
 impl Sheet {
     pub(crate) fn new(kind: Kind, task: &Task) -> Option<Sheet> {
         let plan = task.plans.last()?;
-        let decisions: Vec<String> = match kind {
-            Kind::Approve => plan
-                .document
-                .owner_decisions
-                .iter()
-                .chain(task.completion.iter().flat_map(|m| &m.owner_decisions))
-                .cloned()
-                .collect(),
-            Kind::Changes => Vec::new(),
-        };
+        let decisions: Vec<String> = plan
+            .document
+            .owner_decisions
+            .iter()
+            .chain(task.completion.iter().flat_map(|m| &m.owner_decisions))
+            .cloned()
+            .collect();
         let mut inputs = vec![String::new(); decisions.len()];
         inputs.push(match kind {
             Kind::Approve => APPROVE_NOTE.into(),
@@ -144,12 +141,14 @@ impl Sheet {
     fn notes(&self) -> Result<String, &'static str> {
         let note = self.inputs.last().map_or("", |s| s.trim());
         let answers = &self.inputs[..self.decisions.len()];
-        if answers.iter().any(|a| a.trim().is_empty()) {
+        if self.kind == Kind::Approve && answers.iter().any(|a| a.trim().is_empty()) {
             return Err("resolve every owner decision before approving");
         }
         let mut notes = note.to_string();
         for (question, answer) in self.decisions.iter().zip(answers) {
-            notes.push_str(&format!("\nResolved: {question} => {}", answer.trim()));
+            if !answer.trim().is_empty() {
+                notes.push_str(&format!("\nResolved: {question} => {}", answer.trim()));
+            }
         }
         match notes.trim().is_empty() {
             true if self.kind == Kind::Changes => Err("type what the planner should change"),

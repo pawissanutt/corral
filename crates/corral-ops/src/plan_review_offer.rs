@@ -8,7 +8,7 @@ use crate::{Ctx, operating, plan};
 pub enum PlanReviewOffer {
     /// The latest plan has no review attempt yet.
     Run,
-    /// The last attempt ended in an escalation: the reviewer disappeared, failed to launch or escalated.
+    /// The last attempt failed to launch or lost its reviewer before a verdict.
     Retry,
 }
 
@@ -31,7 +31,17 @@ fn offer_for(task: &Task) -> Option<PlanReviewOffer> {
     }
     match plan.reviews.last() {
         None => Some(PlanReviewOffer::Run),
-        Some(review) if review.verdict == Some(Verdict::Escalate) => Some(PlanReviewOffer::Retry),
+        // Infrastructure failures did not review the snapshot. A substantive escalation,
+        // however, needs an owner decision/revision, not another review of the same plan.
+        Some(review)
+            if review.verdict == Some(Verdict::Escalate)
+                && review.notes.as_deref().is_some_and(|notes| {
+                    notes.starts_with("Review launch failed:")
+                        || notes == "plan reviewer disappeared before recording a verdict"
+                }) =>
+        {
+            Some(PlanReviewOffer::Retry)
+        }
         Some(_) => None,
     }
 }

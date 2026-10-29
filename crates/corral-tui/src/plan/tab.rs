@@ -38,6 +38,7 @@ pub(crate) struct PlanTab {
     human_first: bool,
     details: bool,
     revision: Option<String>,
+    resolution_due: bool,
 }
 
 pub(super) fn markdown_list(out: &mut String, title: &str, items: &[String]) {
@@ -153,6 +154,12 @@ impl PlanTab {
         self.enabled = task.tracker || plan_first(task, config);
         self.stage = stage(task, config);
         self.offer = corral_ops::plan_review_offer(ctx, task);
+        self.resolution_due = task.plans.last().is_some_and(|p| {
+            p.reviews
+                .last()
+                .is_some_and(|r| matches!(r.verdict, Some(Verdict::Escalate | Verdict::Changes)))
+                && self.offer.is_none()
+        });
         self.progress = super::tracker::load(ctx, task);
         self.children = task
             .children
@@ -213,8 +220,13 @@ impl PlanTab {
             buttons.push((review::label(offer), hit::press(review::KEY)));
         }
         if self.decidable() {
+            if self.resolution_due {
+                buttons.push(("Resolve / revise plan", hit::press(KeyCode::Char('c'))));
+            }
             buttons.push(("Approve plan", hit::press(KeyCode::Char('a'))));
-            buttons.push(("Request changes", hit::press(KeyCode::Char('c'))));
+            if !self.resolution_due {
+                buttons.push(("Request changes", hit::press(KeyCode::Char('c'))));
+            }
         }
         if !self.children.is_empty() && (!self.human_first || self.details) {
             buttons.push(("Open child", hit::press(KeyCode::Enter)));
@@ -286,6 +298,25 @@ impl PlanTab {
                 ),
                 Style::new().fg(theme::YELLOW),
             ));
+        }
+        if self.resolution_due {
+            out.extend(wrapped(Line::styled(
+                "Review unchanged: resolve pending decisions with c Resolve / revise plan; this records owner changes with Resolved: <decision> => <resolution> and starts revision. Submit a new snapshot before reviewing again.",
+                Style::new().fg(theme::YELLOW),
+            ), width));
+            if let Some(p) = plan {
+                for decision in p
+                    .document
+                    .owner_decisions
+                    .iter()
+                    .chain(task.completion.iter().flat_map(|m| &m.owner_decisions))
+                {
+                    out.extend(wrapped(
+                        Line::raw(format!("Pending decision: {decision}")),
+                        width,
+                    ));
+                }
+            }
         }
         if self.decidable() {
             out.push(Line::styled(
