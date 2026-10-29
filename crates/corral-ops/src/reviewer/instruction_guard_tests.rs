@@ -16,6 +16,7 @@ use super::*;
 use crate::operating::Origin;
 use crate::review_budget::{Kind, ReviewLaunch};
 use crate::test_support as support;
+use corral_core::Run;
 
 const FAKE: &str = r#"#!/usr/bin/env bash
 cd "$(dirname "$0")" || exit 1
@@ -416,7 +417,8 @@ fn restored_launch_is_refused_before_resume_and_its_preparation_is_retained() {
     let task = fx.ctx.store.get(&fx.id).unwrap();
     let run = task.current_run().unwrap().clone();
     let candidate =
-        crate::verification::capture_identity(&fx.ctx, &task, &run, "candidate").unwrap();
+        crate::verification::capture_identity(&fx.ctx, &task, &run_head(&run), "candidate")
+            .unwrap();
     launch
         .bind(&candidate, "R1-review1", Some("R1-review1"))
         .unwrap();
@@ -428,7 +430,9 @@ fn restored_launch_is_refused_before_resume_and_its_preparation_is_retained() {
             let record = ReviewRecord {
                 route: None,
                 identity: Some(candidate.clone()),
-                evidence_digest: Some(crate::verification::evidence_digest(run)?),
+                evidence_digest: Some(crate::verification::evidence_digest(
+                    &corral_core::RunHead::of(run)?,
+                )?),
                 verdict: None,
                 process_lost: false,
                 reviewer: "rev".into(),
@@ -500,8 +504,11 @@ fn legacy_run_keeps_todays_review_gate_text_and_is_never_refused() {
     assert_eq!(fx.created(), 1);
     let prompt = std::fs::read_to_string(fx.prompt_file()).unwrap();
     let run = fx.run();
-    let today =
-        super::super::prompt_text::gate_text(&fx.ctx, &fx.ctx.store.get(&fx.id).unwrap(), &run);
+    let today = super::super::prompt_text::gate_text(
+        &fx.ctx,
+        &fx.ctx.store.get(&fx.id).unwrap(),
+        &run_head(&run),
+    );
     assert!(
         prompt.contains(&format!("\n\n{today}\nRun the full gate")),
         "{prompt}"
@@ -533,4 +540,9 @@ fn implementation_family_contracts_are_v2_and_carry_no_full_gate_directive() {
             None
         );
     }
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

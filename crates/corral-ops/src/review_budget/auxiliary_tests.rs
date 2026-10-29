@@ -31,7 +31,7 @@ fn prepared<'a>(fx: &'a Fixture, id: &str, kind: Kind) -> ReviewLaunch<'a> {
     let task = fx.ctx.store.get(id).unwrap();
     let run = task.current_run().unwrap();
     let candidate =
-        crate::verification::capture_identity(&fx.ctx, &task, run, "candidate").unwrap();
+        crate::verification::capture_identity(&fx.ctx, &task, &run_head(run), "candidate").unwrap();
     let child_id = (kind == Kind::Reviewer).then_some("R1-review1");
     launch
         .bind(&candidate, child_id.unwrap_or("candidate"), child_id)
@@ -53,7 +53,9 @@ fn prepared<'a>(fx: &'a Fixture, id: &str, kind: Kind) -> ReviewLaunch<'a> {
                     let record = ReviewRecord {
                         route: None,
                         identity: Some(candidate.clone()),
-                        evidence_digest: Some(crate::verification::evidence_digest(run)?),
+                        evidence_digest: Some(crate::verification::evidence_digest(
+                            &corral_core::RunHead::of(run)?,
+                        )?),
                         verdict: None,
                         process_lost: false,
                         reviewer: "rev".into(),
@@ -657,4 +659,9 @@ fn recovered_start_with_a_committed_row_adds_no_second_start_event() {
     let (_, row) = prepared_row(&fx, &id);
     assert_eq!(row.unwrap().launched, Some(json!("w1:prepared")));
     assert_eq!(gate_started_count(&fx, &id), 1);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

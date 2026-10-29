@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use corral_core::{ReviewRecord, Run};
+use corral_core::ReviewRecord;
 
 use crate::Ctx;
 
@@ -25,15 +25,15 @@ pub(crate) fn dir_attempt(review: Option<&ReviewRecord>, child: &str) -> String 
 }
 
 /// The notes file of `run`'s current review, or of its first attempt before any launched.
-pub(super) fn notes_of(ctx: &Ctx, task: &str, run: &Run) -> Result<PathBuf> {
+pub(super) fn notes_of(ctx: &Ctx, task: &str, run: &corral_core::RunHead) -> Result<PathBuf> {
     let child = run
-        .review_runs
-        .last()
+        .current_child
+        .as_deref()
         .map_or_else(|| format!("{}-review1", run.id), |child| child.id.clone());
     let review = run
         .review
         .as_ref()
-        .or_else(|| run.review_runs.last()?.review.as_ref());
+        .or_else(|| run.current_child.as_deref()?.review.as_ref());
     Ok(review_dir(ctx, task, &run.id, &dir_attempt(review, &child))?.join(NOTES))
 }
 

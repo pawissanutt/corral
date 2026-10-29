@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use corral_core::backend::ScratchKind;
-use corral_core::{Artifact, ArtifactKind, ReviewRecord, Run, Status, Task, Verdict};
+use corral_core::{
+    Artifact, ArtifactKind, ReviewRecord, Run, RunHead, Status, Task, TaskRef, Verdict,
+};
 use serde::{Deserialize, Serialize};
 
 use super::ProgressState;
@@ -57,24 +59,28 @@ fn read(ctx: &Ctx, task: &str, child: &str) -> Result<Capture> {
     }
 }
 
-pub(crate) fn start_review(ctx: &Ctx, task: &Task, child: &Run) -> Result<()> {
+pub(crate) fn start_review<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    child: &RunHead,
+) -> Result<()> {
     let capture = Capture {
-        round: task.rounds,
+        round: *task.rounds(),
         ..Default::default()
     };
     crate::artifact_storage::replace(
-        &path(ctx, &task.id, &child.id)?,
+        &path(ctx, task.id(), &child.id)?,
         &serde_json::to_vec(&capture)?,
     )
 }
 
 /// Capture before closing/replacing a pane. Failures are reported, never verification inputs.
-pub(crate) fn capture_review(ctx: &Ctx, task: &Task, run: &Run) {
-    let Some(child) = run.review_runs.last() else {
+pub(crate) fn capture_review<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) {
+    let Some(child) = run.current_child.as_deref() else {
         return;
     };
-    if let Err(error) = capture_child(ctx, task, run, child, false) {
-        crate::messages::report(Some(&task.id), "review capture", format!("{error:#}"));
+    if let Err(error) = capture_child(ctx, task.id(), run, child, false) {
+        crate::messages::report(Some(task.id()), "review capture", format!("{error:#}"));
     }
 }
 
@@ -93,22 +99,28 @@ pub(crate) fn capture_review_exact(ctx: &Ctx, task: &Task, run: &str, child: &st
     let named = parent.review_runs.iter().find(|c| c.id == child);
     capture_child(
         ctx,
-        task,
-        parent,
-        named.context("review child missing")?,
+        &task.id,
+        &RunHead::of(parent)?,
+        &RunHead::of(named.context("review child missing")?)?,
         true,
     )
 }
 
-fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) -> Result<bool> {
+fn capture_child(
+    ctx: &Ctx,
+    task: &str,
+    run: &RunHead,
+    child: &RunHead,
+    exact: bool,
+) -> Result<bool> {
     {
         let Some(_lock) = ctx
             .store
-            .try_lock(&format!("review-capture-{}-{}", task.id, child.id))?
+            .try_lock(&format!("review-capture-{}-{}", task, child.id))?
         else {
             return Ok(false);
         };
-        let mut capture = read(ctx, &task.id, &child.id)?;
+        let mut capture = read(ctx, task, &child.id)?;
         if capture.captured_at.is_some() && !(exact && capture.incomplete) {
             return Ok(true);
         }
@@ -119,15 +131,15 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
         let mut window = child.clone();
         window.ended.get_or_insert_with(jiff::Timestamp::now);
         let key = crate::reviewer::dir_attempt(child.review.as_ref(), &child.id);
-        let notes = crate::reviewer::review_dir(ctx, &task.id, &run.id, &key)?.join("notes.md");
+        let notes = crate::reviewer::review_dir(ctx, task, &run.id, &key)?.join("notes.md");
         if let Ok(notes) = std::fs::read_to_string(notes)
             && !notes.trim().is_empty()
         {
-            save_notes(ctx, &task.id, &run.id, &child.id, &notes)?;
+            save_notes(ctx, task, &run.id, &child.id, &notes)?;
         }
         let harness = matches!(child.harness.as_deref(), Some("omo" | "omp" | "claude"));
         let transcript = if harness && capture.transcript.is_none() {
-            crate::usage::transcript(&window, &ctx.store)
+            crate::usage::transcript_head(&window, &ctx.store)
         } else {
             Ok(Vec::new())
         };
@@ -140,7 +152,7 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
             Err(error) if exact => return Err(error.context("reading the reviewer transcript")),
             Err(error) => {
                 capture.incomplete = true;
-                crate::messages::report(Some(&task.id), "review transcript", format!("{error:#}"));
+                crate::messages::report(Some(task), "review transcript", format!("{error:#}"));
             }
         }
         let record = child.review.as_ref().or(run.review.as_ref());
@@ -155,13 +167,13 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
                 Err(error) if exact => return Err(error.context("reading the review pane")),
                 Err(error) => {
                     capture.incomplete = true;
-                    crate::messages::report(Some(&task.id), "review screen", format!("{error:#}"));
+                    crate::messages::report(Some(task), "review screen", format!("{error:#}"));
                 }
             }
         }
         capture.captured_at = Some(corral_core::clock::now());
         crate::artifact_storage::replace(
-            &path(ctx, &task.id, &child.id)?,
+            &path(ctx, task, &child.id)?,
             &serde_json::to_vec(&capture)?,
         )?;
         Ok(true)
@@ -180,7 +192,7 @@ fn save_notes(ctx: &Ctx, task: &str, run: &str, child: &str, notes: &str) -> Res
             .review_child(run, child)?
             .is_some_and(|c| c.review.as_ref().is_some_and(|r| r.notes.is_none()))
         {
-            head.edit_review_child(run, child, |saved| {
+            head.edit_review_child_head(run, child, |saved| {
                 if let Some(review) = saved.review.as_mut() {
                     review.notes = Some(notes.to_owned());
                 }
@@ -210,22 +222,22 @@ fn save_notes(ctx: &Ctx, task: &str, run: &str, child: &str, notes: &str) -> Res
 
 fn snapshot(
     ctx: &Ctx,
-    task: &Task,
-    parent: &Run,
-    child: &Run,
+    task: &str,
+    parent: &RunHead,
+    child: &RunHead,
     (kind, bytes): (&str, &[u8]),
     named: bool,
 ) -> Result<String> {
-    let file = path(ctx, &task.id, &child.id)?.with_extension(format!("{kind}.log"));
+    let file = path(ctx, task, &child.id)?.with_extension(format!("{kind}.log"));
     crate::artifact_storage::replace(&file, bytes)?;
     let (log, title) = (
         Some(ArtifactKind::Log),
         format!("Reviewer {kind} ({})", child.id),
     );
     let artifact = if named {
-        crate::artifacts::add_artifact_to_run(ctx, &task.id, &parent.id, &file, log, Some(&title))
+        crate::artifacts::add_artifact_to_run(ctx, task, &parent.id, &file, log, Some(&title))
     } else {
-        crate::artifacts::add_artifact_for_run(ctx, &task.id, &parent.id, &file, log, Some(&title))
+        crate::artifacts::add_artifact_for_run(ctx, task, &parent.id, &file, log, Some(&title))
     }?;
     Ok(artifact.path)
 }

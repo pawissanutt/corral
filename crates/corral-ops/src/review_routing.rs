@@ -18,7 +18,11 @@ pub struct ReviewMapping {
     pub warnings: Vec<String>,
 }
 
-pub(crate) fn choice(config: &Config, task: &Task, explicit: Option<&str>) -> Reviewer {
+pub(crate) fn choice<T: corral_core::TaskFieldsRef + ?Sized>(
+    config: &Config,
+    task: &T,
+    explicit: Option<&str>,
+) -> Reviewer {
     explicit.map_or_else(|| config.task_review_policy(task).reviewer, Reviewer::parse)
 }
 
@@ -81,15 +85,19 @@ pub(crate) fn resolve(
     Ok((name, profile))
 }
 
-pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> ReviewMapping {
+pub(crate) fn mapping<T: corral_core::TaskFieldsRef + ?Sized>(
+    config: &Config,
+    task: &T,
+    reviewer: &Reviewer,
+) -> ReviewMapping {
     let rule = config.reviewer_rule(task);
-    let policy_source = if task.reviewer.is_some() {
+    let policy_source = if task.reviewer().is_some() {
         "task_override"
     } else if rule.is_some() {
         "reviewer_rule"
     } else {
         match config
-            .review_policy_sources(task.project.as_deref(), task.review)
+            .review_policy_sources(task.project().as_deref(), *task.review())
             .reviewer
         {
             PolicySource::Default => "none",
@@ -98,7 +106,7 @@ pub(crate) fn mapping(config: &Config, task: &Task, reviewer: &Reviewer) -> Revi
             PolicySource::Task => "task_override",
         }
     };
-    let source = if task.reviewer.is_some() {
+    let source = if task.reviewer().is_some() {
         policy_source
     } else {
         match reviewer {

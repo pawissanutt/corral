@@ -1,39 +1,16 @@
 //! The reviewer launch (plan T-253 section 4, "reviewer"): the acted task is read as its head,
-//! helpers get its fields and current run as a task ([`review_shell`]), earlier review children
-//! are reached only by key, and the launch guard compares the parent's `children` fact and its
-//! current review record: the full form's child count and record.
+//! helpers get it and its current run projection, earlier review children are reached only by
+//! key, and the launch guard compares the parent's `children` fact and its current review
+//! record: the full form's child count and record.
 use super::*;
 use corral_core::{RunHead, TaskHeadMut};
 
-/// The head's fields and current run as a task, with the run's open obligations, its own
-/// artifacts and, ahead of the current child, the superseded child that consumed this
-/// candidate's stronger review: the rows the review checks and the packet read.
-pub(crate) fn review_shell<T: corral_core::TaskRef + ?Sized>(head: &T) -> Result<Task> {
-    let mut task = head.shell_task()?;
-    let Some(run) = task.runs.last_mut() else {
-        return Ok(task);
-    };
-    run.obligations = head.open_obligations(&run.id)?;
-    with_stronger_source(head, run)?;
-    let id = run.id.clone();
-    task.artifacts = head.artifacts_of(&id)?;
-    Ok(task)
-}
-
-/// Inserts ahead of `run`'s current child the earlier superseded child that carries a stronger
-/// request on the run's head, read by key: `stronger_source` then finds it as over all children.
-fn with_stronger_source<T: corral_core::TaskRef + ?Sized>(head: &T, run: &mut Run) -> Result<()> {
-    let Ok(sha) = corral_git::rev_sha(&run.worktree, "HEAD") else {
-        return Ok(());
-    };
-    let current = run.review_runs.last().map(|child| child.id.clone());
-    if let Some(source) = head.stronger_source(&run.id, &sha, current.as_deref())?
-        && let Some(child) = head.review_child(&run.id, &source)?
-    {
-        run.review_runs
-            .insert(0, serde_json::from_value(serde_json::to_value(child)?)?);
-    }
-    Ok(())
+/// The current run of any task form, as its projection.
+fn current_run_head<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<RunHead> {
+    Ok(task
+        .current_run_head()?
+        .with_context(|| format!("task {} has no run", task.id()))?
+        .into_owned())
 }
 
 fn review_parent_head<'a>(task: &'a mut TaskHeadMut, run_id: &str) -> Result<&'a mut RunHead> {
@@ -45,7 +22,7 @@ fn review_parent_head<'a>(task: &'a mut TaskHeadMut, run_id: &str) -> Result<&'a
 /// The accounting child a launch records for its review.
 fn review_child(
     ctx: &Ctx,
-    run: &Run,
+    run: &RunHead,
     resolved: &ResolvedProfile,
     reviewer: &Reviewer,
     review_id: &str,
@@ -108,15 +85,15 @@ fn review_child(
     })
 }
 
-fn launch_profile(
+fn launch_profile<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     resolved: &ResolvedProfile,
     prompt_file: &Path,
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<String> {
-    let title = format!("{} review", task.id);
+    let title = format!("{} review", task.id());
     let command = match crate::agent::hooks::review::command(ctx, task, run, resolved) {
         Some(command) => command?,
         None => render_template(
@@ -124,7 +101,7 @@ fn launch_profile(
             &[
                 ("prompt_file", prompt_file.display().to_string()),
                 ("name", title.clone()),
-                ("task", task.id.clone()),
+                ("task", task.id().clone()),
                 ("worktree", run.worktree.display().to_string()),
             ],
         )?,
@@ -132,7 +109,7 @@ fn launch_profile(
     let herdr = open_run_pane(ctx, task, run, "review")?;
     attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
     let mut child = String::new();
-    ctx.store.update_head(&task.id, |task| {
+    ctx.store.update_head(task.id(), |task| {
         let review = review_parent_head(task, &run.id)?
             .current_child
             .as_deref_mut()
@@ -141,27 +118,27 @@ fn launch_profile(
         child = review.id.clone();
         Ok(())
     })?;
-    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{child}", run.id))?;
+    let receipt = crate::launch_exit::receipt(ctx, task.id(), &format!("{}-{child}", run.id))?;
     let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
     let pane = herdr.pane_id;
     ctx.herdr
-        .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
+        .pane_report_metadata(&pane, &title, &[("task", task.id().as_str())])?;
     submission::submit(ctx, task, run, launch, None, || {
         ctx.herdr.pane_run(&pane, &command)
     })?;
     Ok(pane)
 }
 
-fn attach_pane(
+fn attach_pane<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     pane: &str,
     close_pane: bool,
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<()> {
     launch.attach(pane, close_pane)?;
-    ctx.store.update_head(&task.id, |task| {
+    ctx.store.update_head(task.id(), |task| {
         let parent = review_parent_head(task, &run.id)?;
         if let Some(record) = &mut parent.review {
             record.pane = Some(pane.into());
@@ -175,10 +152,10 @@ fn attach_pane(
     Ok(())
 }
 
-fn prompt_pm(
+fn prompt_pm<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     review_id: &str,
     prompt_file: &Path,
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
@@ -190,7 +167,7 @@ fn prompt_pm(
     attach_pane(ctx, task, run, &pane, false, launch)?;
     let corral = corral_bin()?.display().to_string();
     let notes = prompt_file.with_file_name(NOTES);
-    let prepared = ctx.store.head(&task.id)?;
+    let prepared = ctx.store.head(task.id())?;
     let attempt = prepared
         .current_run
         .as_deref()
@@ -202,10 +179,10 @@ fn prompt_pm(
         "Review run {} of {} ({}): read the review prompt at {} and follow it. Do not edit files; finish with \
          `{corral} verdict {} approve|changes|escalate --attempt {} --notes-file {}`.",
         run.id,
-        task.id,
-        task.title,
+        task.id(),
+        task.title(),
         prompt_file.display(),
-        task.id,
+        task.id(),
         attempt,
         notes.display()
     );
@@ -214,7 +191,7 @@ fn prompt_pm(
         .pane_get(&pane)?
         .context("PM pane disappeared before review")?;
     // Save the exact request before contacting the composer, including on transport errors.
-    ctx.store.update_head(&task.id, |t| {
+    ctx.store.update_head(task.id(), |t| {
         let snapshot = review_parent_head(t, &run.id)?
             .current_child
             .as_deref_mut()
@@ -231,9 +208,9 @@ fn prompt_pm(
     let delivery = submission::submit(ctx, task, run, launch, Some(&message), || {
         ctx.herdr.agent_prompt(&pane, &message)
     })
-    .with_context(|| format!("PM review prompt retained for {}", task.id))?;
+    .with_context(|| format!("PM review prompt retained for {}", task.id()))?;
     ctx.store.log_event(
-        Some(&task.id),
+        Some(task.id()),
         "review_prompt_delivery",
         json!({
             "run": run.id, "review_run": review_id, "pane": pane,
@@ -244,14 +221,14 @@ fn prompt_pm(
     if !delivery.submitted {
         bail!(
             "PM review prompt was not submitted; retained for review-run {}: {}",
-            task.id,
+            task.id(),
             delivery
                 .error
                 .as_deref()
                 .unwrap_or("submission was not confirmed")
         );
     }
-    ctx.store.update_head(&task.id, |t| {
+    ctx.store.update_head(task.id(), |t| {
         if let Some(snapshot) = review_parent_head(t, &run.id)?
             .current_child
             .as_deref_mut()
@@ -285,13 +262,17 @@ pub(super) fn review_run_origin(
     )?;
     let automatic = matches!(origin, crate::operating::Origin::Automatic);
     if launch.restored() {
-        let task = review_shell(&ctx.store.head(id)?)?;
-        let run = current_run(&task)?;
+        let task = ctx.store.head(id)?;
+        let run = current_run_head(&task)?;
         let routed = run.review.as_ref().and_then(|r| r.route.as_deref());
         let profiles: Vec<&str> = routed
             .map(|route| route.profile.as_str())
             .into_iter()
-            .chain(run.review_runs.last().map(|child| child.agent.as_str()))
+            .chain(
+                run.current_child
+                    .as_deref()
+                    .map(|child| child.agent.as_str()),
+            )
             .collect();
         instruction_guard::check(ctx, &task, &run, &profiles, automatic)?;
         launch.resume()?;
@@ -305,8 +286,7 @@ pub(super) fn review_run_origin(
         launch.commit()?;
         return Ok(record);
     }
-    let head = ctx.store.head(id)?;
-    let task = review_shell(&head)?;
+    let task = ctx.store.head(id)?;
     if task.status != Status::Review {
         bail!(
             "{} is {}; only Review tasks can be reviewed",
@@ -314,7 +294,7 @@ pub(super) fn review_run_origin(
             task.status.label()
         );
     }
-    let run = current_run(&task)?;
+    let run = current_run_head(&task)?;
     let mut policy = ctx.store.config.task_review_policy(&task);
     let explicit = reviewer.is_some();
     let reviewer = crate::review_routing::choice(&ctx.store.config, &task, reviewer);
@@ -354,7 +334,7 @@ pub(super) fn review_run_origin(
         vendor.as_deref(),
         &identity,
     )?;
-    selected.route.round = corral_core::implementation_review_round_ref(&head)?;
+    selected.route.round = corral_core::implementation_review_round_ref(&task)?;
     selected.route.scope = corral_core::review_scope(selected.route.round);
     let (name, mut resolved) = (selected.name, selected.resolved);
     if reviewer != Reviewer::Pm {
@@ -392,7 +372,7 @@ pub(super) fn review_run_origin(
         pane: None,
     };
     // The launch guard's read set: the parent's child count and its current review record.
-    let children = head
+    let children = task
         .current_run
         .as_ref()
         .map_or(0, |run| run.facts.children);
@@ -409,7 +389,7 @@ pub(super) fn review_run_origin(
     )?;
     crate::watch::capture_review(ctx, &task, &run);
     let captured_head = ctx.store.head(id)?;
-    let captured = review_shell(&captured_head)?;
+    let captured_run = current_run_head(&captured_head)?;
     let inherited = callback::inherited(&run, record.identity.as_ref());
     if let Some(route) = record.route.as_mut() {
         route.attempt = Some(review_id.clone());
@@ -425,8 +405,8 @@ pub(super) fn review_run_origin(
     .open(ctx)?;
     let (packet_digest, packet_section) = crate::review_packet::write_with(
         ctx,
-        &captured,
-        &current_run(&captured)?,
+        &captured_head,
+        &captured_run,
         &review_id,
         &record,
         route,
@@ -462,7 +442,7 @@ pub(super) fn review_run_origin(
         if r.facts.children != children || r.review != run.review {
             bail!("review changed before preparing accounting child");
         }
-        let finished = r.current_child.as_ref().map(|child| child.id.clone());
+        // The finished child's usage is owed to the next usage refresh (`usage_pending`).
         history::finish_review_head(r, record.at);
         r.idle_since = None;
         r.blocked_excerpt = None;
@@ -470,38 +450,20 @@ pub(super) fn review_run_origin(
             previous.pending_reply = None;
         }
         t.push_review_child(&run.id, child)?;
-        if let Some(finished) = &finished {
-            history::collect_usage(ctx, t, &run.id, finished)?;
-        }
         review_parent_head(t, &run.id)?.review = Some(record.clone());
         Ok(())
     })?;
-    let saved_task = review_shell(&saved)?;
-    let review_id = saved_task
-        .current_run()
-        .and_then(|r| r.review_runs.last())
-        .context("review snapshot was not saved")?
-        .id
-        .clone();
-    crate::watch::start_review(
-        ctx,
-        &saved_task,
-        saved_task
-            .current_run()
-            .and_then(|r| r.review_runs.last())
-            .context("review accounting child disappeared")?,
-    )?;
-    let mut prompt_task = saved_task.clone();
-    prompt_task.comments = crate::comments::emitted_head(&saved)?;
+    let saved_run = current_run_head(&saved)?;
+    let saved_child = saved_run
+        .current_child
+        .as_deref()
+        .context("review snapshot was not saved")?;
+    let review_id = saved_child.id.clone();
+    crate::watch::start_review(ctx, &saved, saved_child)?;
     std::fs::write(
         &prompt_file,
-        review_prompt(
-            ctx,
-            &prompt_task,
-            prompt_task
-                .current_run()
-                .context("review run disappeared")?,
-        )? + &packet_section
+        review_prompt(ctx, &saved, &saved_run)?
+            + &packet_section
             + &crate::scratch_reclaim::prompt_section(ctx, &dir),
     )
     .with_context(|| format!("writing {}", prompt_file.display()))?;

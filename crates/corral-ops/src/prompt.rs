@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::{
-    Config, ExecutionSnapshot, FULL_TIER, ProfileChoice, ResolvedProfile, Run, Task, TaskRef as _,
+    Config, ExecutionSnapshot, FULL_TIER, ProfileChoice, ResolvedProfile, Run, RunHead, Task,
+    TaskRef,
 };
 
 use crate::Ctx;
@@ -90,7 +91,7 @@ fn render_prompt(
             .map(|(name, value)| format!("export {name}='{}'", sh_escape(value))),
     )
     .collect();
-    let contract = tiered_contract(ctx, task, run)?;
+    let contract = tiered_contract(ctx, task, &corral_core::RunHead::of(run)?)?;
     let gate = if policy.gate.is_empty() {
         quoted_gate(&agents_md)?.map(|cmds| ("quoted in AGENTS.md", cmds))
     } else {
@@ -166,7 +167,11 @@ fn render_prompt(
             ctx.store.dir().join(&plan.artifact.path).display(), plan.artifact.sha256,
         ));
     }
-    prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
+    prompt.push_str(&crate::lessons::lessons_prompt(
+        ctx,
+        task,
+        &corral_core::RunHead::of(run)?,
+    )?);
     prompt.push_str(comments);
     let packet = packet()?;
     prompt.push_str("\n## Portable resume contract\n\n");
@@ -189,7 +194,11 @@ const GATE_POINTER: &str =
 
 /// A tiered run's worker contract: the review-phase selection, the tier it gates every round on.
 /// None for legacy runs and untiered projects, which keep today's gate text.
-pub(crate) fn tiered_contract(ctx: &Ctx, task: &Task, run: &Run) -> Result<Option<GateContract>> {
+pub(crate) fn tiered_contract<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<Option<GateContract>> {
     if run.gate_rules.is_legacy() {
         return Ok(None);
     }
@@ -237,10 +246,10 @@ pub(crate) fn tier_send_back(tier: &str, gate: &str, landing: &str) -> String {
 
 /// The send-back text for `run`, with `gate` as the command to name, when its contract is on a
 /// reduced tier: `(tier, text)`. None keeps today's full-gate wording (legacy, untiered, full).
-pub(crate) fn reduced_send_back(
+pub(crate) fn reduced_send_back<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     gate: &str,
 ) -> Result<Option<(String, String)>> {
     Ok(tiered_contract(ctx, task, run)?

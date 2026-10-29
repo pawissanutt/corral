@@ -7,7 +7,7 @@ const DEFAULT_TEMPLATE: &str = include_str!("../../assets/review.md");
 /// {{summary}} {{gate}} {{diff_cmd}} {{artifacts}} {{agents_md}} {{notes_file}} {{verdict_cmd}}.
 /// A routed review always appends its versioned contract, even under a custom template, and a
 /// tiered run's review always appends one authoritative Gate contract (review) section.
-pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
+pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> Result<String> {
     let gate_contract = crate::review_packet::gate_contract(ctx, task, run)?;
     let override_file = ctx.store.template_override("review.md");
     let template = match std::fs::read_to_string(&override_file) {
@@ -16,18 +16,18 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         Err(e) => return Err(e).with_context(|| format!("reading {}", override_file.display())),
     };
     let corral = crate::prompt::shell_path(&corral_bin()?);
-    let project_dir = match task.project.as_deref() {
+    let project_dir = match task.project().as_deref() {
         Some(p) => ctx.store.project_path(p)?,
         None => run.worktree.clone(),
     };
-    let spec = if task.body.trim().is_empty() {
+    let spec = if task.body().trim().is_empty() {
         "(the task has no spec beyond its title)".to_string()
     } else {
-        task.body.trim_end().to_string()
+        task.body().trim_end().to_string()
     };
     let values = [
-        ("id", task.id.clone()),
-        ("title", task.title.clone()),
+        ("id", task.id().clone()),
+        ("title", task.title().clone()),
         ("run", run.id.clone()),
         ("branch", run.branch.clone()),
         ("base", run.base.clone()),
@@ -46,7 +46,7 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
                 None => receipt,
             }
         }),
-        ("diff_cmd", format!("{corral} review {} --diff", task.id)),
+        ("diff_cmd", format!("{corral} review {} --diff", task.id())),
         ("artifacts", artifacts_text(ctx, task, run)),
         (
             "agents_md",
@@ -57,7 +57,7 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         ),
         (
             "notes_file",
-            notes_of(ctx, &task.id, run)?.display().to_string(),
+            notes_of(ctx, task.id(), run)?.display().to_string(),
         ),
         ("verdict_cmd", {
             let attempt = run
@@ -72,7 +72,7 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
                 })
                 .map(|a| format!(" --attempt {a}"))
                 .unwrap_or_default();
-            format!("{corral} verdict {}{attempt}", task.id)
+            format!("{corral} verdict {}{attempt}", task.id())
         }),
     ];
     let mut prompt = fill(&template, &values);
@@ -83,8 +83,8 @@ pub fn review_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
         prompt.push_str(&crate::review_contracts::contract_section(route));
     }
     prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
-    prompt.push_str(&crate::comments::owner_comments(task));
-    if task.completion.is_some() {
+    prompt.push_str(&crate::comments::owner_comments_ref(task)?);
+    if task.completion().is_some() {
         prompt.push_str(&format!(
             "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",
             serde_json::to_string_pretty(&run.completion)?
@@ -170,7 +170,7 @@ fn gate_contract_section(contract: &crate::review_packet::ReviewGateContract) ->
     )
 }
 
-pub(super) fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
+pub(super) fn gate_text<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> String {
     let Some(g) = &run.gate else {
         return "No gate has run for this commit.".to_string();
     };
@@ -193,18 +193,20 @@ pub(super) fn gate_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
             serde_json::to_string_pretty(identity).unwrap_or_default()
         ));
     }
-    let log = gate_paths(ctx, &task.id, &run.id).log;
+    let log = gate_paths(ctx, task.id(), &run.id).log;
     if log.is_file() {
         text.push_str(&format!("\n\nGate log: {}", log.display()));
     }
     text
 }
 
-pub(super) fn artifacts_text(ctx: &Ctx, task: &Task, run: &Run) -> String {
-    let rows: Vec<String> = task
-        .artifacts
+pub(super) fn artifacts_text<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> String {
+    let artifacts = match task.artifacts_of(&run.id) {
+        Ok(artifacts) => artifacts,
+        Err(error) => return format!("(artifacts unavailable: {error:#})"),
+    };
+    let rows: Vec<String> = artifacts
         .iter()
-        .filter(|a| a.run == run.id)
         .map(|a| {
             format!(
                 "- [{}] {}: {}",

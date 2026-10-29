@@ -14,7 +14,7 @@ use corral_core::{ObligationSource, OperatingActionKind, ResourceSnapshot, Statu
 use corral_herdr::Herdr;
 use serde_json::json;
 
-use super::action_budget_growth::{emit, grow, grown_by, land_grown};
+use super::action_budget_growth::{emit, grow, grow_current_child, grown_by, land_grown};
 use super::fixture::{self, Fx};
 use super::{Path, aggregate};
 use crate::resources::{PinnedReadingsProbe, ResourceProbe};
@@ -515,6 +515,9 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
     }
     for relation in &related {
         land_grown(&store, relation);
+    }
+    if kind.hot() {
+        grow_current_child(&store, &id, scale);
     }
     if variant == Variant::Emitted {
         emit(&store, &id, scale, kind);

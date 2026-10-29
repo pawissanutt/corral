@@ -123,7 +123,7 @@ pub fn revert(ctx: &Ctx, id: &str) -> Result<RevertResult> {
         .try_lock(&format!("autopilot-{}", initial.id))?
         .with_context(|| format!("approval or revert already in progress for {}", initial.id))?;
     let run = initial.current_run().context("task has no landed run")?;
-    let repo = crate::review::main_repo(ctx, &initial, run)?;
+    let repo = crate::review::main_repo(ctx, &initial, &corral_core::RunHead::of(run)?)?;
     let _landing = corral_git::landing_lock(&repo)?;
     crate::hooks::reconcile_locked(ctx, &repo)?;
 
@@ -133,7 +133,7 @@ pub fn revert(ctx: &Ctx, id: &str) -> Result<RevertResult> {
             fresh.store = store.clone();
             let range = landing(task, store.events_shared()?.as_slice())?;
             let run = crate::review::current_run(task)?;
-            if crate::review::main_repo(&fresh, task, &run)? != repo {
+            if crate::review::main_repo(&fresh, task, &corral_core::RunHead::of(&run)?)? != repo {
                 bail!("task project changed while acquiring landing lock; retry reverting");
             }
             if let Some(project) = task.project.as_deref()
@@ -145,7 +145,14 @@ pub fn revert(ctx: &Ctx, id: &str) -> Result<RevertResult> {
             let mut operation = None;
             let reverted: RevertedRange =
                 corral_git::revert_range_prepared(&repo, &run.base, &range, |before, sha| {
-                    operation = crate::hooks::prepare(&fresh, task, &run, &repo, before, sha)?;
+                    operation = crate::hooks::prepare(
+                        &fresh,
+                        task,
+                        &corral_core::RunHead::of(&run)?,
+                        &repo,
+                        before,
+                        sha,
+                    )?;
                     Ok(())
                 })?;
             task.status = Status::Backlog;

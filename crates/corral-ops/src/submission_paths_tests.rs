@@ -200,7 +200,7 @@ impl Path {
             Self::RepairLegacy | Self::RepairInbox => {
                 let task = ctx.store.get(id)?;
                 let run = task.current_run().unwrap();
-                let key = crate::integration::RepairKey::new(&task, run, "regression")?;
+                let key = crate::integration::RepairKey::new(&task, &run_head(run), "regression")?;
                 crate::dispatch::auto_request_changes(
                     ctx,
                     id,
@@ -574,9 +574,9 @@ fn refuse_prepared(fx: &Fx, id: &str, path: Path, automatic: bool) {
     let run = task.current_run().unwrap();
     let candidate = if kind == Kind::Reviewer {
         let gate = run.gate.as_ref().unwrap().identity.as_ref().unwrap();
-        crate::verification::identity(&fx.ctx, &task, run, gate).unwrap()
+        crate::verification::identity(&fx.ctx, &task, &run_head(run), gate).unwrap()
     } else {
-        crate::verification::capture_identity(&fx.ctx, &task, run, "candidate").unwrap()
+        crate::verification::capture_identity(&fx.ctx, &task, &run_head(run), "candidate").unwrap()
     };
     let pane = run.herdr.as_ref().unwrap().clone();
     {
@@ -612,7 +612,9 @@ fn refuse_prepared(fx: &Fx, id: &str, path: Path, automatic: bool) {
                     let review = ReviewRecord {
                         route: None,
                         identity: Some(candidate.clone()),
-                        evidence_digest: Some(crate::verification::evidence_digest(run)?),
+                        evidence_digest: Some(crate::verification::evidence_digest(
+                            &corral_core::RunHead::of(run)?,
+                        )?),
                         verdict: None,
                         process_lost: false,
                         reviewer: if matches!(path, Path::ReviewerPm) {
@@ -726,4 +728,9 @@ fn submission_paths_recovered_auxiliary_entries_reuse_refused_attempts_once() {
             assert_eq!(counts(&fx), after);
         }
     }
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

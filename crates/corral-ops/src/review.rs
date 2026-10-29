@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Reviewer, Run, RunOutcome,
-    Status, Task, Verdict,
+    Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Reviewer, Run, RunHead,
+    RunOutcome, Status, Task, TaskRef, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use jiff::Timestamp;
@@ -15,6 +15,10 @@ use crate::agent::effects;
 use crate::artifacts::{add_artifact, scan_artifacts};
 use crate::cleanup::Cleanup;
 use crate::verification;
+
+mod owner;
+pub(crate) use owner::awaiting_owner;
+use owner::review_interrupted;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproveStrategy {
@@ -44,8 +48,12 @@ pub(crate) fn current_run(task: &Task) -> Result<Run> {
         .with_context(|| format!("task {} has no run", task.id))
 }
 
-pub(crate) fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
-    if let Some(project) = &task.project {
+pub(crate) fn main_repo<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<PathBuf> {
+    if let Some(project) = task.project() {
         return ctx.store.project_path(project);
     }
     let parent = run.worktree.parent();
@@ -56,7 +64,7 @@ pub(crate) fn main_repo(ctx: &Ctx, task: &Task, run: &Run) -> Result<PathBuf> {
     .with_context(|| {
         format!(
             "task {} has no project and its worktree is not under <repo>/.worktrees",
-            task.id
+            task.id()
         )
     })
 }
@@ -331,17 +339,19 @@ pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
             .unwrap_or_default();
         (DiffStat::from_diff(&snapshot), snapshot)
     };
-    let main_ready = match crate::plan_target::validate_run(&ctx.store, &task, &run) {
-        Ok(Some(_)) => true,
-        Ok(None) => match main_repo(ctx, &task, &run) {
-            Ok(repo) => {
-                corral_git::current_branch(&repo).is_ok_and(|b| b == run.base)
-                    && !has_tracked_changes(&repo)?
-            }
+    let main_ready =
+        match crate::plan_target::validate_run(&ctx.store, &task, &corral_core::RunHead::of(&run)?)
+        {
+            Ok(Some(_)) => true,
+            Ok(None) => match main_repo(ctx, &task, &corral_core::RunHead::of(&run)?) {
+                Ok(repo) => {
+                    corral_git::current_branch(&repo).is_ok_and(|b| b == run.base)
+                        && !has_tracked_changes(&repo)?
+                }
+                Err(_) => false,
+            },
             Err(_) => false,
-        },
-        Err(_) => false,
-    };
+        };
     Ok(ReviewInfo {
         diff: truncate_lines(diff, DIFF_LINES),
         task,
@@ -359,10 +369,10 @@ fn short(sha: &str) -> &str {
 /// Every landing on main, and on any base that is not an owned Plan target, requires a fresh
 /// receipt of `gate_tier::MAIN_LANDING_TIER` (full) by constant: no tier policy lowers it. A
 /// Plan member lands on its own member binding.
-pub(crate) fn landing_requirement(
+pub(crate) fn landing_requirement<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
 ) -> Result<crate::gate_tier::GateRequirement> {
     if run.plan_target.is_some() {
         let landing = crate::gate_tier::GatePhase::Landing;
@@ -371,10 +381,10 @@ pub(crate) fn landing_requirement(
     Ok(crate::gate_tier::GateRequirement::full())
 }
 
-pub(crate) fn landing_gate_fresh(
+pub(crate) fn landing_gate_fresh<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     gate: &GateRecord,
 ) -> Result<bool> {
     let requirement = landing_requirement(ctx, task, run)?;
@@ -382,7 +392,11 @@ pub(crate) fn landing_gate_fresh(
 }
 
 /// A fresh, passing receipt of the landing tier with a valid log.
-pub(crate) fn landing_gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+pub(crate) fn landing_gate_passed<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<bool> {
     match &run.gate {
         Some(gate) if gate.result == GateResult::Pass => {
             Ok(crate::gate::gate_log_passed(ctx, task, run)?
@@ -393,7 +407,7 @@ pub(crate) fn landing_gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<b
 }
 
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.
-fn quick_approval_on_full_fail(run: &Run) -> Option<&str> {
+fn quick_approval_on_full_fail(run: &RunHead) -> Option<&str> {
     let gate = run.gate.as_ref().filter(|g| g.result == GateResult::Fail)?;
     gate.identity.as_ref().filter(|i| i.gate_tier.is_none())?;
     let review = run.review.as_ref()?;
@@ -403,15 +417,15 @@ fn quick_approval_on_full_fail(run: &Run) -> Option<&str> {
 
 /// Owner acceptance can override a completed check's outcome, but not its candidate identity.
 /// Keep receipts as stale evidence after a rebase; retries must refresh every configured check.
-fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
-    let run = task.current_run().context("run disappeared")?;
+fn require_manual_receipts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
+    let run = &*task.current_run_head()?.context("run disappeared")?;
     let policy = verification::policy(ctx, task)?;
-    if task.reviewer.is_some()
+    if task.reviewer().is_some()
         || ctx
             .store
             .reopen()?
             .config
-            .has_review_policy(task.project.as_deref(), task.review)
+            .has_review_policy(task.project().as_deref(), *task.review())
     {
         verification::require_gate(&policy, task)?;
     }
@@ -426,8 +440,8 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
     {
         bail!(
             "stale_retry: gate missing, pending or stale; run `corral gate {}` then `corral approve {}`",
-            task.id,
-            task.id
+            task.id(),
+            task.id()
         );
     }
     if policy.reviewer != Reviewer::None
@@ -437,14 +451,14 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
         if let Some(tier) = quick_approval_on_full_fail(run) {
             bail!(
                 "stale_retry: the approval is bound to the {tier} receipt and promotion needs a full PASS, but the full landing gate failed; run `corral review-run {}` to review the failed full receipt, then `corral approve {}` after its verdict",
-                task.id,
-                task.id
+                task.id(),
+                task.id()
             );
         }
         bail!(
             "stale_retry: semantic review missing, pending or stale; run `corral review-run {}` then `corral approve {}` after its verdict",
-            task.id,
-            task.id
+            task.id(),
+            task.id()
         );
     }
     Ok(())
@@ -477,25 +491,29 @@ pub fn approve(
 /// Called under the repository landing and board locks. Hold peer task locks through landing
 /// so an existing peer cannot start a review after this check and before the merge.
 /// Only an open peer can hold a review: each is read as its head, current run included.
-fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<corral_core::StoreLock>> {
+fn lock_review_peers<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+) -> Result<Vec<corral_core::StoreLock>> {
     use corral_core::TaskRef as _;
     let mut locks = Vec::new();
     let open = corral_core::backend::HeadQuery::Open {
-        project: task.project.clone(),
+        project: task.project().clone(),
     };
     for peer in ctx.store.heads(&open)? {
-        if peer.id == task.id || peer.project != task.project {
+        if peer.id == *task.id() || peer.project != *task.project() {
             continue;
         }
         let lock = ctx
             .store
             .try_lock(&peer.id)?
             .with_context(|| format!("{} is changing; retry landing after it settles", peer.id))?;
-        let peer = ctx.store.head(&peer.id)?.shell_task()?;
-        if peer.project == task.project
+        let peer = ctx.store.head(&peer.id)?;
+        let run = peer.current_run_head()?;
+        if peer.project == *task.project()
             && peer.status == Status::Review
-            && let Some(run) = peer.current_run()
-            && !run.review_interrupted()
+            && let Some(run) = run.as_deref()
+            && !review_interrupted(run)
             && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
             && corral_git::rev_sha(&run.worktree, "HEAD")? == review.sha
         {
@@ -521,12 +539,15 @@ pub(crate) fn approve_landed(
     ctx.store.check_runtime()?;
     // `approved` is logged after the merge; record when this approval began.
     let started = corral_core::clock::now();
-    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
-    let run = current_run(&task)?;
+    let task = ctx.store.head(id)?;
+    let run = task
+        .current_run_head()?
+        .with_context(|| format!("task {id} has no run"))?
+        .into_owned();
     let repo = main_repo(ctx, &task, &run)?;
     let _landing_lock = corral_git::landing_lock(&repo)?;
     crate::plan_target::recover_run(ctx, &task, &run)?;
-    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
+    let task = ctx.store.head(id)?;
     let mut target = crate::plan_target::validate_run(&ctx.store, &task, &run)?;
     if let Some(landed) = target
         .as_ref()
@@ -534,7 +555,7 @@ pub(crate) fn approve_landed(
     {
         return Ok(landed);
     }
-    if !task.awaiting_owner() {
+    if !awaiting_owner(&task)? {
         bail!(
             "task {} is {}; only Review tasks can be approved",
             task.id,
@@ -569,13 +590,13 @@ pub(crate) fn approve_landed(
     let mut previous_sha = None;
     let task = ctx.store.dispatch_update_head(&task.id, |store, head| {
         let contract = corral_core::TaskRef::contract_revision(&*head)?;
-        let t = &crate::reviewer::review_shell(&*head)?;
+        let t = &*head;
         let _review_locks = if strategy != ApproveStrategy::KeepBranch {
             lock_review_peers(ctx, t)?
         } else {
             Vec::new()
         };
-        if !t.awaiting_owner() || t.current_run().is_none_or(|r| r.id != run.id) {
+        if !awaiting_owner(t)? || t.current_run_head()?.is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
         }
         crate::plan_target::validate_run(store, t, &run)?;
@@ -584,7 +605,8 @@ pub(crate) fn approve_landed(
             if Some(store.effective_operating_policy()?.revision) != authority_revision {
                 bail!("stale_retry: landing authorization revision changed");
             }
-            let current = t.current_run().context("run disappeared")?;
+            let current = t.current_run_head()?.context("run disappeared")?;
+            let current = &*current;
             let policy = verification::policy(ctx, t)?;
             if verification::identity(ctx, t, current, expected)? != *expected
                 || (!policy.gate.is_empty() && !landing_gate_passed(ctx, t, current)?)
@@ -687,7 +709,7 @@ pub(crate) fn approve_landed(
         Ok(())
     });
     let task = match task {
-        Ok((t, ())) => crate::reviewer::review_shell(&t)?,
+        Ok((t, ())) => t,
         Err(error) => {
             ctx.store.log_event(Some(id), "landing_stale", json!({"run":run.id, "outcome":"stale_retry", "reason":format!("{error:#}"), "expected":expected}))?;
             return Err(error);
@@ -723,7 +745,7 @@ pub(crate) fn approve_landed(
     } else {
         String::new()
     };
-    let warnings = crate::cleanup::cleanup_report(ctx, &task, Cleanup::Task);
+    let warnings = crate::cleanup::cleanup_report_head(ctx, &task, Cleanup::Task);
     let mut worktree_note = "kept".to_string();
     if remove_worktree && warnings.is_empty() {
         match crate::cleanup_worktree::remove(ctx, &task, &repo, &run, false) {
@@ -802,11 +824,17 @@ pub fn discard_with_decision(
     let mut branch_deleted = false;
     if let Some(run) = task.current_run() {
         let result = (|| -> Result<()> {
-            let repo = main_repo(ctx, &task, run)?;
+            let repo = main_repo(ctx, &task, &corral_core::RunHead::of(run)?)?;
             if !warnings.is_empty() {
                 bail!("panes could not be closed");
             }
-            crate::cleanup_worktree::remove(ctx, &task, &repo, run, true)?;
+            crate::cleanup_worktree::remove(
+                ctx,
+                &task,
+                &repo,
+                &corral_core::RunHead::of(run)?,
+                true,
+            )?;
             removed = true;
             if !keep_branch {
                 crate::cleanup_worktree::discard_branch(&repo, run)?;

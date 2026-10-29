@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    AttemptFailure, AvailabilityClass, AvailabilityEpisode, ProfileRole, ResolvedProfile, Run,
-    Selection, Task,
+    AttemptFailure, AvailabilityClass, AvailabilityEpisode, ProfileRole, ResolvedProfile, RunHead,
+    Selection, Task, TaskRef,
 };
 use jiff::Timestamp;
 
@@ -13,12 +13,16 @@ use super::{Start, before_start, load, metadata, resolve_before_start, save};
 use crate::Ctx;
 
 /// One episode per reviewer profile and reviewed run, so another profile never borrows it.
-pub(crate) fn review_episode(task: &str, run: &Run, profile: &str) -> String {
+pub(crate) fn review_episode(task: &str, run: &RunHead, profile: &str) -> String {
     format!("{task}-{}-review-{profile}", run.id)
 }
 
 /// The implementer's provider when review independence requires another model family.
-pub(crate) fn review_exclusion(ctx: &Ctx, task: &Task, run: &Run) -> Option<String> {
+pub(crate) fn review_exclusion<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Option<String> {
     let config = &ctx.store.config;
     let policy = config.task_review_policy(task);
     let cross_vendor =
@@ -40,10 +44,10 @@ fn unavailable(reason: String, at: Timestamp) -> AttemptFailure {
 
 /// The candidate a code review launches with. The caller rechecks cross-family policy
 /// against the returned, actual model.
-pub(crate) fn bind_review(
+pub(crate) fn bind_review<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     resolved: ResolvedProfile,
     exclude_provider: Option<&str>,
 ) -> Result<ResolvedProfile> {
@@ -52,7 +56,7 @@ pub(crate) fn bind_review(
     let Some(metadata) = metadata(config, &profile).filter(|m| m.fallback.is_some()) else {
         return Ok(resolved);
     };
-    let id = review_episode(&task.id, run, &profile);
+    let id = review_episode(task.id(), run, &profile);
     let now = corral_core::clock::now();
     let check =
         |candidate: &ResolvedProfile| crate::routing::known_model_unavailability(ctx, candidate);
@@ -65,7 +69,7 @@ pub(crate) fn bind_review(
             };
             let mut episode = AvailabilityEpisode::new(
                 &id,
-                &task.id,
+                task.id(),
                 ProfileRole::ImplementationReview,
                 &profile,
                 metadata,

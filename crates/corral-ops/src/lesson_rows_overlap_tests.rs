@@ -165,7 +165,7 @@ fn prepared_snapshot_keeps_first_packet_approval_attribution_after_newer_prepara
         IntegrationPacket::build(
             ctx,
             &task,
-            &run,
+            &run_head(&run),
             &corral_core::ReviewPolicy::default(),
             key.clone(),
             vec![],
@@ -227,4 +227,9 @@ fn prepared_snapshot_keeps_first_packet_approval_attribution_after_newer_prepara
         old.dispatch_history[0].tasks
     );
     assert_eq!(packet(&ctx), fresh);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

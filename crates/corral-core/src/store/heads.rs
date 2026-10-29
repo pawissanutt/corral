@@ -455,6 +455,13 @@ impl RunHead {
             .ok_or_else(|| anyhow::anyhow!("a split run has no row"))?;
         let (mut head, facts): (RunHead, _) = super::head::projection(&row.doc)?;
         head.facts = facts;
+        // A head projection carries its run's current review child, the last one.
+        head.current_child = run
+            .review_runs
+            .last()
+            .map(RunHead::of)
+            .transpose()?
+            .map(Box::new);
         Ok(head)
     }
 }

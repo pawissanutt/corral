@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use corral_core::{ActionAuthorization, AutoStage, AutopilotState, GateResult, Run};
+use corral_core::{ActionAuthorization, AutoStage, AutopilotState, GateResult};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -155,13 +155,6 @@ pub(crate) fn finish_head(
         }
     }
     Ok(())
-}
-
-fn same_process_head(current: &corral_core::RunHead, observed: &Run, kind: Kind) -> bool {
-    match kind {
-        Kind::Gate => current.gate == observed.gate,
-        Kind::Reviewer => current.review == observed.review,
-    }
 }
 
 /// The gate and reviewer processes holding review slots, besides the one `id` is replacing.
@@ -383,11 +376,11 @@ impl<'a> ReviewLaunch<'a> {
                 origin,
             )?;
             crate::session_scope::check_launch_in(ctx, store)?;
-            let shell = crate::reviewer::review_shell(&*current)?;
             // Only edits that change this task's verification inputs (its effective
             // policy, including the reviewer rules select, or reviewer execution
             // settings) invalidate what was prepared under the earlier snapshot.
-            if !crate::verification::same_task_inputs(&ctx.store.config, &store.config, &shell)? {
+            if !crate::verification::same_task_inputs(&ctx.store.config, &store.config, &*current)?
+            {
                 bail!("review configuration changed before reservation; retry");
             }
             if current.current_run_head()?.map(|r| r.id.clone()).as_ref() != Some(&run.id)
@@ -408,7 +401,7 @@ impl<'a> ReviewLaunch<'a> {
                 Kind::Gate => store.config.limits.count_gates,
                 Kind::Reviewer => store.config.limits.count_reviews,
             };
-            let replacing = shell.current_run().is_some_and(|r| match kind {
+            let replacing = current.current_run_head()?.is_some_and(|r| match kind {
                 Kind::Reviewer => r
                     .review
                     .as_ref()
@@ -420,7 +413,7 @@ impl<'a> ReviewLaunch<'a> {
             });
             if counted
                 && let Some(reason) =
-                    crate::slots::capacity_reason(store, &shell, usize::from(replacing))?
+                    crate::slots::capacity_reason(store, &*current, usize::from(replacing))?
             {
                 return Ok(Some(reason));
             }
@@ -537,8 +530,7 @@ pub(crate) fn reconcile(
         if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
         }
-        let task = head.to_shell_task()?;
-        for run in &task.runs {
+        if let Some(run) = head.current_run.as_deref() {
             for (kind, record) in [
                 (
                     Kind::Gate,
@@ -559,9 +551,9 @@ pub(crate) fn reconcile(
                     continue;
                 };
                 let exited = kind == Kind::Reviewer
-                    && run.review_runs.last().is_some_and(|child| {
+                    && run.current_child.as_deref().is_some_and(|child| {
                         let attempt = format!("{}-{}", run.id, child.id);
-                        crate::launch_exit::exited_for(ctx, &task.id, &attempt)
+                        crate::launch_exit::exited_for(ctx, &head.id, &attempt)
                     });
                 if exited
                     || crate::pane_liveness::gone(
@@ -579,7 +571,7 @@ pub(crate) fn reconcile(
                     )?
                 {
                     let mut release_reason = None;
-                    ctx.store.try_update_head(&task.id, |task| {
+                    ctx.store.try_update_head(&head.id, |task| {
                         if !crate::session_scope::owns_head(ctx, task.head())? {
                             return Ok(false);
                         }
@@ -587,7 +579,7 @@ pub(crate) fn reconcile(
                             .head()
                             .current_run
                             .as_ref()
-                            .is_some_and(|r| r.id == run.id && same_process_head(r, run, kind))
+                            .is_some_and(|r| r.id == run.id && same_process_heads(r, run, kind))
                         {
                             return Ok(false);
                         }
@@ -608,7 +600,7 @@ pub(crate) fn reconcile(
                     if let Some(reason) = release_reason {
                         crate::launch_exit::record(
                             ctx,
-                            &task.id,
+                            &head.id,
                             &run.id,
                             "Reviewer launch failure",
                             &reason,

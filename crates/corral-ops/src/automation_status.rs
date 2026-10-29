@@ -13,9 +13,11 @@ pub fn automation_blocker_head(ctx: &Ctx, head: &corral_core::TaskHead) -> Resul
         crate::verification::review_fresh(
             ctx,
             &checked,
-            checked
-                .current_run()
-                .ok_or_else(|| anyhow::anyhow!("review run missing"))?,
+            &corral_core::RunHead::of(
+                checked
+                    .current_run()
+                    .ok_or_else(|| anyhow::anyhow!("review run missing"))?,
+            )?,
         )
     })?;
     Ok(kind.and_then(|kind| {
@@ -23,6 +25,19 @@ pub fn automation_blocker_head(ctx: &Ctx, head: &corral_core::TaskHead) -> Resul
             .err()
             .map(|error| format!("{error:#}"))
     }))
+}
+
+/// [`automation_blocker`] of any task form, read from its fields and current run.
+pub(crate) fn automation_blocker_ref<T: corral_core::TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+) -> Result<Option<String>> {
+    let Some(kind) = next_action_head(ctx, task)? else {
+        return Ok(None);
+    };
+    Ok(crate::operating::require(&ctx.store, task, kind)
+        .err()
+        .map(|error| format!("{error:#}")))
 }
 
 /// Why automatic review processing cannot take its next step. Collecting existing
@@ -39,7 +54,34 @@ pub fn automation_blocker(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
 /// Landing-only consent can consume fresh verification, but cannot refresh stale
 /// receipts. The executor and readbacks must choose the same prerequisite.
 pub(crate) fn next_action(ctx: &Ctx, task: &Task) -> Result<Option<OperatingActionKind>> {
-    next_action_with(ctx, task, crate::verification::review_fresh)
+    next_action_with(ctx, task, |ctx, task, run| {
+        crate::verification::review_fresh(ctx, task, &corral_core::RunHead::of(run)?)
+    })
+}
+
+/// [`next_action`] of a head: its fields and current run.
+pub(crate) fn next_action_head<T: corral_core::TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+) -> Result<Option<OperatingActionKind>> {
+    if *task.status() != Status::Review || crate::plan_pilot::handles_ref(task)? {
+        return Ok(None);
+    }
+    if task.reviewer().is_none()
+        && !ctx
+            .store
+            .config
+            .has_review_policy(task.project().as_deref(), *task.review())
+    {
+        return Ok(None);
+    }
+    let Some(run) = task
+        .current_run_head()?
+        .filter(|run| run.outcome == Some(RunOutcome::Done))
+    else {
+        return Ok(None);
+    };
+    action_of(ctx, task, &run, crate::verification::review_fresh)
 }
 
 fn next_action_with(
@@ -64,6 +106,19 @@ fn next_action_with(
     else {
         return Ok(None);
     };
+    let run_head = corral_core::RunHead::of(run)?;
+    action_of(ctx, task, &run_head, |ctx, task, _| {
+        review_fresh(ctx, task, run)
+    })
+}
+
+/// The action the current run `run` of `task` needs next.
+fn action_of<T: corral_core::TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &corral_core::RunHead,
+    review_fresh: impl FnOnce(&Ctx, &T, &corral_core::RunHead) -> Result<bool>,
+) -> Result<Option<OperatingActionKind>> {
     let kind = match run.autopilot.as_ref().map(|state| state.stage) {
         Some(stage @ (AutoStage::Reviewed | AutoStage::Landing | AutoStage::Blocked)) => {
             let policy = ctx.store.config.task_review_policy(task);

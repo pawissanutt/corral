@@ -35,9 +35,20 @@ pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Less
     let harness = run
         .and_then(|r| r.harness.as_deref())
         .or_else(|| route.as_ref().map(|r| r.harness.as_str()));
+    matching(ctx, task, &lessons, profile, harness)
+}
+
+/// The lessons of `project` matching `task` under `profile` and `harness`.
+fn matching<T: corral_core::TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    lessons: &[corral_core::Lesson],
+    profile: Option<&str>,
+    harness: Option<&str>,
+) -> Result<Vec<Lesson>> {
     let files = likely_files(ctx, task)?;
     Ok(corral_core::match_lessons(
-        &lessons,
+        lessons,
         task,
         profile,
         harness,
@@ -48,20 +59,23 @@ pub fn lessons_for(ctx: &Ctx, task: &Task, run: Option<&Run>) -> Result<Vec<Less
 }
 
 /// T-064's historical path inference, without routing or requiring saved lessons.
-pub(crate) fn likely_files(ctx: &Ctx, task: &Task) -> Result<Vec<String>> {
-    let Some(project) = task.project.as_deref() else {
+pub(crate) fn likely_files<T: corral_core::TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+) -> Result<Vec<String>> {
+    let Some(project) = task.project().as_deref() else {
         return Ok(vec![]);
     };
     let _followup = corral_core::work::followup("FU-3", "likely_files");
-    let words = keywords(&format!("{} {}", task.title, task.body));
+    let words = keywords(&format!("{} {}", task.title(), task.body()));
     let similar: BTreeSet<_> = ctx
         .store
         .list_shared()?
         .iter()
-        .filter(|t| t.id != task.id && t.project == task.project)
+        .filter(|t| t.id != *task.id() && t.project == *task.project())
         .filter(|t| {
             let overlap = keywords(&t.title).intersection(&words).count();
-            overlap >= 2 || (overlap > 0 && t.kind.is_some() && t.kind == task.kind)
+            overlap >= 2 || (overlap > 0 && t.kind.is_some() && t.kind == *task.kind())
         })
         .map(|t| t.id.clone())
         .collect();
@@ -142,12 +156,27 @@ pub(crate) fn record_exposure<T: corral_core::TaskFieldsRef + ?Sized>(
     Ok(())
 }
 
-pub(crate) fn lessons_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
-    let lessons = match applied_lessons(ctx, task, run)? {
+pub(crate) fn lessons_prompt<T: corral_core::TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &corral_core::RunHead,
+) -> Result<String> {
+    let lessons = match snapshot(ctx, task.id(), &run.id, "lessons_applied")? {
         Some(lessons) => lessons,
-        None => match snapshot(ctx, &task.id, &run.id, "lessons_selected")? {
+        None => match snapshot(ctx, task.id(), &run.id, "lessons_selected")? {
             Some(lessons) => lessons,
-            None => lessons_for(ctx, task, Some(run))?,
+            None => match task.project().as_deref() {
+                Some(project) => {
+                    let lessons = ctx.store.lessons(project)?;
+                    if lessons.is_empty() {
+                        Vec::new()
+                    } else {
+                        let profile = run.profile.as_deref().unwrap_or(&run.agent);
+                        matching(ctx, task, &lessons, Some(profile), run.harness.as_deref())?
+                    }
+                }
+                None => Vec::new(),
+            },
         },
     };
     if lessons.is_empty() {

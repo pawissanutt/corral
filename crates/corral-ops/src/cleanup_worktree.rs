@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Run, StuckProcess, Task};
+use corral_core::{Run, RunHead, StuckProcess, TaskRef};
 
 use crate::Ctx;
 use crate::watchdog::{ProcessControl, SystemProcesses, protected};
@@ -137,7 +137,13 @@ fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
     Ok(found)
 }
 
-pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bool) -> Result<()> {
+pub(crate) fn remove<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    repo: &Path,
+    run: &RunHead,
+    discard: bool,
+) -> Result<()> {
     crate::plan_target::protect_cleanup(repo, run)?;
     let repo = repo
         .canonicalize()
@@ -176,7 +182,9 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         bail!("refusing aliased worktree {}", run.worktree.display());
     }
     let protected_set = protected_pids()?;
-    // The board is read only when a resident process needs its harness checked.
+    // The board is read only when a resident process needs its harness checked; it already
+    // holds the task's stored runs, and `own` its current state.
+    let own = task.shell_task()?;
     let mut tasks = None;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
@@ -187,7 +195,7 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
             };
             tasks
                 .iter()
-                .chain(std::iter::once(task))
+                .chain(std::iter::once(&own))
                 .flat_map(|t| &t.runs)
                 .any(|run| harness(ctx, run, &process.argv))
         } {
@@ -234,7 +242,7 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
 
 /// Explicitly discard an unmerged branch, only after its worktree has been removed.
 pub(crate) fn discard_branch(repo: &Path, run: &Run) -> Result<()> {
-    crate::plan_target::protect_cleanup(repo, run)?;
+    crate::plan_target::protect_cleanup(repo, &corral_core::RunHead::of(run)?)?;
     if run.branch == run.base {
         bail!("refusing to delete integration branch");
     }

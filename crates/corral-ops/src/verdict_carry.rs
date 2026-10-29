@@ -1,6 +1,6 @@
 //! Carry only an unchanged, cleanly replayed approval, never its gate result.
 use anyhow::{Context, Result, bail};
-use corral_core::{GateResult, Run, Task, Verdict};
+use corral_core::{GateResult, RunHead, TaskRef, Verdict};
 use corral_git::RebaseOutcome;
 use serde_json::json;
 
@@ -11,14 +11,14 @@ mod promotion;
 pub(crate) use promotion::{promotable, promote};
 
 /// True when corral's own recorded replay turned the approved commit `old` into `new`.
-pub(crate) fn clean_replay(
+pub(crate) fn clean_replay<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     old: &str,
     new: &str,
 ) -> Result<bool> {
-    replayed(ctx, &task.id, &run.id, |event| {
+    replayed(ctx, task.id(), &run.id, |event| {
         event.detail["review_sha"] == old && event.detail["new_sha"] == new
     })
 }
@@ -41,7 +41,12 @@ fn replayed(
 
 /// Records the successful replay boundary so conflict resolutions or arbitrary
 /// later edits cannot acquire the old review merely by rerunning a gate.
-pub(crate) fn rebase(ctx: &Ctx, task: &Task, run: &Run, onto: &str) -> Result<RebaseOutcome> {
+pub(crate) fn rebase<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    onto: &str,
+) -> Result<RebaseOutcome> {
     let before = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let review_sha = match &run.review {
         Some(review)
@@ -57,7 +62,7 @@ pub(crate) fn rebase(ctx: &Ctx, task: &Task, run: &Run, onto: &str) -> Result<Re
     if outcome == RebaseOutcome::Rebased {
         let after = corral_git::rev_sha(&run.worktree, "HEAD")?;
         ctx.store.log_event(
-            Some(&task.id),
+            Some(task.id()),
             "candidate_rebased",
             json!({"run":run.id, "old_sha":before, "new_sha":after,
                 "base":onto, "review_sha":review_sha}),
@@ -71,8 +76,11 @@ pub(crate) fn rebase(ctx: &Ctx, task: &Task, run: &Run, onto: &str) -> Result<Re
 pub(crate) fn carry(ctx: &Ctx, id: &str) -> Result<bool> {
     let mut carried = None;
     ctx.store.try_update_head(id, |head| {
-        let task = &crate::reviewer::review_shell(&*head)?;
-        let run = task.current_run().context("missing run for verdict carry")?;
+        let run = &head
+            .current_run_head()?
+            .context("missing run for verdict carry")?
+            .into_owned();
+        let task = &*head;
         let Some(review) = run.review.as_ref().filter(|r| r.verdict == Some(Verdict::Approve)) else {
             return Ok(false);
         };
@@ -172,11 +180,11 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         return Ok(());
     }
     verification::require_gate(&policy, &task)?;
-    let repo = crate::review::main_repo(ctx, &task, &run)?;
+    let repo = crate::review::main_repo(ctx, &task, &corral_core::RunHead::of(&run)?)?;
     {
         let _lock = corral_git::landing_lock(&repo)?;
-        crate::plan_target::recover_run(ctx, &task, &run)?;
-        crate::plan_target::validate_run(&ctx.store, &task, &run)?;
+        crate::plan_target::recover_run(ctx, &task, &corral_core::RunHead::of(&run)?)?;
+        crate::plan_target::validate_run(&ctx.store, &task, &corral_core::RunHead::of(&run)?)?;
         let base = corral_git::rev_sha(&repo, &run.base)?;
         let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
         if !corral_git::is_ancestor(&repo, &base, &head)? {
@@ -192,7 +200,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
                     run.worktree.display()
                 );
             }
-            match rebase(ctx, &task, &run, &base)? {
+            match rebase(ctx, &task, &corral_core::RunHead::of(&run)?, &base)? {
                 RebaseOutcome::Rebased => {}
                 RebaseOutcome::Conflict { paths, .. } => {
                     bail!(
@@ -215,7 +223,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
     };
     let gate_complete = match &run.gate {
         Some(g) if g.result != GateResult::Running => {
-            crate::review::landing_gate_fresh(ctx, &task, &run, g)?
+            crate::review::landing_gate_fresh(ctx, &task, &corral_core::RunHead::of(&run)?, g)?
         }
         _ => false,
     };
@@ -247,11 +255,13 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         let run = crate::review::current_run(&task)?;
         let running = match &run.gate {
             Some(g) if g.result == GateResult::Running => {
-                crate::review::landing_gate_fresh(ctx, &task, &run, g)?
+                crate::review::landing_gate_fresh(ctx, &task, &corral_core::RunHead::of(&run)?, g)?
             }
             _ => false,
         };
-        if !running && !crate::review::landing_gate_passed(ctx, &task, &run)? {
+        if !running
+            && !crate::review::landing_gate_passed(ctx, &task, &corral_core::RunHead::of(&run)?)?
+        {
             crate::gate::gate_start_landing(ctx, id, crate::operating::Origin::Owner)
                 .with_context(|| format!("run `corral gate {id}` then `corral approve {id}`"))?;
         }

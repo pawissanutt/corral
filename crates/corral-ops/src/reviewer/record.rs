@@ -131,7 +131,7 @@ pub(super) fn record_verdict(
         }
         refuse_review_child(ctx, t, &run.id)?;
         let current = t.current_run().context("run disappeared")?;
-        let changes = verification::review_changes(ctx, t, current, &record)?;
+        let changes = verification::review_changes(ctx, t, &corral_core::RunHead::of(current)?, &record)?;
         if !changes.is_empty() {
             bail!("stale review: {}", serde_json::to_string(&changes)?);
         }
@@ -206,7 +206,7 @@ pub(super) fn record_verdict(
     }
     let saved = ctx.store.get(&task.id)?;
     if let Some(run) = saved.current_run() {
-        crate::watch::capture_review(ctx, &saved, run);
+        crate::watch::capture_review(ctx, &saved, &corral_core::RunHead::of(run)?);
     }
     Ok((record, None))
 }

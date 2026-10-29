@@ -86,7 +86,11 @@ pub fn slot_usage(ctx: &Ctx) -> Result<SlotUsage> {
 }
 
 /// Called inside Store::dispatch_update for both coding and review admissions.
-pub(crate) fn capacity_reason(store: &Store, task: &Task, credit: usize) -> Result<Option<String>> {
+pub(crate) fn capacity_reason<T: corral_core::TaskFieldsRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    credit: usize,
+) -> Result<Option<String>> {
     let tasks = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
     let used = SlotUsage::from_heads(&tasks, limits)
@@ -98,12 +102,12 @@ pub(crate) fn capacity_reason(store: &Store, task: &Task, credit: usize) -> Resu
             limits.running
         )));
     }
-    if let Some(project) = &task.project
+    if let Some(project) = task.project()
         && let Some(cap) = limits.per_project.get(project)
     {
         let project_tasks = tasks
             .iter()
-            .filter(|t| t.project == task.project)
+            .filter(|t| t.project == *task.project())
             .cloned()
             .collect::<Vec<_>>();
         let used = SlotUsage::from_heads(&project_tasks, limits)

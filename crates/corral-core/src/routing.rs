@@ -122,7 +122,7 @@ pub struct RoutingRule {
 }
 
 impl RoutingRule {
-    pub fn matches(&self, task: &Task) -> Result<bool> {
+    pub fn matches<T: crate::TaskFieldsRef + ?Sized>(&self, task: &T) -> Result<bool> {
         let title = self
             .title_regex
             .as_deref()
@@ -137,17 +137,17 @@ impl RoutingRule {
             .context("invalid routing body regex")?;
         Ok((self.project.is_empty()
             || task
-                .project
+                .project()
                 .as_ref()
                 .is_some_and(|p| self.project.contains(p)))
             && (self.kind.is_empty()
                 || task
-                    .kind
+                    .kind()
                     .as_deref()
                     .is_some_and(|value| self.kind.iter().any(|kind| kind.as_str() == value)))
-            && (self.size.is_empty() || task.size.is_some_and(|s| self.size.contains(&s)))
-            && title.is_none_or(|r| r.is_match(&task.title))
-            && body.is_none_or(|r| r.is_match(&task.body)))
+            && (self.size.is_empty() || task.size().is_some_and(|s| self.size.contains(&s)))
+            && title.is_none_or(|r| r.is_match(task.title()))
+            && body.is_none_or(|r| r.is_match(task.body())))
     }
 }
 

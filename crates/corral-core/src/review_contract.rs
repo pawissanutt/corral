@@ -187,17 +187,20 @@ pub struct ReviewSignals {
 }
 
 impl ReviewSignals {
-    pub fn for_task(task: &Task, subject: ReviewSubjectKind) -> Self {
-        let has = |name: &str| task.labels.iter().any(|l| l.eq_ignore_ascii_case(name));
+    pub fn for_task<T: crate::TaskFieldsRef + ?Sized>(
+        task: &T,
+        subject: ReviewSubjectKind,
+    ) -> Self {
+        let has = |name: &str| task.labels().iter().any(|l| l.eq_ignore_ascii_case(name));
         Self {
             subject,
-            design: task.design,
-            kind: task.kind.clone(),
-            size: task.size,
+            design: *task.design(),
+            kind: task.kind().clone(),
+            size: *task.size(),
             hotfix: has("hotfix"),
             flaky: has("flaky") || has("flaky-test"),
             risks: task
-                .labels
+                .labels()
                 .iter()
                 .filter_map(|l| ReviewRisk::from_label(l))
                 .collect(),

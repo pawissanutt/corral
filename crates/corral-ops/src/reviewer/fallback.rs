@@ -20,7 +20,7 @@ pub(crate) fn continue_review(
     reason: &str,
     now: Timestamp,
 ) -> Result<Vec<Change>> {
-    let notes = notes_of(ctx, &task.id, run)?;
+    let notes = notes_of(ctx, &task.id, &corral_core::RunHead::of(run)?)?;
     let kept = notes.with_file_name(format!("{}-{}-interrupted-notes.md", task.id, child.id));
     if notes.is_file() {
         std::fs::rename(&notes, &kept)
@@ -31,7 +31,7 @@ pub(crate) fn continue_review(
             && t.review_child(&run.id, &child.id)?
                 .is_some_and(|c| c.outcome.is_none())
         {
-            t.edit_review_child(&run.id, &child.id, |interrupted| {
+            t.edit_review_child_head(&run.id, &child.id, |interrupted| {
                 interrupted.outcome = Some(RunOutcome::Interrupted);
                 Ok(())
             })?;

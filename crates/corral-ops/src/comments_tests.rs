@@ -20,7 +20,7 @@ fn custom_dispatch_and_review_templates_keep_exact_comment_payloads() {
     // When either agent-facing prompt is rendered.
     let prompts = [
         crate::task_prompt(&ctx, &task, run).unwrap(),
-        crate::review_prompt(&ctx, &task, run).unwrap(),
+        crate::review_prompt(&ctx, &task, &run_head(run)).unwrap(),
     ];
 
     // Then the stored owner-supplied payload and its durable source ship without expansion.
@@ -95,7 +95,8 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
     // Given a candidate with a gate and review bound to its current inputs.
     let (_tmp, ctx, task) = fixture();
     let run = task.current_run().unwrap();
-    let identity = verification::capture_identity(&ctx, &task, run, "attempt-1").unwrap();
+    let identity =
+        verification::capture_identity(&ctx, &task, &run_head(run), "attempt-1").unwrap();
     let spec = progress_spec_revision(&task).unwrap();
     let plan_spec = plan_spec_revision(&task).unwrap();
     let gate = GateRecord {
@@ -114,7 +115,7 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
     let review = ReviewRecord {
         route: None,
         identity: Some(identity.clone()),
-        evidence_digest: Some(verification::evidence_digest(run).unwrap()),
+        evidence_digest: Some(verification::evidence_digest(&run_head(run)).unwrap()),
         verdict: Some(corral_core::Verdict::Approve),
         process_lost: false,
         reviewer: "owner".into(),
@@ -148,11 +149,11 @@ fn adding_comments_preserves_spec_candidate_gate_and_review_identities() {
     assert_eq!(progress_spec_revision(&saved).unwrap(), spec);
     assert_eq!(plan_spec_revision(&saved).unwrap(), plan_spec);
     assert_eq!(
-        verification::identity(&ctx, &saved, run, &identity).unwrap(),
+        verification::identity(&ctx, &saved, &run_head(run), &identity).unwrap(),
         identity
     );
-    assert!(verification::gate_fresh(&ctx, &saved, run, &gate).unwrap());
-    assert!(verification::review_fresh(&ctx, &saved, run).unwrap());
+    assert!(verification::gate_fresh(&ctx, &saved, &run_head(run), &gate).unwrap());
+    assert!(verification::review_fresh(&ctx, &saved, &run_head(run)).unwrap());
     assert_eq!(saved.body, task.body);
     assert_eq!(saved.runs, task.runs);
 }
@@ -324,4 +325,9 @@ fn stuck_agent_queues_comment_through_existing_reply_path() {
             socket: None,
         })
     );
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

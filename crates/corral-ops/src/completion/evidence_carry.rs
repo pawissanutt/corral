@@ -1,7 +1,9 @@
 //! Evidence carry: criterion records bound to an earlier identity stand for a carried gate or
 //! verdict. The ledger is never rewritten; one relation beside it records the carry.
 use anyhow::Result;
-use corral_core::{CandidateIdentity, CarryMethod, EvidenceCarry, EvidenceRecord, Run, Task};
+use corral_core::{
+    CandidateIdentity, CarryMethod, EvidenceCarry, EvidenceRecord, RunHead, TaskRef,
+};
 use jiff::Timestamp;
 
 use super::{Admission, obligation_failures};
@@ -30,7 +32,7 @@ impl std::fmt::Display for CarryRefused {
 impl std::error::Error for CarryRefused {}
 
 /// SHA-256 of the canonical JSON of the records bound to `from`, in ledger order.
-pub(crate) fn records_sha256(run: &Run, from: &CandidateIdentity) -> Result<String> {
+pub(crate) fn records_sha256(run: &RunHead, from: &CandidateIdentity) -> Result<String> {
     let records: Vec<&EvidenceRecord> = run
         .completion
         .evidence
@@ -41,9 +43,9 @@ pub(crate) fn records_sha256(run: &Run, from: &CandidateIdentity) -> Result<Stri
 }
 
 /// The stored relation while it stands for `to`: same task and run, records unchanged.
-pub(crate) fn live<'r>(
-    task: &Task,
-    run: &'r Run,
+pub(crate) fn live<'r, T: TaskRef + ?Sized>(
+    task: &T,
+    run: &'r RunHead,
     to: &CandidateIdentity,
 ) -> Result<Option<&'r EvidenceCarry>> {
     let Some(carry) = run.completion.evidence_carry.as_deref() else {
@@ -51,7 +53,7 @@ pub(crate) fn live<'r>(
     };
     if carry.version != EVIDENCE_CARRY_VERSION
         || carry.to != *to
-        || carry.from.task != task.id
+        || carry.from.task != *task.id()
         || carry.from.run != run.id
     {
         return Ok(None);
@@ -63,15 +65,15 @@ pub(crate) fn live<'r>(
 /// A live relation whose `to` is the source (a chained carry) keeps its `from` and window.
 /// Returns `None` when there is no manifest, or no obligation and no record bound to the
 /// source; refuses with [`CarryRefused`] and today's failure names otherwise.
-pub fn establish(
+pub fn establish<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     source: CarrySource<'_>,
     to: &CandidateIdentity,
     method: CarryMethod,
 ) -> Result<Option<EvidenceCarry>> {
-    if task.completion.is_none() {
+    if task.completion().is_none() {
         return Ok(None);
     }
     let (from, window_start) = match live(task, run, source.identity)? {

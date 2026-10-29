@@ -8,6 +8,7 @@ use std::path::Path;
 use std::sync::{Barrier, mpsc};
 use std::time::Duration;
 
+use corral_core::Run;
 use corral_core::{AgentCmd, Status, Store, Verdict};
 use corral_herdr::Herdr;
 use serde_json::json;

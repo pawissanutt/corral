@@ -3,7 +3,7 @@
 //! hardcode a full-gate directive refuse the launch before a pane starts or review state
 //! changes. Legacy runs and untiered projects keep today's review prompt and never refuse.
 use anyhow::{Context as _, Result};
-use corral_core::{Run, Task};
+use corral_core::{RunHead, TaskRef};
 
 use crate::Ctx;
 use crate::gate_tier::{GateInstructionConflict, scan_gate_instructions};
@@ -14,10 +14,10 @@ mod tests;
 
 /// Refuses the launch on the first conflict; an automatic launch reports it once, and a clean
 /// scan resumes that report.
-pub(super) fn check(
+pub(super) fn check<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     profiles: &[&str],
     automatic: bool,
 ) -> Result<()> {
@@ -31,10 +31,10 @@ pub(super) fn check(
 }
 
 /// The review template override, then each named profile's `metadata.instructions`.
-pub(crate) fn conflict(
+pub(crate) fn conflict<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     profiles: &[&str],
 ) -> Result<Option<GateInstructionConflict>> {
     let config = &ctx.store.config;

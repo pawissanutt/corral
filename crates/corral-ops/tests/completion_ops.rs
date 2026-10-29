@@ -729,7 +729,8 @@ fn old_capture_cannot_satisfy_a_new_attempt() {
     // When checking evidence for that gate.
     let task = fx.ctx.store.get(&fx.id).unwrap();
     let failures =
-        corral_ops::evidence_failures(&fx.ctx, &task, task.current_run().unwrap()).unwrap();
+        corral_ops::evidence_failures(&fx.ctx, &task, &run_head(task.current_run().unwrap()))
+            .unwrap();
     // Then a matching tree cannot relabel an older capture.
     assert!(failures.contains(&"evidence_capture_stale:C1".into()));
 }
@@ -782,4 +783,9 @@ fn snapshot_symlink_cannot_escape_the_run_directory() {
     let result = record_evidence(&fx.ctx, &fx.id, &fx.observation());
     // Then matching content does not authorize a path escape.
     assert!(result.is_err());
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

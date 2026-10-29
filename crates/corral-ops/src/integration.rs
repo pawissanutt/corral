@@ -2,13 +2,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use corral_core::{Artifact, ArtifactKind, ReviewPolicy, Run, RunOutcome, Status, Task};
+use corral_core::{Artifact, ArtifactKind, ReviewPolicy, RunHead, RunOutcome, Status, TaskRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::gate_tier::GatePhase;
 use crate::{Ctx, verification};
 use corral_core::records::RecordArea;
+#[cfg(test)]
+use corral_core::{Run, Task};
 
 const PACKETS: RecordArea<IntegrationPacket> = RecordArea::new("integration");
 
@@ -60,9 +62,9 @@ pub(crate) struct RepairKey {
 }
 
 impl RepairKey {
-    pub fn new(task: &Task, run: &Run, reason: &str) -> Result<Self> {
+    pub fn new<T: TaskRef + ?Sized>(task: &T, run: &RunHead, reason: &str) -> Result<Self> {
         Ok(Self {
-            task: task.id.clone(),
+            task: task.id().clone(),
             run: run.id.clone(),
             head: corral_git::rev_sha(&run.worktree, "HEAD")?,
             base: corral_git::rev_sha(&run.worktree, &run.base)?,
@@ -75,14 +77,14 @@ impl RepairKey {
     }
 
     /// Called inside the task write lock as well as before any external delivery.
-    pub fn check(&self, task: &Task) -> Result<()> {
+    pub fn check<T: TaskRef + ?Sized>(&self, task: &T) -> Result<()> {
         let Some(run) = task
-            .current_run()
-            .filter(|r| task.id == self.task && r.id == self.run)
+            .current_run_head()?
+            .filter(|r| *task.id() == self.task && r.id == self.run)
         else {
             return Err(StalePacket.into());
         };
-        if task.status != Status::Review
+        if *task.status() != Status::Review
             || run.outcome != Some(RunOutcome::Done)
             || corral_git::rev_sha(&run.worktree, "HEAD")? != self.head
             || corral_git::rev_sha(&run.worktree, &run.base)? != self.base
@@ -175,10 +177,10 @@ pub(crate) struct IntegrationPacket {
 }
 
 impl IntegrationPacket {
-    pub fn build(
+    pub fn build<T: TaskRef + ?Sized>(
         ctx: &Ctx,
-        task: &Task,
-        run: &Run,
+        task: &T,
+        run: &RunHead,
         policy: &ReviewPolicy,
         key: RepairKey,
         mut conflict_paths: Vec<String>,
@@ -200,7 +202,7 @@ impl IntegrationPacket {
             .chain(&missing_commits)
             .map(|commit| commit.sha.clone())
             .collect();
-        let approvals = crate::approvals::lookup(ctx, &task.project, &shas)?;
+        let approvals = crate::approvals::lookup(ctx, task.project(), &shas)?;
         let commits = |commits: Vec<corral_git::Commit>| -> Result<Vec<LandedCommit>> {
             commits
                 .into_iter()
@@ -452,9 +454,16 @@ mod derived_rows_tests {
         let policy = ReviewPolicy::default();
         crate::approvals::prepare(&ctx).unwrap();
         let oracle = approvals(&ctx, &task).unwrap();
-        let packet =
-            IntegrationPacket::build(&ctx, &task, &run, &policy, key.clone(), vec![], None)
-                .unwrap();
+        let packet = IntegrationPacket::build(
+            &ctx,
+            &task,
+            &corral_core::RunHead::of(&run).unwrap(),
+            &policy,
+            key.clone(),
+            vec![],
+            None,
+        )
+        .unwrap();
         for commit in packet
             .dispatch_history
             .iter()
@@ -469,9 +478,16 @@ mod derived_rows_tests {
         assert_eq!(packet.dispatch_history[0].tasks.len(), 2);
         let measure = || {
             let before = work::snapshot();
-            let result =
-                IntegrationPacket::build(&ctx, &task, &run, &policy, key.clone(), vec![], None)
-                    .unwrap();
+            let result = IntegrationPacket::build(
+                &ctx,
+                &task,
+                &corral_core::RunHead::of(&run).unwrap(),
+                &policy,
+                key.clone(),
+                vec![],
+                None,
+            )
+            .unwrap();
             let counts = work::snapshot().since(&before);
             counts.check_identity().unwrap();
             assert_eq!(counts.unattributed_hydrations(), 0);

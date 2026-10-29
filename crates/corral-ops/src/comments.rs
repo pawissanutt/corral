@@ -128,19 +128,20 @@ pub(crate) fn owner_comments_head(head: &corral_core::TaskHead, task: &Task) -> 
     Ok(section(task, &head.emitted_comments()?))
 }
 
-/// The emitted Owner comments of a head, for a prompt built from its shell.
-pub(crate) fn emitted_head(head: &corral_core::TaskHead) -> Result<Vec<TaskComment>> {
-    head.emitted_comments()
+/// [`owner_comments`] of any task form: exactly the emitted comment rows are read.
+pub(crate) fn owner_comments_ref<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<String> {
+    Ok(section_named(task.id(), &task.emitted_comments()?))
 }
 
 fn section(task: &Task, comments: &[TaskComment]) -> String {
+    section_named(&task.id, comments)
+}
+
+fn section_named(id: &str, comments: &[TaskComment]) -> String {
     if comments.is_empty() {
         return String::new();
     }
-    let mut text = format!(
-        "\n## Owner comments\n\nDurable source: `{}`\n",
-        task.durable_source()
-    );
+    let mut text = format!("\n## Owner comments\n\nDurable source: `corral show {id}`\n");
     for comment in comments {
         text.push_str(&format!(
             "\n### {} · {}\n\n{}\n",

@@ -4,7 +4,7 @@ use corral_core::{AutoStage, AutopilotState, Status};
 
 use super::{Change, Pilot, Step};
 use crate::cleanup::{Cleanup, cleanup_head};
-use crate::gate::worktree_head;
+use crate::gate::run_head_sha;
 
 impl Pilot<'_> {
     /// Hands the task to the owner: Needs me with the reason, a notification, one event.
@@ -13,7 +13,7 @@ impl Pilot<'_> {
         let state = AutopilotState {
             stage: AutoStage::Escalated,
             reason: Some(reason.to_string()),
-            sha: worktree_head(self.run),
+            sha: run_head_sha(self.run),
             at: self.now,
         };
         if !self.write(from, state, Status::NeedsMe)? {
@@ -33,13 +33,13 @@ impl Pilot<'_> {
         }
         self.log(
             AutoStage::Escalated,
-            self.task.rounds,
+            self.head.rounds,
             None,
             Some(reason),
             "handed to the owner",
         )?;
         Ok(Step::Moved(Change {
-            task: self.task.id.clone(),
+            task: self.head.id.clone(),
             from: Status::Review,
             to: Status::NeedsMe,
             note: format!("autopilot escalated: {reason}"),

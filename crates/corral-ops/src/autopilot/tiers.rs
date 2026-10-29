@@ -13,9 +13,9 @@ impl Pilot<'_> {
     /// requirement of the run's current phase.
     pub(super) fn gate_stands(&self, gate: &GateRecord) -> Result<bool> {
         if self.landing_phase() {
-            crate::review::landing_gate_fresh(self.ctx, self.task, self.run, gate)
+            crate::review::landing_gate_fresh(self.ctx, self.head, self.run, gate)
         } else {
-            verification::gate_fresh(self.ctx, self.task, self.run, gate)
+            verification::gate_fresh(self.ctx, self.head, self.run, gate)
         }
     }
 

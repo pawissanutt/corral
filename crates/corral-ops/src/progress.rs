@@ -91,7 +91,11 @@ pub fn progress_readback(ctx: &Ctx, id: &str) -> Result<ProgressReadback> {
             tree: tree_revision(run)?,
             progress: run.progress.clone(),
             criteria: corral_core::criterion_progress(task, run, run.progress.as_ref()),
-            evidence_failures: crate::evidence_failures(ctx, task, run)?,
+            evidence_failures: crate::evidence_failures(
+                ctx,
+                task,
+                &corral_core::RunHead::of(run)?,
+            )?,
             checkpoints: run.checkpoints.clone(),
             checkpoint_status: packet.status,
             checkpoint_reasons: packet.reasons,

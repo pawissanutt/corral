@@ -1,6 +1,6 @@
 //! Verdict callbacks are bound to one review attempt, not to the reusable gate attempt that
 //! every replacement review of the same candidate shares.
-use corral_core::{CandidateIdentity, ReviewRecord, Run};
+use corral_core::{CandidateIdentity, ReviewRecord};
 
 /// The token a review's prompt carries: the gate attempt qualified by its callback attempt.
 /// Legacy records without a route keep the bare gate token.
@@ -15,17 +15,20 @@ pub fn token(review: &ReviewRecord) -> Option<String> {
     )
 }
 
-pub(crate) fn matches(_run: &Run, review: &ReviewRecord, expected: &str) -> bool {
+pub(crate) fn matches(review: &ReviewRecord, expected: &str) -> bool {
     token(review).as_deref() == Some(expected)
 }
 
 /// A retry of an undelivered request (still retained in the transport) for the same candidate
 /// keeps that request's callback attempt, so the retained text is submitted unchanged and no
 /// reviewer ever saw the previous token.
-pub(crate) fn inherited(run: &Run, identity: Option<&CandidateIdentity>) -> Option<String> {
+pub(crate) fn inherited(
+    run: &corral_core::RunHead,
+    identity: Option<&CandidateIdentity>,
+) -> Option<String> {
     let child = run
-        .review_runs
-        .last()
+        .current_child
+        .as_deref()
         .filter(|c| c.pending_reply.is_some())?;
     let review = child
         .review

@@ -18,13 +18,13 @@ pub enum StrongerOutcome {
 }
 
 /// The pane of a superseded dedicated reviewer that a replacement launch must close.
-pub(crate) fn superseded_pane(run: &Run) -> Option<&str> {
+pub(crate) fn superseded_pane(run: &corral_core::RunHead) -> Option<&str> {
     if run.review.is_some() {
         return None;
     }
     let child = run
-        .review_runs
-        .last()
+        .current_child
+        .as_deref()
         .filter(|c| c.outcome == Some(RunOutcome::Superseded))?;
     let review = child.review.as_ref().filter(|r| r.reviewer != PM)?;
     review
@@ -39,11 +39,19 @@ fn current(ctx: &Ctx, task: &Task, run: &Run, review: &ReviewRecord) -> Result<(
         "stale review: worktree {} has uncommitted changes",
         run.worktree.display()
     );
-    let mut changes = verification::review_changes(ctx, task, run, review)?;
+    let mut changes =
+        verification::review_changes(ctx, task, &corral_core::RunHead::of(run)?, review)?;
     if changes.is_empty()
         && let Some(route) = review.route.as_deref()
     {
-        changes = crate::review_packet::route_changes(ctx, task, run, review, route, true)?;
+        changes = crate::review_packet::route_changes(
+            ctx,
+            task,
+            &corral_core::RunHead::of(run)?,
+            review,
+            route,
+            true,
+        )?;
     }
     ensure!(
         changes.is_empty(),
@@ -74,7 +82,7 @@ pub fn request_stronger_review(
     let review = run
         .review
         .as_ref()
-        .filter(|r| r.verdict.is_none() && callback::matches(&run, r, attempt))
+        .filter(|r| r.verdict.is_none() && callback::matches(r, attempt))
         .with_context(|| format!("stale review: attempt {attempt} is not the pending review"))?;
     let route = review
         .route
@@ -116,7 +124,7 @@ pub fn request_stronger_review(
         let pending = parent
             .review
             .as_ref()
-            .filter(|r| r.verdict.is_none() && callback::matches(parent, r, attempt))
+            .filter(|r| r.verdict.is_none() && callback::matches(r, attempt))
             .context("review changed before the stronger-review request")?;
         current(ctx, &snapshot, parent, pending)?;
         let parent = review_parent(t, &run.id)?;

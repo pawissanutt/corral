@@ -8,7 +8,7 @@ use anyhow::bail;
 use anyhow::{Context, Result};
 use corral_core::{
     CandidateIdentity, CompletionAudit, CriteriaManifest, EvidenceObservation, EvidenceRecord,
-    EvidenceSource, GateRecord, GateResult, ObservationStatus, Run, Task,
+    EvidenceSource, GateRecord, GateResult, ObservationStatus, RunHead, Task, TaskRef,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -64,7 +64,15 @@ pub fn register_criteria(ctx: &Ctx, id: &str, manifest: &CriteriaManifest) -> Re
         }
         task.completion = Some(manifest.clone());
         let checks = match task.current_run() {
-            Some(run) => crate::gate_tier::select(ctx, task, run, GatePhase::Review)?.commands,
+            Some(run) => {
+                crate::gate_tier::select(
+                    ctx,
+                    task,
+                    &corral_core::RunHead::of(run)?,
+                    GatePhase::Review,
+                )?
+                .commands
+            }
             None => verification::policy(ctx, task)?.gate,
         };
         if let Some(run) = task.current_run_mut() {
@@ -82,14 +90,19 @@ pub fn register_criteria(ctx: &Ctx, id: &str, manifest: &CriteriaManifest) -> Re
     Ok(task)
 }
 
-fn artifact_hashes(ctx: &Ctx, task: &Task, run: &Run, refs: &[String]) -> Result<Vec<String>> {
+fn artifact_hashes<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    refs: &[String],
+) -> Result<Vec<String>> {
     admitted_hashes(ctx, task, run, attempt_start(run), refs)
 }
 
-fn admitted_hashes(
+fn admitted_hashes<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     earliest: Timestamp,
     refs: &[String],
 ) -> Result<Vec<String>> {
@@ -100,15 +113,16 @@ fn admitted_hashes(
 }
 
 /// Bounded, confined byte validation of snapshots captured for `run` no earlier than `earliest`.
-pub(crate) fn snapshot_hashes(
+pub(crate) fn snapshot_hashes<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     run: &str,
     earliest: Timestamp,
     refs: &[String],
 ) -> Result<Vec<String>> {
-    snapshot_hashes_with(ctx, &task.id, run, earliest, refs, &|path| {
-        Ok(task.artifacts.iter().find(|a| a.path == path).cloned())
+    let artifacts = task.artifacts_of(run)?;
+    snapshot_hashes_with(ctx, task.id(), run, earliest, refs, &|path| {
+        Ok(artifacts.iter().find(|a| a.path == path).cloned())
     })
 }
 
@@ -178,7 +192,11 @@ pub(crate) fn snapshot_hashes_with(
     Ok(hashes)
 }
 
-fn current_identity(ctx: &Ctx, task: &Task, run: &Run) -> Result<CandidateIdentity> {
+fn current_identity<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<CandidateIdentity> {
     let receipt = run
         .gate
         .as_ref()
@@ -190,9 +208,9 @@ fn current_identity(ctx: &Ctx, task: &Task, run: &Run) -> Result<CandidateIdenti
     }
 }
 
-fn manifest_failures(task: &Task, run: &Run) -> Result<Vec<String>> {
+fn manifest_failures<T: TaskRef + ?Sized>(task: &T, run: &RunHead) -> Result<Vec<String>> {
     let mut failures = Vec::new();
-    let Some(manifest) = &task.completion else {
+    let Some(manifest) = &task.completion() else {
         return Ok(failures);
     };
     if manifest.version != 1 || manifest.reviewed_by.trim().is_empty() {
@@ -269,14 +287,19 @@ fn evidence_inner(
         if observation.run != run.id {
             bail!("wrong_run");
         }
-        let failures = manifest_failures(task, run)?;
+        let failures = manifest_failures(task, &corral_core::RunHead::of(run)?)?;
         if !failures.is_empty() {
             bail!("{}", failures.join(", "));
         }
         if observation.expected != criterion.expected {
             bail!("criterion_expected_mismatch");
         }
-        let hashes = artifact_hashes(ctx, task, run, &observation.artifacts)?;
+        let hashes = artifact_hashes(
+            ctx,
+            task,
+            &corral_core::RunHead::of(run)?,
+            &observation.artifacts,
+        )?;
         if let Some(existing) = run
             .completion
             .evidence
@@ -292,7 +315,7 @@ fn evidence_inner(
             }
             return Ok(());
         }
-        let identity = current_identity(ctx, task, run)?;
+        let identity = current_identity(ctx, task, &corral_core::RunHead::of(run)?)?;
         if identity.attempt != observation.attempt {
             bail!("wrong_attempt");
         }
@@ -300,13 +323,17 @@ fn evidence_inner(
             if gate.result == GateResult::Running {
                 bail!("gate_incomplete");
             }
-            if !review_gate_fresh(ctx, task, run, gate)? {
+            if !review_gate_fresh(ctx, task, &corral_core::RunHead::of(run)?, gate)? {
                 bail!("gate_stale");
             }
         } else if manifest.require_gate || !verification::policy(ctx, task)?.gate.is_empty() {
             bail!("missing_gate_identity");
         }
-        check_capture_window(observation.captured, run, corral_core::clock::now())?;
+        check_capture_window(
+            observation.captured,
+            &corral_core::RunHead::of(run)?,
+            corral_core::clock::now(),
+        )?;
         let record = EvidenceRecord {
             source: EvidenceSource::WorkerAssertion,
             observation: observation.clone(),
@@ -386,8 +413,12 @@ pub fn evidence_list(ctx: &Ctx, id: &str) -> Result<Vec<EvidenceRecord>> {
 
 /// Required evidence presence is not semantic acceptance. Latest observations supersede
 /// earlier assertions, but never mutate them or promote them to machine PASS.
-pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String>> {
-    let Some(manifest) = &task.completion else {
+pub fn evidence_failures<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<Vec<String>> {
+    let Some(manifest) = &task.completion() else {
         return Ok(Vec::new());
     };
     let complete = |id: &str| {
@@ -415,7 +446,12 @@ pub fn evidence_failures(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String
                 failures.push(format!("owner_decision:{decision}"));
             }
         }
-        for decision in run.obligations.decisions.iter().filter(|d| d.pending()) {
+        for decision in task
+            .open_obligations(&run.id)?
+            .decisions
+            .iter()
+            .filter(|d| d.pending())
+        {
             failures.push(format!("owner_decision:{}", decision.request.id));
         }
     }
@@ -451,14 +487,14 @@ pub(crate) struct Admission<'a> {
 /// Identity-dependent checks of every evidence obligation: each required criterion of an
 /// audited manifest and each criterion progress marks complete. A record bound to the
 /// `carried` identity is admitted under that window; any other record is judged by `current`.
-pub(crate) fn obligation_failures(
+pub(crate) fn obligation_failures<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     current: &Admission,
     carried: Option<&Admission>,
 ) -> Result<Vec<String>> {
-    let Some(manifest) = &task.completion else {
+    let Some(manifest) = &task.completion() else {
         return Ok(Vec::new());
     };
     let complete = |id: &str| {
@@ -520,22 +556,27 @@ pub(crate) fn obligation_failures(
 }
 
 /// The worker's receipt is judged by the review-phase contract, also once an approval exists.
-fn review_gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -> Result<bool> {
+fn review_gate_fresh<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    gate: &GateRecord,
+) -> Result<bool> {
     let requirement = crate::gate_tier::requirement_for(ctx, task, run, GatePhase::Review)?;
     verification::gate_fresh_for(ctx, task, run, gate, &requirement)
 }
 
 /// Bounds compare stamps from `corral_core::clock`, which never runs backwards in-process.
 /// The attempt starts at the gate stamp when a gate exists, else at the run start.
-fn predates_attempt(stamp: Timestamp, run: &Run) -> bool {
+fn predates_attempt(stamp: Timestamp, run: &RunHead) -> bool {
     stamp < attempt_start(run)
 }
 
-fn attempt_start(run: &Run) -> Timestamp {
+fn attempt_start(run: &RunHead) -> Timestamp {
     run.gate.as_ref().map_or(run.started, |gate| gate.at)
 }
 
-fn check_capture_window(captured: Timestamp, run: &Run, now: Timestamp) -> Result<()> {
+fn check_capture_window(captured: Timestamp, run: &RunHead, now: Timestamp) -> Result<()> {
     if predates_attempt(captured, run) || captured > now {
         let earliest = run.gate.as_ref().map_or(run.started, |gate| gate.at);
         bail!(
@@ -549,7 +590,7 @@ fn check_capture_window(captured: Timestamp, run: &Run, now: Timestamp) -> Resul
 #[path = "completion_clock_tests.rs"]
 mod clock_tests;
 
-fn git_output(run: &Run, args: &[&str]) -> Result<std::process::Output> {
+fn git_output(run: &RunHead, args: &[&str]) -> Result<std::process::Output> {
     corral_git::work::record();
     Command::new("git")
         .arg("-C")
@@ -579,15 +620,29 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         audit.passed = false;
         return Ok(audit);
     };
-    audit.failures.extend(evidence_failures(ctx, task, run)?);
+    audit.failures.extend(evidence_failures(
+        ctx,
+        task,
+        &corral_core::RunHead::of(run)?,
+    )?);
     if !audited {
-        audit.identity = Some(current_identity(ctx, task, run)?);
+        audit.identity = Some(current_identity(
+            ctx,
+            task,
+            &corral_core::RunHead::of(run)?,
+        )?);
         audit.passed = audit.failures.is_empty();
         return Ok(audit);
     }
     let manifest = task.completion.as_ref().context("missing_manifest")?;
     audit.manifest_digest = Some(manifest_digest(manifest)?);
-    audit.required_checks = crate::gate_tier::select(ctx, task, run, GatePhase::Review)?.commands;
+    audit.required_checks = crate::gate_tier::select(
+        ctx,
+        task,
+        &corral_core::RunHead::of(run)?,
+        GatePhase::Review,
+    )?
+    .commands;
     if run.completion.required_checks.as_ref() != Some(&audit.required_checks) {
         audit.failures.push("completion_policy_changed".into());
     }
@@ -617,7 +672,10 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         "sequencer",
         "BISECT_LOG",
     ] {
-        let out = git_output(run, &["rev-parse", "--git-path", operation])?;
+        let out = git_output(
+            &corral_core::RunHead::of(run)?,
+            &["rev-parse", "--git-path", operation],
+        )?;
         if !out.status.success() {
             bail!("cannot inspect git operation state");
         }
@@ -626,9 +684,9 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
             audit.failures.push(format!("git_operation:{operation}"));
         }
     }
-    let identity = current_identity(ctx, task, run)?;
+    let identity = current_identity(ctx, task, &corral_core::RunHead::of(run)?)?;
     let ancestry = git_output(
-        run,
+        &corral_core::RunHead::of(run)?,
         &[
             "merge-base",
             "--is-ancestor",
@@ -648,13 +706,14 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
                 if gate.result != GateResult::Pass {
                     audit.failures.push("gate_not_passed".into());
                 }
-                if !review_gate_fresh(ctx, task, run, gate)? {
+                if !review_gate_fresh(ctx, task, &corral_core::RunHead::of(run)?, gate)? {
                     audit.failures.push("gate_stale".into());
                 }
             }
         }
     }
-    let carried = evidence_carry::live(task, run, &identity)?.map(|c| &c.from);
+    let run_head = corral_core::RunHead::of(run)?;
+    let carried = evidence_carry::live(task, &run_head, &identity)?.map(|c| &c.from);
     audit.evidence_keys = run
         .completion
         .evidence

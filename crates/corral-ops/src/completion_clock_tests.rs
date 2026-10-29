@@ -77,15 +77,19 @@ fn capture_after_gate_survives_backward_wall_step() {
     wall.step(-STEP_NS);
     // Raw wall readings would order the later capture before the gate (the T-178 failure).
     assert_eq!(
-        refusal(check_capture_window(wall.raw(), &run, wall.raw())),
+        refusal(check_capture_window(
+            wall.raw(),
+            &run_head(&run),
+            wall.raw()
+        )),
         "capture_outside_attempt"
     );
     // When the capture and the recording check are stamped through the process clock.
     let captured = wall.clock.now();
     let now = wall.clock.now();
     // Then the capture and an artifact added with it are accepted.
-    check_capture_window(captured, &run, now).unwrap();
-    assert!(!predates_attempt(captured, &run));
+    check_capture_window(captured, &run_head(&run), now).unwrap();
+    assert!(!predates_attempt(captured, &run_head(&run)));
 }
 
 #[test]
@@ -101,12 +105,17 @@ fn stamp_before_a_boundary_issued_during_a_backward_step_is_refused() {
     let now = wall.clock.now();
     for run in [&no_gate, &gated] {
         // When checking the older capture and an artifact added at the same instant.
-        let capture = check_capture_window(old, run, now);
+        let capture = check_capture_window(old, &run_head(run), now);
         // Then both are refused against the run-start and gate boundaries alike.
         assert_eq!(refusal(capture), "capture_outside_attempt");
-        assert!(predates_attempt(old, run));
+        assert!(predates_attempt(old, &run_head(run)));
     }
     // And a capture issued after the gate on the same plateau is still accepted.
     let fresh = wall.clock.now();
-    check_capture_window(fresh, &gated, wall.clock.now()).unwrap();
+    check_capture_window(fresh, &run_head(&gated), wall.clock.now()).unwrap();
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

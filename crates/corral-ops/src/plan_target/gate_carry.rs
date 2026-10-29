@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use corral_core::{
     CandidateIdentity, CarryMethod, EvidenceCarry, GateCarry, GateRecord, GateResult,
-    RunPlanTarget, Task,
+    RunPlanTarget, TaskRef,
 };
 use serde_json::json;
 
@@ -33,8 +33,11 @@ struct Rebind {
 pub(crate) fn gate_carry(ctx: &Ctx, id: &str) -> Result<bool> {
     let mut carried = None;
     ctx.store.try_update_head(id, |head| {
-        let task = &crate::reviewer::review_shell(&*head)?;
-        let run = task.current_run().context("missing run for gate carry")?;
+        let run = head
+            .current_run_head()?
+            .context("missing run for gate carry")?
+            .into_owned();
+        let task = &*head;
         // The owned target binding is the only entry: a main-bound run has none.
         let Some(target) = run.plan_target.clone() else {
             return Ok(false);
@@ -79,8 +82,14 @@ pub(crate) fn gate_carry(ctx: &Ctx, id: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn check(ctx: &Ctx, task: &Task, target: &RunPlanTarget) -> Result<Option<Rebind>> {
-    let run = task.current_run().context("missing run for gate carry")?;
+fn check<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    target: &RunPlanTarget,
+) -> Result<Option<Rebind>> {
+    let run = &*task
+        .current_run_head()?
+        .context("missing run for gate carry")?;
     if run.gate_rules.is_legacy() {
         return Ok(None);
     }
@@ -148,14 +157,16 @@ fn check(ctx: &Ctx, task: &Task, target: &RunPlanTarget) -> Result<Option<Rebind
 
 /// Only corral's recorded replay of the receipt's head, with ancestry and an equal patch, may
 /// have moved head, tree and integration base. Returns the old and new patch digests.
-fn replay(
+fn replay<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     gate: &GateRecord,
     old: &CandidateIdentity,
     new: &CandidateIdentity,
 ) -> Result<Option<(String, String)>> {
-    let run = task.current_run().context("missing run for gate carry")?;
+    let run = &*task
+        .current_run_head()?
+        .context("missing run for gate carry")?;
     if old.head == new.head
         || old
             .differences(new)
@@ -182,34 +193,47 @@ fn replay(
 /// True when corral's own replay of an approved candidate moved the receipt's head `from` to
 /// `to`. Matched on the replayed head, not the approved one, so a gate carry saved before its
 /// verdict carry still composes with the next sibling's replay.
-fn replayed_receipt(ctx: &Ctx, task: &Task, run: &str, from: &str, to: &str) -> Result<bool> {
+fn replayed_receipt<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &str,
+    from: &str,
+    to: &str,
+) -> Result<bool> {
     Ok(ctx
         .store
-        .last_event_where(Some(&task.id), &["candidate_rebased"], Some(run), |event| {
-            event.detail["run"] == run
-                && event.detail["old_sha"] == from
-                && event.detail["new_sha"] == to
-                && event.detail["review_sha"].is_string()
-        })?
+        .last_event_where(
+            Some(task.id()),
+            &["candidate_rebased"],
+            Some(run),
+            |event| {
+                event.detail["run"] == run
+                    && event.detail["old_sha"] == from
+                    && event.detail["new_sha"] == to
+                    && event.detail["review_sha"].is_string()
+            },
+        )?
         .is_some())
 }
 
 /// A retry after a crash between `gate_carried` and the save rebinds once: when that event
 /// already recorded this exact rebinding, its carry times are reused and no event is logged.
-fn recorded(
+fn recorded<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     old: &CandidateIdentity,
     new: &CandidateIdentity,
     carry: &mut GateCarry,
     evidence_carry: &mut Option<EvidenceCarry>,
 ) -> Result<bool> {
-    let Some(event) =
-        ctx.store
-            .last_event_where(Some(&task.id), &["gate_carried"], Some(&old.run), |event| {
-                event.detail["old_identity"] == json!(old)
-                    && event.detail["new_identity"] == json!(new)
-            })?
+    let Some(event) = ctx.store.last_event_where(
+        Some(task.id()),
+        &["gate_carried"],
+        Some(&old.run),
+        |event| {
+            event.detail["old_identity"] == json!(old) && event.detail["new_identity"] == json!(new)
+        },
+    )?
     else {
         return Ok(false);
     };

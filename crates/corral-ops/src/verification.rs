@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 use corral_core::{
     CandidateIdentity, GateRecord, GateResult, GateTierBinding, IdentityChange, ReviewPolicy,
-    ReviewRecord, Run, Task, VERIFICATION_ENV,
+    ReviewRecord, RunHead, TaskRef, VERIFICATION_ENV,
 };
 use sha2::{Digest, Sha256};
 
@@ -12,50 +12,50 @@ pub(crate) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub(crate) fn evidence_digest(run: &Run) -> Result<String> {
+pub(crate) fn evidence_digest(run: &RunHead) -> Result<String> {
     Ok(digest(&serde_json::to_vec(&run.completion.evidence)?))
 }
 
-pub(crate) fn spec_digest(task: &Task) -> Result<String> {
+pub(crate) fn spec_digest<T: TaskRef + ?Sized>(task: &T) -> Result<String> {
     Ok(digest(&serde_json::to_vec(&(
-        &task.id,
-        &task.title,
-        &task.project,
-        &task.body,
+        task.id(),
+        task.title(),
+        task.project(),
+        task.body(),
     ))?))
 }
 
 /// Reload policy at each trust boundary, including long-running CLI invocations.
-pub(crate) fn policy(ctx: &Ctx, task: &Task) -> Result<ReviewPolicy> {
+pub(crate) fn policy<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<ReviewPolicy> {
     let store = ctx.store.reopen()?;
     store.config.validate_review()?;
     Ok(store.config.task_review_policy(task))
 }
 
-pub(crate) fn require_gate(policy: &ReviewPolicy, task: &Task) -> Result<()> {
+pub(crate) fn require_gate<T: TaskRef + ?Sized>(policy: &ReviewPolicy, task: &T) -> Result<()> {
     if policy.gate.is_empty() {
         bail!(
             "project {} has no gate configured",
-            task.project.as_deref().unwrap_or("(none)")
+            task.project().as_deref().unwrap_or("(none)")
         );
     }
     Ok(())
 }
 
-pub(crate) fn capture_identity(
+pub(crate) fn capture_identity<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     attempt: &str,
 ) -> Result<CandidateIdentity> {
     capture_identity_with(ctx, task, run, attempt, None)
 }
 
 /// Captures the caller's process environment for a receipt bound to `gate_tier`.
-pub(crate) fn capture_identity_with(
+pub(crate) fn capture_identity_with<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     attempt: &str,
     gate_tier: Option<Box<GateTierBinding>>,
 ) -> Result<CandidateIdentity> {
@@ -94,10 +94,10 @@ pub(crate) fn capture_identity_with(
 }
 
 /// A semantic review shares the gate's captured execution inputs when one exists.
-pub(crate) fn review_identity(
+pub(crate) fn review_identity<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     attempt: &str,
 ) -> Result<CandidateIdentity> {
     match run.gate.as_ref().and_then(|g| g.identity.as_ref()) {
@@ -107,10 +107,10 @@ pub(crate) fn review_identity(
 }
 
 /// Recompute mutable inputs without consulting the verifier's process environment.
-pub(crate) fn identity(
+pub(crate) fn identity<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     expected: &CandidateIdentity,
 ) -> Result<CandidateIdentity> {
     identity_with(
@@ -124,10 +124,10 @@ pub(crate) fn identity(
 }
 
 /// Recompute the identity of `attempt` replaying `environment`, bound to `gate_tier`.
-pub(crate) fn identity_with(
+pub(crate) fn identity_with<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     attempt: &str,
     environment: Vec<(String, Option<String>)>,
     gate_tier: Option<Box<GateTierBinding>>,
@@ -159,16 +159,16 @@ pub(crate) fn identity_with(
     let policy_digest = match (&gate_tier, &run.plan_target) {
         (Some(binding), target) => digest(&serde_json::to_vec(&(
             &policy,
-            &task.completion,
+            task.completion(),
             target,
             binding,
         ))?),
-        (None, Some(target)) => digest(&serde_json::to_vec(&(&policy, &task.completion, target))?),
-        (None, None) => digest(&serde_json::to_vec(&(&policy, &task.completion))?),
+        (None, Some(target)) => digest(&serde_json::to_vec(&(&policy, task.completion(), target))?),
+        (None, None) => digest(&serde_json::to_vec(&(&policy, task.completion()))?),
     };
     Ok(CandidateIdentity {
         version: 2,
-        task: task.id.clone(),
+        task: task.id().clone(),
         run: run.id.clone(),
         attempt: attempt.to_string(),
         head: corral_git::rev_sha(&run.worktree, "HEAD")?,
@@ -206,10 +206,10 @@ pub(crate) fn config_inputs(config: &corral_core::Config) -> Result<Vec<u8>> {
 
 /// Whether a config edit leaves this task's verification inputs unchanged, so an in-flight
 /// gate or review launch prepared under `before` stays valid under `after`.
-pub(crate) fn same_task_inputs(
+pub(crate) fn same_task_inputs<T: TaskRef + ?Sized>(
     before: &corral_core::Config,
     after: &corral_core::Config,
-    task: &Task,
+    task: &T,
 ) -> Result<bool> {
     Ok(
         before.task_review_policy(task) == after.task_review_policy(task)
@@ -218,7 +218,12 @@ pub(crate) fn same_task_inputs(
 }
 
 /// Fresh for the run's current phase.
-pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -> Result<bool> {
+pub(crate) fn gate_fresh<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    gate: &GateRecord,
+) -> Result<bool> {
     let phase = crate::gate_tier::current_phase(run);
     let requirement = crate::gate_tier::requirement_for(ctx, task, run, phase)?;
     gate_fresh_for(ctx, task, run, gate, &requirement)
@@ -226,10 +231,10 @@ pub(crate) fn gate_fresh(ctx: &Ctx, task: &Task, run: &Run, gate: &GateRecord) -
 
 /// Fresh for a review of the run. A review packet is built before the new review record
 /// replaces an earlier approval, so it must not judge the gate in the landing phase.
-pub(crate) fn gate_fresh_for_review(
+pub(crate) fn gate_fresh_for_review<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     gate: &GateRecord,
 ) -> Result<bool> {
     let review = crate::gate_tier::GatePhase::Review;
@@ -238,10 +243,10 @@ pub(crate) fn gate_fresh_for_review(
 }
 
 /// The receipt re-derives under its own binding, and that binding satisfies `requirement`.
-pub(crate) fn gate_fresh_for(
+pub(crate) fn gate_fresh_for<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     gate: &GateRecord,
     requirement: &crate::gate_tier::GateRequirement,
 ) -> Result<bool> {
@@ -254,7 +259,7 @@ pub(crate) fn gate_fresh_for(
         && identity(ctx, task, run, expected)? == *expected)
 }
 
-pub(crate) fn gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+pub(crate) fn gate_passed<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> Result<bool> {
     match &run.gate {
         Some(g) if g.result == GateResult::Pass => {
             Ok(crate::gate::gate_log_passed(ctx, task, run)? && gate_fresh(ctx, task, run, g)?)
@@ -263,7 +268,11 @@ pub(crate) fn gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
     }
 }
 
-pub(crate) fn review_fresh(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+pub(crate) fn review_fresh<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<bool> {
     let Some(review) = &run.review else {
         return Ok(false);
     };
@@ -289,10 +298,10 @@ pub(crate) fn review_fresh(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
     }
 }
 
-pub(crate) fn review_changes(
+pub(crate) fn review_changes<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     review: &ReviewRecord,
 ) -> Result<Vec<IdentityChange>> {
     let Some(expected) = &review.identity else {

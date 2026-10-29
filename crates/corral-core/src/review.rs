@@ -11,11 +11,11 @@ use crate::config_validation::SemanticInputs;
 use crate::{Config, Task};
 
 /// The existing planning contract identity, kept independent from execution progress.
-pub fn plan_contract_revision(task: &Task) -> Result<String> {
+pub fn plan_contract_revision<T: crate::TaskFieldsRef + ?Sized>(task: &T) -> Result<String> {
     crate::operating::digest(&(
-        crate::operating::digest(&(&task.id, &task.title, &task.project, &task.body))?,
-        &task.completion,
-        &task.depends_on,
+        crate::operating::digest(&(task.id(), task.title(), task.project(), task.body()))?,
+        task.completion(),
+        task.depends_on(),
     ))
 }
 
@@ -508,9 +508,9 @@ impl Config {
     }
 
     /// Effective task policy, including its independent reviewer override and reviewer rules.
-    pub fn task_review_policy(&self, task: &Task) -> ReviewPolicy {
-        let mut policy = self.review_policy(task.project.as_deref(), task.review);
-        if let Some(reviewer) = &task.reviewer {
+    pub fn task_review_policy<T: crate::TaskFieldsRef + ?Sized>(&self, task: &T) -> ReviewPolicy {
+        let mut policy = self.review_policy(task.project().as_deref(), *task.review());
+        if let Some(reviewer) = task.reviewer() {
             policy.reviewer = Reviewer::parse(reviewer);
         } else if let Some((_, rule)) = self.reviewer_rule(task) {
             // A replaced workspace `cross-vendor` selector still asked for reviewer diversity.
@@ -525,13 +525,16 @@ impl Config {
     /// The first matching `[[routing.reviewer_rules]]` entry (one-based index) when it decides the
     /// reviewer: a task `reviewer:` or a `[projects.<p>.review] reviewer` keeps precedence.
     /// Rules with an invalid regex never match; config validation reports them.
-    pub fn reviewer_rule(&self, task: &Task) -> Option<(usize, &crate::RoutingRule)> {
+    pub fn reviewer_rule<T: crate::TaskFieldsRef + ?Sized>(
+        &self,
+        task: &T,
+    ) -> Option<(usize, &crate::RoutingRule)> {
         let project_reviewer = task
-            .project
+            .project()
             .as_deref()
             .and_then(|p| self.projects.get(p))
             .is_some_and(|p| p.review.reviewer.is_some());
-        if task.reviewer.is_some() || project_reviewer {
+        if task.reviewer().is_some() || project_reviewer {
             return None;
         }
         self.routing

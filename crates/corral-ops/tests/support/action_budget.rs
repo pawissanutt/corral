@@ -345,7 +345,9 @@ fn entry(kind: Kind, bench: &Bench) -> Entry {
         Kind::RepairLegacy | Kind::RepairInbox => {
             let task = bench.ctx.store.get(&bench.id).unwrap();
             let run = task.current_run().unwrap();
-            Entry::Repair(crate::integration::RepairKey::new(&task, run, "regression").unwrap())
+            Entry::Repair(
+                crate::integration::RepairKey::new(&task, &run_head(run), "regression").unwrap(),
+            )
         }
         Kind::AggregateCode | Kind::AggregateNoCode => Entry::Aggregate,
         _ => Entry::Tick,
@@ -790,4 +792,9 @@ fn budget(kinds: &[Kind]) {
         "action budget exceeded:\n  {}",
         failures.join("\n  ")
     );
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

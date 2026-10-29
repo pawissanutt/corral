@@ -593,6 +593,38 @@ impl Config {
             })
     }
 
+    /// [`Config::run_vendor`] of a run projection: the same fields, read from its head.
+    pub fn run_vendor_head(&self, run: &crate::RunHead) -> Result<String, UnresolvedRunVendor> {
+        if let Some(snapshot) = &run.execution {
+            return snapshot
+                .resolved
+                .vendor
+                .clone()
+                .or_else(|| snapshot.resolved.model.as_deref().and_then(infer_vendor))
+                .ok_or_else(|| UnresolvedRunVendor {
+                    run: run.id.clone(),
+                    profile: snapshot.resolved.profile.clone(),
+                });
+        }
+        run.vendor
+            .clone()
+            .or_else(|| run.model.as_deref().and_then(infer_vendor))
+            .or_else(|| {
+                self.profiles
+                    .get(run.profile.as_deref().unwrap_or(&run.agent))
+                    .and_then(|profile| {
+                        profile
+                            .vendor
+                            .clone()
+                            .or_else(|| profile.model.as_deref().and_then(infer_vendor))
+                    })
+            })
+            .ok_or_else(|| UnresolvedRunVendor {
+                run: run.id.clone(),
+                profile: run.profile.as_ref().unwrap_or(&run.agent).clone(),
+            })
+    }
+
     /// Every name `resolve_profile` accepts: `[profiles]` keys plus legacy `[agents]` keys, sorted.
     pub fn profile_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self

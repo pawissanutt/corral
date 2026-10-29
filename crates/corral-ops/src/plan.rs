@@ -153,8 +153,11 @@ pub(crate) fn fresh(ctx: &Ctx, task: &Task, plan: &PlanRecord) -> Result<()> {
 }
 
 /// Only a final owner acceptance can resolve a manifest's design questions.
-pub(crate) fn accepted_owner_notes(ctx: &Ctx, task: &Task) -> Result<Option<String>> {
-    let Some((parent, revision)) = task.plan.as_deref().and_then(|link| link.split_once('@'))
+pub(crate) fn accepted_owner_notes<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+) -> Result<Option<String>> {
+    let Some((parent, revision)) = task.plan().as_deref().and_then(|link| link.split_once('@'))
     else {
         return Ok(None);
     };

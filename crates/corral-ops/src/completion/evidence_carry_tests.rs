@@ -7,6 +7,7 @@ use corral_core::{
 
 use super::*;
 use crate::completion::{completion_check_task, evidence_failures, record_evidence};
+use corral_core::Task;
 
 const SUMMARY: &str = "Verified: fixture\nNot verified: semantic review\n";
 const METHODS: [CarryMethod; 3] = [
@@ -146,7 +147,8 @@ impl Fx {
     fn gate(&self, attempt: &str) -> (CandidateIdentity, Timestamp) {
         let task = self.task();
         let run = task.current_run().unwrap();
-        let identity = verification::capture_identity(&self.ctx, &task, run, attempt).unwrap();
+        let identity =
+            verification::capture_identity(&self.ctx, &task, &run_head(run), attempt).unwrap();
         let at = corral_core::clock::now();
         let receipt = identity.clone();
         self.mutate(|task| {
@@ -193,7 +195,7 @@ impl Fx {
         establish(
             &self.ctx,
             &task,
-            task.current_run().unwrap(),
+            &run_head(task.current_run().unwrap()),
             source,
             to,
             method,
@@ -208,13 +210,13 @@ impl Fx {
 
     fn failures(&self) -> Vec<String> {
         let task = self.task();
-        evidence_failures(&self.ctx, &task, task.current_run().unwrap()).unwrap()
+        evidence_failures(&self.ctx, &task, &run_head(task.current_run().unwrap())).unwrap()
     }
 
     fn failures_without_carry(&self) -> Vec<String> {
         let mut task = self.task();
         task.current_run_mut().unwrap().completion.evidence_carry = None;
-        evidence_failures(&self.ctx, &task, task.current_run().unwrap()).unwrap()
+        evidence_failures(&self.ctx, &task, &run_head(task.current_run().unwrap())).unwrap()
     }
 
     /// Record C1 at identity A, then gate attempt N1 and carry A's records to it.
@@ -246,7 +248,7 @@ fn live_carry_admits_records_bound_to_the_origin_without_rewriting_them() {
         let before = fx.task();
         let run = before.current_run().unwrap();
         let ledger = serde_json::to_vec(&run.completion.evidence).unwrap();
-        let digest = verification::evidence_digest(run).unwrap();
+        let digest = verification::evidence_digest(&run_head(run)).unwrap();
         assert!(fx.failures().contains(&"evidence_stale:C1".into()));
 
         // When the records are carried from A to N.
@@ -269,7 +271,10 @@ fn live_carry_admits_records_bound_to_the_origin_without_rewriting_them() {
             serde_json::to_vec(&run.completion.evidence).unwrap(),
             ledger
         );
-        assert_eq!(verification::evidence_digest(run).unwrap(), digest);
+        assert_eq!(
+            verification::evidence_digest(&run_head(run)).unwrap(),
+            digest
+        );
     }
 }
 
@@ -551,4 +556,9 @@ fn runs_without_a_relation_report_todays_failures() {
             "evidence_artifact_invalid:C1".into(),
         ]
     );
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

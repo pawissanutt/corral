@@ -7,7 +7,7 @@ mod requirement;
 use anyhow::{Context as _, Result};
 use corral_core::{
     Config, ExpectedFailure, FULL_TIER, GatePromotion, GateRecord, GateRules, GateTierBinding,
-    PolicySource, ReviewPolicy, Run, Store, Task, Verdict,
+    PolicySource, ReviewPolicy, RunHead, Store, Task, TaskRef, Verdict,
 };
 use serde::Serialize;
 
@@ -86,7 +86,7 @@ pub struct GateReadback {
     pub gate_ref: Option<GateRef>,
 }
 
-pub(crate) fn current_phase(run: &Run) -> GatePhase {
+pub(crate) fn current_phase(run: &RunHead) -> GatePhase {
     if run.review.as_ref().and_then(|review| review.verdict) == Some(Verdict::Approve) {
         GatePhase::Landing
     } else {
@@ -98,7 +98,12 @@ pub(crate) fn current_phase(run: &Run) -> GatePhase {
 ///
 /// # Errors
 /// Invalid review configuration, or a tiered Plan member whose gate cannot be resolved.
-pub(crate) fn select(ctx: &Ctx, task: &Task, run: &Run, phase: GatePhase) -> Result<GateContract> {
+pub(crate) fn select<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    phase: GatePhase,
+) -> Result<GateContract> {
     let store = ctx.store.reopen()?;
     store.config.validate_review()?;
     let policy = store.config.task_review_policy(task);
@@ -119,10 +124,10 @@ pub(crate) fn select(ctx: &Ctx, task: &Task, run: &Run, phase: GatePhase) -> Res
 }
 
 /// Legacy runs need no policy read: they are full with full dominance in every phase.
-pub(crate) fn requirement_for(
+pub(crate) fn requirement_for<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     phase: GatePhase,
 ) -> Result<GateRequirement> {
     if run.gate_rules.is_legacy() {
@@ -150,12 +155,16 @@ pub(crate) fn aggregate(config: &Config, tracker: &Task, policy: &ReviewPolicy) 
 }
 
 /// The completion command snapshot of a new run: legacy runs keep today's full commands.
-pub(crate) fn required_checks(ctx: &Ctx, task: &Task, run: &Run) -> Result<Vec<String>> {
+pub(crate) fn required_checks<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<Vec<String>> {
     if run.gate_rules.is_legacy() {
         return Ok(ctx
             .store
             .config
-            .review_policy(task.project.as_deref(), task.review)
+            .review_policy(task.project().as_deref(), *task.review())
             .gate);
     }
     Ok(select(ctx, task, run, GatePhase::Review)?.commands)
@@ -196,7 +205,7 @@ impl OriginStep {
         }
     }
 
-    pub(crate) fn apply(&self, run: &mut Run) {
+    pub(crate) fn apply(&self, run: &mut RunHead) {
         match self {
             Self::Record(origin) => run.promotion_origin = Some(Box::new(origin.clone())),
             Self::Clear => run.promotion_origin = None,
@@ -207,7 +216,7 @@ impl OriginStep {
 
 /// Only landing gates of tiered main-bound runs touch the origin. An approval is promotable
 /// when it is bound to a reduced-tier identity.
-pub(crate) fn origin_step(run: &Run, contract: &GateContract) -> OriginStep {
+pub(crate) fn origin_step(run: &RunHead, contract: &GateContract) -> OriginStep {
     if contract.rules.is_legacy()
         || contract.phase != GatePhase::Landing
         || contract.destination.kind != DestinationKind::Main
@@ -251,6 +260,7 @@ pub fn gate_readback(ctx: &Ctx, task: &Task) -> Result<GateReadback> {
     let Some(run) = task.current_run() else {
         return Ok(GateReadback::default());
     };
+    let run = &RunHead::of(run)?;
     let (gate_contract, gate_contract_error) = match select(ctx, task, run, current_phase(run)) {
         Ok(contract) => (Some(contract), None),
         Err(error) => (None, Some(format!("{error:#}"))),
@@ -276,17 +286,17 @@ pub fn gate_readback(ctx: &Ctx, task: &Task) -> Result<GateReadback> {
     })
 }
 
-fn full(
+fn full<T: TaskRef + ?Sized>(
     config: &Config,
     policy: &ReviewPolicy,
-    task: &Task,
+    task: &T,
     destination: GateDestination,
     phase: GatePhase,
 ) -> GateContract {
     GateContract {
         tier: FULL_TIER.to_owned(),
         commands: policy.gate.clone(),
-        scope: task.write_scope.clone(),
+        scope: task.write_scope().clone(),
         tests: Vec::new(),
         expected_failures: Vec::new(),
         destination,
@@ -299,16 +309,16 @@ fn full(
 }
 
 /// A member's gate in every phase; it always carries a binding, also for tier full.
-fn member(
+fn member<T: TaskRef + ?Sized>(
     store: &Store,
     policy: &ReviewPolicy,
-    task: &Task,
+    task: &T,
     contract: GateContract,
 ) -> Result<GateContract> {
     let member = crate::plan::scope_gate::resolve(store, task)?.with_context(|| {
         format!(
             "{} is bound to a Plan target but is not a member of an integration Plan; no gate starts",
-            task.id
+            task.id()
         )
     })?;
     let gate = member.gate;
@@ -316,8 +326,8 @@ fn member(
         format!(
             "member gate tier {:?} of {} is not defined for project {}; no gate starts",
             gate.tier,
-            task.id,
-            task.project.as_deref().unwrap_or("(none)")
+            task.id(),
+            task.project().as_deref().unwrap_or("(none)")
         )
     })?;
     let binding = requirement::binding(
@@ -367,7 +377,7 @@ fn review_rounds(policy: &ReviewPolicy, contract: GateContract) -> Result<GateCo
     })
 }
 
-fn destination(config: &Config, task: &Task, run: &Run) -> GateDestination {
+fn destination<T: TaskRef + ?Sized>(config: &Config, task: &T, run: &RunHead) -> GateDestination {
     let (kind, branch) = match &run.plan_target {
         Some(target) => (DestinationKind::PlanTarget, target.branch.clone()),
         None if run.base == main_branch(config, task) => (DestinationKind::Main, run.base.clone()),
@@ -376,22 +386,22 @@ fn destination(config: &Config, task: &Task, run: &Run) -> GateDestination {
     GateDestination { kind, branch }
 }
 
-fn main_branch<'a>(config: &'a Config, task: &Task) -> &'a str {
-    task.project
+fn main_branch<'a, T: TaskRef + ?Sized>(config: &'a Config, task: &T) -> &'a str {
+    task.project()
         .as_deref()
         .and_then(|project| config.projects.get(project))
         .and_then(|project| project.base.as_deref())
         .unwrap_or("main")
 }
 
-fn full_source(config: &Config, task: &Task) -> String {
+fn full_source<T: TaskRef + ?Sized>(config: &Config, task: &T) -> String {
     match config
-        .review_policy_sources(task.project.as_deref(), task.review)
+        .review_policy_sources(task.project().as_deref(), *task.review())
         .gate
     {
         PolicySource::Project => format!(
             "config:projects.{}.review.gate",
-            task.project.as_deref().unwrap_or_default()
+            task.project().as_deref().unwrap_or_default()
         ),
         PolicySource::Global => "config:review.gate".to_owned(),
         PolicySource::Default | PolicySource::Task => "config:default".to_owned(),

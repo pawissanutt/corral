@@ -1,5 +1,6 @@
 use super::*;
 use corral_core::{AutoStage, AutopilotState, Store};
+use corral_core::{Run, Task};
 use corral_herdr::Herdr;
 use serde_json::json;
 use std::path::Path;
@@ -53,7 +54,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task, Run, RepairKey) {
             Ok(())
         })
         .unwrap();
-    let key = RepairKey::new(&task, &run, "merge_conflict").unwrap();
+    let key = RepairKey::new(&task, &run_head(&run), "merge_conflict").unwrap();
     let preview = ctx
         .store
         .preview_operating_policy(&corral_core::OperatingSelection {
@@ -107,7 +108,8 @@ fn file_sizes_use_effective_extension_ceilings_and_existing_line_counting() {
     policy.size_limits.insert("ts".into(), 400);
 
     // When the integration packet captures those changed files.
-    let packet = IntegrationPacket::build(&ctx, &task, &run, &policy, key, vec![], None).unwrap();
+    let packet =
+        IntegrationPacket::build(&ctx, &task, &run_head(&run), &policy, key, vec![], None).unwrap();
 
     // Then ceilings describe every configured extension without changing SLOC semantics.
     let sizes: BTreeMap<_, _> = packet
@@ -169,7 +171,7 @@ fn gated_packet(tiers: bool, rules: corral_core::GateRules) -> IntegrationPacket
         .store
         .config
         .review_policy(task.project.as_deref(), None);
-    IntegrationPacket::build(&ctx, &task, &run, &policy, key, vec![], None).unwrap()
+    IntegrationPacket::build(&ctx, &task, &run_head(&run), &policy, key, vec![], None).unwrap()
 }
 
 #[test]
@@ -254,8 +256,16 @@ fn stale_packet_cannot_deliver_retry_or_attach_to_a_newer_run() {
         .store
         .config
         .review_policy(task.project.as_deref(), None);
-    let packet =
-        IntegrationPacket::build(&ctx, &task, &run, &policy, key.clone(), vec![], None).unwrap();
+    let packet = IntegrationPacket::build(
+        &ctx,
+        &task,
+        &run_head(&run),
+        &policy,
+        key.clone(),
+        vec![],
+        None,
+    )
+    .unwrap();
     let current = ctx
         .store
         .update(&task.id, |task| {
@@ -417,4 +427,9 @@ fn oversized_automatic_inbox_request_changes_nothing() {
     );
     assert_eq!(ctx.store.get(&task.id).unwrap(), task);
     assert!(!ctx.store.dir().join("inbox").exists());
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

@@ -125,7 +125,7 @@ fn review_prompt_has_spec_acceptance_gate_and_verdict_footer() {
     let (_tmp, ctx, id, _worktree) = task_in_review();
     let task = ctx.store.get(&id).unwrap();
     let run = task.current_run().unwrap();
-    let prompt = corral_ops::review_prompt(&ctx, &task, run).unwrap();
+    let prompt = corral_ops::review_prompt(&ctx, &task, &run_head(run)).unwrap();
 
     assert!(
         prompt.starts_with(&format!("# Review {id} Spin the widget (run R1)")),
@@ -178,7 +178,8 @@ fn review_prompt_template_is_overridable() {
     )
     .unwrap();
     let task = ctx.store.get(&id).unwrap();
-    let prompt = corral_ops::review_prompt(&ctx, &task, task.current_run().unwrap()).unwrap();
+    let prompt =
+        corral_ops::review_prompt(&ctx, &task, &run_head(task.current_run().unwrap())).unwrap();
     assert_eq!(prompt, format!("Custom {id} / R1 / {{{{unknown}}}}\n"));
 }
 
@@ -570,8 +571,9 @@ fn replacing_active_review_closes_old_window_and_preserves_retry_history() {
     )
     .unwrap();
 
-    // When another reviewer replaces it without a verdict.
+    // When another reviewer replaces it without a verdict, and the next usage refresh runs.
     let replacement = corral_ops::review_run(&ctx, &id, Some("rev")).unwrap();
+    corral_ops::refresh_usage(&ctx.store, &id).unwrap();
 
     // Then the old window stops exactly at the new start and retains collected usage.
     let task = ctx.store.get(&id).unwrap();
@@ -617,4 +619,9 @@ fn replacing_completed_review_preserves_its_verdict_window_and_usage() {
     assert!(completed.usage.is_none());
     assert!(completed.usage_note.is_some());
     assert_eq!(run.review.as_ref().unwrap().verdict, None);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, GateTierReceipt,
-    HerdrRef, Run, Task, TaskRef as _,
+    HerdrRef, Run, RunHead, TaskRef,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -72,7 +72,11 @@ pub(crate) fn dir_paths(dir: &Path, stem: &str) -> GatePaths {
 }
 
 /// Read-only log proof; candidate freshness remains `verification::gate_passed`'s responsibility.
-pub(crate) fn gate_log_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+pub(crate) fn gate_log_passed<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<bool> {
     if run
         .gate
         .as_ref()
@@ -84,14 +88,18 @@ pub(crate) fn gate_log_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool>
 }
 
 /// A completed, unchanged log is required even when the owner overrides a failed check.
-pub(crate) fn gate_log_valid(ctx: &Ctx, task: &Task, run: &Run) -> Result<bool> {
+pub(crate) fn gate_log_valid<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<bool> {
     let Some(gate) = &run.gate else {
         return Ok(false);
     };
     let Some(identity) = &gate.identity else {
         return Ok(false);
     };
-    let Some(log) = evidence::attempt_log(ctx, &task.id, &run.id, &identity.attempt)? else {
+    let Some(log) = evidence::attempt_log(ctx, task.id(), &run.id, &identity.attempt)? else {
         return Ok(false);
     };
     let commands = crate::gate_tier::receipt_commands(&verification::policy(ctx, task)?, gate);
@@ -177,6 +185,14 @@ impl std::fmt::Display for LegacyGate {
 impl std::error::Error for LegacyGate {}
 
 /// Current HEAD of the run's worktree, or None when the worktree is gone or unreadable.
+/// [`worktree_head`] of a run projection.
+pub(crate) fn run_head_sha(run: &RunHead) -> Option<String> {
+    if !run.worktree.is_dir() {
+        return None;
+    }
+    corral_git::rev_sha(&run.worktree, "HEAD").ok()
+}
+
 pub fn worktree_head(run: &Run) -> Option<String> {
     if !run.worktree.is_dir() {
         return None;
@@ -184,10 +200,12 @@ pub fn worktree_head(run: &Run) -> Option<String> {
     corral_git::rev_sha(&run.worktree, "HEAD").ok()
 }
 
-fn current_run(task: &Task) -> Result<Run> {
-    task.current_run()
-        .cloned()
-        .with_context(|| format!("task {} has no run", task.id))
+/// The current run of any task form, as its projection.
+fn current_run_head<T: TaskRef + ?Sized>(task: &T) -> Result<RunHead> {
+    Ok(task
+        .current_run_head()?
+        .with_context(|| format!("task {} has no run", task.id()))?
+        .into_owned())
 }
 
 fn pane_alive(ctx: &Ctx, pane: Option<&str>) -> Result<bool> {
@@ -243,7 +261,12 @@ pub(crate) fn prepare_owner(path: &Path) -> Result<()> {
 
 /// Opens a `label` tab in the run's herdr workspace when it still exists, else a new workspace "<id> <label>";
 /// both start in the run's worktree.
-pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> Result<HerdrRef> {
+pub(crate) fn open_run_pane<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    label: &str,
+) -> Result<HerdrRef> {
     let workspace = run.herdr.as_ref().map(|h| h.workspace_id.clone());
     if let Some(ws) = workspace
         && ctx.herdr.workspace_list()?.iter().any(|(id, _)| *id == ws)
@@ -255,11 +278,11 @@ pub(crate) fn open_run_pane(ctx: &Ctx, task: &Task, run: &Run, label: &str) -> R
             socket: Some(ctx.herdr.socket_path()?),
         });
     }
-    let label: String = format!("{} {label}", task.id).chars().take(40).collect();
+    let label: String = format!("{} {label}", task.id()).chars().take(40).collect();
     let created = ctx.herdr.workspace_create(&run.worktree, &label, false)?;
     crate::cleanup::record_run_workspace(
         ctx,
-        &task.id,
+        task.id(),
         &run.id,
         &created.pane_id,
         &created.workspace_id,
@@ -356,13 +379,13 @@ fn gate_start_origin(
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
     ctx.store.config.validate_review()?;
-    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
-    if crate::plan_pilot::handles(&task) {
+    let task = ctx.store.head(id)?;
+    if crate::plan_pilot::handles_ref(&task)? {
         bail!("plan runs use plan review, not a code gate");
     }
     let policy = verification::policy(ctx, &task)?;
     verification::require_gate(&policy, &task)?;
-    let run = current_run(&task)?;
+    let run = current_run_head(&task)?;
     let phase = phase.unwrap_or_else(|| crate::gate_tier::current_phase(&run));
     let contract = crate::gate_tier::select(ctx, &task, &run, phase)?;
     let mut launch = crate::review_budget::ReviewLaunch::reserve_origin(
@@ -537,15 +560,14 @@ fn gate_start_origin(
     evidence::tier_detail(&mut started, record.tier.as_deref());
     let run_id = run.id.clone();
     ctx.store.update_head(&task.id, |t| {
-        let shell = crate::reviewer::review_shell(&*t)?;
         let expected = record.identity.as_ref().context("missing gate identity")?;
-        if verification::identity(ctx, &shell, &run, expected)? != *expected {
+        if verification::identity(ctx, &*t, &run, expected)? != *expected {
             bail!("candidate changed while starting gate");
         }
-        let mut current = shell
-            .current_run()
+        let mut current = t
+            .current_run_head()?
             .filter(|r| r.id == run_id)
-            .cloned()
+            .map(std::borrow::Cow::into_owned)
             .ok_or_else(|| anyhow!("{}: run {run_id} is no longer current", task.id))?;
         // The origin is recorded, kept or cleared in the update that replaces the receipt.
         if crate::gate_tier::origin_step(&current, &contract) != origin {
@@ -595,8 +617,8 @@ fn gate_start_origin(
         |store, head| {
             let mut fresh = ctx.clone();
             fresh.store = store.clone();
-            let task = &crate::reviewer::review_shell(&*head)?;
-            let current = current_run(task)?;
+            let task = &*head;
+            let current = current_run_head(task)?;
             let expected = record.identity.as_ref().context("missing gate identity")?;
             if task.status != expected_status
                 || current.id != run.id
@@ -628,8 +650,8 @@ pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
 
 fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRecord>> {
     ctx.store.check_runtime()?;
-    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
-    let run = current_run(&task)?;
+    let task = ctx.store.head(id)?;
+    let run = current_run_head(&task)?;
     let mut record = run
         .gate
         .clone()
@@ -741,17 +763,20 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     let staged = evidence::put_result(ctx, &task.id, &run.id, &attempt, &stem, &paths)?;
     let mut finished: Option<GateRecord> = None;
     let run_id = run.id.clone();
+    let run_task_id = task.id.clone();
     let task = ctx.store.update_head(&task.id, |t| {
-        let shell = crate::reviewer::review_shell(&*t)?;
+        let mut current = t
+            .current_run_head()?
+            .filter(|r| r.id == run_id)
+            .map(std::borrow::Cow::into_owned);
         if result == GateResult::Pass
-            && let Some(current) = shell.current_run().filter(|r| r.id == run_id)
-            && !verification::gate_fresh(ctx, &shell, current, &record)?
+            && let Some(current) = current.as_ref()
+            && !verification::gate_fresh(ctx, &*t, current, &record)?
         {
             result = GateResult::Fail;
             failed_cmd =
                 Some("stale_result: verification inputs changed at collection boundary".into());
         }
-        let mut current = shell.current_run().filter(|r| r.id == run_id).cloned();
         if let Some(r) = current.as_mut()
             && let Some(g) = r.gate.as_mut().filter(|g| **g == record)
         {
@@ -779,7 +804,7 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             let attempt = record.identity.as_ref().map(|identity| &identity.attempt);
             let mut detail = json!({ "run": run_id, "attempt": attempt, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "log_sha256": record.log_sha256 });
             evidence::tier_detail(&mut detail, record.tier.as_deref());
-            ctx.store.log_event(Some(&shell.id), "gate", detail)?;
+            ctx.store.log_event(Some(&run_task_id), "gate", detail)?;
             // The row, its evidence and the scratch closure commit with this receipt.
             evidence::failpoint("gate_collect_commit");
             if let Some(staged) = &staged {

@@ -6,7 +6,7 @@
 use anyhow::Result;
 use corral_core::{
     Accept, AutoStage, AutopilotState, Config, GateRecord, GateResult, MergeMode,
-    OperatingActionKind, ReviewPolicy, ReviewRecord, Reviewer, Run, RunOutcome, Status, Task,
+    OperatingActionKind, ReviewPolicy, ReviewRecord, Reviewer, RunHead, RunOutcome, Status,
     Verdict,
 };
 use corral_git::RebaseOutcome;
@@ -16,7 +16,7 @@ use serde_json::json;
 use crate::acceptance::{Landing, record_acceptance};
 use crate::artifacts::glob_match;
 use crate::dispatch::{auto_request_changes, auto_retry};
-use crate::gate::{gate_collect, gate_paths, worktree_head};
+use crate::gate::{gate_collect, gate_paths, run_head_sha};
 use crate::integration::{IntegrationPacket, RepairKey};
 use crate::prompt::corral_bin;
 use crate::review::{approve_landed, has_tracked_changes, main_repo};
@@ -68,7 +68,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     };
     let mut changes = Vec::new();
     for task in output::review_tasks(&ctx)? {
-        if crate::plan_pilot::handles(&task) {
+        if crate::plan_pilot::handles_ref(&task)? {
             continue;
         }
         output::record_authority(&ctx, &task)?;
@@ -120,8 +120,8 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
 
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let head = ctx.store.head(id)?;
-    let task = output::pilot_task(&head)?;
-    let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
+    let task = &head;
+    let Some(kind) = crate::automation_status::next_action_head(ctx, task)? else {
         return Ok(Step::Wait);
     };
     // Current authority, holds and unresolved decisions precede executor or repair work.
@@ -130,23 +130,24 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
     let Some(run) = task
-        .current_run()
+        .current_run_head()?
         .filter(|r| r.outcome == Some(RunOutcome::Done))
+        .map(std::borrow::Cow::into_owned)
     else {
         return Ok(Step::Wait);
     };
+    let run = &run;
     let config = &ctx.store.config;
-    let policy = config.task_review_policy(&task);
+    let policy = config.task_review_policy(task);
     let pilot = Pilot {
         ctx,
         config,
         head: &head,
-        task: &task,
         run,
         policy,
         now,
     };
-    if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+    if let Err(error) = verification::require_gate(&pilot.policy, task) {
         return pilot.escalate(&error.to_string());
     }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
@@ -154,13 +155,13 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
         && let Some(review) = run.review.as_ref().filter(|r| {
             r.verdict == Some(Verdict::Changes)
-                && worktree_head(run).as_deref() == Some(r.sha.as_str())
+                && run_head_sha(run).as_deref() == Some(r.sha.as_str())
         })
     {
         return pilot.reviewer_changes(review);
     }
     if pilot.policy.reviewer == Reviewer::CrossVendor {
-        match crate::reviewer::implementer_vendor(ctx, &task, run) {
+        match crate::reviewer::implementer_vendor(ctx, task, run) {
             Ok(_) => {}
             Err(error) if error.is::<corral_core::UnresolvedRunVendor>() => {
                 return pilot.escalate(&error.to_string());
@@ -170,13 +171,13 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     }
     if pilot.stage() == Some(AutoStage::Reviewed) {
         let gate_stale =
-            !pilot.policy.gate.is_empty() && !verification::gate_passed(ctx, &task, run)?;
-        let review_stale = pilot.policy.reviewer != Reviewer::None
-            && !verification::review_fresh(ctx, &task, run)?;
+            !pilot.policy.gate.is_empty() && !verification::gate_passed(ctx, task, run)?;
+        let review_stale =
+            pilot.policy.reviewer != Reviewer::None && !verification::review_fresh(ctx, task, run)?;
         if !gate_stale && !review_stale {
             // Fresh receipts need no integration packet or search-index refresh. Recheck
             // acceptance authority so a newly delegated task can still finish.
-            return pilot.accept(worktree_head(run).unwrap_or_default());
+            return pilot.accept(run_head_sha(run).unwrap_or_default());
         }
     }
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done)) {
@@ -203,16 +204,15 @@ struct Pilot<'a> {
     ctx: &'a Ctx,
     config: &'a Config,
     head: &'a corral_core::TaskHead,
-    /// The head's fields and current run as a task: no history is read through it.
-    task: &'a Task,
-    run: &'a Run,
+    /// The head's current run, with its current review child.
+    run: &'a RunHead,
     policy: ReviewPolicy,
     now: Timestamp,
 }
 
 impl Pilot<'_> {
     fn id(&self) -> &str {
-        &self.task.id
+        &self.head.id
     }
 
     fn state(&self) -> Option<&AutopilotState> {
@@ -237,7 +237,7 @@ impl Pilot<'_> {
     }
 
     fn start(&self) -> Result<Step> {
-        let Some(head) = worktree_head(self.run) else {
+        let Some(head) = run_head_sha(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
         if !corral_git::is_clean(&self.run.worktree)? {
@@ -263,7 +263,7 @@ impl Pilot<'_> {
     }
 
     fn gating(&self) -> Result<Step> {
-        let Some(head) = worktree_head(self.run) else {
+        let Some(head) = run_head_sha(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
         if self.policy.gate.is_empty() {
@@ -290,7 +290,7 @@ impl Pilot<'_> {
         if self.promote()? {
             return Ok(Step::Acted);
         }
-        let failures = crate::completion::evidence_failures(self.ctx, self.task, self.run)?;
+        let failures = crate::completion::evidence_failures(self.ctx, self.head, self.run)?;
         if !failures.is_empty() {
             return self.escalate(&format!(
                 "required evidence missing or stale: {}",
@@ -299,7 +299,7 @@ impl Pilot<'_> {
         }
         if self.policy.reviewer == Reviewer::None {
             if self
-                .task
+                .head
                 .completion
                 .as_ref()
                 .is_some_and(|m| m.audited && m.criteria.iter().any(|c| c.required))
@@ -316,7 +316,7 @@ impl Pilot<'_> {
             return Ok(Step::Acted);
         }
         if self.run.review.as_ref().and_then(|r| r.verdict) == Some(Verdict::Approve)
-            && verification::review_fresh(self.ctx, self.task, self.run)?
+            && verification::review_fresh(self.ctx, self.head, self.run)?
         {
             return self.accept(head);
         }
@@ -353,7 +353,7 @@ impl Pilot<'_> {
     fn gate_failure(&self, g: &GateRecord, after: &str) -> Result<(String, String)> {
         let cmd = g.failed_cmd.as_deref().unwrap_or("?").trim();
         let gate = format!("{} gate {} --wait", corral_bin()?.display(), self.id());
-        let tier = crate::prompt::reduced_send_back(self.ctx, self.task, self.run, &gate)?
+        let tier = crate::prompt::reduced_send_back(self.ctx, self.head, self.run, &gate)?
             .filter(|(tier, _)| g.tier.as_ref().is_some_and(|t| t.tier == *tier));
         let label = tier.as_ref().map(|(t, _)| format!(" ({t} tier)"));
         let summary = format!(
@@ -374,7 +374,7 @@ impl Pilot<'_> {
     }
 
     fn reviewing(&self) -> Result<Step> {
-        let Some(head) = worktree_head(self.run) else {
+        let Some(head) = run_head_sha(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
         if self
@@ -390,7 +390,7 @@ impl Pilot<'_> {
         }
         if !self.policy.gate.is_empty()
             && self.run.review.as_ref().is_none_or(|r| r.verdict.is_some())
-            && !verification::gate_passed(self.ctx, self.task, self.run)?
+            && !verification::gate_passed(self.ctx, self.head, self.run)?
         {
             return self.start();
         }
@@ -415,14 +415,14 @@ impl Pilot<'_> {
                 // not a reviewer edit: gate it, then carry the verdict or request a fresh review.
                 let replayed = head != review.sha
                     && crate::verdict_carry::clean_replay(
-                        self.ctx, self.task, self.run, &review.sha, &head,
+                        self.ctx, self.head, self.run, &review.sha, &head,
                     )?;
                 if (head != review.sha && !replayed) || !corral_git::is_clean(&self.run.worktree)? {
                     return self.escalate(
                         "the worktree changed after the reviewer approved it; a reviewer must not edit it",
                     );
                 }
-                if replayed || !verification::review_fresh(self.ctx, self.task, self.run)? {
+                if replayed || !verification::review_fresh(self.ctx, self.head, self.run)? {
                     return self.start();
                 }
                 self.accept(head)
@@ -438,10 +438,10 @@ impl Pilot<'_> {
     /// Gate and review passed: wait for the owner (accept = owner), or check the guards and start landing.
     /// Diff size is deliberately not a guard: the independent reviewer is the safeguard.
     fn accept(&self, head: String) -> Result<Step> {
-        if self.task.review == Some(Accept::Owner)
+        if self.head.review == Some(Accept::Owner)
             && self
                 .config
-                .review_policy(self.task.project.as_deref(), None)
+                .review_policy(self.head.project.as_deref(), None)
                 .accept
                 == Accept::Auto
         {
@@ -480,7 +480,7 @@ impl Pilot<'_> {
     /// Landing (and Blocked, which retries it): main checkout ready, branch on top of the base (rebasing makes
     /// the gate stale, so it runs again), gate passed on the commit, then fast-forward the base.
     fn landing(&self) -> Result<Step> {
-        let Some(head) = worktree_head(self.run) else {
+        let Some(head) = run_head_sha(self.run) else {
             return self.escalate("the run's worktree is gone");
         };
         let expected = self.state().and_then(|a| a.sha.clone()).unwrap_or_default();
@@ -494,8 +494,8 @@ impl Pilot<'_> {
         if !corral_git::is_clean(&self.run.worktree)? {
             return self.escalate("the worktree has uncommitted changes while landing");
         }
-        let project_repo = main_repo(self.ctx, self.task, self.run)?;
-        let target = crate::plan_target::validate_run(&self.ctx.store, self.task, self.run)?;
+        let project_repo = main_repo(self.ctx, self.head, self.run)?;
+        let target = crate::plan_target::validate_run(&self.ctx.store, self.head, self.run)?;
         let repo = target
             .as_ref()
             .map_or(project_repo.as_path(), |target| target.checkout.as_path());
@@ -519,9 +519,9 @@ impl Pilot<'_> {
             return self.rebase();
         }
         if (!self.policy.gate.is_empty()
-            && !crate::review::landing_gate_passed(self.ctx, self.task, self.run)?)
+            && !crate::review::landing_gate_passed(self.ctx, self.head, self.run)?)
             || (self.policy.reviewer != Reviewer::None
-                && !verification::review_fresh(self.ctx, self.task, self.run)?)
+                && !verification::review_fresh(self.ctx, self.head, self.run)?)
         {
             return self.start();
         }
@@ -559,8 +559,8 @@ impl Pilot<'_> {
             .and_then(|g| g.identity.as_ref())
             .or_else(|| self.run.review.as_ref().and_then(|r| r.identity.as_ref()));
         let expected = match receipt {
-            Some(receipt) => verification::identity(self.ctx, self.task, self.run, receipt)?,
-            None => verification::capture_identity(self.ctx, self.task, self.run, "no-checks")?,
+            Some(receipt) => verification::identity(self.ctx, self.head, self.run, receipt)?,
+            None => verification::capture_identity(self.ctx, self.head, self.run, "no-checks")?,
         };
         if expected.integration_base != base_head {
             return self.block("stale_retry: integration base moved before landing");
@@ -596,7 +596,7 @@ impl Pilot<'_> {
         })?;
         self.log(
             AutoStage::Done,
-            self.task.rounds,
+            self.head.rounds,
             Some(&sha),
             None,
             &format!("landed: {line}"),
@@ -610,7 +610,7 @@ impl Pilot<'_> {
         };
         record_acceptance(self.ctx, self.id(), &self.run.id, &landing)?;
         Ok(Step::Moved(Change {
-            task: self.task.id.clone(),
+            task: self.head.id.clone(),
             from: Status::Review,
             to: Status::Done,
             note: format!("autopilot landed: {line}"),
@@ -628,12 +628,12 @@ impl Pilot<'_> {
         packet: Option<&str>,
     ) -> Result<Step> {
         let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
-        key.check(&self.ctx.store.head(self.id())?.shell_task()?)?;
+        key.check(&self.ctx.store.head(self.id())?)?;
         let digest = key.digest()?;
         if packet.is_some() && output::requested(self.ctx, key, &digest)? {
             return Ok(Step::Wait);
         }
-        let round = self.task.rounds + 1;
+        let round = self.head.rounds + 1;
         let max = self.policy.max_rounds;
         if round > max {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
@@ -664,7 +664,7 @@ impl Pilot<'_> {
         let state = AutopilotState {
             stage: AutoStage::Changes,
             reason: Some(request),
-            sha: worktree_head(self.run),
+            sha: run_head_sha(self.run),
             at: self.now,
         };
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
@@ -733,9 +733,9 @@ impl Pilot<'_> {
         if !self.write(from, state, Status::Review)? {
             return Ok(Step::Wait);
         }
-        self.log(to, self.task.rounds, sha.as_deref(), reason, note)?;
+        self.log(to, self.head.rounds, sha.as_deref(), reason, note)?;
         Ok(Step::Moved(Change {
-            task: self.task.id.clone(),
+            task: self.head.id.clone(),
             from: Status::Review,
             to: Status::Review,
             note: format!("autopilot {}: {note}", to.as_str()),
@@ -757,8 +757,7 @@ impl Pilot<'_> {
                 store: store.clone(),
                 ..self.ctx.clone()
             };
-            let shell = output::pilot_task(t)?;
-            let Some(kind) = crate::automation_status::next_action(&current, &shell)? else {
+            let Some(kind) = crate::automation_status::next_action_head(&current, &*t)? else {
                 return Ok(false);
             };
             if crate::operating::require(store, &*t, kind).is_err() {
