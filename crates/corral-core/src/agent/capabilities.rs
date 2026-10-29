@@ -22,7 +22,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 3;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 4;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -98,6 +98,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         key: "mcp.enabled",
         summary: "explicit project-scoped MCP servers",
         defaults: mcp_defaults,
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
+        key: "codemode",
+        summary: "QuickJS parallel tool calls and result filtering (no non-LLM models)",
+        defaults: |role| Some([false, role != AgentRole::Pm, true]),
         host: true,
         settings: None,
     },

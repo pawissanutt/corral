@@ -16,7 +16,7 @@ export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
-  "mcp.enabled", "tool_search",
+  "mcp.enabled", "tool_search", "codemode",
   "hooks", "bash_rules", "background_shell",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;

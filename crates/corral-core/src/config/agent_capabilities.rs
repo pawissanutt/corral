@@ -724,6 +724,7 @@ mod mcp_config_tests {
             for role in ROLES {
                 let mut config = AgentCapabilities::default();
                 config.set_preset(preset);
+                config.set(role, "codemode", false).unwrap();
                 let default = preset != Preset::Strict;
                 assert_eq!(config.resolve(role, None).enabled("mcp.enabled"), default);
                 assert_eq!(config.resolve(role, None).enabled("tool_search"), default);
@@ -741,6 +742,27 @@ mod mcp_config_tests {
                 assert_eq!(snapshot.enabled("mcp.enabled"), default);
             }
         }
+    }
+
+    #[test]
+    fn codemode_defaults_and_overrides_are_independent_of_mcp_and_search() {
+        for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
+            for role in ROLES {
+                let mut config = AgentCapabilities::default();
+                config.set_preset(preset);
+                let enabled =
+                    preset == Preset::Full || (preset == Preset::Standard && role != AgentRole::Pm);
+                assert_eq!(config.resolve(role, None).enabled("codemode"), enabled);
+                for key in ["mcp.enabled", "tool_search"] {
+                    config.set(role, key, false).unwrap();
+                }
+                assert_eq!(config.resolve(role, None).enabled("codemode"), enabled);
+                config.set(role, "codemode", !enabled).unwrap();
+                assert_eq!(config.resolve(role, None).enabled("codemode"), !enabled);
+            }
+        }
+        let config: AgentCapabilities = toml::from_str("[pm]\ncodemode = true").unwrap();
+        assert!(config.resolve(AgentRole::Pm, None).enabled("codemode"));
     }
 
     #[test]

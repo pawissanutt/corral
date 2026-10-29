@@ -398,6 +398,13 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
     }
     if NO_EFFECT.contains(&tool) || tool.starts_with("lsp_") {
         (ResumeClass::InterruptedNoEffect, None)
+    } else if tool == "codemode" {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some(format!(
+                "nested tools may have run; reconcile their effects before retrying; {detail}"
+            )),
+        )
     } else if tool.starts_with("mcp_") {
         (
             ResumeClass::OutcomeUnknown,
@@ -452,7 +459,9 @@ pub fn classify_local(
 pub fn needs_snapshot(scan: &DanglingScan, hooks: Option<&HookSettings>) -> bool {
     !scan.hooks.is_empty()
         || scan.calls.iter().any(|call| {
-            MUTATING.contains(&call.name.as_str()) || hooks.is_some_and(|h| h.wraps(&call.name))
+            MUTATING.contains(&call.name.as_str())
+                || call.name == "codemode"
+                || hooks.is_some_and(|h| h.wraps(&call.name))
         })
 }
 
@@ -520,6 +529,24 @@ mod tests {
             assert_eq!(actual, class, "{tool}");
             assert_eq!(detail.is_none(), class == ResumeClass::InterruptedNoEffect);
         }
+    }
+
+    #[test]
+    fn interrupted_codemode_is_unknown_even_when_its_script_looks_read_only() {
+        // The outer call has no final result: nested calls may already have acted.
+        let scan = DanglingScan {
+            calls: vec![DanglingCall {
+                id: "script-1".into(),
+                name: "codemode".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(needs_snapshot(&scan, None));
+        let (class, detail) = classify_local(&scan.calls[0], (Some("saved.diff"), &[], None));
+        assert_eq!(class, ResumeClass::OutcomeUnknown);
+        let detail = detail.unwrap();
+        assert!(detail.contains("nested tools may have run"));
+        assert!(detail.contains("saved.diff"));
     }
 
     #[test]
