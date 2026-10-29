@@ -513,3 +513,66 @@ fn rust_side_lessons_never_depend_on_the_installed_host() {
     assert!(legacy.enabled("compaction") && legacy.enabled("lessons"));
     assert!(!legacy.enabled("skills") && !legacy.enabled("session_export"));
 }
+
+#[test]
+fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_settings() {
+    // Given full-preset tables for roles that may and may not use each control.
+    let text = "preset = 'full'\n[worker.hooks]\ntimeout_ms = 500\n\
+                [[worker.hooks.pre_tool]]\nname = 'lint'\nargv = ['lint', '--fix']\ntools = ['edit']\n\
+                [reviewer.bash_rules]\ndeny = ['git push*']\ndefault = 'ask'";
+    let config: AgentCapabilities = toml::from_str(text).unwrap();
+    // When each role resolves.
+    let worker = config.resolve(AgentRole::Worker, None);
+    let reviewer = config.resolve(AgentRole::Reviewer, None);
+    // Then the effective settings are complete and the worker's typed hooks are readable.
+    let hooks = crate::agent::HookSettings::of(&worker).unwrap();
+    assert_eq!(hooks.timeout_ms, 500);
+    assert!(hooks.wraps("edit") && !hooks.wraps("read") && !hooks.wraps("corral_edit"));
+    assert_eq!(
+        serde_json::to_value(&worker.features["bash_rules"].settings).unwrap(),
+        serde_json::json!({"allow": [], "ask": [], "deny": [], "default": "allow"})
+    );
+    assert_eq!(
+        reviewer.features["bash_rules"].settings["default"],
+        serde_json::json!("ask")
+    );
+    assert!(!reviewer.features.contains_key("hooks"));
+    assert!(
+        !config
+            .resolve(AgentRole::Pm, None)
+            .features
+            .contains_key("bash_rules")
+    );
+    // And standard leaves both off until a role override enables one.
+    let mut standard = AgentCapabilities::default();
+    let before = standard.resolve(AgentRole::Worker, None);
+    assert!(!before.enabled("hooks") && !before.enabled("bash_rules"));
+    assert!(crate::agent::HookSettings::of(&before).is_none());
+    standard.set(AgentRole::Worker, "hooks", true).unwrap();
+    let after = standard.resolve(AgentRole::Worker, None);
+    assert_eq!(
+        crate::agent::HookSettings::of(&after),
+        Some(crate::agent::HookSettings::default())
+    );
+    let transition = after.transition_from(1, &before).unwrap();
+    assert!(
+        transition
+            .changes
+            .iter()
+            .any(|c| c.key == "hooks" && c.to == Some(true))
+    );
+    // And role ceilings and invalid settings are configuration errors.
+    for invalid in [
+        "[reviewer.hooks]\nenabled = true",
+        "[pm]\nbash_rules = true",
+        "[worker.hooks]\n[[worker.hooks.pre_tool]]\nname = 'x'\nargv = []",
+        "[worker.hooks]\n[[worker.hooks.post_tool]]\nname = 'x'\nargv = ['x']\ntools = ['corral_done']",
+        "[worker.bash_rules]\ndefault = 'maybe'",
+        "[worker.bash_rules]\nunknown = 1",
+    ] {
+        assert!(
+            toml::from_str::<AgentCapabilities>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+}

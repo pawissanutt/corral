@@ -64,6 +64,8 @@ error. The catalog today, as strict / standard / full:
 | `session_export` | worker off / on / on; not available to PM | off / on / on |
 | `mcp.enabled` | off / on / on | off / on / on |
 | `tool_search` | off / on / on | off / on / on |
+| `hooks` | worker off / off / on; not available to PM | not available |
+| `bash_rules` | worker off / off / on; not available to PM | reviewer off / off / on; not available to planning roles |
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -240,6 +242,69 @@ The generation snapshot and digest include the resolved MCP configuration. Expli
 resume adapts it while preserving old snapshots. An interrupted local `tool_search`
 is `interrupted_no_effect`; MCP connections, activation, tool and resource calls
 remain `outcome_unknown`, regardless of read annotations.
+
+### Hooks and bash rules
+
+Two worker-side controls run inside the host, in full or by role override. Both come only
+from corral configuration and are resolved into the generation snapshot:
+
+```toml
+[agent.capabilities.worker.hooks]
+enabled = true
+timeout_ms = 60000                 # default; per hook, 1..600000
+
+[[agent.capabilities.worker.hooks.pre_tool]]
+name = "lint"                      # [A-Za-z0-9._-], unique per phase
+argv = ["scripts/lint.sh", "--quick"]
+tools = ["edit", "write"]          # omitted: every local tool
+
+[[agent.capabilities.worker.hooks.post_tool]]
+name = "fmt"
+argv = ["cargo", "fmt"]
+tools = ["edit"]
+
+[[agent.capabilities.worker.hooks.turn_end]]
+name = "notify"
+argv = ["notify-send", "turn done"]
+
+[agent.capabilities.worker.bash_rules]   # also under reviewer
+enabled = true
+deny = ["git push*", "rm -rf *"]
+ask = ["git reset --hard*"]
+allow = []
+default = "allow"                  # allow, ask or deny for a command no rule matches
+```
+
+Hooks are programs run with argv (no shell) in the worktree, with the call as JSON on stdin
+and `CORRAL_HOOK_PHASE`, `CORRAL_HOOK_NAME`, `CORRAL_HOOK_INVOCATION` and
+`CORRAL_HOOK_TOOL` in the environment. A pre-tool hook that exits non-zero, cannot start or
+times out refuses the call with its output tail; a failing post-tool hook appends a note to
+the result; a turn-end hook runs once as each turn settles. A timed-out hook's process group
+is killed. Hooks wrap only top-level local calls that passed the role check and bash rules:
+never a corral operation, a denied call, or a call another tool issued. Hook subprocesses
+are trusted same-user programs outside the in-process network guard, like bash.
+
+Before launching a hook the host appends a `corral_hook` entry (`prepared`) to the bound Pi
+session, then `started` and `completed`. After host loss, recovery uses these records and
+the lost generation's own hook settings: a call a hook was recorded around, or that a
+configured pre/post hook wraps, is `outcome_unknown` even when it is a read, and a hook
+that never completed (a turn-end hook included) is listed as `hook:<phase>:<name>` with
+its invocation ID. Hook scripts are never replayed.
+
+Bash rules decide every bash call, nested ones too, before it runs. A command is split on
+`;`, `&&`, `||`, `|`, `&` and newlines, and the bodies of `$(...)`, backticks and
+`sh -c`/`bash -c` arguments are checked as well; quotes are not parsed, so splitting errs
+toward more pieces. Patterns are globs (`*` any text, `?` one character) matching a whole
+piece. Deny wins over ask, ask over allow; under `default = "ask"` or `"deny"` every piece
+must match `allow`. A denied command fails with the rule and nothing runs.
+
+An `ask` command also fails at first, naming a `bash-permission:<sha256>` reference. The
+worker asks with `corral_ask` kind `permission`, options `allow`/`deny`, that reference in
+`context_refs` and the exact command in its text. When corral delivers the owner's answer
+to that question choosing `allow`, the identical command runs once; it is decided again
+from the start, so a deny rule still wins. The PM cannot answer permission questions, and
+a correction to another option revokes an unused grant. Grants live in the host process:
+after recovery, ask again.
 
 ### Todo progress
 
@@ -880,7 +945,8 @@ resumes the PM's host in its saved pane, retaining its project scope and durable
    | single-phase corral tool with no receipt | `not_committed`, naming idempotent effects it may have made first (a `commit_all` commit, content-addressed blobs) |
    | two-phase corral tool (gate, capture, reply) with no reservation, or abandoned before it started | `not_executed` |
    | `edit`, `write`, `bash` | `outcome_unknown`; for bash, processes it started may still run |
-   | `read`, `grep`, `find`, `ls` and the LSP tools | `interrupted_no_effect` |
+   | `read`, `grep`, `find`, `ls` and the LSP tools | `interrupted_no_effect`, unless a hook ran or may have run around it: then `outcome_unknown` naming the hook invocations |
+   | a hook that never completed (`hook:<phase>:<name>`) | `outcome_unknown`; hook scripts are never replayed |
 
    A definitely unsubmitted gate or reviewer preparation whose candidate changed (for
    example, after a rebase) is superseded on the next admission. Its complete preparation

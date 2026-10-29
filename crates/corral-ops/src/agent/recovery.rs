@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::agent::{
-    self, AgentRunState, ContainerRef, Executor, HostHealth, InterruptedCall, ReceiptState,
-    RequestReceipt, ResumeClass, pm_state,
+    self, AgentRunState, ContainerRef, Executor, HookSettings, HostHealth, InterruptedCall,
+    ReceiptState, RequestReceipt, ResumeClass, pm_state,
 };
 use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Recipient, Urgency};
 use corral_core::{ArtifactKind, Task};
@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use super::admission::{BindTarget, fence_generation};
 use super::bridge::BridgeClient;
 use super::bridge::cancel as cancels;
-use super::bridge::interrupted::{self, MUTATING, ScanLimit};
+use super::bridge::interrupted::{self, ScanLimit};
 use super::bridge::liveness::{bound_host, gone};
 use super::bridge::notice::{self, Unconfirmed};
 use super::cli::{AgentTarget, CancelArgs, ResumeArgs};
@@ -542,18 +542,16 @@ fn classify_lost(
         &generation.bind_nonce_sha256,
     )?;
     let all = receipts(ctx, container)?;
-    let needs_snapshot = dangling
-        .calls
-        .iter()
-        .any(|c| MUTATING.contains(&c.name.as_str()));
-    let snapshot = match needs_snapshot {
+    let hooks = generation.capabilities.as_ref().and_then(HookSettings::of);
+    let snapshot = match interrupted::needs_snapshot(&dangling, hooks.as_ref()) {
         true => Some(worktree_snapshot(ctx, container, n, plan)?),
         false => None,
     };
-    let (mut calls, mut running) = (Vec::new(), Vec::new());
-    for call in dangling.calls {
+    let (mut calls, mut running) = (interrupted::unfinished_hooks(&dangling), Vec::new());
+    for call in dangling.calls.clone() {
         let Some(op) = call.name.strip_prefix("corral_") else {
-            let (class, detail) = interrupted::classify_upstream(&call.name, snapshot.as_deref());
+            let local = (snapshot.as_deref(), &dangling.hooks[..], hooks.as_ref());
+            let (class, detail) = interrupted::classify_local(&call, local);
             calls.push(InterruptedCall {
                 tool_call_id: call.id,
                 tool: call.name,

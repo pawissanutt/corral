@@ -345,6 +345,53 @@ fn web_settings_resume_preserves_prior_snapshot_and_delivers_resolved_policy() {
 }
 
 #[test]
+fn hook_and_bash_rule_settings_reach_launch_and_resume_records_their_change() {
+    // Given a host implementing hooks and bash rules, and a standard generation without them.
+    let mut fx = fixture(Some(&["todo", "hooks", "bash_rules"]));
+    let first = fx.open().unwrap();
+    let settings = &fx.message(&first)["capabilities"]["settings"];
+    assert!(settings.get("hooks").is_none() && settings.get("bash_rules").is_none());
+    // When the owner enables both for the worker and explicitly resumes.
+    let mut config = std::fs::read_to_string(fx.ctx.store.config_path()).unwrap();
+    config.push_str(
+        "\n[agent.capabilities.worker.hooks]\nenabled = true\ntimeout_ms = 900\n\
+         [[agent.capabilities.worker.hooks.post_tool]]\nname = 'fmt'\nargv = ['cargo', 'fmt']\n\
+         tools = ['edit']\n[agent.capabilities.worker.bash_rules]\nenabled = true\n\
+         deny = ['git push*']\n",
+    );
+    std::fs::write(fx.ctx.store.config_path(), config).unwrap();
+    fx.ctx = Ctx::from_store(Store::open(fx.tmp.path()).unwrap());
+    let second = fx.open().unwrap();
+    // Then the launch carries the resolved settings and the transition names both keys.
+    let capabilities = &fx.message(&second)["capabilities"];
+    assert_eq!(
+        capabilities["settings"]["hooks"],
+        json!({"timeout_ms": 900, "pre_tool": [], "turn_end": [],
+            "post_tool": [{"name": "fmt", "argv": ["cargo", "fmt"], "tools": ["edit"]}]})
+    );
+    assert_eq!(
+        capabilities["settings"]["bash_rules"],
+        json!({"allow": [], "ask": [], "deny": ["git push*"], "default": "allow"})
+    );
+    assert!(
+        capabilities["enabled"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("hooks"))
+    );
+    let host = fx.host();
+    assert_eq!(host.generation(1).unwrap().capabilities, first.capabilities);
+    let change = host
+        .generation(2)
+        .unwrap()
+        .capability_transition
+        .clone()
+        .unwrap();
+    let keys: Vec<&str> = change.changes.iter().map(|c| c.key.as_str()).collect();
+    assert_eq!(keys, ["bash_rules", "hooks"]);
+}
+
+#[test]
 fn disabled_unsupported_and_historical_web_settings_are_omitted_from_launch() {
     // Given a host without web support and a historical snapshot without settings.
     let mut fx = fixture(Some(&["todo"]));

@@ -5,7 +5,7 @@
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use super::tests::{event, messages, resume, run_recipient, state, sync};
+use super::tests::{classes, event, messages, resume, run_recipient, state, sync};
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Fx, HostProc};
 use crate::agent::test_support as ts;
@@ -188,4 +188,57 @@ fn a_retry_turn_that_succeeds_recovers_the_stall_once_it_ends() {
     assert!(!crate::provider_stall::retrying(&fx.ctx, &key));
     assert_eq!(fx.events("provider_recovered").len(), 1);
     assert_eq!(retries(&fx), 1);
+}
+
+#[test]
+fn resume_reports_hooked_reads_and_unfinished_turn_end_hooks_unknown_without_replaying_them() {
+    // Given a lost worker whose session recorded a mutating pre hook around a read and a
+    // turn-end hook that started, both without completing, beside an unhooked grep:
+    let fx = f::fixture(false, 5);
+    let mut host = HostProc::spawn(true);
+    let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
+    let hook = |invocation: &str, phase: &str, call: Option<&str>| {
+        json!({"type": "custom", "customType": "corral_hook", "data": {"invocation": invocation,
+            "phase": phase, "hook": "touch", "tool_call_id": call, "turn": 1, "state": "started"}})
+        .to_string()
+    };
+    let calls = [
+        ("c-read", "read"),
+        ("c-grep", "grep"),
+        ("c-todo", "corral_todo"),
+    ];
+    let session = format!(
+        "{}{}\n{}\n",
+        f::session(&calls, &[]),
+        hook("hk-1-1", "pre_tool", Some("c-read")),
+        hook("hk-1-2", "turn_end", None)
+    );
+    f::write_session(&bound, &session);
+    host.kill();
+
+    // When the owner resumes the run:
+    resume(&fx, &fx.worker(), false).unwrap();
+
+    // Then the hooked read and the turn-end hook are outcome_unknown with their invocations,
+    // the unhooked read keeps its class, the corral call keeps its receipt class, and the
+    // only pane command is the relaunch: no hook script is replayed.
+    let notices = messages(&fx, &run_recipient(&fx), NOTICE_KIND);
+    let subject = notices[0].subject.clone().unwrap();
+    let expected = [
+        ("hook:turn_end:touch", "outcome_unknown"),
+        ("read", "outcome_unknown"),
+        ("grep", "interrupted_no_effect"),
+        ("corral_todo", "not_committed"),
+    ];
+    let expected: Vec<(String, String)> = expected
+        .iter()
+        .map(|(t, c)| ((*t).into(), (*c).into()))
+        .collect();
+    assert_eq!(classes(&subject["calls"]), expected);
+    assert_eq!(subject["calls"][0]["tool_call_id"], json!("hk-1-2"));
+    let read = subject["calls"][1]["detail"].as_str().unwrap();
+    assert!(read.contains("hk-1-1 (pre_tool touch, started)"), "{read}");
+    let runs = fx.calls("pane run");
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(runs[0].contains("agent launch --bootstrap"));
 }

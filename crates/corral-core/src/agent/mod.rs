@@ -5,6 +5,7 @@
 
 mod capabilities;
 mod live;
+mod local_controls;
 pub mod paths;
 pub mod pm_state;
 mod question;
@@ -16,6 +17,7 @@ mod todo;
 
 pub use capabilities::*;
 pub use live::*;
+pub use local_controls::*;
 pub use pm_state::AgentPm;
 pub use question::*;
 pub use records::*;

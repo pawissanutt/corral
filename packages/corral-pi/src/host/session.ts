@@ -15,7 +15,10 @@ import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
+import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
+import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
+import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
@@ -222,6 +225,9 @@ export class HostSession {
   private interactive = false;
   private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
+  private readonly controls: HostControls;
+  private readonly hooks: Hooks | undefined;
+  private readonly permissions: BashPermissions | undefined;
 
   readonly provider: ProviderId;
 
@@ -259,6 +265,17 @@ export class HostSession {
       ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),
       enableSkillCommands: options.capabilities?.enabled.includes("skills") === true && options.guidance !== undefined,
     };
+    try {
+      this.controls = parseControls(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+    } catch (error) {
+      throw new Error(`module_invalid: ${error instanceof Error ? error.message : error}`);
+    }
+    // Recovery attributes a lost hook only through this record, so it precedes every launch.
+    this.hooks = this.controls.hooks && new Hooks(this.controls.hooks, {
+      cwd: options.cwd, generation: options.identity.generation,
+      record: (entry) => this.session.sessionManager.appendCustomEntry(HOOK_ENTRY, entry),
+    });
+    this.permissions = this.controls.bashRules && new BashPermissions();
   }
 
   private exportable(): boolean {
@@ -386,6 +403,12 @@ export class HostSession {
           ? `${event.toolName} is a corral operation; call it directly, not from another tool`
           : `${event.toolName} is not in the ${this.options.identity.role} loadout`,
       };
+    });
+    installToolControls(pi, {
+      ...(this.hooks ? { hooks: this.hooks } : {}),
+      ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
+      ...(this.permissions ? { permissions: this.permissions } : {}),
+      events: this.options.events, corral, currentTurn: () => this.currentTurn(),
     });
     if (!this.loadout.includes("bash")) {
       pi.on("user_bash", () => ({
@@ -569,6 +592,9 @@ export class HostSession {
     } catch (error) {
       return { disposition: "rejected", reason: `delivery_refused: ${error instanceof Error ? error.message : error}` };
     }
+    // Only a corral inbox delivery can carry the owner's answer to a bound permission question.
+    const permission = input.origin === "corral-inbox" ? this.permissions?.observeAnswer(input.text) : undefined;
+    if (permission) this.options.events.emit("bash_permission_answer", { decision: permission });
     return new Promise<SubmitResult>((resolve) => {
       let settled = false;
       const settle = (result: SubmitResult) => {

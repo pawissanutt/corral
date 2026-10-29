@@ -57,6 +57,8 @@
     "compaction",
     "session_export",
     "mcp.enabled",
-    "tool_search"
+    "tool_search",
+    "hooks",
+    "bash_rules"
   ]
 }
