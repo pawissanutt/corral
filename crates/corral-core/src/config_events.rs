@@ -115,19 +115,29 @@ impl Store {
                     ),
                     "cannot refresh authority after a submission attempt"
                 );
+                // A fresh explicit owner request is fresh consent to the current contract;
+                // automatic authority may only follow a new grant for the same contract.
+                let owner_renewal = matches!(
+                    (&record.authorization.origin, &authorization.origin),
+                    (
+                        OperatingOrigin::ExplicitOwner { .. },
+                        OperatingOrigin::ExplicitOwner { .. }
+                    )
+                );
                 ensure!(
-                    matches!(
-                        (&record.authorization.origin, &authorization.origin),
-                        (
-                            OperatingOrigin::Automatic { .. },
-                            OperatingOrigin::Automatic { .. }
-                        )
-                    ),
+                    owner_renewal
+                        || matches!(
+                            (&record.authorization.origin, &authorization.origin),
+                            (
+                                OperatingOrigin::Automatic { .. },
+                                OperatingOrigin::Automatic { .. }
+                            )
+                        ),
                     "cannot change the action's authorization origin"
                 );
                 ensure!(
                     record.authorization.workspace == authorization.workspace
-                        && record.authorization.member == authorization.member
+                        && (owner_renewal || record.authorization.member == authorization.member)
                         && record.authorization.action == authorization.action,
                     "cannot refresh a changed prepared action identity"
                 );
@@ -152,6 +162,29 @@ impl Store {
             })?;
         }
         Ok(authorization)
+    }
+
+    /// Whether an unsubmitted authorization was refused or no longer matches the current
+    /// policy revision or task contract. Attempted submissions are never stale: they must
+    /// not be replaced.
+    pub fn operating_authorization_stale(
+        &self,
+        authorization: &ActionAuthorization,
+    ) -> Result<bool> {
+        match self.authorized_submission(&authorization.id)?.disposition {
+            SubmissionDisposition::AuthorizationRefused { .. } => Ok(true),
+            SubmissionDisposition::Prepared => {
+                let config = self.operating_config()?;
+                let task = self.get(&authorization.action.task)?;
+                Ok(
+                    authorization.member != self.operating_member(&config, &task)?
+                        || authorization.policy_revision != self.policy_revision(&config)?,
+                )
+            }
+            SubmissionDisposition::Submitting
+            | SubmissionDisposition::Submitted
+            | SubmissionDisposition::Uncertain { .. } => Ok(false),
+        }
     }
 
     pub fn operating_state(&self) -> Result<crate::OperatingState> {

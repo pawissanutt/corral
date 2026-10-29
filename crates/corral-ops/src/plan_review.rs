@@ -324,16 +324,8 @@ fn review_with_origin(
     preparation.save(ctx, &task.id)?;
     close_plan_review(ctx, &previous)?;
     let mut launch = || -> Result<HerdrRef> {
-        let herdr = if let Some(herdr) = &preparation.review.herdr {
-            ensure!(
-                herdr.socket.as_ref() == Some(&ctx.herdr.socket_path()?),
-                "prepared reviewer belongs to another session"
-            );
-            ensure!(
-                ctx.herdr.pane_get(&herdr.pane_id)?.is_some(),
-                "prepared reviewer pane disappeared"
-            );
-            herdr.clone()
+        let herdr = if let Some(herdr) = preparation.live_pane(ctx)? {
+            herdr
         } else if name == "pm" {
             let pane_id = match crate::pm::live_pm_pane(ctx)? {
                 Some(pane) => pane,

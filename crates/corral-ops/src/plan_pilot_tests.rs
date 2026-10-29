@@ -26,6 +26,8 @@ mod ownership;
 mod lifecycle;
 #[path = "plan_reaccept_pilot_tests.rs"]
 mod reaccept;
+#[path = "plan_reauthorize_tests.rs"]
+mod reauthorize;
 #[path = "plan_revision_tests.rs"]
 mod revision;
 #[path = "plan_routing_tests.rs"]
