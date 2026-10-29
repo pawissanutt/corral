@@ -36,16 +36,16 @@ pub fn print(ctx: &Ctx, tasks: &[Task], columns: &[String]) -> Result<()> {
         for t in tasks {
             let blocked = blocker(t);
             println!(
-                "{:<7} {:<9} {:<3} {:<14} {}",
+                "{:<7} {:<9} {:<3} {:<14} {}{}",
                 t.id,
                 blocked.map_or(t.status.label(), |_| "Blocked"),
                 t.priority,
                 t.project.as_deref().unwrap_or("-"),
-                t.title
+                t.title,
+                blocked
+                    .map(|condition| format!("  [{}]", blocked_text(condition)))
+                    .unwrap_or_default()
             );
-            if let Some(condition) = blocked {
-                println!("        {}", blocked_text(condition));
-            }
         }
         return Ok(());
     }
