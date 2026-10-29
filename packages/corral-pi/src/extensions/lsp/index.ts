@@ -136,7 +136,8 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
     while (serverRoot !== root && !spec.rootMarkers?.some((marker) => existsSync(join(serverRoot, marker)))) {
       serverRoot = dirname(serverRoot);
     }
-    const key = JSON.stringify([spec.id, serverRoot]);
+    // IDs are display labels, not identities: configured IDs can equal built-in IDs.
+    const key = JSON.stringify([servers.indexOf(spec), serverRoot]);
     const existing = clients.get(key);
     if (existing) {
       const current = await existing.catch(() => undefined);

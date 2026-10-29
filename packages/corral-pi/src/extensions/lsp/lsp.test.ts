@@ -85,6 +85,24 @@ test("generation settings select a configured server without exposing mutating L
   expect(configuredServers({ languages: { changed: { ...settings.languages.example, args: [FAKE, "--exit-on-definition"] } } })[0]?.id).toBe("changed");
 });
 
+test("configured IDs colliding with built-ins retain distinct processes in both orders", async () => {
+  for (const [id, extension] of [["rust-analyzer", ".rs"], ["typescript-language-server", ".ts"]] as const) {
+    writeFileSync(join(root, `other${extension}`), "def alpha\n");
+    for (const reverse of [false, true]) {
+      const configured = { ...fake("--exit-on-definition"), id };
+      const builtin = { ...fake(), id, languages: { [extension]: "builtin" } };
+      const made = lspToolkit({ root, servers: [configured, builtin], limits: LIMITS });
+      toolkits.push(made);
+      const path = `other${extension}`;
+      if (reverse) await call(made, "lsp_diagnostics", { path });
+      await call(made, "lsp_diagnostics", { path: "src/main.fk" });
+      if (!reverse) await call(made, "lsp_diagnostics", { path });
+      expect((await call(made, "lsp_definition", { path, line: 1, column: 1 })).locations).toHaveLength(1);
+      expect((await failure(call(made, "lsp_definition", { path: "src/main.fk", line: 1, column: 1 }))).code).toBe("lsp_server_exited");
+    }
+  }
+});
+
 test("root markers select the nearest project and otherwise fall back to the worktree", async () => {
   mkdirSync(join(root, "project", "src"), { recursive: true });
   writeFileSync(join(root, "project", "marker"), "");
