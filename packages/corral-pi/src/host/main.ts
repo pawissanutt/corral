@@ -79,6 +79,7 @@ async function main(): Promise<void> {
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
+    ...(config.capabilities ? { capabilities: config.capabilities } : {}),
     modules, client, events, network,
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
   });

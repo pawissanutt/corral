@@ -11,7 +11,9 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::agent::{AgentRunState, ContainerRef, pm_state};
+use corral_core::agent::{
+    AgentRunState, CapabilitySnapshot, CapabilityTransition, ContainerRef, pm_state,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -425,6 +427,13 @@ pub fn state(ctx: &Ctx, args: &StateArgs) -> Result<()> {
     {
         println!("todo: {}", serde_json::to_string_pretty(todo)?);
     }
+    let field = |name: &str| value["container"][name].clone();
+    if let Ok(snapshot) = serde_json::from_value::<CapabilitySnapshot>(field("capabilities")) {
+        println!("capabilities: {}", snapshot.summary());
+    }
+    if let Ok(change) = serde_json::from_value::<CapabilityTransition>(field("capability_change")) {
+        println!("capability changes {}", change.summary());
+    }
     println!(
         "assets: {}",
         value["installation"]["summary"].as_str().unwrap_or("")
@@ -508,6 +517,8 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
         "turns": state.turns.len(),
         "todo_enabled": state.current_generation().is_some_and(|g| g.todo),
         "todo": state.todo,
+        "capabilities": state.current_generation().map(|g| g.effective_capabilities(state.binding.role)),
+        "capability_change": state.current_generation().and_then(|g| g.capability_transition.as_ref()),
     });
     match value {
         Value::Object(map) => map,

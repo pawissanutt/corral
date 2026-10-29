@@ -20,7 +20,7 @@ import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
-import type { HostIdentity, RoleContext } from "../roles/types.ts";
+import type { CapabilitySet, HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
@@ -43,6 +43,8 @@ export interface HostSessionOptions {
   readonly effort?: string;
   readonly promptFile?: string;
   readonly todo?: boolean;
+  /** The generation's recorded snapshot; when present it decides todo. */
+  readonly capabilities?: CapabilitySet;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
   readonly ui?: UiMode;
   readonly modules: LoadedModules;
@@ -208,7 +210,8 @@ export class HostSession {
     this.provider = options.provider ?? "openai-codex";
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, model: options.model,
-      todo: options.todo === true,
+      todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
+      ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
     };
@@ -279,6 +282,7 @@ export class HostSession {
   private extension(pi: ExtensionAPI): void {
     const allowed = new Set(this.loadout);
     const specs = this.options.modules.role.tools(this.roleContext);
+    const corral = new Set(corralToolNames(specs));
     const rich = this.options.ui !== "plain";
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
@@ -294,11 +298,19 @@ export class HostSession {
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
     }
     for (const tool of this.localTools) pi.registerTool(tool);
+    // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
+    // runs only at top level, where its request ID is bound to a transcript tool call.
     pi.on("tool_call", (event) => {
-      if (allowed.has(event.toolName)) return undefined;
+      const nested = event.parentToolCallId !== undefined;
+      if (allowed.has(event.toolName) && !(nested && corral.has(event.toolName))) return undefined;
       this.deniedTools++;
-      this.options.events.emit("tool_denied", { tool: event.toolName });
-      return { block: true, reason: `${event.toolName} is not in the ${this.options.identity.role} loadout` };
+      this.options.events.emit("tool_denied", { tool: event.toolName, ...(nested ? { nested: true } : {}) });
+      return {
+        block: true,
+        reason: allowed.has(event.toolName)
+          ? `${event.toolName} is a corral operation; call it directly, not from another tool`
+          : `${event.toolName} is not in the ${this.options.identity.role} loadout`,
+      };
     });
     if (!allowed.has("bash")) {
       pi.on("user_bash", () => ({
@@ -499,6 +511,7 @@ export class HostSession {
     return {
       role: this.options.identity.role,
       todo: this.loadout.includes("corral_todo"),
+      capabilities: this.options.capabilities ?? null,
       generation: this.options.identity.generation,
       bound: this.bound,
       interactive: this.interactive,

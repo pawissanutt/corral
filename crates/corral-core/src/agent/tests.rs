@@ -33,6 +33,8 @@ fn state(role: AgentRole, callback: Option<&str>) -> Box<AgentRunState> {
         nudged_at: None,
         event_seq: 0,
         todo: false,
+        capabilities: None,
+        capability_transition: None,
     });
     state.turns.push(AgentTurn {
         generation: 1,

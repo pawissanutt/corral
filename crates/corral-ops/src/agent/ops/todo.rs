@@ -59,7 +59,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         .resolved
         .state(&container)
         .and_then(|state| state.current_generation())
-        .is_some_and(|g| g.todo);
+        .is_some_and(|g| g.capability("todo"));
     if !enabled {
         return Err(Rejection::new(
             RejectCode::OpNotAllowed,

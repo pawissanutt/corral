@@ -266,6 +266,7 @@ pub(crate) fn checks_with(
             "Run `corral agent login` in a pane to log in each provider your pi-native profiles use.",
         ),
         line("pi_native_question_wake", true, wake, ""),
+        capabilities_check(ctx, found["dir"].as_str().map(Path::new)),
     ];
     let bedrock_configured = ctx.store.config.profiles.values().any(|profile| {
         corral_core::is_pi_native(&profile.harness)
@@ -285,6 +286,54 @@ pub(crate) fn checks_with(
         checks.push(bedrock_check(root.as_deref(), home.as_deref()));
     }
     Ok(checks)
+}
+
+/// Every role's effective settings against the installed host: an unavailable default is
+/// informational, an explicit request the host lacks fails because launch refuses it.
+fn capabilities_check(ctx: &Ctx, assets: Option<&Path>) -> DoctorCheck {
+    let supported = assets.map(|dir| {
+        read_compat(dir)
+            .map(|pins| pins.capabilities)
+            .unwrap_or_default()
+    });
+    let snapshots: Vec<_> = [
+        AgentRole::Worker,
+        AgentRole::Reviewer,
+        AgentRole::Pm,
+        AgentRole::Planner,
+        AgentRole::PlanReviewer,
+    ]
+    .into_iter()
+    .map(|role| {
+        ctx.store
+            .config
+            .agent
+            .capabilities
+            .resolve(role, supported.as_ref())
+    })
+    .collect();
+    let refused = snapshots.iter().find_map(|snapshot| {
+        snapshot
+            .explicit_unavailable()
+            .map(|(key, _)| (snapshot.role, key))
+    });
+    let summaries: Vec<String> = snapshots
+        .iter()
+        .map(|snapshot| snapshot.summary())
+        .collect();
+    line(
+        "pi_native_capabilities",
+        refused.is_none(),
+        format!("pi-native capabilities: {}", summaries.join("; ")),
+        &match refused {
+            Some((role, key)) => format!(
+                "Run `corral agent install` to update the host, or remove \
+                 [agent.capabilities.{}] {key}.",
+                role.as_str()
+            ),
+            None => String::new(),
+        },
+    )
 }
 
 /// Offline readiness with explicit roots so a fixture never inspects the owner's AWS files.

@@ -165,6 +165,7 @@ fn todo_ledgers_survive_reopen_resume_and_retain_drop_reasons() {
 
 #[test]
 fn todo_strict_and_role_disable_apply_at_generation_boundaries() {
+    use corral_core::agent::AgentRole;
     use corral_core::config::agent_capabilities::Preset;
     // Given each supported role with strict or its own explicit disable.
     for pm in [false, true] {
@@ -183,12 +184,13 @@ fn todo_strict_and_role_disable_apply_at_generation_boundaries() {
             };
             let active = ts::bind(&fx, &target, "p1", "active");
             committed(&hello(&fx, &active));
+            let capabilities = &mut fx.ctx.store.config.agent.capabilities;
             if strict {
-                fx.ctx.store.config.agent.capabilities.preset = Preset::Strict;
+                capabilities.set_preset(Preset::Strict);
             } else if pm {
-                fx.ctx.store.config.agent.capabilities.pm.todo = Some(false);
+                capabilities.set(AgentRole::Pm, "todo", false).unwrap();
             } else {
-                fx.ctx.store.config.agent.capabilities.worker.todo = Some(false);
+                capabilities.set(AgentRole::Worker, "todo", false).unwrap();
             }
             // When config changes during a generation, then on explicit resume.
             committed(&todo(&fx, &active, "init", init()));

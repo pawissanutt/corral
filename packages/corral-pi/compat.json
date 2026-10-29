@@ -47,5 +47,8 @@
     "openai",
     "anthropic",
     "amazon-bedrock"
+  ],
+  "capabilities": [
+    "todo"
   ]
 }

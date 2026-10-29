@@ -248,6 +248,11 @@ For a future upgrade:
 4. Switch only after reviewed acceptance; negotiate capabilities and reject
    unsupported startup. No implicit upgrade or schema conversion.
 
+The production host now negotiates optional features through `compat.json`'s
+`capabilities` list (T-563): an unavailable default is reported and omitted, and only an
+explicit request the host lacks refuses startup. See
+[capabilities](pi-native-capabilities.md).
+
 Rollback disables the opt-in integration and fences/stops only its owned Pi
 resources, restores the previously configured OmO PM and supplies a canonical
 brief/next/questions/waits handoff. Keep tasks, artifacts, mutation receipts

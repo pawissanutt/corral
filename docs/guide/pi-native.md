@@ -33,14 +33,13 @@ when you dispatch, before a worktree exists.
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
-### Todo progress
+### Capabilities
 
-New worker and PM generations expose `corral_todo` by default. The minimal capability
-configuration is shared with the upcoming capability catalog:
+Optional Pi-native features are selected per role by one shared catalog:
 
 ```toml
 [agent.capabilities]
-preset = "standard" # default; "full" also enables todo, "strict" disables it
+preset = "standard" # default; "full" adds more where a feature defines it, "strict" turns optional features off
 
 [agent.capabilities.worker]
 todo = false       # optional per-role override
@@ -49,8 +48,25 @@ todo = false       # optional per-role override
 todo = true        # optional per-role override, including under strict
 ```
 
-Reviewers and planning roles cannot mutate todo ledgers. No other optional capability
-is introduced by these settings. Reinstall the host to get its todo tool.
+Role tables are `worker`, `reviewer`, `pm`, `planner` and `plan_reviewer`. A key that is
+not in the catalog, or that the role may not use (todo for a reviewer), is a configuration
+error. Today the catalog has `todo`, on for worker and PM under standard and full.
+
+Each generation records its resolved settings and their digest once. `corral agent state`
+shows them with where each value came from, and, after an explicit resume with changed
+settings, what changed since the previous generation. Older generations without a record
+show as `legacy_strict` and still resume. `corral agent doctor` lists every role's
+settings against the installed host: a default the host does not implement is shown as
+unavailable and left off, while an explicit `true` for it refuses the launch until you run
+`corral agent install` or remove the override. Capabilities never grant Corral authority;
+Corral tools also refuse to run from inside another tool. See
+[the capability record](../records/pi-native-capabilities.md).
+
+### Todo progress
+
+New worker and PM generations expose `corral_todo` by default (the `todo` capability).
+Reviewers and planning roles cannot mutate todo ledgers. Reinstall the host to get its
+todo tool.
 
 `corral_todo` accepts `init`, `append`, `start`, `done`, and `drop`. Initialize with
 `{"op":"init","phases":[{"id":"build","label":"Build","steps":[{"id":"wire","label":"Wire the tool"}]}]}`.
@@ -69,7 +85,7 @@ by the existing 8 KiB receipt-result limit. Worker progress appears in board car
 `corral show`; the PM ledger appears in `corral agent state --pm` and its JSON output.
 The compact host transcript shows the operation, step and resulting revision.
 
-Todo settings are frozen for an active generation and resolved again on explicit resume.
+Capability settings are frozen for an active generation and resolved again on explicit resume.
 Ledgers and drop reasons survive host loss and resume; disabling todo does not delete
 them or invalidate old receipts. Legacy generations and launch messages without a todo
 setting keep the tool disabled. Todo is progress bookkeeping, never gate or acceptance

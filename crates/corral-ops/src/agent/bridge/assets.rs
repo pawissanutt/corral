@@ -1,5 +1,6 @@
 //! Asset checks shared by dispatch and the launcher: the asset digest, the GO manifest's Bun
 //! range, the Bun on PATH and the fixed-path role, delivery and auth modules.
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -37,6 +38,8 @@ fn refuse(code: &'static str, detail: impl Into<String>) -> LaunchRefusal {
 
 pub struct CompatPins {
     pub range: String,
+    /// Catalog keys the installed host implements; a manifest without the list implements none.
+    pub capabilities: BTreeSet<String>,
 }
 
 pub fn read_compat(assets: &Path) -> Result<CompatPins, LaunchRefusal> {
@@ -48,15 +51,29 @@ pub fn read_compat(assets: &Path) -> Result<CompatPins, LaunchRefusal> {
         .as_ref()
         .filter(|v| v["verdict"] == "GO")
         .and_then(|v| v["bun"]["range"].as_str().map(str::to_owned));
-    range.map(|range| CompatPins { range }).ok_or_else(|| {
-        refuse(
-            "compat_unavailable",
-            format!(
-                "no GO compatibility manifest with a Bun range at {}",
-                path.display()
-            ),
-        )
-    })
+    let capabilities = value
+        .as_ref()
+        .and_then(|v| v["capabilities"].as_array())
+        .map(|keys| {
+            keys.iter()
+                .filter_map(|key| key.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    range
+        .map(|range| CompatPins {
+            range,
+            capabilities,
+        })
+        .ok_or_else(|| {
+            refuse(
+                "compat_unavailable",
+                format!(
+                    "no GO compatibility manifest with a Bun range at {}",
+                    path.display()
+                ),
+            )
+        })
 }
 
 /// `(code, detail)` for each missing module, role first, each naming its owning child.

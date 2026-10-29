@@ -1034,6 +1034,26 @@ do not form a backlog. The first enabled sync with a live PM and no saved cursor
 run one sync with push disabled first to skip it. Position persists in `.corral/state/pm-events.json`.
 See [board events](events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
 
+## agent.capabilities
+
+Optional Pi-native features per role; only pi-native runs read them.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `preset` | `"standard"` | `strict`, `standard` or `full`; each catalog feature defines its value per preset and role. |
+| `worker`, `reviewer`, `pm`, `planner`, `plan_reviewer` | empty | Per-role tables of catalog key = boolean overrides. Unknown keys and keys outside the role's ceiling are rejected. |
+
+```toml
+[agent.capabilities]
+preset = "standard"
+
+[agent.capabilities.worker]
+todo = false
+```
+
+Settings are resolved once per generation and again on explicit resume. See
+[Pi-native capabilities](pi-native.md#capabilities) for the catalog and recovery behavior.
+
 ## herdr
 
 | Key | Default | Meaning |

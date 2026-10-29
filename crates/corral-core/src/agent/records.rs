@@ -144,9 +144,31 @@ pub struct AgentGeneration {
     /// Last bridge event sequence corral reconciled (`events_since` resumes after it).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub event_seq: u64,
-    /// Wave-0 capability snapshot. Older generations retain the legacy disabled loadout.
+    /// Wave-0 todo flag, still written for older readers; `capabilities` supersedes it.
     #[serde(default)]
     pub todo: bool,
+    /// The generation's effective settings, resolved once at open and never rewritten.
+    /// Absent on generations recorded before the catalog (`legacy_strict`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<super::CapabilitySnapshot>,
+    /// How these settings differ from the previous generation's, when they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_transition: Option<super::CapabilityTransition>,
+}
+
+impl AgentGeneration {
+    pub fn effective_capabilities(&self, role: AgentRole) -> super::CapabilitySnapshot {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(|| super::CapabilitySnapshot::legacy(role, self.todo))
+    }
+
+    pub fn capability(&self, key: &str) -> bool {
+        match &self.capabilities {
+            Some(snapshot) => snapshot.enabled(key),
+            None => key == "todo" && self.todo,
+        }
+    }
 }
 
 /// What hello proved. The bind nonce is consumed when this is written.

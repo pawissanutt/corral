@@ -5,9 +5,11 @@ import { isAbsolute } from "node:path";
 
 import type { AwsBinding } from "../auth/aws.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
-import { ROLES, type HostIdentity, type Role } from "../roles/types.ts";
+import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
 
 export const LAUNCH_VERSION = 1;
+/** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
+export const HOST_CAPABILITIES: readonly string[] = ["todo"];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
 export type UiMode = "rich" | "plain";
@@ -31,6 +33,7 @@ export interface HostConfig {
   readonly resumeSession?: string;
   readonly freshSession?: boolean;
   readonly todo?: boolean;
+  readonly capabilities?: CapabilitySet;
   readonly model: string;
   readonly provider?: ProviderId;
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
@@ -80,6 +83,28 @@ function awsBinding(value: unknown): AwsBinding | undefined {
   return { profile: field(binding, "profile", AWS_PROFILE, 64), region };
 }
 
+function capabilitySet(value: unknown): CapabilitySet | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new LaunchMessageInvalid("capabilities must be an object");
+  const set = value as Json;
+  if (typeof set.catalog !== "number" || !Number.isSafeInteger(set.catalog) || set.catalog < 1) {
+    throw new LaunchMessageInvalid("capabilities.catalog must be a positive integer");
+  }
+  const enabled = set.enabled;
+  if (!Array.isArray(enabled) || enabled.some((key) => typeof key !== "string")) {
+    throw new LaunchMessageInvalid("capabilities.enabled must be a list of names");
+  }
+  // Corral resolves against compat.json, so an unknown enabled key is a mismatched install.
+  const unknown = enabled.find((key) => !HOST_CAPABILITIES.includes(key as string));
+  if (unknown !== undefined) throw new LaunchMessageInvalid(`capability ${unknown} is not implemented by this host`);
+  return {
+    catalog: set.catalog,
+    digest: field(set, "digest", /^[0-9a-f]{64}$/, 64),
+    preset: field(set, "preset", /^[a-z_]+$/, 32),
+    enabled: [...new Set(enabled as string[])],
+  };
+}
+
 export function parseLaunchMessage(text: string): HostConfig {
   let value: unknown;
   try {
@@ -114,6 +139,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     throw new LaunchMessageInvalid("todo must be a boolean");
   }
   const aws = awsBinding(message.aws);
+  const capabilities = capabilitySet(message.capabilities);
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {
@@ -137,7 +163,8 @@ export function parseLaunchMessage(text: string): HostConfig {
     sessionDir: path(message, "session_dir"),
     resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
     freshSession: message.fresh_session === true,
-    todo: message.todo === true,
+    todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
+    ...(capabilities ? { capabilities } : {}),
     model: field(message, "model", TOKEN, 128),
     ...(provider ? { provider } : {}),
     ...(aws ? { aws } : {}),
