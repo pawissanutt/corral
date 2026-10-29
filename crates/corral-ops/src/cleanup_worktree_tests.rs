@@ -4,6 +4,14 @@ use std::io::{BufRead, BufReader};
 use super::*;
 
 #[test]
+fn non_linux_protects_even_an_owned_orphan() {
+    assert!(!may_terminate(false, true));
+    assert!(!may_terminate(false, false));
+    assert!(may_terminate(true, true));
+    assert!(!may_terminate(true, false));
+}
+
+#[test]
 fn current_process_and_parent_are_protected() {
     let pids = protected_pids().unwrap();
     let own = std::process::id();

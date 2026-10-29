@@ -70,6 +70,7 @@ fn approval_closes_every_pane_before_removing_worktree() {
     fx.assert_closed(&panes, &run.herdr.unwrap().workspace_id);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn approval_stops_resident_nested_cwd_but_leaves_outside_process() {
     let fx = Fx::new();
@@ -219,6 +220,7 @@ fn another_tasks_custom_reviewer_harness_is_never_signalled() {
     assert!(harness.0.try_wait().unwrap().is_none());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn discard_explicitly_deletes_unmerged_branch_and_dirty_worktree() {
     let fx = Fx::new();
