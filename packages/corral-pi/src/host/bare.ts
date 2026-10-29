@@ -15,7 +15,8 @@ import { PROVIDERS, type ProviderId, isProviderId } from "../auth/providers.ts";
 import { UPSTREAM_TOOLS } from "../roles/types.ts";
 import { loadAuth } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictEnvironment, restrictedSettings } from "./restrict.ts";
-import { checkRuntime, readCompat } from "./runtime.ts";
+import { compiledBundle } from "./bundle.ts";
+import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { authContext, restrictProvider } from "./session.ts";
 
 /** Pi 1.3.0's own default model of each provider (`defaultModelPerProvider`, not exported). */
@@ -124,10 +125,13 @@ export async function openBare(options: BareOptions, loadSdk: () => Promise<type
   return { runtime, sessionDir, network };
 }
 
-async function main(): Promise<void> {
-  const options = parseBareArgs(process.argv.slice(2), bareAssetRoot());
+/** Runs bare Pi from `argv` on `assets` (this source tree, or a compiled host's directory). */
+export async function runBare(argv: readonly string[], assets: string): Promise<void> {
+  const options = parseBareArgs(argv, assets);
   restrictEnvironment(process.env);
-  checkRuntime(options.assets, readCompat(options.assets));
+  const compat = readCompat(options.assets);
+  if (compiledBundle()) checkCompiledRuntime(compat);
+  else checkRuntime(options.assets, compat);
   process.chdir(options.cwd);
   const loaded: { sdk?: typeof Sdk } = {};
   const bare = await openBare(options, async () => (loaded.sdk = await import("@earendil-works/pi-coding-agent")));
@@ -138,10 +142,15 @@ async function main(): Promise<void> {
   await terminal.run();
 }
 
-if (import.meta.main) {
-  main().catch((error: unknown) => {
+/** `runBare`, reporting a refusal on stderr with exit code 2. */
+export async function bareCommand(argv: readonly string[], assets: string): Promise<void> {
+  try {
+    await runBare(argv, assets);
+  } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`corral pi --bare stopped: ${message}\n`);
     process.exit(2);
-  });
+  }
 }
+
+if (import.meta.main) await bareCommand(process.argv.slice(2), bareAssetRoot());

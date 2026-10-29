@@ -453,16 +453,18 @@ a live host after verifying its pid, start time and command. Opening the PM in a
 **Plain Pi: `corral pi --bare`.** This starts unbound Pi in the current directory, inside or
 outside herdr and a corral workspace. There is no bootstrap, generation, nonce, bridge socket,
 hello, role or delivery module, and no `corral_*` tool: only Pi's own read, edit, write, bash,
-grep, find and ls. It runs the installed assets' pinned Pi SDK (after the same Bun range and lock
-checks), the corral-owned login of `--provider` (default `openai-codex`; run `corral agent
+grep, find and ls. It runs the installed assets' pinned Pi SDK: a release installation's compiled
+host runs its own bare mode (`corral-pi-host bare`) with its embedded Bun and bundled auth module,
+so no Bun is needed on PATH, and a source installation runs under Bun after the same Bun range
+and lock checks. It uses the corral-owned login of `--provider` (default `openai-codex`; run `corral agent
 login --provider <p>` first) and the same guarded fetch, restrictions and model lanes as the
 bound host: Anthropic runs through the Claude Agent SDK lane, with Claude Code's private config
 directory in `$XDG_DATA_HOME/corral/pi-native/bare/agent/claude-code/`. `--model` defaults to
 Pi's own default for the provider. Sessions are kept in
 `$XDG_DATA_HOME/corral/pi-native/bare/sessions/` (Pi's agent directory beside it), and nothing
 is written to `.corral/`. It refuses `assets_unavailable` without an installation,
-`bare_unavailable` when the installation predates `corral pi` (reinstall with `corral agent
-install`), and `credentials_unavailable` without the provider's login.
+`bare_unavailable` when a source installation predates `corral pi` (reinstall with `corral
+agent install`), and `credentials_unavailable` without the provider's login.
 
 ## What else already applies
 

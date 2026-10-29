@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BARE_DEFAULT_MODEL, BareArgsInvalid, openBare, parseBareArgs } from "../src/host/bare.ts";
 import { UPSTREAM_TOOLS } from "../src/roles/types.ts";
-import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
+import { setBundle } from "../src/host/bundle.ts";
+import fixtureAuth from "./fixtures/auth/index.ts";
+import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
 
 const originalFetch = globalThis.fetch;
 let assets: FixtureInstall;
@@ -75,4 +78,32 @@ test("bare Anthropic runs through the bound host's Claude Agent SDK lane with on
   } finally {
     install.cleanup();
   }
+}, 60_000);
+
+test("a compiled installation's bare mode uses the bundled auth: its directory has no src/ tree", async () => {
+  const compiled = mkdtempSync(join(work, "compiled-"));
+  copyFileSync(join(PACKAGE_ROOT, "compat.json"), join(compiled, "compat.json"));
+  const unused = () => { throw new Error("bare mode builds no role"); };
+  setBundle({ roles: { worker: unused, reviewer: unused, pm: unused }, delivery: {}, auth: fixtureAuth });
+  try {
+    expect(existsSync(join(compiled, "src"))).toBeFalse();
+    const options = parseBareArgs(["--cwd", cwd], compiled, { XDG_DATA_HOME: join(work, "data-compiled") });
+    const bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
+    const tools = bare.runtime.session.getAllTools().map((tool) => tool.name);
+    expect(tools.filter((name) => name.startsWith("corral_"))).toEqual([]);
+    expect([...bare.runtime.session.getActiveToolNames()].sort()).toEqual([...UPSTREAM_TOOLS].sort());
+  } finally {
+    setBundle(undefined);
+  }
+}, 60_000);
+
+test("the compiled entry routes `bare` to the bare entry, never to the bound host", () => {
+  const child = spawnSync(process.execPath, ["--no-env-file", "src/host/compiled.ts", "bare", "--cwd", "relative"], {
+    cwd: PACKAGE_ROOT, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8",
+    env: { ...process.env, XDG_DATA_HOME: join(work, "data-dispatch") },
+  });
+  const stderr = child.stderr;
+  expect(child.status).toBe(2);
+  expect(stderr).toContain("usage_error: --cwd must be an absolute directory");
+  expect(stderr).not.toContain("launch_message_invalid");
 }, 60_000);
