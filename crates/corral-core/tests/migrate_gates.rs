@@ -7,8 +7,9 @@ mod support;
 
 use std::fs;
 
+use corral_core::backend::GateAttempt;
 use corral_core::backend::{PageReq, RecordQuery, StoreBackend};
-use corral_core::{CandidateIdentity, Store};
+use corral_core::{CandidateIdentity, GateRecord, Store};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use support::{Legacy, done_task};
@@ -31,16 +32,19 @@ fn identity(task: &str, run: &str, attempt: &str) -> Value {
     })
 }
 
-fn record(identity: Value, result: &str, log: Option<&[u8]>, failed: Option<&str>) -> Value {
+fn record(
+    identity: Value,
+    result: &str,
+    log: Option<&(Vec<u8>, Value)>,
+    failed: Option<&str>,
+) -> Value {
     let mut gate = json!({
         "identity": identity, "result": result, "at": "2026-10-01T01:50:00Z", "sha": HEAD,
         "pane": "w9:p2"
     });
-    if let Some(log) = log {
+    if let Some((log, receipts)) = log {
         gate["log_sha256"] = json!(sha(log));
-        gate["commands"] = json!([{"command": "cargo test", "exit_code": 0, "log_start": 0,
-            "log_end": log.len(), "started": "2026-10-01T01:45:00Z",
-            "ended": "2026-10-01T01:50:00Z"}]);
+        gate["commands"] = receipts.clone();
     }
     if result == "running" {
         gate["process_lost"] = json!(true);
@@ -52,6 +56,9 @@ fn record(identity: Value, result: &str, log: Option<&[u8]>, failed: Option<&str
 }
 
 struct Files {
+    run: (Vec<u8>, Value),
+    aggregate: (Vec<u8>, Value),
+    checkpoint: (Vec<u8>, Value),
     run_log: Vec<u8>,
     run_result: Vec<u8>,
     run_context: Vec<u8>,
@@ -63,13 +70,35 @@ struct Files {
 /// T-004 with a passed run gate (R1) and a process-lost one (R2), and T-005 with an aggregate
 /// attempt and a checkpoint, each with the legacy files and events `main` writes.
 fn sibling_shapes(legacy: &Legacy) -> Files {
+    let run = support::gate_log(
+        &[
+            ("cargo fmt --all -- --check", "", 0),
+            (
+                "cargo test",
+                "running 3 tests\ntest result: ok. 3 passed\n",
+                0,
+            ),
+        ],
+        "pass",
+    );
+    let aggregate = support::gate_log(
+        &[("scripts/gate.sh", "==> nextest\nGate passed.\n", 0)],
+        "pass",
+    );
+    let checkpoint = support::gate_log(
+        &[("cargo test", "test result: FAILED. 1 failed\n", 101)],
+        "fail",
+    );
     let files = Files {
-        run_log: b"$ cargo test\nok\ncorral gate: pass\n".to_vec(),
+        run_log: run.0.clone(),
+        aggregate_log: aggregate.0.clone(),
+        checkpoint_log: checkpoint.0.clone(),
+        run,
+        aggregate,
+        checkpoint,
         run_result: br#"{"result":"pass","exit_code":0}"#.to_vec(),
         run_context: br#"{"tier":"quick","tests":["package(corral-core)"]}"#.to_vec(),
         lost_result: br#"{"result":"pass","exit_code":0}"#.to_vec(),
-        aggregate_log: b"$ scripts/gate.sh\ncorral gate: pass\n".to_vec(),
-        checkpoint_log: b"$ cargo test\nFAILED\ncorral gate: fail\n".to_vec(),
     };
     let path = legacy.corral.join("tasks/T-004-gates.md");
     let mut task = corral_core::parse_task_record(&done_task("T-004", "unused"), &path)
@@ -78,13 +107,8 @@ fn sibling_shapes(legacy: &Legacy) -> Files {
     task.artifacts.clear();
     let run_identity = identity("T-004", "R1", RUN_ATTEMPT);
     task.runs[0].gate = Some(
-        serde_json::from_value(record(
-            run_identity.clone(),
-            "pass",
-            Some(&files.run_log),
-            None,
-        ))
-        .unwrap(),
+        serde_json::from_value(record(run_identity.clone(), "pass", Some(&files.run), None))
+            .unwrap(),
     );
     let mut lost = task.runs[0].clone();
     lost.id = "R2".to_owned();
@@ -111,7 +135,7 @@ fn sibling_shapes(legacy: &Legacy) -> Files {
             "id": AGGREGATE, "identity": identity("T-005", "aggregate", AGGREGATE),
             "target": {"kind": "main"}, "code": false, "members": [], "started": "2026-10-01T02:00:00Z",
             "gate": record(identity("T-005", "aggregate", AGGREGATE), "pass",
-                Some(&files.aggregate_log), None)
+                Some(&files.aggregate), None)
         }))
         .unwrap(),
     );
@@ -121,7 +145,7 @@ fn sibling_shapes(legacy: &Legacy) -> Files {
         "landings": 1, "started": "2026-10-01T03:00:00Z",
         "identity": identity("T-005", "checkpoint", "C1"),
         "gate": record(identity("T-005", "checkpoint", "C1"), "fail",
-            Some(&files.checkpoint_log), Some("cargo test"))
+            Some(&files.checkpoint), Some("cargo test"))
     }]});
     legacy.put(
         "state/plan-checkpoints/T-005.json",
@@ -143,7 +167,7 @@ fn sibling_shapes(legacy: &Legacy) -> Files {
     legacy.put("state/plan-gates/T-005-C1.log", &files.checkpoint_log);
     let events = [
         json!({"ts": "2026-10-01T01:45:00Z", "task": "T-004", "kind": "gate_started",
-            "detail": {"run": "R1", "sha": HEAD, "pane": "w9:p2", "commands": ["cargo test"],
+            "detail": {"run": "R1", "sha": HEAD, "pane": "w9:p2", "commands": ["cargo fmt --all -- --check", "cargo test"],
                 "identity": run_identity}}),
         json!({"ts": "2026-10-01T01:50:00Z", "task": "T-004", "kind": "gate",
             "detail": {"run": "R1", "sha": HEAD, "result": "pass", "failed_cmd": null,
@@ -158,6 +182,19 @@ fn sibling_shapes(legacy: &Legacy) -> Files {
     }
     fs::write(legacy.corral.join("events.jsonl"), text).unwrap();
     files
+}
+
+/// Whether an attempt's migrated evidence satisfies the ordinary and aggregate validators: the
+/// log read by its key hashes to the receipt's `log_sha256`, and the command-log contract holds
+/// for the commands the row records.
+fn receipt_valid(store: &Store, row: &GateAttempt, record: &GateRecord) -> bool {
+    let Some(log) = bytes(store, row.log.as_ref()) else {
+        return false;
+    };
+    let commands: Vec<String> =
+        serde_json::from_slice(&bytes(store, Some(&row.commands)).unwrap()).unwrap();
+    record.log_sha256.as_deref() == Some(sha(&log).as_str())
+        && support::command_log_valid(&log, &commands, &record.commands, record.result)
 }
 
 fn bytes(store: &Store, blob: Option<&corral_core::blob_ref::BlobRef>) -> Option<Vec<u8>> {
@@ -202,8 +239,10 @@ fn legacy_gates_import_as_keyed_attempt_rows() {
     );
     assert_eq!(
         bytes(&store, Some(&row.commands)),
-        Some(br#"["cargo test"]"#.to_vec())
+        Some(br#"["cargo fmt --all -- --check","cargo test"]"#.to_vec())
     );
+    // And the migrated receipt passes the ordinary validator's contract.
+    assert!(receipt_valid(&store, &row, receipt));
     // And the process-lost attempt has no synthesized result: unended, its result file kept.
     let lost = store
         .gate_attempt("T-004", "R2", LOST_ATTEMPT)
@@ -227,7 +266,7 @@ fn legacy_gates_import_as_keyed_attempt_rows() {
     );
     assert_eq!(
         bytes(&store, aggregate.log.as_ref()),
-        Some(files.aggregate_log)
+        Some(files.aggregate_log.clone())
     );
     let checkpoint = store
         .gate_attempt("T-005", "checkpoint", "C1")
@@ -243,8 +282,66 @@ fn legacy_gates_import_as_keyed_attempt_rows() {
     );
     assert_eq!(
         bytes(&store, checkpoint.log.as_ref()),
-        Some(files.checkpoint_log)
+        Some(files.checkpoint_log.clone())
     );
+    // And the aggregate receipt (the aggregate `passed` contract) and the failed checkpoint's
+    // receipt hold for their migrated evidence.
+    let plan = store.get("T-005").unwrap();
+    assert!(receipt_valid(
+        &store,
+        &aggregate,
+        plan.aggregate_attempts[0].gate.as_ref().unwrap()
+    ));
+    let journal: Value = serde_json::from_slice(
+        &fs::read(legacy.corral.join("state/plan-checkpoints/T-005.json")).unwrap(),
+    )
+    .unwrap();
+    let failed: GateRecord =
+        serde_json::from_value(journal["attempts"][0]["gate"].clone()).unwrap();
+    assert!(receipt_valid(&store, &checkpoint, &failed));
+    // And the check rejects what the validators reject: a changed byte, a range that swallows
+    // the footer, a command other than the log's, and a failed receipt that exited 0.
+    let commands = vec![
+        "cargo fmt --all -- --check".to_owned(),
+        "cargo test".to_owned(),
+    ];
+    let run_record = task.runs[0].gate.as_ref().unwrap();
+    let mut tampered = files.run_log.clone();
+    let at = tampered.len() - 25;
+    tampered[at] ^= 1;
+    assert_ne!(
+        run_record.log_sha256.as_deref(),
+        Some(sha(&tampered).as_str())
+    );
+    let mut swallowed = run_record.commands.clone();
+    swallowed.last_mut().unwrap().log_end = files.run_log.len() as u64;
+    assert!(!support::command_log_valid(
+        &files.run_log,
+        &commands,
+        &swallowed,
+        corral_core::GateResult::Pass
+    ));
+    let mut renamed = plan.aggregate_attempts[0]
+        .gate
+        .as_ref()
+        .unwrap()
+        .commands
+        .clone();
+    renamed[0].command = "cargo test".to_owned();
+    assert!(!support::command_log_valid(
+        &files.aggregate_log,
+        &["cargo test".to_owned()],
+        &renamed,
+        corral_core::GateResult::Pass
+    ));
+    let mut exited_zero = failed.commands.clone();
+    exited_zero[0].exit_code = 0;
+    assert!(!support::command_log_valid(
+        &files.checkpoint_log,
+        &["cargo test".to_owned()],
+        &exited_zero,
+        corral_core::GateResult::Fail
+    ));
     // And the checkpoint journal is the Plan's `plan-checkpoints` record.
     drop(store);
     let backend = corral_core::sqlite::SqliteBackend::open(
