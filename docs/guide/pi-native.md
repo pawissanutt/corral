@@ -752,7 +752,7 @@ pane or prompt exists, and refuse with a stable code naming what is missing:
 
 | Code | Meaning |
 |---|---|
-| `vendor_refused` | The profile's vendor is not on the pi-native allowlist (`openai`, `anthropic`, `amazon-bedrock`). |
+| `vendor_refused` | The profile's vendor is not on the pi-native allowlist (`openai`, `anthropic`, `amazon-bedrock`, `llama.cpp`). |
 | `metered_vendor_not_explicit` | A metered vendor was inferred rather than explicitly set on the profile. Set `vendor = "amazon-bedrock"`. |
 | `provider_unsupported_by_host` | The vendor is on the allowlist but the installed host's `compat.json` `providers` list does not include it. A `compat.json` without `providers` declares `openai` only. |
 | `assets_unavailable` | No asset installation: `[agent] assets_dir` is unset and `corral agent install` has not run, or the directory does not exist. |
@@ -932,10 +932,10 @@ another turn starts. The nudge is tied to the turn that spent it, an earlier rep
 for a later turn, and a nudge spent before a change request is not given back. Turns you typed in
 are never nudged.
 
-**Vendors.** The allowlist admits `openai`, `anthropic` and explicit `amazon-bedrock`; a worker profile with any other vendor
+**Vendors.** The allowlist admits `openai`, `anthropic`, explicit `amazon-bedrock` and configured `llama.cpp`; a worker profile with any other vendor
 is refused `vendor_refused` before a worktree exists. A vendor also has to be one the installed
 host declares in `compat.json` `providers`; the shipped host declares `openai` and
-`anthropic` and `amazon-bedrock`, and an older installation without the list is refused
+`anthropic`, `amazon-bedrock` and `llama.cpp`, and an older installation without the list is refused
 `provider_unsupported_by_host` for Anthropic until you reinstall. Setup discovery lists only the
 vendors the installed host declares, so it does not offer an Anthropic profile the host cannot
 run. Anthropic profiles are opt-in and use subscription OAuth held only in the corral-owned Pi

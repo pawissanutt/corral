@@ -744,3 +744,19 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod local_vendor_tests {
+    use super::*;
+
+    #[test]
+    fn local_vendor_is_admitted_without_changing_cloud_vendor_policy() {
+        // Given the cloud vendors and an explicit local inference vendor.
+        for vendor in ["openai", "anthropic", "amazon-bedrock", "llama.cpp"] {
+            // When dispatch checks the vendor, then each supported route is admitted.
+            assert!(check_pi_native_vendor("configured", Some(vendor)).is_ok());
+        }
+        assert!(check_pi_native_vendor("configured", Some("unconfigured")).is_err());
+        assert!(check_pi_native_vendor("configured", None).is_err());
+    }
+}

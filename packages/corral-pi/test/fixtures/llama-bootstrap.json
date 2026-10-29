@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "root": "/fixture",
+  "store": "fixture",
+  "project": "test",
+  "role": "worker",
+  "generation": 1,
+  "bind_nonce": "fixture",
+  "pane": "p1",
+  "cwd": "/fixture",
+  "assets": "/fixture/assets",
+  "asset_sha256": "fixture",
+  "corral": "/fixture/corral",
+  "session_dir": "/fixture/session",
+  "model": "new-family/new-model.gguf",
+  "provider": "llama.cpp",
+  "capabilities": {
+    "catalog": 4,
+    "role": "worker",
+    "preset": "standard",
+    "digest": "fixture",
+    "features": {
+      "llama_cpp.enabled": {"enabled": true, "source": "role_override"}
+    },
+    "llama_cpp": {
+      "endpoint": "http://localhost:8080",
+      "discover": true,
+      "context_window": 32768,
+      "max_tokens": 8192,
+      "timeout_ms": 15000
+    }
+  }
+}
