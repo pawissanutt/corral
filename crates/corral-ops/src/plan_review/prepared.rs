@@ -108,3 +108,118 @@ pub(super) fn load(ctx: &Ctx, task: &str) -> Result<Option<Prepared>> {
         | SubmissionDisposition::Uncertain { .. } => Ok(None),
     }
 }
+
+/// Read a suspended submission's actual refusal, not just today's broader grant.
+pub(crate) fn blocker(
+    ctx: &Ctx,
+    task: &corral_core::Task,
+) -> Result<Option<(jiff::Timestamp, String)>> {
+    if task.plans.is_empty()
+        || task
+            .plans
+            .last()
+            .is_some_and(|plan| plan.approval.is_some())
+    {
+        return Ok(None);
+    }
+    let Some(prepared) = load(ctx, &task.id)? else {
+        return Ok(None);
+    };
+    let record = ctx
+        .store
+        .authorized_submission(&prepared.authorization.id)?;
+    Ok(match record.disposition {
+        SubmissionDisposition::AuthorizationRefused { reason } => Some((
+            prepared.review.at,
+            format!("Prepared plan review refused: {reason}"),
+        )),
+        SubmissionDisposition::Prepared
+        | SubmissionDisposition::Submitting
+        | SubmissionDisposition::Submitted
+        | SubmissionDisposition::Uncertain { .. } => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_core::{AuthorizedSubmission, Status, Store};
+    use serde_json::json;
+
+    #[test]
+    fn refused_preparation_is_projected_without_replaying_or_mutating_it() {
+        // Given a suspended plan review and its exact authorization journal.
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let task = store.create("Plan", None, Status::Review, "").unwrap();
+        let at: jiff::Timestamp = "2026-10-29T01:00:00Z".parse().unwrap();
+        let task = store
+            .update(&task.id, |task| {
+                task.plans.push(serde_json::from_value(json!({
+                    "id":"P1", "spec_revision":"spec",
+                    "artifact":{"run":"P1","kind":"plan","title":"Plan","path":"plan.md",
+                        "source":"/fixture/plan.md","sha256":"sha","bytes":0,"added":at},
+                    "document":{"goal":"fixture","non_goals":[],"decisions":[],
+                        "affected_paths":[],"contracts":[],"dependencies":[],
+                        "acceptance":[],"verification":[],"owner_decisions":[]}
+                }))?);
+                Ok(())
+            })
+            .unwrap();
+        let ctx = crate::resources::FixedResourceProbe::ctx(store);
+        let prepared = Prepared {
+            plan: "P1".into(),
+            artifact_sha256: "sha".into(),
+            spec_revision: "spec".into(),
+            previous_reviews: 0,
+            review: serde_json::from_value(json!({
+                "id":"PR1","reviewer":"fixture","policy_digest":"policy","at":at
+            }))
+            .unwrap(),
+            authorization: serde_json::from_value(json!({
+                "id":"a".repeat(64),"workspace":root.path(),
+                "member":{"project":"fixture","repository":root.path(),
+                    "repository_identity":"repo","contract_revision":"contract"},
+                "policy_revision":"old-policy",
+                "action":{"task":task.id,"run":"P1","attempt":"PR1",
+                    "kind":"plan_review","candidate":null,"plan":"P1","round":null},
+                "origin":{"kind":"automatic","authorization":"old-grant","revision":1}
+            }))
+            .unwrap(),
+            prompt: root.path().join("prompt.md"),
+            command: "never executed".into(),
+        };
+        prepared.save(&ctx, &task.id).unwrap();
+        let directory = ctx.store.state_dir().join("action-authorizations");
+        std::fs::create_dir_all(&directory).unwrap();
+        let journal = directory.join(format!("{}.json", prepared.authorization.id));
+        for (disposition, stopped) in [
+            (
+                SubmissionDisposition::AuthorizationRefused {
+                    reason: "policy changed".into(),
+                },
+                true,
+            ),
+            (SubmissionDisposition::Prepared, false),
+            (SubmissionDisposition::Submitted, false),
+        ] {
+            let record = AuthorizedSubmission {
+                version: 1,
+                authorization: prepared.authorization.clone(),
+                disposition,
+                authorization_history: vec![],
+            };
+            let bytes = serde_json::to_vec(&record).unwrap();
+            std::fs::write(&journal, &bytes).unwrap();
+            // When the read-only blocker projection reads the retained preparation.
+            let result = blocker(&ctx, &task).unwrap();
+            // Then only a refused, unsubmitted action is blocked, anchored to this attempt.
+            assert_eq!(result.is_some(), stopped);
+            if let Some((since, _)) = result {
+                assert_eq!(since, at);
+            }
+            assert_eq!(std::fs::read(&journal).unwrap(), bytes);
+            assert_eq!(ctx.store.get(&task.id).unwrap(), task);
+        }
+    }
+}

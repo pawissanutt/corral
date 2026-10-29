@@ -650,7 +650,7 @@ fn reconcile(
             )
         } else {
             (
-                format!("▲ {} needs you", task.id),
+                format!("▲ {} blocked", task.id),
                 excerpt
                     .as_deref()
                     .unwrap_or(note)

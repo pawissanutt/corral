@@ -16,6 +16,20 @@ use crate::theme;
 
 pub(crate) type Snapshot = Result<BTreeMap<String, Assessment>, String>;
 
+/// Visual membership only; actions and slot accounting still use the stored status.
+pub(crate) fn column(task: &Task, snapshot: &Snapshot) -> Option<corral_core::Status> {
+    let blocked = snapshot
+        .as_ref()
+        .ok()
+        .and_then(|rows| rows.get(&task.id))
+        .and_then(|assessment| corral_core::attention::blocked(task, assessment));
+    if blocked.is_some() {
+        Some(corral_core::Status::NeedsMe)
+    } else {
+        task.status.column()
+    }
+}
+
 pub(crate) fn from_board(board: corral_ops::attention::AttentionBoard) -> Snapshot {
     Ok(board
         .tasks
@@ -177,6 +191,45 @@ pub(crate) fn card_line(
     ))
 }
 
+pub(crate) fn blocked_lines(
+    condition: &Condition,
+    width: usize,
+    now: Timestamp,
+) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthStr;
+    let age = age_text(condition, now);
+    let labeled_age = format!("{age} blocked");
+    let mut lines = vec![if labeled_age.width() <= width {
+        labeled_age
+    } else {
+        age
+    }];
+    let reason = condition
+        .reason
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    lines.extend(crate::board::cards::wrap2(&reason, width));
+    let unblocker = condition.unblocker();
+    let unblocker = if unblocker.width() + 3 <= width {
+        format!("By {unblocker}")
+    } else {
+        format!("By {}", unblocker.replace(['(', ')'], ""))
+    };
+    let style = Style::new().fg(theme::YELLOW);
+    let mut lines = lines
+        .into_iter()
+        .map(|line| Line::styled(truncate(&line, width), style))
+        .collect::<Vec<_>>();
+    let chunks = crate::render::wrap::chunks(&[(unblocker, style)]);
+    lines.extend(
+        crate::render::wrap::wrap(&chunks, width)
+            .into_iter()
+            .map(Line::from),
+    );
+    lines
+}
+
 pub(crate) fn waiting(task: &Task, snapshot: &Snapshot, now: Timestamp) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled("Waiting", theme::bold())];
     let assessment = match snapshot {
@@ -216,6 +269,10 @@ pub(crate) fn waiting(task: &Task, snapshot: &Snapshot, now: Timestamp) -> Vec<L
             Style::new().fg(theme::YELLOW),
         ));
         lines.extend(ui::text_lines(&condition.reason));
+        lines.extend(ui::text_lines(&format!(
+            "Unblocker: {}",
+            condition.unblocker()
+        )));
         let since = condition.since.map_or_else(
             || "unknown".into(),
             |at| ui::local_date(at, "%Y-%m-%d %H:%M:%S %Z"),

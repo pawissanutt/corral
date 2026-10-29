@@ -301,8 +301,8 @@ fn real_reply_and_changes_streams_count_one_action_per_message() {
         })
         .unwrap();
     crate::sync_at(&world.fx.reopen(), at(1)).unwrap();
-    // In Review an escalated stage derives an unexpected stall, run recovered historically.
-    let escalation = format!("{ended}/unexpected_stall/review:escalated:{before}");
+    // The recorded escalation keeps its canonical identity even while the task is in Review.
+    let escalation = format!("{ended}/escalation/{before}");
     let opened = stats(&ctx, wide()).unwrap();
     assert_eq!(opened.conditions[&escalation].run.as_deref(), Some("R1"));
     // When the real changes path posts its request and logs it.

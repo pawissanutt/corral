@@ -100,24 +100,12 @@ fn attention_lifecycle_board_renders_only_actionable_rows_and_the_projection_cou
             println!("ATTENTION BOARD {density:?} {width}x{height}\n{screen}");
             // Then the count is independent of card visibility and every rendered row fits.
             assert!(screen.contains("overdue 2"), "{screen}");
-            assert!(screen.contains("Stall"), "{screen}");
+            assert_eq!(board.column_counts().unwrap()[3], 3);
             assert!(
                 screen
                     .lines()
                     .all(|line| line.width() <= usize::from(width))
             );
-            if density == Density::Compact && width == 160 {
-                assert!(screen.contains("Witness s"), "{screen}");
-                let title = screen
-                    .lines()
-                    .position(|line| line.contains("Witness s"))
-                    .unwrap();
-                let attention = screen
-                    .lines()
-                    .position(|line| line.contains("Stall"))
-                    .unwrap();
-                assert!(title < attention, "{screen}");
-            }
         }
     }
 }

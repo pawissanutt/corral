@@ -32,7 +32,7 @@ of the operating mode.
 An existing current-spec plan awaiting review or owner acceptance blocks
 automatic planning and ordinary manual dispatch. The refusal names the pending
 revision. `dispatch --plan` explicitly requests a replacement instead.
-On a Review or Needs me task whose latest unapproved plan has a `changes`
+On a Review or Blocked task whose latest unapproved plan has a `changes`
 verdict, `dispatch --plan` revises that plan with the verdict's notes in its
 own planner run when that run still matches the current task contract.
 Otherwise (no planner run, or the task contract changed) it starts a new
@@ -72,7 +72,7 @@ Replies reach a live planner through the usual prompt delivery path; a missing,
 exited, shell-only or terminal planner gives a plan-specific error.
 Cancellation closes the owned planner pane, ends the plan run as `cancelled`,
 releases its slot and holds automatic dispatch. It retains every plan snapshot
-and verdict. A pending plan stays in Needs me without being accepted or rejected.
+and verdict. A pending plan stays in Blocked without being accepted or rejected.
 Cancellation can also clean up an already failed planner and is idempotent.
 An approved plan run cannot be cancelled.
 Later review callbacks can record their verdicts but cannot revive the cancelled
@@ -477,7 +477,7 @@ policy; plan approval itself launches no implementation agent.
 The board shows planning stages on cards and adds
 **Plan > Plan review > Your approval > Tasks** before implementation stages.
 The detail **Plan** tab shows the snapshot, revision and verdict history,
-reviewer notes and child links. Awaiting approvals appear in Needs me and count
+reviewer notes and child links. Awaiting approvals appear in Blocked and count
 in the header's **needs you** total. Both mouse and keyboard can inspect the plan
 and approve or request changes.
 New-format plans open on their human overview: problem, goal, included changes,

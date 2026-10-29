@@ -413,7 +413,7 @@ corral plan accept T-010 --attempt A2
 `plan add-member` is owner-only, with the same entry rules as `plan member-gate`.
 The new member must be unstarted (Idea, Backlog or Ready with no runs), in the
 Plan's project, and not already in a Plan. The Plan must not be Done, Dropped or
-accepted. No existing member may be Running, Needs me or in Review, because
+accepted. No existing member may be Running, Blocked or in Review, because
 that run is bound to the current membership. A decomposed Plan's design gets
 the same member, so member-gate and scope amendments keep working. The
 addition logs one `plan_member_added` event. If a crash interrupts it,
@@ -439,7 +439,7 @@ corral plan verify T-010
 `plan move-member` is owner-only, with the same entry rules as
 `plan add-member`. The member must be unstarted (Idea, Backlog or Ready with no
 runs), and it cannot be the source Plan's last member. Neither Plan may be Done,
-Dropped or accepted, and no member of either Plan may be Running, Needs me or in
+Dropped or accepted, and no member of either Plan may be Running, Blocked or in
 Review. The task keeps its ID, holds, dependencies and criteria, and the owner's
 member gate for it moves to the target Plan. A decomposed Plan's design follows
 its tracker.

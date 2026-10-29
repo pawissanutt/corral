@@ -130,7 +130,8 @@ impl BoardView {
         self.plan_review_waits = snapshot.plan_review_waits;
         self.unreviewed = snapshot.unreviewed;
         self.plan_progress = snapshot.plan_progress;
-        self.index = index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned);
+        self.index =
+            index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned, &self.attention);
         self.index
             .usage(&self.tasks, &snapshot.ctx.store.config.limits);
         if let Some(cursor) = &mut self.shelf_cursor {

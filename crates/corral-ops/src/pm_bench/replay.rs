@@ -103,24 +103,7 @@ impl Board {
 }
 
 pub(super) fn task(observation: &PmObservation) -> Option<&str> {
-    match observation {
-        PmObservation::GateUntrusted { task, .. }
-        | PmObservation::StaleReview { task, .. }
-        | PmObservation::Question { task, .. }
-        | PmObservation::EvidenceOnly { task, .. }
-        | PmObservation::LoadFailure { task, .. }
-        | PmObservation::ReviewInFlight { task, .. }
-        | PmObservation::AutomaticWait { task, .. }
-        | PmObservation::GateNeeded { task }
-        | PmObservation::ReviewNeeded { task }
-        | PmObservation::ReadyToLand { task }
-        | PmObservation::Dispatch { task }
-        | PmObservation::PlanDecision { task, .. }
-        | PmObservation::AgentQuestion { task, .. }
-        | PmObservation::OwnerQuestion { task, .. }
-        | PmObservation::Owner { task, .. } => Some(task),
-        PmObservation::IdleIdeas { .. } => None,
-    }
+    observation.task()
 }
 
 /// A ready candidate may not land while another recorded review is running.

@@ -147,7 +147,7 @@ fn compact_cards_keep_cost_at_both_sizes_with_reported_and_subscription_labels()
     line_with(&wide, &["T-006", "sub ~$2.25"]);
     let narrow = render(&mut b, &fx, 80, 24);
     line_with(&narrow, &["004 $1.50"]);
-    line_with(&narrow, &["06 ~$2.25"]);
+    line_with(&narrow, &["6 ~$2.25"]);
 }
 
 fn entry(reported: Option<f64>, estimated: Option<f64>, unpriced_tokens: u64) -> UsageEntry {

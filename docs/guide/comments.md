@@ -33,7 +33,7 @@ Custom prompt templates receive the comments even when they have no comment plac
 corral comment T-046 "Use the existing reply path." --send
 ```
 
-`--send` requires a current running agent (Running or Needs me). It saves the comment first,
+`--send` requires a current running agent (Running or Blocked). It saves the comment first,
 then sends an owner note referencing the task file through the supported reply delivery path.
 A stuck agent queues it. A failed delivery keeps the saved comment and, once accepted by
 the reply path, its exact pending message; use `corral reply T-046 --resend` to retry that

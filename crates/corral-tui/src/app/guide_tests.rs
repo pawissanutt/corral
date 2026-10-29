@@ -132,7 +132,7 @@ fn tour_keyboard_only_walks_every_card_with_the_configured_keys() {
         "This is your board",
         "Open an agent",
         "Get back here",
-        "Needs me",
+        "Blocked",
         "Review and approve",
         "Leaving and coming back",
     ] {

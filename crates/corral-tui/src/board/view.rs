@@ -176,6 +176,10 @@ impl View for BoardView {
         self.apply_snapshot(snapshot);
     }
 
+    fn column_counts(&self) -> Option<[usize; 6]> {
+        Some(self.index.counts())
+    }
+
     fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
         self.mouse(ev, m)
     }

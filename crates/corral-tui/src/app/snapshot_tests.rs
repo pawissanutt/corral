@@ -48,21 +48,48 @@ fn worker_result_moves_card_when_store_changes_between_ticks() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let text = buffer_text(terminal.backend().buffer());
     let heading = text.lines().find(|line| line.contains("Backlog")).unwrap();
-    let review_x =
-        unicode_width::UnicodeWidthStr::width(&heading[..heading.find("Review").unwrap()]);
+    let blocked_x =
+        unicode_width::UnicodeWidthStr::width(&heading[..heading.find("Blocked").unwrap()]);
     let card_x = (0..45)
         .flat_map(|y| (0..160).map(move |x| (x, y)))
         .find(|(x, y)| matches!(app.hits.at(*x, *y), Some(Hit::Card(id)) if id == "T-002"))
         .unwrap()
         .0;
     assert!(
-        (review_x - 2..review_x + 24).contains(&usize::from(card_x)),
+        (blocked_x - 2..blocked_x + 24).contains(&usize::from(card_x)),
         "{text}"
     );
-    assert_eq!(app.counts.review, 2);
+    assert_eq!((app.counts.review, app.counts.needs), (0, 3));
 }
 
 struct RefreshCounter(Rc<Cell<usize>>);
+
+#[test]
+fn header_counts_derived_membership_on_load_and_worker_refresh() {
+    // Given a native parked run and an ordinary worker with unchanged canonical statuses.
+    let fx = crate::board::blocked_tests::parked();
+    let mut app = fx.app(Mode::Board);
+    assert_eq!((app.counts.needs, app.counts.used), (3, 2));
+    fx.ctx
+        .store
+        .update("T-004", |task| {
+            task.current_run_mut().unwrap().obligations.waits.clear();
+            Ok(())
+        })
+        .unwrap();
+    let snapshot = crate::board::BoardSnapshot::load_with_attention(
+        &fx.ctx,
+        crate::attention::load(&fx.ctx, fx.now.get()),
+    )
+    .unwrap();
+
+    // When a worker refresh resumes the parked run.
+    app.on_worker(WorkerMsg::Synced(Ok((Vec::new(), Box::new(snapshot)))));
+
+    // Then the header follows visual membership and native resumption reoccupies its slot.
+    assert_eq!((app.counts.needs, app.counts.used), (2, 3));
+    assert_eq!(fx.ctx.store.get("T-004").unwrap().status, Status::Running);
+}
 
 #[test]
 fn worker_projection_reaches_visible_detail_without_reclassification() {

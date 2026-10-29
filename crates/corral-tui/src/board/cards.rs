@@ -42,7 +42,7 @@ fn ago(ts: Timestamp, now: Timestamp) -> String {
     corral_core::age_text(now.as_second() - ts.as_second())
 }
 
-pub(super) fn wrap2(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap2(text: &str, width: usize) -> Vec<String> {
     let mut first = String::new();
     let mut rest = text;
     for (i, word) in text.split(' ').enumerate() {
@@ -426,9 +426,12 @@ pub(crate) fn card_lines(
     now: Timestamp,
     extra: CardExtra,
 ) -> Vec<Line<'static>> {
+    let blocked = extra
+        .attention
+        .and_then(|assessment| corral_core::attention::blocked(t, assessment));
     let bar = if selected {
         Span::styled("▌ ", Style::new().fg(theme::CYAN))
-    } else if t.status == Status::NeedsMe {
+    } else if blocked.is_some() || t.status == Status::NeedsMe {
         // Distinct from the selection bar so the focused card is never ambiguous.
         Span::styled("▲ ", Style::new().fg(theme::YELLOW))
     } else {
@@ -475,12 +478,25 @@ pub(crate) fn card_lines(
         None => &scan,
     };
     let card_cfg = &config.board.card;
-    let attention = extra.attention.and_then(|assessment| {
-        crate::attention::card_line(assessment, t, config, width, now).map(|mut line| {
-            line.spans.insert(0, bar.clone());
-            line
-        })
-    });
+    let blocked_lines = || {
+        blocked
+            .into_iter()
+            .flat_map(|condition| crate::attention::blocked_lines(condition, width, now))
+            .map(|mut line| {
+                line.spans.insert(0, bar.clone());
+                line
+            })
+            .collect::<Vec<_>>()
+    };
+    let attention = extra
+        .attention
+        .filter(|_| blocked.is_none())
+        .and_then(|assessment| {
+            crate::attention::card_line(assessment, t, config, width, now).map(|mut line| {
+                line.spans.insert(0, bar.clone());
+                line
+            })
+        });
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
         let plan = crate::plan::stage(t, Some(config));
         let plan = plan.map(crate::plan::PlanStage::label);
@@ -498,6 +514,7 @@ pub(crate) fn card_lines(
             route_warning,
         };
         let mut lines = vec![compact.line(bar.clone(), width, title_style)];
+        lines.extend(blocked_lines());
         if let Some(progress) = extra.plan_progress {
             for mut line in crate::plan::tracker::card_lines(progress, width) {
                 line.spans.insert(0, bar.clone());
@@ -518,6 +535,7 @@ pub(crate) fn card_lines(
             Span::styled(truncate(&t.title, width), title_style),
         ]),
     ];
+    lines.extend(blocked_lines());
     for meta in meta_lines(t, done, config, width, now, extra) {
         let mut spans = vec![bar.clone()];
         let mut used = 0;

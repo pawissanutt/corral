@@ -32,6 +32,14 @@ struct LoadCheck {
 }
 
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
+    let board = crate::attention::board(ctx, jiff::Timestamp::now())?;
+    with_assessments(ctx, &board.tasks)
+}
+
+pub(crate) fn with_assessments(
+    ctx: &Ctx,
+    assessments: &[crate::attention::TaskAssessment],
+) -> Result<Vec<PmObservation>> {
     let mut tasks = ctx.store.list()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let events = ctx.store.events_shared()?;
@@ -188,6 +196,7 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
             }
         }
     }
+    project_blocked(assessments, &mut out);
     // Each candidate's own soft/hard cap is checked below; P0 and red-main Ideas may use headroom.
     if crate::dispatch_policy::headroom_slots(ctx)? > 0 {
         let mut shortlist = Vec::new();
@@ -219,6 +228,39 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
         }
     }
     Ok(out)
+}
+
+fn project_blocked(
+    assessments: &[crate::attention::TaskAssessment],
+    observations: &mut Vec<PmObservation>,
+) {
+    for task in assessments {
+        let Some(condition) = &task.blocked else {
+            continue;
+        };
+        let mut observed = false;
+        for observation in observations.iter_mut() {
+            if observation.task() != Some(task.task.as_str()) {
+                continue;
+            }
+            observed = true;
+            if matches!(
+                observation,
+                PmObservation::ReviewInFlight { .. } | PmObservation::AutomaticWait { .. }
+            ) {
+                *observation = PmObservation::Blocked {
+                    task: task.task.clone(),
+                    condition: Box::new(condition.clone()),
+                };
+            }
+        }
+        if !observed {
+            observations.push(PmObservation::Blocked {
+                task: task.task.clone(),
+                condition: Box::new(condition.clone()),
+            });
+        }
+    }
 }
 
 fn review_observation(

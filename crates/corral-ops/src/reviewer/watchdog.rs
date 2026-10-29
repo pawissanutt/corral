@@ -344,7 +344,7 @@ pub(crate) fn reconcile_review_sampled_at(
         crate::owner_notice::notify(
             ctx,
             crate::owner_notice::newly_committed(&saved, batch)?,
-            &format!("{} needs you", id),
+            &format!("{} blocked", id),
             &reason,
             true,
         )?;

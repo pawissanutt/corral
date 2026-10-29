@@ -15,7 +15,7 @@ Goals:
 - A workspace-level PM agent turns ideas into specced tasks bound to a project (repo).
 - Dispatch a task to its own agent session (OMO, oh-my-pi, Claude Code, generic) in its own
   worktree, as a herdr pane.
-- A TUI kanban board that answers "what needs me?" first.
+- A TUI kanban board that answers "what is blocked?" first.
 - Agent outputs (plans, reports, evidence, diffs, screenshots) are tracked artifacts that can be
   pulled up at any time, even after the worktree is gone.
 
@@ -186,7 +186,7 @@ terminal tasks or bypass Review. Existing queued Backlog records migrate to Read
 next owning sync, preserving pinned routes and logging `queue_migrated`.
 
 A newly dispatched run gets `[sync] startup_grace_secs` (default 30) for its pane to
-appear in herdr's pane list. An absent pane moves the card to Needs me only after
+appear in herdr's pane list. An absent pane moves the card to Blocked only after
 that window expires, or immediately once the pane has been listed at least once.
 The sighting is persisted on the run, including idle and unknown panes.
 
@@ -223,10 +223,10 @@ evidence require a new review. The autopilot uses this path when approved tasks 
 
 Sending back goes to the same agent pane, or, when the pane is gone, to a retry run with the same
 profile whose prompt carries the request. Each send-back is a round (task `rounds`); the owner's own
-request-changes or retry resets it. Guards that hand the task to the owner (Needs me, with the
+request-changes or retry resets it. Guards that hand the task to the owner (Blocked, with the
 reason, notified): rounds above `max_rounds`, `owner_paths` touched (diff size is not a guard; the independent reviewer is the safeguard),
 task `review: owner` under an auto policy, the worktree changing during or after review. The owner
-can approve or request changes from Needs me.
+can approve or request changes from Blocked.
 
 None of this runs without authority. One workspace operating policy (`[automation]`, see
 `docs/guide/automation.md`) is either **Assist**, the default, where every start, gate, review,
@@ -396,7 +396,7 @@ herdr calls by flow:
 Verified against herdr 0.9.3: `pane.agent_status_changed`, `pane.agent_detected` and the
 `worktree.*` events exist in the API schema, and `pi` is a known agent value. Still to verify:
 that `pane.agent_status_changed` is accepted as an `[[events]]` hook without a link warning (if
-not, Needs me updates only while the board is open, plus a reconcile on open), and that OMO is
+not, Blocked updates only while the board is open, plus a reconcile on open), and that OMO is
 detected. If OMO isn't detected, its adapter reports state through `pane.report_agent`.
 
 ## 8. Agent adapters
@@ -453,9 +453,17 @@ the command; `corral open` waits for the viewer and fails with that command. The
 Principles: herdr is the room and corral the whiteboard; capture costs two seconds; attention
 comes first; jump, don't switch; agents propose and the owner disposes.
 
-Board columns: `Backlog | Ready | Running n/limit | Needs me | Review | Done` (Ideas are a Backlog
-filter behind `i`; `D` toggles the Done column). The Needs me card shows the agent's question
+Board columns: `Backlog | Ready | Running n/limit | Blocked | Review | Done` (Ideas are a Backlog
+filter behind `i`; `D` toggles the Done column). The Blocked card shows the agent's question
 excerpt.
+
+Blocked holds any stopped work that can't continue on its own, not only owner questions. The
+`needs_me` status key, events and config values keep their names. Membership is derived: a task
+is Blocked when it is parked with an unmet wait or a missing receipt, when a plan or aggregate
+reviewer is missing or not live, when an authorization is refused, when it escalated, when a
+launch failed, when an agent went idle without a report, or when a prepared action went stale.
+Each Blocked item shows its reason, its unblocker (Owner, PM, another task with that task's
+status, or corral itself) and its age.
 
 The Done column shows the most recent finished tasks, newest first: those finished within `[ui]
 done_window` (default `"7d"`, N h/d/w) and at most `[ui] done_max` (default 10). A Done card shows
@@ -622,7 +630,7 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 
 | User action | Keyboard-only path | Mouse-only path |
 |---|---|---|
-| Board: focus a column / select a card | `h/l`, `j/k`, arrows | Click column/card; header counters focus Needs me, Running, Review |
+| Board: focus a column / select a card | `h/l`, `j/k`, arrows | Click column/card; header counters focus Blocked, Running, Review |
 | Board: reach off-screen cards | `j/k`, arrows (selection scrolls into view) | Wheel over that column |
 | Board: open detail / review | `⏎` on selected card | Click selected card again or double-click |
 | Board: open card menu | `.` | Right-click card, click `⋯`, or footer `. menu` |
@@ -641,7 +649,7 @@ Footer hints wrap onto additional rows instead of hiding actions at narrower ter
 | Grant, pause, resume or withdraw Autopilot | Board `O` | Header mode status, Settings > Automation > Operating mode, or help `O` |
 | Inspect Review stage badge (gating, reviewing, landing, reviewed, blocked) | Select card then `⏎` | Click badge/card to select, again to open review |
 | Inspect autopilot change round / auto-landed result | Select Running/Done card then `⏎`; `2` for Runs | Click card, then Runs tab |
-| Handle an escalated finished run in Needs me | `⏎` opens review; `a/c/R/x` there | Click card/badge or menu review; review action buttons |
+| Handle an escalated finished run in Blocked | `⏎` opens review; `a/c/R/x` there | Click card/badge or menu review; review action buttons |
 | Activate autopilot notification | `F8/F9/F10` | Click toast; finished escalations open review, not detail/reply |
 | Toggle Ideas / Done | `i` / `D` | Column toggles or footer ideas/done |
 | Open help | `?` | Footer keys |
@@ -785,7 +793,7 @@ Captures and the PASS receipt live under `.omo/evidence/mouse/`.
 | v0 | `.corral/` store, CLI (`init new list show move edit`), board TUI over files with live file-watch, capture popup, plugin manifest with board/capture keys | The owner captures ideas and moves cards inside herdr; no agents involved |
 | v1 | Dispatch with omo + generic adapters, run records, worktrees, jump, metadata tokens, `corral done` | A task runs end to end into review with no manual pane work |
 | v2 | Artifacts: explicit add, convention scan, snapshots, viewer, global finder | Any past run's report opens in two keystrokes |
-| v3 | Status sync: hook, Needs me, inline reply, notifications, agent view, review screen + merge sheet | Blocked agents surface without watching panes |
+| v3 | Status sync: hook, Blocked, inline reply, notifications, agent view, review screen + merge sheet | Blocked agents surface without watching panes |
 | v4 | PM agent skill + workspace pane, omp and claude adapters, retry with another agent | Ideas go from chat to dispatched tasks |
 
 ## 13. Risks

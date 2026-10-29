@@ -23,6 +23,33 @@ JSON. An empty successful view means no conditions matched this selection, not
 that every task is executing. Read failures exit nonzero rather than reporting
 an empty successful assessment.
 
+## Blocked
+
+The board's **Blocked** column, `corral list`, and `corral pm next` use the same
+read-only stopping assessment. A native wait overrides stale working telemetry.
+Its dependency is shown with its current status; if it already landed but the
+wait has no receipt, the blocker names the missing receipt and PM recovery.
+Requested plan or aggregate reviews without a live reviewer, authorization
+refusals, failed launches, silent workers and escalations also appear here.
+
+Every card shows the reason, unblocker and blocked age. Unblockers can be Owner,
+PM, a dependency task with its status, or corral. Normally working agents and
+ordinary not-yet-started admission or capacity waits remain in their own columns.
+Unknown ages stay unknown. Reviewer absence comes from recorded observations,
+not a new pane probe while rendering.
+
+```sh
+corral list --status blocked
+corral list --columns id,status,blocked,title
+corral list --status blocked --json
+```
+
+This does not move tasks on disk. The stored `needs_me` key and old status and
+card-field aliases remain compatible. List JSON retains canonical `status` and
+adds `display_status`, `blocked` (the stopping condition or null), and
+`unblocker`. Current guides use the new label; retained historical reports keep
+the terminology they recorded.
+
 ## JSON version 1
 
 The top-level object has `version: 1` and `tasks`. Each task has:
@@ -31,6 +58,7 @@ The top-level object has `version: 1` and `tasks`. Each task has:
 - `conditions`: every derived condition, not only the one chosen for display.
 - `primary`: a copy of the displayed condition, or `null`.
 - `progress`: the executor, `since`, reason, and recorded liveness, or `null`.
+- `blocked`: the stopping condition, or `null` when work can continue.
 
 These fields are flattened into each task object; there is no nested
 `assessment` field.
@@ -107,7 +135,7 @@ notifications and PM availability are not the record of outstanding work:
 `corral attention` and scoped `pm next` still expose canonical conditions.
 
 Existing producer claims cover only their exact stage, message, question or
-Needs me entry episode. An earlier entry cannot cover a later question revision.
+Blocked entry episode. An earlier entry cannot cover a later question revision.
 Claims commit before transport; replay publishes pending facts but never sends
 again. A process stop between claim and send can lose a notification. A stop
 after sending but before saving its outcome is indistinguishable and is also
@@ -127,7 +155,7 @@ corral attention unpark T-128 --expected-revision 1
 ```
 
 Use the revision returned by `park` or the task's JSON, not the example revision.
-The PM and owner may park Ready, Review and Needs me tasks. Workers, reviewers
+The PM and owner may park Ready, Review and Blocked tasks. Workers, reviewers
 and callers inside a run worktree cannot park or unpark. A PM cannot remove or
 replace an owner's park. `--expected-revision` refuses an obsolete unpark request.
 Parking never changes `dispatch_hold`, and unparking never lifts that hold.
@@ -156,7 +184,7 @@ Parking blocks new automatic execution, queue admission and explicit owner
 start commands. Already-running gates and reviewers still record their results.
 Prepared work and its original authorization remain retained. Unparking allows
 normal eligibility checks to reconsider that work; it does not create authority.
-Leaving Ready, Review and Needs me clears the park in the same normalized task
+Leaving Ready, Review and Blocked clears the park in the same normalized task
 save and logs `unparked` with `by: system` and `reason: status`.
 
 Each owning sync rechecks the conditions, including when the terminal host or

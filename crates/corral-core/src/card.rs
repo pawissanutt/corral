@@ -77,7 +77,7 @@ impl CardField {
             CardField::Artifacts => "artifacts",
             CardField::Pinned => "pinned",
             CardField::Lines => "lines",
-            CardField::NeedsMe => "needs_me",
+            CardField::NeedsMe => "blocked",
         }
     }
 
@@ -94,6 +94,9 @@ impl CardField {
     }
 
     pub fn parse(s: &str) -> Option<CardField> {
+        if s.trim() == "needs_me" {
+            return Some(CardField::NeedsMe);
+        }
         CardField::ALL.into_iter().find(|f| f.key() == s.trim())
     }
 
@@ -116,7 +119,7 @@ impl CardField {
             CardField::Artifacts => "artifact count of the current run",
             CardField::Pinned => "star when the task is pinned",
             CardField::Lines => "lines added and removed by the current run",
-            CardField::NeedsMe => "why the task needs the owner",
+            CardField::NeedsMe => "why work stopped and who or what unblocks it",
         }
     }
 
@@ -285,7 +288,11 @@ impl TaskCost {
     }
 
     fn plus(&self) -> &'static str {
-        if self.partial() { "+" } else { "" }
+        if self.partial() {
+            "+"
+        } else {
+            ""
+        }
     }
 
     fn unpriced(&self) -> Option<String> {
@@ -433,7 +440,11 @@ impl CardCfg {
         } else {
             status
         };
-        let names = self.columns.get(status_key(status)).unwrap_or(&self.fields);
+        let names = (status == Status::NeedsMe)
+            .then(|| self.columns.get("blocked"))
+            .flatten()
+            .or_else(|| self.columns.get(status_key(status)))
+            .unwrap_or(&self.fields);
         names.iter().filter_map(|n| CardField::parse(n)).collect()
     }
 
@@ -452,7 +463,7 @@ impl CardCfg {
         };
         list("board.card.fields".into(), &self.fields, &mut out);
         for (col, names) in &self.columns {
-            if !Status::COLUMNS.iter().any(|s| status_key(*s) == col) {
+            if col != "blocked" && !Status::COLUMNS.iter().any(|s| status_key(*s) == col) {
                 out.push(format!("board.card.columns.{col}: unknown column"));
             }
             list(format!("board.card.columns.{col}"), names, &mut out);

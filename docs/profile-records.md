@@ -71,7 +71,7 @@ profile, its instructions and the role contract stay the same.
   Implementation continues as a linked retry run through automatic dispatch
   authority, from the run's last compatible checkpoint. The checkpoint and the
   source worktree are required even when the old pane is gone. A missing
-  handoff or missing authority becomes a precise Needs me reason and is never
+  handoff or missing authority becomes a precise Blocked reason and is never
   replayed; `corral retry` continues with the selected candidate.
 - **Reviewers.** A reviewer continues as a new review attempt with the same
   reviewer profile, on the same candidate SHA. The interrupted attempt keeps no

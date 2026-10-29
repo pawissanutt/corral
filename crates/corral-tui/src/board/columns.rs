@@ -68,6 +68,13 @@ impl BoardView {
         } else {
             right
         };
+        let right = if col == Status::NeedsMe
+            && usize::from(area.width) < title.width() + right.width() + 4
+        {
+            Span::raw("")
+        } else {
+            right
+        };
         let block = if focused {
             overlays::focused_block(title)
         } else {

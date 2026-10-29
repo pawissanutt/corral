@@ -40,7 +40,7 @@ call sites (`created`, `moved`, `dispatched`, `needs_me`, `blocked`, `replied`, 
 ## A first-day scenario
 
 You capture "Task history log" in the TUI. The PM promotes it to Ready. It dispatches; an hour in,
-the agent asks "jsonl or sqlite?" and the task goes to Needs me. You answer from the CLI. The gate
+the agent asks "jsonl or sqlite?" and the task goes to Blocked. You answer from the CLI. The gate
 passes, the reviewer approves, you land it.
 
 Today, the detail view of that task shows: the spec as it is *now*, one run, its artifacts, its
@@ -51,7 +51,7 @@ diff, and "gate pass / verdict approved". After this work, a new **Timeline** ta
 2026-10-15 09:40  edited      owner     cli      title, acceptance (+6 lines)
 2026-10-15 09:41  moved       pm        pm       idea → ready  "fits sprint"
 2026-10-15 10:02  dispatched  system    tui      R1 claude/opus, pane w3:2
-2026-10-15 11:30  needs me    agent     run:R1   "jsonl or sqlite?"          ┐ waited 1h 05m
+2026-10-15 11:30  blocked    agent     run:R1   "jsonl or sqlite?"          ┐ waited 1h 05m
 2026-10-15 12:35  replied     owner     cli      "jsonl"                     ┘
 2026-10-15 13:10  gate        system    run:R1   pass
 2026-10-15 13:14  verdict     reviewer  run:R1   approved

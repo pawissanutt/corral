@@ -234,7 +234,7 @@ fn desktop_fixture_child() {
                     entries.len(),
                     4 * (usize::from(needs_me) + usize::from(review))
                 );
-                assert_eq!(entries.iter().any(|arg| arg == "T-001: Needs me"), needs_me);
+                assert_eq!(entries.iter().any(|arg| arg == "T-001: Blocked"), needs_me);
                 assert_eq!(entries.iter().any(|arg| arg == "T-002: Review"), review);
             }
         }

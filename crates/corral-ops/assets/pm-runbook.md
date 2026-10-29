@@ -52,7 +52,7 @@
    a bounded change request, a split follow-up, a stronger investigation, or deferral.
    Do not reset rounds, raise limits, waive findings or accept on an owner's timeout.
    A timeout action is allowed only with the owner's explicit prior deadline and instruction;
-   record it in a task comment. Otherwise leave Needs me and progress independent work.
+   record it in a task comment. Otherwise leave Blocked and progress independent work.
 6. Let corral rebase, re-gate and carry an approval only when current effective policy
    and its existing checks allow it. Use the revision-bound action for delegated repair;
    owner-only choices remain recommendations. Do not rebase project code yourself,

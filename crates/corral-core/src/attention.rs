@@ -120,6 +120,24 @@ pub struct Condition {
     pub next_action: NextAction,
 }
 
+impl Condition {
+    /// Human label for the party that can remove this stopping condition.
+    pub fn unblocker(&self) -> String {
+        match self.responsible {
+            Responsible::Owner => "Owner".into(),
+            Responsible::Pm => "PM".into(),
+            Responsible::Executor | Responsible::External => {
+                if self.resume.iter().any(|check| check.kind == "task_status")
+                    && let Some(recipient) = &self.next_action.recipient
+                {
+                    return recipient.clone();
+                }
+                "corral".into()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
     pub executor: String,
@@ -134,6 +152,78 @@ pub struct Assessment {
     pub progress: Option<Progress>,
     /// A copy of a condition, not a second identity or a resolution rule.
     pub primary: Option<Condition>,
+}
+
+/// Select the primary stopping condition without mistaking admission or capacity for a stall.
+pub fn blocked<'a>(task: &crate::Task, assessment: &'a Assessment) -> Option<&'a Condition> {
+    use crate::Status;
+    if matches!(task.status, Status::Idea | Status::Done | Status::Dropped) {
+        return None;
+    }
+    if matches!(task.status, Status::Backlog | Status::Ready)
+        && task.current_run().is_none()
+        && task.plan_runs.is_empty()
+        && task.plans.is_empty()
+        && !task.tracker
+        && task.park.is_none()
+        && task
+            .launch
+            .as_ref()
+            .is_none_or(|launch| launch.error.is_none())
+    {
+        return None;
+    }
+    let stopping = |condition: &&Condition| {
+        if condition.kind == "question_open"
+            && task.current_run().is_some_and(|run| {
+                std::iter::once(run)
+                    .chain(&run.review_runs)
+                    .filter_map(|run| run.agent_host.as_ref())
+                    .flat_map(|host| &host.questions)
+                    .any(|question| {
+                        !question.blocking
+                            && condition.resume.iter().any(|check| {
+                                check.kind == "question_answered"
+                                    && check.target.as_deref() == Some(question.key.as_str())
+                            })
+                    })
+            })
+        {
+            return false;
+        }
+        if matches!(
+            condition.class,
+            WaitClass::Capacity | WaitClass::NotScheduled
+        ) {
+            return false;
+        }
+        assessment.progress.is_none()
+            || task.status == Status::NeedsMe
+            || matches!(
+                condition.kind.as_str(),
+                "obligation_wait"
+                    | "decision_pending"
+                    | "question_escalated"
+                    | "question_unattended"
+                    | "escalation"
+                    | "infra_escalation"
+                    | "launch_failed"
+                    | "silent_turn"
+                    | "review_turn_without_verdict"
+                    | "agent_lost"
+                    | "stuck_process"
+                    | "parked"
+                    | "park_resume_ready"
+                    | "park_review_due"
+                    | "plan_reviewer_missing"
+                    | "aggregate_reviewer_missing"
+            )
+    };
+    assessment
+        .primary
+        .as_ref()
+        .filter(stopping)
+        .or_else(|| assessment.conditions.iter().find(stopping))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -209,16 +209,38 @@ pub(super) fn list(
         Some(input) => corral_ops::search_tasks(&ctx.store, input)?,
         None => ctx.store.list()?,
     };
+    let assessment = if want.is_some() || json {
+        Some(corral_ops::attention::board(ctx, jiff::Timestamp::now())?)
+    } else {
+        None
+    };
+    let blocked = |t: &Task| {
+        assessment
+            .as_ref()
+            .and_then(|board| board.tasks.iter().find(|row| row.task == t.id))
+            .and_then(|row| corral_core::attention::blocked(t, &row.assessment))
+    };
     let tasks: Vec<Task> = tasks
         .into_iter()
         .filter(|t| match want {
-            Some(s) => t.status == s,
+            Some(Status::NeedsMe) => blocked(t).is_some(),
+            Some(s) => t.status == s && blocked(t).is_none(),
             None => query.is_some() || all || !matches!(t.status, Status::Done | Status::Dropped),
         })
         .filter(|t| project.is_none_or(|p| t.project.as_deref() == Some(p)))
         .collect();
     if json {
-        let v: Vec<_> = tasks.iter().map(|t| task_json(t, false)).collect();
+        let v: Vec<_> = tasks
+            .iter()
+            .map(|t| {
+                let mut value = task_json(t, false);
+                let condition = blocked(t);
+                value["display_status"] = condition.map_or(t.status.label(), |_| "Blocked").into();
+                value["blocked"] = serde_json::json!(condition);
+                value["unblocker"] = serde_json::json!(condition.map(|c| c.unblocker()));
+                value
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&v)?);
         return Ok(());
     }

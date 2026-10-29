@@ -648,7 +648,7 @@ fn retry_with(
         Status::Review | Status::NeedsMe | Status::Running
     ) {
         bail!(
-            "{} is {}; only Running, Needs me and Review tasks can be retried",
+            "{} is {}; only Running, Blocked and Review tasks can be retried",
             task.id,
             task.status.label()
         );

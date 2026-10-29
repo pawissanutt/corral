@@ -124,22 +124,8 @@ fn tracker_dispatch_is_absent_from_hints_and_menu_and_refused_by_key() {
             })
             .unwrap();
         let mut board = fx.board();
-        board.col = board
-            .columns()
-            .iter()
-            .position(|s| {
-                *s == if status == Status::Idea {
-                    Status::Backlog
-                } else {
-                    status
-                }
-            })
-            .unwrap();
-        board.row = board
-            .column_tasks(board.columns()[board.col])
-            .iter()
-            .position(|t| t.id == TRACKER)
-            .unwrap();
+        board.selected = Some(TRACKER.into());
+        board.restore_selection();
         assert_eq!(board.selected_task().unwrap().id, TRACKER);
         assert!(!board.hints().iter().any(|(key, _)| *key == "d"));
         board.on_key(key('.'), &fx.ctx);

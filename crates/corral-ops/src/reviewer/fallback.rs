@@ -108,7 +108,7 @@ fn escalate(
         crate::owner_notice::notify(
             ctx,
             crate::owner_notice::newly_committed(&saved, batch)?,
-            &format!("{} needs you", task.id),
+            &format!("{} blocked", task.id),
             note,
             true,
         )?;

@@ -115,14 +115,14 @@ impl Status {
         Status::Done,
     ];
 
-    /// Human label: "Idea", "Backlog", "Ready", "Running", "Needs me", "Review", "Done", "Dropped".
+    /// Human label; the legacy `needs_me` storage status is displayed as Blocked.
     pub fn label(self) -> &'static str {
         match self {
             Status::Idea => "Idea",
             Status::Backlog => "Backlog",
             Status::Ready => "Ready",
             Status::Running => "Running",
-            Status::NeedsMe => "Needs me",
+            Status::NeedsMe => "Blocked",
             Status::Review => "Review",
             Status::Done => "Done",
             Status::Dropped => "Dropped",
@@ -143,7 +143,7 @@ impl Status {
         }
     }
 
-    /// Parses snake_case names and labels, case-insensitive; "needs-me", "needsme", "needs me" all map to NeedsMe.
+    /// Parses labels and storage names, retaining legacy aliases for Blocked.
     pub fn parse(s: &str) -> Option<Status> {
         let k: String = s
             .trim()
@@ -156,7 +156,7 @@ impl Status {
             "backlog" => Status::Backlog,
             "ready" => Status::Ready,
             "running" => Status::Running,
-            "needsme" => Status::NeedsMe,
+            "blocked" | "needsme" => Status::NeedsMe,
             "review" => Status::Review,
             "done" => Status::Done,
             "dropped" | "drop" => Status::Dropped,

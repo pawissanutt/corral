@@ -121,7 +121,7 @@ fn done_inner(
     }
     if !matches!(task.status, Status::Running | Status::NeedsMe) {
         bail!(
-            "task {} is {}; only Running or Needs me tasks can be marked done",
+            "task {} is {}; only Running or Blocked tasks can be marked done",
             task.id,
             task.status.label()
         );

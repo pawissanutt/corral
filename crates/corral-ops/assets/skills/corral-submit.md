@@ -16,7 +16,7 @@ slot. File only what you would be content to see run, and never dispatch what yo
 1. `corral search "<keywords>" --in all` covers specs, reviews and artifacts; add `--json` to script it.
 2. `corral list --json --all` lists every task, including Done and Dropped ones; `corral list --query "<keywords>"`
    searches all statuses in relevance order.
-3. Check open tasks (Idea, Backlog, Ready, Running, Needs me, Review) for overlap in goal **and** in files:
+3. Check open tasks (Idea, Backlog, Ready, Running, Blocked, Review) for overlap in goal **and** in files:
    a conflicting open task is a reason to `corral comment <id> "<text>"` on it, or to file with `--depends`,
    rather than to file a rival. A Done task that already shipped the behavior means there is nothing to file.
 4. Inspect candidates with `corral show <id> --json`. Importing the same plan file again is refused

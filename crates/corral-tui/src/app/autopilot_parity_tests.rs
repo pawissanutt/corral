@@ -105,7 +105,7 @@ fn input_parity_review_badges_open_the_same_review_with_either_input() {
 
 #[test]
 fn input_parity_escalated_menu_offers_review_not_a_reply_to_a_finished_run() {
-    // Given a finished run escalated to Needs me.
+    // Given a finished run escalated to Blocked.
     let fx = seeded();
     fx.ctx
         .store

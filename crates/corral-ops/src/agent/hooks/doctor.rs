@@ -234,7 +234,7 @@ pub(crate) fn checks_with(
         QuestionWakeRoute::None => format!(
             "pi-native question wakes have no push route (no Pi-native PM bound, no OmO PM push of \
              question_opened); OmO PM watchers wake through `corral wait` on question_opened, and \
-             a blocking question reaches Needs me after {}s (agent.question_unattended_secs, 600 \
+             a blocking question reaches Blocked after {}s (agent.question_unattended_secs, 600 \
              by default)",
             ctx.store.config.agent.question_unattended_secs
         ),
@@ -316,7 +316,7 @@ mod tests {
         for part in [
             "have no push route",
             "OmO PM watchers wake through `corral wait` on question_opened",
-            "a blocking question reaches Needs me after 600s",
+            "a blocking question reaches Blocked after 600s",
             "agent.question_unattended_secs, 600 by default",
         ] {
             assert!(wake.message.contains(part), "{}", wake.message);

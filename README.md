@@ -18,7 +18,7 @@ An example conversation, after setting up checks and a reviewer:
 > **The board:** Running → Review → Done, after the configured checks, a separate review,
 > and your approval. Questions or failed checks come back with a reason and evidence.
 
-![The corral board, with tasks in Backlog, Ready, Running, Needs me and Review](docs/img/board.svg)
+![The corral board, with tasks in Backlog, Ready, Running, Blocked and Review](docs/img/board.svg)
 
 *Real board capture in an isolated demo workspace, not corral's own task history.*
 
@@ -114,9 +114,9 @@ Keep intent, scope and authority with you; let the PM handle the mechanics:
 - **Destructive actions.** Give explicit authorization for destructive recovery or cleanup rather
   than treating a suggestion or board notification as consent.
 
-The PM asks questions in its pane. Blocked workers and review escalations appear in **Needs me** on
-the board with a reason; select a card and press `r` to reply. Runs awaiting owner acceptance remain
-in **Review**. Idea promotion is owner-controlled today; Ready-task admission can be configured, but
+The PM asks questions in its pane. Stopped workers, missing reviewers, unresolved waits and owner
+decisions appear in **Blocked**, with a reason, unblocker and age. Select a card to inspect it;
+`r` replies when the agent is waiting for input. Idea promotion is owner-controlled today; Ready-task admission can be configured, but
 does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-boundaries).
 
 ## Safety model
@@ -129,7 +129,7 @@ does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-bound
 - **Automation needs your grant.** The default mode is Assist, with no gate, no reviewer and owner
   acceptance. Automatic work needs a confirmed, finite Autopilot grant; legacy settings such as
   `[review] autopilot` or `accept = "auto"` never grant it. Configured checks, independent review,
-  protected paths and review-round guards still apply and can send work to Needs me.
+  protected paths and review-round guards still apply and can send work to Blocked.
   `corral mode pause` (alias `corral autopilot off`) stops every new automatic action across the
   workspace without killing running agents.
 - **Safe branch deletion.** Merged task branches use `git branch -d`, which refuses unmerged work.
