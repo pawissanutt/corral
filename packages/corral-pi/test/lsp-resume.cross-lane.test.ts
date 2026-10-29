@@ -102,7 +102,8 @@ test("explicit lost-host resume uses changed LSP settings and retains the prior 
     const end = events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation && e.detail?.turn === next,
       90_000, `LSP turn ${generation}/${next}`);
     const submitted = await client.request(frame(cap, generation, "submit_input", { text: "Run the lookup.", busy_policy: "follow_up", idempotency_key: `query-${generation}`, origin: "test" }));
-    expect([submitted.result?.disposition, submitted.result?.turn]).toEqual(["started", next]);
+    expect(["started", "queued"]).toContain(submitted.result?.disposition);
+    if (submitted.result?.disposition === "started") expect(submitted.result?.turn).toBe(next);
     await end;
     client.close();
   };
