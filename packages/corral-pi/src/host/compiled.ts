@@ -53,6 +53,10 @@ async function runHost(): Promise<void> {
 }
 
 restrictEnvironment(process.env);
+// Pi deliberately hides OAuth flow imports from bundlers. Its standalone loader embeds
+// those modules and registers them before login, auth derivation, or token refresh.
+const { registerBunOAuthFlows } = await import("@earendil-works/pi-ai/bun-oauth");
+registerBunOAuthFlows();
 const [command, operand] = process.argv.slice(2);
 if (command === "--version") {
   process.stdout.write(`corral-pi-host pi ${compat.pi.version} bun ${process.versions.bun}\n`);
