@@ -26,8 +26,14 @@ fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<Task> {
     })
 }
 
-/// Reclaim a failed launch only after its old owner released the kernel lock.
-pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
+/// Reclaim a failed launch only after its old owner released the kernel lock. `owner` is an
+/// explicit owner request, the only caller that may renew a stale owner approval.
+pub(crate) fn resume(
+    ctx: &Ctx,
+    task: &Task,
+    force_resources: bool,
+    owner: bool,
+) -> Result<DispatchOutcome> {
     let claim = task.launch.as_ref().context("no launch to resume")?;
     // Submission cannot be replayed safely: IPC may have succeeded before the receipt.
     if claim.stage == LaunchStage::Submitting {
@@ -39,9 +45,19 @@ pub(crate) fn resume(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<Di
         release(ctx, task, &error)?;
         return Err(error);
     };
-    if crate::operating::is_automatic(&authorization)
-        && crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch).is_ok()
-    {
+    if !crate::operating::is_automatic(&authorization) {
+        if crate::operating::owner_consent_drift(ctx, &authorization)?.is_some() {
+            if !owner {
+                return hold_stale_owner(ctx, task);
+            }
+            // A fresh owner request is fresh consent to the current policy (T-549, T-560).
+            authorization = crate::operating::authorize(
+                ctx,
+                authorization.action.clone(),
+                crate::operating::Origin::Owner,
+            )?;
+        }
+    } else if crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch).is_ok() {
         authorization = crate::operating::authorize(
             ctx,
             authorization.action.clone(),
@@ -112,7 +128,50 @@ fn validate_execution(ctx: &Ctx, task: &Task) -> Result<()> {
     Ok(())
 }
 
+/// Keep an owner-queued launch whose approval drifted under a policy or contract change as one
+/// stable Blocked launch error, with no IPC and no retry, until the owner explicitly
+/// re-authorizes it (T-560). Automatic callers never renew owner consent.
+fn hold_stale_owner(ctx: &Ctx, task: &Task) -> Result<DispatchOutcome> {
+    let claim = task.launch.as_ref().context("launch missing")?;
+    let authorization = claim
+        .authorization
+        .as_ref()
+        .context("launch authority missing")?;
+    let reason = crate::operating::owner_consent_drift(ctx, authorization)?
+        .context("owner consent is current")?;
+    let message = crate::operating::stale_owner_queue(&task.id, reason);
+    if !claim.reserved && claim.error.as_deref() == Some(message.as_str()) {
+        return Ok(DispatchOutcome::Queued {
+            task: task.clone(),
+            reason: message,
+        });
+    }
+    let held = ctx.store.update(&task.id, |t| {
+        let launch = t
+            .launch
+            .as_mut()
+            .context("launch reservation disappeared")?;
+        launch.reserved = false;
+        launch.error = Some(message.clone());
+        Ok(())
+    })?;
+    ctx.store.log_event(
+        Some(&task.id),
+        "owner_consent_stale",
+        json!({"run": task.current_run().map(|r| &r.id), "reason": message}),
+    )?;
+    Ok(DispatchOutcome::Queued {
+        task: held,
+        reason: message,
+    })
+}
+
 pub(crate) fn launch(ctx: &Ctx, task: &Task, force_resources: bool) -> Result<DispatchOutcome> {
+    if let Some(authorization) = task.launch.as_ref().and_then(|l| l.authorization.as_ref())
+        && crate::operating::owner_consent_drift(ctx, authorization)?.is_some()
+    {
+        return hold_stale_owner(ctx, task);
+    }
     match advance(ctx, task, force_resources) {
         Ok(outcome) => Ok(outcome),
         Err(error) => {

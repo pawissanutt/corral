@@ -174,17 +174,53 @@ impl Store {
         match self.authorized_submission(&authorization.id)?.disposition {
             SubmissionDisposition::AuthorizationRefused { .. } => Ok(true),
             SubmissionDisposition::Prepared => {
-                let config = self.operating_config()?;
-                let task = self.get(&authorization.action.task)?;
-                Ok(
-                    authorization.member != self.operating_member(&config, &task)?
-                        || authorization.policy_revision != self.policy_revision(&config)?,
-                )
+                Ok(self.operating_consent_drift(authorization)?.is_some())
             }
             SubmissionDisposition::Submitting
             | SubmissionDisposition::Submitted
             | SubmissionDisposition::Uncertain { .. } => Ok(false),
         }
+    }
+
+    /// The pre-T-560 revision format, which also digested `limits`. Only the identical
+    /// configuration reproduces it, so an approval carrying it was granted under exactly the
+    /// current policy and is carried across the format change without renewal.
+    fn legacy_policy_revision(&self, config: &Config) -> Result<String> {
+        let config = config.policy_view();
+        let mut dispatch = config.dispatch.clone();
+        dispatch.paused = false;
+        digest(&(
+            self.root(),
+            &config.automation,
+            &config.review,
+            &dispatch,
+            &config.projects,
+            &config.limits,
+            &config.resources,
+        ))
+    }
+
+    /// Whether `revision` names the current policy, in the current or the pre-T-560 format.
+    pub(crate) fn policy_revision_current(&self, config: &Config, revision: &str) -> Result<bool> {
+        Ok(revision == self.policy_revision(config)?
+            || revision == self.legacy_policy_revision(config)?)
+    }
+
+    /// Why an authorization no longer matches the current task contract or policy revision,
+    /// as the final submission check would report it; `None` while it still matches.
+    pub fn operating_consent_drift(
+        &self,
+        authorization: &ActionAuthorization,
+    ) -> Result<Option<&'static str>> {
+        let config = self.operating_config()?;
+        let task = self.get(&authorization.action.task)?;
+        if authorization.member != self.operating_member(&config, &task)? {
+            return Ok(Some("action task contract or project identity changed"));
+        }
+        if !self.policy_revision_current(&config, &authorization.policy_revision)? {
+            return Ok(Some("action policy revision changed"));
+        }
+        Ok(None)
     }
 
     pub fn operating_state(&self) -> Result<crate::OperatingState> {

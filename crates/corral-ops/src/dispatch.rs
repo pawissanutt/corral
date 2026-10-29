@@ -132,7 +132,8 @@ fn dispatch_with(
         bail!("{} is no longer authorized for queued dispatch", task.id);
     }
     if task.launch.is_some() {
-        return crate::launch::resume(ctx, &task, opts.force_resources);
+        let owner = matches!(admission, Admission::Manual);
+        return crate::launch::resume(ctx, &task, opts.force_resources, owner);
     }
     let opts = &DispatchOpts {
         plan: admission.plan_requested(&task, opts),
