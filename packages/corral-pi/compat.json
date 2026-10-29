@@ -50,6 +50,11 @@
   ],
   "capabilities": [
     "todo",
-    "web.enabled"
+    "web.enabled",
+    "context_files",
+    "skills",
+    "prompt_templates",
+    "compaction",
+    "session_export"
   ]
 }

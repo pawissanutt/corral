@@ -6,9 +6,17 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::AgentRole;
 use super::paths::sha256_hex;
+use crate::config::agent_capabilities::{compaction_settings, skill_settings, template_settings};
+
+/// A configured settings table, or the effective settings a snapshot records.
+pub type CapabilitySettings = BTreeMap<String, Value>;
+
+/// Validates a configured table (without `enabled`) and returns the effective settings.
+pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
 pub const CAPABILITY_CATALOG_VERSION: u32 = 2;
@@ -19,6 +27,10 @@ pub struct CapabilityDef {
     pub key: &'static str,
     pub summary: &'static str,
     pub defaults: fn(AgentRole) -> Option<[bool; 3]>,
+    /// The installed Pi host must implement it; a Rust-side feature (lessons) never needs it.
+    pub host: bool,
+    /// Settings beside `enabled`; `None` means the key is a plain boolean.
+    pub settings: Option<SettingsFn>,
 }
 
 /// Every capability Corral resolves. Each later member registers its own implemented key here.
@@ -27,13 +39,63 @@ pub const CATALOG: &[CapabilityDef] = &[
         key: "todo",
         summary: "corral_todo progress ledger",
         defaults: todo_defaults,
+        host: true,
+        settings: None,
     },
     CapabilityDef {
         key: "web.enabled",
         summary: "GET-only web fetch and search",
         defaults: web_defaults,
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
+        key: "context_files",
+        summary: "AGENTS.md/CLAUDE.md from a trusted project",
+        defaults: optional_text,
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
+        key: "skills",
+        summary: "Agent Skills from user_dirs and a trusted project",
+        defaults: optional_text,
+        host: true,
+        settings: Some(skill_settings),
+    },
+    CapabilityDef {
+        key: "prompt_templates",
+        summary: "prompt templates from user_dirs and a trusted project",
+        defaults: optional_text,
+        host: true,
+        settings: Some(template_settings),
+    },
+    CapabilityDef {
+        key: "compaction",
+        summary: "automatic compaction and branch-summary settings",
+        defaults: |_| Some([true, true, true]),
+        host: true,
+        settings: Some(compaction_settings),
+    },
+    CapabilityDef {
+        key: "lessons",
+        summary: "project lessons in the dispatch prompt",
+        defaults: |role| (role != AgentRole::Pm).then_some([true, true, true]),
+        host: false,
+        settings: None,
+    },
+    CapabilityDef {
+        key: "session_export",
+        summary: "/corral-export offline HTML session artifact",
+        defaults: |role| (role != AgentRole::Pm).then_some([false, true, true]),
+        host: true,
+        settings: None,
     },
 ];
+
+fn optional_text(_: AgentRole) -> Option<[bool; 3]> {
+    Some([false, true, true])
+}
 
 fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
@@ -118,6 +180,9 @@ pub struct CapabilityState {
     /// Requested but omitted because the installed host does not implement it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<String>,
+    /// Effective settings of an enabled key that takes them; part of the digest.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub settings: CapabilitySettings,
 }
 
 /// The effective per-role settings of one generation. `digest` covers every other field.
@@ -130,6 +195,10 @@ pub struct CapabilitySnapshot {
     pub features: BTreeMap<String, CapabilityState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<WebSettings>,
+    /// The project-text trust decision (`trusted_projects`) for the launched project; absent
+    /// when no project was resolved (doctor) or in a snapshot that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_text: Option<bool>,
     pub digest: String,
 }
 
@@ -141,6 +210,8 @@ struct Canonical<'a> {
     features: &'a BTreeMap<String, CapabilityState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     web: Option<&'a WebSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_text: Option<bool>,
 }
 
 /// One setting that differs between two generations; `None` means absent from that snapshot.
@@ -149,6 +220,9 @@ pub struct CapabilityChange {
     pub key: String,
     pub from: Option<bool>,
     pub to: Option<bool>,
+    /// The key's effective settings differ, whatever its enabled state.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub settings: bool,
 }
 
 /// Recorded on a generation whose snapshot differs from its predecessor's. The predecessor's
@@ -177,7 +251,7 @@ impl CapabilitySnapshot {
         preset: SnapshotPreset,
         features: BTreeMap<String, CapabilityState>,
     ) -> Self {
-        Self::with_web(role, preset, features, None)
+        Self::resolved(role, preset, features, None, None)
     }
 
     pub fn with_web(
@@ -185,6 +259,17 @@ impl CapabilitySnapshot {
         preset: SnapshotPreset,
         features: BTreeMap<String, CapabilityState>,
         web: Option<WebSettings>,
+    ) -> Self {
+        Self::resolved(role, preset, features, web, None)
+    }
+
+    /// A snapshot with web settings (kept only while web is enabled) and project-text trust.
+    pub fn resolved(
+        role: AgentRole,
+        preset: SnapshotPreset,
+        features: BTreeMap<String, CapabilityState>,
+        web: Option<WebSettings>,
+        project_text: Option<bool>,
     ) -> Self {
         let web = web.filter(|_| {
             features
@@ -197,6 +282,7 @@ impl CapabilitySnapshot {
             preset,
             features: &features,
             web: web.as_ref(),
+            project_text,
         };
         // A derived Serialize over fixed fields and a BTreeMap cannot fail.
         let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
@@ -206,21 +292,24 @@ impl CapabilitySnapshot {
             preset,
             features,
             web,
+            project_text,
             digest: sha256_hex(&bytes),
         }
     }
 
-    /// A generation recorded before the catalog: optional features are off except the
-    /// wave-0 todo flag it recorded. Nothing about it is reconstructed or refused.
+    /// A generation recorded before the catalog: optional features take their strict values
+    /// (what such a host ran: upstream compaction and prompt lessons) except the wave-0 todo
+    /// flag it recorded. Nothing about it is reconstructed or refused.
     pub fn legacy(role: AgentRole, todo: bool) -> Self {
         let features = CATALOG
             .iter()
-            .filter(|def| (def.defaults)(role).is_some())
-            .map(|def| {
+            .filter_map(|def| Some((def, (def.defaults)(role)?)))
+            .map(|(def, defaults)| {
                 let state = CapabilityState {
-                    enabled: def.key == "todo" && todo,
+                    enabled: if def.key == "todo" { todo } else { defaults[0] },
                     source: CapabilitySource::Legacy,
                     unavailable: None,
+                    settings: CapabilitySettings::new(),
                 };
                 (def.key.to_owned(), state)
             })
@@ -268,12 +357,15 @@ impl CapabilitySnapshot {
         let changes = keys
             .into_iter()
             .filter_map(|key| {
-                let from = previous.features.get(key).map(|state| state.enabled);
-                let to = self.features.get(key).map(|state| state.enabled);
-                (from != to).then(|| CapabilityChange {
+                let (old, new) = (previous.features.get(key), self.features.get(key));
+                let from = old.map(|state| state.enabled);
+                let to = new.map(|state| state.enabled);
+                let settings = old.map(|state| &state.settings) != new.map(|state| &state.settings);
+                (from != to || settings).then(|| CapabilityChange {
                     key: key.clone(),
                     from,
                     to,
+                    settings,
                 })
             })
             .collect();
@@ -342,10 +434,15 @@ impl CapabilityTransition {
                     None => "absent",
                 };
                 format!(
-                    "{} {} -> {}",
+                    "{} {} -> {}{}",
                     change.key,
                     side(change.from),
-                    side(change.to)
+                    side(change.to),
+                    if change.settings {
+                        " (settings changed)"
+                    } else {
+                        ""
+                    }
                 )
             })
             .collect();

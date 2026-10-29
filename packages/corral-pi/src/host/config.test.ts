@@ -40,6 +40,23 @@ test("a capability snapshot decides todo and is kept whole; keys this host lacks
   }
 });
 
+test("snapshot settings and project-text trust reach the host; a corral without them sends none", () => {
+  // Given a snapshot with compound settings and a trust decision, and one from an older corral:
+  const capabilities = { catalog: 1, digest: "d".repeat(64), preset: "standard", enabled: ["skills", "compaction"] };
+  const settings = { skills: { user_dirs: ["~/.agents/skills"] }, compaction: { reserve_tokens: 1 } };
+  const parsed = parseLaunchMessage(JSON.stringify({ ...message, capabilities: { ...capabilities, settings, project_text: true } }));
+  // Then the host keeps both, an older snapshot carries no guidance, and malformed values refuse.
+  expect(parsed.guidance).toEqual({ settings, projectText: true });
+  expect(parsed.capabilities).toEqual(capabilities);
+  expect(parseLaunchMessage(JSON.stringify({ ...message, capabilities })).guidance).toBeUndefined();
+  for (const invalid of [
+    { settings: [], project_text: true }, { settings: { skills: [] }, project_text: true }, { settings: {}, project_text: "yes" },
+  ]) {
+    expect(() => parseLaunchMessage(JSON.stringify({ ...message, capabilities: { ...capabilities, ...invalid } })))
+      .toThrow(LaunchMessageInvalid);
+  }
+});
+
 test("compat.json advertises exactly the capabilities this host implements", () => {
   const compat = JSON.parse(readFileSync(fileURLToPath(new URL("../../compat.json", import.meta.url)), "utf8"));
   expect(compat.capabilities).toEqual([...HOST_CAPABILITIES]);

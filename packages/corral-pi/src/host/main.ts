@@ -82,6 +82,8 @@ async function main(): Promise<void> {
     ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
+    ...(config.guidance ? { guidance: config.guidance } : {}),
+    root: config.root, exportDir: join(config.sessionDir, "exports"),
     modules, client, events, network,
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
   });

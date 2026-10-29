@@ -383,3 +383,29 @@ fn bedrock_million_token_session_prices_at_catalog_input_plus_output() {
         );
     }
 }
+
+#[test]
+fn compaction_and_branch_summary_usage_counts_once_toward_the_run() {
+    // Given the fixture session plus a compaction and a branch summary that recorded their own
+    // request usage, one compaction without usage, and the summary lines repeated as a copy would:
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-worker");
+    let compaction = r#"{"type":"compaction","id":"cmp1","parentId":"x","timestamp":"2026-10-29T00:00:01Z","summary":"s","firstKeptEntryId":"x","tokensBefore":9,"usage":{"input":700,"output":70,"cacheRead":7,"cacheWrite":0,"cost":{"total":0.01}}}"#;
+    let branch = r#"{"type":"branch_summary","id":"bs1","parentId":"x","timestamp":"2026-10-29T00:00:02Z","fromId":"x","summary":"b","usage":{"input":300,"output":30,"cacheRead":0,"cacheWrite":3}}"#;
+    let unpriced = r#"{"type":"compaction","id":"cmp0","parentId":"x","timestamp":"2026-10-29T00:00:00Z","summary":"s","firstKeptEntryId":"x","tokensBefore":9}"#;
+    let mut lines = fixture_lines().0;
+    lines.extend([unpriced, compaction, branch, compaction, branch]);
+    write_session(&host.sessions.join("session.jsonl"), &lines);
+    // When usage is collected twice:
+    let run = task(&fx, &id).runs[0].clone();
+    let first = collect(&run, &fx.ctx.store).unwrap();
+    let second = collect(&run, &fx.ctx.store).unwrap();
+    // Then each summary request is added exactly once to the assistant totals.
+    let [input, output, cache_read, cache_write] = totals();
+    assert_eq!(
+        tokens(&first),
+        [input + 1000, output + 100, cache_read + 7, cache_write + 3]
+    );
+    assert_eq!(tokens(&second), tokens(&first));
+}

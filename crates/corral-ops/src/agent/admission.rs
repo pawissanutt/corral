@@ -436,12 +436,19 @@ pub fn open_generation_with(
     supported: Option<&BTreeSet<String>>,
 ) -> Result<GenerationGrant> {
     // Settings resolve once per generation; an explicit request the host lacks refuses
-    // before any record changes, while an unavailable default is only reported.
-    let capabilities = store
-        .config
-        .agent
-        .capabilities
-        .resolve(target.role(), supported);
+    // before any record changes, while an unavailable default is only reported. The
+    // project's text trust is recorded with them.
+    let project = match (target, target.container().task()) {
+        (BindTarget::Pm { project }, _) => Some(project.clone()),
+        (_, Some(task)) => store.get(task)?.project,
+        (_, None) => None,
+    };
+    let capabilities =
+        store
+            .config
+            .agent
+            .capabilities
+            .resolve_for(target.role(), project.as_deref(), supported);
     if let Some((key, reason)) = capabilities.explicit_unavailable() {
         bail!(
             "capability_unavailable: [agent.capabilities.{}] {key} = true, but {reason}, or \

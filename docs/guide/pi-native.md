@@ -50,9 +50,73 @@ todo = true        # optional per-role override, including under strict
 
 Role tables are `worker`, `reviewer`, `pm`, `planner` and `plan_reviewer`. A key that is
 not in the catalog, or that the role may not use (todo for a reviewer), is a configuration
-error. The catalog includes `todo` (worker and PM) and `web.enabled` (worker,
-reviewer, planner and plan-reviewer), on under standard and full. Native planning
-role availability is separate from these capability defaults.
+error. The catalog today, as strict / standard / full:
+
+| Key | Worker, PM | Reviewer, planner, plan reviewer |
+|---|---|---|
+| `todo` | off / on / on | not available |
+| `web.enabled` | worker off / on / on; not available to PM | off / on / on |
+| `context_files` | off / on / on | off / on / on |
+| `skills` | off / on / on | off / on / on |
+| `prompt_templates` | off / on / on | off / on / on |
+| `compaction` | on / on / on (upstream defaults) | on / on / on |
+| `lessons` | worker on / on / on; not available to PM | on / on / on |
+| `session_export` | worker off / on / on; not available to PM | off / on / on |
+
+A compound key also takes a table with an optional `enabled` and its settings:
+
+```toml
+[agent.capabilities]
+trusted_projects = ["*"]        # default: every registered project; [] trusts none
+
+[agent.capabilities.worker.skills]
+user_dirs = ["~/.agents/skills", "/opt/team-skills"]   # default ["~/.agents/skills"]; [] loads none
+
+[agent.capabilities.reviewer.prompt_templates]
+user_dirs = []                   # default ["~/.agents/prompts"]
+
+[agent.capabilities.worker.compaction]
+reserve_tokens = 16384           # omitted values keep Pi's defaults
+keep_recent_tokens = 20000
+branch_summary = { reserve_tokens = 16384, skip_prompt = false }
+```
+
+`user_dirs` entries are absolute or `~/` directories; a missing directory is skipped. Web takes
+its own `[agent.capabilities.<role>.web]` table (below). Native planning role availability is
+separate from these capability defaults.
+
+### Guidance and session export
+
+Under standard and full every role loads, as text only:
+
+- Agent Skills from its `skills.user_dirs` (by default `~/.agents/skills`), plus the
+  project's `.agents/skills` directories from the working directory up to the repository root;
+- prompt templates from its `prompt_templates.user_dirs` (by default `~/.agents/prompts`), plus
+  the project's `.agents/prompts`, as `/name` commands; skills also expand with `/skill:name`;
+- the `AGENTS.md`/`CLAUDE.md` context files from the working directory up to the corral
+  workspace root, in that order, where a linked worktree's file replaces its main checkout's.
+
+Project files (context files, `.agents/skills`, `.agents/prompts`) load only when the task's
+project is in `trusted_projects`; the decision is recorded in the generation's snapshot as
+`project_text`. Home directories do not depend on it. Pi's own discovery stays off: nothing is
+read from `~/.pi` or a project's `.pi` (settings, extensions, MCP, skills, prompts), and no
+extension, MCP server or theme loads. The worker keeps its packaged corral-worker skill in every
+preset. `corral agent state` lists the selected paths under `guidance`.
+
+`lessons` is the dispatch prompt's existing project-lessons section; turning it off for the
+worker drops that section, and its exposure record, from pi-native worker prompts only. Lesson
+storage is unchanged, and the PM keeps its `read_lessons` tool.
+
+`compaction` passes its settings to Pi's automatic compaction and `/tree` branch summaries.
+A summary records its own request usage on its session entry, and corral's usage collector
+counts it toward the run with the assistant responses.
+
+With `session_export`, the owner can type `/corral-export` in a worker or reviewer pane. The
+host writes the bound session's current branch as one offline HTML file into the private
+`exports` directory beside the session file and attaches it to the run (or review child) as a
+`log` artifact. Nothing is uploaded. Exporting the same snapshot again reuses the file and the
+request ID, so corral replays the first receipt instead of attaching a duplicate; after new
+entries it is a new snapshot and a new artifact. Pi's own `/export` and `/share` are unchanged.
 
 Each generation records its resolved settings and their digest once. `corral agent state`
 shows them with where each value came from, and, after an explicit resume with changed
@@ -389,9 +453,11 @@ you can watch and type.
 ### What the host leaves out
 
 Only the role's tools are active; any other tool call is refused. The host loads no extension
-but corral's own, and no MCP, prompt templates, themes or context files such as `AGENTS.md`.
-The only skill is the one the role ships inside the installation (the worker's corral-worker
-skill); skills in the worktree, your home directory or another harness are never loaded. Install telemetry, analytics, the cache warmer and the remote model catalog are
+but corral's own, and no MCP or themes. Skills, prompt templates and context files are exactly
+the ones [Guidance and session export](#guidance-and-session-export) selects from the
+generation's snapshot, plus the skill the role ships inside the installation (the worker's
+corral-worker skill); under strict only that skill loads, and nothing is ever read from `~/.pi`,
+a project's `.pi` or another harness. Install telemetry, analytics, the cache warmer and the remote model catalog are
 off. Its network is a guarded fetch that sends only POST requests to the bound profile's provider
 API and that provider's token-refresh endpoint: for `openai`,
 `https://chatgpt.com/backend-api/codex/responses` and `https://auth.openai.com/oauth/token`; for

@@ -19,6 +19,23 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
 /// A tiered run's `{{gate}}` points to the one authoritative Gate contract section that is always
 /// appended after the template, whether or not the template contains `{{gate}}`.
+/// Whether the run's prompt carries project lessons: always for other harnesses; for a
+/// pi-native worker, the `lessons` capability (on in every preset, disableable per role).
+pub(crate) fn lessons_included(ctx: &Ctx, task: &Task, run: &Run) -> bool {
+    !crate::agent::hooks::run_is_pi_native(run)
+        || ctx
+            .store
+            .config
+            .agent
+            .capabilities
+            .resolve_for(
+                corral_core::agent::AgentRole::Worker,
+                task.project.as_deref(),
+                None,
+            )
+            .enabled("lessons")
+}
+
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     let template = run_template(ctx, run)?;
     let corral = shell_path(&corral_bin()?);
@@ -135,7 +152,9 @@ pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
             ctx.store.dir().join(&plan.artifact.path).display(), plan.artifact.sha256,
         ));
     }
-    prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
+    if lessons_included(ctx, task, run) {
+        prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
+    }
     prompt.push_str(&crate::comments::owner_comments(task));
     let packet = crate::resume_packet(ctx, task, run)?;
     prompt.push_str("\n## Portable resume contract\n\n");

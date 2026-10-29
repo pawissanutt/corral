@@ -442,7 +442,7 @@ fn finish(ctx: &Ctx, task: &Task, uncertain: bool) -> Result<DispatchOutcome> {
         t.dispatch_plan = None;
         Ok(())
     })?;
-    if !uncertain {
+    if !uncertain && crate::prompt::lessons_included(ctx, &task, run) {
         crate::lessons::record_exposure(ctx, &task, run)?;
     }
     ctx.store.log_event(

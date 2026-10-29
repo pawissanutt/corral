@@ -389,3 +389,34 @@ fn run_prompt_names_the_worker_skill() {
         "{prompt}"
     );
 }
+
+#[test]
+fn pi_native_prompt_lessons_follow_the_worker_lessons_capability() {
+    // Given a project lesson that matches every run.
+    let (tmp, mut ctx) = workspace();
+    let task = task(&ctx);
+    let lesson: corral_core::Lesson = serde_json::from_value(serde_json::json!({
+        "id": "L-any", "rule": "Check every gate attempt", "why": "Observed history",
+        "confidence": 0.8, "last_seen": "2026-10-15T00:00:00Z"
+    }))
+    .unwrap();
+    ctx.store.save_lessons("app", &[lesson]).unwrap();
+    let has_lessons = |ctx: &Ctx, harness| {
+        corral_ops::task_prompt(ctx, &task, &run(tmp.path(), Some(harness)))
+            .unwrap()
+            .contains("<corral-lessons>")
+    };
+    // Then the default includes lessons for every harness.
+    assert!(has_lessons(&ctx, "omp"));
+    assert!(has_lessons(&ctx, "pi-native"));
+    // When the worker opts out, only the pi-native prompt drops them; lesson storage is unchanged.
+    ctx.store
+        .config
+        .agent
+        .capabilities
+        .set(corral_core::agent::AgentRole::Worker, "lessons", false)
+        .unwrap();
+    assert!(!has_lessons(&ctx, "pi-native"));
+    assert!(has_lessons(&ctx, "omp"));
+    assert_eq!(ctx.store.lessons("app").unwrap().len(), 1);
+}

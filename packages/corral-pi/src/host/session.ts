@@ -2,6 +2,7 @@
 // (agent_start to agent_settled) and provider errors to corral as `event` calls, and answers
 // bridge input with upstream's own dispositions: started, queued, handled or rejected.
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type * as Sdk from "@earendil-works/pi-coding-agent";
@@ -14,6 +15,8 @@ import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
+import { compactionSettings } from "../capabilities/compaction.ts";
+import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
@@ -26,6 +29,7 @@ import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { corralRenderers } from "../ui/render.ts";
 import type { UiMode } from "./config.ts";
+import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
@@ -46,6 +50,14 @@ export interface HostSessionOptions {
   readonly todo?: boolean;
   /** The generation's recorded snapshot; when present it decides todo. */
   readonly capabilities?: CapabilitySet;
+  /** The snapshot's settings and project-text trust; absent loads no optional guidance. */
+  readonly guidance?: CapabilityGuidance;
+  /** The corral workspace root, the outermost directory whose context files may load. */
+  readonly root?: string;
+  /** Where `~/` in a `user_dirs` entry points; absent means the user's home directory. */
+  readonly home?: string;
+  /** The private directory `/corral-export` writes into; absent disables the command. */
+  readonly exportDir?: string;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
   readonly ui?: UiMode;
   readonly modules: LoadedModules;
@@ -204,6 +216,8 @@ export class HostSession {
   private deniedTools = 0;
   private sessionsCreated = 0;
   private interactive = false;
+  private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
+  private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
 
   readonly provider: ProviderId;
 
@@ -231,6 +245,23 @@ export class HostSession {
     const local = this.localTools.map((tool) => tool.name);
     this.loadout = [...role.upstreamTools, ...corralToolNames(specs), ...local];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
+    this.settings = {
+      ...restrictedSettings(), ...compactionSettings(options.capabilities, options.guidance),
+      enableSkillCommands: options.capabilities?.enabled.includes("skills") === true && options.guidance !== undefined,
+    };
+  }
+
+  private exportable(): boolean {
+    return this.options.exportDir !== undefined && this.options.guidance !== undefined &&
+      this.options.capabilities?.enabled.includes("session_export") === true &&
+      this.options.modules.role.corralOps.includes("artifact");
+  }
+
+  /** `/corral-export`: the current snapshot as one attached offline HTML artifact. */
+  async exportSession(): Promise<SessionExport> {
+    if (!this.exportable() || this.options.exportDir === undefined) throw new Error("session_export is not enabled for this role");
+    if (!this.bound) throw new Error("host_not_bound");
+    return exportSnapshot(this.session, this.sessionId(), this.options.exportDir, this.options.client);
   }
 
   static async create(options: HostSessionOptions): Promise<HostSession> {
@@ -249,10 +280,20 @@ export class HostSession {
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
-      const settingsManager = sdk.SettingsManager.inMemory(restrictedSettings());
+      const settingsManager = sdk.SettingsManager.inMemory(host.settings);
+      const guidance = selectGuidance({
+        cwd, agentDir, root: options.root ?? cwd, home: options.home ?? homedir(),
+        ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+        ...(options.guidance ? { guidance: options.guidance } : {}),
+      });
+      host.guidance = guidance;
       const services = await sdk.createAgentSessionServices({
         cwd, agentDir, modelRuntime: models, settingsManager,
-        resourceLoaderOptions: { ...resourceLoaderOptions([(pi: ExtensionAPI) => host.extension(pi)]), appendSystemPrompt: [contract] },
+        resourceLoaderOptions: {
+          ...resourceLoaderOptions([(pi: ExtensionAPI) => host.extension(pi)]), appendSystemPrompt: [contract],
+          additionalSkillPaths: [...guidance.skillPaths], additionalPromptTemplatePaths: [...guidance.promptPaths],
+          agentsFilesOverride: () => ({ agentsFiles: guidance.contextFiles.map((file) => ({ ...file })) }),
+        },
       });
       const result = await sdk.createAgentSessionFromServices({
         services, sessionManager, model, tools: [...host.loadout],
@@ -337,6 +378,21 @@ export class HostSession {
     pi.on("session_before_switch", (event, ctx) =>
       refuse(event.reason === "new" ? "a new session" : "switching or importing a session", ctx.ui));
     pi.on("session_before_fork", (_event, ctx) => refuse("forking the session", ctx.ui));
+    if (this.exportable()) {
+      pi.registerCommand(EXPORT_COMMAND, {
+        description: "Attach this session's current branch to corral as an offline HTML artifact",
+        handler: async (_args, ctx) => {
+          try {
+            const { path, receipt } = await this.exportSession();
+            this.options.events.emit("session_exported", { path, state: receipt.state, replayed: receipt.replayed === true });
+            ctx.ui.notify(`corral: session export ${receipt.state}${receipt.replayed ? " (already attached)" : ""}: ${path}`,
+              receipt.state === "committed" ? "info" : "warning");
+          } catch (error) {
+            ctx.ui.notify(`corral: session export failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+          }
+        },
+      });
+    }
     pi.on("input", (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
@@ -537,7 +593,13 @@ export class HostSession {
         prompts: resources.getPrompts().prompts.length,
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
-      settings: restrictedSettings(),
+      guidance: {
+        project_text: this.options.guidance?.projectText ?? false,
+        skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],
+        context_files: this.guidance.contextFiles.map((file) => file.path),
+        export: this.exportable(),
+      },
+      settings: this.settings,
       network: {
         allowed_destinations: [...(this.options.network.destinations ?? hostDestinations(this.provider))],
         ...this.options.network.ledger(),

@@ -4,13 +4,16 @@ import { closeSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
 import type { AwsBinding } from "../auth/aws.ts";
+import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
-export const HOST_CAPABILITIES: readonly string[] = ["todo", "web.enabled"];
+export const HOST_CAPABILITIES: readonly string[] = [
+  "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
+];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
 export type UiMode = "rich" | "plain";
@@ -35,6 +38,8 @@ export interface HostConfig {
   readonly freshSession?: boolean;
   readonly todo?: boolean;
   readonly capabilities?: CapabilitySet;
+  /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
+  readonly guidance?: CapabilityGuidance;
   readonly model: string;
   readonly provider?: ProviderId;
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
@@ -82,6 +87,19 @@ function awsBinding(value: unknown): AwsBinding | undefined {
   const region = field(binding, "region", /^[a-z0-9-]+$/, 32);
   if (!isAwsRegion(region)) throw new LaunchMessageInvalid("region is missing or malformed");
   return { profile: field(binding, "profile", AWS_PROFILE, 64), region };
+}
+
+function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const set = value as Json;
+  if (set.settings === undefined) return undefined;
+  const settings = set.settings;
+  if (typeof settings !== "object" || settings === null || Array.isArray(settings) ||
+      Object.values(settings).some((entry) => typeof entry !== "object" || entry === null || Array.isArray(entry))) {
+    throw new LaunchMessageInvalid("capabilities.settings must map names to objects");
+  }
+  if (typeof set.project_text !== "boolean") throw new LaunchMessageInvalid("capabilities.project_text must be a boolean");
+  return { settings: settings as CapabilityGuidance["settings"], projectText: set.project_text };
 }
 
 function capabilitySet(value: unknown): CapabilitySet | undefined {
@@ -150,6 +168,7 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (role === "pm" && capabilities?.enabled.includes("web.enabled")) {
     throw new LaunchMessageInvalid("web.enabled is not available to the pm role");
   }
+  const guidance = capabilityGuidance(message.capabilities);
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {
@@ -175,6 +194,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     freshSession: message.fresh_session === true,
     todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
     ...(capabilities ? { capabilities } : {}),
+    ...(guidance ? { guidance } : {}),
     model: field(message, "model", TOKEN, 128),
     ...(provider ? { provider } : {}),
     ...(aws ? { aws } : {}),

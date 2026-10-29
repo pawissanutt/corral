@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::agent::{
-    AgentRole, CATALOG, CapabilitySnapshot, CapabilitySource, CapabilityState, SnapshotPreset,
-    WebSettings,
+    AgentRole, CATALOG, CapabilitySettings, CapabilitySnapshot, CapabilitySource, CapabilityState,
+    SnapshotPreset, WebSettings,
 };
 
 /// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
@@ -90,6 +90,15 @@ impl Preset {
     }
 }
 
+/// One `[agent.capabilities.<role>]` entry: `key = bool`, or a compound key's table with an
+/// optional `enabled` and its settings (`[agent.capabilities.worker.skills] user_dirs = []`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RoleSetting {
+    Enabled(bool),
+    Table(CapabilitySettings),
+}
+
 /// `[agent.capabilities.<role>.web]`: optional preset override and GET-only web policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -100,24 +109,37 @@ pub struct WebCapabilities {
     pub settings: WebSettings,
 }
 
-/// `[agent.capabilities.<role>]`: boolean overrides plus compound web settings.
+/// `[agent.capabilities.<role>]`: boolean overrides, compound tables and web settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web: Option<WebCapabilities>,
     #[serde(flatten)]
-    overrides: BTreeMap<String, bool>,
+    overrides: BTreeMap<String, RoleSetting>,
 }
 
 impl RoleCapabilities {
     pub fn get(&self, key: &str) -> Option<bool> {
-        if key == "web.enabled" {
-            self.web
-                .as_ref()
-                .and_then(|web| web.enabled)
-                .or_else(|| self.overrides.get(key).copied())
-        } else {
-            self.overrides.get(key).copied()
+        if key == "web.enabled"
+            && let Some(enabled) = self.web.as_ref().and_then(|web| web.enabled)
+        {
+            return Some(enabled);
+        }
+        match self.overrides.get(key)? {
+            RoleSetting::Enabled(enabled) => Some(*enabled),
+            RoleSetting::Table(table) => table.get("enabled").and_then(|value| value.as_bool()),
+        }
+    }
+
+    /// The configured settings of a compound key, without `enabled`.
+    pub fn settings(&self, key: &str) -> CapabilitySettings {
+        match self.overrides.get(key) {
+            Some(RoleSetting::Table(table)) => table
+                .iter()
+                .filter(|(name, _)| name.as_str() != "enabled")
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            _ => CapabilitySettings::new(),
         }
     }
 
@@ -125,9 +147,27 @@ impl RoleCapabilities {
         if key == "web.enabled" {
             self.overrides.remove(key);
             self.web.get_or_insert_default().enabled = Some(enabled);
-        } else {
-            self.overrides.insert(key.to_owned(), enabled);
+            return;
         }
+        match self.overrides.get_mut(key) {
+            Some(RoleSetting::Table(table)) => {
+                table.insert("enabled".into(), enabled.into());
+            }
+            _ => {
+                self.overrides
+                    .insert(key.to_owned(), RoleSetting::Enabled(enabled));
+            }
+        }
+    }
+
+    /// Replaces a compound key's settings, keeping its `enabled` override.
+    pub fn set_settings(&mut self, key: &str, settings: CapabilitySettings) {
+        let mut table = settings;
+        if let Some(enabled) = self.get(key) {
+            table.insert("enabled".into(), enabled.into());
+        }
+        self.overrides
+            .insert(key.to_owned(), RoleSetting::Table(table));
     }
 
     pub fn is_empty(&self) -> bool {
@@ -135,10 +175,23 @@ impl RoleCapabilities {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// `trusted_projects` default: every registered project's text is trusted.
+fn all_projects() -> Vec<String> {
+    vec!["*".into()]
+}
+
+fn trusts_all(projects: &[String]) -> bool {
+    projects == all_projects().as_slice()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RawCapabilities {
     pub preset: Preset,
+    /// Projects whose repository text (AGENTS.md, CLAUDE.md, `.agents/skills`,
+    /// `.agents/prompts`) a host may load; `"*"` trusts every registered project, `[]` none.
+    #[serde(default = "all_projects", skip_serializing_if = "trusts_all")]
+    pub trusted_projects: Vec<String>,
     #[serde(skip_serializing_if = "RoleCapabilities::is_empty")]
     pub worker: RoleCapabilities,
     #[serde(skip_serializing_if = "RoleCapabilities::is_empty")]
@@ -149,6 +202,20 @@ pub struct RawCapabilities {
     pub planner: RoleCapabilities,
     #[serde(skip_serializing_if = "RoleCapabilities::is_empty")]
     pub plan_reviewer: RoleCapabilities,
+}
+
+impl Default for RawCapabilities {
+    fn default() -> Self {
+        Self {
+            preset: Preset::default(),
+            trusted_projects: all_projects(),
+            worker: RoleCapabilities::default(),
+            reviewer: RoleCapabilities::default(),
+            pm: RoleCapabilities::default(),
+            planner: RoleCapabilities::default(),
+            plan_reviewer: RoleCapabilities::default(),
+        }
+    }
 }
 
 /// Validated `[agent.capabilities]`: every override names a catalog key its role may use.
@@ -169,12 +236,12 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                 }
                 validate_web(&web.settings)?;
             }
-            for key in settings
+            let entries = settings
                 .overrides
-                .keys()
-                .map(String::as_str)
-                .chain(settings.web.as_ref().map(|_| "web.enabled"))
-            {
+                .iter()
+                .map(|(key, setting)| (key.as_str(), Some(setting)))
+                .chain(settings.web.as_ref().map(|_| ("web.enabled", None)));
+            for (key, setting) in entries {
                 let def = CATALOG.iter().find(|def| def.key == key).ok_or_else(|| {
                     let known: Vec<&str> = CATALOG.iter().map(|def| def.key).collect();
                     format!(
@@ -189,6 +256,24 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                         role.as_str(),
                         role.as_str()
                     ));
+                }
+                let Some(RoleSetting::Table(table)) = setting else {
+                    continue;
+                };
+                let table_name = format!("[agent.capabilities.{}.{key}]", role.as_str());
+                if table
+                    .get("enabled")
+                    .is_some_and(|value| !value.is_boolean())
+                {
+                    return Err(format!("{table_name} enabled must be a boolean"));
+                }
+                let settings = config.role(role).settings(key);
+                match def.settings {
+                    Some(check) => {
+                        check(&settings).map_err(|reason| format!("{table_name} {reason}"))?;
+                    }
+                    None if settings.is_empty() => {}
+                    None => return Err(format!("{table_name} takes only `enabled`")),
                 }
             }
         }
@@ -229,25 +314,66 @@ impl AgentCapabilities {
         }
     }
 
-    /// Sets a role override after checking it against the catalog, as parsing does.
-    pub fn set(&mut self, role: AgentRole, key: &str, enabled: bool) -> Result<(), String> {
+    pub fn set_trusted_projects(&mut self, projects: Vec<String>) {
+        self.0.trusted_projects = projects;
+    }
+
+    /// Whether `project`'s repository text may be loaded (`trusted_projects`).
+    pub fn trusts(&self, project: &str) -> bool {
+        self.0
+            .trusted_projects
+            .iter()
+            .any(|name| name == "*" || name == project)
+    }
+
+    fn edit(
+        &mut self,
+        role: AgentRole,
+        change: impl FnOnce(&mut RoleCapabilities),
+    ) -> Result<(), String> {
         let mut raw = self.0.clone();
-        match role {
-            AgentRole::Worker => raw.worker.set(key, enabled),
-            AgentRole::Reviewer => raw.reviewer.set(key, enabled),
-            AgentRole::Pm => raw.pm.set(key, enabled),
-            AgentRole::Planner => raw.planner.set(key, enabled),
-            AgentRole::PlanReviewer => raw.plan_reviewer.set(key, enabled),
-        }
+        change(match role {
+            AgentRole::Worker => &mut raw.worker,
+            AgentRole::Reviewer => &mut raw.reviewer,
+            AgentRole::Pm => &mut raw.pm,
+            AgentRole::Planner => &mut raw.planner,
+            AgentRole::PlanReviewer => &mut raw.plan_reviewer,
+        });
         *self = Self::try_from(raw)?;
         Ok(())
     }
 
-    /// The effective snapshot for `role`. `supported` is the installed host's implemented keys;
-    /// `None` skips that check. A requested key the host lacks is reported and left off.
+    /// Sets a role override after checking it against the catalog, as parsing does.
+    pub fn set(&mut self, role: AgentRole, key: &str, enabled: bool) -> Result<(), String> {
+        self.edit(role, |table| table.set(key, enabled))
+    }
+
+    /// Sets a compound key's settings for `role`, checked as parsing checks them.
+    pub fn set_settings(
+        &mut self,
+        role: AgentRole,
+        key: &str,
+        settings: CapabilitySettings,
+    ) -> Result<(), String> {
+        self.edit(role, |table| table.set_settings(key, settings))
+    }
+
+    /// The effective snapshot for `role` without a project, as doctor shows every role.
     pub fn resolve(
         &self,
         role: AgentRole,
+        supported: Option<&BTreeSet<String>>,
+    ) -> CapabilitySnapshot {
+        self.resolve_for(role, None, supported)
+    }
+
+    /// The effective snapshot for `role` launched in `project`. `supported` is the installed
+    /// host's implemented keys; `None` skips that check. A requested key the host lacks is
+    /// reported and left off. The project's text trust is part of the snapshot.
+    pub fn resolve_for(
+        &self,
+        role: AgentRole,
+        project: Option<&str>,
         supported: Option<&BTreeSet<String>>,
     ) -> CapabilitySnapshot {
         let overrides = self.role(role);
@@ -259,18 +385,27 @@ impl AgentCapabilities {
                     Some(value) => (value, CapabilitySource::RoleOverride),
                     None => (defaults[self.0.preset.index()], CapabilitySource::Preset),
                 };
-                let unavailable = (wanted && supported.is_some_and(|keys| !keys.contains(def.key)))
-                    .then(|| {
-                        format!(
-                            "the installed Pi host does not implement {}; run `corral agent install` \
+                let lacking = def.host && supported.is_some_and(|keys| !keys.contains(def.key));
+                let unavailable = (wanted && lacking).then(|| {
+                    format!(
+                        "the installed Pi host does not implement {}; run `corral agent install` \
                              to update it",
-                            def.key
-                        )
-                    });
+                        def.key
+                    )
+                });
+                let enabled = wanted && unavailable.is_none();
+                // Parsing validated the table, so a settings error cannot occur here.
+                let settings = match def.settings {
+                    Some(effective) if enabled => {
+                        effective(&overrides.settings(def.key)).unwrap_or_default()
+                    }
+                    _ => CapabilitySettings::new(),
+                };
                 let state = CapabilityState {
-                    enabled: wanted && unavailable.is_none(),
+                    enabled,
                     source,
                     unavailable,
+                    settings,
                 };
                 Some((def.key.to_owned(), state))
             })
@@ -279,7 +414,8 @@ impl AgentCapabilities {
             .web
             .as_ref()
             .map_or_else(WebSettings::default, |web| web.settings.clone());
-        CapabilitySnapshot::with_web(role, self.0.preset.snapshot(), features, Some(web))
+        let trust = project.map(|project| self.trusts(project));
+        CapabilitySnapshot::resolved(role, self.0.preset.snapshot(), features, Some(web), trust)
     }
 
     pub fn todo(&self, role: AgentRole) -> bool {
@@ -321,303 +457,94 @@ fn validate_web(web: &WebSettings) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// A JSON safe integer: the host passes token counts to upstream as JavaScript numbers.
+const SAFE_INTEGER_MAX: u64 = (1 << 53) - 1;
 
-    #[test]
-    fn presets_and_overrides_respect_role_ceiling() {
-        // Given each preset and a per-role override different from its default.
-        for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
-            let mut config = AgentCapabilities::default();
-            config.set_preset(preset);
-            let enabled = preset != Preset::Strict;
-            assert_eq!(config.todo(AgentRole::Worker), enabled);
-            assert_eq!(config.todo(AgentRole::Pm), enabled);
-            // When worker overrides its preset.
-            config.set(AgentRole::Worker, "todo", !enabled).unwrap();
-            // Then PM retains its default and foreign roles remain excluded.
-            assert_eq!(config.todo(AgentRole::Worker), !enabled);
-            assert_eq!(config.todo(AgentRole::Pm), enabled);
-            for role in [
-                AgentRole::Reviewer,
-                AgentRole::Planner,
-                AgentRole::PlanReviewer,
-            ] {
-                assert!(!config.todo(role));
-            }
-        }
-    }
-
-    #[test]
-    fn omitted_capabilities_default_to_standard_and_parse_role_disable() {
-        // Given absent configuration and a configured worker opt-out.
-        let absent: crate::config::AgentCfg = toml::from_str("").unwrap();
-        let configured: crate::config::AgentCfg =
-            toml::from_str("[capabilities.worker]\ntodo = false").unwrap();
-        // Then absent config enables worker/PM, while only the worker opts out.
-        assert!(absent.capabilities.todo(AgentRole::Worker));
-        assert!(absent.capabilities.todo(AgentRole::Pm));
-        assert!(!configured.capabilities.todo(AgentRole::Worker));
-        assert!(configured.capabilities.todo(AgentRole::Pm));
-    }
-
-    #[test]
-    fn overrides_outside_the_catalog_or_role_ceiling_are_config_errors() {
-        // Given an unknown key, a ceiling-disallowed key and every role table.
-        let parse = |text: &str| toml::from_str::<crate::config::AgentCfg>(text).map(|_| ());
-        // Then parsing names the table and the reason; allowed tables parse.
-        let unknown = parse("[capabilities.worker]\nteleport = true").unwrap_err();
-        assert!(
-            unknown
-                .to_string()
-                .contains("teleport is not a known capability")
-        );
-        let ceiling = parse("[capabilities.reviewer]\ntodo = true").unwrap_err();
-        assert!(
-            ceiling
-                .to_string()
-                .contains("not available to the reviewer role")
-        );
-        parse("[capabilities]\npreset = \"full\"\n[capabilities.planner]\n[capabilities.plan_reviewer]")
-            .unwrap();
-        let mut config = AgentCapabilities::default();
-        assert!(config.set(AgentRole::Planner, "todo", true).is_err());
-        assert_eq!(config, AgentCapabilities::default());
-    }
-
-    #[test]
-    fn snapshot_records_values_sources_and_a_stable_digest() {
-        // Given the default config and a worker override.
-        let standard = AgentCapabilities::default();
-        let mut overridden = standard.clone();
-        overridden.set(AgentRole::Worker, "todo", false).unwrap();
-        // When each resolves the worker snapshot.
-        let a = standard.resolve(AgentRole::Worker, None);
-        let b = overridden.resolve(AgentRole::Worker, None);
-        // Then values, sources and the digest follow the settings deterministically.
-        assert_eq!(a, standard.resolve(AgentRole::Worker, None));
-        assert_eq!(a.preset, SnapshotPreset::Standard);
-        assert_eq!(a.features["todo"].source, CapabilitySource::Preset);
-        assert!(a.enabled("todo"));
-        assert_eq!(b.features["todo"].source, CapabilitySource::RoleOverride);
-        assert!(!b.enabled("todo"));
-        assert_ne!(a.digest, b.digest);
-        assert!(
-            standard
-                .resolve(AgentRole::Reviewer, None)
-                .enabled("web.enabled")
-        );
-        // And the round trip through TOML preserves the overrides.
-        let text = toml::to_string(&overridden).unwrap();
-        assert_eq!(
-            toml::from_str::<AgentCapabilities>(&text).unwrap(),
-            overridden
-        );
-    }
-
-    #[test]
-    fn an_older_host_reports_unavailable_defaults_and_names_explicit_requests() {
-        // Given an installed host that implements no catalog key.
-        let older = BTreeSet::new();
-        let mut explicit = AgentCapabilities::default();
-        explicit.set(AgentRole::Pm, "todo", true).unwrap();
-        // When resolving a preset default and an explicit request.
-        let default = AgentCapabilities::default().resolve(AgentRole::Worker, Some(&older));
-        let requested = explicit.resolve(AgentRole::Pm, Some(&older));
-        // Then both are omitted and reported; only the explicit request is named for refusal.
-        assert!(!default.enabled("todo"));
-        assert!(default.features["todo"].unavailable.is_some());
-        assert_eq!(default.explicit_unavailable(), None);
-        assert!(!requested.enabled("todo"));
-        assert_eq!(
-            requested.explicit_unavailable().map(|(key, _)| key),
-            Some("todo")
-        );
-        let current: BTreeSet<String> = ["todo".to_owned()].into();
-        assert!(
-            explicit
-                .resolve(AgentRole::Pm, Some(&current))
-                .enabled("todo")
-        );
-    }
-
-    #[test]
-    fn legacy_and_changed_settings_produce_an_explicit_transition() {
-        // Given a legacy generation with todo and a current strict resolution.
-        let legacy = CapabilitySnapshot::legacy(AgentRole::Worker, true);
-        let mut strict = AgentCapabilities::default();
-        strict.set_preset(Preset::Strict);
-        let current = strict.resolve(AgentRole::Worker, None);
-        // When the next generation compares itself with the old one.
-        let transition = current.transition_from(3, &legacy).unwrap();
-        // Then the legacy label and the concrete change are recorded, and identity is silent.
-        assert_eq!(legacy.preset, SnapshotPreset::LegacyStrict);
-        assert!(legacy.enabled("todo"));
-        assert_eq!(transition.from_generation, 3);
-        assert_eq!(transition.from_preset, SnapshotPreset::LegacyStrict);
-        assert_eq!(transition.from_digest, legacy.digest);
-        assert_eq!(
-            transition.changes,
-            vec![crate::agent::CapabilityChange {
-                key: "todo".into(),
-                from: Some(true),
-                to: Some(false),
-            }]
-        );
-        assert!(current.transition_from(4, &current).is_none());
-    }
-
-    #[test]
-    fn web_presets_overrides_and_role_ceilings_share_the_catalog() {
-        // Given every preset and role.
-        for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
-            let mut config = AgentCapabilities::default();
-            config.set_preset(preset);
-            for role in [
-                AgentRole::Worker,
-                AgentRole::Reviewer,
-                AgentRole::Planner,
-                AgentRole::PlanReviewer,
-            ] {
-                let snapshot = config.resolve(role, None);
-                assert_eq!(snapshot.enabled("web.enabled"), preset != Preset::Strict);
-                assert_eq!(
-                    snapshot.web,
-                    (preset != Preset::Strict).then(WebSettings::default)
-                );
-                // When web overrides the preset through the existing setter.
-                config
-                    .set(role, "web.enabled", preset == Preset::Strict)
-                    .unwrap();
-                // Then the override is honored without changing the role ceiling.
-                assert_eq!(
-                    config.resolve(role, None).enabled("web.enabled"),
-                    preset == Preset::Strict
-                );
-            }
-            assert!(config.set(AgentRole::Pm, "web.enabled", true).is_err());
-            assert!(config.resolve(AgentRole::Pm, None).web.is_none());
-        }
-        assert!(toml::from_str::<AgentCapabilities>("[pm.web]\nhosts = ['*']").is_err());
-    }
-
-    #[test]
-    fn compound_web_config_round_trips_with_todo_overrides_and_endpoint() {
-        // Given a strict preset with independent todo and compound web configuration.
-        let text = "preset = 'strict'\n[worker]\ntodo = true\n[worker.web]\n\
-                    enabled = true\nhosts = ['docs.example.org']\n\
-                    searxng_url = 'http://localhost:8080/search'";
-        // When parsed and serialized through the public configuration.
-        let config: AgentCapabilities = toml::from_str(text).unwrap();
-        let encoded = toml::to_string(&config).unwrap();
-        // Then both forms preserve overrides, policy defaults, and the localhost endpoint.
-        assert_eq!(
-            toml::from_str::<AgentCapabilities>(&encoded).unwrap(),
-            config
-        );
-        let snapshot = config.resolve(AgentRole::Worker, None);
-        assert!(snapshot.enabled("todo") && snapshot.enabled("web.enabled"));
-        let web = snapshot.web.unwrap();
-        assert_eq!(web.hosts, ["docs.example.org"]);
-        assert_eq!(web.max_bytes, 1_048_576);
-        assert_eq!(web.timeout_ms, 15_000);
-        assert_eq!(web.max_redirects, 5);
-        assert_eq!(
-            web.searxng_url.as_deref(),
-            Some("http://localhost:8080/search")
-        );
-    }
-
-    #[test]
-    fn web_config_rejects_invalid_limits_and_endpoints() {
-        // Given invalid policy values at the parsing boundary.
-        for value in [
-            "max_bytes = 0",
-            "max_bytes = 9007199254740992",
-            "timeout_ms = 0",
-            "timeout_ms = 2147483648",
-            "max_redirects = -1",
-            "max_redirects = 11",
-            "searxng_url = 'ftp://localhost/search'",
-            "searxng_url = 'https://user:pass@example.org/search'",
-            "searxng_url = 'https://example.org/search#fragment'",
-            "searxng_url = 'http://localhost:99999'",
-            "unknown = true",
-        ] {
-            // When a compound configuration is parsed, then invalid settings are refused.
-            assert!(
-                toml::from_str::<AgentCapabilities>(&format!("[worker.web]\n{value}")).is_err(),
-                "{value}"
-            );
-        }
-        for url in [
-            "http://localhost:8080",
-            "https://search.example.org/search",
-            "http://[::1]:8080/search",
-        ] {
-            assert!(
-                toml::from_str::<AgentCapabilities>(&format!(
-                    "[worker.web]\nsearxng_url = '{url}'"
-                ))
-                .is_ok(),
-                "{url}"
-            );
-        }
-    }
-
-    #[test]
-    fn host_and_endpoint_settings_each_change_the_snapshot_digest() {
-        // Given a standard worker policy and independent host and endpoint changes.
-        let original = AgentCapabilities::default().resolve(AgentRole::Worker, None);
-        for setting in [
-            "hosts = ['docs.example.org']",
-            "searxng_url = 'http://localhost:8080'",
-        ] {
-            let config: AgentCapabilities =
-                toml::from_str(&format!("[worker.web]\n{setting}")).unwrap();
-            // When resolving settings, then the deterministic digest and concrete diff change.
-            let snapshot = config.resolve(AgentRole::Worker, None);
-            assert_eq!(snapshot, config.resolve(AgentRole::Worker, None));
-            assert_ne!(snapshot.digest, original.digest);
-            let transition = snapshot.transition_from(1, &original).unwrap();
-            assert!(transition.changes.is_empty());
-            assert!(transition.web_change.is_some());
-        }
-    }
-
-    #[test]
-    fn bool_map_web_override_preserves_public_get_and_set_behavior() {
-        // Given the existing boolean-map form with a dotted catalog key.
-        let mut role: RoleCapabilities =
-            toml::from_str("\"web.enabled\" = false\ntodo = true").unwrap();
-        assert_eq!(role.get("web.enabled"), Some(false));
-        // When the public setter replaces that override.
-        role.set("web.enabled", true);
-        // Then both getters and the serialized compound form retain the effective values.
-        assert_eq!(role.get("web.enabled"), Some(true));
-        assert_eq!(role.get("todo"), Some(true));
-        let encoded = toml::to_string(&role).unwrap();
-        let decoded: RoleCapabilities = toml::from_str(&encoded).unwrap();
-        assert_eq!(decoded, role);
-    }
-
-    #[test]
-    fn web_policy_accepts_transport_boundaries_and_independent_search_endpoint() {
-        // Given the exact transport bounds and an empty fetch allowlist.
-        let text = "[worker.web]\nhosts = []\nmax_bytes = 9007199254740991\n\
-                    timeout_ms = 2147483647\nmax_redirects = 10\n\
-                    searxng_url = 'http://localhost:8080'";
-        // When policy resolves, then endpoint configuration does not broaden fetch hosts.
-        let config: AgentCapabilities = toml::from_str(text).unwrap();
-        let settings = config.resolve(AgentRole::Worker, None).web.unwrap();
-        assert!(settings.hosts.is_empty());
-        assert_eq!(settings.max_bytes, 9_007_199_254_740_991);
-        assert_eq!(settings.timeout_ms, 2_147_483_647);
-        assert_eq!(settings.max_redirects, 10);
-        assert_eq!(
-            settings.searxng_url.as_deref(),
-            Some("http://localhost:8080")
-        );
+fn tokens(value: &serde_json::Value, name: &str) -> Result<serde_json::Value, String> {
+    match value.as_u64() {
+        Some(count) if count <= SAFE_INTEGER_MAX => Ok(count.into()),
+        _ => Err(format!("{name} must be a non-negative integer token count")),
     }
 }
+
+fn unknown(name: &str, known: &str) -> String {
+    format!("has no setting {name} (known: {known})")
+}
+
+/// `user_dirs`: absolute or `~/` directories, read as text only; `[]` loads none.
+fn user_dirs(table: &CapabilitySettings, default: &str) -> Result<CapabilitySettings, String> {
+    let mut dirs = vec![serde_json::Value::from(default)];
+    for (name, value) in table {
+        if name != "user_dirs" {
+            return Err(unknown(name, "user_dirs"));
+        }
+        let list = value
+            .as_array()
+            .ok_or("user_dirs must be a list of directories")?;
+        for dir in list {
+            let text = dir.as_str().unwrap_or_default();
+            if !(text.starts_with('/') || text.starts_with("~/")) || text.contains('\0') {
+                return Err(format!(
+                    "user_dirs entry {dir} must be an absolute or ~/ directory"
+                ));
+            }
+        }
+        dirs.clone_from(list);
+    }
+    Ok([("user_dirs".to_owned(), dirs.into())].into())
+}
+
+pub(crate) fn skill_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    user_dirs(table, "~/.agents/skills")
+}
+
+pub(crate) fn template_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    user_dirs(table, "~/.agents/prompts")
+}
+
+/// Compaction keeps upstream's defaults for every value left out, so only configured values
+/// are recorded: `reserve_tokens`, `keep_recent_tokens` and `branch_summary.{reserve_tokens,
+/// skip_prompt}`.
+pub(crate) fn compaction_settings(
+    table: &CapabilitySettings,
+) -> Result<CapabilitySettings, String> {
+    let mut effective = CapabilitySettings::new();
+    for (name, value) in table {
+        let value = match name.as_str() {
+            "reserve_tokens" | "keep_recent_tokens" => tokens(value, name)?,
+            "branch_summary" => {
+                let summary = value.as_object().ok_or("branch_summary must be a table")?;
+                let mut out = serde_json::Map::new();
+                for (inner, item) in summary {
+                    let checked = match inner.as_str() {
+                        "reserve_tokens" => tokens(item, "branch_summary.reserve_tokens")?,
+                        "skip_prompt" => item
+                            .as_bool()
+                            .ok_or("branch_summary.skip_prompt must be a boolean")?
+                            .into(),
+                        other => {
+                            return Err(unknown(
+                                &format!("branch_summary.{other}"),
+                                "reserve_tokens, skip_prompt",
+                            ));
+                        }
+                    };
+                    out.insert(inner.clone(), checked);
+                }
+                out.into()
+            }
+            other => {
+                return Err(unknown(
+                    other,
+                    "reserve_tokens, keep_recent_tokens, branch_summary",
+                ));
+            }
+        };
+        effective.insert(name.clone(), value);
+    }
+    Ok(effective)
+}
+
+#[cfg(test)]
+#[path = "agent_capabilities_tests.rs"]
+mod tests;

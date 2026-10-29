@@ -198,7 +198,7 @@ async function expectRestricted(): Promise<void> {
   for (const builtin of BUILTIN_EXTENSIONS) expect(resources.extensions.join(" ")).not.toContain(builtin);
   expect(state.settings).toEqual({
     cacheWarming: "off", enableInstallTelemetry: false, enableAnalytics: false, enableSkillCommands: false,
-    quietStartup: true, transport: "sse", extensions: [],
+    quietStartup: true, transport: "sse", extensions: [], compaction: { enabled: true },
   });
   for (const tool of ["fixture_forbidden", "bash"]) {
     const tag = `${tool}-${host.state().last_seq}`;
