@@ -207,6 +207,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: None,
     },
+    CapabilityDef {
+        key: "headless",
+        summary: "host runs without its terminal UI; input arrives only through the bridge",
+        defaults: headless_defaults,
+        host: true,
+        settings: None,
+    },
 ];
 
 // Assistant hooks run in scratch roots only, which the scratch-worktrees member adds.
@@ -372,6 +379,14 @@ fn plan_role_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
         AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm | AgentRole::Assistant => None,
+    }
+}
+
+// An operational choice, never a preset default (T-577): `full` leaves it off too.
+fn headless_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker | AgentRole::Reviewer => Some([false, false, false]),
+        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 

@@ -20,6 +20,7 @@ export const HOST_CAPABILITIES: readonly string[] = [
   "budget", "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
   "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled", "checkpoints", "subagents", "oracle",
+  "headless",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 

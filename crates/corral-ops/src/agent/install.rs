@@ -407,6 +407,7 @@ pub fn state(ctx: &Ctx, args: &StateArgs) -> Result<()> {
     for (label, field) in [
         ("harness", "harness"),
         ("role", "role"),
+        ("mode", "mode"),
         ("health", "health"),
         ("generation", "generation"),
         ("generations", "generations"),
@@ -507,8 +508,19 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
         .filter(|q| q.recorded_pending())
         .map(|q| q.key.as_str())
         .collect();
+    let capabilities = state
+        .current_generation()
+        .map(|g| g.effective_capabilities(state.binding.role));
+    let mode = capabilities.as_ref().map(|snapshot| {
+        if snapshot.enabled("headless") {
+            "headless"
+        } else {
+            "interactive"
+        }
+    });
     let value = json!({
         "role": state.binding.role.as_str(),
+        "mode": mode,
         "health": state.binding.health,
         "generation": state.binding.generation,
         "pane": state.current_generation().map(|g| &g.pane),
@@ -519,7 +531,7 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
         "turns": state.turns.len(),
         "todo_enabled": state.current_generation().is_some_and(|g| g.todo),
         "todo": state.todo,
-        "capabilities": state.current_generation().map(|g| g.effective_capabilities(state.binding.role)),
+        "capabilities": capabilities,
         "capability_change": state.current_generation().and_then(|g| g.capability_transition.as_ref()),
     });
     match value {
