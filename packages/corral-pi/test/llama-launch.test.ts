@@ -33,8 +33,22 @@ test("a local route requires its enabled capability and resolved settings", () =
   }))).toThrow();
 });
 
-test("local configuration does not redirect an existing cloud provider", () => {
-  // Given a cloud route carrying an enabled local inference capability.
-  // When launch parses it, then contradictory routing is refused.
-  expect(() => parseLaunchMessage(JSON.stringify({ ...message, provider: "openai-codex", model: "gpt-6.1-sol" }))).toThrow();
-});
+for (const role of ["worker", "reviewer", "pm"] as const) {
+  for (const provider of ["openai-codex", "anthropic", "amazon-bedrock"] as const) {
+    test(`${role}/${provider} accepts the role's local permission without changing its cloud selection`, () => {
+      // Given a cloud profile and the same role's independently enabled local capability.
+      const cloud = {
+        ...message, role, provider, model: "cloud-model",
+        ...(provider === "amazon-bedrock" ? { aws: { profile: "fixture", region: "us-west-2" } } : {}),
+      };
+      const baseline = parseLaunchMessage(JSON.stringify({ ...cloud, capabilities: undefined }));
+      // When the normal launcher forwards the local-capable role snapshot.
+      const configured = parseLaunchMessage(JSON.stringify(cloud));
+      // Then the selected provider, model and AWS binding retain their cloud values.
+      expect(configured.provider).toBe(baseline.provider);
+      expect(configured.model).toBe(baseline.model);
+      expect(configured.aws).toEqual(baseline.aws);
+      expect(configured.capabilities?.llama_cpp).toEqual(message.capabilities.llama_cpp);
+    });
+  }
+}
