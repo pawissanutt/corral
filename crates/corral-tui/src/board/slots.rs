@@ -6,11 +6,21 @@ use unicode_width::UnicodeWidthStr;
 /// `limits.count_reviews` / `count_gates` keeps off the count is shown but marked `uncounted`.
 pub fn slot_summary(u: &SlotUsage, limits: &Limits) -> String {
     let parts = slot_parts(u, limits, false);
-    let used = format!("{}/{} used", u.total(), limits.running);
+    let used = format!("{}/{} used{}", u.total(), limits.running, soft(limits));
     if parts.is_empty() {
         used
     } else {
         format!("{used}: {}", parts.join(" · "))
+    }
+}
+
+/// `" (soft target 2)"` while `limits.running_target` holds headroom below the hard limit.
+fn soft(limits: &Limits) -> String {
+    let target = corral_ops::soft_target(limits);
+    if target < limits.running {
+        format!(" (soft target {target})")
+    } else {
+        String::new()
     }
 }
 
@@ -40,7 +50,7 @@ fn slot_parts(u: &SlotUsage, limits: &Limits, short: bool) -> Vec<String> {
 /// The Running column's title badge: the slot fraction plus, when anything besides tasks holds or reserves a
 /// slot, the breakdown - long when it fits in `avail` cells, else short, else just the fraction.
 pub(super) fn slot_badge(u: &SlotUsage, limits: &Limits, avail: usize) -> String {
-    let frac = format!(" {}/{} ", u.total(), limits.running);
+    let frac = format!(" {}/{}{} ", u.total(), limits.running, soft(limits));
     if u.reviews + u.gates + u.reservations + u.parked == 0 {
         return frac;
     }

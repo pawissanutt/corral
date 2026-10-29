@@ -109,6 +109,18 @@ impl SlotUsage {
     }
 }
 
+/// The soft coding-slot target automatic admission fills up to, never above the hard limit.
+pub fn soft_target(limits: &Limits) -> usize {
+    limits
+        .running_target
+        .map_or(limits.running, |target| target.min(limits.running))
+}
+
+/// P0 tasks and red-main fixes may take automatic coding slots in the headroom up to the hard limit.
+pub(crate) fn uses_headroom(task: &Task) -> bool {
+    task.priority == "P0" || corral_core::red_main(task)
+}
+
 /// Only the current coding run can reuse a slot already held by its worker.
 pub(crate) fn gate_shares_dispatch_slot(task: &Task) -> bool {
     task.status.holds_slot() && task.holds_dispatch_slot() && task.current_run().is_some()

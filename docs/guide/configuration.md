@@ -81,11 +81,22 @@ How many agents run at once.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `running` | `3` | Global slots: each Running/Needs me task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. |
+| `running` | `3` | Global slots: each Running/Needs me task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. This is the hard limit. |
+| `running_target` | `running` | Soft target that automatic coding admission fills up to; see below. Must be within `1..=running`. |
 | `per_project.<project>` | none | Optional cap for one project. Must name a configured project and be above 0. |
 | `count_reviews` | `true` | Include active reviewer processes in global and project slots. |
 | `count_gates` | `true` | Include running gates in global and project slots. |
 | `review` | `2` | Additional combined gate/reviewer process cap, even when either counting switch is off. Must be above 0. |
+
+`running_target` (default: unset, meaning `running`) is the soft coding-slot target. Automatic
+Backlog admission, Idea promotion and automatically queued Ready work fill coding slots only up
+to it. The gap up to the hard `running` limit is headroom: direct `corral dispatch`, work the
+owner authorized with `corral dispatch --queue`, woken parked runs, and automatic admission of
+P0 tasks and red-main fixes may use it. It must be within `1..=running`; the same finishing
+(`limits.review`) headroom is reserved below either limit, and machine-pressure holds apply to
+all of them. Parked runs that released their slot count against neither. A task waiting for
+this reason shows `waiting: at soft target (...)`; `corral queue list` prints
+`running N / soft S / hard H` and the board shows `(soft target S)` beside the slot fraction.
 
 `corral dispatch --queue` moves work to Ready without launching it. Sync admits Ready work
 when capacity permits, reserving `limits.review` headroom for gates and reviews.
@@ -93,6 +104,7 @@ when capacity permits, reserving `limits.review` headroom for gates and reviews.
 ```toml
 [limits]
 running = 3
+# running_target = 2   # optional soft target; keeps one slot for ad-hoc and P0 work
 
 [limits.per_project]
 app = 2
