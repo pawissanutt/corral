@@ -19,7 +19,7 @@ export const UPSTREAM_TOOLS: readonly UpstreamTool[] = [
 /** The enumerated v1 operations of `corral agent call --op`. */
 export type CorralOp =
   | "hello" | "event" | "receipt_lookup" | "ask" | "withdraw" | "wait" | "progress"
-  | "checkpoint" | "evidence" | "artifact" | "gate" | "done" | "verdict"
+  | "checkpoint" | "evidence" | "artifact" | "gate" | "done" | "verdict" | "todo"
   | "question_answer" | "question_escalate" | "question_cancel" | "reply" | "comment"
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
   | "read_route" | "read_artifacts" | "read_lessons";
@@ -28,7 +28,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
   "evidence", "artifact", "gate", "done", "verdict", "question_answer", "question_escalate",
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
-  "read_list", "read_search", "read_route", "read_artifacts", "read_lessons",
+  "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "todo",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
@@ -46,6 +46,8 @@ export interface HostIdentity {
 /** What a role module can see when it builds its loadout and contract. */
 export interface RoleContext {
   readonly identity: HostIdentity;
+  /** Enabled only by the Rust launch snapshot; absent means disabled. */
+  readonly todo?: boolean;
   /** The worktree (worker, reviewer) or workspace root (pm) Pi works in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */

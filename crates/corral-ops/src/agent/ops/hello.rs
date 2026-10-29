@@ -121,11 +121,13 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             .into());
         }
         generation.bound = Some(bound);
+        let todo = generation.todo;
         state.binding.health = HostHealth::Healthy;
         Ok(Commit {
             result: json!({
                 "generation": n, "container": key, "role": role.as_str(),
-                "ops": AgentOp::implemented_for(role),
+                "ops": AgentOp::implemented_for(role).into_iter()
+                    .filter(|op| *op != "todo" || todo).collect::<Vec<_>>(),
             }),
             effect: Some(ReceiptEffect {
                 kind: "generation_bound".into(),

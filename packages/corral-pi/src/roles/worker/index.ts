@@ -8,6 +8,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { assetPath, assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
+import { todoTool } from "../common/todo.ts";
 import { checkpointTool, doneTool, gateTool, progressTool, waitTool } from "./tools.ts";
 import { LSP_TOOL_NAMES, type LspToolkit, type LspToolkitOptions, lspToolkit } from "../../extensions/lsp/index.ts";
 
@@ -18,7 +19,7 @@ const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "bash", "gre
 const TOOLS: readonly CorralToolSpec[] = [
   askTool, withdrawTool, waitTool, progressTool, checkpointTool, evidenceTool, artifactTool, gateTool, doneTool,
 ];
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op)];
+const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op), "todo"];
 
 /** The first user message of a fresh worker session: the run prompt and how its commands map. */
 export function kickoff(context: RoleContext): string | undefined {
@@ -48,8 +49,8 @@ export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = 
     upstreamTools: UPSTREAM,
     corralOps: OPS,
     localToolNames: LSP_TOOL_NAMES,
-    tools() {
-      return TOOLS;
+    tools(context) {
+      return context.todo === true ? [...TOOLS, todoTool] : TOOLS;
     },
     localTools(context: RoleContext) {
       return toolkit(context).tools;

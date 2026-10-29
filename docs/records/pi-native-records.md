@@ -64,6 +64,16 @@ containers too.
 | `turns` | AgentTurn[] | ≤ 512 (`TURNS_MAX`); the oldest ended turns are evicted first, open turns never | request-receipts (facts), worker-role and reviewer-role (`class`) |
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |
 | `reports` | AgentReport[] | ≤ 64 (`REPORTS_MAX`) | op-receipts |
+| `todo` | RunProgress? | PM-only canonical ledger; absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
+
+Workers continue to use `Run.progress`; `agent_host.todo` is not a worker shadow copy.
+The PM ledger is stored in `AgentPm.state.todo` and read through `agent::pm_state`.
+Its `spec_revision` is `pm:<bound-project>`; changing the PM's project on a new binding
+starts a separate empty ledger. Task acceptance links are not permitted in PM progress.
+Both ledgers retain terminal states and drop reasons. Each top-level `todo` operation
+commits the new revision with its canonical receipt and owes a `progress_updated` event.
+An identical request returns the original receipt even after a fence; it never reapplies
+the command. No separate runtime file is needed to recover the ledger.
 
 AgentBinding: launcher-bound, never model-supplied.
 
@@ -89,6 +99,13 @@ AgentGeneration: one host process lifetime.
 | `fenced` | GenerationFence? | `{reason, at}`, permanent |
 | `nudged_at` | timestamp? | OD11's one automatic `turn_nudge` (worker-role) |
 | `event_seq` | u64 | last reconciled bridge event sequence (recovery) |
+| `todo` | bool | resolved worker/PM todo enablement for this generation; serde-default false for legacy records |
+
+The wave-0 resolver in `config/agent_capabilities.rs` supplies standard/full defaults,
+strict opt-out and worker/PM overrides. `open_generation` records the effective boolean;
+the launch message carries it as `todo` and hello omits the operation when disabled.
+Config edits affect the next explicit generation, not an active one's loadout. The
+full capability catalog and generation digest are later work, not a second catalog here.
 
 GenerationBound: `host_cap_sha256`, `ctl_cap_sha256` (64 hex each, and different from each
 other), `session_id` (≤ 128), `session_file` (absolute, under the container's sessions

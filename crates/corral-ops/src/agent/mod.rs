@@ -36,6 +36,8 @@ mod receipts_tests;
 pub mod recovery;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod todo_tests;
 pub mod turns;
 pub mod usage;
 pub mod wake;

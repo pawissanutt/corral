@@ -105,7 +105,7 @@ test("the PM exposes only its scoped operations and requires the installed conte
   // Then neither lifecycle-only operations nor owner authority become model tools.
   expect(pm.upstreamTools).toEqual([]);
   expect(tools.map((item) => item.name)).toEqual(names);
-  expect([...pm.corralOps].sort()).toEqual(["hello", "event", "receipt_lookup", ...cases.map(({ op }) => op)].sort());
+  expect([...pm.corralOps].sort()).toEqual(["hello", "event", "receipt_lookup", ...cases.map(({ op }) => op), "todo"].sort());
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-pm-noassets-"));
   try {
     expect(() => pmRole(empty).contract(context)).toThrow(`role_asset_missing: ${CONTEXT_ASSET}`);

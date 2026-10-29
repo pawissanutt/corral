@@ -409,6 +409,7 @@ pub fn state(ctx: &Ctx, args: &StateArgs) -> Result<()> {
         ("receipts", "receipts"),
         ("open questions", "open_questions"),
         ("turns", "turns"),
+        ("todo enabled", "todo_enabled"),
     ] {
         let item = &value["container"][field];
         if !item.is_null() {
@@ -417,6 +418,12 @@ pub fn state(ctx: &Ctx, args: &StateArgs) -> Result<()> {
                 item.as_str().map_or(item.to_string(), str::to_owned)
             );
         }
+    }
+    if let Some(todo) = value["container"]
+        .get("todo")
+        .filter(|todo| !todo.is_null())
+    {
+        println!("todo: {}", serde_json::to_string_pretty(todo)?);
     }
     println!(
         "assets: {}",
@@ -499,6 +506,8 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
         "receipts": state.receipts.len(),
         "open_questions": open,
         "turns": state.turns.len(),
+        "todo_enabled": state.current_generation().is_some_and(|g| g.todo),
+        "todo": state.todo,
     });
     match value {
         Value::Object(map) => map,

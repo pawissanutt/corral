@@ -69,6 +69,9 @@ pub struct AgentRunState {
     pub wakes: Vec<WakeSubscription>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reports: Vec<AgentReport>,
+    /// PM's own progress; workers use the existing Run.progress instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo: Option<crate::RunProgress>,
 }
 
 impl AgentRunState {
@@ -82,6 +85,7 @@ impl AgentRunState {
             turns: Vec::new(),
             wakes: Vec::new(),
             reports: Vec::new(),
+            todo: None,
         }
     }
 
@@ -140,6 +144,9 @@ pub struct AgentGeneration {
     /// Last bridge event sequence corral reconciled (`events_since` resumes after it).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub event_seq: u64,
+    /// Wave-0 capability snapshot. Older generations retain the legacy disabled loadout.
+    #[serde(default)]
+    pub todo: bool,
 }
 
 /// What hello proved. The bind nonce is consumed when this is written.

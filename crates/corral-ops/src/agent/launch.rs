@@ -82,6 +82,9 @@ pub struct Bootstrap {
     /// `[agent] ui` at dispatch; absent in older bootstraps, which means rich.
     #[serde(default)]
     pub ui: corral_core::AgentUi,
+    /// Resolved wave-0 todo capability; absent in legacy bootstraps.
+    #[serde(default)]
+    pub todo: bool,
 }
 
 impl std::fmt::Debug for Bootstrap {
@@ -401,6 +404,13 @@ pub fn prepare_bootstrap(
         effort: spec.effort.clone(),
         prompt_file: spec.prompt_file.clone(),
         ui: ctx.store.config.agent.ui,
+        todo: ctx.store.config.agent.capabilities.todo(match target {
+            BindTarget::Worker { .. } => AgentRole::Worker,
+            BindTarget::Pm { .. } => AgentRole::Pm,
+            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
+            BindTarget::Planner { .. } => AgentRole::Planner,
+            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
+        }),
     };
     let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
     let path = write_bootstrap(&dir, &bootstrap)?;
@@ -768,6 +778,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
         "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
+        "todo": bootstrap.todo,
     });
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {

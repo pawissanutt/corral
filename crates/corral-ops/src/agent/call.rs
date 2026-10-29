@@ -28,6 +28,7 @@ pub enum AgentOp {
     Withdraw,
     Wait,
     Progress,
+    Todo,
     Checkpoint,
     Evidence,
     Artifact,
@@ -61,9 +62,10 @@ const AGENTS: &[AgentRole] = &[AgentRole::Worker, AgentRole::Reviewer];
 const WORKER: &[AgentRole] = &[AgentRole::Worker];
 const REVIEWER: &[AgentRole] = &[AgentRole::Reviewer];
 const PM: &[AgentRole] = &[AgentRole::Pm];
+const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 27] = [
+    pub const ALL: [AgentOp; 28] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -71,6 +73,7 @@ impl AgentOp {
         AgentOp::Withdraw,
         AgentOp::Wait,
         AgentOp::Progress,
+        AgentOp::Todo,
         AgentOp::Checkpoint,
         AgentOp::Evidence,
         AgentOp::Artifact,
@@ -102,6 +105,7 @@ impl AgentOp {
             AgentOp::Withdraw => "withdraw",
             AgentOp::Wait => "wait",
             AgentOp::Progress => "progress",
+            AgentOp::Todo => "todo",
             AgentOp::Checkpoint => "checkpoint",
             AgentOp::Evidence => "evidence",
             AgentOp::Artifact => "artifact",
@@ -133,6 +137,7 @@ impl AgentOp {
     pub fn roles(self) -> &'static [AgentRole] {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => ALL_ROLES,
+            AgentOp::Todo => TODO,
             AgentOp::Ask | AgentOp::Withdraw | AgentOp::Evidence | AgentOp::Artifact => AGENTS,
             AgentOp::Wait | AgentOp::Progress | AgentOp::Checkpoint => WORKER,
             AgentOp::Gate | AgentOp::Done => WORKER,
@@ -157,6 +162,7 @@ impl AgentOp {
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
+            AgentOp::Todo => None,
             AgentOp::Ask | AgentOp::Withdraw => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
@@ -441,6 +447,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Hello => super::ops::hello(ctx, &envelope),
             AgentOp::Event => super::ops::event(ctx, &envelope),
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
+            AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
             AgentOp::Ask => ask(ctx, &envelope),
             AgentOp::Withdraw => withdraw(ctx, &envelope),
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {

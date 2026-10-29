@@ -30,6 +30,7 @@ export interface HostConfig {
   readonly sessionDir: string;
   readonly resumeSession?: string;
   readonly freshSession?: boolean;
+  readonly todo?: boolean;
   readonly model: string;
   readonly provider?: ProviderId;
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
@@ -109,6 +110,9 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.fresh_session !== undefined && typeof message.fresh_session !== "boolean") {
     throw new LaunchMessageInvalid("fresh_session must be a boolean");
   }
+  if (message.todo !== undefined && typeof message.todo !== "boolean") {
+    throw new LaunchMessageInvalid("todo must be a boolean");
+  }
   const aws = awsBinding(message.aws);
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
@@ -133,6 +137,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     sessionDir: path(message, "session_dir"),
     resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
     freshSession: message.fresh_session === true,
+    todo: message.todo === true,
     model: field(message, "model", TOKEN, 128),
     ...(provider ? { provider } : {}),
     ...(aws ? { aws } : {}),
