@@ -85,7 +85,7 @@ export async function createModelCatalog(
       const id = provider.id;
       const getModels = () => {
         const listed = metadata.getModels(id).filter((model) => model.api === PROVIDERS[id].modelApi);
-        const extra = SUPPLEMENTAL_MODELS[id]
+        const extra = (SUPPLEMENTAL_MODELS[id] ?? [])
           .filter((model) => model.api === PROVIDERS[id].modelApi && !listed.some((entry) => entry.id === model.id));
         return [...listed, ...extra];
       };
