@@ -74,7 +74,7 @@ pub fn selection_catalog(store: &Store, id: &str, role: ProfileRole) -> Result<S
     }
     Ok(SelectionCatalog {
         version: PROFILE_RECORD_VERSION,
-        spec_revision: corral_core::plan_contract_revision(&task)?,
+        spec_revision: corral_core::profile_selection_revision(&task)?,
         catalog_revision: config.profile_catalog_revision()?,
         config_revision: config.profile_setup_revision()?,
         task,

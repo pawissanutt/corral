@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     AutoProfileSelection, Config, FALLBACK_PROFILE, ProfileChoice, ProfileRole, ResolvedProfile,
-    SelectionActor, Task, TaskKind, TaskSize,
+    SelectionActor, Task, TaskDifficulty, TaskKind, TaskSize,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +114,12 @@ pub struct RoutingRule {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub size: Vec<TaskSize>,
+    #[serde(
+        default,
+        deserialize_with = "alternatives",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub difficulty: Vec<TaskDifficulty>,
     #[serde(default, alias = "title", skip_serializing_if = "Option::is_none")]
     pub title_regex: Option<String>,
     #[serde(default, alias = "body", skip_serializing_if = "Option::is_none")]
@@ -146,6 +152,10 @@ impl RoutingRule {
                     .as_deref()
                     .is_some_and(|value| self.kind.iter().any(|kind| kind.as_str() == value)))
             && (self.size.is_empty() || task.size.is_some_and(|s| self.size.contains(&s)))
+            && (self.difficulty.is_empty()
+                || task
+                    .difficulty
+                    .is_some_and(|d| self.difficulty.contains(&d)))
             && title.is_none_or(|r| r.is_match(&task.title))
             && body.is_none_or(|r| r.is_match(&task.body)))
     }

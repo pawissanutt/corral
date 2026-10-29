@@ -413,6 +413,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             priority,
             kind,
             size,
+            difficulty,
             design,
             labels,
         } => {
@@ -435,6 +436,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 priority,
                 kind,
                 size,
+                difficulty,
                 origin,
                 design,
                 &labels,

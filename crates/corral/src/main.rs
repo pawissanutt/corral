@@ -42,7 +42,7 @@ mod wait_cmd;
 use std::path::PathBuf;
 
 use clap::{FromArgMatches, Parser, Subcommand};
-use corral_core::{CommentAuthor, Origin, TaskKind, TaskSize};
+use corral_core::{CommentAuthor, Origin, TaskDifficulty, TaskKind, TaskSize};
 
 fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
     match value {
@@ -221,9 +221,12 @@ pub enum Cmd {
         /// Task category used by routing rules
         #[arg(long)]
         kind: Option<TaskKind>,
-        /// Estimated task size used by routing rules
+        /// Estimated work volume, independent of reasoning difficulty
         #[arg(long)]
         size: Option<TaskSize>,
+        /// Reasoning difficulty, independent of task size: routine, standard or hard
+        #[arg(long)]
+        difficulty: Option<TaskDifficulty>,
         /// Route the idea or task through design planning before implementation
         #[arg(long, visible_alias = "plan-required")]
         design: bool,

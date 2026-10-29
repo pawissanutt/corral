@@ -4,8 +4,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 use corral_core::{
-    Artifact, ArtifactKind, Origin, PlanDocument, PlanScope, Status, Store, Task, TaskKind,
-    TaskSize,
+    Artifact, ArtifactKind, Origin, PlanDocument, PlanScope, Status, Store, Task, TaskDifficulty,
+    TaskKind, TaskSize,
 };
 use serde::{Deserialize, Serialize};
 
@@ -70,6 +70,7 @@ struct Entry {
     project: Option<String>,
     kind: Option<TaskKind>,
     size: Option<TaskSize>,
+    difficulty: Option<TaskDifficulty>,
     priority: Option<String>,
     profile: Option<String>,
     #[serde(default)]
@@ -156,6 +157,7 @@ pub fn import_plan(ctx: &Ctx, path: &Path, dry_run: bool, origin: Origin) -> Res
             child.project = entry.project.clone().or_else(|| document.project.clone());
             child.kind = entry.kind.map(|kind| kind.as_str().to_owned());
             child.size = entry.size;
+            child.difficulty = entry.difficulty;
             if let Some(priority) = &entry.priority {
                 child.priority = priority.clone();
             }

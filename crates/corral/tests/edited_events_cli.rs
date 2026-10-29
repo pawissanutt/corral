@@ -81,6 +81,48 @@ fn edit_command_records_one_title_and_body_diff_without_body_text() {
 }
 
 #[test]
+fn edit_command_persists_difficulty_without_changing_size() {
+    // Given a task and a noninteractive editor changing only difficulty.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    let task = store.create("Assess", None, Status::Backlog, "").unwrap();
+    let mut replacement = task.clone();
+    replacement.difficulty = Some(corral_core::TaskDifficulty::Standard);
+    let replacement_path = dir.path().join("replacement.md");
+    std::fs::write(&replacement_path, corral_core::render_task(&replacement)).unwrap();
+    let editor = dir.path().join("editor.sh");
+    std::fs::write(&editor, "cp \"$CORRAL_EDIT_REPLACEMENT\" \"$1\"\n").unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_corral"));
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("CORRAL_")
+            || key.to_string_lossy().starts_with("HERDR_")
+        {
+            cmd.env_remove(key);
+        }
+    }
+    // When the existing edit command saves its scratch file.
+    let out = cmd
+        .current_dir(dir.path())
+        .env("CORRAL_ROOT", dir.path())
+        .env("HERDR_BIN_PATH", dir.path().join("no-herdr"))
+        .env("EDITOR", format!("sh {}", editor.display()))
+        .env("CORRAL_EDIT_REPLACEMENT", &replacement_path)
+        .args(["edit", &task.id])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    // Then the assessment changes independently of size.
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let saved = store.get(&task.id).unwrap();
+    assert_eq!(saved.difficulty, replacement.difficulty);
+    assert_eq!(saved.size, task.size);
+}
+
+#[test]
 fn edit_command_cannot_bypass_scope_amendments_even_with_owner_ok() {
     for field in ["scope", "revision", "history"] {
         for owner_ok in [false, true] {

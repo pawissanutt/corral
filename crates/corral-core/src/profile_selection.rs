@@ -339,7 +339,7 @@ impl AutoProfileSelection {
             "Auto selection reason is empty"
         );
         ensure!(
-            self.spec_revision == crate::plan_contract_revision(task)?,
+            self.spec_revision == profile_selection_revision(task)?,
             "stale task specification"
         );
         ensure!(
@@ -400,5 +400,15 @@ impl AutoProfileSelection {
             }
         }
         Ok(())
+    }
+}
+
+/// Difficulty changes invalidate a semantic choice without invalidating an approved plan.
+/// Unclassified tasks retain the existing receipt identity.
+pub fn profile_selection_revision(task: &Task) -> Result<String> {
+    let spec = crate::plan_contract_revision(task)?;
+    match task.difficulty {
+        Some(difficulty) => crate::operating::digest(&(spec, difficulty)),
+        None => Ok(spec),
     }
 }

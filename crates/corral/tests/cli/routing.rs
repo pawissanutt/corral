@@ -52,7 +52,7 @@ model = "missing-model"
 }
 
 #[test]
-fn new_kind_size_roundtrip() {
+fn new_kind_size_difficulty_roundtrip() {
     // Given an initialized workspace.
     let ws = init_ws();
     // When a classified task is filed.
@@ -67,26 +67,31 @@ fn new_kind_size_roundtrip() {
             "backend",
             "--size",
             "m",
+            "--difficulty",
+            "hard",
         ],
     );
-    // Then both metadata fields survive storage and appear in CLI views.
+    // Then the metadata fields survive storage and appear in CLI views.
     let show: serde_json::Value =
         serde_json::from_str(&ok(&ws.root, &["show", "1", "--json"])).expect("json");
     assert_eq!(show["kind"], "backend");
     assert_eq!(show["size"], "m");
+    assert_eq!(show["difficulty"], "hard");
     let list: serde_json::Value =
         serde_json::from_str(&ok(&ws.root, &["list", "--json"])).expect("json");
     assert_eq!(list[0]["kind"], "backend");
     assert_eq!(list[0]["size"], "m");
+    assert_eq!(list[0]["difficulty"], "hard");
     let text = ok(&ws.root, &["show", "1"]);
     assert!(text.contains("kind:     backend"), "{text}");
     assert!(text.contains("size:     m"), "{text}");
+    assert!(text.contains("difficulty: hard"), "{text}");
 }
 
 #[test]
-fn new_rejects_invalid_kind_and_size_before_writing() {
+fn new_rejects_invalid_classification_before_writing() {
     let ws = init_ws();
-    for flag in ["--kind", "--size"] {
+    for flag in ["--kind", "--size", "--difficulty"] {
         // Given no tasks, when an invalid classification is supplied.
         let out = corral(&ws.root, &["new", "Invalid", flag, "bogus"]);
         // Then argument parsing rejects it and leaves storage untouched.
@@ -98,6 +103,9 @@ fn new_rejects_invalid_kind_and_size_before_writing() {
         serde_json::from_str(&ok(&ws.root, &["list", "--json"])).expect("json");
     assert_eq!(list, serde_json::json!([]));
 }
+
+#[path = "routing_difficulty.rs"]
+mod difficulty;
 
 #[test]
 fn route_text_includes_unset_defaults_and_source() {

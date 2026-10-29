@@ -140,6 +140,7 @@ mod tests {
             project: None,
             kind: None,
             size: None,
+            difficulty: None,
             priority: "P2".into(),
             depends_on: Vec::new(),
             labels: Vec::new(),

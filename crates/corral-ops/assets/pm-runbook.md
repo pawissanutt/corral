@@ -83,7 +83,18 @@ This is the authoritative selector procedure shared by task proposers and the PM
 It is embedded unchanged in the installed task-filing skill and new PM instructions.
 It selects configured profiles, not new models; model setup/research is separate.
 
-1. After filing or revising the task specification, load
+1. After filing or revising the task specification, assess and persist difficulty
+   separately from size. Size is work volume; difficulty is reasoning: `routine`
+   means a known pattern or repetition, `standard` means bounded reasoning, and
+   `hard` means uncertainty, algorithmic optimization or correctness argued from
+   invariants. Read the actual task and repository evidence, never classify from
+   title keywords, kind or size alone. Use `{{bin}} new --difficulty <value>`
+   (including `--idea`), imported task-entry `difficulty`, or `{{bin}} edit <id>`
+   for an existing task. Unset means not assessed and retains legacy routing;
+   do not silently call it routine. Keep Agent: Auto, with no new mandatory owner
+   choice. Save the assessment before loading the catalog or generating a receipt:
+   difficulty changes the selection revision independently of plan identity.
+   Then load
    `{{bin}} selection catalog <id> --role implementation --json`
    (use `--role planning` for a planning deliverable). Load it again whenever the
    task or relevant configuration changes. Never choose from remembered starter names
@@ -98,11 +109,20 @@ It selects configured profiles, not new models; model setup/research is separate
    Respect approved provider/spending limits; if required access or authority is
    unresolved, expose that decision rather than claiming the catalog verified it.
 3. Compare the goal, acceptance criteria, relevant repository facts, risks and
-   uncertainty to the guidance. Title keywords and size alone do not decide.
+   uncertainty and the persisted difficulty to the guidance. Title keywords and
+   size alone do not decide.
    Select the best fit with a concise reason. For overlapping profiles, name the
    closest eligible alternative and state the relevant distinction, not private
    chain-of-thought. If no specialist fits better, a general-purpose profile is valid
-   with a reason. If the task is too vague, clarify it or use authorized planning;
+   with a reason. Prefer an adequate routine/general preset for known-pattern work,
+   even at L/XL; do not pay for deeper reasoning merely because there is more code.
+   Choose a stronger reasoning preset when uncertainty or correctness demands it,
+   even at XS/S. Among adequate choices, use the owner's configured cost/latency
+   preferences and evidence, not guessed prices or model-name rankings.
+   Explain the choice in one sentence, such as "Large but routine: follows the
+   existing authentication pattern, so the general preset is sufficient."
+   Owner rules and explicit pins still win; explain them when they override this
+   assessment. If the task is too vague, clarify it or use authorized planning;
    if nothing is eligible, report unavailable/unconfigured rather than invent a profile.
 4. Write a JSON Auto receipt to an ordinary file and run
    `{{bin}} selection save --file <json> --json`. Use these exact fields:

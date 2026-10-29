@@ -5,7 +5,9 @@
 # All specified rule fields must match; a field accepts one value or a list.
 # Rules run top to bottom, skipping unavailable models. Indexes in `route` are one-based.
 # Overrides: dispatch flags > task profile > rules > project default_profile > defaults > omo.
-# UI comes first; XL and explicit "hard correctness" outrank cheaper size/kind shortcuts.
+# Explicit difficulty comes first: volume alone does not require deeper reasoning.
+# Routine repeats a known pattern; standard needs bounded reasoning; hard needs discovery.
+# Unclassified tasks retain the legacy UI/size/kind rules below.
 # Set "hard correctness" in a title or body when Astra is needed for correctness work.
 # Uncomment the defaults example too: ordinary tasks fall back to gpt-sol.
 # Sol Fast is an optional faster, more expensive option at the same quality.
@@ -37,6 +39,17 @@
 # effort = "high"
 #
 # [defaults]
+# profile = "gpt-sol"
+#
+# [[routing.rules]]
+# name = "Hard reasoning at any size"
+# difficulty = "hard"
+# profile = "gpt-astra"
+#
+# [[routing.rules]]
+# name = "Routine or standard implementation at any size"
+# difficulty = ["routine", "standard"]
+# kind = ["backend", "logic", "test", "refactor", "research"]
 # profile = "gpt-sol"
 #
 # [[routing.rules]]

@@ -84,6 +84,7 @@ fn routed_fixture(profile: &str) -> Fixture {
             project: Vec::new(),
             kind: Vec::new(),
             size: Vec::new(),
+            difficulty: Vec::new(),
             title_regex: None,
             body_regex: None,
             profile: profile.into(),

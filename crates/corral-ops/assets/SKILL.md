@@ -73,8 +73,13 @@ Use the task specification, not only a comment, to change acceptance criteria.
   in one project; split bigger asks and link them with `--depends`.
 - Follow the configured review policy (`[review]` in `.corral/corral.toml`); with `accept = "owner"`,
   approval stays the user's decision, made on the board. Request changes and discard are the user's too.
-- Set `--kind` and `--size` when filing a task, and explain the classification and size estimate in
-  the task body. These remain supporting signals for owner routing rules, not semantic selection.
+- Set `--kind`, `--size` and assessed `--difficulty` when filing a task, including `--idea`,
+  and explain them in the body. Size is work volume; difficulty is reasoning: `routine` for a
+  known pattern or repetition, `standard` for bounded reasoning, `hard` for uncertainty,
+  algorithmic optimization or correctness argued from invariants. Never classify by title
+  keywords or size alone. Unset difficulty means not assessed; legacy routing applies.
+  Persist difficulty before loading a selection catalog or generating a receipt; use
+  `corral edit <id>` to revise it. Keep Agent: Auto; do not ask the owner for a new mandatory choice.
 - Follow the shared "Profile selector procedure (v1)" above after filing/revising work:
   load `corral selection catalog <id> --role implementation|planning`, then save a structured
   proposer/PM receipt with `corral selection save --file <json>`. Leave `--profile` unset for

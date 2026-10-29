@@ -49,6 +49,30 @@ fn tree(path: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 }
 
 #[test]
+fn import_preserves_assessed_and_unassessed_difficulty() {
+    for dry_run in [true, false] {
+        // Given a plan with independent work volume and difficulty assessments.
+        let (_dir, ctx, path) = fixture();
+        let source = PLAN
+            .replace("size: s\n", "size: s\n    difficulty: hard\n")
+            .replace("size: xs\n", "size: xs\n    difficulty: routine\n");
+        fs::write(&path, source).unwrap();
+        // When the plan is previewed or published.
+        let result = import_plan(&ctx, &path, dry_run, Origin::Owner).unwrap();
+        // Then assessed values and missing assessments survive both import paths.
+        assert_eq!(result.tasks[0].difficulty, Some(TaskDifficulty::Hard));
+        assert_eq!(result.tasks[0].size, Some(TaskSize::S));
+        assert_eq!(result.tasks[1].difficulty, Some(TaskDifficulty::Routine));
+        assert_eq!(result.tasks[2].difficulty, None);
+        if !dry_run {
+            for task in &result.tasks {
+                assert_eq!(ctx.store.get(&task.id).unwrap().difficulty, task.difficulty);
+            }
+        }
+    }
+}
+
+#[test]
 fn imports_tracker_and_three_children_with_resolved_edges() {
     for ready in [false, true] {
         // Given a plan with local and existing dependencies and project overrides.
@@ -148,6 +172,7 @@ fn invalid_imports_publish_nothing() {
         PLAN.replace("project: docs", "project: unknown"),
         PLAN.replace("kind: logic", "kind: bogus"),
         PLAN.replace("size: s", "size: gigantic"),
+        PLAN.replace("size: s", "size: s\n    difficulty: impossible"),
         PLAN.replace("priority: P1", "priority: P9"),
         PLAN.replace("key: docs", "key: api"),
         PLAN.replace("title: Add Widget.spin", "title: ''"),

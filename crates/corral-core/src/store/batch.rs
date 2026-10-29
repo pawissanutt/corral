@@ -163,6 +163,7 @@ pub(super) fn draft_task(
         project: project.map(str::to_owned),
         kind: None,
         size: None,
+        difficulty: None,
         priority: "P2".into(),
         depends_on: Vec::new(),
         labels: Vec::new(),

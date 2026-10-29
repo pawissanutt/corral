@@ -356,15 +356,29 @@ Which profile a run uses is decided by [routing](#routing).
 
 ## routing
 
-Rules pick a profile from a task's classification, so small tasks can go to a cheap profile and hard ones to a
-strong one without choosing by hand. Classify tasks when you file them:
+Leave **Agent: Auto** selected. The PM assesses the task and routing picks a preset.
+Size means **how much work**; difficulty means **how much reasoning**. A large,
+repetitive implementation can use an ordinary preset; a small, difficult optimization
+can use a stronger one. Model and reasoning effort come from the chosen preset.
+
+When filing directly, classification is optional:
 
 ```bash
-corral new "Add a --dry-run flag" -p app --ready --kind backend --size s
+corral new "Add a --dry-run flag" -p app --ready --kind backend --size s --difficulty routine
 ```
 
 `--kind` is one of `ui`, `backend`, `logic`, `docs`, `test`, `refactor`, `research`; `--size` is one of `xs`, `s`,
-`m`, `l`, `xl`. Both are optional and stored in the task file.
+`m`, `l`, `xl`. `--difficulty` is `routine`, `standard`, or `hard`:
+
+- **Routine:** the solution follows a known pattern; most work is implementation or repetition.
+- **Standard:** bounded design and debugging using understood techniques.
+- **Hard:** unresolved behavior, algorithmic discovery, subtle invariants, or difficult trade-offs.
+
+All three fields are optional and stored in the task file. Missing difficulty means
+**not assessed**, not easy; existing routes continue to apply. The PM assesses the
+actual spec, not keywords: authentication can be routine when following an established
+design, and hard when its security model is unresolved. Optimization can be routine
+when applying a measured, known fix, and hard when finding the algorithm is the task.
 
 Rules are `[[routing.rules]]` entries, checked in order; the first match wins.
 
@@ -375,6 +389,7 @@ Rules are `[[routing.rules]]` entries, checked in order; the first match wins.
 | `project` | any | One project key or a list. |
 | `kind` | any | One kind or a list. |
 | `size` | any | One size or a list. |
+| `difficulty` | any | One difficulty or a list, independent of size. |
 | `title_regex` | any | Regular expression the task title must match (alias `title`). |
 | `body_regex` | any | Regular expression the task body must match (alias `body`). |
 
@@ -386,18 +401,18 @@ task. Unknown keys are rejected.
 profile = "sonnet"
 
 [[routing.rules]]
-name = "UI work needs the strongest model"
-kind = "ui"
+name = "Hard reasoning, at any size"
+difficulty = "hard"
 profile = "opus-high"
 
 [[routing.rules]]
-name = "Small and test tasks"
-size = ["xs", "s"]
+name = "Known implementation, at any size"
+difficulty = ["routine", "standard"]
 profile = "sonnet"
 
 [[routing.rules]]
-name = "Hard correctness"
-title_regex = "(?i)hard correctness"
+name = "Unassessed large tasks"
+size = ["l", "xl"]
 profile = "opus-high"
 
 [profiles.sonnet]
@@ -411,9 +426,19 @@ effort = "high"
 ```
 
 `corral init` writes a commented starter (profiles, rules and a `[defaults]` example) that you can enable.
+Its explicit difficulty rules precede legacy size rules: hard work uses `gpt-astra`,
+while routine/standard backend, logic, test, refactor and research work uses `gpt-sol`
+at every size. UI specialization remains separate.
 Its XS, S, and test rules select `gpt-sol`; docs select `gpt-luna`.
 The optional `gpt-sol-fast` profile buys speed at a higher price, not higher quality,
 and no starter rule selects it.
+
+For an existing workspace, place difficulty rules **before** broad size rules.
+Rules keep their existing top-to-bottom order; adding task metadata alone does not
+override an earlier owner rule. Profile names and their models/effort remain configurable.
+Explicit task or dispatch pins still win. Updating a task's difficulty invalidates its
+previous Auto selection receipt, so the PM must select again; it does not invalidate an
+approved plan. Running agents keep their recorded preset.
 
 The profile for a run is the first of these that applies:
 
