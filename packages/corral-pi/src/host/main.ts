@@ -16,6 +16,7 @@ import { loadModules } from "./modules.ts";
 import { loadPeerLookup } from "./peer.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
 import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts";
+import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
@@ -43,6 +44,9 @@ async function main(): Promise<void> {
   const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined;
+  if (provider === "llama.cpp" && config.capabilities?.llama_cpp) {
+    rules = localInferenceRules(config.capabilities.llama_cpp);
+  }
   if (PROVIDERS[provider].auth === "aws-profile") {
     if (!config.aws) {
       throw new CredentialsUnavailable(`no Amazon Bedrock binding was passed for provider ${provider}; ` +

@@ -27,17 +27,18 @@ import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
-import type { CapabilitySet, HostIdentity, RoleContext } from "../roles/types.ts";
+import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { corralRenderers } from "../ui/render.ts";
-import type { UiMode } from "./config.ts";
+import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
+import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
@@ -62,7 +63,7 @@ export interface HostSessionOptions {
   readonly promptFile?: string;
   readonly todo?: boolean;
   /** The generation's recorded snapshot; when present it decides todo. */
-  readonly capabilities?: CapabilitySet;
+  readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent loads no optional guidance. */
   readonly guidance?: CapabilityGuidance;
   /** The corral workspace root, the outermost directory whose context files may load. */
@@ -352,14 +353,22 @@ export class HostSession {
     const host = new HostSession(options);
     const { sdk } = options;
     const route = PROVIDERS[host.provider];
-    const models = await createModelCatalog(options.modules.auth.credentials(authContext(route.id)), {
+    const local = options.capabilities?.enabled.includes("llama_cpp.enabled") === true
+      ? options.capabilities.llama_cpp : undefined;
+    if ((host.provider === "llama.cpp") !== (local !== undefined)) {
+      throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
+    }
+    const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
+    const models = localModels?.models ?? await createModelCatalog(options.modules.auth.credentials(authContext(route.id)), {
       providers: [route.id],
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
-    const model = models.getModel(route.id, modelId);
+    const model = localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
-      { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+    if (!localModels) {
+      restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
+        { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+    }
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);

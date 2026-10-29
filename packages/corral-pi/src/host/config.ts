@@ -12,17 +12,22 @@ import { browserSettings } from "../extensions/browser/index.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { parseControls } from "./tool-controls.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
+import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser",
+  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
 export type UiMode = "rich" | "plain";
+
+export interface HostCapabilities extends CapabilitySet {
+  readonly llama_cpp?: LlamaCppSettings;
+}
 
 export interface HostSecrets {
   readonly hostCap: string;
@@ -43,7 +48,7 @@ export interface HostConfig {
   readonly resumeSession?: string;
   readonly freshSession?: boolean;
   readonly todo?: boolean;
-  readonly capabilities?: CapabilitySet;
+  readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
   readonly guidance?: CapabilityGuidance;
   readonly model: string;
@@ -109,7 +114,7 @@ function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
   return { settings: settings as CapabilityGuidance["settings"], projectText: set.project_text, ...(projectDir ? { projectDir } : {}) };
 }
 
-function capabilitySet(value: unknown): CapabilitySet | undefined {
+function capabilitySet(value: unknown): HostCapabilities | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) throw new LaunchMessageInvalid("capabilities must be an object");
   const set = value as Json;
@@ -133,6 +138,11 @@ function capabilitySet(value: unknown): CapabilitySet | undefined {
   if (enabled.includes("mcp.enabled") !== (mcp?.success === true)) {
     throw new LaunchMessageInvalid("mcp.enabled requires exactly one resolved capabilities.mcp settings object");
   }
+  const local = set.llama_cpp === undefined ? undefined : LlamaCppSettingsSchema.safeParse(set.llama_cpp);
+  if (local && !local.success) throw new LaunchMessageInvalid("capabilities.llama_cpp settings are malformed");
+  if (enabled.includes("llama_cpp.enabled") !== (local?.success === true)) {
+    throw new LaunchMessageInvalid("llama_cpp.enabled requires exactly one resolved capabilities.llama_cpp settings object");
+  }
   return {
     catalog: set.catalog,
     digest: field(set, "digest", /^[0-9a-f]{64}$/, 64),
@@ -140,6 +150,7 @@ function capabilitySet(value: unknown): CapabilitySet | undefined {
     enabled: [...new Set(enabled as string[])],
     ...(web?.success ? { web: web.data } : {}),
     ...(mcp?.success ? { mcp: mcp.data } : {}),
+    ...(local?.success ? { llama_cpp: local.data } : {}),
   };
 }
 
@@ -178,6 +189,9 @@ export function parseLaunchMessage(text: string): HostConfig {
   }
   const aws = awsBinding(message.aws);
   const capabilities = capabilitySet(message.capabilities);
+  if ((provider === "llama.cpp") !== (capabilities?.enabled.includes("llama_cpp.enabled") === true)) {
+    throw new LaunchMessageInvalid("the llama.cpp provider requires llama_cpp.enabled and cannot replace a cloud route");
+  }
   if (role === "pm" && capabilities?.enabled.includes("web.enabled")) {
     throw new LaunchMessageInvalid("web.enabled is not available to the pm role");
   }
@@ -224,7 +238,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
     ...(capabilities ? { capabilities } : {}),
     ...(guidance ? { guidance } : {}),
-    model: field(message, "model", TOKEN, 128),
+    model: field(message, "model", provider === "llama.cpp" ? /^[^\s\0]+$/ : TOKEN, provider === "llama.cpp" ? 512 : 128),
     ...(provider ? { provider } : {}),
     ...(aws ? { aws } : {}),
     effort: optional(message, "effort", TOKEN),

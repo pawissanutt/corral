@@ -46,7 +46,8 @@
   "providers": [
     "openai",
     "anthropic",
-    "amazon-bedrock"
+    "amazon-bedrock",
+    "llama.cpp"
   ],
   "capabilities": [
     "todo",
@@ -64,6 +65,7 @@
     "background_shell",
     "role_enabled",
     "lsp",
-    "browser"
+    "browser",
+    "llama_cpp.enabled"
   ]
 }

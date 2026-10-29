@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::agent::{
     AgentRole, CATALOG, CapabilitySettings, CapabilitySnapshot, CapabilitySource, CapabilityState,
-    McpSettings, McpToolAccess, SnapshotPreset, WebSettings,
+    LlamaCppSettings, McpSettings, McpToolAccess, SnapshotPreset, WebSettings,
 };
 
 /// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
@@ -119,13 +119,25 @@ pub struct McpCapabilities {
     pub settings: McpSettings,
 }
 
-/// `[agent.capabilities.<role>]`: boolean overrides, compound tables, web and MCP settings.
+/// `[agent.capabilities.<role>.llama_cpp]`: explicit local provider opt-in.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LlamaCppCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub settings: LlamaCppSettings,
+}
+
+/// `[agent.capabilities.<role>]`: boolean overrides, compound tables and typed settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web: Option<WebCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llama_cpp: Option<LlamaCppCapabilities>,
     #[serde(flatten)]
     overrides: BTreeMap<String, RoleSetting>,
 }
@@ -139,6 +151,11 @@ impl RoleCapabilities {
         }
         if key == "mcp.enabled"
             && let Some(enabled) = self.mcp.as_ref().and_then(|mcp| mcp.enabled)
+        {
+            return Some(enabled);
+        }
+        if key == "llama_cpp.enabled"
+            && let Some(enabled) = self.llama_cpp.as_ref().and_then(|local| local.enabled)
         {
             return Some(enabled);
         }
@@ -169,6 +186,10 @@ impl RoleCapabilities {
             self.overrides.remove(key);
             self.mcp.get_or_insert_default().enabled = Some(enabled);
             return;
+        } else if key == "llama_cpp.enabled" {
+            self.overrides.remove(key);
+            self.llama_cpp.get_or_insert_default().enabled = Some(enabled);
+            return;
         }
         match self.overrides.get_mut(key) {
             Some(RoleSetting::Table(table)) => {
@@ -192,7 +213,10 @@ impl RoleCapabilities {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.overrides.is_empty() && self.web.is_none() && self.mcp.is_none()
+        self.overrides.is_empty()
+            && self.web.is_none()
+            && self.mcp.is_none()
+            && self.llama_cpp.is_none()
     }
 }
 
@@ -263,12 +287,39 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                 }
                 validate_mcp(&mcp.settings, role)?;
             }
+            if let Some(local) = &settings.llama_cpp {
+                if local.enabled.is_some() && settings.overrides.contains_key("llama_cpp.enabled") {
+                    return Err(
+                        "llama_cpp.enabled is configured both as a key and a llama_cpp setting"
+                            .into(),
+                    );
+                }
+                validate_llama_cpp(&local.settings)?;
+            }
+            if settings.get("llama_cpp.enabled") == Some(true)
+                && settings
+                    .llama_cpp
+                    .as_ref()
+                    .and_then(|local| local.settings.endpoint.as_deref())
+                    .is_none_or(str::is_empty)
+            {
+                return Err(format!(
+                    "[agent.capabilities.{}.llama_cpp] endpoint is required when enabled",
+                    role.as_str()
+                ));
+            }
             let entries = settings
                 .overrides
                 .iter()
                 .map(|(key, setting)| (key.as_str(), Some(setting)))
                 .chain(settings.web.as_ref().map(|_| ("web.enabled", None)))
-                .chain(settings.mcp.as_ref().map(|_| ("mcp.enabled", None)));
+                .chain(settings.mcp.as_ref().map(|_| ("mcp.enabled", None)))
+                .chain(
+                    settings
+                        .llama_cpp
+                        .as_ref()
+                        .map(|_| ("llama_cpp.enabled", None)),
+                );
             for (key, setting) in entries {
                 let def = CATALOG.iter().find(|def| def.key == key).ok_or_else(|| {
                     let known: Vec<&str> = CATALOG.iter().map(|def| def.key).collect();
@@ -447,6 +498,10 @@ impl AgentCapabilities {
             .mcp
             .as_ref()
             .map_or_else(McpSettings::default, |mcp| mcp.settings.clone());
+        let llama_cpp = overrides
+            .llama_cpp
+            .as_ref()
+            .map(|local| local.settings.clone());
         CapabilitySnapshot::with_settings(
             role,
             self.0.preset.snapshot(),
@@ -454,6 +509,7 @@ impl AgentCapabilities {
             Some(web),
             Some(mcp),
             trust,
+            llama_cpp,
         )
     }
 
@@ -518,6 +574,54 @@ fn validate_mcp(mcp: &McpSettings, role: AgentRole) -> Result<(), String> {
         }
         if server.resources.iter().any(String::is_empty) {
             return Err(fail("resource scopes must not be empty"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_llama_cpp(local: &LlamaCppSettings) -> Result<(), String> {
+    if local.context_window == 0 || local.max_tokens == 0 || local.max_tokens > local.context_window
+    {
+        return Err(
+            "llama_cpp limits must be positive and max_tokens must not exceed context_window"
+                .into(),
+        );
+    }
+    if local.timeout_ms == 0 || local.timeout_ms > 2_147_483_647 {
+        return Err("llama_cpp.timeout_ms must be between 1 and 2147483647".into());
+    }
+    if let Some(url) = &local.endpoint {
+        let origin =
+            regex::Regex::new(r"^https?://([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::([0-9]+))?/?$")
+                .map_err(|error| format!("compiling llama_cpp endpoint pattern: {error}"))?;
+        let captures = origin
+            .captures(url)
+            .ok_or("llama_cpp.endpoint must be an HTTP(S) origin without userinfo, path, query or fragment")?;
+        if let Some(port) = captures.get(2)
+            && port.as_str().parse::<u16>().is_err()
+        {
+            return Err("llama_cpp.endpoint has an invalid port".into());
+        }
+        if let Some(host) = captures.get(1) {
+            let host = host.as_str();
+            let valid = if let Some(ipv6) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+            {
+                ipv6.parse::<std::net::Ipv6Addr>().is_ok()
+            } else if host.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                host.parse::<std::net::Ipv4Addr>().is_ok()
+            } else {
+                let host = host.strip_suffix('.').unwrap_or(host);
+                host.len() <= 253
+                    && host.split('.').all(|label| {
+                        !label.is_empty()
+                            && label.len() <= 63
+                            && !label.starts_with('-')
+                            && !label.ends_with('-')
+                    })
+            };
+            if !valid {
+                return Err("llama_cpp.endpoint has an invalid host".into());
+            }
         }
     }
     Ok(())
@@ -854,6 +958,162 @@ mod mcp_config_tests {
                 toml::from_str::<AgentCapabilities>(&text).is_ok(),
                 role == AgentRole::Worker
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod llama_cpp_tests {
+    use super::*;
+
+    #[test]
+    fn llama_cpp_requires_explicit_opt_in_for_every_role_and_preset() {
+        // Given each role and preset, with no local provider configuration.
+        for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
+            let mut config = AgentCapabilities::default();
+            config.set_preset(preset);
+            for role in ROLES {
+                // When resolved, then even full and legacy leave local access off.
+                let snapshot = config.resolve(role, None);
+                assert!(!snapshot.enabled("llama_cpp.enabled"));
+                assert!(snapshot.llama_cpp.is_none());
+                assert!(!CapabilitySnapshot::legacy(role, true).enabled("llama_cpp.enabled"));
+                // A boolean-only opt-in fails atomically, just as parsing does.
+                assert!(config.set(role, "llama_cpp.enabled", true).is_err());
+                assert!(!config.resolve(role, None).enabled("llama_cpp.enabled"));
+            }
+        }
+    }
+
+    #[test]
+    fn llama_cpp_opt_in_round_trips_and_preserves_dotted_setters() {
+        // Given an explicit endpoint for each allowed role.
+        for role in ROLES {
+            let text = format!(
+                "[{}.llama_cpp]\nenabled = true\nendpoint = 'http://[::1]:8080/'",
+                role.as_str()
+            );
+            // When parsed and round-tripped, then all defaults and the opt-in survive.
+            let mut config: AgentCapabilities = toml::from_str(&text).unwrap();
+            let encoded = toml::to_string(&config).unwrap();
+            assert_eq!(
+                toml::from_str::<AgentCapabilities>(&encoded).unwrap(),
+                config
+            );
+            let snapshot = config.resolve(role, None);
+            assert!(snapshot.enabled("llama_cpp.enabled"));
+            assert_eq!(snapshot.catalog, 4);
+            assert_eq!(
+                snapshot.llama_cpp.unwrap(),
+                LlamaCppSettings {
+                    endpoint: Some("http://[::1]:8080/".into()),
+                    ..LlamaCppSettings::default()
+                }
+            );
+            config.set(role, "llama_cpp.enabled", false).unwrap();
+            assert!(config.resolve(role, None).llama_cpp.is_none());
+            config.set(role, "llama_cpp.enabled", true).unwrap();
+            assert!(
+                config
+                    .resolve(role, Some(&BTreeSet::new()))
+                    .llama_cpp
+                    .is_none()
+            );
+        }
+        let mut role: RoleCapabilities = toml::from_str("\"llama_cpp.enabled\" = false").unwrap();
+        assert_eq!(role.get("llama_cpp.enabled"), Some(false));
+        role.set("llama_cpp.enabled", true);
+        assert_eq!(role.get("llama_cpp.enabled"), Some(true));
+        let encoded = toml::to_string(&role).unwrap();
+        assert_eq!(toml::from_str::<RoleCapabilities>(&encoded).unwrap(), role);
+        let dotted =
+            "\"llama_cpp.enabled\" = true\n[worker.llama_cpp]\nendpoint = 'http://localhost:8080'";
+        assert!(toml::from_str::<AgentCapabilities>(&format!("[worker]\n{dotted}")).is_ok());
+    }
+
+    #[test]
+    fn llama_cpp_rejects_invalid_origins_and_limits_at_parse_boundary() {
+        // Given malformed origins and out-of-contract limits.
+        for setting in [
+            "enabled = true",
+            "\"llama_cpp.enabled\" = true",
+            "endpoint = ''",
+            "endpoint = 'ftp://localhost'",
+            "endpoint = 'http://user@localhost'",
+            "endpoint = 'http://localhost/path'",
+            "endpoint = 'http://localhost?x=1'",
+            "endpoint = 'http://localhost#x'",
+            "endpoint = 'http://local host'",
+            "endpoint = 'http://localhost\\path'",
+            "endpoint = 'http://[:::1]'",
+            "endpoint = 'http://[::1]:65536'",
+            "endpoint = 'http://-host'",
+            "endpoint = 'http://host..test'",
+            "endpoint = 'http://999.0.0.1'",
+            "context_window = 0",
+            "max_tokens = 0",
+            "context_window = 1",
+            "timeout_ms = 0",
+            "timeout_ms = 2147483648",
+            "unknown = true",
+        ] {
+            // When parsed, then malformed settings cannot reach a snapshot.
+            assert!(
+                toml::from_str::<AgentCapabilities>(&format!("[worker.llama_cpp]\n{setting}"))
+                    .is_err(),
+                "{setting}"
+            );
+        }
+        assert!(
+            toml::from_str::<AgentCapabilities>("[worker]\n\"llama_cpp.enabled\" = true").is_err()
+        );
+        for endpoint in [
+            "http://localhost",
+            "https://host.test:443/",
+            "http://127.0.0.1:8080",
+            "http://[::ffff:127.0.0.1]:8080",
+        ] {
+            let text = format!(
+                "[worker.llama_cpp]\nenabled = true\nendpoint = '{endpoint}'\n\
+                 context_window = 1\nmax_tokens = 1\ntimeout_ms = 2147483647\ndiscover = false"
+            );
+            assert!(
+                toml::from_str::<AgentCapabilities>(&text).is_ok(),
+                "{endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn llama_cpp_settings_change_digest_and_record_concrete_transition() {
+        // Given a local policy and independent changes to each setting.
+        let text = "[worker.llama_cpp]\nenabled = true\nendpoint = 'http://localhost:8080'\n";
+        let original = toml::from_str::<AgentCapabilities>(text)
+            .unwrap()
+            .resolve(AgentRole::Worker, None);
+        for change in [
+            "discover = false",
+            "context_window = 65536",
+            "max_tokens = 4096",
+            "timeout_ms = 30000",
+            "endpoint = 'https://host.test/'",
+        ] {
+            let base = if change.starts_with("endpoint") {
+                "[worker.llama_cpp]\nenabled = true\n"
+            } else {
+                text
+            };
+            // When resolved, then the digest and concrete settings diff track the change.
+            let config: AgentCapabilities = toml::from_str(&format!("{base}{change}")).unwrap();
+            let next = config.resolve(AgentRole::Worker, None);
+            assert_eq!(next, config.resolve(AgentRole::Worker, None));
+            assert_ne!(next.digest, original.digest);
+            let transition = next.transition_from(1, &original).unwrap();
+            assert!(transition.changes.is_empty());
+            assert!(transition.web_change.is_none());
+            let local = transition.llama_cpp_change.unwrap();
+            assert_eq!(local.from, original.llama_cpp);
+            assert_eq!(local.to, next.llama_cpp);
         }
     }
 }

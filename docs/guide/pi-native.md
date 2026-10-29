@@ -26,7 +26,7 @@ assets_dir = "/path/to/pi-assets"
 ```
 
 Model and effort travel in the host's one-shot bootstrap, not on the command line, so a
-pi-native profile takes no `args`. The `openai`, `anthropic` and `amazon-bedrock` vendors are allowed (for
+pi-native profile takes no `args`. The `openai`, `anthropic`, `amazon-bedrock` and `llama.cpp` vendors are allowed (for
 example `model = "claude-opus-5-5"` with `vendor = "anthropic"`); any other vendor is refused
 when you dispatch, before a worktree exists.
 
@@ -78,6 +78,7 @@ error. The catalog today, as strict / standard / full:
 | Key | Worker, PM | Reviewer, planner, plan reviewer |
 |---|---|---|
 | `todo` | off / on / on | not available |
+| `llama_cpp.enabled` | off / off / off | off / off / off |
 | `web.enabled` | worker off / on / on; not available to PM | off / on / on |
 | `context_files` | off / on / on | off / on / on |
 | `skills` | off / on / on | off / on / on |
@@ -232,6 +233,56 @@ retain their ordinary OS/network access; this is not an OS sandbox. A failed or 
 script does not undo tools already run. Recovery classifies an unfinished `codemode` call as
 `outcome_unknown`, even if its source appears read-only, and preserves a worktree snapshot for
 reconciliation. Reload rebuilds the extension from the same generation snapshot.
+
+### Local inference (llama.cpp)
+
+Use an already running OpenAI-compatible chat endpoint. Corral does not start llama.cpp,
+install a runtime, download weights, or enable Pi's model-management extension:
+
+```toml
+[profiles.local]
+harness = "pi-native"
+vendor = "llama.cpp"
+model = "my-model.gguf"  # endpoint-owned ID; names containing "/" are supported
+effort = "off"
+
+[agent.capabilities.worker.llama_cpp]
+enabled = true
+endpoint = "http://127.0.0.1:8080"
+discover = true
+context_window = 32768
+max_tokens = 8192
+timeout_ms = 15000
+```
+
+Select this profile through the normal routing configuration. Configure the corresponding
+`reviewer`, `pm`, `planner` or `plan_reviewer` capability table for another role; role
+availability and Corral authority are unchanged. Local inference is explicitly off in
+strict, standard and full. An enabled local capability requires a `llama.cpp` profile,
+not a cloud profile, and that profile requires the capability. No cloud login is needed.
+`corral pi --bare` has no bound capability configuration and does not offer this route.
+
+`endpoint` is one HTTP(S) origin, optionally with a trailing slash, without a path,
+credentials, query or fragment. No ambient `LLAMA_BASE_URL`, API key or foreign credential
+store supplies it. Discovery reads only `GET /v1/models` (up to 1 MiB and 4,096 entries)
+and selects the profile's exact model ID; an optional `llama.cpp/` prefix is stripped.
+New IDs need only server/config changes, never a source patch. A missing ID refuses
+startup with `local_model_unavailable`. For a server without model listing, set
+`discover = false` to use the configured ID directly without a catalog request.
+
+The in-process guard admits only that origin's catalog GET and
+`POST /v1/chat/completions`; redirects, router load/download operations, cloud endpoints,
+cookies and foreign authorization are refused. Inference uses a fixed non-secret
+`Bearer local` marker, so this route is for endpoints that do not require a secret key.
+The request timeout and token limit come from the generation snapshot; `max_tokens`
+must not exceed `context_window`. Explicit model refresh can rediscover IDs at the same
+origin. Reload retains the generation settings; explicit Corral resume resolves current
+settings and records their difference without rewriting the old snapshot.
+
+Local responses retain input, output and cache token counts with Pi-reported USD zero.
+Zero cost never means zero tokens. Corral's existing collector still reads these
+assistant records; API-equivalent pricing gaps remain explicit for IDs without configured
+prices. No metered inference allowance is consumed by the deterministic HTTP fixtures.
 
 ### Web access
 
@@ -757,7 +808,7 @@ the ones [Guidance and session export](#guidance-and-session-export) selects fro
 generation's snapshot, plus the skill the role ships inside the installation (the worker's
 corral-worker skill); under strict only that skill loads, and nothing is ever read from `~/.pi`,
 a project's `.pi` or another harness. Install telemetry, analytics, the cache warmer and the remote model catalog are
-off. Its network is a guarded fetch that sends only POST requests to the bound profile's provider
+off, except explicitly configured local model discovery. Its network is a guarded fetch that sends only POST requests to the bound profile's provider
 API and that provider's token-refresh endpoint: for `openai`,
 `https://chatgpt.com/backend-api/codex/responses` and `https://auth.openai.com/oauth/token`; for
 `anthropic`, only `https://platform.claude.com/v1/oauth/token`, since the host process never
@@ -765,18 +816,19 @@ calls `https://api.anthropic.com` itself. Claude Code's own traffic (model reque
 whatever else it sends; its non-essential traffic is switched off with
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`) leaves from its subprocess, outside this guarded
 fetch. Every other request, the other provider's endpoints and bug-report uploads included, is
-refused. Bedrock uses the additional bound-profile rules described above. The same holds after a reload and
+refused. Bedrock and local inference use their separate configured rules described above. The same holds after a reload and
 after the session is replaced.
 
 ### Model catalog
 
-Launch and model listing share a corral-owned catalog, including models added in
+Cloud launch and model listing share a corral-owned catalog, including models added in
 `$XDG_DATA_HOME/corral/pi-native/models.json`, or
 `~/.local/share/corral/pi-native/models.json` when `XDG_DATA_HOME` is unset or relative.
 Ambient Pi configuration (`~/.pi/agent` and `PI_CODING_AGENT_DIR`) is not loaded.
 Add a model under an existing subscription provider with that provider's model API;
 no corral source change is needed. Pi's model refresh reloads this file offline.
-Remote catalog requests remain disabled and model endpoint restrictions remain in force.
+Cloud remote catalog requests remain disabled and model endpoint restrictions remain in force.
+The local inference catalog instead uses its explicitly configured endpoint as described above.
 Metadata uses an in-memory catalog store, not an ambient `models-store.json`.
 Invalid JSON or model configuration fails startup with `model_catalog_invalid`
 and the SDK's diagnostic, including the file path. A failed refresh retains the
