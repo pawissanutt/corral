@@ -222,6 +222,7 @@ fn sync_scoped(
     crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     crate::scratch_reclaim::reclaim_scratch_pass(ctx, now)?;
+    crate::storage_gc::lifecycle_pass(ctx, now)?;
     let panes: HashMap<String, PaneInfo> = inventory
         .panes
         .iter()

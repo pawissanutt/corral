@@ -2,7 +2,7 @@
 
 use crate::blob_ref::BlobHash;
 
-use super::rows::{BlobState, EventSeq, ScratchState, TaskPart};
+use super::rows::{BlobState, EventSeq, LifecycleOutcome, ScratchState, TaskPart};
 
 #[path = "artifact_reviews.rs"]
 pub(crate) mod artifact_reviews;
@@ -203,6 +203,17 @@ pub enum StorageQuery {
     },
     Lifecycle {
         task: Option<String>,
+    },
+    /// Lifecycle rows of `outcome` whose `next_check_at` is at or before `now`, earliest check
+    /// first (the `lifecycle_due` index).
+    LifecycleDue {
+        outcome: LifecycleOutcome,
+        now: jiff::Timestamp,
+    },
+    /// Lifecycle rows whose `policy_digest` differs from `digest`, in digest then key order
+    /// (the `lifecycle_policy` index).
+    LifecyclePolicyOtherThan {
+        digest: String,
     },
     Leases,
     Claims,

@@ -679,6 +679,29 @@ impl ReadView for SqliteView {
                     Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
                 })
             }
+            StorageQuery::LifecycleDue { outcome, now } => {
+                let sql = format!(
+                    "SELECT {} FROM lifecycle WHERE outcome = ? AND next_check_at <= ? \
+                     ORDER BY next_check_at, task, generation, target",
+                    load::LIFECYCLE_COLUMNS
+                );
+                let args = vec![Sql::Text(name(outcome).or_view()?), Sql::Text(ts(*now))];
+                self.page(&page, &sql, args, |_, row| {
+                    Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
+                })
+            }
+            StorageQuery::LifecyclePolicyOtherThan { digest } => {
+                // Two index ranges; `<>` alone would not use `lifecycle_policy`.
+                let sql = format!(
+                    "SELECT {} FROM lifecycle WHERE policy_digest < ?1 OR policy_digest > ?1 \
+                     ORDER BY policy_digest, task, generation, target",
+                    load::LIFECYCLE_COLUMNS
+                );
+                let args = vec![Sql::Text(digest.clone())];
+                self.page(&page, &sql, args, |_, row| {
+                    Ok(StorageRow::Lifecycle(load::lifecycle(row)?))
+                })
+            }
             StorageQuery::Leases => self.page(
                 &page,
                 "SELECT id, holder, started, expires FROM leases ORDER BY id",

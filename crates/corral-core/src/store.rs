@@ -6,6 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 
+use crate::backend::{
+    BlobQuery, BlobRow, LeaseRow, LifecycleOutcome, LifecycleRow, LifecycleWrite, Operation,
+    PageReq, ScratchRow, ScratchState, StorageQuery, StorageRow,
+};
 use crate::config::Config;
 use crate::model::{Event, Status, Task};
 use crate::runtime::Executable;
@@ -696,6 +700,140 @@ impl Store {
         self.db.backend.as_ref()
     }
 
+    /// Up to `limit` storage rows matching `query`, every page read on one view.
+    fn storage_rows_up_to(&self, query: &StorageQuery, limit: u32) -> Result<Vec<StorageRow>> {
+        let view = self.view()?;
+        let mut rows = Vec::new();
+        let mut req = PageReq::first(limit.min(256));
+        while req.limit > 0 {
+            let page = view.storage_rows(query, req)?;
+            rows.extend(page.items);
+            let left = limit.saturating_sub(u32::try_from(rows.len()).unwrap_or(u32::MAX));
+            match page.next {
+                Some(after) => {
+                    req = PageReq {
+                        after: Some(after),
+                        limit: left.min(256),
+                    }
+                }
+                None => break,
+            }
+        }
+        Ok(rows)
+    }
+
+    fn lifecycle_query(&self, query: &StorageQuery, limit: u32) -> Result<Vec<LifecycleRow>> {
+        Ok(self
+            .storage_rows_up_to(query, limit)?
+            .into_iter()
+            .filter_map(|row| match row {
+                StorageRow::Lifecycle(row) => Some(row),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// The lifecycle rows of `task` (every generation and target), by key.
+    pub fn lifecycle_rows(&self, task: &str) -> Result<Vec<LifecycleRow>> {
+        let query = StorageQuery::Lifecycle {
+            task: Some(task.to_owned()),
+        };
+        self.lifecycle_query(&query, u32::MAX)
+    }
+
+    /// At most `limit` deferred lifecycle rows due by `now`, earliest check first, read through
+    /// the `lifecycle_due` index: a bounded batch whatever the history holds.
+    pub fn lifecycle_due(&self, now: jiff::Timestamp, limit: u32) -> Result<Vec<LifecycleRow>> {
+        let query = StorageQuery::LifecycleDue {
+            outcome: LifecycleOutcome::Deferred,
+            now,
+        };
+        self.lifecycle_query(&query, limit)
+    }
+
+    /// At most `limit` lifecycle rows recorded under a policy digest other than `digest`, read
+    /// through the `lifecycle_policy` index.
+    pub fn lifecycle_policy_other_than(
+        &self,
+        digest: &str,
+        limit: u32,
+    ) -> Result<Vec<LifecycleRow>> {
+        let query = StorageQuery::LifecyclePolicyOtherThan {
+            digest: digest.to_owned(),
+        };
+        self.lifecycle_query(&query, limit)
+    }
+
+    /// Writes one lifecycle row; a stale `expected` outcome fails with a conflict.
+    pub fn put_lifecycle(&self, write: LifecycleWrite) -> Result<()> {
+        let key = format!("{}/{}/{}", write.task, write.generation, write.target);
+        self.backend()
+            .apply(Operation::Lifecycle(write))
+            .map_err(|error| anyhow::anyhow!("writing lifecycle {key}: {error}"))?;
+        Ok(())
+    }
+
+    /// Every blob row, in hash order, read on one view.
+    pub fn blob_rows(&self) -> Result<Vec<BlobRow>> {
+        all_blobs(self.view()?.as_ref(), &BlobQuery::default())
+    }
+
+    /// The scratch registrations in `states`, read from the view alone: unlike
+    /// `scratch_rows_in`, nothing on disk is created or opened.
+    pub fn scratch_rows_viewed(&self, states: &[ScratchState]) -> Result<Vec<ScratchRow>> {
+        let query = StorageQuery::Scratch {
+            states: states.to_vec(),
+        };
+        let rows = self.storage_rows_up_to(&query, u32::MAX)?.into_iter();
+        Ok(rows
+            .filter_map(|row| match row {
+                StorageRow::Scratch(row) => Some(row),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// The storage leases (readers that hold blob GC's horizon back).
+    pub fn storage_leases(&self) -> Result<Vec<LeaseRow>> {
+        Ok(self
+            .storage_rows_up_to(&StorageQuery::Leases, u32::MAX)?
+            .into_iter()
+            .filter_map(|row| match row {
+                StorageRow::Lease(row) => Some(row),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Database integrity problems: the database half of `storage check`.
+    pub fn check_database(&self) -> Result<Vec<String>> {
+        Ok(self.backend().check()?.problems)
+    }
+
+    /// This workspace's `corral.toml` with every project path made absolute, for a copy of the
+    /// store elsewhere that must validate as this one does.
+    pub fn config_with_absolute_projects(&self) -> Result<String> {
+        let text = fs::read_to_string(self.config_path()).unwrap_or_default();
+        let mut config: toml_edit::DocumentMut = text.parse()?;
+        let projects = config
+            .get_mut("projects")
+            .and_then(toml_edit::Item::as_table_like_mut);
+        for (_, project) in projects.into_iter().flat_map(|p| p.iter_mut()) {
+            let path = project.get("path").and_then(toml_edit::Item::as_str);
+            let absolute = path.map(|p| self.root.join(p).to_string_lossy().into_owned());
+            if let (Some(absolute), Some(table)) = (absolute, project.as_table_like_mut()) {
+                table.insert("path", toml_edit::value(absolute));
+            }
+        }
+        Ok(config.to_string())
+    }
+
+    /// One consistent copy of the database only, taken while writers continue, into `dest`,
+    /// which must not exist; blobs are not included (plan section 7, backup).
+    pub fn backup_database(&self, dest: &Path) -> Result<()> {
+        self.backend().backup_database(dest)
+    }
+
     /// Absolute path of a project's repo: config path joined to root (absolute paths kept).
     pub fn project_path(&self, project: &str) -> Result<PathBuf> {
         let p = self
@@ -709,6 +847,22 @@ impl Store {
         } else {
             self.root.join(path)
         })
+    }
+}
+
+fn all_blobs(view: &dyn crate::backend::ReadView, query: &BlobQuery) -> Result<Vec<BlobRow>> {
+    let mut rows = Vec::new();
+    let mut req = PageReq::first(256);
+    loop {
+        let page = view.blobs(query, req)?;
+        rows.extend(page.items);
+        let Some(after) = page.next else {
+            return Ok(rows);
+        };
+        req = PageReq {
+            after: Some(after),
+            limit: 256,
+        };
     }
 }
 

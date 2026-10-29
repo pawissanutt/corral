@@ -472,7 +472,8 @@ fn real_blockers_precede_stale_review_when_main_moves() {
             .map(|run| {
                 (
                     run.id.clone(),
-                    fixture::git(&run.worktree, &["rev-parse", "HEAD"]),
+                    // The run's committed head: sync removes a finished clean worktree.
+                    fixture::git(&fx.temp.path().join("app"), &["rev-parse", &run.branch]),
                     run.gate.clone(),
                     run.review.clone(),
                     run.ended,
