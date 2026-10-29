@@ -370,6 +370,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         Cmd::Init => init(&root, &entry),
         Cmd::Import(args) => crate::import_cmd::run(&root, args, &entry),
         Cmd::Export { what } => crate::export_cmd::run(&open(&root)?, what),
+        Cmd::Storage { cmd } => crate::storage_cmd::run(&open(&root)?, cmd),
         Cmd::ReviewSprint(args) => crate::sprint_cmd::run(&open(&root)?, args),
         Cmd::Digest(args) => crate::digest_cmd::run(&open(&root)?, args),
         Cmd::Revert { id } => {

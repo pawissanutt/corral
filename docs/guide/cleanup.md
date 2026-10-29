@@ -8,7 +8,9 @@ Worktree removal first stops leftover processes whose current working directory 
 inside that worktree, including nested directories. Each termination pins the
 process with a Linux pidfd and rechecks its start time and command before SIGTERM;
 SIGKILL escalation uses the same pidfd. Corral never signals its current process,
-its ancestors, or recognized agent harnesses, including another task's harness.
+its ancestors, or recognized agent harnesses: the harnesses of the removed run and
+its review children, of every open task's current run that holds a pane, and every
+configured harness, so a finished task's still-running harness is protected too.
 A protected resident or failed termination retains the directory and branch with
 a warning. A process outside the worktree is left alone.
 
@@ -27,3 +29,51 @@ and whether the worktree and branch were removed; the CLI also prints warnings.
 
 `corral doctor` reports directories still present for any run of Done or Dropped
 tasks, including intentionally retained worktrees. It does not delete them.
+
+## Finished worktrees at sync
+
+Each sync pass settles the worktree of every task that became Done or Dropped since
+the previous pass, then at most a small batch of earlier decisions that are due for
+a recheck or were made under a different cleanup policy. It never walks the board's
+history. One lifecycle record per task, run and target remembers the decision, so a
+later sync does no filesystem work for it:
+
+- a clean worktree is removed whole with `git worktree remove` (never `--force`);
+  its branch is kept;
+- a dirty worktree, or one a process or a Cargo build still uses, is deferred and
+  checked again after one minute, doubling up to an hour, then removed once clean
+  and idle;
+- a worktree approve deliberately kept (`--keep-worktree`, or `remove_worktree =
+  false`) is never removed; changing `remove_worktree` re-evaluates the affected
+  records;
+- a directory whose `.git` entry is gone is not trusted: it is removed only when it
+  holds nothing but build output (directories tagged with `CACHEDIR.TAG`);
+- a directory outside the project's `.worktrees/` is reported, never removed.
+
+Reopening a task and finishing it again settles the new run's worktree on its own
+record. Every removal logs one `storage_reclaimed` event; a failed one logs
+`storage_reclaim_failed`.
+
+## `corral storage gc`
+
+`corral storage gc --dry-run` reports every storage class with its bytes and changes
+nothing: worktrees under each project's `.worktrees/`, registered scratch, agent
+sessions under `.corral/agent/sessions`, legacy build output under `.corral/state`,
+unreferenced and stray evidence blobs, rollback archives and the fixed roots. The
+totals separate bytes reclaimed, compressed into blobs, moved outside `.corral`,
+legacy files awaiting the migration's finalize step, rollback archives, fixed roots and
+retained entries, and each retained entry carries its reason. Legacy files are
+removed only by the migration's finalize step, never by gc.
+
+`corral storage gc --yes` removes clean finished worktrees (branches kept),
+closed scratch nothing uses, terminal tasks' agent sessions after promoting each
+transcript file to a log artifact, legacy build output, and evidence blobs
+unreferenced for longer than `blob_grace_hours` (and stray blob files as old). It
+leaves dirty, kept, open, non-terminal, unmanaged and unknown entries alone, never
+deletes a fixed class root or `.corral/rollback`, and logs one `storage_reclaimed`
+event per deletion plus one `storage_gc` summary. Add `--json` for the full report.
+
+`corral storage check` verifies database integrity and reads every live blob back to
+its hash. `corral storage backup DIR` copies the database and every live blob into
+`DIR/.corral` under a storage lease, so blob GC cannot delete anything the copy
+references while it runs; `corral --root DIR storage check` then verifies the copy.

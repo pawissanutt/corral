@@ -483,6 +483,29 @@ impl ReadView for FakeView {
                     .map(StorageRow::Lifecycle),
                 &page,
             ),
+            StorageQuery::LifecycleDue { outcome, now } => {
+                let mut rows: Vec<&LifecycleRow> = state
+                    .lifecycle
+                    .values()
+                    .filter(|row| row.outcome == *outcome)
+                    .filter(|row| row.next_check_at.is_some_and(|at| at <= *now))
+                    .collect();
+                rows.sort_by_key(|row| {
+                    (row.next_check_at, &row.task, &row.generation, &row.target)
+                });
+                self.page(rows.into_iter().cloned().map(StorageRow::Lifecycle), &page)
+            }
+            StorageQuery::LifecyclePolicyOtherThan { digest } => {
+                let mut rows: Vec<&LifecycleRow> = state
+                    .lifecycle
+                    .values()
+                    .filter(|row| row.policy_digest != *digest)
+                    .collect();
+                rows.sort_by_key(|row| {
+                    (&row.policy_digest, &row.task, &row.generation, &row.target)
+                });
+                self.page(rows.into_iter().cloned().map(StorageRow::Lifecycle), &page)
+            }
             StorageQuery::Leases => {
                 self.page(state.leases.values().cloned().map(StorageRow::Lease), &page)
             }

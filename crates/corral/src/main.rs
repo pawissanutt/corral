@@ -33,6 +33,7 @@ mod setup_cmd;
 mod skill;
 mod sprint_cmd;
 mod stats;
+mod storage_cmd;
 mod unstick;
 mod up;
 mod wait_cmd;
@@ -149,6 +150,11 @@ pub enum Cmd {
     Export {
         #[command(subcommand)]
         what: export_cmd::ExportCmd,
+    },
+    /// Check storage integrity, report or reclaim storage by class, and take verified backups
+    Storage {
+        #[command(subcommand)]
+        cmd: storage_cmd::StorageCmd,
     },
     /// Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
     Stats {

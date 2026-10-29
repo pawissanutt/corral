@@ -35,6 +35,7 @@ Commands:
   pricing         Inspect coverage of API-equivalent model prices
   import          Import a Markdown plan as a tracker and dependent child tasks
   export          Export the store's records in portable forms
+  storage         Check storage integrity, report or reclaim storage by class, and take verified backups
   stats           Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
   new             Create a task and print its id
   list            List tasks (done/dropped hidden unless --all; --done lists finished tasks, newest first)
@@ -1906,6 +1907,68 @@ Options:
 
 Each JSONL record includes its stored `seq`; resume with `--since <seq>`.
 The export sequence checkpoint is exclusive. See [board events](events.md) for wait cursors.
+
+## `corral storage`
+
+```text
+Check storage integrity, report or reclaim storage by class, and take verified backups
+
+Usage: corral storage [OPTIONS] <COMMAND>
+
+Commands:
+  check   Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
+  gc      Report storage by class with bytes (--dry-run changes nothing) or reclaim it (--yes)
+  backup  Copy the database and every live blob into DIR/.corral under a storage lease, each blob verified against its hash; the copy opens with `corral --root DIR`
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral storage check`
+
+```text
+Verify database integrity and that every live blob decodes to its hash; exits 1 on a problem
+
+Usage: corral storage check [OPTIONS]
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral storage gc`
+
+```text
+Report storage by class with bytes (--dry-run changes nothing) or reclaim it (--yes)
+
+Usage: corral storage gc [OPTIONS]
+
+Options:
+      --dry-run      Report what would be reclaimed and why the rest stays; change nothing
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --yes          Remove clean finished worktrees (branches kept), reclaimable scratch, terminal agent sessions after promoting their transcripts, legacy build output and unreferenced blobs past the grace period; one audited event per deletion
+      --json         
+  -h, --help         Print help
+```
+
+### `corral storage backup`
+
+```text
+Copy the database and every live blob into DIR/.corral under a storage lease, each blob verified against its hash; the copy opens with `corral --root DIR`
+
+Usage: corral storage backup [OPTIONS] <DIR>
+
+Arguments:
+  <DIR>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
 
 ## `corral stats`
 

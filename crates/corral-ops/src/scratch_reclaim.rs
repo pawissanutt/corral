@@ -24,8 +24,8 @@ use crate::Ctx;
 
 /// Stable across restarts so the next pass completes a reclaim a crashed pass began; the
 /// `scratch-reclaim` lease keeps passes from overlapping.
-const OWNER: &str = "scratch-reclaim";
-const LEASE: &str = "scratch-reclaim";
+pub(crate) const OWNER: &str = "scratch-reclaim";
+pub(crate) const LEASE: &str = "scratch-reclaim";
 const BATCH: usize = 16;
 const FIRST_DEFER: Duration = Duration::from_secs(60);
 const MAX_DEFER: Duration = Duration::from_secs(3600);
@@ -320,7 +320,7 @@ fn ordinal(run: &str) -> u64 {
 }
 
 /// Bytes below `dir`, without following symlinks.
-fn usage(dir: &Path) -> Result<u64> {
+pub(crate) fn usage(dir: &Path) -> Result<u64> {
     let mut total = 0;
     let mut pending = vec![dir.to_path_buf()];
     while let Some(next) = pending.pop() {
@@ -582,12 +582,18 @@ fn resume(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<()> {
     ctx.store.reclaim_scratch_entry(&row.id, OWNER).map(drop)
 }
 
-fn reclaim(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<()> {
+/// Why the closed or deferred directory of `row` is still in use, read-only.
+pub(crate) fn in_use_now(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<Option<String>> {
     let dir = ctx.store.scratch_path(&row.path)?;
-    let pane = pane_of(ctx, row, now)?;
-    let Some(reason) = in_use(ctx, pane.as_deref(), &dir)? else {
+    in_use(ctx, pane_of(ctx, row, now)?.as_deref(), &dir)
+}
+
+/// Reclaims `row` when nothing uses it, else defers it; returns the reason it was deferred.
+/// The caller holds [`LEASE`].
+pub(crate) fn reclaim(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<Option<String>> {
+    let Some(reason) = in_use_now(ctx, row, now)? else {
         ctx.store.reclaim_scratch_entry(&row.id, OWNER)?;
-        return Ok(());
+        return Ok(None);
     };
     let delay = match (row.state, row.closed) {
         (ScratchState::Deferred, Some(closed)) => now
@@ -597,7 +603,8 @@ fn reclaim(ctx: &Ctx, row: &ScratchRow, now: Timestamp) -> Result<()> {
         _ => FIRST_DEFER,
     };
     let next = now.checked_add(SignedDuration::try_from(delay)?)?;
-    ctx.store.defer_scratch(&row.id, row.state, &reason, next)
+    ctx.store.defer_scratch(&row.id, row.state, &reason, next)?;
+    Ok(Some(reason))
 }
 
 /// A process whose working directory or an open file lies under `dir`; processes that exit or

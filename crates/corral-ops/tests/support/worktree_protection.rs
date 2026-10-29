@@ -1,0 +1,265 @@
+//! Worktree-removal process checks (T-334): a resident harness is protected through the run's
+//! `harnesses` fact, open heads and the configured harnesses, with the same decision and the
+//! same counters whatever the run's review children or the board's finished history hold.
+
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+
+use corral_core::config::Project;
+use corral_core::work::{Counter, snapshot};
+use corral_core::{AgentCmd, Run, Status, Store};
+use serde_json::json;
+
+use super::remove;
+use crate::Ctx;
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", "corral test")
+        .env("GIT_AUTHOR_EMAIL", "corral@test.invalid")
+        .env("GIT_COMMITTER_NAME", "corral test")
+        .env("GIT_COMMITTER_EMAIL", "corral@test.invalid")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+struct Resident(Child);
+
+impl Resident {
+    fn start(dir: &Path, name: &str) -> Resident {
+        let mut child = Command::new("python3")
+            .args([
+                "-c",
+                "import signal; print('ready', flush=True); signal.pause()",
+            ])
+            .arg0(name)
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        Resident(child)
+    }
+
+    fn alive(&mut self) -> bool {
+        self.0.try_wait().unwrap().is_none()
+    }
+}
+
+impl Drop for Resident {
+    fn drop(&mut self) {
+        if self.alive() {
+            self.0.kill().unwrap();
+        }
+        self.0.wait().unwrap();
+    }
+}
+
+fn run(id: &str, worktree: &Path, harness: &str, herdr: bool) -> serde_json::Value {
+    let mut run = json!({
+        "id": id,
+        "agent": harness,
+        "harness": harness,
+        "worktree": worktree,
+        "branch": format!("corral/{id}"),
+        "base": "main",
+        "base_sha": "0".repeat(40),
+        "started": corral_core::clock::now(),
+    });
+    if herdr {
+        run["herdr"] = json!({"workspace_id": format!("w-{id}"), "pane_id": format!("p-{id}")});
+    }
+    run
+}
+
+struct Fx {
+    _tmp: tempfile::TempDir,
+    ctx: Ctx,
+    repo: PathBuf,
+    id: String,
+    worktree: PathBuf,
+}
+
+/// A Review task whose run has `children` review children (the last one's harness is
+/// `reviewbot`), `terminal` Done tasks run by `finished-agent` (a configured harness) and one
+/// open task whose live pane runs `liveagent`.
+fn fixture(children: usize, terminal: usize) -> Fx {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let repo = root.join("app");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    let mut store = Store::init(&root).unwrap();
+    store.config.projects.insert(
+        "app".into(),
+        Project {
+            path: "app".into(),
+            dispatch: Default::default(),
+            default_profile: None,
+            base: None,
+            review: Default::default(),
+            artifact_retention: None,
+            post_land: vec![],
+        },
+    );
+    store.config.agents.insert(
+        "finished-agent".into(),
+        AgentCmd {
+            command: "finished-agent run".into(),
+        },
+    );
+    store.save_config().unwrap();
+    let ctx = Ctx {
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
+        store,
+        herdr: corral_herdr::Herdr::with_bin(root.join("absent-herdr"), None),
+    };
+    let add = |status: Status, run: serde_json::Value| {
+        let task = ctx.store.create("work", Some("app"), status, "").unwrap();
+        let run: Run = serde_json::from_value(run).unwrap();
+        ctx.store
+            .update(&task.id, |t| {
+                t.runs.push(run);
+                Ok(())
+            })
+            .unwrap();
+        task.id
+    };
+    for n in 0..terminal {
+        add(
+            Status::Done,
+            run(
+                "R1",
+                &root.join(format!("done-{n}")),
+                "finished-agent",
+                true,
+            ),
+        );
+    }
+    add(
+        Status::Running,
+        run("R1", &root.join("live"), "liveagent", true),
+    );
+    let worktree = repo.join(".worktrees").join("subject");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "corral/subject",
+            &worktree.to_string_lossy(),
+            "main",
+        ],
+    );
+    let mut subject = run("R1", &worktree, "coder", true);
+    subject["review_runs"] = (0..children)
+        .map(|n| {
+            let harness = if n + 1 == children {
+                "reviewbot"
+            } else {
+                "earlier-reviewer"
+            };
+            let mut child = run(&format!("R1-review{}", n + 1), &worktree, harness, false);
+            child["ended"] = json!(corral_core::clock::now());
+            child
+        })
+        .collect();
+    let id = add(Status::Review, subject);
+    Fx {
+        _tmp: tmp,
+        ctx,
+        repo,
+        id,
+        worktree,
+    }
+}
+
+/// The removal's error and its counter totals; nothing is removed while a harness is resident.
+fn attempt(fx: &Fx) -> (String, BTreeMap<Counter, u64>) {
+    let head = fx.ctx.store.head(&fx.id).unwrap();
+    let run = head.current_run.as_deref().unwrap();
+    let before = snapshot();
+    let error = remove(&fx.ctx, &head, &fx.repo, run, false).unwrap_err();
+    let after = snapshot();
+    let counters = Counter::ALL
+        .iter()
+        .map(|&c| (c, after.total(c) - before.total(c)))
+        .collect();
+    (format!("{error:#}"), counters)
+}
+
+#[test]
+fn a_review_child_harness_is_protected_through_the_harnesses_fact_at_any_size() {
+    let mut results = Vec::new();
+    for children in [1, 11] {
+        let fx = fixture(children, 0);
+        let mut reviewer = Resident::start(&fx.worktree, "reviewbot");
+        let (error, counters) = attempt(&fx);
+        assert!(
+            error.contains(&format!("protected process {}", reviewer.0.id())),
+            "{error}"
+        );
+        assert!(reviewer.alive() && fx.worktree.exists());
+        results.push(counters);
+    }
+    assert_eq!(results[0], results[1], "identical counters at both sizes");
+    assert_eq!(results[0][&Counter::FullTaskHydrations], 0);
+}
+
+#[test]
+fn live_and_finished_pane_harnesses_are_protected_without_reading_finished_tasks() {
+    let mut results = Vec::new();
+    for terminal in [1, 10] {
+        let fx = fixture(1, terminal);
+        let mut live = Resident::start(&fx.worktree, "liveagent");
+        let mut finished = Resident::start(&fx.worktree, "finished-agent");
+        let (error, counters) = attempt(&fx);
+        for resident in [&live, &finished] {
+            assert!(
+                error.contains(&format!("protected process {}", resident.0.id())),
+                "{error}"
+            );
+        }
+        assert!(live.alive() && finished.alive() && fx.worktree.exists());
+        results.push(counters);
+    }
+    assert_eq!(results[0], results[1], "identical counters at both sizes");
+    assert_eq!(results[0][&Counter::FullTaskHydrations], 0);
+}
+
+#[test]
+fn an_unprotected_resident_is_stopped_and_the_worktree_removed() {
+    let fx = fixture(1, 1);
+    let mut stray = Resident::start(&fx.worktree, "stray-tool");
+    let head = fx.ctx.store.head(&fx.id).unwrap();
+    remove(
+        &fx.ctx,
+        &head,
+        &fx.repo,
+        head.current_run.as_deref().unwrap(),
+        false,
+    )
+    .unwrap();
+    assert!(!stray.alive());
+    assert!(!fx.worktree.exists());
+}
