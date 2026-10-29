@@ -34,8 +34,8 @@ export function kickoff(context: RoleContext): string | undefined {
   return `Read ${promptFile} in full and follow it: that file is your complete plan review prompt for corral `
     + `task ${identity.task ?? ""}, plan ${identity.run ?? ""} (attempt ${identity.review ?? ""}). Do not edit files. `
     + "Where it tells you to write notes to a file and finish with `corral plan verdict`, call corral_plan_verdict "
-    + "with the same verdict and your notes instead; corral already knows the plan and attempt and writes the "
-    + "notes report. For notes over 16 KiB, write them first with corral_plan_write and call corral_plan_verdict "
+    + "with the same verdict and your notes instead; corral already knows the plan and attempt and records the "
+    + "notes on the review. To keep the notes file the prompt names, or for notes over 16 KiB, write them first with corral_plan_write and call corral_plan_verdict "
     + "without notes. Ask with corral_ask rather than in the pane.";
 }
 

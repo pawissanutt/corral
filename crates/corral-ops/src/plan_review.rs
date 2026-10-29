@@ -310,7 +310,7 @@ fn review_with_origin(
             run.state = PlanRunState::Reviewing;
         }
         if !cancelled
-            && !published_design(t)
+            && !plan::published_design(t)
             && (run_id.is_some() || t.current_run().is_none_or(|r| r.outcome.is_some()))
         {
             t.status = corral_core::Status::Review;
@@ -507,25 +507,22 @@ pub fn plan_verdict(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<Plan
     plan_verdict_report(ctx, id, input).map(|(review, _)| review)
 }
 
-/// A Done design task whose accepted plan already published its children. Its
-/// status is the dependency barrier for those children and must not be reopened.
-fn published_design(task: &corral_core::Task) -> bool {
-    task.status == corral_core::Status::Done
-        && !task.children.is_empty()
-        && task.plan.as_deref()
-            == Some(&format!(
-                "{}@{}",
-                task.id,
-                task.plans.last().map_or("", |p| &p.id)
-            ))
-}
-
 /// Record a plan verdict; also returns the published children whose approval
 /// binding an owner re-acceptance of an already decomposed plan refreshed.
 pub fn plan_verdict_report(
     ctx: &Ctx,
     id: &str,
     input: &PlanVerdict<'_>,
+) -> Result<(PlanReview, Vec<String>)> {
+    verdict_report_checked(ctx, id, input, &|_| Ok(()))
+}
+
+/// `plan_verdict_report` whose final transaction first runs `check`: a native reviewer's binding.
+pub(crate) fn verdict_report_checked(
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+    check: &dyn Fn(&corral_core::Task) -> Result<()>,
 ) -> Result<(PlanReview, Vec<String>)> {
     let _attribution = input
         .attempt
@@ -535,6 +532,7 @@ pub fn plan_verdict_report(
     }
     let mut superseded = None;
     let saved = ctx.store.update(id, |task| {
+        check(task)?;
         let config = plan::config(ctx)?;
         let selected = task.plans.last().filter(|p| p.id == input.plan).context(
             "stale plan verdict: plan was replaced; inspect `corral plan show <id> --json`",
@@ -662,7 +660,7 @@ pub fn plan_verdict_report(
                 Verdict::Escalate => PlanRunState::Escalated,
             };
         }
-        let published = published_design(task);
+        let published = plan::published_design(task);
         if !cancelled && !published && verdict == Verdict::Approve && !accepted {
             let effective = ctx.store.effective_operating_policy()?;
             task.status = if decisions || config.explicit_owner_acceptance(task, true)
@@ -820,7 +818,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 run.state = PlanRunState::Approved;
             }
             task.queued = false;
-            if run_id.is_some() && !published_design(task) {
+            if run_id.is_some() && !plan::published_design(task) {
                 task.status = corral_core::Status::Ready;
             }
             Ok(())

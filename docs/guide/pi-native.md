@@ -929,15 +929,19 @@ or write tool, so the source tree stays read-only even beyond the planner's read
   1 MiB. corral_plan_submit runs the same submission as `corral plan submit`; a refused plan
   settles with its reason, and the planner fixes the file and submits again.
 - The plan reviewer has corral_ask, corral_withdraw, corral_plan_write (its notes report,
-  the path the review prompt names) and corral_plan_verdict. A verdict always carries the
-  launcher-bound plan and attempt, as `corral plan verdict --attempt` does, so it is never an
+  the path the review prompt names) and corral_plan_verdict. Inline verdict notes are recorded on
+  the review; without them the written report is the notes. Only corral_plan_write changes the
+  report file. A verdict always carries the launcher-bound plan and attempt, as `corral plan verdict --attempt` does, so it is never an
   owner verdict: an approval at most awaits owner acceptance.
 
 Each host sends its dispatch prompt once per planning request. A revision round rewrites
 the prompt with its required changes and is sent again; relaunching the same request is not.
 Plan submission and verdicts reserve their receipt before the plan service commits, because
-that service then closes the planning pane. Sync settles a reservation whose executor is
+that service then closes the planning pane. The service's own final transaction rechecks the
+bound generation and container, so a fenced host or a replaced planner run never submits. Sync settles a reservation whose executor is
 gone from the plan record: committed when the plan or verdict exists, otherwise abandoned.
+Ordinary sync visits a planning-only task while a planning host is open or still holds a
+reservation or pending question, and terminalizes the questions of a closed planning host.
 Interrupted calls of either are therefore `not_executed` without a reservation.
 
 `corral agent doctor` lists `role_enabled` with each planning role's other effective
