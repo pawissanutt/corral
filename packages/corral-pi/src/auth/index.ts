@@ -16,10 +16,10 @@ const NO_STORED_CREDENTIAL: CredentialStore = {
   read: async () => undefined,
   list: async () => [],
   modify: async () => {
-    throw new Error("an AWS-profile provider never stores a credential");
+    throw new Error("this provider never stores a credential");
   },
   delete: async () => {
-    throw new Error("an AWS-profile provider never stores a credential");
+    throw new Error("this provider never stores a credential");
   },
 };
 
@@ -27,7 +27,7 @@ const auth: AuthModule = {
   provider: "openai-codex",
   providers: HOST_PROVIDER_IDS,
   credentials(context) {
-    if (PROVIDERS[context.provider].auth === "aws-profile") return NO_STORED_CREDENTIAL;
+    if (PROVIDERS[context.provider].auth !== "oauth") return NO_STORED_CREDENTIAL;
     store = new FileCredentialStore(authDir(), context.provider);
     if (!store.present()) {
       const name = PROVIDERS[context.provider].label.split(" (")[0];

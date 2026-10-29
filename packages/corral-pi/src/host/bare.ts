@@ -22,7 +22,7 @@ import { providerCapabilities, providerTransport, type ProviderAvailability } fr
 import { createModelCatalog } from "./catalog.ts";
 
 /** Pi 1.3.0's own default model of each provider (`defaultModelPerProvider`, not exported). */
-export const BARE_DEFAULT_MODEL: Readonly<Record<ProviderId, string>> = {
+export const BARE_DEFAULT_MODEL: Readonly<Record<Exclude<ProviderId, "llama.cpp">, string>> = {
   "openai-codex": "gpt-6.1-sol",
   anthropic: "claude-opus-4-8",
   "amazon-bedrock": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -68,6 +68,9 @@ export function parseBareArgs(argv: readonly string[], assets: string, env: Node
   if (cwd === undefined || !isAbsolute(cwd)) throw new BareArgsInvalid("--cwd must be an absolute directory");
   const provider = flags.get("--provider") ?? "openai-codex";
   if (!isProviderId(provider)) throw new BareArgsInvalid(`unknown provider ${provider}`);
+  if (provider === "llama.cpp") {
+    throw new BareArgsInvalid("llama.cpp requires a bound role's configured llama_cpp capability");
+  }
   const effort = flags.get("--effort");
   return {
     assets, cwd, provider, model: flags.get("--model") ?? BARE_DEFAULT_MODEL[provider],

@@ -158,6 +158,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: Some(browser_settings),
     },
+    CapabilityDef {
+        key: "llama_cpp.enabled",
+        summary: "explicit local llama.cpp provider",
+        defaults: llama_cpp_defaults,
+        host: true,
+        settings: None,
+    },
 ];
 
 /// Validates configured servers and preserves their generation-bound settings.
@@ -263,6 +270,40 @@ fn mcp_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::Pm
         | AgentRole::Planner
         | AgentRole::PlanReviewer => Some([false, true, true]),
+    }
+}
+
+fn llama_cpp_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker
+        | AgentRole::Reviewer
+        | AgentRole::Pm
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer => Some([false; 3]),
+    }
+}
+
+/// Resolved local provider policy; an endpoint is never inferred.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LlamaCppSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    pub discover: bool,
+    pub context_window: u32,
+    pub max_tokens: u32,
+    pub timeout_ms: u32,
+}
+
+impl Default for LlamaCppSettings {
+    fn default() -> Self {
+        Self {
+            endpoint: None,
+            discover: true,
+            context_window: 32_768,
+            max_tokens: 8_192,
+            timeout_ms: 15_000,
+        }
     }
 }
 
@@ -410,6 +451,8 @@ pub struct CapabilitySnapshot {
     pub project_text: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpSettings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llama_cpp: Option<LlamaCppSettings>,
     pub digest: String,
 }
 
@@ -425,6 +468,8 @@ struct Canonical<'a> {
     project_text: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     mcp: Option<&'a McpSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    llama_cpp: Option<&'a LlamaCppSettings>,
 }
 
 /// One setting that differs between two generations; `None` means absent from that snapshot.
@@ -451,6 +496,15 @@ pub struct CapabilityTransition {
     pub web_change: Option<WebSettingsChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_change: Option<McpSettingsChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llama_cpp_change: Option<LlamaCppSettingsChange>,
+}
+
+/// Concrete local provider policy difference between generations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlamaCppSettingsChange {
+    pub from: Option<LlamaCppSettings>,
+    pub to: Option<LlamaCppSettings>,
 }
 
 /// Concrete web policy difference without changing the boolean feature-change API.
@@ -493,7 +547,7 @@ impl CapabilitySnapshot {
         web: Option<WebSettings>,
         project_text: Option<bool>,
     ) -> Self {
-        Self::with_settings(role, preset, features, web, None, project_text)
+        Self::with_settings(role, preset, features, web, None, project_text, None)
     }
 
     pub fn with_settings(
@@ -503,6 +557,7 @@ impl CapabilitySnapshot {
         web: Option<WebSettings>,
         mcp: Option<McpSettings>,
         project_text: Option<bool>,
+        llama_cpp: Option<LlamaCppSettings>,
     ) -> Self {
         let web = web.filter(|_| {
             features
@@ -514,6 +569,11 @@ impl CapabilitySnapshot {
                 .get("mcp.enabled")
                 .is_some_and(|state| state.enabled)
         });
+        let llama_cpp = llama_cpp.filter(|_| {
+            features
+                .get("llama_cpp.enabled")
+                .is_some_and(|state| state.enabled)
+        });
         let canonical = Canonical {
             catalog: CAPABILITY_CATALOG_VERSION,
             role,
@@ -522,6 +582,7 @@ impl CapabilitySnapshot {
             web: web.as_ref(),
             project_text,
             mcp: mcp.as_ref(),
+            llama_cpp: llama_cpp.as_ref(),
         };
         // A derived Serialize over fixed fields and a BTreeMap cannot fail.
         let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
@@ -533,6 +594,7 @@ impl CapabilitySnapshot {
             web,
             project_text,
             mcp,
+            llama_cpp,
             digest: sha256_hex(&bytes),
         }
     }
@@ -622,6 +684,12 @@ impl CapabilitySnapshot {
                 from: previous.mcp.clone(),
                 to: self.mcp.clone(),
             }),
+            llama_cpp_change: (self.llama_cpp != previous.llama_cpp).then(|| {
+                LlamaCppSettingsChange {
+                    from: previous.llama_cpp.clone(),
+                    to: self.llama_cpp.clone(),
+                }
+            }),
         })
     }
 
@@ -654,6 +722,9 @@ impl CapabilitySnapshot {
         }
         if let Some(mcp) = &self.mcp {
             features.push(format!("mcp settings {mcp:?}"));
+        }
+        if let Some(llama_cpp) = &self.llama_cpp {
+            features.push(format!("llama_cpp settings {llama_cpp:?}"));
         }
         format!(
             "{} {} [{}]: {}",
@@ -698,6 +769,12 @@ impl CapabilityTransition {
         }
         if let Some(change) = &self.mcp_change {
             changes.push(format!("mcp settings {:?} -> {:?}", change.from, change.to));
+        }
+        if let Some(change) = &self.llama_cpp_change {
+            changes.push(format!(
+                "llama_cpp settings {:?} -> {:?}",
+                change.from, change.to
+            ));
         }
         format!(
             "since generation {} ({} [{}]): {}",
@@ -898,5 +975,29 @@ mod mcp_tests {
             serde_json::from_str::<serde_json::Value>(snapshot).unwrap()
         );
         assert!(old_transition.mcp_change.is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_snapshots_keep_their_recorded_catalog_and_digest() {
+        // Given a snapshot recorded before local provider settings existed.
+        let recorded = serde_json::json!({
+            "catalog": 2, "role": "worker", "preset": "strict",
+            "features": {}, "digest": "recorded-digest"
+        });
+        // When read, then no re-resolution or digest rewrite occurs.
+        let snapshot: CapabilitySnapshot = serde_json::from_value(recorded.clone()).unwrap();
+        assert_eq!(snapshot.catalog, 2);
+        assert_eq!(snapshot.digest, "recorded-digest");
+        assert!(snapshot.llama_cpp.is_none());
+        assert_eq!(serde_json::to_value(snapshot).unwrap(), {
+            let mut expected = recorded;
+            expected.as_object_mut().unwrap().remove("features");
+            expected
+        });
     }
 }

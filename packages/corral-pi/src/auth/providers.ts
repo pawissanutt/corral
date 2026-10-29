@@ -4,14 +4,14 @@
 // OpenAI Codex and Anthropic run on a subscription OAuth login; Amazon Bedrock is the one metered
 // vendor (OD-1), signed with a named AWS profile's credentials (OD-2).
 
-export type ProviderId = "openai-codex" | "anthropic" | "amazon-bedrock";
+export type ProviderId = "openai-codex" | "anthropic" | "amazon-bedrock" | "llama.cpp";
 
 /** How a provider authenticates: a corral-owned subscription OAuth login, or a named AWS profile. */
-export type AuthKind = "oauth" | "aws-profile";
+export type AuthKind = "oauth" | "aws-profile" | "local";
 
 export interface ProviderRoute {
   readonly id: ProviderId;
-  readonly vendor: "openai" | "anthropic" | "amazon-bedrock";
+  readonly vendor: "openai" | "anthropic" | "amazon-bedrock" | "llama.cpp";
   readonly brand: string;
   readonly label: string;
   /** The Pi model API every request of this provider must use. */
@@ -84,13 +84,25 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
     refresh: "",
     login: [],
   },
+  "llama.cpp": {
+    id: "llama.cpp",
+    vendor: "llama.cpp",
+    brand: "llama.cpp",
+    label: "llama.cpp (configured local inference)",
+    modelApi: "openai-completions",
+    auth: "local",
+    api: "",
+    apiQueries: [],
+    refresh: "",
+    login: [],
+  },
 };
 
 /** The subscription OAuth providers (OD5), the policy a session's provider capabilities draw from. */
 export const PROVIDER_IDS: readonly ProviderId[] = ["openai-codex", "anthropic"];
 
 /** Every provider a host can be bound to: the subscription providers and metered Amazon Bedrock. */
-export const HOST_PROVIDER_IDS: readonly ProviderId[] = [...PROVIDER_IDS, "amazon-bedrock"];
+export const HOST_PROVIDER_IDS: readonly ProviderId[] = [...PROVIDER_IDS, "amazon-bedrock", "llama.cpp"];
 
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === "string" && (HOST_PROVIDER_IDS as readonly string[]).includes(value);
@@ -172,6 +184,8 @@ function hostOnly(method: "GET" | "POST", host: string, path: string, query: boo
  */
 export function hostRules(provider: ProviderId, bedrock?: BedrockRoute): readonly DestinationRule[] {
   const route = PROVIDERS[provider];
+  // Local inference receives only the generation's explicitly configured origin rules.
+  if (route.auth === "local") return [];
   if (route.auth === "aws-profile") {
     if (!bedrock || !isAwsRegion(bedrock.region) || bedrock.ssoRegions.some((region) => !isAwsRegion(region))) return [];
     return [

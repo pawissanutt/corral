@@ -66,7 +66,7 @@ test("a compiled host loads its bundled modules, building each role on the insta
     for (const role of ["worker", "reviewer", "pm"] as Role[]) {
       const loaded = await loadModules(PACKAGE_ROOT, role, "anthropic");
       expect(loaded.role.role).toBe(role);
-      expect(loaded.auth.providers).toEqual(["openai-codex", "anthropic", "amazon-bedrock"]);
+      expect(loaded.auth.providers).toEqual(["openai-codex", "anthropic", "amazon-bedrock", "llama.cpp"]);
     }
     expect(roots).toEqual([PACKAGE_ROOT, PACKAGE_ROOT, PACKAGE_ROOT]);
   } finally {
@@ -131,5 +131,5 @@ test("an auth module that does not serve the bound provider is credentials_unava
   expect((error as ModuleUnavailable).message).toContain("for provider anthropic");
   expect((await loadModules(dir, "worker", "openai-codex")).auth.provider).toBe("openai-codex");
   const shipped = await import("../src/auth/index.ts");
-  expect(shipped.default.providers).toEqual(["openai-codex", "anthropic", "amazon-bedrock"]);
+  expect(shipped.default.providers).toEqual(["openai-codex", "anthropic", "amazon-bedrock", "llama.cpp"]);
 });

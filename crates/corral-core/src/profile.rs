@@ -18,7 +18,7 @@ pub const PI_NATIVE_HARNESS: &str = "pi-native";
 /// hook. Model and effort travel in the one-shot bootstrap, never on the command line.
 pub const PI_NATIVE_COMMAND: &str = "{corral} agent launch {delivery_args}";
 /// Vendors a pi-native profile may use. Bedrock is the explicit metered exception to OD5.
-pub const PI_NATIVE_VENDORS: [&str; 3] = ["openai", "anthropic", "amazon-bedrock"];
+pub const PI_NATIVE_VENDORS: [&str; 4] = ["openai", "anthropic", "amazon-bedrock", "llama.cpp"];
 /// Metered vendors require an explicit profile vendor, never model-only inference.
 pub const PI_NATIVE_METERED_VENDORS: [&str; 1] = ["amazon-bedrock"];
 
