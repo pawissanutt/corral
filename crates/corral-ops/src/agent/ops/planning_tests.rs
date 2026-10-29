@@ -598,3 +598,167 @@ fn normal_sync_abandons_a_dead_plan_reviewer_reservation_that_recorded_nothing()
     assert_eq!(state.receipt(&lost).unwrap().state, ReceiptState::Abandoned);
     assert!(fx.ctx.store.get(&id).unwrap().plans[0].approval.is_none());
 }
+
+/// One pass of the per-task hook ordinary sync runs for Pi-native work, behind its own
+/// `wants` predicate. The full sync loop also observes the herdr engine, absent here.
+fn sync_agent(fx: &ts::Fx, id: &str, now: jiff::Timestamp) {
+    let task = fx.ctx.store.get(id).unwrap();
+    assert!(crate::agent::hooks::sync::wants(&task));
+    crate::agent::hooks::sync::task(&fx.ctx, &task, now).unwrap();
+}
+
+fn question_key(response: &CallResponse) -> String {
+    committed(response).result["key"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn owner_answers(fx: &ts::Fx, key: &str) {
+    let revision = fx_question(fx, key).revision;
+    let input = crate::questions::AnswerInput {
+        text: "Use the round widget.".into(),
+        ..Default::default()
+    };
+    crate::questions::answer(
+        &fx.ctx,
+        key,
+        revision,
+        crate::questions::Actor::Owner,
+        input,
+    )
+    .unwrap();
+}
+
+fn fx_question(fx: &ts::Fx, key: &str) -> corral_core::agent::AgentQuestion {
+    let task = fx.ctx.store.get(key.split('/').next().unwrap()).unwrap();
+    crate::questions::views(&task)
+        .into_iter()
+        .find(|view| view.question.key == key)
+        .unwrap()
+        .question
+}
+
+fn past_unattended(fx: &ts::Fx) -> jiff::Timestamp {
+    let secs = fx.ctx.store.config.agent.question_unattended_secs as i64 + 1;
+    jiff::Timestamp::now() + jiff::SignedDuration::from_secs(secs)
+}
+
+fn hold(fx: &ts::Fx, container: &ContainerRef) -> Option<String> {
+    ts::state(fx, container).question_hold
+}
+
+#[test]
+fn a_planner_question_unattended_past_its_deadline_holds_needs_me_until_the_owner_answers() {
+    // Given a bound planner on a Running planning task with a blocking question.
+    let fx = ts::fx();
+    let id = planning_task(&fx);
+    let host = planner(&fx, &id, "s-plan");
+    let planner = ContainerRef::Planner {
+        task: id.clone(),
+        run: "D1".into(),
+    };
+    let ask = json!({"kind": "clarification", "text": "Which widget?", "blocking": true});
+    let key = question_key(&op(&fx, &host, "ask", "q", ask));
+    // When ordinary sync runs after the unattended deadline.
+    let later = past_unattended(&fx);
+    sync_agent(&fx, &id, later);
+    // Then the task enters Needs me on the planner's own hold, and the planner stays live.
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, corral_core::Status::NeedsMe);
+    assert!(hold(&fx, &planner).unwrap().contains(&key));
+    assert!(corral_core::agent::container_closure(&task, &planner).is_none());
+    // And the planner pane reporting Working on the next pass does not clear that hold.
+    let pane = corral_herdr::PaneInfo {
+        pane_id: "p1".into(),
+        workspace_id: "w1".into(),
+        tab_id: "t1".into(),
+        agent: Some("pi".into()),
+        status: corral_herdr::AgentStatus::Working,
+        title: None,
+        cwd: None,
+    };
+    let panes = std::collections::HashMap::from([("p1".to_owned(), pane)]);
+    let snapshot = crate::pane_liveness::Snapshot::injected(&panes);
+    crate::plan_pilot::reconcile(&fx.ctx, &task, snapshot, later).unwrap();
+    assert_eq!(
+        fx.ctx.store.get(&id).unwrap().status,
+        corral_core::Status::NeedsMe
+    );
+    // When the owner answers and sync runs again.
+    owner_answers(&fx, &key);
+    sync_agent(&fx, &id, later);
+    // Then exactly the hold the question raised is cleared and the planner keeps working.
+    assert_eq!(
+        fx.ctx.store.get(&id).unwrap().status,
+        corral_core::Status::Running
+    );
+    assert!(hold(&fx, &planner).is_none());
+    committed(&op(&fx, &host, "plan_write", "w", json!({"content": PLAN})));
+}
+
+#[test]
+fn a_plan_reviewer_unattended_question_holds_needs_me_until_it_is_withdrawn() {
+    // Given a bound plan reviewer with a blocking question.
+    let fx = ts::fx();
+    let (id, reviewer) = reviewing_task(&fx);
+    let container = ContainerRef::PlanReviewer {
+        task: id.clone(),
+        plan: "P1".into(),
+        review: "PR1".into(),
+    };
+    let ask =
+        json!({"kind": "clarification", "text": "May the plan drop the CLI?", "blocking": true});
+    let key = question_key(&op(&fx, &reviewer, "ask", "q", ask));
+    // When ordinary sync runs after the unattended deadline.
+    sync_agent(&fx, &id, past_unattended(&fx));
+    // Then the task waits on the owner through the reviewer's own hold.
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(task.status, corral_core::Status::NeedsMe);
+    assert!(hold(&fx, &container).unwrap().contains(&key));
+    // When the reviewer withdraws its question.
+    let withdraw = json!({"key": key, "reason": "The plan answers it."});
+    committed(&op(&fx, &reviewer, "withdraw", "wd", withdraw));
+    // Then the task returns to Review and the reviewer can still record its verdict.
+    assert_eq!(
+        fx.ctx.store.get(&id).unwrap().status,
+        corral_core::Status::Review
+    );
+    assert!(hold(&fx, &container).is_none());
+    let verdict = json!({"verdict": "changes", "notes": "Name the CLI test."});
+    assert_eq!(
+        committed(&op(&fx, &reviewer, "plan_verdict", "v", verdict)).result["outcome"],
+        "recorded"
+    );
+}
+
+#[test]
+fn a_planning_question_never_clears_a_needs_me_hold_it_did_not_raise() {
+    // Given a planning task already in Needs me for another reason, and a planner question.
+    let fx = ts::fx();
+    let id = planning_task(&fx);
+    let host = planner(&fx, &id, "s-plan");
+    let planner = ContainerRef::Planner {
+        task: id.clone(),
+        run: "D1".into(),
+    };
+    let ask = json!({"kind": "clarification", "text": "Which widget?", "blocking": true});
+    let key = question_key(&op(&fx, &host, "ask", "q", ask));
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.status = corral_core::Status::NeedsMe;
+            Ok(())
+        })
+        .unwrap();
+    // When sync runs past the unattended deadline and the planner then withdraws its question.
+    sync_agent(&fx, &id, past_unattended(&fx));
+    assert!(hold(&fx, &planner).is_none());
+    let withdraw = json!({"key": key, "reason": "Resolved in the plan."});
+    committed(&op(&fx, &host, "withdraw", "wd", withdraw));
+    // Then the unrelated hold stays in place.
+    assert_eq!(
+        fx.ctx.store.get(&id).unwrap().status,
+        corral_core::Status::NeedsMe
+    );
+}

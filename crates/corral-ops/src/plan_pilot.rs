@@ -75,7 +75,15 @@ pub(crate) fn reconcile(
             | corral_herdr::AgentStatus::Done
             | corral_herdr::AgentStatus::Unknown => task.status,
         };
-        if task.status != status {
+        // A planner question that waits on the owner holds Needs me like a worker's: the pane's
+        // working state never clears that hold; answering or withdrawing the question does.
+        let planner = corral_core::agent::ContainerRef::Planner {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        let question_hold = corral_core::agent::container_state(task, &planner)
+            .is_some_and(|state| state.question_hold.is_some());
+        if task.status != status && !question_hold {
             ctx.store.update(&task.id, |t| {
                 t.status = status;
                 Ok(())

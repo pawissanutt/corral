@@ -942,6 +942,10 @@ bound generation and container, so a fenced host or a replaced planner run never
 gone from the plan record: committed when the plan or verdict exists, otherwise abandoned.
 Ordinary sync visits a planning-only task while a planning host is open or still holds a
 reservation or pending question, and terminalizes the questions of a closed planning host.
+A planning question that waits on the owner (escalated, or blocking past
+`question_unattended_secs`) moves the task to Needs me from Running (planner) or Review (plan
+reviewer), as a worker's or reviewer's does. The planner pane's working state does not undo
+that hold. An answer or withdrawal returns the task only from the hold its own question raised.
 Interrupted calls of either are therefore `not_executed` without a reservation.
 
 `corral agent doctor` lists `role_enabled` with each planning role's other effective

@@ -147,15 +147,29 @@ impl QuestionKey {
         if !parts[..parts.len() - 1].iter().all(word) {
             return Err(bad());
         }
+        // Planning containers key their run or plan as `plan-<D|P>` (`ContainerRef::key`).
         let container = match parts.as_slice() {
-            [task, run, _] => ContainerRef::Worker {
-                task: (*task).into(),
-                run: (*run).into(),
+            [task, run, _] => match run.strip_prefix("plan-") {
+                Some(run) => ContainerRef::Planner {
+                    task: (*task).into(),
+                    run: run.into(),
+                },
+                None => ContainerRef::Worker {
+                    task: (*task).into(),
+                    run: (*run).into(),
+                },
             },
-            [task, run, review, _] => ContainerRef::Reviewer {
-                task: (*task).into(),
-                run: (*run).into(),
-                review: (*review).into(),
+            [task, run, review, _] => match run.strip_prefix("plan-") {
+                Some(plan) => ContainerRef::PlanReviewer {
+                    task: (*task).into(),
+                    plan: plan.into(),
+                    review: (*review).into(),
+                },
+                None => ContainerRef::Reviewer {
+                    task: (*task).into(),
+                    run: (*run).into(),
+                    review: (*review).into(),
+                },
             },
             _ => return Err(bad()),
         };

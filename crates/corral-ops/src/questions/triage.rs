@@ -151,16 +151,16 @@ pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
 }
 
 /// Moves the task to Needs me for a question that waits on the owner, from Running for a
-/// worker run or from Review for a review child (whose binding stays live through
-/// `agent::question_hold`), and back once none of the container's questions waits on the owner,
-/// mirroring `register_decision`.
+/// worker run or planner, or from Review for a review child or plan reviewer (whose binding stays
+/// live through `agent::question_hold` or its open plan review), and back once none of the
+/// container's questions waits on the owner, mirroring `register_decision`. The hold lives in the
+/// run's `blocked_excerpt`, or a planning container's own `question_hold`, so only a hold that a
+/// question raised is ever cleared.
 fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe) -> bool {
-    let (run, resting) = match container {
-        ContainerRef::Worker { run, .. } => (run, Status::Running),
-        ContainerRef::Reviewer { run, .. } => (run, Status::Review),
-        ContainerRef::Pm | ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
-            return false;
-        }
+    let resting = match container {
+        ContainerRef::Worker { .. } | ContainerRef::Planner { .. } => Status::Running,
+        ContainerRef::Reviewer { .. } | ContainerRef::PlanReviewer { .. } => Status::Review,
+        ContainerRef::Pm => return false,
     };
     let waiting = agent::container_state(task, container).and_then(|state| {
         state
@@ -170,34 +170,47 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
             .map(excerpt)
     });
     let status = task.status;
-    let Some(record) = task.runs.iter_mut().find(|r| r.id == *run) else {
-        return false;
+    let (slot, decision_pending) = match container {
+        ContainerRef::Worker { run, .. } | ContainerRef::Reviewer { run, .. } => {
+            let Some(record) = task.runs.iter_mut().find(|r| r.id == *run) else {
+                return false;
+            };
+            let pending = record.obligations.pending_decision().is_some();
+            (&mut record.blocked_excerpt, pending)
+        }
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+            let Some(state) = agent::container_state_mut(task, container) else {
+                return false;
+            };
+            (&mut state.question_hold, false)
+        }
+        ContainerRef::Pm => return false,
     };
-    match needs_me {
+    let held = slot
+        .as_deref()
+        .is_some_and(|e| e.starts_with(EXCERPT_PREFIX));
+    let (raised, next) = match needs_me {
         NeedsMe::Raise(_) if status == resting && waiting.is_some() => {
-            record.blocked_excerpt = waiting;
-            task.status = Status::NeedsMe;
-            true
+            *slot = waiting;
+            (true, Some(Status::NeedsMe))
         }
-        NeedsMe::Raise(_) | NeedsMe::Settle
-            if status == Status::NeedsMe
-                && record
-                    .blocked_excerpt
-                    .as_deref()
-                    .is_some_and(|e| e.starts_with(EXCERPT_PREFIX)) =>
-        {
-            match waiting {
-                Some(next) => record.blocked_excerpt = Some(next),
-                None if record.obligations.pending_decision().is_none() => {
-                    record.blocked_excerpt = None;
-                    task.status = resting;
-                }
-                None => {}
+        NeedsMe::Raise(_) | NeedsMe::Settle if status == Status::NeedsMe && held => match waiting {
+            Some(next) => {
+                *slot = Some(next);
+                (false, None)
             }
-            false
-        }
-        _ => false,
+            None if !decision_pending => {
+                *slot = None;
+                (false, Some(resting))
+            }
+            None => (false, None),
+        },
+        _ => (false, None),
+    };
+    if let Some(next) = next {
+        task.status = next;
     }
+    raised
 }
 
 fn record_entry_notice(
