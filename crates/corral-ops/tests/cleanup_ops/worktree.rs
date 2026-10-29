@@ -4,10 +4,23 @@ use std::process::Child;
 
 use super::*;
 
+impl Fx {
+    fn marker(&self) -> String {
+        let run = self.run();
+        let path = self
+            .ctx
+            .store
+            .state_dir()
+            .join("launch-exits")
+            .join(format!("{}-{}.owner", self.id, run.id));
+        std::fs::read_to_string(path).unwrap()
+    }
+}
+
 struct Resident(Child);
 
 impl Resident {
-    fn start(path: &Path, harness: Option<&str>) -> Self {
+    fn start(path: &Path, harness: Option<&str>, marker: Option<&str>) -> Self {
         // Ready is emitted by the final process, after exec and cwd establishment.
         let mut command = crate::support::command("python3", path);
         command
@@ -20,6 +33,11 @@ impl Resident {
             .stdout(Stdio::piped());
         if let Some(name) = harness {
             command.arg0(name);
+        }
+        if let Some(marker) = marker {
+            command.env("CORRAL_PROCESS_OWNER", marker);
+        } else {
+            command.env_remove("CORRAL_PROCESS_OWNER");
         }
         let mut child = command.spawn().unwrap();
         let mut line = String::new();
@@ -59,8 +77,9 @@ fn approval_stops_resident_nested_cwd_but_leaves_outside_process() {
     let run = fx.run();
     let nested = run.worktree.join("nested");
     std::fs::create_dir(&nested).unwrap();
-    let mut inside = Resident::start(&nested, None);
-    let mut outside = Resident::start(&fx.app, None);
+    let marker = fx.marker();
+    let mut inside = Resident::start(&nested, None, Some(&marker));
+    let mut outside = Resident::start(&fx.app, None, None);
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
     assert!(line.contains("worktree removed"), "{line}");
@@ -68,12 +87,45 @@ fn approval_stops_resident_nested_cwd_but_leaves_outside_process() {
     assert!(outside.0.try_wait().unwrap().is_none());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn owned_orphan_daemon_is_removed_after_landing() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let marker = fx.marker();
+    let mut parent = crate::support::command("python3", &run.worktree);
+    let output = parent.current_dir(&run.worktree).env("CORRAL_PROCESS_OWNER", marker)
+        .args(["-c", "import os,signal; p=os.fork(); os._exit(0) if p else None; print(os.getpid(),flush=True); signal.pause()"])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut parent = output;
+    let mut line = String::new();
+    BufReader::new(parent.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let pid: u32 = line.trim().parse().unwrap();
+    parent.wait().unwrap();
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    // Ensure a failing assertion does not leak the fixture process.
+    let still_alive = std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok();
+    if still_alive {
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+    }
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(!still_alive);
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
 #[test]
 fn foreign_harness_retains_worktree_and_branch_with_warning() {
     let fx = Fx::new();
     fx.owner_ready();
     let run = fx.run();
-    let mut harness = Resident::start(&run.worktree, Some("codex"));
+    let mut harness = Resident::start(&run.worktree, Some("codex"), None);
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
     assert!(line.contains("protected process"), "{line}");
@@ -81,6 +133,54 @@ fn foreign_harness_retains_worktree_and_branch_with_warning() {
     assert!(run.worktree.is_dir());
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
     assert!(harness.0.try_wait().unwrap().is_none());
+}
+
+#[test]
+fn unrelated_editor_is_protected() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let mut editor = Resident::start(&run.worktree, Some("editor"), None);
+    let line =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(
+        line.contains("protected process") && line.contains("warning"),
+        "{line}"
+    );
+    assert!(editor.0.try_wait().unwrap().is_none());
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
+}
+
+#[test]
+fn dirty_worktree_is_retained_without_signalling_owned_process() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    std::fs::write(run.worktree.join("untracked"), "changes").unwrap();
+    let marker = fx.marker();
+    let mut child = Resident::start(&run.worktree, None, Some(&marker));
+    let error = corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false)
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("uncommitted changes"));
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
+    assert!(child.0.try_wait().unwrap().is_none());
+}
+
+#[test]
+fn unlanded_branch_and_worktree_are_retained() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let marker = fx.marker();
+    let mut child = Resident::start(&run.worktree, None, Some(&marker));
+    let line =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::KeepBranch, true, false).unwrap();
+    assert!(line.contains("unlanded branch"), "{line}");
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
+    assert!(child.0.try_wait().unwrap().is_none());
 }
 
 #[test]
@@ -111,7 +211,7 @@ fn another_tasks_custom_reviewer_harness_is_never_signalled() {
             Ok(())
         })
         .unwrap();
-    let mut harness = Resident::start(&run.worktree, Some("custom-review-harness"));
+    let mut harness = Resident::start(&run.worktree, Some("custom-review-harness"), None);
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
     assert!(line.contains("protected process"), "{line}");
@@ -126,7 +226,8 @@ fn discard_explicitly_deletes_unmerged_branch_and_dirty_worktree() {
     let run = fx.run();
     assert!(!corral_git::is_ancestor(&fx.app, &run.branch, "main").unwrap());
     std::fs::write(run.worktree.join("untracked"), "discard me").unwrap();
-    let mut child = Resident::start(&run.worktree, None);
+    let marker = fx.marker();
+    let mut child = Resident::start(&run.worktree, None, Some(&marker));
     corral_ops::discard(&fx.ctx, &fx.id).unwrap();
     assert!(child.0.wait().unwrap().code().is_none());
     assert!(!run.worktree.exists());

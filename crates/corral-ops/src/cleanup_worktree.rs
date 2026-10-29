@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use corral_core::{Run, StuckProcess, Task};
 
 use crate::Ctx;
-use crate::watchdog::{ProcessControl, SystemProcesses, protected};
+use crate::watchdog::{ProcessControl, SystemProcesses};
 
 #[cfg(test)]
 #[path = "cleanup_worktree_tests.rs"]
@@ -95,12 +95,37 @@ fn protected_pids() -> Result<BTreeSet<u32>> {
     Ok(protected_set)
 }
 
-fn harness(ctx: &Ctx, run: &Run, argv: &[String]) -> bool {
-    protected(ctx, run, argv)
-        || run
-            .review_runs
-            .iter()
-            .any(|child| harness(ctx, child, argv))
+#[cfg(target_os = "linux")]
+fn owned(ctx: &Ctx, task: &Task, run: &Run, process: &StuckProcess) -> bool {
+    let Ok(env) = std::fs::read(format!("/proc/{}/environ", process.pid)) else {
+        return false;
+    };
+    let marker = env
+        .split(|b| *b == 0)
+        .find_map(|entry| entry.strip_prefix(b"CORRAL_PROCESS_OWNER="));
+    let Some(marker) = marker else { return false };
+    task.runs
+        .iter()
+        .chain(std::iter::once(run))
+        .filter(|candidate| candidate.worktree == run.worktree)
+        .any(|candidate| {
+            let receipts = std::iter::once(candidate.id.clone()).chain(
+                candidate
+                    .review_runs
+                    .iter()
+                    .map(|child| format!("{}-{}", candidate.id, child.id)),
+            );
+            receipts.into_iter().any(|attempt| {
+                let path =
+                    crate::launch_exit::receipt(ctx, &task.id, &attempt).with_extension("owner");
+                std::fs::read(path).is_ok_and(|saved| saved.len() == 64 && saved == marker)
+            })
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn owned(_ctx: &Ctx, _task: &Task, _run: &Run, _process: &StuckProcess) -> bool {
+    false
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -175,17 +200,30 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
     if (!cfg!(windows) && path != run.worktree) || path.parent() != Some(expected.as_path()) {
         bail!("refusing aliased worktree {}", run.worktree.display());
     }
+    if !discard {
+        if !registered(&repo, &path)? {
+            bail!("refusing to remove unregistered worktree");
+        }
+        if !git(
+            &path,
+            &["status", "--porcelain", "--untracked-files=normal"],
+        )?
+        .is_empty()
+        {
+            bail!("refusing to remove dirty worktree");
+        }
+        let target = run
+            .plan_target
+            .as_ref()
+            .map_or(run.base.as_str(), |t| t.branch.as_str());
+        if !corral_git::is_ancestor(&repo, &run.branch, target)? {
+            bail!("refusing to remove worktree for unlanded branch");
+        }
+    }
     let protected_set = protected_pids()?;
-    let tasks = ctx.store.list()?;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
-        if protected_set.contains(&process.pid)
-            || tasks
-                .iter()
-                .chain(std::iter::once(task))
-                .flat_map(|t| &t.runs)
-                .any(|run| harness(ctx, run, &process.argv))
-        {
+        if protected_set.contains(&process.pid) || !owned(ctx, task, run, &process) {
             warnings.push(format!(
                 "protected process {} still uses worktree",
                 process.pid
