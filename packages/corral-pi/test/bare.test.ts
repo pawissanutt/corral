@@ -8,6 +8,7 @@ import { BARE_DEFAULT_MODEL, BareArgsInvalid, openBare, parseBareArgs } from "..
 import { UPSTREAM_TOOLS } from "../src/roles/types.ts";
 import { setBundle } from "../src/host/bundle.ts";
 import fixtureAuth from "./fixtures/auth/index.ts";
+import type { AuthContext } from "../src/auth/types.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
 
 const originalFetch = globalThis.fetch;
@@ -91,6 +92,50 @@ test("a compiled installation's bare mode uses the bundled auth: its directory h
     const tools = bare.runtime.session.getAllTools().map((tool) => tool.name);
     expect(tools.filter((name) => name.startsWith("corral_"))).toEqual([]);
     expect([...bare.runtime.session.getActiveToolNames()].sort()).toEqual([...UPSTREAM_TOOLS].sort());
+  } finally {
+    setBundle(undefined);
+  }
+}, 60_000);
+
+test("bare model selection switches from OpenAI to Claude and back in the same session", async () => {
+  // Given both provider logins, without contacting either provider.
+  setBundle({ auth: {
+    ...fixtureAuth, providers: ["openai-codex", "anthropic"],
+    credentials(context: AuthContext) {
+      if (context.provider === "openai-codex") return fixtureAuth.credentials(context);
+      return {
+        async read(provider: string) {
+          return provider === "anthropic" ? {
+            type: "oauth" as const, access: "sk-ant-oat-synthetic", refresh: "r", expires: 4_000_000_000_000,
+          } : undefined;
+        },
+        async list() { return [{ providerId: "anthropic", type: "oauth" as const }]; },
+        async modify() { throw new Error("read-only"); },
+        async delete() { throw new Error("read-only"); },
+      };
+    },
+  } });
+  try {
+    const options = parseBareArgs(["--cwd", cwd], assets.dir, { XDG_DATA_HOME: join(work, "data-switch") });
+    mkdirSync(options.dataRoot, { recursive: true });
+    writeFileSync(join(options.dataRoot, "models.json"), JSON.stringify({
+      providers: { anthropic: { models: [{ id: "configured-future-claude" }] } },
+    }));
+    const bare = await openBare(options, () => import("@earendil-works/pi-coding-agent"));
+    const session = bare.runtime.session;
+    // When the real runtime refreshes the picker and selects Claude.
+    await session.modelRuntime.refresh({ allowNetwork: false });
+    const available = await session.modelRuntime.getAvailable();
+    const claude = available.find((model) => model.provider === "anthropic" && model.id === "configured-future-claude");
+    const openai = available.find((model) => model.provider === "openai-codex");
+    if (!claude || !openai) throw new Error("both provider catalogs must be available");
+    await session.setModel(claude);
+    // Then the selected provider changes in place, without replacing the session.
+    expect(session.model?.provider).toBe("anthropic");
+    await session.setModel(openai);
+    expect(session.model?.provider).toBe("openai-codex");
+    expect(session.modelRuntime.getProvider("anthropic")?.auth.apiKey).toBeUndefined();
+    expect(bare.network.ledger().allowed).toBe(0);
   } finally {
     setBundle(undefined);
   }
