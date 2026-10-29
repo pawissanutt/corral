@@ -23,6 +23,13 @@ The role skills are procedures that point at `corral <verb> --help`; the run and
 prompts stay authoritative for their sessions. `scripts/check-docs.sh` (part of the gate) checks
 every `corral` command and flag shown in a role skill against the binary's `--help`.
 
+Pi-native also has a separate five-skill pack (`frontend`, `visual-qa`, `programming`,
+`debugging`, `git-master`), installed with `corral skill install --harness pi-native` or
+`corral agent install` into `~/.corral/skills/pi-native`. This harness target installs the pack,
+not extra role-skill copies. It stays outside OmO's discovery roots; do not put these copies in
+shared directories. See [Pi-native skills](pi-native.md#curated-pi-native-skill-pack) for loading,
+opt-outs and extensions. The same managed-file refresh rules apply.
+
 ## Versions and refresh
 
 Each managed skill carries the managed marker followed by a stamp line:

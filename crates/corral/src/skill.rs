@@ -9,7 +9,7 @@ use corral_ops::{
     skill_markdown,
 };
 
-pub const HARNESS_NAMES: [&str; 4] = ["omo", "omp", "claude", "agents"];
+pub const HARNESS_NAMES: [&str; 5] = ["omo", "omp", "claude", "agents", "pi-native"];
 
 /// Where one report label installs: a bare skills directory, or a harness under $HOME (which may share another
 /// harness's directory).
