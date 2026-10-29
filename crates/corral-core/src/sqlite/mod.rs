@@ -19,6 +19,7 @@ pub mod guard;
 mod lesson_approvals;
 mod lesson_artifacts;
 mod load;
+pub mod migrate;
 mod plans;
 mod row_indexes;
 mod schema;

@@ -125,6 +125,46 @@ pub(crate) fn derive_ledger(rows: &mut Rows) {
     }
 }
 
+/// The ledger rows of the tool panes and fallback workspaces only a legacy task's creation events
+/// name (`gate_started`, a non-PM `review_started`, `run_workspace_created`), as the legacy
+/// cleanup collected them; `events` are that task's events. Rows `rows` already holds stay.
+pub(crate) fn derive_event_ledger(rows: &mut Rows, runs: &[crate::Run], events: &[crate::Event]) {
+    for event in events {
+        let Some(run) = event.detail["run"].as_str() else {
+            continue;
+        };
+        let Some(n) = runs.iter().position(|r| r.id == run) else {
+            continue;
+        };
+        let kind = match event.kind.as_str() {
+            "gate_started" => "gate",
+            "review_started" if event.detail["reviewer"].as_str().is_some_and(|r| r != "pm") => {
+                "review"
+            }
+            "run_workspace_created" => "workspace",
+            _ => continue,
+        };
+        let Some(pane) = text(&event.detail["pane"]) else {
+            continue;
+        };
+        let row = ledger_row(
+            &format!("run:{}/{}", seq(n + 1), seq(SELF)),
+            CleanupPane {
+                key: String::new(),
+                kind: kind.into(),
+                pane,
+                socket: text(&event.detail["socket"]).unwrap_or_default(),
+                workspace: (kind == "workspace")
+                    .then(|| text(&event.detail["workspace"]))
+                    .flatten(),
+            },
+        );
+        if !rows.0.contains_key(&(row.part, row.key.clone())) {
+            rows.put(row);
+        }
+    }
+}
+
 /// A full write keeps the ledger as stored: rows it still derives keep their release state,
 /// and rows whose record was replaced stay owed.
 pub(crate) fn carry_ledger(

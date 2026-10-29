@@ -35,6 +35,7 @@ Commands:
   pricing         Inspect coverage of API-equivalent model prices
   import          Import a Markdown plan as a tracker and dependent child tasks
   export          Export the store's records in portable forms
+  migrate         Move a legacy file store into the database, roll it back, or finalize it
   storage         Check storage integrity, report or reclaim storage by class, and take verified backups
   stats           Outcome evidence grouped by profile (default), model, kind, project, task, size, mode or day
   new             Create a task and print its id
@@ -1907,6 +1908,27 @@ Options:
 
 Each JSONL record includes its stored `seq`; resume with `--since <seq>`.
 The export sequence checkpoint is exclusive. See [board events](events.md) for wait cursors.
+
+## `corral migrate`
+
+```text
+Move a legacy file store into the database, roll it back, or finalize it
+
+Usage: corral migrate [OPTIONS] <--status|--dry-run|--apply|--rollback|--finalize>
+
+Options:
+      --root <ROOT>             Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --status                  Show the migration state, step, candidate location and next command; changes nothing
+      --dry-run                 List blockers (open work) and classify every legacy file; creates nothing
+      --apply                   Fence the legacy store, import it into .corral/db and publish it (resumes after a crash)
+      --rollback                Restore the legacy store: discard an unpublished candidate, or archive the published database under .corral/rollback/ (resumes after a crash)
+      --discard-v2-changes <N>  Allow a rollback that archives exactly N v2 changes made since publication
+      --finalize                Delete the legacy files of a published store (requires --yes)
+      --yes                     Confirm --finalize
+      --wait <SECS>             Seconds --apply, --rollback and --finalize wait for other corral processes to close the store [default: 10]
+      --json                    
+  -h, --help                    Print help
+```
 
 ## `corral storage`
 
