@@ -15,6 +15,8 @@ import type { CapabilitySet } from "../roles/types.ts";
 export interface CapabilityGuidance {
   readonly settings: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly projectText: boolean;
+  /** The PM's selected project checkout; other roles read project text from their cwd. */
+  readonly projectDir?: string;
 }
 
 export interface GuidanceOptions {
@@ -87,20 +89,21 @@ export function selectGuidance(options: GuidanceOptions): Guidance {
   if (!capabilities || !guidance) return NONE;
   const on = (key: string) => capabilities.enabled.includes(key);
   const trusted = guidance.projectText;
+  const project = guidance.projectDir ?? options.cwd;
   const dedupe = (paths: string[]) => [...new Set(paths)];
   const skillPaths = on("skills")
-    ? dedupe([...userDirs(guidance.settings.skills, options.home), ...(trusted ? repoDirs(options.cwd, ".agents/skills") : [])])
+    ? dedupe([...userDirs(guidance.settings.skills, options.home), ...(trusted ? repoDirs(project, ".agents/skills") : [])])
     : [];
   const promptPaths = on("prompt_templates")
     ? dedupe([
       ...userDirs(guidance.settings.prompt_templates, options.home),
-      ...(trusted ? repoDirs(options.cwd, ".agents/prompts") : []),
+      ...(trusted ? repoDirs(project, ".agents/prompts") : []),
     ])
     : [];
   const root = resolve(options.root);
   const agentDir = resolve(options.agentDir);
   const contextFiles = on("context_files") && trusted
-    ? loadProjectContextFiles({ cwd: options.cwd, agentDir })
+    ? loadProjectContextFiles({ cwd: project, agentDir })
       .filter((file) => within(resolve(file.path), root) && !within(resolve(file.path), agentDir))
     : [];
   return { skillPaths, promptPaths, contextFiles };

@@ -96,12 +96,16 @@ Under standard and full every role loads, as text only:
 - the `AGENTS.md`/`CLAUDE.md` context files from the working directory up to the corral
   workspace root, in that order, where a linked worktree's file replaces its main checkout's.
 
+Workers and reviewers read project text from their worktree. The PM runs at the workspace root, so
+corral also passes it its selected project's checkout, and the PM's project context, skills and
+templates come from there.
+
 Project files (context files, `.agents/skills`, `.agents/prompts`) load only when the task's
 project is in `trusted_projects`; the decision is recorded in the generation's snapshot as
 `project_text`. Home directories do not depend on it. Pi's own discovery stays off: nothing is
 read from `~/.pi` or a project's `.pi` (settings, extensions, MCP, skills, prompts), and no
 extension, MCP server or theme loads. The worker keeps its packaged corral-worker skill in every
-preset. `corral agent state` lists the selected paths under `guidance`.
+preset; a home or repository skill with the same name is skipped (the pane shows the conflict). `corral agent state` lists the selected paths under `guidance`.
 
 `lessons` is the dispatch prompt's existing project-lessons section; turning it off for the
 worker drops that section, and its exposure record, from pi-native worker prompts only. Lesson
@@ -114,9 +118,11 @@ counts it toward the run with the assistant responses.
 With `session_export`, the owner can type `/corral-export` in a worker or reviewer pane. The
 host writes the bound session's current branch as one offline HTML file into the private
 `exports` directory beside the session file and attaches it to the run (or review child) as a
-`log` artifact. Nothing is uploaded. Exporting the same snapshot again reuses the file and the
-request ID, so corral replays the first receipt instead of attaching a duplicate; after new
-entries it is a new snapshot and a new artifact. Pi's own `/export` and `/share` are unchanged.
+`log` artifact. Nothing is uploaded. A snapshot is the session's last transcript entry; corral's own
+bookkeeping entries do not change it. Exporting the same snapshot again reuses the file and the
+request ID, so corral replays the first receipt instead of attaching a duplicate; after a new turn
+it is a new snapshot and a new artifact. A failed export is reported in the pane and as a
+`session_export_failed` host event. Pi's own `/export` and `/share` are unchanged.
 
 Each generation records its resolved settings and their digest once. `corral agent state`
 shows them with where each value came from, and, after an explicit resume with changed

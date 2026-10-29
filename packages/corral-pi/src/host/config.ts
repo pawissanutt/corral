@@ -99,7 +99,8 @@ function capabilityGuidance(value: unknown): CapabilityGuidance | undefined {
     throw new LaunchMessageInvalid("capabilities.settings must map names to objects");
   }
   if (typeof set.project_text !== "boolean") throw new LaunchMessageInvalid("capabilities.project_text must be a boolean");
-  return { settings: settings as CapabilityGuidance["settings"], projectText: set.project_text };
+  const projectDir = set.project_dir === undefined || set.project_dir === null ? undefined : path(set, "project_dir");
+  return { settings: settings as CapabilityGuidance["settings"], projectText: set.project_text, ...(projectDir ? { projectDir } : {}) };
 }
 
 function capabilitySet(value: unknown): CapabilitySet | undefined {

@@ -91,7 +91,12 @@ interface Started {
   readonly events: EventLog;
 }
 
-async function start(role: Role, enabled: readonly string[], guidance?: CapabilityGuidance): Promise<Started> {
+interface Layout {
+  readonly cwd?: string;
+  readonly home?: string;
+}
+
+async function start(role: Role, enabled: readonly string[], guidance?: CapabilityGuidance, layout: Layout = {}): Promise<Started> {
   const dir = mkdtempSync(join(work, `${role}-`));
   const modules: LoadedModules = await loadModules(assets.dir, role);
   const transport = modules.auth.transport?.(authContext());
@@ -106,10 +111,10 @@ async function start(role: Role, enabled: readonly string[], guidance?: Capabili
     corral: corral.path, root, identity: identity(role), hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
   });
   host = await HostSession.create({
-    sdk, identity: identity(role), cwd, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
-    capabilities: snapshot(enabled), ...(guidance ? { guidance } : {}), root, home,
+    sdk, identity: identity(role), cwd: layout.cwd ?? cwd, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
+    capabilities: snapshot(enabled), ...(guidance ? { guidance } : {}), root, home: layout.home ?? home,
     exportDir: join(dir, "sessions", "exports"),
-    modules, client, events, network, sessionManager: sdk.SessionManager.create(cwd, join(dir, "sessions")),
+    modules, client, events, network, sessionManager: sdk.SessionManager.create(layout.cwd ?? cwd, join(dir, "sessions")),
   });
   return { host, corral, events };
 }
@@ -147,10 +152,13 @@ function userTexts(host: HostSession): string[] {
 }
 
 test("every role loads home skills, trusted project text and templates, never ambient .pi resources", async () => {
-  // Given standard guidance with project-text trust for the worker, reviewer and PM roles:
+  // Given standard guidance with project-text trust for the worker and reviewer in the project
+  // worktree, and the PM at the workspace root with its selected project's checkout:
   const trusted: CapabilityGuidance = { settings: HOME_DIRS, projectText: true };
   for (const role of ["worker", "reviewer", "pm"] as const) {
-    const started = await start(role, role === "reviewer" ? STANDARD : [...STANDARD, "todo"], trusted);
+    const pm = role === "pm";
+    const started = await start(role, role === "reviewer" ? STANDARD : [...STANDARD, "todo"],
+      pm ? { ...trusted, projectDir: cwd } : trusted, pm ? { cwd: root } : {});
     try {
       // When the host binds its extensions and builds its resources:
       await started.host.session.bindExtensions({});
@@ -187,6 +195,54 @@ test("every role loads home skills, trusted project text and templates, never am
     for (const { host } of [untrusted, strict, older]) host.session.dispose();
   }
 }, 120_000);
+
+test("home and repository skills never replace the role's packaged skill, before or after reload", async () => {
+  // Given a home and a trusted repository that each ship an impostor corral-worker skill:
+  const impostorHome = join(work, "impostor-home");
+  skill(join(impostorHome, ".agents/skills"), "corral-worker", "HOME-IMPOSTOR");
+  const repo = join(work, "impostor-repo");
+  mkdirSync(join(repo, ".git"), { recursive: true });
+  skill(join(repo, ".agents/skills"), "corral-worker", "REPO-IMPOSTOR");
+  const packaged = readFileSync(join(PACKAGE_ROOT, "src/roles/worker/skills/corral-worker/SKILL.md"), "utf8");
+  const started = await start("worker", STANDARD, { settings: HOME_DIRS, projectText: true },
+    { cwd: repo, home: impostorHome });
+  try {
+    for (const stage of ["startup", "reload"]) {
+      // When the worker binds its extensions, and again after a reload:
+      // An error listener is a binding, as the pane's UI is, so reload rediscovers resources.
+      if (stage === "startup") await started.host.session.bindExtensions({ onError: () => undefined });
+      else await started.host.session.reload();
+      // Then the one corral-worker skill is the installation's file with its packaged content.
+      const workers = started.host.runtime.services.resourceLoader.getSkills().skills
+        .filter((item) => item.name === "corral-worker");
+      expect(workers.map((item) => item.filePath)).toEqual([join(assets.dir, "src/roles/worker/skills/corral-worker/SKILL.md")]);
+      expect(readFileSync(workers[0]?.filePath ?? "", "utf8")).toBe(packaged);
+      const listed = (started.host.state().guidance as { skills: { name: string; path: string }[] }).skills
+        .filter((item) => item.name === "corral-worker");
+      expect(listed.map((item) => item.path)).toEqual(workers.map((item) => item.filePath));
+    }
+  } finally {
+    started.host.session.dispose();
+  }
+}, 120_000);
+
+test("the PM's selected project text follows its trust decision and directory settings", () => {
+  // Given the PM at the workspace root with its project checkout, trusted or not:
+  const select = (settings: CapabilityGuidance["settings"], projectText: boolean) =>
+    selectGuidance({ cwd: root, root, home, agentDir: join(work, "agent"), capabilities: snapshot(STANDARD),
+      guidance: { settings, projectText, projectDir: cwd } });
+  const trusted = select(HOME_DIRS, true);
+  const untrusted = select(HOME_DIRS, false);
+  const optedOut = select({ skills: { user_dirs: [] }, prompt_templates: { user_dirs: [] } }, true);
+  // Then the project's context, skills and templates load only under trust, and opt-outs drop
+  // only the home directories.
+  expect(trusted.contextFiles.map((file) => file.path)).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);
+  expect(trusted.skillPaths).toEqual([join(home, ".agents/skills"), join(cwd, ".agents/skills")]);
+  expect(trusted.promptPaths).toEqual([join(home, ".agents/prompts"), join(cwd, ".agents/prompts")]);
+  expect([untrusted.contextFiles, untrusted.skillPaths, untrusted.promptPaths])
+    .toEqual([[], [join(home, ".agents/skills")], [join(home, ".agents/prompts")]]);
+  expect([optedOut.skillPaths, optedOut.promptPaths]).toEqual([[join(cwd, ".agents/skills")], [join(cwd, ".agents/prompts")]]);
+});
 
 test("a role's directory settings add or disable home directories and the skills switch disables both", () => {
   // Given one role that replaces the home skills directory, one with no home directories and

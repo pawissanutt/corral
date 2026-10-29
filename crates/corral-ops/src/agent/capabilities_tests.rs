@@ -162,7 +162,8 @@ fn explicit_resume_adapts_changed_settings_and_keeps_each_generation_snapshot() 
     assert_eq!(
         message["capabilities"],
         json!({"catalog": corral_core::agent::CAPABILITY_CATALOG_VERSION, "digest": snapshot.digest,
-            "preset": "standard", "enabled": ["todo"], "settings": {}, "project_text": true})
+            "preset": "standard", "enabled": ["todo"], "settings": {}, "project_text": true,
+            "project_dir": null})
     );
     // When the owner disables worker todo and the run is explicitly resumed.
     fx.ctx
@@ -380,4 +381,37 @@ fn disabled_unsupported_and_historical_web_settings_are_omitted_from_launch() {
         historical.capabilities.as_ref().unwrap().digest,
         "historical-digest"
     );
+}
+
+#[test]
+fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
+    // Given a registered project and a PM launched at the workspace root for it.
+    let mut fx = fixture(Some(&["todo"]));
+    let app = fx.tmp.path().join("app");
+    std::fs::create_dir_all(&app).unwrap();
+    fx.ctx.store.config.projects.insert(
+        "corral".into(),
+        serde_json::from_value(json!({"path": "app"})).unwrap(),
+    );
+    write(
+        &fx.tmp.path().join("assets/src/roles/pm/index.ts"),
+        "export default {};\n",
+    );
+    let pm = BindTarget::Pm {
+        project: "corral".into(),
+    };
+    let spec = HostSpec {
+        cwd: fx.tmp.path().to_path_buf(),
+        ..fx.spec()
+    };
+    // When the PM and a worker bootstrap are prepared.
+    let prepared = prepare_bootstrap(&fx.ctx, &pm, "p1", &spec).unwrap();
+    let bootstrap = consume_bootstrap(&prepared.bootstrap).unwrap();
+    let worker = fx.open().unwrap();
+    // Then only the PM names the project checkout, separately from its workspace cwd.
+    assert_eq!(bootstrap.cwd, fx.tmp.path());
+    assert_eq!(bootstrap.project_dir.as_deref(), Some(app.as_path()));
+    assert_eq!(bootstrap.capabilities.unwrap().project_text, Some(true));
+    // The worker's launch message pins "project_dir": null in the exact-message test above.
+    assert_eq!(worker.project_dir, None);
 }

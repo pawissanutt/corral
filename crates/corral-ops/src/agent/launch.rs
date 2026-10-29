@@ -88,6 +88,10 @@ pub struct Bootstrap {
     /// The generation's recorded capability snapshot; absent in legacy bootstraps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<corral_core::agent::CapabilitySnapshot>,
+    /// The PM's selected project checkout, whose text guidance it loads; its cwd is the
+    /// workspace root. Absent for roles that run in the project's own worktree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Bootstrap {
@@ -376,6 +380,10 @@ pub fn prepare_bootstrap(
         }
         ContainerRef::Pm => (None, None, None),
     };
+    let project_dir = match target {
+        BindTarget::Pm { .. } => ctx.store.project_path(&project).ok(),
+        _ => None,
+    };
     let bootstrap = Bootstrap {
         version: BOOTSTRAP_VERSION,
         root: ctx.store.root().to_path_buf(),
@@ -413,6 +421,7 @@ pub fn prepare_bootstrap(
         ui: ctx.store.config.agent.ui,
         todo: grant.capabilities.enabled("todo"),
         capabilities: Some(grant.capabilities),
+        project_dir,
     };
     let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
     let path = write_bootstrap(&dir, &bootstrap)?;
@@ -793,6 +802,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
                     .map(|(key, state)| (key.clone(), json!(state.settings)))
                     .collect::<serde_json::Map<_, _>>(),
                 "project_text": snapshot.project_text == Some(true),
+                "project_dir": bootstrap.project_dir,
             });
             if snapshot.enabled("web.enabled") && let Some(web) = &snapshot.web {
                 payload["web"] = json!(web);
