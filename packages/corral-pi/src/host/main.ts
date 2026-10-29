@@ -57,7 +57,12 @@ async function main(): Promise<void> {
     aws = { binding: config.aws, resolver };
   }
   const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider, rules,
-    config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined);
+    config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined,
+    config.capabilities?.mcp ? {
+      origins: Object.values(config.capabilities.mcp.servers)
+        .flatMap((server) => server.projects.includes(config.identity.project) && server.url ? [new URL(server.url).origin] : []),
+      send: rawFetch,
+    } : undefined);
   if (aws) {
     const { installSocketTripwire } = await import("./smithy.ts");
     installSocketTripwire((destination) => network.refuse?.(destination) ?? new NetworkRefused(destination));
@@ -108,7 +113,7 @@ async function main(): Promise<void> {
       shutdown: () => {
         events.emit("shutdown");
         terminal?.stop();
-        void session.drained().then(() => bridge.close()).then(() => process.exit(0));
+        void session.drained().then(() => session.close()).then(() => bridge.close()).then(() => process.exit(0));
       },
     },
   });
@@ -116,7 +121,8 @@ async function main(): Promise<void> {
   terminal = new sdk.InteractiveMode(session.runtime, { verbose: false });
   await terminal.init();
   session.markInteractive();
-  await terminal.run();
+  try { await terminal.run(); }
+  finally { await session.close(); await bridge.close(); }
 }
 
 main().catch((error: unknown) => {

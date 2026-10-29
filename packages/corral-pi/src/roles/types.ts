@@ -5,6 +5,7 @@
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
+import type { McpSettings } from "../host/mcp-settings.ts";
 
 export type Role = "worker" | "reviewer" | "pm";
 
@@ -55,6 +56,8 @@ export interface CapabilitySet {
   readonly enabled: readonly string[];
   /** Resolved only when web.enabled is effective for this generation. */
   readonly web?: WebSettings;
+  /** Workspace-configured servers; each explicitly names its enabled projects. */
+  readonly mcp?: McpSettings;
 }
 
 /** What a role module can see when it builds its loadout and contract. */

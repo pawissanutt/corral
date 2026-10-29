@@ -8,11 +8,13 @@ import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
+import { McpSettingsSchema } from "./mcp-settings.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
+  "mcp.enabled", "tool_search",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -122,12 +124,18 @@ function capabilitySet(value: unknown): CapabilitySet | undefined {
   if (enabled.includes("web.enabled") !== (web?.success === true)) {
     throw new LaunchMessageInvalid("web.enabled requires exactly one resolved capabilities.web settings object");
   }
+  const mcp = set.mcp === undefined ? undefined : McpSettingsSchema.safeParse(set.mcp);
+  if (mcp && !mcp.success) throw new LaunchMessageInvalid("capabilities.mcp settings are malformed");
+  if (enabled.includes("mcp.enabled") !== (mcp?.success === true)) {
+    throw new LaunchMessageInvalid("mcp.enabled requires exactly one resolved capabilities.mcp settings object");
+  }
   return {
     catalog: set.catalog,
     digest: field(set, "digest", /^[0-9a-f]{64}$/, 64),
     preset: field(set, "preset", /^[a-z_]+$/, 32),
     enabled: [...new Set(enabled as string[])],
     ...(web?.success ? { web: web.data } : {}),
+    ...(mcp?.success ? { mcp: mcp.data } : {}),
   };
 }
 

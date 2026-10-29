@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::agent::{
     AgentRole, CATALOG, CapabilitySettings, CapabilitySnapshot, CapabilitySource, CapabilityState,
-    SnapshotPreset, WebSettings,
+    McpSettings, McpToolAccess, SnapshotPreset, WebSettings,
 };
 
 /// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
@@ -109,11 +109,23 @@ pub struct WebCapabilities {
     pub settings: WebSettings,
 }
 
-/// `[agent.capabilities.<role>]`: boolean overrides, compound tables and web settings.
+/// `[agent.capabilities.<role>.mcp]`: explicit server policy and preset override.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub settings: McpSettings,
+}
+
+/// `[agent.capabilities.<role>]`: boolean overrides, compound tables, web and MCP settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoleCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web: Option<WebCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpCapabilities>,
     #[serde(flatten)]
     overrides: BTreeMap<String, RoleSetting>,
 }
@@ -122,6 +134,11 @@ impl RoleCapabilities {
     pub fn get(&self, key: &str) -> Option<bool> {
         if key == "web.enabled"
             && let Some(enabled) = self.web.as_ref().and_then(|web| web.enabled)
+        {
+            return Some(enabled);
+        }
+        if key == "mcp.enabled"
+            && let Some(enabled) = self.mcp.as_ref().and_then(|mcp| mcp.enabled)
         {
             return Some(enabled);
         }
@@ -148,6 +165,10 @@ impl RoleCapabilities {
             self.overrides.remove(key);
             self.web.get_or_insert_default().enabled = Some(enabled);
             return;
+        } else if key == "mcp.enabled" {
+            self.overrides.remove(key);
+            self.mcp.get_or_insert_default().enabled = Some(enabled);
+            return;
         }
         match self.overrides.get_mut(key) {
             Some(RoleSetting::Table(table)) => {
@@ -171,7 +192,7 @@ impl RoleCapabilities {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.overrides.is_empty() && self.web.is_none()
+        self.overrides.is_empty() && self.web.is_none() && self.mcp.is_none()
     }
 }
 
@@ -236,11 +257,18 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                 }
                 validate_web(&web.settings)?;
             }
+            if let Some(mcp) = &settings.mcp {
+                if mcp.enabled.is_some() && settings.overrides.contains_key("mcp.enabled") {
+                    return Err("mcp.enabled is configured both as a key and an mcp setting".into());
+                }
+                validate_mcp(&mcp.settings, role)?;
+            }
             let entries = settings
                 .overrides
                 .iter()
                 .map(|(key, setting)| (key.as_str(), Some(setting)))
-                .chain(settings.web.as_ref().map(|_| ("web.enabled", None)));
+                .chain(settings.web.as_ref().map(|_| ("web.enabled", None)))
+                .chain(settings.mcp.as_ref().map(|_| ("mcp.enabled", None)));
             for (key, setting) in entries {
                 let def = CATALOG.iter().find(|def| def.key == key).ok_or_else(|| {
                     let known: Vec<&str> = CATALOG.iter().map(|def| def.key).collect();
@@ -415,12 +443,84 @@ impl AgentCapabilities {
             .as_ref()
             .map_or_else(WebSettings::default, |web| web.settings.clone());
         let trust = project.map(|project| self.trusts(project));
-        CapabilitySnapshot::resolved(role, self.0.preset.snapshot(), features, Some(web), trust)
+        let mcp = overrides
+            .mcp
+            .as_ref()
+            .map_or_else(McpSettings::default, |mcp| mcp.settings.clone());
+        CapabilitySnapshot::with_settings(
+            role,
+            self.0.preset.snapshot(),
+            features,
+            Some(web),
+            Some(mcp),
+            trust,
+        )
     }
 
     pub fn todo(&self, role: AgentRole) -> bool {
         self.resolve(role, None).enabled("todo")
     }
+}
+
+fn validate_mcp(mcp: &McpSettings, role: AgentRole) -> Result<(), String> {
+    let write_proxy = regex::Regex::new(
+        r"(?i)(^|[_./-])(bash|shell|exec|execute|run_command|write|edit|delete|remove|create|patch)([_./-]|$)",
+    ).map_err(|error| format!("compiling MCP tool policy: {error}"))?;
+    for (name, server) in &mcp.servers {
+        let fail = |reason: &str| format!("mcp.servers.{name}: {reason}");
+        if name.is_empty()
+            || name.len() > 40
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(fail("server name must match [A-Za-z0-9_-]{1,40}"));
+        }
+        if server.projects.is_empty()
+            || server
+                .projects
+                .iter()
+                .any(|project| project.trim().is_empty() || project.contains(['*', '?']))
+        {
+            return Err(fail(
+                "projects must be exact nonempty project names, without wildcards",
+            ));
+        }
+        match (&server.command, &server.url) {
+            (Some(command), None) if !command.trim().is_empty() => {}
+            (None, Some(url)) if server.args.is_empty() => {
+                validate_http_endpoint(url).map_err(|error| fail(&error))?;
+            }
+            _ => {
+                return Err(fail(
+                    "configure exactly one command/args or HTTP(S) url transport",
+                ));
+            }
+        }
+        if role != AgentRole::Worker && server.tools.values().any(|v| *v == McpToolAccess::Write) {
+            return Err(fail("write tools are not available to this read-only role"));
+        }
+        for tool in server.tools.keys() {
+            if tool.is_empty()
+                || tool
+                    .split(['_', '.', '/', '-'])
+                    .any(|token| token.eq_ignore_ascii_case("corral"))
+            {
+                return Err(fail(
+                    "tool names must be nonempty and cannot contain a corral token",
+                ));
+            }
+            if role != AgentRole::Worker && write_proxy.is_match(tool) {
+                return Err(fail(
+                    "execution/write proxy tools are not available to this read-only role",
+                ));
+            }
+        }
+        if server.resources.iter().any(String::is_empty) {
+            return Err(fail("resource scopes must not be empty"));
+        }
+    }
+    Ok(())
 }
 
 fn validate_web(web: &WebSettings) -> Result<(), String> {
@@ -455,6 +555,175 @@ fn validate_web(web: &WebSettings) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn validate_http_endpoint(url: &str) -> Result<(), String> {
+    let endpoint = regex::Regex::new(
+            r"^https?://((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[0-9A-Fa-f:]+\])(?::([0-9]+))?(?:[/?][^\s#\\]*)?$",
+        ).map_err(|error| format!("compiling HTTP endpoint pattern: {error}"))?;
+    let captures = endpoint
+        .captures(url)
+        .ok_or("must be an HTTP(S) endpoint without userinfo or fragments")?;
+    if let Some(port) = captures.get(2)
+        && port.as_str().parse::<u16>().is_err()
+    {
+        return Err("has an invalid port".into());
+    }
+    if let Some(host) = captures.get(1)
+        && host.as_str().starts_with('[')
+        && host.as_str()[1..host.as_str().len() - 1]
+            .parse::<std::net::Ipv6Addr>()
+            .is_err()
+    {
+        return Err("has an invalid IPv6 host".into());
+    }
+    if url.chars().any(char::is_control)
+        || url.as_bytes().iter().enumerate().any(|(i, byte)| {
+            *byte == b'%'
+                && !url
+                    .as_bytes()
+                    .get(i + 1..i + 3)
+                    .is_some_and(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+        })
+    {
+        return Err("has invalid URL characters or percent encoding".into());
+    }
+    if let Some(host) = captures.get(1)
+        && !host.as_str().starts_with('[')
+        && (host.as_str().len() > 253
+            || host.as_str().split('.').any(|label| label.len() > 63)
+            || (host
+                .as_str()
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b == b'.')
+                && host.as_str().parse::<std::net::Ipv4Addr>().is_err()))
+    {
+        return Err("has an invalid host".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod mcp_config_tests {
+    use super::*;
+
+    #[test]
+    fn mcp_and_tool_search_are_independent_for_every_role_and_preset() {
+        // Given every role and preset, including PM.
+        for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
+            for role in ROLES {
+                let mut config = AgentCapabilities::default();
+                config.set_preset(preset);
+                let default = preset != Preset::Strict;
+                assert_eq!(config.resolve(role, None).enabled("mcp.enabled"), default);
+                assert_eq!(config.resolve(role, None).enabled("tool_search"), default);
+                // When either boolean is independently overridden.
+                config.set(role, "mcp.enabled", !default).unwrap();
+                // Then the other boolean is unchanged; MCP never implies codemode.
+                let snapshot = config.resolve(role, None);
+                assert_eq!(snapshot.enabled("mcp.enabled"), !default);
+                assert_eq!(snapshot.enabled("tool_search"), default);
+                assert!(!snapshot.enabled("codemode"));
+                config.set(role, "tool_search", !default).unwrap();
+                config.set(role, "mcp.enabled", default).unwrap();
+                let snapshot = config.resolve(role, None);
+                assert_eq!(snapshot.enabled("tool_search"), !default);
+                assert_eq!(snapshot.enabled("mcp.enabled"), default);
+            }
+        }
+    }
+
+    #[test]
+    fn mcp_transports_and_project_policy_parse_with_defaults_and_round_trip() {
+        // Given both supported transport forms and explicit project enablement.
+        for transport in ["command = 'docs-mcp'", "url = 'http://[::1]:8080/mcp'"] {
+            let text = format!(
+                "[worker.mcp.servers.docs]\nprojects = ['corral']\n\
+                 tools = {{ search = 'read' }}\n{transport}"
+            );
+            // When parsing the workspace policy.
+            let config: AgentCapabilities = toml::from_str(&text).unwrap();
+            let encoded = toml::to_string(&config).unwrap();
+            // Then absent args/resources default empty and explicit bindings survive.
+            assert_eq!(
+                toml::from_str::<AgentCapabilities>(&encoded).unwrap(),
+                config
+            );
+            let server = &config.resolve(AgentRole::Worker, None).mcp.unwrap().servers["docs"];
+            assert_eq!(server.projects, ["corral"]);
+            assert!(server.args.is_empty() && server.resources.is_empty());
+        }
+    }
+
+    #[test]
+    fn mcp_rejects_invalid_transports_secrets_and_project_wildcards() {
+        // Given invalid server settings at the configuration boundary.
+        for settings in [
+            "command = ''",
+            "url = 'ftp://example.org'",
+            "url = 'https://user:pass@example.org'",
+            "url = 'https://example.org/#fragment'",
+            "url = 'https://example..org'",
+            "url = 'http://[:::1]'",
+            "url = 'http://localhost:99999'",
+            "url = 'https://example.org/%ZZ'",
+            "url = 'http://999.1.1.1'",
+            "url = 'http://example.org'\nargs = ['--stdio']",
+            "command = 'mcp'\nurl = 'https://example.org'",
+            "args = []",
+            "command = 'mcp'\nenv = { TOKEN = 'secret' }",
+            "command = 'mcp'\nheaders = { Authorization = 'secret' }",
+            "command = 'mcp'\nunknown = true",
+        ] {
+            // When parsing, then malformed or ambiguous transport and secret fields are rejected.
+            assert!(
+                toml::from_str::<AgentCapabilities>(&format!(
+                    "[worker.mcp.servers.docs]\nprojects = ['corral']\ntools = {{}}\n{settings}"
+                ))
+                .is_err(),
+                "{settings}"
+            );
+        }
+        for projects in [
+            "",
+            "projects = []",
+            "projects = ['*']",
+            "projects = ['cor?al']",
+            "projects = ['']",
+        ] {
+            assert!(
+                toml::from_str::<AgentCapabilities>(&format!(
+                    "[worker.mcp.servers.docs]\ncommand = 'mcp'\ntools = {{}}\n{projects}"
+                ))
+                .is_err(),
+                "{projects}"
+            );
+        }
+        assert!(
+            toml::from_str::<AgentCapabilities>(
+                "[worker]\n'mcp.enabled' = true\n[worker.mcp]\nenabled = false"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn mcp_write_policy_is_refused_for_all_read_only_roles_even_when_disabled() {
+        // Given a server whose configured ceiling permits writes.
+        for role in ROLES {
+            // When parsing each role, then only workers may retain this policy.
+            let text = format!(
+                "[{}.mcp]\nenabled = false\n[{}.mcp.servers.docs]\n\
+                 projects = ['corral']\ncommand = 'mcp'\ntools = {{ edit = 'write' }}",
+                role.as_str(),
+                role.as_str()
+            );
+            assert_eq!(
+                toml::from_str::<AgentCapabilities>(&text).is_ok(),
+                role == AgentRole::Worker
+            );
+        }
+    }
 }
 
 /// A JSON safe integer: the host passes token counts to upstream as JavaScript numbers.

@@ -87,6 +87,8 @@ export interface GuardedFetch {
   readonly fetch: Fetch;
   /** Purpose-specific GET tools; never grants provider fetch the search-origin exception. */
   readonly web?: WebAccess;
+  /** MCP transport only; it cannot borrow provider credentials or public-fetch policy. */
+  readonly mcp?: Fetch;
   ledger(): NetworkLedger;
   /** The allowed destinations get_state shows; absent means the provider's default rules. */
   readonly destinations?: readonly string[];
@@ -100,6 +102,11 @@ export interface WebNetworkOptions {
   readonly lookup?: Lookup;
 }
 
+export interface McpNetworkOptions {
+  readonly origins: readonly string[];
+  readonly send: Fetch;
+}
+
 /**
  * A fetch that sends only requests matching `provider`'s rules (by default its pinned POST
  * endpoints), through `send`, without redirects. Every other destination, method or
@@ -110,6 +117,7 @@ export function guardedFetch(
   provider: ProviderId | readonly ProviderId[] = "openai-codex",
   rules: readonly DestinationRule[] = (typeof provider === "string" ? [provider] : provider).flatMap((id) => hostRules(id)),
   web?: WebNetworkOptions,
+  mcp?: McpNetworkOptions,
 ): GuardedFetch {
   let allowed = 0;
   let refused = 0;
@@ -130,6 +138,19 @@ export function guardedFetch(
   };
   return {
     fetch, refuse, destinations: rules.map((rule) => rule.display),
+    ...(mcp ? { mcp: async (input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]) => {
+      const target = destination(input);
+      const url = new URL(target.url);
+      const method = (init?.method ?? target.method ?? "GET").toUpperCase();
+      const headers = new Headers(init?.headers ?? target.headers);
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash ||
+          !mcp.origins.includes(url.origin) || !["GET", "POST", "DELETE"].includes(method) ||
+          ["authorization", "cookie", "proxy-authorization", "x-api-key"].some((key) => headers.has(key))) {
+        throw refuse(redact(target.url));
+      }
+      allowed++;
+      return mcp.send(input, { ...init, redirect: "error" });
+    } } : {}),
     ...(web ? { web: createWebAccess(web.settings, web.send, {
       ...(web.lookup ? { lookup: web.lookup } : {}),
       allowed: () => { allowed++; },

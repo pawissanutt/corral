@@ -19,7 +19,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 2;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 3;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -91,10 +91,34 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: None,
     },
+    CapabilityDef {
+        key: "mcp.enabled",
+        summary: "explicit project-scoped MCP servers",
+        defaults: mcp_defaults,
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
+        key: "tool_search",
+        summary: "local cached tool discovery",
+        defaults: mcp_defaults,
+        host: true,
+        settings: None,
+    },
 ];
 
 fn optional_text(_: AgentRole) -> Option<[bool; 3]> {
     Some([false, true, true])
+}
+
+fn mcp_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker
+        | AgentRole::Reviewer
+        | AgentRole::Pm
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer => Some([false, true, true]),
+    }
 }
 
 fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
@@ -128,6 +152,38 @@ impl Default for WebSettings {
             searxng_url: None,
         }
     }
+}
+
+/// Explicit workspace MCP policy; the host filters projects by its bound identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpSettings {
+    pub servers: BTreeMap<String, McpServer>,
+}
+
+/// No ambient configuration or inline credential fields are accepted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServer {
+    pub projects: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub tools: BTreeMap<String, McpToolAccess>,
+    #[serde(default)]
+    pub resources: Vec<String>,
+}
+
+/// Configured tool effect ceiling, independent of server-provided annotations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpToolAccess {
+    Read,
+    Write,
 }
 
 // The exhaustive match is the role seam: a new role (T-544's assistant) must decide each entry.
@@ -199,6 +255,8 @@ pub struct CapabilitySnapshot {
     /// when no project was resolved (doctor) or in a snapshot that predates it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_text: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<McpSettings>,
     pub digest: String,
 }
 
@@ -212,6 +270,8 @@ struct Canonical<'a> {
     web: Option<&'a WebSettings>,
     #[serde(skip_serializing_if = "Option::is_none")]
     project_text: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mcp: Option<&'a McpSettings>,
 }
 
 /// One setting that differs between two generations; `None` means absent from that snapshot.
@@ -236,6 +296,8 @@ pub struct CapabilityTransition {
     pub changes: Vec<CapabilityChange>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_change: Option<WebSettingsChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_change: Option<McpSettingsChange>,
 }
 
 /// Concrete web policy difference without changing the boolean feature-change API.
@@ -243,6 +305,13 @@ pub struct CapabilityTransition {
 pub struct WebSettingsChange {
     pub from: Option<WebSettings>,
     pub to: Option<WebSettings>,
+}
+
+/// Concrete MCP policy difference, including project bindings and effect ceilings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpSettingsChange {
+    pub from: Option<McpSettings>,
+    pub to: Option<McpSettings>,
 }
 
 impl CapabilitySnapshot {
@@ -271,9 +340,25 @@ impl CapabilitySnapshot {
         web: Option<WebSettings>,
         project_text: Option<bool>,
     ) -> Self {
+        Self::with_settings(role, preset, features, web, None, project_text)
+    }
+
+    pub fn with_settings(
+        role: AgentRole,
+        preset: SnapshotPreset,
+        features: BTreeMap<String, CapabilityState>,
+        web: Option<WebSettings>,
+        mcp: Option<McpSettings>,
+        project_text: Option<bool>,
+    ) -> Self {
         let web = web.filter(|_| {
             features
                 .get("web.enabled")
+                .is_some_and(|state| state.enabled)
+        });
+        let mcp = mcp.filter(|_| {
+            features
+                .get("mcp.enabled")
                 .is_some_and(|state| state.enabled)
         });
         let canonical = Canonical {
@@ -283,6 +368,7 @@ impl CapabilitySnapshot {
             features: &features,
             web: web.as_ref(),
             project_text,
+            mcp: mcp.as_ref(),
         };
         // A derived Serialize over fixed fields and a BTreeMap cannot fail.
         let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
@@ -293,6 +379,7 @@ impl CapabilitySnapshot {
             features,
             web,
             project_text,
+            mcp,
             digest: sha256_hex(&bytes),
         }
     }
@@ -378,6 +465,10 @@ impl CapabilitySnapshot {
                 from: previous.web.clone(),
                 to: self.web.clone(),
             }),
+            mcp_change: (self.mcp != previous.mcp).then(|| McpSettingsChange {
+                from: previous.mcp.clone(),
+                to: self.mcp.clone(),
+            }),
         })
     }
 
@@ -408,6 +499,9 @@ impl CapabilitySnapshot {
                 web.searxng_url.as_deref().unwrap_or("not configured")
             ));
         }
+        if let Some(mcp) = &self.mcp {
+            features.push(format!("mcp settings {mcp:?}"));
+        }
         format!(
             "{} {} [{}]: {}",
             self.role.as_str(),
@@ -419,6 +513,145 @@ impl CapabilitySnapshot {
                 features.join(", ")
             }
         )
+    }
+}
+
+#[cfg(test)]
+mod mcp_tests {
+    use super::*;
+    use crate::config::agent_capabilities::AgentCapabilities;
+
+    #[test]
+    fn mcp_config_enforces_host_name_and_tool_policy() {
+        // Given server names at and beyond the host boundary.
+        for (name, allowed) in [
+            ("docs_1-local", true),
+            ("bad.name", false),
+            ("", false),
+            ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false),
+        ] {
+            // When parsing, then the Rust policy matches the host name constraints.
+            let text =
+                format!("[worker.mcp.servers.'{name}']\nprojects = ['corral']\ncommand = 'mcp'");
+            assert_eq!(toml::from_str::<AgentCapabilities>(&text).is_ok(), allowed);
+        }
+        // Given tools including mislabeled execution proxies and Corral namespace tokens.
+        for role in ["worker", "reviewer", "pm", "planner", "plan_reviewer"] {
+            for tool in [
+                "search",
+                "run_command",
+                "docs/EDIT",
+                "corral_done",
+                "docs.Corral.read",
+            ] {
+                let text = format!(
+                    "[{role}.mcp.servers.docs]\nprojects = ['corral']\ncommand = 'mcp'\n\
+                     tools = {{ '{tool}' = 'read' }}"
+                );
+                // When parsing, then Corral tokens are never allowed and proxies require worker.
+                let allowed = tool == "search"
+                    || (role == "worker" && ["run_command", "docs/EDIT"].contains(&tool));
+                assert_eq!(
+                    toml::from_str::<AgentCapabilities>(&text).is_ok(),
+                    allowed,
+                    "{role} {tool}"
+                );
+            }
+        }
+        // Omitted tool and resource allowlists default empty.
+        let config: AgentCapabilities =
+            toml::from_str("[worker.mcp.servers.docs]\nprojects = ['corral']\ncommand = 'mcp'")
+                .unwrap();
+        assert!(
+            config.resolve(AgentRole::Worker, None).mcp.unwrap().servers["docs"]
+                .tools
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn mcp_policy_changes_digest_transition_and_round_trips() {
+        // Given explicit settings with independent project, transport, tool and resource changes.
+        let policy = "[worker.mcp.servers.docs]\nprojects = ['corral']\n\
+                      command = 'docs-mcp'\ntools = { search = 'read' }\nresources = ['docs://a']";
+        let resolve = |text: &str| {
+            toml::from_str::<AgentCapabilities>(text)
+                .unwrap()
+                .resolve(AgentRole::Worker, None)
+        };
+        let previous = resolve(policy);
+        let old_json = serde_json::to_string(&previous).unwrap();
+        for changed in [
+            policy.replace("corral", "other"),
+            policy.replace("docs-mcp", "other-mcp"),
+            policy.replace("'read'", "'write'"),
+            policy.replace("docs://a", "docs://b"),
+            format!("{policy}\nargs = ['--local']"),
+            policy.replace("command = 'docs-mcp'", "url = 'https://example.org/mcp'"),
+        ] {
+            // When resolving a new generation.
+            let current = resolve(&changed);
+            let transition = current.transition_from(2, &previous).unwrap();
+            // Then deterministic identity and concrete policy readback reflect that change.
+            assert_eq!(current, resolve(&changed));
+            assert_ne!(current.digest, previous.digest);
+            assert!(transition.changes.is_empty());
+            let change = transition.mcp_change.unwrap();
+            assert_eq!(change.from, previous.mcp);
+            assert_eq!(change.to, current.mcp);
+            assert_eq!(
+                serde_json::from_str::<CapabilitySnapshot>(
+                    &serde_json::to_string(&current).unwrap()
+                )
+                .unwrap(),
+                current
+            );
+        }
+        assert_eq!(serde_json::to_string(&previous).unwrap(), old_json);
+        assert_eq!(
+            previous.mcp.as_ref().unwrap().servers["docs"].projects,
+            ["corral"]
+        );
+    }
+
+    #[test]
+    fn disabled_or_unsupported_mcp_filters_settings_without_disabling_search() {
+        // Given explicit server settings and either a disabled feature or an older host.
+        let config: AgentCapabilities = toml::from_str(
+            "[worker.mcp]\nenabled = false\n[worker.mcp.servers.docs]\n\
+             projects = ['corral']\ncommand = 'docs-mcp'\ntools = {}",
+        )
+        .unwrap();
+        let supported = ["tool_search".to_owned()].into_iter().collect();
+        // When resolving a generation.
+        for snapshot in [
+            config.resolve(AgentRole::Worker, None),
+            AgentCapabilities::default().resolve(AgentRole::Worker, Some(&supported)),
+        ] {
+            // Then MCP settings cannot reach launch, but local search remains independent.
+            assert!(!snapshot.enabled("mcp.enabled"));
+            assert!(snapshot.mcp.is_none());
+            assert!(snapshot.enabled("tool_search"));
+        }
+    }
+
+    #[test]
+    fn pre_mcp_snapshots_and_transitions_remain_unchanged_when_parsed() {
+        // Given recorded pre-MCP wire records with their original digests.
+        let snapshot = r#"{"catalog":2,"role":"worker","preset":"standard","digest":"recorded"}"#;
+        let transition = r#"{"from_generation":1,"from_digest":"old","from_preset":"strict"}"#;
+        // When reading existing records.
+        let old: CapabilitySnapshot = serde_json::from_str(snapshot).unwrap();
+        let old_transition: CapabilityTransition = serde_json::from_str(transition).unwrap();
+        // Then new fields remain absent and the recorded identity is never recomputed.
+        assert!(old.mcp.is_none());
+        assert_eq!(old.catalog, 2);
+        assert_eq!(old.digest, "recorded");
+        assert_eq!(
+            serde_json::to_value(&old).unwrap(),
+            serde_json::from_str::<serde_json::Value>(snapshot).unwrap()
+        );
+        assert!(old_transition.mcp_change.is_none());
     }
 }
 
@@ -448,6 +681,9 @@ impl CapabilityTransition {
             .collect();
         if let Some(change) = &self.web_change {
             changes.push(format!("web settings {:?} -> {:?}", change.from, change.to));
+        }
+        if let Some(change) = &self.mcp_change {
+            changes.push(format!("mcp settings {:?} -> {:?}", change.from, change.to));
         }
         format!(
             "since generation {} ({} [{}]): {}",

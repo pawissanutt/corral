@@ -16,8 +16,16 @@ const CALLS_MAX: usize = 256;
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
 const TWO_PHASE: [&str; 3] = ["gate", "capture", "reply"];
-// Web tools are defined as GET-only and never receive credentials.
-const NO_EFFECT: [&str; 6] = ["read", "grep", "find", "ls", "web_fetch", "web_search"];
+// Web tools are GET-only; tool_search reads only the host's local cached catalog.
+const NO_EFFECT: [&str; 7] = [
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "web_fetch",
+    "web_search",
+    "tool_search",
+];
 pub const MUTATING: [&str; 3] = ["edit", "write", "bash"];
 
 pub fn class_name(class: ResumeClass) -> &'static str {
@@ -297,6 +305,11 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
     }
     if NO_EFFECT.contains(&tool) || tool.starts_with("lsp_") {
         (ResumeClass::InterruptedNoEffect, None)
+    } else if tool.starts_with("mcp_") {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some("the MCP connection may have started or the server may have acted; reconcile before retrying".into()),
+        )
     } else if MUTATING.contains(&tool) {
         (ResumeClass::OutcomeUnknown, Some(detail))
     } else {
@@ -319,6 +332,27 @@ pub fn update_body(receipt: &RequestReceipt, class: ResumeClass, detail: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_search_is_no_effect_but_mcp_and_unknown_tools_are_uncertain() {
+        // Given unmatched cached discovery, connection-backed calls, and unknown names.
+        for (tool, class) in [
+            ("tool_search", ResumeClass::InterruptedNoEffect),
+            ("mcp_connect", ResumeClass::OutcomeUnknown),
+            ("mcp_activate", ResumeClass::OutcomeUnknown),
+            ("mcp_read_resource", ResumeClass::OutcomeUnknown),
+            ("mcp_list_resources", ResumeClass::OutcomeUnknown),
+            ("mcp_docs_search", ResumeClass::OutcomeUnknown),
+            ("mcp_tool_search", ResumeClass::OutcomeUnknown),
+            ("tool_search_remote", ResumeClass::OutcomeUnknown),
+            ("unknown", ResumeClass::OutcomeUnknown),
+        ] {
+            // When classifying recovery, then only exact local discovery promises no effect.
+            let (actual, detail) = classify_upstream(tool, None);
+            assert_eq!(actual, class, "{tool}");
+            assert_eq!(detail.is_none(), class == ResumeClass::InterruptedNoEffect);
+        }
+    }
 
     #[test]
     fn get_only_web_tools_are_interrupted_without_local_effects() {
