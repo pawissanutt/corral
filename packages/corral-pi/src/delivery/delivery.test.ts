@@ -22,7 +22,7 @@ import { ENTRY_TYPE } from "./index.ts";
 
 const CTL = "d".repeat(64);
 const originalFetch = globalThis.fetch;
-const RECIPIENTS: Record<Role, { key: string; identity: Record<string, unknown> }> = {
+const RECIPIENTS: Record<Exclude<Role, "planner" | "plan_reviewer">, { key: string; identity: Record<string, unknown> }> = {
   worker: { key: "T-001_R1", identity: { task: "T-001", run: "R1" } },
   reviewer: { key: "T-001_R1_rv-R1-review1", identity: { task: "T-001", run: "R1", review: "R1-review1", callback: "g1:c1" } },
   pm: { key: "pm", identity: {} },
@@ -49,7 +49,7 @@ function entries(file: string): { customType?: string; data: Record<string, unkn
     .filter((entry) => entry.customType === ENTRY_TYPE);
 }
 
-for (const role of ["worker", "reviewer", "pm"] as Role[]) {
+for (const role of ["worker", "reviewer", "pm"] as const) {
   test(`${role}: one corral_delivery entry per inbox key, with the envelope SHA-256, before Pi sees the text`, async () => {
     const modules = await loadModules(assets.dir, role);
     expect(modules.role.role).toBe(role);

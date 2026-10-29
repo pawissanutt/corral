@@ -37,6 +37,14 @@ impl AgentRole {
             AgentRole::Pm => "pm",
         }
     }
+
+    /// The installed role module's directory: `src/roles/<dir>/index.ts`.
+    pub fn module_dir(self) -> &'static str {
+        match self {
+            AgentRole::PlanReviewer => "plan-reviewer",
+            other => other.as_str(),
+        }
+    }
 }
 
 /// Host liveness is a binding fact, never a run outcome.

@@ -456,6 +456,22 @@ pub fn open_generation_with(
             target.role().as_str()
         );
     }
+    // A disabled native planning role refuses here, before any record changes; corral never
+    // falls back to another harness in its place.
+    if let Some(state) = capabilities.features.get("role_enabled")
+        && !state.enabled
+    {
+        let role = target.role().as_str();
+        match &state.unavailable {
+            Some(reason) => bail!("role_unavailable: native {role} role: {reason}"),
+            None => bail!(
+                "role_disabled: the native {role} role is off (preset {} or \
+                 [agent.capabilities.{role}] role_enabled = false); enable it, or choose a \
+                 non-native planning profile explicitly",
+                capabilities.preset.as_str()
+            ),
+        }
+    }
     let nonce = random_secret()?;
     let digest = paths::sha256_hex(nonce.as_bytes());
     let store_id = paths::store_id(store);

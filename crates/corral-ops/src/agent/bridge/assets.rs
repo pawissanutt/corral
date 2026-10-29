@@ -81,7 +81,7 @@ pub fn missing_modules(assets: &Path, role: AgentRole) -> Vec<(&'static str, Str
     let role_name = role.as_str();
     let modules = [
         (
-            format!("src/roles/{role_name}/index.ts"),
+            format!("src/roles/{}/index.ts", role.module_dir()),
             "role_unavailable",
             format!(
                 "{role_name} (owner {})",

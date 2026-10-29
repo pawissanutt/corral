@@ -21,7 +21,7 @@ pub const HOOK_ENTRY: &str = "corral_hook";
 const HOOK_PHASES: [&str; 3] = ["pre_tool", "post_tool", "turn_end"];
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
-const TWO_PHASE: [&str; 3] = ["gate", "capture", "reply"];
+const TWO_PHASE: [&str; 5] = ["gate", "capture", "reply", "plan_submit", "plan_verdict"];
 // Web tools are GET-only; tool_search reads only the host's local cached catalog; job_output
 // reads the host's output cache.
 const NO_EFFECT: [&str; 8] = [
@@ -322,6 +322,7 @@ fn pre_commit_effects(op: &str) -> &'static str {
     match op {
         "done" => "a commit_all commit of the worktree",
         "artifact" | "evidence" | "checkpoint" | "progress" => "content-addressed blobs",
+        "plan_write" => "the plan or notes file, rewritten identically by a retry",
         _ => "none",
     }
 }

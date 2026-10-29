@@ -7,9 +7,12 @@ import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
 
-export type Role = "worker" | "reviewer" | "pm";
+export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer";
 
-export const ROLES: readonly Role[] = ["worker", "reviewer", "pm"];
+export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer"];
+
+/** The native planning roles: each runs only while its `role_enabled` capability is on. */
+export const PLANNING_ROLES: readonly Role[] = ["planner", "plan_reviewer"];
 
 /** Upstream Pi tools a role may activate (OD3). Nothing else upstream is ever active. */
 export type UpstreamTool = "read" | "edit" | "write" | "bash" | "grep" | "find" | "ls";
@@ -24,13 +27,15 @@ export type CorralOp =
   | "checkpoint" | "evidence" | "artifact" | "gate" | "done" | "verdict" | "todo"
   | "question_answer" | "question_escalate" | "question_cancel" | "reply" | "comment"
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
-  | "read_route" | "read_artifacts" | "read_lessons" | "job" | "job_monitor";
+  | "read_route" | "read_artifacts" | "read_lessons" | "job" | "job_monitor"
+  | "plan_write" | "plan_submit" | "plan_verdict";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
   "evidence", "artifact", "gate", "done", "verdict", "question_answer", "question_escalate",
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
   "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "todo", "job", "job_monitor",
+  "plan_write", "plan_submit", "plan_verdict",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */

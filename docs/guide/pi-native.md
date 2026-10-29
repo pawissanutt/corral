@@ -68,6 +68,7 @@ error. The catalog today, as strict / standard / full:
 | `hooks` | worker off / off / on; not available to PM | not available |
 | `bash_rules` | worker off / off / on; not available to PM | reviewer off / off / on; not available to planning roles |
 | `background_shell` | worker off / on / on; not available to PM | not available |
+| `role_enabled` | not available | planner and plan reviewer off / on / on; not available to reviewer |
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -91,8 +92,13 @@ branch_summary = { reserve_tokens = 16384, skip_prompt = false }
 `max_output_bytes` (retained per job, default 8 MiB) and `max_runtime_secs` (default 3600).
 
 `user_dirs` entries are absolute or `~/` directories; a missing directory is skipped. Web takes
-its own `[agent.capabilities.<role>.web]` table (below). Native planning role availability is
-separate from these capability defaults.
+its own `[agent.capabilities.<role>.web]` table (below).
+
+`role_enabled` switches a native planning role itself. With it off (preset `strict`, or
+`role_enabled = false` under `planner` or `plan_reviewer`), launching that native host refuses
+with `role_disabled` before any binding is recorded; corral never substitutes another harness.
+An installed host older than the planning roles is refused with `role_unavailable` until
+`corral agent install` updates it. See [the planner and plan reviewer roles](#the-planner-and-plan-reviewer-roles).
 
 ### Guidance and session export
 
@@ -908,6 +914,35 @@ PM replacement and project changes are rechecked before publication and at the d
 boundary, so an old project's wake is never sent to a new project's PM. OmO question push
 keeps its existing opt-in configuration; without triage, waiting questions still reach
 Blocked after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
+
+## The planner and plan reviewer roles
+
+A `pi-native` planning profile runs the planner of a [plan run](plans.md) and its independent
+plan review in their own planning containers (`<task>/plan-D1`, `<task>/plan-P1/PR1`), never
+as a worker or the PM. Both roles have upstream read, grep, find and ls only: no shell, edit
+or write tool, so the source tree stays read-only even beyond the planner's read-only sandbox.
+
+- The planner has corral_ask, corral_withdraw, corral_plan_write and corral_plan_submit.
+  corral_plan_write writes the run's `plan.md`, the path its prompt names; the model never
+  chooses the path. Content arrives in chunks of at most 16 KiB: offset 0 starts the file
+  over, and each later chunk continues at the `bytes` the previous receipt returned, up to
+  1 MiB. corral_plan_submit runs the same submission as `corral plan submit`; a refused plan
+  settles with its reason, and the planner fixes the file and submits again.
+- The plan reviewer has corral_ask, corral_withdraw, corral_plan_write (its notes report,
+  the path the review prompt names) and corral_plan_verdict. A verdict always carries the
+  launcher-bound plan and attempt, as `corral plan verdict --attempt` does, so it is never an
+  owner verdict: an approval at most awaits owner acceptance.
+
+Each host sends its dispatch prompt once per planning request. A revision round rewrites
+the prompt with its required changes and is sent again; relaunching the same request is not.
+Plan submission and verdicts reserve their receipt before the plan service commits, because
+that service then closes the planning pane. Sync settles a reservation whose executor is
+gone from the plan record: committed when the plan or verdict exists, otherwise abandoned.
+Interrupted calls of either are therefore `not_executed` without a reservation.
+
+`corral agent doctor` lists `role_enabled` with each planning role's other effective
+capabilities, and every planning generation records it in its capability snapshot. Planning
+hosts relaunch through the plan pipeline, not `corral agent resume`.
 
 ## Starting Pi yourself: `corral pi`
 

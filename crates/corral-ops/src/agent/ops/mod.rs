@@ -5,6 +5,7 @@ mod event;
 mod hello;
 pub(crate) mod jobs;
 mod lookup;
+pub(crate) mod planning;
 pub(crate) mod pm;
 pub(crate) mod reviewer;
 pub(crate) mod todo;

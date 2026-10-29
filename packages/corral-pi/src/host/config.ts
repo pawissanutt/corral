@@ -6,7 +6,7 @@ import { isAbsolute } from "node:path";
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
-import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
+import { PLANNING_ROLES, ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { parseControls } from "./tool-controls.ts";
@@ -17,7 +17,7 @@ export const LAUNCH_VERSION = 1;
 export const HOST_CAPABILITIES: readonly string[] = [
   "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell",
+  "hooks", "bash_rules", "background_shell", "role_enabled",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -179,6 +179,10 @@ export function parseLaunchMessage(text: string): HostConfig {
   const capabilities = capabilitySet(message.capabilities);
   if (role === "pm" && capabilities?.enabled.includes("web.enabled")) {
     throw new LaunchMessageInvalid("web.enabled is not available to the pm role");
+  }
+  // Corral refuses to launch a disabled planning role; a host never runs one without its snapshot.
+  if (PLANNING_ROLES.includes(role as Role) && capabilities?.enabled.includes("role_enabled") !== true) {
+    throw new LaunchMessageInvalid(`the ${role} role needs an enabled role_enabled capability`);
   }
   const guidance = capabilityGuidance(message.capabilities);
   try {

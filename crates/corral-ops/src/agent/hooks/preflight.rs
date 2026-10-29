@@ -39,7 +39,7 @@ pub fn role_owner(role: AgentRole) -> &'static str {
     match role {
         AgentRole::Worker => "worker-role",
         AgentRole::Reviewer => "reviewer-role",
-        AgentRole::Planner | AgentRole::PlanReviewer => "T-460 planner capability loadouts",
+        AgentRole::Planner | AgentRole::PlanReviewer => "plan-roles",
         AgentRole::Pm => "pm-role",
     }
 }
@@ -300,7 +300,7 @@ pub fn assets(dir: &Path, role: AgentRole, explicit: bool) -> Result<(), Refusal
     let role_name = role.as_str();
     let modules = [
         (
-            format!("src/roles/{role_name}/index.ts"),
+            format!("src/roles/{}/index.ts", role.module_dir()),
             "role_unavailable",
             format!("{role_name}, "),
             role_owner(role),

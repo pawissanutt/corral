@@ -687,6 +687,7 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
 /// its uncertain gates, and completes owed effects in every receipt home the task holds: each
 /// worker run, each review child (closed and historical ones too) and its PM receipts.
 pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
+    super::ops::planning::reconcile(ctx, task_id)?;
     let task = ctx.store.get(task_id)?;
     let mut homes = Vec::new();
     for run in &task.runs {

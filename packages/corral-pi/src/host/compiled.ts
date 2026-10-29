@@ -42,13 +42,14 @@ function writeInstall(dir: string): void {
 }
 
 async function installBundle(): Promise<void> {
-  const [{ setBundle }, worker, reviewer, pm, delivery, auth] = await Promise.all([
+  const [{ setBundle }, worker, reviewer, pm, planner, planReviewer, delivery, auth] = await Promise.all([
     import("./bundle.ts"), import("../roles/worker/index.ts"), import("../roles/reviewer/index.ts"),
-    import("../roles/pm/index.ts"), import("../delivery/index.ts"), import("../auth/index.ts"),
+    import("../roles/pm/index.ts"), import("../roles/planner/index.ts"), import("../roles/plan-reviewer/index.ts"),
+    import("../delivery/index.ts"), import("../auth/index.ts"),
   ]);
   setBundle({
     roles: { worker: (root) => worker.workerRole(root), reviewer: (root) => reviewer.reviewerRole(root),
-      pm: (root) => pm.pmRole(root) },
+      pm: (root) => pm.pmRole(root), planner: () => planner.default, plan_reviewer: () => planReviewer.default },
     delivery: delivery.default, auth: auth.default,
   });
 }

@@ -22,7 +22,26 @@ fn sha256(bytes: &[u8]) -> String {
         .to_owned()
 }
 
+/// The plan a native planner writes and submits (T-573); old-format plans stay valid.
+const PLAN: &str = "---\ngoal: Native fixture\nnon_goals: [No implementation]\ndecisions: [Keep existing contracts]\naffected_paths: [protected.txt]\ncontracts: []\ndependencies: []\nacceptance:\n  - scenario: Read source\n    expected: Source remains unchanged\nverification: [cargo test]\nowner_decisions: []\n---\n";
+
 fn hello(message: &Value, envelope: &Value) -> Value {
+    call(message, "hello", envelope)
+}
+
+/// One typed tool call through the real CLI, as the Pi host's corral tool sends it.
+fn tool(message: &Value, identity: &Value, op: &str, call_id: &str, payload: Value) -> Value {
+    let canonical: std::collections::BTreeMap<_, _> = payload.as_object().unwrap().iter().collect();
+    let request = format!("rq-{}", &sha256(call_id.as_bytes())[..32]);
+    let envelope = json!({
+        "version": 1, "op": op, "request_id": request, "identity": identity,
+        "payload_sha256": sha256(&serde_json::to_vec(&canonical).unwrap()),
+        "auth": {"host_cap": message["secrets"]["host_cap"]}, "payload": payload,
+    });
+    call(message, op, &envelope)
+}
+
+fn call(message: &Value, op: &str, envelope: &Value) -> Value {
     let mut child = Command::new(message["corral"].as_str().unwrap())
         .args([
             "--root",
@@ -30,7 +49,7 @@ fn hello(message: &Value, envelope: &Value) -> Value {
             "agent",
             "call",
             "--op",
-            "hello",
+            op,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -106,9 +125,33 @@ fn main() {
         let protected = Path::new(message["cwd"].as_str().unwrap()).join("protected.txt");
         std::fs::write(protected, "must not write").is_err()
     };
+    // The role's own typed operations: write and submit the plan, or record the verdict.
+    let plan_ops = if role == "planner" {
+        vec![
+            tool(
+                &message,
+                &identity,
+                "plan_write",
+                "write",
+                json!({"content": PLAN}),
+            ),
+            tool(&message, &identity, "plan_submit", "submit", json!({})),
+        ]
+    } else {
+        let notes = "Approve: the plan keeps source read-only.";
+        let verdict = json!({"verdict": "approve", "notes": notes});
+        vec![tool(
+            &message,
+            &identity,
+            "plan_verdict",
+            "verdict",
+            verdict,
+        )]
+    };
     message.as_object_mut().unwrap().remove("secrets");
     let proof = json!({
         "launch": message, "hello": bound, "nonce_reuse": reused, "read_only": read_only,
+        "plan_ops": plan_ops,
     });
     std::fs::write(
         Path::new(&root).join(format!(".corral/state/planner-launch-{role}.json")),
