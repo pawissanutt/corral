@@ -30,7 +30,7 @@
   },
   "lock": {
     "file": "bun.lock",
-    "sha256": "03d5a28d058a97d89e38ec074b446c136c49eabda84464b12b035613c8ec6aac"
+    "sha256": "db2a4fc3d9ccd879c4efb4dd2454814319599e2d3cbbfe60af4cbe601dc1df19"
   },
   "claude": {
     "task": "T-493",
@@ -45,6 +45,7 @@
   },
   "providers": [
     "openai",
-    "anthropic"
+    "anthropic",
+    "amazon-bedrock"
   ]
 }

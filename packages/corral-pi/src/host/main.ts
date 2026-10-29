@@ -1,7 +1,10 @@
 // The Bun host entry point, exec'd by `corral agent launch` with `--launch-fd <n>`. It reads
 // the launch message from that inherited pipe, refuses an unpinned runtime or a missing module,
 // starts the bridge, binds the generation with hello and hands the pane to InteractiveMode.
+// A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
+// tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { startBridge } from "../bridge/server.ts";
@@ -11,10 +14,12 @@ import { readLaunchMessage } from "./config.ts";
 import { openSession, withRecoveryContext } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { loadPeerLookup } from "./peer.ts";
-import { guardedFetch, restrictEnvironment } from "./restrict.ts";
+import { CredentialsUnavailable } from "../auth/paths.ts";
+import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts";
+import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
-import { HostSession, authContext } from "./session.ts";
+import { type AwsRoute, HostSession, authContext } from "./session.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -27,16 +32,37 @@ function launchFd(argv: readonly string[]): number {
 
 async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
-  restrictEnvironment(process.env);
+  const provider = config.provider ?? "openai-codex";
+  restrictEnvironment(process.env, provider);
   const compat = readCompat(config.assets);
   if (compiledBundle()) checkCompiledRuntime(compat);
   else checkRuntime(config.assets, compat);
-  const provider = config.provider ?? "openai-codex";
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const send = modules.auth.transport?.(authContext(provider)) ?? globalThis.fetch.bind(globalThis);
-  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider);
+  let aws: AwsRoute | undefined;
+  let rules: readonly DestinationRule[] | undefined;
+  if (PROVIDERS[provider].auth === "aws-profile") {
+    if (!config.aws) {
+      throw new CredentialsUnavailable(`no Amazon Bedrock binding was passed for provider ${provider}; ` +
+        `run \`corral agent login --provider ${provider}\``);
+    }
+    const [{ bedrockRoute, createAwsCredentialResolver }, { adoptSmithyHandlers }] =
+      await Promise.all([import("../auth/aws.ts"), import("./smithy.ts")]);
+    adoptSmithyHandlers();
+    const resolver = createAwsCredentialResolver(config.aws, homedir());
+    const model = config.model.startsWith(`${provider}/`) ? config.model.slice(provider.length + 1) : config.model;
+    rules = hostRules(provider, bedrockRoute(config.aws, model, await resolver.profile()));
+    aws = { binding: config.aws, resolver };
+  }
+  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider, rules);
+  if (aws) {
+    const { installSocketTripwire } = await import("./smithy.ts");
+    installSocketTripwire((destination) => network.refuse?.(destination) ?? new NetworkRefused(destination));
+  }
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
+  // An unusable profile or an expired SSO session stops the host here, before any session exists.
+  if (aws) await aws.resolver.get();
   const sdk = await import("@earendil-works/pi-coding-agent");
   process.chdir(config.cwd);
   mkdirSync(config.sessionDir, { recursive: true, mode: 0o700 });
@@ -48,7 +74,7 @@ async function main(): Promise<void> {
     sessionId: () => host?.sessionId() ?? "",
   });
   host = await HostSession.create({
-    sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider,
+    sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
     ...(config.ui ? { ui: config.ui } : {}),

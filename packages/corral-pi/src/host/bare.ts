@@ -25,6 +25,7 @@ import { createModelCatalog } from "./catalog.ts";
 export const BARE_DEFAULT_MODEL: Readonly<Record<ProviderId, string>> = {
   "openai-codex": "gpt-6.1-sol",
   anthropic: "claude-opus-4-8",
+  "amazon-bedrock": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 };
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
@@ -88,7 +89,9 @@ export interface BareSession {
  */
 export async function openBare(options: BareOptions, loadSdk: () => Promise<typeof Sdk>): Promise<BareSession> {
   const auth = await loadAuth(options.assets, options.provider);
-  const capabilities = await providerCapabilities(auth, options.provider, auth.providers ?? [auth.provider]);
+  // Bare Pi runs only subscription OAuth providers: it carries no Amazon Bedrock binding.
+  const policy = (auth.providers ?? [auth.provider]).filter((provider) => PROVIDERS[provider].auth === "oauth");
+  const capabilities = await providerCapabilities(auth, options.provider, policy);
   const send = providerTransport(auth, capabilities.providers, globalThis.fetch.bind(globalThis));
   const network = guardedFetch(send, undefined, capabilities.providers);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
