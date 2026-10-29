@@ -32,6 +32,23 @@ export const DEFAULT_SERVERS: readonly LspServerSpec[] = [
   },
 ];
 
+/** Convert the generation's Rust-validated configuration into explicit argv server specs. */
+export function configuredServers(settings: Readonly<Record<string, unknown>> | undefined): readonly LspServerSpec[] {
+  const raw = settings?.languages;
+  if (raw === undefined) return DEFAULT_SERVERS;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid lsp.languages");
+  const configured: LspServerSpec[] = Object.entries(raw).map(([id, value]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`invalid lsp server ${id}`);
+    const spec = value as Record<string, unknown>;
+    if (typeof spec.command !== "string" || !spec.command || !spec.extensions || typeof spec.extensions !== "object" || Array.isArray(spec.extensions)
+      || (spec.args !== undefined && (!Array.isArray(spec.args) || spec.args.some((v) => typeof v !== "string")))
+      || (spec.root_markers !== undefined && (!Array.isArray(spec.root_markers) || spec.root_markers.some((v) => typeof v !== "string" || !v || v === "." || v === ".." || v.includes("/"))))
+      || Object.entries(spec.extensions).some(([ext, lang]) => !ext.startsWith(".") || typeof lang !== "string" || !lang)) throw new Error(`invalid lsp server ${id}`);
+    return { id, command: [spec.command, ...((spec.args ?? []) as string[])], languages: spec.extensions as Record<string, string>, rootMarkers: (spec.root_markers ?? []) as string[] };
+  });
+  return [...configured, ...DEFAULT_SERVERS];
+}
+
 export const LSP_TOOL_NAMES = ["lsp_diagnostics", "lsp_definition", "lsp_references"] as const;
 
 export const MAX_ITEMS = 50;

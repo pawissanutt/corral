@@ -76,13 +76,7 @@ test("a worker turn calls lsp_definition on the configured server and gets lsp_s
   writeFileSync(join(cwd, "lib.fk"), "def gamma\nuse gamma\n");
   writeFileSync(join(cwd, "main.gh"), "ghost\n");
   const fixture = await loadModules(assets.dir, "worker");
-  const role = workerRole(fileURLToPath(new URL("../../..", import.meta.url)), {
-    servers: [
-      { id: "fake", command: [process.execPath, FAKE], languages: { ".fk": "fake" } },
-      { id: "ghost", command: ["corral-no-such-language-server"], languages: { ".gh": "ghost" } },
-    ],
-    limits: { quietMs: 0 },
-  });
+  const role = workerRole(fileURLToPath(new URL("../../..", import.meta.url)), { limits: { quietMs: 0 } });
   const modules = { ...fixture, role };
   const events = new EventLog(identity.generation);
   const transport = modules.auth.transport?.(authContext());
@@ -95,6 +89,11 @@ test("a worker turn calls lsp_definition on the configured server and gets lsp_s
   const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
   host = await HostSession.create({
     sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
+    capabilities: { catalog: 5, digest: "d".repeat(64), preset: "standard", enabled: ["lsp"] },
+    guidance: { projectText: false, settings: { lsp: { languages: {
+      fake: { command: process.execPath, args: [FAKE], extensions: { ".fk": "fake" } },
+      ghost: { command: "corral-no-such-language-server", extensions: { ".gh": "ghost" } },
+    } } } },
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
   await host.session.bindExtensions({});

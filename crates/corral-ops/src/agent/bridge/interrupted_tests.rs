@@ -158,13 +158,13 @@ fn classification_never_claims_not_executed_without_proof() {
     );
     assert_eq!(class("capture", None, false), ResumeClass::NotExecuted);
     assert_eq!(class("comment", None, false), ResumeClass::NotCommitted);
-    for tool in ["edit", "write", "bash", "mystery"] {
+    for tool in ["edit", "write", "bash", "mystery", "lsp_diagnostics"] {
         assert_eq!(
             interrupted::classify_upstream(tool, None).0,
             ResumeClass::OutcomeUnknown
         );
     }
-    for tool in ["read", "grep", "find", "ls", "lsp_diagnostics"] {
+    for tool in ["read", "grep", "find", "ls"] {
         let class = interrupted::classify_upstream(tool, None).0;
         assert_eq!(class, ResumeClass::InterruptedNoEffect);
     }

@@ -10,7 +10,7 @@ import { assetPath, assetRoot, readAsset, renderContract } from "../common/asset
 import { artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
 import { todoTool } from "../common/todo.ts";
 import { checkpointTool, doneTool, gateTool, progressTool, waitTool } from "./tools.ts";
-import { LSP_TOOL_NAMES, type LspToolkit, type LspToolkitOptions, lspToolkit } from "../../extensions/lsp/index.ts";
+import { LSP_TOOL_NAMES, type LspToolkit, type LspToolkitOptions, configuredServers, lspToolkit } from "../../extensions/lsp/index.ts";
 
 export const CONTRACT_ASSET = "assets/worker-contract.md";
 export const SKILL_ASSET = "src/roles/worker/skills/corral-worker/SKILL.md";
@@ -42,7 +42,7 @@ export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = 
   const toolkit = (context: RoleContext) => {
     let found = toolkits.get(context);
     if (!found) {
-      found = lspToolkit({ ...lsp, root: context.cwd });
+      found = lspToolkit({ ...lsp, servers: lsp.servers ?? configuredServers(context.lspSettings), root: context.cwd });
       toolkits.set(context, found);
     }
     return found;

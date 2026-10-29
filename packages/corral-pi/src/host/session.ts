@@ -38,6 +38,7 @@ import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { webTools } from "../extensions/web/index.ts";
+import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
 import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
@@ -235,6 +236,7 @@ export class HostSession {
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
   private readonly controls: HostControls;
   private readonly hooks: Hooks | undefined;
+  private readonly additionalLsp: LspToolkit | undefined;
   private readonly permissions: BashPermissions | undefined;
 
   readonly provider: ProviderId;
@@ -245,6 +247,7 @@ export class HostSession {
       identity: options.identity, cwd: options.cwd, model: options.model,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+      ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
     };
@@ -259,11 +262,15 @@ export class HostSession {
     if (webEnabled && (options.identity.role === "pm" || !options.network.web || !options.capabilities?.web)) {
       throw new Error("module_invalid: web.enabled needs an eligible role and its generation-bound web transport");
     }
+    const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
+      ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
+    if (lspEnabled && options.identity.role !== "worker" && options.identity.role !== "pm") {
+      this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp) });
+    }
     this.jobs = this.jobRuntime();
-    this.localTools = [
-      ...roleLocal, ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
-      ...(this.jobs ? jobTools(this.jobs) : []),
-    ];
+    this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
+      ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
+      ...(this.jobs ? jobTools(this.jobs) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -400,6 +407,7 @@ export class HostSession {
     if (this.options.capabilities?.enabled.includes("codemode")) {
       await codemode(this.options.sdk.createCodemodeExtension)(pi);
     }
+    if (this.additionalLsp) pi.on("session_shutdown", async () => { await this.additionalLsp?.shutdown(); });
     const settings = this.options.capabilities?.mcp;
     const search = this.options.capabilities?.enabled.includes("tool_search") === true;
     if (settings) {
