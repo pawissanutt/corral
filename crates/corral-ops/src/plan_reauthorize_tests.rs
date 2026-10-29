@@ -2,15 +2,16 @@
 use super::*;
 use corral_core::{ActionAuthorization, OperatingOrigin, SubmissionDisposition};
 
-fn change_limits(store: &Store) {
+/// A consent-relevant policy input; `limits.*` capacity no longer changes the revision (T-560).
+fn change_policy(store: &Store) {
     let mut fresh = Store::open(store.root()).unwrap();
-    fresh.config.limits.review += 1;
+    fresh.config.review.max_rounds = Some(fresh.config.review.max_rounds.unwrap_or(3) + 1);
     fresh.save_config().unwrap();
 }
 
-/// Refuse the first launch at its final submission boundary by changing `limits.*` there,
+/// Refuse the first launch at its final submission boundary by changing review policy there,
 /// then restore the plain engine so the retry runs unobstructed.
-fn refuse_by_limits_change(
+fn refuse_by_policy_change(
     tmp: &std::path::Path,
     ctx: &Ctx,
     id: &str,
@@ -22,7 +23,7 @@ fn refuse_by_limits_change(
     let launch = std::thread::spawn(move || launch(&launch_ctx, &launch_id));
     let mut bytes = [0; 32];
     let (_, peer) = barrier.recv_from(&mut bytes).unwrap();
-    change_limits(&ctx.store);
+    change_policy(&ctx.store);
     barrier
         .send_to(b"release", peer.as_pathname().unwrap())
         .unwrap();
@@ -73,10 +74,10 @@ fn assert_superseded(ctx: &Ctx, refused: &ActionAuthorization) -> ActionAuthoriz
 }
 
 #[test]
-fn owner_plan_review_after_a_limits_change_launches_with_fresh_consent() {
-    // Given an owner plan review refused because a limits value changed under it.
+fn owner_plan_review_after_a_policy_change_launches_with_fresh_consent() {
+    // Given an owner plan review refused because review policy changed under it.
     let (tmp, ctx, id, _) = fixture();
-    let refused = refuse_by_limits_change(tmp.path(), &ctx, &id, |ctx, id| {
+    let refused = refuse_by_policy_change(tmp.path(), &ctx, &id, |ctx, id| {
         crate::plan_review(ctx, id, None)
     });
     assert!(matches!(
@@ -86,7 +87,7 @@ fn owner_plan_review_after_a_limits_change_launches_with_fresh_consent() {
     // When an automatic caller reaches the owner's preparation, it still cannot use it.
     assert!(crate::plan_review::review_auto(&ctx, &id).is_err());
     assert!(!tmp.path().join("engine/launch-command").exists());
-    // When the owner asks again under the changed limits.
+    // When the owner asks again under the changed policy.
     let review = crate::plan_review(&ctx, &id, None).unwrap();
     // Then the same attempt launches under fresh owner consent; the refusal stays as audit.
     assert_eq!(review.id, "PR1");
@@ -101,14 +102,14 @@ fn owner_plan_review_after_a_limits_change_launches_with_fresh_consent() {
 }
 
 #[test]
-fn automatic_plan_review_after_a_limits_change_re_prepares_and_launches() {
-    // Given an automatic plan review refused because a limits value changed under it.
+fn automatic_plan_review_after_a_policy_change_re_prepares_and_launches() {
+    // Given an automatic plan review refused because review policy changed under it.
     let (tmp, ctx, id, _) = fixture();
-    let refused = refuse_by_limits_change(tmp.path(), &ctx, &id, |ctx, id| {
+    let refused = refuse_by_policy_change(tmp.path(), &ctx, &id, |ctx, id| {
         crate::plan_review::review_auto(ctx, id)
     });
     assert!(crate::operating::is_automatic(&refused));
-    // When autopilot advances the plan again under the changed limits.
+    // When autopilot advances the plan again under the changed policy.
     advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
     // Then it re-prepares the same attempt under current policy and launches it.
     let task = ctx.store.get(&id).unwrap();
