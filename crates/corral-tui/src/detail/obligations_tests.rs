@@ -86,7 +86,7 @@ fn capture(name: &str, text: &str) {
 fn board(fx: &Fixture) -> String {
     let mut b = fx.board();
     b.on_key(key('D'), &fx.ctx);
-    let mut term = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(180, 45)).unwrap();
     term.draw(|f| b.draw(f, f.area(), &fx.ctx, &mut crate::HitMap::default()))
         .unwrap();
     buffer_text(term.backend().buffer())
