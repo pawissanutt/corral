@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use super::durable::{self, Seen};
 use super::journal::{Candidate, Journal, JournalState, RollbackRecord, RollbackStep, write_fence};
-use super::scan::{BuildRoot, Manifest, walk};
+use super::scan::{BuildRoot, Manifest};
 use super::status::DirState;
 use super::{DB, DISCARD, MANIFEST, Migrate, ROLLBACK_DIR, locks};
 use crate::sqlite::SqliteBackend;
@@ -101,7 +101,7 @@ fn published(m: &Migrate, journal: Journal, discard: Option<u64>) -> Result<Roll
             .as_deref()
             .context("the journal has no M0")?,
     )?;
-    let now = walk(corral)?;
+    let now = Manifest::capture(corral)?;
     let changed = m0.differences(&now);
     ensure!(
         changed.is_empty(),

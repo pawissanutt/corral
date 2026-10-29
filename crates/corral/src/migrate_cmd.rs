@@ -64,9 +64,10 @@ pub fn run(root: &Path, args: MigrateArgs) -> Result<()> {
         }
         if !report.ok {
             bail!(
-                "the store cannot be migrated yet: {} blockers, {} unclassified files",
+                "the store cannot be migrated yet: {} blockers, {} unclassified files, {} missing artifact snapshots",
                 report.blockers.len(),
-                report.unclassified.len()
+                report.unclassified.len(),
+                report.missing_artifacts.len()
             );
         }
         return Ok(());
@@ -169,6 +170,9 @@ fn print_dry_run(report: &DryRun) {
     }
     for path in &report.unclassified {
         println!("unclassified: {path}");
+    }
+    for artifact in &report.missing_artifacts {
+        println!("missing snapshot: {artifact}");
     }
     let schemas: Vec<String> = report
         .tasks_by_schema

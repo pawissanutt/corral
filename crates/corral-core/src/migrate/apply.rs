@@ -120,7 +120,8 @@ fn drain_check(m: &Migrate) -> Result<()> {
         unclassified.len(),
         unclassified.join(", ")
     );
-    let (blockers, _) = LegacyBoard::read(corral)?.blockers(corral)?;
+    let board = LegacyBoard::read(corral)?;
+    let (blockers, _) = board.blockers(corral)?;
     if !blockers.is_empty() {
         let list: Vec<String> = blockers.iter().map(ToString::to_string).collect();
         bail!(
@@ -129,6 +130,13 @@ fn drain_check(m: &Migrate) -> Result<()> {
             list.join("\n  ")
         );
     }
+    let missing = board.missing_snapshots(corral);
+    ensure!(
+        missing.is_empty(),
+        "{} registered artifacts have no snapshot to import: {}; refusing and changing nothing",
+        missing.len(),
+        missing.join("; ")
+    );
     Ok(())
 }
 
@@ -191,7 +199,7 @@ fn import(m: &Migrate, journal: &mut Journal) -> Result<import::ImportReport> {
         "the imported database failed integrity_check: {}",
         problems.join("; ")
     );
-    let differences = m0.differences(&walk(corral)?);
+    let differences = m0.differences(&Manifest::capture(corral)?);
     ensure!(
         differences.is_empty(),
         "legacy files changed during the import ({}; first: {})",

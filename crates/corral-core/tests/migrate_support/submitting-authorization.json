@@ -1,0 +1,45 @@
+{
+ "version": 1,
+ "authorization": {
+  "id": "00e38c5269c3c4f455977ff4be731792fe1e75ff25dbfd369d6f4616f4ff318e",
+  "workspace": "/home/pawis/miti-workspace",
+  "member": {
+   "project": "corral",
+   "repository": "/home/pawis/miti-workspace/corral",
+   "repository_identity": "ed41ceceea775b52751056df3a78f7cd8e859c3834b2cfcbefb88badf8c76a32",
+   "contract_revision": "92d04639e33125a1b4cc6c0b868891374683b0ceeaca66d60da5de0cce4d1356"
+  },
+  "policy_revision": "80a2ba3945c4f2e6a70710e09bf5301c1be42719543f854331d10ad143036975",
+  "action": {
+   "task": "T-009",
+   "run": "R1",
+   "attempt": "3257768-1792468110269122504",
+   "kind": "gate",
+   "candidate": {
+    "version": 2,
+    "task": "T-232",
+    "run": "R1",
+    "attempt": "3257768-1792468110269122504",
+    "head": "bcd57d7141ba3b6a0ab3b19c60a914d3ec2f409a",
+    "tree": "ec530240406447356e9e48a49c77a1ef5c013d1c",
+    "integration_base": "2942cca95cdc71433719c3febf7a8d7d62b4cc61",
+    "dispatch_base": "b9be8259f3c5353aaa4da70414b23a13544b8685",
+    "spec_digest": "bf1d3d7969d3b1b01aab5f904f4d0a104a2171852d3cefba98f4306fe72c6be7",
+    "policy_digest": "7fbc891278f2beaeecdd726ee625e4d17c010fe781736909ce65936cf4094725",
+    "inputs_digest": "8e0e082e096b72bc335b1727a331b2a198c60ab811697840ff080891b90ebec2",
+    "environment": []
+   },
+   "plan": null,
+   "round": null
+  },
+  "origin": {
+   "kind": "explicit_owner",
+   "approval": "T-232:R1:Gate:3257768-1792468110269122504:2026-10-20T03:48:30.797796796Z",
+   "confirmed_by": "owner",
+   "confirmed_at": "2026-10-20T03:48:30.797801685Z"
+  }
+ },
+ "disposition": {
+  "state": "submitting"
+ }
+}

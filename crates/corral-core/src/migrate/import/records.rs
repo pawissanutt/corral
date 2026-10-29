@@ -122,7 +122,9 @@ fn record(c: &mut Collected, rel: &str, area: &str, path: &Path, events: &[u8]) 
             c.typed(area, "state", cursor);
         }
         "availability" | "provider-stall" | "review-prepared" | "integration"
-        | "profile-proposals" => c.typed(area, stem(name, "", ".json")?, read_json(path)?),
+        | "profile-proposals" | "plan-checkpoints" => {
+            c.typed(area, stem(name, "", ".json")?, read_json(path)?)
+        }
         "lessons-distill" => {
             let task = crate::Store::normalize_id(stem(name, "", ".json")?)?;
             c.typed(area, &task, read_json(path)?);

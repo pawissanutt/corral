@@ -95,6 +95,7 @@ fn classify_state(rest: &[&str]) -> Option<Area> {
         _ if json("lessons") => area("lessons-distill", Record),
         _ if json("profile-proposals") => area("profile-proposals", Record),
         _ if json("post-land") => area("post-land", Record),
+        _ if json("plan-checkpoints") => area("plan-checkpoints", Record),
         ["provider-stall", name] if name.ends_with(".launch") => area("provider-session", Record),
         ["herdr-plugin", "herdr-plugin.toml"] => area("herdr-plugin", Record),
         ["artifact-decoded", ..] => area("artifact-decoded", Cache),
@@ -103,8 +104,8 @@ fn classify_state(rest: &[&str]) -> Option<Area> {
         ["pane-liveness.json"] => area("pane-liveness", Cache),
         ["content-search.lock"] => area("lock", Lock),
         [
-            "gates" | "plan-gates" | "reviews" | "review-watch" | "watch" | "plans" | "post-land"
-            | "herdr-plugin" | "schema-3-backup" | "tmp",
+            "gates" | "plan-gates" | "plan-checkpoints" | "reviews" | "review-watch" | "watch"
+            | "plans" | "post-land" | "herdr-plugin" | "schema-3-backup" | "tmp",
             ..,
         ] => area("evidence", Evidence),
         [name] => return classify_state_file(name),

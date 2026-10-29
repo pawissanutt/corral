@@ -204,3 +204,241 @@ fn a_verified_journal_with_both_or_neither_candidate_refuses_to_publish() {
         JournalState::Verified.as_str()
     );
 }
+
+#[test]
+fn apply_refuses_a_same_size_same_mtime_content_change_during_the_import() {
+    // Given an import during which a stored review note changes after its blob was taken,
+    // keeping its size and mtime.
+    let legacy = Legacy::new();
+    let corral = legacy.corral.clone();
+    let note = "state/reviews/T-001-R1-notes.md";
+    let barrier = support::act_at("B3", move || {
+        support::alter_in_place(&corral, note, "good", "fine");
+        Ok(())
+    });
+    // When the apply compares the legacy files with M0 (A5), it refuses naming the file.
+    let error = legacy.migrate().barrier(barrier).apply().unwrap_err();
+    assert!(
+        format!("{error:#}").contains(&format!("{note}: content changed")),
+        "{error:#}"
+    );
+    // Then nothing is verified or published.
+    assert_eq!(legacy.journal().unwrap()["state"], "importing");
+    assert!(!legacy.exists("db"));
+    assert_eq!(legacy.fence().as_deref(), Some("4\n"));
+}
+
+/// Writes T-009 (in the backlog) with `extra` merged into its task document.
+fn injected_task(legacy: &Legacy, extra: serde_json::Value) {
+    let path = legacy.corral.join("tasks/T-009-injected.md");
+    let task = corral_core::parse_task_record(&support::simple_task("T-009", "backlog"), &path)
+        .unwrap()
+        .task;
+    let mut doc = serde_json::to_value(&task).unwrap();
+    for (key, value) in extra.as_object().unwrap() {
+        doc[key] = value.clone();
+    }
+    let task: corral_core::Task = serde_json::from_value(doc).unwrap();
+    fs::write(&path, corral_core::render_task(&task)).unwrap();
+}
+
+fn identity(task: &str) -> serde_json::Value {
+    serde_json::json!({
+        "version": 2, "task": task, "run": "aggregate", "attempt": "ag-1", "head": "1".repeat(40),
+        "tree": "2".repeat(40), "integration_base": "3".repeat(40), "dispatch_base": "4".repeat(40),
+        "spec_digest": "5".repeat(64), "policy_digest": "6".repeat(64),
+        "inputs_digest": "7".repeat(64), "environment": []
+    })
+}
+
+/// Injects one blocker of `family` and returns the task its blocker names.
+fn inject_state(legacy: &Legacy, family: &str) -> &'static str {
+    use serde_json::json;
+    let support = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/migrate_support");
+    match family {
+        "pending_plan_review" => injected_task(
+            legacy,
+            json!({"plans": [{
+                "id": "P1", "spec_revision": "s",
+                "artifact": {"run": "D1", "kind": "plan", "title": "Plan", "path": "artifacts/T-009/D1/p.md",
+                    "source": "/tmp/p.md", "sha256": "0".repeat(64), "bytes": 0,
+                    "added": "2026-10-04T00:00:00Z", "purged_at": "2026-10-04T00:00:00Z"},
+                "document": {"goal": "g", "non_goals": [], "decisions": [], "affected_paths": [],
+                    "contracts": [], "dependencies": [], "acceptance": [], "verification": [],
+                    "owner_decisions": []},
+                "reviews": [{"id": "P1-review1", "reviewer": "codex", "policy_digest": "d",
+                    "at": "2026-10-04T00:10:00Z"}]
+            }]}),
+        ),
+        "pending_aggregate_review" => {
+            let route: serde_json::Value =
+                serde_json::from_slice(&fs::read(support.join("review-route.json")).unwrap())
+                    .unwrap();
+            injected_task(
+                legacy,
+                json!({"aggregate_attempts": [{
+                    "id": "ag-1", "identity": identity("T-009"), "target": {"kind": "main"},
+                    "code": false, "members": [], "started": "2026-10-04T00:00:00Z",
+                    "reviews": [{"id": "ag-1-review1", "reviewer": "codex", "route": route,
+                        "identity": identity("T-009"), "evidence_digest": "e",
+                        "requested": "2026-10-04T00:10:00Z"}]
+                }]}),
+            );
+        }
+        "review_wait" => injected_task(legacy, json!({"review_wait": "gate"})),
+        "submitting_authorization" => {
+            let bytes = fs::read(support.join("submitting-authorization.json")).unwrap();
+            let doc: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let id = doc["authorization"]["id"].as_str().unwrap();
+            legacy.put(&format!("state/action-authorizations/{id}.json"), &bytes);
+        }
+        "prepared_review_journal" => {
+            injected_task(legacy, json!({}));
+            legacy.put(
+                "state/review-prepared/T-009-R1.json",
+                br#"{"task":"T-009","run":"R1"}"#,
+            );
+        }
+        "prepared_plan_review_journal" => {
+            legacy.put(
+                "state/plan-review-T-010-P1.json",
+                br#"{"plan":"P1","review":{"id":"P1-review1","verdict":null}}"#,
+            );
+            return "T-010";
+        }
+        "review_launch_journal" => legacy.put(
+            "state/review-launch.json",
+            br#"{"task":"T-009","run":"R1","pane":"w9:p9"}"#,
+        ),
+        other => panic!("unknown family {other}"),
+    }
+    "T-009"
+}
+
+#[test]
+fn apply_refuses_the_journal_review_and_authorization_families_and_changes_nothing() {
+    for family in [
+        "pending_plan_review",
+        "pending_aggregate_review",
+        "review_wait",
+        "submitting_authorization",
+        "prepared_review_journal",
+        "prepared_plan_review_journal",
+        "review_launch_journal",
+    ] {
+        // Given a drained board with one blocker of this family injected.
+        let legacy = Legacy::new();
+        let task = inject_state(&legacy, family);
+        let before = legacy.legacy_bytes();
+        // When the dry run reports and an apply runs.
+        let dry = legacy.migrate().dry_run().unwrap();
+        let error = format!("{:#}", legacy.migrate().apply().unwrap_err());
+        // Then both name the blocker and its task, with no journal, fence or file change.
+        assert!(
+            dry.blockers
+                .iter()
+                .any(|b| b.family == family && b.task == task),
+            "{family}: {:?}",
+            dry.blockers
+        );
+        assert!(
+            error.contains(family) && error.contains(task),
+            "{family}: {error}"
+        );
+        assert!(legacy.journal().is_none(), "{family}");
+        assert_eq!(legacy.fence().as_deref(), Some(FENCE), "{family}");
+        assert_eq!(legacy.legacy_bytes(), before, "{family}");
+        legacy.invariant();
+    }
+}
+
+/// Every task's rows and summary in `corral`'s database, by `(part, key)`.
+fn task_rows(
+    corral: &std::path::Path,
+) -> std::collections::BTreeMap<String, (serde_json::Value, Vec<corral_core::backend::HistoryRow>)>
+{
+    use corral_core::backend::{StoreBackend, TaskNum, TaskParts};
+    let backend = corral_core::sqlite::SqliteBackend::open(
+        corral,
+        corral_core::sqlite::SqliteOptions::default(),
+    )
+    .unwrap();
+    let view = backend.view().unwrap();
+    let mut out = std::collections::BTreeMap::new();
+    for (id, num) in [("T-001", 1), ("T-002", 2), ("T-003", 3)] {
+        let doc = view.task(TaskNum(num), &TaskParts::All).unwrap().unwrap();
+        let mut rows = doc.rows;
+        rows.sort_by(|a, b| {
+            (format!("{:?}", a.part), &a.key).cmp(&(format!("{:?}", b.part), &b.key))
+        });
+        out.insert(id.to_owned(), (doc.head.summary, rows));
+    }
+    out
+}
+
+#[test]
+fn imported_rows_equal_a_v2_write_and_add_only_the_event_only_panes() {
+    use corral_core::backend::TaskPart;
+    // Given the legacy board, migrated, and the same task records saved by a fresh v2 store
+    // through the ordinary write path.
+    let legacy = Legacy::new();
+    let records: Vec<corral_core::Task> = [
+        "T-001-finished-work.md",
+        "T-002-backlog.md",
+        "T-003-flat.md",
+    ]
+    .iter()
+    .map(|file| {
+        let path = legacy.corral.join("tasks").join(file);
+        corral_core::parse_task_record(&fs::read_to_string(&path).unwrap(), &path)
+            .unwrap()
+            .task
+    })
+    .collect();
+    legacy.migrate().apply().unwrap();
+    let fresh = tempfile::tempdir().unwrap();
+    let store = corral_core::Store::init(fresh.path()).unwrap();
+    for task in &records {
+        store.save(task).unwrap();
+    }
+    drop(store);
+    // When both databases' rows are read.
+    let migrated = task_rows(&legacy.corral);
+    let written = task_rows(&fresh.path().join(".corral"));
+    for (id, (summary, rows)) in &migrated {
+        let (written_summary, written_rows) = &written[id];
+        // Then the summary and every derived row (findings, nested children, facts, pane refs,
+        // checkpoints) equal the ordinary write's, the event-only ledger rows aside.
+        assert_eq!(summary, written_summary, "{id} summary");
+        let ledger =
+            |rows: &[corral_core::backend::HistoryRow]| -> Vec<corral_core::backend::HistoryRow> {
+                rows.iter()
+                    .filter(|r| r.part != TaskPart::CleanupPane)
+                    .cloned()
+                    .collect()
+            };
+        assert_eq!(ledger(rows), ledger(written_rows), "{id} rows");
+        let extra: Vec<(String, serde_json::Value)> = rows
+            .iter()
+            .filter(|r| r.part == TaskPart::CleanupPane && !written_rows.contains(r))
+            .map(|r| (r.key.clone(), r.doc.clone()))
+            .collect();
+        // And the only additions are the panes the legacy events alone name: T-001 R1's gate
+        // pane from gate_started and its fallback workspace from run_workspace_created.
+        let expected: Vec<(String, serde_json::Value)> = if id == "T-001" {
+            vec![
+                (
+                    "run:000001/000000/gate/w1:p3".to_owned(),
+                    serde_json::json!({"kind": "gate", "pane": "w1:p3", "socket": "/tmp/h.sock", "workspace": null}),
+                ),
+                (
+                    "run:000001/000000/workspace/w2:p1".to_owned(),
+                    serde_json::json!({"kind": "workspace", "pane": "w2:p1", "socket": "", "workspace": "w2"}),
+                ),
+            ]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(extra, expected, "{id} event-only panes");
+    }
+}

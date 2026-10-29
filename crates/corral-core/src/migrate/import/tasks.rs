@@ -35,7 +35,12 @@ pub(super) fn import(
                 let events = by_task
                     .get(task.task.id.as_str())
                     .map_or(&[][..], Vec::as_slice);
-                import_task(task, events).with_context(|| format!("importing {}", task.task.id))
+                let mut imported = import_task(task, events)
+                    .with_context(|| format!("importing {}", task.task.id))?;
+                if let Some(rows) = report.gate_rows.get(&task.task.id) {
+                    imported.rows.extend(rows.iter().cloned());
+                }
+                Ok(imported)
             })
             .collect::<Result<Vec<_>>>()?;
         report.tasks += tasks.len() as u64;
