@@ -27,6 +27,23 @@ never join `state_dir()` themselves, so T-253 can move these areas without editi
 `paths::store_id` is `st-` plus 16 hex digits of the SHA-256 of the canonical `.corral`
 directory. Envelopes name the store by this ID.
 
+## Usage attribution references (T-570)
+
+`AgentRunState.usage_sessions` is a serde-default, omitted-when-empty canonical list, shared
+by implementation, PM and planning containers. Each `UsageSession` records initiating
+`generation`, `kind` (`explore`, `oracle`, `summary`), `session_id`, `session_file`, and optional
+fallback `model`. Producers persist the reference before launching a billable request and
+retain it through resume/rewind. This is an accounting seam, not a shipped child launcher or
+an alternative authoritative transcript. There is no model-callable operation to register it.
+
+Use `paths::usage_session_file(store, container, request_key)` for auxiliary transcripts:
+`<container sessions>/auxiliary/<sha256(request_key)>.jsonl`. Open-container files are
+recovery-critical, not runtime caches. Future producers own admission/count bounds; the
+collector rejects references to absent generations and applies its existing per-file byte cap.
+`agent::usage::collect_state` combines all generation/auxiliary references with a common
+session/response identity map, and `collect_container` selects PM/planning records without
+adding their usage to implementation totals. Pricing provenance/gaps follow `UsageEntry`.
+
 ## Canonical records
 
 ### `Run.agent_host`: AgentRunState v1

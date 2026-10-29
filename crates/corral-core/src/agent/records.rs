@@ -90,6 +90,9 @@ pub struct AgentRunState {
     /// Owner rewinds to a turn checkpoint and how far each got (T-575).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rewinds: Vec<super::RewindRecord>,
+    /// Recovery-critical references for billable auxiliary sessions, retained across resumes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_sessions: Vec<super::UsageSession>,
 }
 
 impl AgentRunState {
@@ -107,6 +110,7 @@ impl AgentRunState {
             jobs: Vec::new(),
             question_hold: None,
             rewinds: Vec::new(),
+            usage_sessions: Vec::new(),
         }
     }
 

@@ -18,6 +18,7 @@ mod rewind;
 #[cfg(test)]
 mod tests;
 mod todo;
+mod usage;
 
 pub use browser::canonical_origin;
 pub use capabilities::*;
@@ -29,3 +30,4 @@ pub use question::*;
 pub use records::*;
 pub use rewind::*;
 pub use todo::*;
+pub use usage::*;
