@@ -30,6 +30,7 @@ impl Pilot<'_> {
         if crate::plan_target::gate_carry(self.ctx, self.id())? {
             return Ok(GateNow::Replayed(Step::Acted));
         }
+        let _action = corral_core::work::action(self.id(), OperatingActionKind::Gate);
         if self.landing_phase() {
             let origin = crate::operating::Origin::Automatic;
             crate::gate::gate_start_landing(self.ctx, self.id(), origin)?;
@@ -44,6 +45,7 @@ impl Pilot<'_> {
         if self.run.gate_rules.is_legacy() {
             return Ok(false);
         }
+        let _action = corral_core::work::action(self.id(), OperatingActionKind::Review);
         crate::verdict_carry::promote(self.ctx, self.id())
     }
 }

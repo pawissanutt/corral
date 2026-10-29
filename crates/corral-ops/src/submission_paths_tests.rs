@@ -22,6 +22,8 @@ mod action_budget_checks;
 mod action_budget_fixture;
 #[path = "../tests/support/action_budget_growth.rs"]
 mod action_budget_growth;
+#[path = "../tests/support/action_budget_hot.rs"]
+mod action_budget_hot;
 #[path = "../tests/support/action_budget_prompts.rs"]
 mod action_budget_prompts;
 #[path = "../tests/support/action_heads.rs"]
@@ -34,6 +36,8 @@ mod crashes;
 mod launch_resume;
 #[path = "../tests/support/submission_refusals.rs"]
 mod refusals;
+#[path = "../tests/support/reviewer_guard.rs"]
+mod reviewer_guard;
 
 use fixture::Fx;
 
@@ -372,7 +376,12 @@ fn submission_paths_real_entries_commit_before_exact_effect_and_refuse_replay() 
                     acquired.lock().unwrap().push(lease.to_owned());
                     return;
                 }
-                if matches!(point, "submission_entered" | "refused_committed") {
+                // `review_child_observed` is the reviewer launch's guard observation, before
+                // its submission is entered.
+                if matches!(
+                    point,
+                    "submission_entered" | "refused_committed" | "review_child_observed"
+                ) {
                     return;
                 }
                 let ctx = crate::Ctx::from_store(store.clone());
@@ -541,14 +550,21 @@ fn submission_paths_paused_policy_refuses_every_automatic_entry_without_effects(
 }
 
 fn recovered_setup(path: Path, automatic: bool) -> (Fx, String) {
-    use crate::operating::Origin;
-    use crate::review_budget::{Kind, ReviewLaunch};
-    use corral_core::ReviewRecord;
-
     let (mut fx, id) = path.setup();
     if automatic {
         fx.grant(&[&id]);
     }
+    refuse_prepared(&fx, &id, path, automatic);
+    (fx, id)
+}
+
+/// A known never-sent attempt of `path` on task `id`: prepared, bound and refused once.
+fn refuse_prepared(fx: &Fx, id: &str, path: Path, automatic: bool) {
+    use crate::operating::Origin;
+    use crate::review_budget::{Kind, ReviewLaunch};
+    use corral_core::ReviewRecord;
+
+    let id = id.to_owned();
     let kind = if matches!(path, Path::Gate) {
         Kind::Gate
     } else {
@@ -642,7 +658,6 @@ fn recovered_setup(path: Path, automatic: bool) -> (Fx, String) {
             .unwrap_err();
         assert!(crate::operating::refused(&error));
     }
-    (fx, id)
 }
 
 #[test]

@@ -211,6 +211,24 @@ impl TaskHead {
         .collect()
     }
 
+    /// Artifacts of one run with their 0-based registration ordinals over the whole task, in
+    /// registration order, on the head's pinned view.
+    pub fn artifact_rows_of(&self, run: &str) -> Result<Vec<(usize, crate::Artifact)>> {
+        self.query(
+            &crate::backend::RowQuery::part(crate::backend::TaskPart::Artifact)
+                .with_index(format!("run:{run}")),
+            u32::MAX,
+            Counter::HistoryRowDecodes,
+        )?
+        .into_iter()
+        .map(|row| {
+            let ordinal: usize = row.key.parse().context("artifact row key")?;
+            let index = ordinal.checked_sub(1).context("artifact row ordinal 0")?;
+            Ok((index, serde_json::from_value(row.doc)?))
+        })
+        .collect()
+    }
+
     /// One artifact by its stored path, without decoding other artifacts.
     pub fn artifact_by_path(&self, path: &str) -> Result<Option<crate::Artifact>> {
         self.artifact_index(&format!("path:{path}"), false)

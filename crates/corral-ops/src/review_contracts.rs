@@ -254,8 +254,6 @@ pub(crate) fn implementation_route(
         },
     )?;
     selected.route.warnings.extend(receipt_warning);
-    selected.route.round = corral_core::implementation_review_round(task);
-    selected.route.scope = corral_core::review_scope(selected.route.round);
     selected.route.escalated_from = escalated_from;
     Ok(selected)
 }

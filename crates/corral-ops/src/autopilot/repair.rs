@@ -48,7 +48,7 @@ impl Pilot<'_> {
                     Vec::new(),
                     None,
                 )?;
-                key.check(&self.ctx.store.get(self.id())?)?;
+                key.check(&self.ctx.store.head(self.id())?.shell_task()?)?;
                 packet.attach(self.ctx)?;
                 Ok(None)
             }
@@ -82,7 +82,7 @@ impl Pilot<'_> {
             paths,
             details,
         )?;
-        key.check(&self.ctx.store.get(self.id())?)?;
+        key.check(&self.ctx.store.head(self.id())?.shell_task()?)?;
         let artifact = packet.attach(self.ctx)?;
         let summary = if key.reason == "base_moved" {
             format!(
@@ -124,13 +124,15 @@ impl Pilot<'_> {
             return self.integration_changes(key, Vec::new(), None);
         }
         // The real replay is authoritative even when merge-tree was clean.
+        let _action = corral_core::work::action(self.id(), OperatingActionKind::Repair);
         let rebased = self
             .ctx
             .store
-            .dispatch_update(self.id(), |store, current| {
-                crate::operating::require(store, current, OperatingActionKind::Repair)?;
-                key.check(current)?;
-                crate::verdict_carry::rebase(self.ctx, current, self.run, &key.base)
+            .dispatch_update_head(self.id(), |store, current| {
+                crate::operating::require(store, &*current, OperatingActionKind::Repair)?;
+                let shell = current.shell_task()?;
+                key.check(&shell)?;
+                crate::verdict_carry::rebase(self.ctx, &shell, self.run, &key.base)
             })
             .map(|(_, outcome)| outcome);
         match rebased {

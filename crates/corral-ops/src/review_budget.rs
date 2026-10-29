@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
+use corral_core::{TaskMut as _, TaskRef as _};
 
 pub(crate) use corral_core::ReviewWork as Kind;
 
@@ -31,7 +32,7 @@ impl std::error::Error for CapacityWait {}
 
 impl CapacityWait {
     pub(crate) fn persist(&self, ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
-        ctx.store.update(id, |task| {
+        ctx.store.update_head(id, |task| {
             task.review_wait = Some(self.kind);
             if let Some(run) = task.current_run_mut() {
                 let state = run.autopilot.get_or_insert(AutopilotState {
@@ -113,31 +114,8 @@ fn clear(ctx: &Ctx) -> Result<()> {
     ctx.store.delete_record("review-launch", "current")
 }
 
-pub(crate) fn finish(ctx: &Ctx, run: &mut Run, kind: Kind) {
-    match kind {
-        Kind::Gate => {
-            if let Some(gate) = &mut run.gate
-                && gate.result == GateResult::Running
-            {
-                gate.process_lost = true;
-            }
-        }
-        Kind::Reviewer => {
-            if let Some(review) = run.review.as_mut().filter(|r| r.holds_slot()) {
-                review.process_lost = true;
-                if let Some(snapshot) = run.review_runs.last_mut()
-                    && snapshot.ended.is_none()
-                {
-                    snapshot.review = Some(review.clone());
-                    snapshot.ended = Some(corral_core::clock::now());
-                    crate::usage::collect(snapshot, &ctx.store);
-                }
-            }
-        }
-    }
-}
-
-/// [`finish`] on the current run of a head: the reviewer snapshot is its current child.
+/// Ends the current run's slot-holding gate or reviewer as lost: the reviewer snapshot is its
+/// current child.
 pub(crate) fn finish_head(
     task: &mut corral_core::TaskHeadMut,
     kind: Kind,
@@ -186,7 +164,114 @@ fn same_process_head(current: &corral_core::RunHead, observed: &Run, kind: Kind)
     }
 }
 
-fn same_process(current: &Run, observed: &Run, kind: Kind) -> bool {
+/// The gate and reviewer processes holding review slots, besides the one `id` is replacing.
+/// Slots are held only by open tasks' current runs: each is read from its head, with its
+/// current review child.
+fn active_processes(ctx: &Ctx, id: &str, kind: Kind) -> Result<usize> {
+    let mut active = 0;
+    for head in ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+    {
+        let Some(run) = head.current_run.as_deref() else {
+            continue;
+        };
+        for (record_kind, pane) in [
+            (
+                Kind::Gate,
+                run.gate
+                    .as_ref()
+                    .filter(|g| g.holds_slot())
+                    .map(|g| g.pane.as_deref()),
+            ),
+            (
+                Kind::Reviewer,
+                run.review
+                    .as_ref()
+                    .filter(|r| r.holds_slot())
+                    .map(|r| r.pane.as_deref()),
+            ),
+        ] {
+            let Some(pane) = pane else { continue };
+            // Collect completed gates even if their pane remains open.
+            if record_kind == Kind::Gate
+                && run.gate.as_ref().is_some_and(|g| g.identity.is_some())
+                && crate::gate::gate_collect(ctx, &head.id)?.is_some()
+            {
+                continue;
+            }
+            let inventory = crate::pane_liveness::inventory(ctx);
+            let started = match record_kind {
+                Kind::Gate => run.gate.as_ref().map(|g| g.at),
+                Kind::Reviewer => run.review.as_ref().map(|r| r.at),
+            }
+            .context("active review process has no start time")?;
+            let gone = match inventory {
+                Some(inventory) => crate::pane_liveness::gone(
+                    ctx,
+                    crate::pane_liveness::Sample {
+                        task: (&head).into(),
+                        pane,
+                        started,
+                        seen: false,
+                        present: pane
+                            .is_some_and(|id| inventory.panes.iter().any(|p| p.pane_id == id)),
+                        at: corral_core::clock::now(),
+                        ticket: Some(inventory.ticket),
+                        count_miss: false,
+                    },
+                )?,
+                None => false,
+            };
+            if gone {
+                let released = ctx.store.try_update_head(&head.id, |task| {
+                    if !crate::session_scope::owns_head(ctx, task.head())? {
+                        return Ok(false);
+                    }
+                    if !task.head().current_run.as_ref().is_some_and(|current| {
+                        current.id == run.id && same_process_heads(current, run, record_kind)
+                    }) {
+                        return Ok(false);
+                    }
+                    finish_head(task, record_kind, ctx.store.now())?;
+                    Ok(true)
+                })?;
+                if released.is_some() {
+                    continue;
+                }
+            }
+            if head.id == id {
+                // Legacy gates cannot be collected. gate_start closes their
+                // old pane before replacing them under this same reservation.
+                if kind == Kind::Gate
+                    && record_kind == Kind::Gate
+                    && run.gate.as_ref().is_some_and(|g| g.identity.is_none())
+                {
+                    continue;
+                }
+                // Sequential reviewer replacement is supported, but only after its
+                // old pane is closed by review_run under this same lock.
+                if kind == Kind::Reviewer
+                    && record_kind == Kind::Reviewer
+                    && run.review.as_ref().is_some_and(|r| r.reviewer != "pm")
+                {
+                    continue;
+                }
+                if kind == record_kind {
+                    bail!("{id}: a gate or reviewer is already running");
+                }
+            }
+            active += 1;
+        }
+    }
+    Ok(active)
+}
+
+fn same_process_heads(
+    current: &corral_core::RunHead,
+    observed: &corral_core::RunHead,
+    kind: Kind,
+) -> bool {
     match kind {
         Kind::Gate => current.gate == observed.gate,
         Kind::Reviewer => current.review == observed.review,
@@ -203,15 +288,16 @@ fn abandon(ctx: &Ctx, pending: &Pending) -> Result<()> {
         if !pending.close_pane {
             // Delivery to a shared PM may have succeeded before the launcher died.
             // Retain its attached record until a verdict or pane disappearance.
-            ctx.store.update(&pending.task, |task| {
-                if let Some(review) = task
-                    .runs
-                    .iter_mut()
-                    .find(|r| r.id == pending.run)
-                    .and_then(|r| r.review.as_mut())
-                    && review.verdict.is_none()
-                {
-                    review.pane = pending.pane.clone();
+            ctx.store.update_head(&pending.task, |task| {
+                if task.run_head(&pending.run)?.is_some() {
+                    task.edit_run(&pending.run, |run| {
+                        if let Some(review) = run.review.as_mut()
+                            && review.verdict.is_none()
+                        {
+                            review.pane = pending.pane.clone();
+                        }
+                        Ok(())
+                    })?;
                 }
                 task.review_reservation = None;
                 Ok(())
@@ -221,11 +307,13 @@ fn abandon(ctx: &Ctx, pending: &Pending) -> Result<()> {
         // Never release a slot if its process could still be running.
         ctx.herdr.pane_close(pane)?;
     }
-    ctx.store.update(&pending.task, |task| {
-        if let Some(run) = task.runs.iter_mut().find(|r| r.id == pending.run)
-            && pending.started
+    ctx.store.update_head(&pending.task, |task| {
+        if pending.started
+            && task
+                .current_run_head()?
+                .is_some_and(|run| run.id == pending.run)
         {
-            finish(ctx, run, pending.kind);
+            finish_head(task, pending.kind, ctx.store.now())?;
         }
         task.review_reservation = None;
         Ok(())
@@ -247,7 +335,7 @@ impl<'a> ReviewLaunch<'a> {
         origin: crate::operating::Origin,
     ) -> Result<Self> {
         crate::session_scope::check_launch(ctx)?;
-        let requested = ctx.store.get(id)?;
+        let requested = ctx.store.head(id)?;
         let id = requested.id.as_str();
         let lock = ctx
             .store
@@ -257,107 +345,9 @@ impl<'a> ReviewLaunch<'a> {
         if let Some(pending) = load_pending(ctx)? {
             abandon(ctx, &pending)?;
         }
-
-        let mut active = 0;
-        for task in ctx.store.list()? {
-            for run in &task.runs {
-                for (record_kind, pane) in [
-                    (
-                        Kind::Gate,
-                        run.gate
-                            .as_ref()
-                            .filter(|g| g.holds_slot())
-                            .map(|g| g.pane.as_deref()),
-                    ),
-                    (
-                        Kind::Reviewer,
-                        run.review
-                            .as_ref()
-                            .filter(|r| r.holds_slot())
-                            .map(|r| r.pane.as_deref()),
-                    ),
-                ] {
-                    let Some(pane) = pane else { continue };
-                    // Collect completed gates even if their pane remains open.
-                    if record_kind == Kind::Gate
-                        && run.gate.as_ref().is_some_and(|g| g.identity.is_some())
-                        && task.current_run().is_some_and(|r| r.id == run.id)
-                        && crate::gate::gate_collect(ctx, &task.id)?.is_some()
-                    {
-                        continue;
-                    }
-                    let inventory = crate::pane_liveness::inventory(ctx);
-                    let started = match record_kind {
-                        Kind::Gate => run.gate.as_ref().map(|g| g.at),
-                        Kind::Reviewer => run.review.as_ref().map(|r| r.at),
-                    }
-                    .context("active review process has no start time")?;
-                    let gone = match inventory {
-                        Some(inventory) => crate::pane_liveness::gone(
-                            ctx,
-                            crate::pane_liveness::Sample {
-                                task: (&task).into(),
-                                pane,
-                                started,
-                                seen: false,
-                                present: pane.is_some_and(|id| {
-                                    inventory.panes.iter().any(|p| p.pane_id == id)
-                                }),
-                                at: corral_core::clock::now(),
-                                ticket: Some(inventory.ticket),
-                                count_miss: false,
-                            },
-                        )?,
-                        None => false,
-                    };
-                    if gone {
-                        let released = ctx.store.try_update(&task.id, |task| {
-                            if !crate::session_scope::owns_task(ctx, task)? {
-                                return Ok(false);
-                            }
-                            let Some(current) = task
-                                .runs
-                                .iter_mut()
-                                .find(|r| r.id == run.id && same_process(r, run, record_kind))
-                            else {
-                                return Ok(false);
-                            };
-                            finish(ctx, current, record_kind);
-                            Ok(true)
-                        })?;
-                        if released.is_some() {
-                            continue;
-                        }
-                    }
-                    if task.id == id {
-                        // Legacy gates cannot be collected. gate_start closes their
-                        // old pane before replacing them under this same reservation.
-                        if kind == Kind::Gate
-                            && record_kind == Kind::Gate
-                            && task.current_run().is_some_and(|r| r.id == run.id)
-                            && run.gate.as_ref().is_some_and(|g| g.identity.is_none())
-                        {
-                            continue;
-                        }
-                        // Sequential reviewer replacement is supported, but only after its
-                        // old pane is closed by review_run under this same lock.
-                        if kind == Kind::Reviewer
-                            && record_kind == Kind::Reviewer
-                            && task.current_run().is_some_and(|r| r.id == run.id)
-                            && run.review.as_ref().is_some_and(|r| r.reviewer != "pm")
-                        {
-                            continue;
-                        }
-                        if kind == record_kind {
-                            bail!("{id}: a gate or reviewer is already running");
-                        }
-                    }
-                    active += 1;
-                }
-            }
-        }
-        let task = ctx.store.get(id)?;
-        let run = task.current_run().context("task has no run")?;
+        let active = active_processes(ctx, id, kind)?;
+        let task = ctx.store.head(id)?;
+        let run = task.current_run.as_deref().context("task has no run")?;
         crate::operating::require_origin(&ctx.store, &task, submission::action_kind(kind), origin)?;
         let retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
         let pending = if let Some(pending) = retained {
@@ -385,21 +375,22 @@ impl<'a> ReviewLaunch<'a> {
             .store
             .try_lock("session-ownership")?
             .context("pane inventory is being reconciled; retry review launch")?;
-        let (_, waiting) = ctx.store.dispatch_update(id, |store, current| {
+        let (_, waiting) = ctx.store.dispatch_update_head(id, |store, current| {
             crate::operating::require_origin(
                 store,
-                current,
+                &*current,
                 submission::action_kind(kind),
                 origin,
             )?;
             crate::session_scope::check_launch_in(ctx, store)?;
+            let shell = crate::reviewer::review_shell(&*current)?;
             // Only edits that change this task's verification inputs (its effective
             // policy, including the reviewer rules select, or reviewer execution
             // settings) invalidate what was prepared under the earlier snapshot.
-            if !crate::verification::same_task_inputs(&ctx.store.config, &store.config, current)? {
+            if !crate::verification::same_task_inputs(&ctx.store.config, &store.config, &shell)? {
                 bail!("review configuration changed before reservation; retry");
             }
-            if current.current_run().map(|r| &r.id) != Some(&run.id)
+            if current.current_run_head()?.map(|r| r.id.clone()).as_ref() != Some(&run.id)
                 || current.status != task.status
             {
                 bail!("review run changed before reservation");
@@ -417,7 +408,7 @@ impl<'a> ReviewLaunch<'a> {
                 Kind::Gate => store.config.limits.count_gates,
                 Kind::Reviewer => store.config.limits.count_reviews,
             };
-            let replacing = current.current_run().is_some_and(|r| match kind {
+            let replacing = shell.current_run().is_some_and(|r| match kind {
                 Kind::Reviewer => r
                     .review
                     .as_ref()
@@ -429,7 +420,7 @@ impl<'a> ReviewLaunch<'a> {
             });
             if counted
                 && let Some(reason) =
-                    crate::slots::capacity_reason(store, current, usize::from(replacing))?
+                    crate::slots::capacity_reason(store, &shell, usize::from(replacing))?
             {
                 return Ok(Some(reason));
             }
@@ -442,8 +433,8 @@ impl<'a> ReviewLaunch<'a> {
                 if let Some(review) = &pending.prepared_review {
                     run.review = Some(review.clone());
                     let child = run
-                        .review_runs
-                        .last_mut()
+                        .current_child
+                        .as_deref_mut()
                         .filter(|child| Some(&child.id) == pending.review_run.as_ref())
                         .context("prepared reviewer child changed")?;
                     child.ended = None;
@@ -498,7 +489,7 @@ impl<'a> ReviewLaunch<'a> {
     }
 
     pub(crate) fn commit(mut self) -> Result<()> {
-        self.ctx.store.update(&self.pending.task, |task| {
+        self.ctx.store.update_head(&self.pending.task, |task| {
             task.review_reservation = None;
             Ok(())
         })?;

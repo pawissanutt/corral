@@ -123,19 +123,7 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
         if let Ok(notes) = std::fs::read_to_string(notes)
             && !notes.trim().is_empty()
         {
-            ctx.store.update(&task.id, |task| {
-                if let Some(saved) = task
-                    .runs
-                    .iter_mut()
-                    .find(|r| r.id == run.id)
-                    .and_then(|r| r.review_runs.iter_mut().find(|r| r.id == child.id))
-                    .and_then(|r| r.review.as_mut())
-                    && saved.notes.is_none()
-                {
-                    saved.notes = Some(notes.clone());
-                }
-                Ok(())
-            })?;
+            save_notes(ctx, &task.id, &run.id, &child.id, &notes)?;
         }
         let harness = matches!(child.harness.as_deref(), Some("omo" | "omp" | "claude"));
         let transcript = if harness && capture.transcript.is_none() {
@@ -178,6 +166,46 @@ fn capture_child(ctx: &Ctx, task: &Task, run: &Run, child: &Run, exact: bool) ->
         )?;
         Ok(true)
     }
+}
+
+/// Records the reviewer's notes on review child `child` when it has none: a keyed edit of
+/// the child on its current run; an earlier run's child is edited in the full task.
+fn save_notes(ctx: &Ctx, task: &str, run: &str, child: &str, notes: &str) -> Result<()> {
+    use corral_core::TaskRef as _;
+    let edited = ctx.store.try_update_head(task, |head| {
+        if head.current_run_head()?.is_none_or(|r| r.id != run) {
+            return Ok(false);
+        }
+        if head
+            .review_child(run, child)?
+            .is_some_and(|c| c.review.as_ref().is_some_and(|r| r.notes.is_none()))
+        {
+            head.edit_review_child(run, child, |saved| {
+                if let Some(review) = saved.review.as_mut() {
+                    review.notes = Some(notes.to_owned());
+                }
+                Ok(())
+            })?;
+        }
+        Ok(true)
+    })?;
+    if edited.is_some() {
+        return Ok(());
+    }
+    ctx.store.update(task, |task| {
+        if let Some(saved) = task
+            .runs
+            .iter_mut()
+            .find(|r| r.id == run)
+            .and_then(|r| r.review_runs.iter_mut().find(|r| r.id == child))
+            .and_then(|r| r.review.as_mut())
+            && saved.notes.is_none()
+        {
+            saved.notes = Some(notes.to_owned());
+        }
+        Ok(())
+    })?;
+    Ok(())
 }
 
 fn snapshot(

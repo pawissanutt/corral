@@ -315,12 +315,7 @@ fn truncate_lines(text: String, max: usize) -> String {
 pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
     let task = ctx.store.get(id)?;
     let run = current_run(&task)?;
-    let artifacts: Vec<Artifact> = task
-        .artifacts
-        .iter()
-        .filter(|a| a.run == run.id)
-        .cloned()
-        .collect();
+    let artifacts: Vec<Artifact> = ctx.store.head(id)?.artifacts_of(&run.id)?;
     let (stat, diff) = if run.worktree.exists() {
         let base = corral_git::rev_sha(&run.worktree, &run.base)?;
         (
@@ -481,9 +476,14 @@ pub fn approve(
 
 /// Called under the repository landing and board locks. Hold peer task locks through landing
 /// so an existing peer cannot start a review after this check and before the merge.
+/// Only an open peer can hold a review: each is read as its head, current run included.
 fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<corral_core::StoreLock>> {
+    use corral_core::TaskRef as _;
     let mut locks = Vec::new();
-    for peer in ctx.store.list()? {
+    let open = corral_core::backend::HeadQuery::Open {
+        project: task.project.clone(),
+    };
+    for peer in ctx.store.heads(&open)? {
         if peer.id == task.id || peer.project != task.project {
             continue;
         }
@@ -491,7 +491,7 @@ fn lock_review_peers(ctx: &Ctx, task: &Task) -> Result<Vec<corral_core::StoreLoc
             .store
             .try_lock(&peer.id)?
             .with_context(|| format!("{} is changing; retry landing after it settles", peer.id))?;
-        let peer = ctx.store.get(&peer.id)?;
+        let peer = ctx.store.head(&peer.id)?.shell_task()?;
         if peer.project == task.project
             && peer.status == Status::Review
             && let Some(run) = peer.current_run()
@@ -521,12 +521,12 @@ pub(crate) fn approve_landed(
     ctx.store.check_runtime()?;
     // `approved` is logged after the merge; record when this approval began.
     let started = corral_core::clock::now();
-    let task = ctx.store.get(id)?;
+    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
     let run = current_run(&task)?;
     let repo = main_repo(ctx, &task, &run)?;
     let _landing_lock = corral_git::landing_lock(&repo)?;
     crate::plan_target::recover_run(ctx, &task, &run)?;
-    let task = ctx.store.get(id)?;
+    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
     let mut target = crate::plan_target::validate_run(&ctx.store, &task, &run)?;
     if let Some(landed) = target
         .as_ref()
@@ -567,7 +567,9 @@ pub(crate) fn approve_landed(
     let mut landed = None;
     let mut operation = None;
     let mut previous_sha = None;
-    let task = ctx.store.dispatch_update(&task.id, |store, t| {
+    let task = ctx.store.dispatch_update_head(&task.id, |store, head| {
+        let contract = corral_core::TaskRef::contract_revision(&*head)?;
+        let t = &crate::reviewer::review_shell(&*head)?;
         let _review_locks = if strategy != ApproveStrategy::KeepBranch {
             lock_review_peers(ctx, t)?
         } else {
@@ -578,7 +580,7 @@ pub(crate) fn approve_landed(
         }
         crate::plan_target::validate_run(store, t, &run)?;
         if let Some(expected) = expected {
-            crate::operating::require(store, t, corral_core::OperatingActionKind::Accept)?;
+            crate::operating::require(store, &*head, corral_core::OperatingActionKind::Accept)?;
             if Some(store.effective_operating_policy()?.revision) != authority_revision {
                 bail!("stale_retry: landing authorization revision changed");
             }
@@ -601,7 +603,7 @@ pub(crate) fn approve_landed(
             previous_sha = Some(base_before.clone());
             let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
             if let Some(target) = &mut target {
-                target.prepare_landing(t, &run, &head, "fast_forward", expected, crate::plan_target::LandingOptions { remove_worktree, keep_branch, started })?;
+                target.prepare_landing(t, &run, &head, "fast_forward", expected, crate::plan_target::LandingOptions { contract: &contract, remove_worktree, keep_branch, started })?;
             } else {
                 operation = crate::hooks::prepare(ctx, t, &run, &repo, &base_before, &head)?;
             }
@@ -644,7 +646,7 @@ pub(crate) fn approve_landed(
                     }
                     require_manual_receipts(ctx, t)?;
                     if let Some(target) = &mut target {
-                        target.prepare_landing(t, &run, head, "rebase", expected, crate::plan_target::LandingOptions { remove_worktree, keep_branch, started })?;
+                        target.prepare_landing(t, &run, head, "rebase", expected, crate::plan_target::LandingOptions { contract: &contract, remove_worktree, keep_branch, started })?;
                     } else {
                         operation = crate::hooks::prepare(ctx, t, &run, &repo, base_before, head)?;
                     }
@@ -668,9 +670,9 @@ pub(crate) fn approve_landed(
         landed = Some((sha, action));
         // A legacy/concurrent change request may have reopened the run. Landing
         // owns the terminal transition: never persist Done with a working run.
-        let current = t.current_run_mut().context("run disappeared before finalization")?;
         let now = corral_core::clock::now();
-        crate::reviewer::supersede_review(ctx, current, now);
+        crate::reviewer::supersede_review_head(head, now)?;
+        let current = head.current_run_mut().context("run disappeared before finalization")?;
         current.ended.get_or_insert(now);
         current.outcome = Some(RunOutcome::Done);
         current.agent_state = Some("done".into());
@@ -680,12 +682,12 @@ pub(crate) fn approve_landed(
         current.herdr_idle_since = None;
         current.idle_no_report = false;
         current.stuck = None;
-        t.status = Status::Done;
-        t.queued = false;
+        head.status = Status::Done;
+        head.queued = false;
         Ok(())
     });
     let task = match task {
-        Ok((t, ())) => t,
+        Ok((t, ())) => crate::reviewer::review_shell(&t)?,
         Err(error) => {
             ctx.store.log_event(Some(id), "landing_stale", json!({"run":run.id, "outcome":"stale_retry", "reason":format!("{error:#}"), "expected":expected}))?;
             return Err(error);

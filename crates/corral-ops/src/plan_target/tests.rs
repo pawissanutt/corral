@@ -85,6 +85,7 @@ impl Fixture {
                 "fast_forward",
                 None,
                 LandingOptions {
+                    contract: &corral_core::operating_contract_revision(&self.task).unwrap(),
                     remove_worktree: false,
                     keep_branch: false,
                     started: APPROVAL_STARTED.parse().unwrap(),

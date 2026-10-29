@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::completion::evidence_carry::{CarryRefused, CarrySource, establish};
 use crate::gate_tier::{DestinationKind, GatePhase, MAIN_LANDING_TIER};
 use crate::{Ctx, verification};
+use corral_core::TaskMut as _;
 
 /// The only fields the full landing receipt may differ in from the re-derived approval: one
 /// snapshot of every input, so the policy digest differs exactly by the tier binding.
@@ -41,11 +42,12 @@ pub(crate) fn promotable(ctx: &Ctx, task: &Task) -> Result<bool> {
 /// fails; the caller then needs a new review or reports the evidence failure.
 pub(crate) fn promote(ctx: &Ctx, id: &str) -> Result<bool> {
     let mut carried = None;
-    ctx.store.try_update(id, |task| {
+    ctx.store.try_update_head(id, |head| {
+        let task = &crate::reviewer::review_shell(&*head)?;
         let Some(promotion) = check(ctx, task)? else {
             return Ok(false);
         };
-        let run = task.current_run_mut().context("run disappeared")?;
+        let run = task.current_run().context("run disappeared")?;
         let mut review = run.review.clone().context("approval disappeared")?;
         let detail = json!({"run": run.id, "method": promotion.method,
             "from_tier": promotion.from_tier, "to_tier": FULL_TIER,
@@ -56,9 +58,12 @@ pub(crate) fn promote(ctx: &Ctx, id: &str) -> Result<bool> {
             "evidence_carry": promotion.evidence_carry});
         review.sha = promotion.full.head.clone();
         review.identity = Some(promotion.full);
-        run.review = Some(review);
-        run.completion.evidence_carry = promotion.evidence_carry.map(Box::new);
-        run.promotion_origin = None;
+        head.edit_run(&run.id, |current| {
+            current.review = Some(review);
+            current.completion.evidence_carry = promotion.evidence_carry.map(Box::new);
+            current.promotion_origin = None;
+            Ok(())
+        })?;
         // Persist provenance before the rebound approval can authorize a landing.
         ctx.store
             .log_event(Some(id), "verdict_carried", detail.clone())?;

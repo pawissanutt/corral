@@ -20,6 +20,41 @@ pub(super) fn finish_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
     }
 }
 
+/// [`finish_review`] on a head's current run: the snapshot is its current child, whose usage
+/// [`collect_usage`] collects; no earlier child is read.
+pub(super) fn finish_review_head(parent: &mut corral_core::RunHead, ended: Timestamp) {
+    let record = parent.review.clone();
+    if let Some(snapshot) = parent.current_child.as_deref_mut() {
+        if let Some(mut record) = record {
+            if record.notes.is_none() {
+                record.notes = snapshot.review.as_ref().and_then(|r| r.notes.clone());
+            }
+            snapshot.review = Some(record);
+        }
+        if snapshot.ended.is_none() {
+            snapshot.ended = Some(ended);
+            snapshot.usage_pending = true;
+        }
+    }
+}
+
+/// Collects the usage a finished review child `child` of run `run` was owed at finish, editing
+/// only that child's rows.
+pub(super) fn collect_usage(
+    ctx: &Ctx,
+    task: &mut corral_core::TaskHeadMut,
+    run: &str,
+    child: &str,
+) -> anyhow::Result<()> {
+    task.edit_review_child(run, child, |snapshot| {
+        if snapshot.usage_pending {
+            crate::usage::collect(snapshot, &ctx.store);
+            snapshot.usage_pending = false;
+        }
+        Ok(())
+    })
+}
+
 /// End a pending review without inventing a verdict for a superseded candidate.
 pub(crate) fn supersede_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
     if parent.review.as_ref().is_none_or(|r| r.verdict.is_some()) {

@@ -128,6 +128,11 @@ pub(crate) fn owner_comments_head(head: &corral_core::TaskHead, task: &Task) -> 
     Ok(section(task, &head.emitted_comments()?))
 }
 
+/// The emitted Owner comments of a head, for a prompt built from its shell.
+pub(crate) fn emitted_head(head: &corral_core::TaskHead) -> Result<Vec<TaskComment>> {
+    head.emitted_comments()
+}
+
 fn section(task: &Task, comments: &[TaskComment]) -> String {
     if comments.is_empty() {
         return String::new();

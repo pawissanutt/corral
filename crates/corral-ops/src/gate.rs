@@ -2,12 +2,11 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, GateTierReceipt,
-    HerdrRef, Run, Task,
+    HerdrRef, Run, Task, TaskRef as _,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -17,8 +16,13 @@ use crate::Ctx;
 use crate::artifacts::add_artifact;
 use crate::gate_script::{qp, render};
 use crate::verification;
+use corral_core::TaskMut as _;
 
+mod collect;
 pub(crate) mod evidence;
+
+pub(crate) use collect::collect_finished;
+pub use collect::gate_wait;
 
 /// Files of one gate attempt in its registered scratch directory `gates/<stem>/`, all named
 /// `<stem>.*` where the stem is `<task>-<run>-<attempt>`.
@@ -37,9 +41,9 @@ pub struct GatePaths {
 pub fn gate_paths(ctx: &Ctx, task: &str, run: &str) -> GatePaths {
     let attempt = ctx
         .store
-        .get(task)
+        .head(task)
         .ok()
-        .and_then(|t| t.runs.into_iter().find(|r| r.id == run))
+        .and_then(|t| t.run_head(run).ok().flatten())
         .and_then(|r| r.gate.and_then(|g| g.identity))
         .map(|i| i.attempt);
     attempt_paths(ctx, task, run, attempt.as_deref())
@@ -328,13 +332,19 @@ fn gate_start_origin(
     request: Option<crate::review_budget::GateRequest>,
 ) -> Result<GateRecord> {
     ctx.store.check_runtime()?;
+    // A running attempt belongs to an open task's current run.
     if let Some(inherited) = std::env::var_os("CORRAL_GATE_ATTEMPT")
-        && ctx.store.list()?.iter().any(|task| {
-            task.current_run()
-                .and_then(|run| run.gate.as_ref())
-                .and_then(|gate| gate.identity.as_ref())
-                .is_some_and(|identity| std::ffi::OsStr::new(&identity.attempt) == inherited)
-        })
+        && ctx
+            .store
+            .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+            .iter()
+            .any(|task| {
+                task.current_run
+                    .as_ref()
+                    .and_then(|run| run.gate.as_ref())
+                    .and_then(|gate| gate.identity.as_ref())
+                    .is_some_and(|identity| std::ffi::OsStr::new(&identity.attempt) == inherited)
+            })
     {
         bail!("cannot start a nested gate from inside a gate attempt");
     }
@@ -346,7 +356,7 @@ fn gate_start_origin(
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
     ctx.store.config.validate_review()?;
-    let task = ctx.store.get(id)?;
+    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
     if crate::plan_pilot::handles(&task) {
         bail!("plan runs use plan review, not a code gate");
     }
@@ -368,8 +378,12 @@ fn gate_start_origin(
     }
     if launch.restored() {
         launch.resume()?;
-        let record = current_run(&ctx.store.get(id)?)?
-            .gate
+        let record = ctx
+            .store
+            .head(id)?
+            .current_run
+            .as_ref()
+            .and_then(|run| run.gate.clone())
             .context("resumed gate missing")?;
         launch.commit()?;
         return Ok(record);
@@ -418,7 +432,7 @@ fn gate_start_origin(
     // The previous attempt this start supersedes, with the evidence a lost one left.
     let mut superseded = None;
     if let Some(prev) = &run.gate {
-        crate::watch::load(ctx, &task.id)?;
+        crate::watch::reconcile(ctx, &task.id)?;
         if prev.result == GateResult::Running
             && prev.identity.is_some()
             && gate_collect(ctx, &task.id)?.is_none()
@@ -520,26 +534,32 @@ fn gate_start_origin(
     let mut started = json!({ "run": run.id, "sha": sha, "pane": pane, "attempt": attempt, "behind_at_start": behind });
     evidence::tier_detail(&mut started, record.tier.as_deref());
     let run_id = run.id.clone();
-    ctx.store.update(&task.id, |t| {
+    ctx.store.update_head(&task.id, |t| {
+        let shell = crate::reviewer::review_shell(&*t)?;
         let expected = record.identity.as_ref().context("missing gate identity")?;
-        if verification::identity(ctx, t, &run, expected)? != *expected {
+        if verification::identity(ctx, &shell, &run, expected)? != *expected {
             bail!("candidate changed while starting gate");
         }
-        let r = t
-            .current_run_mut()
+        let mut current = shell
+            .current_run()
             .filter(|r| r.id == run_id)
+            .cloned()
             .ok_or_else(|| anyhow!("{}: run {run_id} is no longer current", task.id))?;
         // The origin is recorded, kept or cleared in the update that replaces the receipt.
-        if crate::gate_tier::origin_step(r, &contract) != origin {
+        if crate::gate_tier::origin_step(&current, &contract) != origin {
             bail!("candidate changed while starting gate");
         }
-        origin.apply(r);
-        r.gate = Some(record.clone());
-        // Retain a completed approval as stale evidence for clean-rebase carry.
-        // It still cannot authorize this gate's candidate until explicitly rebound.
-        if r.review.as_ref().and_then(|r| r.verdict) != Some(corral_core::Verdict::Approve) {
-            r.review = None;
-        }
+        origin.apply(&mut current);
+        t.edit_run(&run_id, |r| {
+            r.promotion_origin = current.promotion_origin;
+            r.gate = Some(record.clone());
+            // Retain a completed approval as stale evidence for clean-rebase carry.
+            // It still cannot authorize this gate's candidate until explicitly rebound.
+            if r.review.as_ref().and_then(|r| r.verdict) != Some(corral_core::Verdict::Approve) {
+                r.review = None;
+            }
+            Ok(())
+        })?;
         // The marker, the attempt row, its references and the start event commit as one
         // GateStart, with a superseded lost attempt's end when there is one.
         ctx.store
@@ -569,10 +589,11 @@ fn gate_start_origin(
     let expected_status = task.status;
     ctx.herdr
         .pane_report_metadata(&pane, &title, &[("task", task.id.as_str())])?;
-    launch.submit(
-        |store, task| {
+    launch.submit_head(
+        |store, head| {
             let mut fresh = ctx.clone();
             fresh.store = store.clone();
+            let task = &crate::reviewer::review_shell(&*head)?;
             let current = current_run(task)?;
             let expected = record.identity.as_ref().context("missing gate identity")?;
             if task.status != expected_status
@@ -605,7 +626,7 @@ pub fn gate_collect(ctx: &Ctx, id: &str) -> Result<Option<GateRecord>> {
 
 fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRecord>> {
     ctx.store.check_runtime()?;
-    let task = ctx.store.get(id)?;
+    let task = crate::reviewer::review_shell(&ctx.store.head(id)?)?;
     let run = current_run(&task)?;
     let mut record = run
         .gate
@@ -629,12 +650,14 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             record.result = GateResult::Fail;
             record.failed_cmd =
                 Some("stale_result: candidate, spec, base, policy or gate log changed".into());
-            ctx.store.update(&task.id, |t| {
-                if let Some(r) = t
-                    .current_run_mut()
-                    .filter(|r| r.id == run.id && r.gate.as_ref() == Some(&old))
+            ctx.store.update_head(&task.id, |t| {
+                if t.current_run_head()?
+                    .is_some_and(|r| r.id == run.id && r.gate.as_ref() == Some(&old))
                 {
-                    r.gate = Some(record.clone());
+                    t.edit_run(&run.id, |r| {
+                        r.gate = Some(record.clone());
+                        Ok(())
+                    })?;
                 } else {
                     bail!("gate changed during stale-result invalidation");
                 }
@@ -716,16 +739,18 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     let staged = evidence::put_result(ctx, &task.id, &run.id, &attempt, &stem, &paths)?;
     let mut finished: Option<GateRecord> = None;
     let run_id = run.id.clone();
-    let task = ctx.store.update(&task.id, |t| {
+    let task = ctx.store.update_head(&task.id, |t| {
+        let shell = crate::reviewer::review_shell(&*t)?;
         if result == GateResult::Pass
-            && let Some(current) = t.current_run().filter(|r| r.id == run_id)
-            && !verification::gate_fresh(ctx, t, current, &record)?
+            && let Some(current) = shell.current_run().filter(|r| r.id == run_id)
+            && !verification::gate_fresh(ctx, &shell, current, &record)?
         {
             result = GateResult::Fail;
             failed_cmd =
                 Some("stale_result: verification inputs changed at collection boundary".into());
         }
-        if let Some(r) = t.current_run_mut().filter(|r| r.id == run_id)
+        let mut current = shell.current_run().filter(|r| r.id == run_id).cloned();
+        if let Some(r) = current.as_mut()
             && let Some(g) = r.gate.as_mut().filter(|g| **g == record)
         {
             g.result = result;
@@ -752,20 +777,28 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
             let attempt = record.identity.as_ref().map(|identity| &identity.attempt);
             let mut detail = json!({ "run": run_id, "attempt": attempt, "result": record.result.as_str(), "failed_cmd": record.failed_cmd, "sha": record.sha, "log_sha256": record.log_sha256 });
             evidence::tier_detail(&mut detail, record.tier.as_deref());
-            ctx.store.log_event(Some(&t.id), "gate", detail)?;
+            ctx.store.log_event(Some(&shell.id), "gate", detail)?;
             // The row, its evidence and the scratch closure commit with this receipt.
             evidence::failpoint("gate_collect_commit");
             if let Some(staged) = &staged {
                 staged.stage(&ctx.store, (record.result, record.failed_cmd.as_deref()))?;
             }
         }
+        if let Some(collected) = current.filter(|_| finished.is_some()) {
+            t.edit_run(&run_id, |r| {
+                r.gate = collected.gate;
+                r.failures = collected.failures;
+                r.promotion_origin = collected.promotion_origin;
+                Ok(())
+            })?;
+        }
         Ok(())
     })?;
     let Some(record) = finished else {
         // Another caller recorded it between our read and our update.
-        return Ok(task.current_run().and_then(|r| r.gate.clone()));
+        return Ok(task.current_run.as_ref().and_then(|r| r.gate.clone()));
     };
-    crate::watch::load(ctx, &task.id)?;
+    crate::watch::reconcile(ctx, &task.id)?;
     let title = format!("Gate: {}", record.result.as_str());
     if paths.log.is_file() {
         add_artifact(
@@ -784,95 +817,4 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         Some("Gate command receipts"),
     )?;
     Ok(Some(record))
-}
-
-/// Blocks until the current run's running gate finishes (polling its result file), then records it. Error when
-/// the gate pane disappears before a result is written.
-pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
-    loop {
-        if let Some(record) = gate_collect(ctx, id)? {
-            return Ok(record);
-        }
-        let task = ctx.store.get(id)?;
-        let gate = task
-            .current_run()
-            .and_then(|r| r.gate.as_ref())
-            .context("task has no running gate")?;
-        let pane = gate.pane.as_deref();
-        let listed = crate::pane_liveness::inventory(ctx);
-        if listed.is_some()
-            && crate::pane_liveness::gone(
-                ctx,
-                crate::pane_liveness::Sample {
-                    task: (&task).into(),
-                    pane,
-                    started: gate.at,
-                    seen: false,
-                    present: pane.is_some_and(|id| {
-                        listed.as_ref().is_some_and(|inventory| {
-                            inventory.panes.iter().any(|p| p.pane_id == id)
-                        })
-                    }),
-                    at: corral_core::clock::now(),
-                    ticket: listed.as_ref().map(|inventory| inventory.ticket),
-                    count_miss: true,
-                },
-            )?
-        {
-            // The script may have finished just before the pane closed.
-            if let Some(record) = gate_collect(ctx, id)? {
-                return Ok(record);
-            }
-            bail!(
-                "{}: gate pane {} closed before the gate finished",
-                task.id,
-                pane.unwrap_or("?")
-            );
-        }
-        drop(listed);
-        std::thread::sleep(Duration::from_millis(500));
-    }
-}
-
-/// Collects finished gates of nonterminal tasks (called by sync). Legacy gates cannot authorize a pass
-/// and are skipped with one summary diagnostic. Returns the task ids whose gate was recorded.
-pub(crate) fn collect_finished(ctx: &Ctx, now: Timestamp) -> Result<Vec<String>> {
-    let mut done = Vec::new();
-    let mut legacy = 0;
-    for task in ctx
-        .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-    {
-        if !crate::session_scope::owns_head(ctx, &task)? {
-            continue;
-        }
-        let running = task
-            .current_run
-            .as_ref()
-            .and_then(|r| r.gate.as_ref())
-            .is_some_and(|g| g.result == GateResult::Running);
-        if !running {
-            continue;
-        }
-        match gate_collect_at(ctx, &task.id, now) {
-            Ok(Some(_)) => done.push(task.id.clone()),
-            Ok(None) => {}
-            Err(e) if e.is::<LegacyGate>() => legacy += 1,
-            Err(e) => crate::messages::report(
-                Some(&task.id),
-                "gate",
-                format!("collecting gate of {} failed: {e:#}", task.id),
-            ),
-        }
-    }
-    if legacy > 0 {
-        crate::messages::report(
-            None,
-            "gate",
-            format!(
-                "skipped {legacy} legacy gate record(s); start new gates to verify active tasks"
-            ),
-        );
-    }
-    Ok(done)
 }

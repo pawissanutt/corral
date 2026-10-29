@@ -194,20 +194,47 @@ fn fold(
 /// the stored checkpoint does not describe the run as it was before this publication (any edit
 /// outside publication, a revival or a superseded Diff), the run is rebuilt in a new epoch.
 pub(crate) fn published(ctx: &Ctx, task: &Task, index: usize, added: bool) -> Result<()> {
-    let artifact = &task.artifacts[index];
-    let after = revision(task.artifacts.iter(), &artifact.run);
+    let run = &task.artifacts[index].run;
+    let rows: Vec<(usize, Artifact)> = task
+        .artifacts
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| &a.run == run)
+        .map(|(i, a)| (i, a.clone()))
+        .collect();
+    published_rows(ctx, &task.id, &rows, index, added)
+}
+
+/// [`published`] from the registrations of the run alone, each with its 0-based ordinal over
+/// the task: every read of `published` is of that run's registrations.
+pub(crate) fn published_rows(
+    ctx: &Ctx,
+    task: &str,
+    rows: &[(usize, Artifact)],
+    index: usize,
+    added: bool,
+) -> Result<()> {
+    let artifact = &rows
+        .iter()
+        .find(|(i, _)| *i == index)
+        .context("published registration missing")?
+        .1;
+    let after = revision(rows.iter().map(|(_, a)| a), &artifact.run);
     let before = if added {
-        revision(task.artifacts[..index].iter(), &artifact.run)
+        revision(
+            rows.iter().filter(|(i, _)| *i < index).map(|(_, a)| a),
+            &artifact.run,
+        )
     } else {
         after.clone()
     };
-    let name = run_key(&task.id, &artifact.run)?;
+    let name = run_key(task, &artifact.run)?;
     let previous: Option<RunState> = ctx.store.record(RUNS, &name)?;
     let row = corral_core::store::codec::ordinal_key(index + 1);
-    let current = (artifact.title == TITLE).then(|| classify(ctx, &task.id, artifact));
+    let current = (artifact.title == TITLE).then(|| classify(ctx, task, artifact));
     if let Some(report) = &current {
         ctx.store
-            .save_record(REPORTS, &report_key(&task.id, &row), report)?;
+            .save_record(REPORTS, &report_key(task, &row), report)?;
     }
     let repair_issue = previous
         .as_ref()
@@ -233,22 +260,21 @@ pub(crate) fn published(ctx: &Ctx, task: &Task, index: usize, added: bool) -> Re
             epoch: next_epoch(previous.as_ref()),
             ..RunState::default()
         };
-        for (index, a) in task
-            .artifacts
+        for (index, a) in rows
             .iter()
-            .enumerate()
+            .map(|(i, a)| (*i, a))
             .filter(|(_, a)| a.run == artifact.run && a.title == TITLE)
         {
             let row = corral_core::store::codec::ordinal_key(index + 1);
-            let report = ingested(ctx, &task.id, &row, a)?;
+            let report = ingested(ctx, task, &row, a)?;
             ctx.store
-                .save_record(REPORTS, &report_key(&task.id, &row), &report)?;
+                .save_record(REPORTS, &report_key(task, &row), &report)?;
             fold(&mut state, &mut failures, &row, &report);
         }
         state
     };
     for (head, selected) in failures {
-        let name = failure_key(&task.id, &artifact.run, &head)?;
+        let name = failure_key(task, &artifact.run, &head)?;
         let old: Option<Selection> = ctx.store.record(FAILURES, &name)?;
         if old.is_none_or(|old| old.epoch != state.epoch || old.row <= selected.row) {
             ctx.store.save_record(FAILURES, &name, &selected)?;

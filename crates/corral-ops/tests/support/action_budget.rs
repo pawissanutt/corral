@@ -72,8 +72,17 @@ pub(super) fn normalize(output: &str) -> String {
         let ordinal_prefix = ["T-", "-r", "-h", "review-", "reviewer:", "-H"]
             .iter()
             .any(|prefix| out.ends_with(prefix));
-        if word.len() >= 40 && word.chars().all(|c| c.is_ascii_hexdigit()) {
+        let hex = word.chars().all(|c| c.is_ascii_hexdigit());
+        if word.len() >= 40 && hex {
             out.push_str("<digest>");
+        } else if word.len() == 8 && hex && output[end..].starts_with('-') {
+            // A snapshot's content prefix: each store's repository has its own commits.
+            out.push_str("<sha8>");
+        } else if word.len() == 7 && hex && (out.ends_with(" at ") || out.ends_with(" at `")) {
+            // A landed commit's short sha.
+            out.push_str("<short>");
+        } else if letters == "review" && !digits.is_empty() {
+            out.push_str("review#");
         } else if letters.is_empty() && ordinal_prefix {
             out.push('#');
         } else if !digits.is_empty()
@@ -205,11 +214,15 @@ fn durable_output(
     for event in bench.ctx.store.events().unwrap().into_iter().skip(events) {
         out.push(format!("event {} {}", event.kind, event.detail));
     }
-    for (path, text) in store_files(bench) {
-        if files.get(&path) != Some(&text) {
-            out.push(format!("file {}:\n{text}", path.display()));
-        }
-    }
+    // Snapshot names carry a content prefix of each store's own commits: order them as
+    // normalized, so the order is the same on every store.
+    let mut changed: Vec<String> = store_files(bench)
+        .into_iter()
+        .filter(|(path, text)| files.get(path) != Some(text))
+        .map(|(path, text)| format!("file {}:\n{text}", path.display()))
+        .collect();
+    changed.sort_by_cached_key(|entry| normalize(entry));
+    out.extend(changed);
     for (path, text) in prompt_files(bench) {
         if prompts.get(&path) != Some(&text) {
             out.push(format!("prompt {}:\n{text}", path.display()));
@@ -270,7 +283,7 @@ fn strip_grown(shell: &mut serde_json::Value) {
 }
 
 /// Runs of twelve or more digits: real-clock nanoseconds in scratch registration ids.
-fn mask_clock_ids(text: &str) -> String {
+pub(super) fn mask_clock_ids(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut digits = String::new();
     // Only standalone runs: a digest's hex digits stay for its own normalization.
@@ -382,6 +395,7 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     let files = store_files(bench);
     let prompts = prompt_files(bench);
     let events = bench.ctx.store.events().unwrap().len();
+    let events_before = events;
     let start = work::snapshot();
     let output = run(&entry, bench);
     let delta = work::snapshot().since(&start);
@@ -394,11 +408,24 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     let (after, after_volumes) = walk(bench);
     m.references = super::action_budget_prompts::references(bench, kind);
     let effects = submitted(bench, kind) - effects;
-    m.failures.extend(effect_failures(
+    let effect = effect_failures(
         kind,
         &effects_before,
         &super::action_budget_checks::effects(bench),
-    ));
+    );
+    if !effect.is_empty() {
+        // Why the pass did not act: its error events and reports.
+        let events = bench.ctx.store.events().unwrap();
+        for event in events
+            .iter()
+            .skip(events_before)
+            .filter(|e| e.kind.contains("error"))
+        {
+            m.failures
+                .push(format!("effect: {} {}", event.kind, event.detail));
+        }
+    }
+    m.failures.extend(effect);
     if let Err(error) = delta.check_identity() {
         m.failures.push(format!("identity: {error}"));
     }
@@ -696,17 +723,38 @@ fn report(m: &Measured) -> String {
 
 #[test]
 fn action_budget_actions_launch_kinds_do_not_follow_history() {
+    budget(&KINDS);
+}
+
+/// The hot-actions kinds (gate, reviewer, recovered reviewer, Land, Carry), each taken by a
+/// real sync tick's autopilot.
+#[test]
+fn action_budget_hot_actions_kinds_do_not_follow_history() {
+    budget(&super::action_budget_hot::HOT_KINDS);
+}
+
+fn budget(kinds: &[Kind]) {
     let only = std::env::var("ACTION_BUDGET_KIND").ok();
     let mut failures = Vec::new();
     let mut text = String::new();
-    for kind in KINDS
-        .into_iter()
+    for kind in kinds
+        .iter()
+        .copied()
         .filter(|k| only.as_deref().is_none_or(|o| o == k.name()))
     {
+        // ACTION_BUDGET_WARM=1 skips the fresh-process variants while iterating on one kind.
+        let modes = if std::env::var_os("ACTION_BUDGET_WARM").is_some() {
+            1
+        } else {
+            2
+        };
         for (mode, measure) in [
             ("warm", warm as fn(Kind, Variant) -> Measured),
             ("cold", cold),
-        ] {
+        ]
+        .into_iter()
+        .take(modes)
+        {
             let [base, grown, emitted] =
                 [Variant::Base, Variant::Grown, Variant::Emitted].map(|v| measure(kind, v));
             for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {

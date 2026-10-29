@@ -107,6 +107,12 @@ pub(super) struct Effects {
     submitted_changes: usize,
     accepted: usize,
     main: String,
+    /// The current run's gate attempt and whether it runs.
+    gate: Option<(String, bool)>,
+    review_children: usize,
+    /// Events of the acted task by kind: `gate_started`, `review_started`, `verdict_carried`.
+    started: [usize; 3],
+    review_sha: Option<String>,
 }
 
 pub(super) fn effects(bench: &Bench) -> Effects {
@@ -144,6 +150,29 @@ pub(super) fn effects(bench: &Bench) -> Effects {
             .filter(|attempt| attempt.acceptance.is_some())
             .count(),
         main: corral_git::rev_sha(&repo, "main").unwrap_or_default(),
+        gate: current.and_then(|run| run.gate.as_ref()).map(|gate| {
+            (
+                gate.identity
+                    .as_ref()
+                    .map(|i| i.attempt.clone())
+                    .unwrap_or_default(),
+                gate.result == corral_core::GateResult::Running,
+            )
+        }),
+        review_children: current.map_or(0, |run| run.review_runs.len()),
+        started: ["gate_started", "review_started", "verdict_carried"].map(|kind| {
+            bench
+                .ctx
+                .store
+                .events()
+                .unwrap()
+                .iter()
+                .filter(|e| e.task.as_deref() == Some(bench.id.as_str()) && e.kind == kind)
+                .count()
+        }),
+        review_sha: current
+            .and_then(|run| run.review.as_ref())
+            .map(|review| review.sha.clone()),
     }
 }
 
@@ -166,13 +195,13 @@ pub(super) fn effect_failures(kind: Kind, b: &Effects, a: &Effects) -> Vec<Strin
             !b.approved && a.approved && b.children == 0 && a.children == 2,
             "one acceptance publishing two children",
         ),
-        Kind::RepairInbox => (
+        Kind::RepairInbox | Kind::RepairTickInbox => (
             b.status == Status::Review
                 && a.status == Status::Running
                 && a.messages == b.messages + 1,
             "one changes request in the run's inbox",
         ),
-        Kind::RepairLegacy => (
+        Kind::RepairLegacy | Kind::RepairTickLegacy => (
             b.status == Status::Review
                 && a.status == Status::Running
                 && a.submitted_changes == b.submitted_changes + 1
@@ -186,6 +215,32 @@ pub(super) fn effect_failures(kind: Kind, b: &Effects, a: &Effects) -> Vec<Strin
         Kind::AggregateNoCode => (
             a.accepted == b.accepted + 1 && a.main == b.main,
             "one acceptance without a landing",
+        ),
+        Kind::Gate => (
+            a.gate.as_ref().is_some_and(|(attempt, running)| {
+                *running && b.gate.as_ref().is_none_or(|(before, _)| before != attempt)
+            }) && a.started[0] == b.started[0] + 1,
+            "one started gate attempt",
+        ),
+        Kind::ReviewerPane | Kind::ReviewerPm => (
+            a.review_children == b.review_children + 1 && a.started[1] == b.started[1] + 1,
+            "one started review with its accounting child",
+        ),
+        Kind::RecoveredPane | Kind::RecoveredPm => (
+            a.review_children == b.review_children && a.started[1] == b.started[1] + 1,
+            "one resumed review on its retained child",
+        ),
+        Kind::Land => (
+            b.status == Status::Review && a.status == Status::Done && a.main != b.main,
+            "one landing on main",
+        ),
+        Kind::Steady => (
+            a.gate == b.gate && a.started == b.started && a.status == b.status,
+            "no action: the running gate stands",
+        ),
+        Kind::Carry => (
+            a.started[2] == b.started[2] + 1 && a.review_sha != b.review_sha && a.main == b.main,
+            "one carried approval and no landing",
         ),
     };
     if ok {
@@ -241,7 +296,7 @@ pub(super) fn preconditions(
     if output.contains("machine busy") || output.contains("waiting: machine") {
         fail("the pass reports a machine hold".into());
     }
-    if effects != 1 {
+    if effects != usize::from(kind.submits()) {
         fail(format!(
             "{effects} submitted {:?} actions, expected exactly one",
             kind.action()
@@ -320,6 +375,7 @@ pub(super) fn sections(kind: Kind) -> &'static [(&'static str, u64)] {
         Kind::PlanReviewPane | Kind::PlanReviewPm => &[("comments", 1), ("plan_findings", 1)],
         // The accepting tick admits and launches the implementation run; it has no source run.
         Kind::AcceptPlan => &[("comments", 1)],
+        Kind::ReviewerPane | Kind::ReviewerPm => &[("comments", 1), ("review_findings", 1)],
         _ => &[],
     }
 }
@@ -336,6 +392,9 @@ pub(super) fn section_cells(bench: &Bench, section: &str) -> (u64, u64) {
         }
         "plan_findings" => {
             head.emitted_findings(FindingSource::Plan, None).unwrap();
+        }
+        "review_findings" => {
+            head.emitted_findings(FindingSource::Review, None).unwrap();
         }
         "resume" => {
             head.emitted_obligations("R1").unwrap();

@@ -412,16 +412,16 @@ fn keyed_artifact_operations_do_the_same_work_with_ten_times_the_history() {
     };
     assert_eq!(hydrations(&base_reads), Some(0));
     assert_eq!(base_reads, grown_reads);
-    // And attaching and re-tiering are still two full-task writes: they never list the board,
-    // and only the acted task's own history rows they hydrate grow (head-form artifact writes
-    // are a follow-up outside this task's write scope).
+    // And attaching is a head write (T-333) while re-tiering is still one full-task write: they
+    // never list the board, and only the acted task's own history rows they read grow
+    // (head-form re-tiering is a follow-up outside this task's write scope).
     let without_rows = |c: &[(Counter, u64)]| {
         c.iter()
             .filter(|(k, _)| *k != Counter::HistoryRowDecodes)
             .copied()
             .collect::<Vec<_>>()
     };
-    assert_eq!(hydrations(&base_writes), Some(2));
+    assert_eq!(hydrations(&base_writes), Some(1));
     assert_eq!(without_rows(&base_writes), without_rows(&grown_writes));
     assert_eq!(base_seen, grown_seen);
     assert_eq!(base_seen[4], "<p>report</p>");

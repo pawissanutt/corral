@@ -207,6 +207,20 @@ fn attach(
     title: Option<&str>,
     origin: Option<&RequestOrigin>,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
+    if origin.is_none()
+        && let Some(attached) = attach_head(
+            ctx,
+            id,
+            target,
+            bytes,
+            sha,
+            (file_name, source),
+            kind,
+            title,
+        )?
+    {
+        return Ok((attached, None));
+    }
     let mut result: Option<(Artifact, bool)> = None;
     let mut receipt = None;
     ctx.store.update(id, |t| {
@@ -305,6 +319,86 @@ fn attach(
     })?;
     let (artifact, _) = result.context("artifact update produced no result")?;
     Ok((artifact, receipt))
+}
+
+/// [`attach`] of a registration without a request origin, as a head update: the target run and
+/// its own registrations are read by key, never the task's other artifacts. A revival or a
+/// Diff, which edit earlier rows, returns `None` for the full form.
+#[allow(clippy::too_many_arguments)]
+fn attach_head(
+    ctx: &Ctx,
+    id: &str,
+    target: Target<'_>,
+    bytes: &[u8],
+    sha: &str,
+    (file_name, source): (&str, &Path),
+    kind: Option<ArtifactKind>,
+    title: Option<&str>,
+) -> Result<Option<Artifact>> {
+    use corral_core::TaskRef as _;
+    let kind = kind.unwrap_or_else(|| ArtifactKind::guess(file_name));
+    if kind == ArtifactKind::Diff {
+        return Ok(None);
+    }
+    let mut result = None;
+    ctx.store.try_update_head(id, |t| {
+        let current = t.current_run_head()?.map(|r| r.id.clone());
+        let planning = t.last_plan_run_head()?.map(|r| (r.id.clone(), r.state));
+        let run = match target {
+            Target::Expected(run)
+                if current.as_deref() != Some(run)
+                    && planning.as_ref().is_none_or(|(id, _)| id != run) =>
+            {
+                bail!("stale_retry: run changed before attaching artifact");
+            }
+            Target::Named(run) if t.run_head(run)?.is_none() => {
+                bail!("run {run} does not exist on {}", t.id);
+            }
+            Target::Expected(run) | Target::Named(run) => run.to_string(),
+            Target::Current => planning
+                .filter(|(_, state)| *state != corral_core::PlanRunState::Approved)
+                .map(|(id, _)| id)
+                .or(current)
+                .unwrap_or_else(|| "R0".to_string()),
+        };
+        let mut rows = t.head().artifact_rows_of(&run)?;
+        if let Some((index, existing)) = rows.iter().find(|(_, a)| a.sha256 == sha) {
+            if existing.purged_at.is_some() {
+                return Ok(false);
+            }
+            crate::artifact_storage::record_row_keys(ctx, &t.id, existing, *index, false)?;
+            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, *index, false)?;
+            result = Some(existing.clone());
+            return Ok(true);
+        }
+        let index = usize::try_from(t.head().summary.artifacts)?;
+        let snap_name = format!("{}-{file_name}", &sha[..8]);
+        let artifact = Artifact {
+            run: run.clone(),
+            kind,
+            title: title
+                .map(str::to_string)
+                .unwrap_or_else(|| file_name.to_string()),
+            path: format!("artifacts/{}/{run}/{snap_name}", t.id),
+            source: source.to_string_lossy().into_owned(),
+            sha256: sha.to_string(),
+            bytes: u64::try_from(bytes.len()).context("artifact length overflow")?,
+            added: corral_core::clock::now(),
+            tier_override: None,
+            compressed_bytes: None,
+            purged_at: None,
+        };
+        crate::artifact_storage::mirror(ctx, &artifact, bytes)?;
+        t.add_artifact(artifact.clone())?;
+        crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
+        rows.push((index, artifact.clone()));
+        crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, true)?;
+        ctx.store
+            .log_event(Some(&t.id), "artifact", artifact_detail(&artifact))?;
+        result = Some(artifact);
+        Ok(true)
+    })?;
+    Ok(result)
 }
 
 fn artifact_detail(artifact: &Artifact) -> serde_json::Value {

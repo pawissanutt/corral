@@ -23,7 +23,7 @@ pub(super) fn prepare(
         pending.submitted == Some(false),
         "cannot replay an uncertain auxiliary launch"
     );
-    let task = ctx.store.get(&pending.task)?;
+    let task = crate::reviewer::review_shell(&ctx.store.head(&pending.task)?)?;
     let run = task
         .current_run()
         .filter(|run| run.id == pending.run)
@@ -61,7 +61,7 @@ impl ReviewLaunch<'_> {
             .authorization
             .clone()
             .context("prepared authority missing")?;
-        let task = ctx.store.get(&self.pending.task)?;
+        let task = crate::reviewer::review_shell(&ctx.store.head(&self.pending.task)?)?;
         let run = task.current_run().context("prepared run missing")?;
         let pane = match &self.pending.pane {
             Some(pane) => pane.clone(),
@@ -72,18 +72,19 @@ impl ReviewLaunch<'_> {
                 );
                 let herdr = crate::gate::open_run_pane(ctx, &task, run, "review")?;
                 self.attach(&herdr.pane_id, true)?;
-                ctx.store.update(&task.id, |task| {
+                ctx.store.update_head(&task.id, |task| {
                     let run = task
                         .current_run_mut()
                         .context("prepared parent disappeared")?;
                     let review = run.review.as_mut().context("prepared review missing")?;
                     review.pane = Some(herdr.pane_id.clone());
+                    let review = review.clone();
                     let child = run
-                        .review_runs
-                        .last_mut()
+                        .current_child
+                        .as_deref_mut()
                         .context("prepared child missing")?;
                     child.herdr = Some(herdr.clone());
-                    child.review = Some(review.clone());
+                    child.review = Some(review);
                     Ok(())
                 })?;
                 herdr.pane_id
@@ -198,12 +199,13 @@ impl ReviewLaunch<'_> {
         };
         let task_id = task.id.clone();
         let gate_started = started.clone();
-        self.submit(
-            |store, task| {
+        self.submit_head(
+            |store, head| {
                 let fresh = Ctx {
                     store: store.clone(),
                     ..ctx.clone()
                 };
+                let task = &crate::reviewer::review_shell(&*head)?;
                 let run = task.current_run().context("prepared run disappeared")?;
                 let candidate = authorization
                     .action
@@ -216,7 +218,7 @@ impl ReviewLaunch<'_> {
                     "prepared candidate changed before resubmission"
                 );
                 if reviewer && run.review.is_some() {
-                    crate::reviewer::current_assessment(ctx, store, task, run)?;
+                    crate::reviewer::current_assessment_ref(ctx, store, &*head, &run.id)?;
                 }
                 if let Some(staged) = &fresh_start {
                     staged.stage(store)?;
@@ -248,14 +250,14 @@ impl ReviewLaunch<'_> {
             );
         }
         if self.pending.kind == Kind::Reviewer {
-            ctx.store.update(&task.id, |task| {
+            ctx.store.update_head(&task.id, |task| {
+                task.restart_current_child(corral_core::clock::now())?;
                 let child = task
                     .current_run_mut()
                     .context("parent missing")?
-                    .review_runs
-                    .last_mut()
+                    .current_child
+                    .as_deref_mut()
                     .context("child missing")?;
-                child.started = corral_core::clock::now();
                 child.pending_reply = None;
                 ctx.store
                     .log_event(Some(&task.id), "review_started", started)?;

@@ -12,6 +12,7 @@ use serde_json::json;
 use crate::completion::evidence_carry::{CarryRefused, CarrySource, establish};
 use crate::gate_tier::{DestinationKind, GatePhase};
 use crate::{Ctx, verification};
+use corral_core::TaskMut as _;
 
 /// The only fields corral's recorded replay may change in the re-derived receipt identity.
 const REPLAYED: [&str; 3] = ["head", "tree", "integration_base"];
@@ -31,7 +32,8 @@ struct Rebind {
 /// replayed, or any check fails; the caller then gates the replayed head as today.
 pub(crate) fn gate_carry(ctx: &Ctx, id: &str) -> Result<bool> {
     let mut carried = None;
-    ctx.store.try_update(id, |task| {
+    ctx.store.try_update_head(id, |head| {
+        let task = &crate::reviewer::review_shell(&*head)?;
         let run = task.current_run().context("missing run for gate carry")?;
         // The owned target binding is the only entry: a main-bound run has none.
         let Some(target) = run.plan_target.clone() else {
@@ -40,8 +42,7 @@ pub(crate) fn gate_carry(ctx: &Ctx, id: &str) -> Result<bool> {
         let Some(rebind) = check(ctx, task, &target)? else {
             return Ok(false);
         };
-        let run = task.current_run_mut().context("run disappeared")?;
-        let gate = run.gate.as_mut().context("gate disappeared")?;
+        let mut gate = run.gate.clone().context("gate disappeared")?;
         let tier = gate.tier.as_mut().context("member receipt has no tier")?;
         let detail = json!({"run": run.id, "tier": tier.tier,
             "old_sha": rebind.old.head, "new_sha": rebind.new.head,
@@ -51,7 +52,11 @@ pub(crate) fn gate_carry(ctx: &Ctx, id: &str) -> Result<bool> {
         tier.carried = Some(rebind.carry);
         gate.sha = rebind.new.head.clone();
         gate.identity = Some(rebind.new);
-        run.completion.evidence_carry = rebind.evidence_carry.map(Box::new);
+        head.edit_run(&run.id, |current| {
+            current.gate = Some(gate);
+            current.completion.evidence_carry = rebind.evidence_carry.map(Box::new);
+            Ok(())
+        })?;
         // Persist provenance before the rebound receipt can authorize anything.
         if !rebind.logged {
             ctx.store
@@ -178,14 +183,15 @@ fn replay(
 /// `to`. Matched on the replayed head, not the approved one, so a gate carry saved before its
 /// verdict carry still composes with the next sibling's replay.
 fn replayed_receipt(ctx: &Ctx, task: &Task, run: &str, from: &str, to: &str) -> Result<bool> {
-    Ok(ctx.store.events_shared()?.iter().rev().any(|event| {
-        event.task.as_deref() == Some(&task.id)
-            && event.kind == "candidate_rebased"
-            && event.detail["run"] == run
-            && event.detail["old_sha"] == from
-            && event.detail["new_sha"] == to
-            && event.detail["review_sha"].is_string()
-    }))
+    Ok(ctx
+        .store
+        .last_event_where(Some(&task.id), &["candidate_rebased"], Some(run), |event| {
+            event.detail["run"] == run
+                && event.detail["old_sha"] == from
+                && event.detail["new_sha"] == to
+                && event.detail["review_sha"].is_string()
+        })?
+        .is_some())
 }
 
 /// A retry after a crash between `gate_carried` and the save rebinds once: when that event
@@ -198,13 +204,13 @@ fn recorded(
     carry: &mut GateCarry,
     evidence_carry: &mut Option<EvidenceCarry>,
 ) -> Result<bool> {
-    let events = ctx.store.events_shared()?;
-    let Some(event) = events.iter().rev().find(|event| {
-        event.task.as_deref() == Some(&task.id)
-            && event.kind == "gate_carried"
-            && event.detail["old_identity"] == json!(old)
-            && event.detail["new_identity"] == json!(new)
-    }) else {
+    let Some(event) =
+        ctx.store
+            .last_event_where(Some(&task.id), &["gate_carried"], Some(&old.run), |event| {
+                event.detail["old_identity"] == json!(old)
+                    && event.detail["new_identity"] == json!(new)
+            })?
+    else {
         return Ok(false);
     };
     let prior_carry: GateCarry = serde_json::from_value(event.detail["gate_carry"].clone())?;

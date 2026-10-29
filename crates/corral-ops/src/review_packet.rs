@@ -413,6 +413,29 @@ fn findings(task: &Task, exclude: &str) -> Vec<Finding> {
         .collect()
 }
 
+/// [`findings`] of a task form, read by the emitted reader: every review finding of the task
+/// except the attempt `exclude`, in prompt order.
+pub(crate) fn findings_of<T: corral_core::TaskRef + ?Sized>(
+    task: &T,
+    exclude: &str,
+) -> Result<Vec<Finding>> {
+    Ok(task
+        .emitted_findings(corral_core::FindingSource::Review, Some(exclude))?
+        .into_iter()
+        .filter_map(|finding| {
+            Some(Finding {
+                run: finding.owner,
+                attempt: finding.attempt,
+                reviewer: finding.reviewer,
+                verdict: finding.verdict,
+                superseded: finding.superseded,
+                sha: finding.sha,
+                notes: finding.notes?,
+            })
+        })
+        .collect())
+}
+
 pub(crate) fn build(
     ctx: &Ctx,
     task: &Task,
@@ -420,6 +443,7 @@ pub(crate) fn build(
     attempt: &str,
     record: &ReviewRecord,
     route: &ReviewRoute,
+    previous: Vec<Finding>,
 ) -> Result<(ReviewPacket, String)> {
     let base = crate::review_contracts::patch_base(run)?;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
@@ -521,22 +545,24 @@ pub(crate) fn build(
             reusable,
         },
         gaps: evidence_gaps(ctx, task, run, route)?,
-        previous_findings: findings(task, attempt),
+        previous_findings: previous,
         gate_contract: gate_contract(ctx, task, run)?,
     };
     let digest = verification::digest(&serde_json::to_vec(&bound)?);
     Ok((ReviewPacket { digest, bound }, diff))
 }
 
-pub(crate) fn write(
+/// Writes the packet whose previous findings are `previous`.
+pub(crate) fn write_with(
     ctx: &Ctx,
     task: &Task,
     run: &Run,
     attempt: &str,
     record: &ReviewRecord,
     route: &ReviewRoute,
+    previous: Vec<Finding>,
 ) -> Result<(String, String)> {
-    let (packet, diff) = build(ctx, task, run, attempt, record, route)?;
+    let (packet, diff) = build(ctx, task, run, attempt, record, route, previous)?;
     let (packet_file, diff_file) = paths(ctx, task, run, (attempt, route))?;
     std::fs::write(&diff_file, diff).with_context(|| format!("writing {}", diff_file.display()))?;
     let json = serde_json::to_string_pretty(&packet)?;
@@ -594,7 +620,9 @@ pub(crate) fn route_changes(
         subject.as_ref().filter(|_| packet),
     )?;
     if packet {
-        current.packet_digest = Some(build(ctx, task, run, &attempt, record, &current)?.0.digest);
+        let previous = findings(task, &attempt);
+        let packet = build(ctx, task, run, &attempt, record, &current, previous)?;
+        current.packet_digest = Some(packet.0.digest);
     }
     if route.same_assessment(&current) && route.profile == current.profile {
         return Ok(Vec::new());

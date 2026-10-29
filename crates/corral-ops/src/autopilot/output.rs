@@ -20,6 +20,30 @@ pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<Task>> {
         .collect()
 }
 
+/// The task a pilot step reads: the head's fields and current run with the rows its checks
+/// read by key ([`crate::reviewer::review_shell`]); nothing earlier is read.
+pub(super) fn pilot_task<T: corral_core::TaskRef + ?Sized>(head: &T) -> Result<Task> {
+    crate::reviewer::review_shell(head)
+}
+
+/// Whether the integration request `digest` was already sent for `key`'s run.
+pub(super) fn requested(
+    ctx: &Ctx,
+    key: &crate::integration::RepairKey,
+    digest: &str,
+) -> Result<bool> {
+    let matches = |event: &corral_core::Event| event.detail["digest"].as_str() == Some(digest);
+    Ok(ctx
+        .store
+        .last_event_where(
+            Some(&key.task),
+            &["integration_request"],
+            Some(&key.run),
+            matches,
+        )?
+        .is_some())
+}
+
 pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
     let Some(_lock) = ctx
         .store

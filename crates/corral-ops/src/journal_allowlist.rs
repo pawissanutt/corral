@@ -152,7 +152,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
         "pane_run or agent_prompt launching the replacement reviewer",
     ),
     (
-        "reviewer.rs",
+        "reviewer/launch.rs",
         "prompt_pm",
         "review_prompt_delivery",
         "submit",
@@ -162,14 +162,14 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
         "review_budget/recovery.rs",
         "resume",
         "gate_started",
-        "submit",
+        "submit_head",
         "pane_run launching the recovered gate",
     ),
     (
         "review_budget/recovery.rs",
         "resume",
         "review_started",
-        "submit",
+        "submit_head",
         "pane_run or agent_prompt launching the recovered reviewer",
     ),
 ];

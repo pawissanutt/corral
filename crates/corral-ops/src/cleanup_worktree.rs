@@ -176,16 +176,21 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         bail!("refusing aliased worktree {}", run.worktree.display());
     }
     let protected_set = protected_pids()?;
-    let tasks = ctx.store.list()?;
+    // The board is read only when a resident process needs its harness checked.
+    let mut tasks = None;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
-        if protected_set.contains(&process.pid)
-            || tasks
+        if protected_set.contains(&process.pid) || {
+            let tasks = match &mut tasks {
+                Some(tasks) => tasks,
+                None => tasks.insert(ctx.store.list()?),
+            };
+            tasks
                 .iter()
                 .chain(std::iter::once(task))
                 .flat_map(|t| &t.runs)
                 .any(|run| harness(ctx, run, &process.argv))
-        {
+        } {
             warnings.push(format!(
                 "protected process {} still uses worktree",
                 process.pid

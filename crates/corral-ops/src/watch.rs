@@ -267,7 +267,17 @@ fn observe(ctx: &Ctx, task: &Task, attempt: &mut GateAttempt) -> Result<()> {
 /// Loads oldest-first history and live progress. Reconciles monitor sidecars only;
 /// callers still use the normal gate/review collectors for verification.
 pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
-    let task = ctx.store.get(task)?;
+    load_task(ctx, &ctx.store.get(task)?)
+}
+
+/// [`load`]'s sidecar reconciliation alone, from the head's fields and current run: every
+/// sidecar write follows the current run and its current review child, so the writes equal
+/// `load`'s; nothing earlier is read.
+pub(crate) fn reconcile(ctx: &Ctx, task: &str) -> Result<()> {
+    load_task(ctx, &crate::reviewer::review_shell(&ctx.store.head(task)?)?).map(drop)
+}
+
+fn load_task(ctx: &Ctx, task: &Task) -> Result<StageHistory> {
     let owned = crate::session_scope::owns_inventory(ctx)?;
     let dir = ctx.store.scratch_path(WATCH)?.join(&task.id);
     let mut gates = Vec::new();
@@ -281,7 +291,7 @@ pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
                 let mut attempt: GateAttempt =
                     read_optional(&path)?.context("gate monitor disappeared during load")?;
                 if owned {
-                    observe(ctx, &task, &mut attempt)?;
+                    observe(ctx, task, &mut attempt)?;
                 } else {
                     attempt.live_pane = None;
                 }
@@ -302,7 +312,7 @@ pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
     });
     Ok(StageHistory {
         gates,
-        reviews: review::load(ctx, &task, owned)?,
+        reviews: review::load(ctx, task, owned)?,
     })
 }
 

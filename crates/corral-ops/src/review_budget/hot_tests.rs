@@ -286,22 +286,15 @@ fn a_watchdog_escalation_tick_hydrates_only_in_its_round_cleanup() {
     let before = work::snapshot();
     let change = crate::reviewer::reconcile_review_sampled_at(&fx.ctx, &id, at(600), snapshot);
     let delta = work::snapshot().since(&before);
-    // Then it escalates, and only the round's screen capture and artifact snapshot (that later
-    // conversions own) read the task: the round's pane cleanup reads heads (T-332), and the
-    // finish itself is measured above.
+    // Then it escalates and nothing reads the task: the round's pane cleanup and screen
+    // capture read heads (T-332, T-333), and the finish itself is measured above.
     assert!(change.unwrap().is_some());
     let files: std::collections::BTreeSet<&str> = delta
         .sites
         .iter()
         .map(|site| site.location.file())
         .collect();
-    assert_eq!(
-        files,
-        std::collections::BTreeSet::from([
-            "crates/corral-ops/src/artifacts.rs",
-            "crates/corral-ops/src/reviewer/watchdog.rs",
-        ])
-    );
+    assert_eq!(files, std::collections::BTreeSet::new());
     assert_eq!((delta.own_record_rows(), delta.own_record_bytes()), (0, 0));
     drop(_hot);
     assert_eq!(fx.ctx.store.get(&id).unwrap().status, Status::NeedsMe);

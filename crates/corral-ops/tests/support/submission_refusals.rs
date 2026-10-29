@@ -146,6 +146,8 @@ fn verify(mut fx: Fx, id: String, case: Case) {
                 }
                 seen.snapshot = Some(store.get(&task_id).unwrap());
             }
+            // The reviewer launch's guard observation, before its submission is entered.
+            "review_child_observed" => {}
             "refused_committed" => {
                 let mut seen = observed.lock().unwrap();
                 seen.refused += 1;
