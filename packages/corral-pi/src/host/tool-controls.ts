@@ -47,12 +47,16 @@ export interface ToolControls {
   currentTurn(): number | undefined;
 }
 
+/** Tools whose `command` input runs in a shell: background jobs obey the same bash rules (T-565). */
+const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "job_start"]);
+
 export function installToolControls(pi: ExtensionAPI, controls: ToolControls): void {
   const hooked = new Set<string>();
   pi.on("tool_call", async (event) => {
     const nested = event.parentToolCallId !== undefined;
-    if (controls.rules && event.toolName === "bash") {
-      const command = typeof event.input.command === "string" ? event.input.command : "";
+    if (controls.rules && SHELL_TOOLS.has(event.toolName)) {
+      const input = event.input as Record<string, unknown>;
+      const command = typeof input.command === "string" ? input.command : "";
       const decision = decideBash(command, controls.rules);
       const detail = { tool_call_id: event.toolCallId, ...(decision.rule ? { rule: decision.rule } : {}),
         ...(nested ? { nested: true } : {}) };

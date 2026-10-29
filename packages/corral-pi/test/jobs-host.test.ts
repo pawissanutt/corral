@@ -130,3 +130,66 @@ test("background_shell gives only the worker job tools, and the monitor runs onl
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 120_000);
+
+test("background jobs obey the worker's bash rules: deny and ask stop job_start before anything is recorded", async () => {
+  // Given a worker with background_shell and bash rules that deny rm and ask before touch.
+  const assets = buildFixtureInstall();
+  const cwd = mkdtempSync(join(tmpdir(), "corral-pi-jobs-rules-"));
+  try {
+    restrictEnvironment(process.env);
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    const modules = await loadModules(assets.dir, "worker");
+    const transport = modules.auth.transport?.(authContext());
+    if (!transport) throw new Error("fixture transport missing");
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-565", run: "R1" };
+    const events = new EventLog(1);
+    const corral = writeFakeCorral(cwd);
+    let host: HostSession | undefined;
+    const client = new CorralClient({
+      corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
+    });
+    host = await HostSession.create({
+      sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", client, events,
+      network: guardedFetch(transport, undefined, "openai-codex"), runtimeDir: join(cwd, "runtime"),
+      capabilities: { ...capabilities, enabled: ["background_shell", "bash_rules"] },
+      guidance: { projectText: false, settings: {
+        ...guidance.settings, bash_rules: { allow: [], ask: ["touch asked*"], deny: ["rm *"], default: "allow" },
+      } },
+      modules: { ...modules, role: workerRole(PACKAGE_ROOT) },
+      sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
+    });
+    try {
+      await host.session.bindExtensions({});
+      await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+      // When the model starts a denied, an ask-gated and an allowed job.
+      fixtureTransport().script([
+        { toolCalls: [{ callId: "deny", name: "job_start", arguments: { command: "rm notes.txt" } }] },
+        { toolCalls: [{ callId: "ask", name: "job_start", arguments: { command: "touch asked.txt" } }] },
+        { toolCalls: [{ callId: "allow", name: "job_start", arguments: { command: "true" } }] },
+        { text: "Done" },
+      ]);
+      const ended = nextEvent(events, (event) => event.kind === "turn_ended");
+      const exited = nextEvent(events, (event) => event.kind === "job_exited");
+      expect((await host.submit({ text: "go", busyPolicy: "prompt", idempotencyKey: "go", origin: "test" }, "rq-go"))
+        .disposition).toBe("started");
+      await ended;
+      await exited;
+      await host.drained();
+      // Then only the allowed command became a job; the others were refused before any record.
+      const live = host;
+      const result = (name: string) => live.session.messages.filter((m) => m.role === "toolResult" && m.toolName === "job_start")
+        .map((m) => (m.role === "toolResult" ? { isError: m.isError, text: m.content.map((p) => (p.type === "text" ? p.text : "")).join("") } : undefined))[["deny", "ask", "allow"].indexOf(name)];
+      expect(result("deny")).toEqual({ isError: true, text: 'bash rule "rm *" denies "rm notes.txt"; nothing ran' });
+      expect(result("ask")?.isError).toBeTrue();
+      expect(result("allow")?.isError).toBeFalse();
+      const prepared = corral.calls().map((call) => call.envelope)
+        .filter((e) => e.op === "job" && e.payload.action === "prepare").map((e) => e.payload.command);
+      expect(prepared).toEqual(["true"]);
+    } finally {
+      host.session.dispose();
+    }
+  } finally {
+    assets.cleanup();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
