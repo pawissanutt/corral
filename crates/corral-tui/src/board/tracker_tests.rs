@@ -383,6 +383,28 @@ fn scoped_tracker_projection_errors_remain_visible_instead_of_done_counts() {
 }
 
 #[test]
+fn board_refresh_reads_the_board_once_for_every_tracker() {
+    use corral_core::work::{Work, count};
+    // Given a scoped tracker.
+    let fx = scoped_tracker();
+    let task = fx.ctx.store.get(TRACKER).unwrap();
+    let lists = |tasks: &[corral_core::Task]| {
+        let start = count(Work::TaskList);
+        let progress = crate::plan::tracker::load_all(&fx.ctx, tasks);
+        (count(Work::TaskList) - start, progress)
+    };
+    // When one refresh projects one tracker, then three (T-547).
+    let (one, single) = lists(std::slice::from_ref(&task));
+    let (three, many) = lists(&[task.clone(), task.clone(), task.clone()]);
+    // Then the trackers share one read of the board, with the same projection as `load`.
+    assert_eq!(three, one);
+    let shown = |p: &crate::plan::tracker::Progress| crate::plan::tracker::summary(p);
+    let loaded = crate::plan::tracker::load(&fx.ctx, &task).unwrap();
+    assert_eq!(shown(&single[TRACKER]), shown(&loaded));
+    assert_eq!(shown(&many[TRACKER]), shown(&loaded));
+}
+
+#[test]
 fn scoped_tracker_prerequisite_distinguishes_initial_base_from_existing_target_head() {
     // Given the shared readiness projection before and after target initialization.
     let fx = scoped_tracker();

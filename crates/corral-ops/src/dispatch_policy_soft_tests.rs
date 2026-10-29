@@ -166,6 +166,31 @@ fn automatic_ready_waits_at_soft_target_while_owner_queue_uses_headroom() {
 }
 
 #[test]
+fn a_blocked_ready_queue_resolves_the_operating_policy_once_per_drain() {
+    // Given automatic Ready tasks that one drain queued behind a full soft target.
+    let mut fx = soft_fixture();
+    let waiting: Vec<Task> = (0..4)
+        .map(|i| fx.task(&format!("Waiting {i}"), Status::Ready))
+        .collect();
+    fx.grant(&waiting.iter().collect::<Vec<_>>());
+    manual(&fx, "Manual one");
+    manual(&fx, "Manual two");
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    // When the queue drains again with every task still blocked (T-547).
+    let resolves = || corral_core::work::count(corral_core::work::Work::PolicyResolve);
+    let before = resolves();
+    crate::queue_drain::start_queued(&fx.ctx, Fixture::now()).unwrap();
+    // Then each was checked and skipped against one policy resolution, not one per check.
+    for task in &waiting {
+        let current = fx.ctx.store.get(&task.id).unwrap();
+        assert!(current.queued && current.dispatch_plan.is_some());
+        assert_eq!(current.status, Status::Ready);
+    }
+    assert_eq!(used(&fx), 2);
+    assert_eq!(resolves() - before, 1);
+}
+
+#[test]
 fn interrupted_automatic_launch_recovery_respects_soft_target_without_leaking_a_slot() {
     // Given an engine that refuses workspace creation once a marker file exists.
     let mut fx = soft_fixture();

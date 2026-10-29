@@ -505,9 +505,12 @@ impl Store {
     }
 
     /// A matching receipt is necessary but never sufficient for any executor's safety checks.
+    /// A read-only snapshot resolves it once per pass, like its tasks (T-547).
     pub fn effective_operating_policy(&self) -> Result<EffectivePolicy> {
-        let config = self.operating_config()?;
-        self.resolve_operating_policy(&config)
+        let policy = self.pass_derived("effective_operating_policy", || {
+            self.resolve_operating_policy(&self.operating_config()?)
+        })?;
+        Ok(policy.as_ref().clone())
     }
 
     pub(crate) fn resolve_operating_policy(&self, config: &Config) -> Result<EffectivePolicy> {
@@ -515,6 +518,7 @@ impl Store {
         if !self.is_snapshot() {
             return self.read_only_snapshot()?.resolve_operating_policy(config);
         }
+        crate::work::record(crate::work::Work::PolicyResolve, 1);
         let policy = &config.automation;
         let state = self.operating_state()?;
         let expired = state

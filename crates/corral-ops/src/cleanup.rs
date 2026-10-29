@@ -79,6 +79,13 @@ fn clean<'a>(
     // Gate records are replaced each round. Creation events retain earlier panes, including
     // ones whose previous close failed, and record fallback workspace ownership explicitly.
     let events = ctx.store.events_shared()?;
+    // Grouped once, in log order: a sweep visits every finished task (T-547).
+    let mut by_task: BTreeMap<&str, Vec<&corral_core::Event>> = BTreeMap::new();
+    for event in events.iter() {
+        if let Some(task) = event.task.as_deref() {
+            by_task.entry(task).or_default().push(event);
+        }
+    }
     for task in tasks {
         // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
         if crate::agent::hooks::task_is_pi_native(task)
@@ -113,11 +120,10 @@ fn clean<'a>(
                 workspaces.insert(h.workspace_id.as_str(), task);
             }
         }
-        for event in events.iter() {
-            if event.task.as_deref() != Some(task.id.as_str())
-                || !runs
-                    .iter()
-                    .any(|run| event.detail["run"].as_str() == Some(&run.id))
+        for event in by_task.get(task.id.as_str()).into_iter().flatten() {
+            if !runs
+                .iter()
+                .any(|run| event.detail["run"].as_str() == Some(&run.id))
             {
                 continue;
             }

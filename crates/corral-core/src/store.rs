@@ -86,13 +86,14 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
         };
-        let mut v: Vec<PathBuf> = rd
+        // Sorting names, not paths, keeps the same order without component-wise comparison.
+        let mut names: Vec<std::ffi::OsString> = rd
             .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "md"))
+            .map(|e| e.file_name())
+            .filter(|n| Path::new(n).extension().is_some_and(|x| x == "md"))
             .collect();
-        v.sort();
-        Ok(v)
+        names.sort();
+        Ok(names.into_iter().map(|n| dir.join(n)).collect())
     }
 
     /// Exclusive lock on `lock/<name>.lock`, held until the returned guard is dropped.
@@ -492,12 +493,16 @@ impl Store {
         if let Some(frozen) = &self.frozen {
             return frozen.get(&id, n);
         }
-        for path in self.task_files()? {
-            if file_id_number(&path) == Some(n) {
-                return self.task_cache.read(&path);
-            }
+        let dir = self.dir.join("tasks");
+        let found = self.task_cache.with_files(
+            &dir,
+            || Self::list_task_files(&dir),
+            |paths| paths.iter().find(|p| file_id_number(p) == Some(n)).cloned(),
+        )?;
+        match found {
+            Some(path) => self.task_cache.read(&path),
+            None => bail!("task {id} not found"),
         }
-        bail!("task {id} not found")
     }
 
     /// Normalizes an id: "42" / "t-42" / "T-042" -> "T-042".

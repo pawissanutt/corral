@@ -43,6 +43,12 @@ pub struct PromotionCandidate {
 /// All eligible Ideas, irrespective of promotion mode or current free capacity.
 /// Reads tasks and bounded historical lesson signals; never mutates board state.
 pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
+    // One read of the board, so each project's lesson history is derived once per shortlist,
+    // not once per candidate and per active task (T-547).
+    let ctx = &Ctx {
+        store: ctx.store.read_only_snapshot()?,
+        ..ctx.clone()
+    };
     let tasks = ctx.store.list_shared()?;
     let mut out = Vec::new();
     for task in tasks.iter().filter(|t| t.status == Status::Idea) {
