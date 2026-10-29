@@ -76,9 +76,16 @@ fn input_parity_review_badges_open_the_same_review_with_either_input() {
         // When a badge is clicked twice, or its card is selected and opened by keys.
         click(&mut pointer, x, y);
         click(&mut pointer, x, y);
-        for _ in 0..4 {
+        'select: for count in keyboard.stack[0].column_counts().unwrap() {
+            for _ in 0..count {
+                if render(&mut keyboard).contains("▌ T-006") {
+                    break 'select;
+                }
+                keyboard.handle_key(code(KeyCode::Down));
+            }
             keyboard.handle_key(code(KeyCode::Right));
         }
+        assert!(render(&mut keyboard).contains("▌ T-006"));
         keyboard.handle_key(code(KeyCode::Enter));
 
         // Then both reach the same rendered review without changing the worker's stage.
