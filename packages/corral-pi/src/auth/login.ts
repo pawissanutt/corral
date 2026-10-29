@@ -1,7 +1,8 @@
 // `corral agent login` runs this entry point in the owner's pane with the provider the owner
 // picked (`--provider openai-codex|anthropic`): one interactive subscription OAuth login through
 // Pi's own flow, persisted into that provider's file in the corral-owned auth directory. Its
-// network is restricted to POSTs to that provider's OAuth endpoints.
+// network is restricted to POSTs to that provider's OAuth endpoints. Amazon Bedrock has no OAuth
+// login: `corral agent login --provider amazon-bedrock` records its AWS profile binding in Rust.
 import { type Interface, createInterface } from "node:readline/promises";
 
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
@@ -49,7 +50,9 @@ const NOTICE_MAX = 240;
  * and an HTTP status ever reach the terminal.
  */
 export function loginDiagnostic(error: unknown, provider: ProviderId = "openai-codex"): string {
-  if (error instanceof LoginNetworkRefused || error instanceof CredentialsUnavailable) return error.message;
+  if (error instanceof LoginNetworkRefused || error instanceof CredentialsUnavailable || error instanceof LoginNotOAuth) {
+    return error.message;
+  }
   const message = error instanceof Error ? error.message : "";
   if (message.startsWith("login_failed:")) return message;
   const fixed = FIXED_FAILURES.find((text) => message.startsWith(text));
@@ -66,9 +69,17 @@ export function redactNotice(text: string): string {
   return text.replace(/[A-Za-z0-9._~+/=-]{24,}/g, "<redacted>").slice(0, NOTICE_MAX);
 }
 
+export class LoginNotOAuth extends Error {
+  readonly code = "usage_error";
+  constructor(readonly provider: ProviderId) {
+    super(`${provider} has no OAuth login here; run \`corral agent login --provider ${provider}\`, which binds an AWS profile`);
+  }
+}
+
 export async function login(
   dir: string, interaction: AuthInteraction, provider: ProviderId = "openai-codex",
 ): Promise<LoginResult> {
+  if (PROVIDERS[provider].auth !== "oauth") throw new LoginNotOAuth(provider);
   const store = new FileCredentialStore(dir, provider);
   store.ensureDir();
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
@@ -213,6 +224,10 @@ export function runLogin(argv: readonly string[]): void {
   const provider = arg("--provider") ?? "openai-codex";
   if (!isProviderId(provider)) {
     process.stderr.write(`corral agent login failed: unknown provider ${provider}; use openai-codex or anthropic\n`);
+    process.exit(2);
+  }
+  if (PROVIDERS[provider].auth !== "oauth") {
+    process.stderr.write(`corral agent login failed: ${new LoginNotOAuth(provider).message}\n`);
     process.exit(2);
   }
   globalThis.fetch = loginFetch(globalThis.fetch.bind(globalThis), provider) as typeof globalThis.fetch;

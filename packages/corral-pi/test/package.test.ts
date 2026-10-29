@@ -10,13 +10,18 @@ const REPO = join(PACKAGE_ROOT, "../..");
 const json = (path: string) => JSON.parse(readFileSync(path, "utf8"));
 const sha256 = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
 const go = json(join(REPO, "tools/pi-probe/bun-go.json"));
+/** The Bedrock host's direct dependencies (T-504), each at the version the GO lock already resolves. */
+const AWS_DEPENDENCIES = ["@aws-sdk/nested-clients", "@smithy/core", "@smithy/fetch-http-handler", "@smithy/node-http-handler"];
 
 test("package.json pins exactly the GO manifest's Pi release, the Claude Agent SDK lane and the probe's dev pins", () => {
   const pkg = json(join(PACKAGE_ROOT, "package.json"));
   const compat = json(join(PACKAGE_ROOT, "compat.json"));
   expect(go.verdict).toBe("GO");
+  const goLock = bunApi().JSONC.parse(readFileSync(join(REPO, go.lock.file), "utf8")) as { packages: Record<string, string[]> };
+  const locked = (name: string) => goLock.packages[name]![0]!.slice(name.length + 1);
   expect(pkg.dependencies).toEqual({
     [go.pi.package]: go.pi.version, [compat.claude.package]: compat.claude.version, zod: compat.claude.zod,
+    ...Object.fromEntries(AWS_DEPENDENCIES.map((name) => [name, locked(name)])),
   });
   expect(pkg.devDependencies).toEqual(json(join(REPO, "tools/pi-probe/package.json")).devDependencies);
   expect(pkg.trustedDependencies).toEqual([]);

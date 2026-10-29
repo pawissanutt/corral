@@ -3,7 +3,8 @@
 import { closeSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
-import { type ProviderId, isProviderId } from "../auth/providers.ts";
+import type { AwsBinding } from "../auth/aws.ts";
+import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { ROLES, type HostIdentity, type Role } from "../roles/types.ts";
 
 export const LAUNCH_VERSION = 1;
@@ -31,6 +32,8 @@ export interface HostConfig {
   readonly freshSession?: boolean;
   readonly model: string;
   readonly provider?: ProviderId;
+  /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
+  readonly aws?: AwsBinding;
   readonly effort?: string;
   readonly promptFile?: string;
   readonly ui?: UiMode;
@@ -65,6 +68,16 @@ function path(value: Json, key: string): string {
 
 const SECRET = /^[A-Za-z0-9_-]{32,256}$/;
 const TOKEN = /^[A-Za-z0-9._:+-]+$/;
+const AWS_PROFILE = /^[A-Za-z0-9_.+=,@-]{1,64}$/;
+
+function awsBinding(value: unknown): AwsBinding | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new LaunchMessageInvalid("aws must be an object");
+  const binding = value as Json;
+  const region = field(binding, "region", /^[a-z0-9-]+$/, 32);
+  if (!isAwsRegion(region)) throw new LaunchMessageInvalid("region is missing or malformed");
+  return { profile: field(binding, "profile", AWS_PROFILE, 64), region };
+}
 
 export function parseLaunchMessage(text: string): HostConfig {
   let value: unknown;
@@ -96,6 +109,7 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (message.fresh_session !== undefined && typeof message.fresh_session !== "boolean") {
     throw new LaunchMessageInvalid("fresh_session must be a boolean");
   }
+  const aws = awsBinding(message.aws);
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {
@@ -121,6 +135,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     freshSession: message.fresh_session === true,
     model: field(message, "model", TOKEN, 128),
     ...(provider ? { provider } : {}),
+    ...(aws ? { aws } : {}),
     effort: optional(message, "effort", TOKEN),
     promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),
     ...(ui ? { ui } : {}),

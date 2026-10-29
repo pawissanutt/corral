@@ -10,8 +10,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import type { StreamFunction } from "@earendil-works/pi-ai";
+import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
+import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
@@ -36,6 +38,8 @@ export interface HostSessionOptions {
   readonly model: string;
   /** The bound profile's provider; absent means OpenAI Codex, the only pre-T-479 route. */
   readonly provider?: ProviderId;
+  /** The Bedrock binding and its credential resolver; required for an AWS-profile provider. */
+  readonly aws?: AwsRoute;
   readonly effort?: string;
   readonly promptFile?: string;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
@@ -63,6 +67,49 @@ function bounded(value: Record<string, unknown> | null): Record<string, unknown>
 
 type Models = Awaited<ReturnType<typeof Sdk.ModelRuntime.create>>;
 
+export interface AwsRoute {
+  readonly binding: AwsBinding;
+  readonly resolver: AwsCredentialResolver;
+}
+
+/**
+ * Re-registers the Bedrock provider so it signs only with the bound profile's credentials: Pi's
+ * env-sniffing auth (Bedrock API keys, AWS_PROFILE, ambient keys, container and web-identity
+ * roles) is replaced by a fixed source, and every turn resolves the resolver's unexpired keys into
+ * a scoped environment before Pi builds its client, which pins them so the SDK's default chain
+ * never runs. A turn without keys ends with the refusal before any request.
+ */
+function restrictAwsProvider(
+  models: Models, provider: NonNullable<ReturnType<Models["getProvider"]>>, fetch: typeof globalThis.fetch, aws: AwsRoute,
+): void {
+  const route = PROVIDERS[provider.id as ProviderId];
+  const stream = provider.stream.bind(provider) as StreamFunction;
+  const streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
+  const signed = async (current: { api: string }, streamOptions: unknown) => {
+    if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
+    const credentials = await aws.resolver.get();
+    const { apiKey: _apiKey, bearerToken: _bearer, profile: _profile, env: _env, ...rest } =
+      (streamOptions ?? {}) as Record<string, unknown>;
+    return {
+      ...rest, fetch, region: aws.binding.region,
+      env: {
+        AWS_ACCESS_KEY_ID: credentials.accessKeyId, AWS_SECRET_ACCESS_KEY: credentials.secretAccessKey,
+        ...(credentials.sessionToken ? { AWS_SESSION_TOKEN: credentials.sessionToken } : {}),
+        // HTTP/2 signs the :authority pseudo-header, which the guarded fetch cannot send.
+        AWS_BEDROCK_FORCE_HTTP1: "1",
+      },
+    };
+  };
+  models.registerNativeProvider({
+    ...provider,
+    auth: { apiKey: { name: "corral AWS profile", resolve: async () => ({ auth: {}, source: "corral AWS profile" }) } },
+    stream: (current, context, streamOptions) =>
+      lazyStream(current, async () => stream(current, context, await signed(current, streamOptions) as never)),
+    streamSimple: (current, context, streamOptions) =>
+      lazyStream(current, async () => streamSimple(current, context, await signed(current, streamOptions) as never)),
+  });
+}
+
 /**
  * Re-registers the bound provider so it can only run on its stored subscription OAuth
  * credential and only through the guarded fetch. Pi's API-key handler (an API key, ambient
@@ -73,10 +120,19 @@ type Models = Awaited<ReturnType<typeof Sdk.ModelRuntime.create>>;
  * endpoint from this process: its calls run through that lane's registered Pi API (T-493).
  */
 export function restrictProvider(
-  models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch, lane?: ClaudeLaneConfig,
+  models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch, lane?: ClaudeLaneConfig, aws?: AwsRoute,
 ): void {
   const route = PROVIDERS[providerId];
   const provider = models.getProvider(route.id);
+  if (route.auth === "aws-profile") {
+    if (!provider) throw new Error(`model_unavailable: ${route.id} is not in Pi's catalog`);
+    if (!aws) {
+      throw new Error(`credentials_unavailable: ${route.id} has no AWS profile binding; ` +
+        `run \`corral agent login --provider ${route.id}\``);
+    }
+    restrictAwsProvider(models, provider, fetch, aws);
+    return;
+  }
   if (!provider?.auth.oauth) throw new Error(`model_unavailable: ${route.id} has no subscription OAuth`);
   let stream = provider.stream.bind(provider) as StreamFunction;
   let streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
@@ -112,8 +168,13 @@ export function authContext(provider: ProviderId = "openai-codex"): AuthContext 
   return { provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
 }
 
-function providerErrorClass(message: string): string {
+export function providerErrorClass(message: string): string {
   if (/network_refused/.test(message)) return "network_refused";
+  // AWS errors carry their exception name, often without an HTTP status code.
+  if (/credentials_unavailable|\b(AccessDeniedException|UnrecognizedClientException|ExpiredTokenException|InvalidSignatureException)\b/
+    .test(message)) return "auth";
+  if (/\bThrottlingException\b|throttl/i.test(message)) return "rate_limit";
+  if (/\b(ServiceUnavailableException|ModelNotReadyException)\b/.test(message)) return "overload";
   if (/\b(401|403)\b|unauthori[sz]ed|forbidden|expired/i.test(message)) return "auth";
   if (/\b429\b|rate.?limit|quota|usage limit/i.test(message)) return "rate_limit";
   if (/\b5\d\d\b|overload|unavailable/i.test(message)) return "overload";
@@ -171,7 +232,7 @@ export class HostSession {
     const model = models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
     restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
-      { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd });
+      { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);
@@ -454,7 +515,10 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       settings: restrictedSettings(),
-      network: { allowed_destinations: [...hostDestinations(this.provider)], ...this.options.network.ledger() },
+      network: {
+        allowed_destinations: [...(this.options.network.destinations ?? hostDestinations(this.provider))],
+        ...this.options.network.ledger(),
+      },
       corral_calls: { ...this.stats },
       delivery: bounded(this.options.modules.delivery.state?.() ?? null),
       auth: bounded(this.options.modules.auth.state?.() ?? null),
