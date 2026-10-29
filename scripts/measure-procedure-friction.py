@@ -2,9 +2,10 @@
 """Baseline how much time and how many rounds dispatched workers lose to procedure.
 
 T-230. Read-only and standard-library only. Sources:
-  * `corral list --all --json`      task kind/size, runs, profile, harness, model, usage
-  * <root>/.corral/events.jsonl     dispatch, gate, done, send-back, stale and idle events
-  * <root>/.corral/artifacts/**/*changes-round-*.md   reviewer send-back notes
+  * `corral list --all --json` + `show <id> --json`   full tasks and run history
+  * `corral export events --json`  raw Event JSONL (ts, task, kind, detail, seq)
+  * `corral stats --gates --json`  gate counts, durations, classes, behind and carries
+  * `corral artifact show <reference> --raw`        stored reviewer send-back notes
   * harness session transcripts     omo (and omp) worker sessions, matched per run by
                                     worktree directory and run time window (the
                                     discovery rule of crates/corral-ops/src/usage.rs)
@@ -15,6 +16,9 @@ Usage:
 
 Heuristic classification is deliberate and every classified item is retained in the
 JSON (`items`) so a sample can be audited. See the T-230 report for limitations.
+The original baseline scripts and hashes remain historical evidence. This adapter
+uses raw exports, not `log <id> --all --json`: that is TimelineEntry JSONL with
+the raw Event under `event`, not an Event stream or a JSON array.
 """
 from __future__ import annotations
 
@@ -67,7 +71,14 @@ def load_tasks(corral, root):
         [corral, "list", "--all", "--json", "--root", root],
         capture_output=True, text=True, stdin=subprocess.DEVNULL, check=True,
     ).stdout
-    return json.loads(out)
+    tasks = []
+    for summary in json.loads(out):
+        task = subprocess.run(
+            [corral, "show", summary["id"], "--json", "--root", root],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, check=True,
+        ).stdout
+        tasks.append(json.loads(task))
+    return tasks
 
 
 def corral_verbs(corral):
@@ -99,16 +110,16 @@ def is_ancestor(repo, ancestor, descendant):
     return _ANC[key]
 
 
-def load_events(path):
+def load_events(corral, root):
+    out = subprocess.run(
+        [corral, "export", "events", "--json", "--root", root],
+        capture_output=True, text=True, stdin=subprocess.DEVNULL, check=True,
+    ).stdout
     ev = []
-    with open(path, errors="replace") as fh:
-        for line in fh:
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            e["_t"] = ts(e.get("ts"))
-            ev.append(e)
+    for line in out.splitlines():
+        e = json.loads(line)
+        e["_t"] = ts(e.get("ts"))
+        ev.append(e)
     return ev
 
 
@@ -166,14 +177,22 @@ PROC_TITLE = re.compile(
 HEADING = re.compile(r"^#{3,4}\s+(?:\d+\.\s*)?(?:P[0-3][:.\s-]*)?(.*\S)\s*$")
 
 
-def reviewer_findings(artifacts_root, text):
+def note_body(path, read_note):
+    if read_note:
+        return read_note(path)
+    # Historical offline callers can still supply ordinary Markdown evidence.
+    if os.path.isfile(path):
+        with open(path, errors="replace") as stream:
+            return stream.read()
+    return ""
+
+
+def reviewer_findings(read_note, text):
     m = re.search(r"Details: (\S+?\.md)", text) or re.search(r"(/\S+changes-round-\d+\.md)", text)
     path = m.group(1) if m else None
-    if path and not os.path.isfile(path):
-        path = None
     if not path:
         return None, None
-    body = open(path, errors="replace").read()
+    body = note_body(path, read_note)
     sec = re.split(r"^## ", body, flags=re.M)
     heads = []
     for s in sec:
@@ -303,14 +322,13 @@ ATTEMPT_ID = re.compile(r"\b(\d{3,}-\d{15,})\b")
 DETAILS_HEAD_CHARS = 1500
 
 
-def named_attempts(text):
+def named_attempts(text, read_note=None):
     """Gate attempt ids a send-back names: in its own text and in the head of its linked Details file,
     whose first lines give the failed gate's log path (`.../T-N-R1-<attempt>.log`)."""
     ids = set(ATTEMPT_ID.findall(text))
     details = DETAILS_PATH.search(text)
-    if details and os.path.isfile(details.group(1)):
-        with open(details.group(1), errors="replace") as f:
-            ids.update(ATTEMPT_ID.findall(f.read(DETAILS_HEAD_CHARS)))
+    if details:
+        ids.update(ATTEMPT_ID.findall(note_body(details.group(1), read_note)[:DETAILS_HEAD_CHARS]))
     return ids
 
 
@@ -324,7 +342,9 @@ def resolve_gate(gates, sendback, sha, ids):
     prior = sorted((g for g in gates if str((g.get("detail") or {}).get("sha", "")).startswith(sha)
                     and g["_t"] <= sendback["_t"]), key=lambda g: g["_t"], reverse=True)
     if ids:
-        named = next((g for g in prior if ((g.get("detail") or {}).get("identity") or {}).get("attempt") in ids), None)
+        named = next((g for g in prior if (
+            ((g.get("detail") or {}).get("identity") or {}).get("attempt")
+            or (g.get("detail") or {}).get("attempt")) in ids), None)
         return named, "named" if named else "named_missing"
     latest = prior[0] if prior else None
     return (latest if latest and (latest.get("detail") or {}).get("result") == "fail" else None), "latest"
@@ -339,7 +359,7 @@ def classify_sendback(e, gates_by_task, artifacts_root):
     low = head.lower()
     gm = re.search(r"gate failed at ([0-9a-f]{7,40})", head)
     if gm:
-        g, basis = resolve_gate(gates_by_task.get(e["task"], []), e, gm.group(1), named_attempts(text))
+        g, basis = resolve_gate(gates_by_task.get(e["task"], []), e, gm.group(1), named_attempts(text, artifacts_root))
         c["gate_basis"] = basis
         cmd = ((g or {}).get("detail") or {}).get("failed_cmd") or ""
         if cmd.startswith("stale_result"):
@@ -358,7 +378,7 @@ def classify_sendback(e, gates_by_task, artifacts_root):
             comps = remediation_components(text)[0]
         c["components"] = sorted(comps)
         details = DETAILS_PATH.search(text)
-        details_text = open(details.group(1), errors="replace").read(2000) if details and os.path.isfile(details.group(1)) else ""
+        details_text = note_body(details.group(1), artifacts_root)[:2000] if details else ""
         stated = bool(MAIN_MOVED.search(text) and not MAIN_NOT_MOVED.search(text))
         c["main_moved_stated"] = stated or bool(MAIN_MOVED.search(details_text))
         c["main_advance_basis"] = "stated" if stated else "details" if c["main_moved_stated"] else None
@@ -902,11 +922,18 @@ def main():
 
     root = os.path.abspath(args.root)
     home = os.path.expanduser("~")
-    events_path = os.path.join(root, ".corral", "events.jsonl")
-    if not os.path.isfile(events_path):
-        sys.exit(f"no {events_path}; pass --root <dir containing .corral>")
     tasks = load_tasks(args.corral, root)
-    events = load_events(events_path)
+    events = load_events(args.corral, root)
+    # The declared projection resolves slim gate receipts through the store.
+    # Do not reconstruct timing, behind-at-start or carries from removed fields.
+    gate_command = [args.corral, "stats", "--gates", "--json", "--root", root]
+    for flag, value in (("--since", args.since), ("--until", args.until)):
+        if value:
+            gate_command.extend((flag, value))
+    gate_metrics = json.loads(subprocess.run(
+        gate_command, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL, check=True,
+    ).stdout)
     runs = build_runs(tasks, ts(args.since) if args.since else None, ts(args.until) if args.until else None)
     for x in args.exclude_task:
         for k in [k for k in runs if k[0] == x]:
@@ -922,18 +949,30 @@ def main():
     for e in events:
         if e.get("kind") == "gate":
             gates_by_task[e["task"]].append(e)
-    artifacts_root = os.path.join(root, ".corral", "artifacts")
+    def read_note(path: str) -> str:
+        # Stored paths are logical references, including after legacy mirrors go.
+        # Offline fixture copies can retain the original workspace's absolute path.
+        reference = path.split("/.corral/", 1)[-1]
+        if reference.startswith(("artifacts/", "blob:")):
+            return subprocess.run(
+                [args.corral, "--root", root, "artifact", "show", reference, "--raw"],
+                capture_output=True, text=True, stdin=subprocess.DEVNULL, check=True,
+            ).stdout
+        if os.path.isfile(path):
+            with open(path, errors="replace") as stream:
+                return stream.read()
+        return ""
 
     for key, r in runs.items():
         facts = scan_transcripts(r, home, verb_re, real_re, help_re)
-        r["m"] = run_metrics(r, facts, gates_by_task, artifacts_root)
+        r["m"] = run_metrics(r, facts, gates_by_task, read_note)
         r["_harness"] = r["harness"] or ("omo" if facts is not None else "unknown(legacy)")
 
     all_runs = list(runs.values())
     result = {
         "generated": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window": f"{min(r['start'] for r in all_runs):%Y-%m-%d} .. {max(r['start'] for r in all_runs):%Y-%m-%d}",
-        "events": len(events), "totals": agg(all_runs),
+        "events": len(events), "totals": agg(all_runs), "gate_metrics": gate_metrics,
         "failure_modes": failure_modes(runs), "system_noise": system_noise(window_events, None),
     }
     for g, fn in GROUPS.items():

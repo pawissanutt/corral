@@ -66,7 +66,7 @@ cat "$EV/tui-dispatch-show.txt"
 grep -F "profile fake, harness fake, effort high" "$EV/tui-dispatch-show.txt" >/dev/null \
   || { echo "FAIL: run record lacks the effort override"; fail=1; }
 
-AGENT=$(sed -n 's/^ *pane_id: *//p' "$W/.corral/tasks/$T"-*.md | head -1)
+AGENT=$(C show "$T" --json | jq -er '.runs[-1].herdr.pane_id')
 for _ in $(seq 50); do
   H pane read "$AGENT" --source recent --lines 40 > "$EV/tui-dispatch-agent.txt" 2>&1
   grep -qF "extra args=--thinking high" "$EV/tui-dispatch-agent.txt" && break

@@ -17,9 +17,8 @@ CLEAN=$(env | cut -d= -f1 | grep -E '^(CORRAL_|HERDR_)' | sed 's/^/-u /' | tr '\
 ENVC="env $CLEAN CORRAL_HERDR_SESSION=$SESSION"
 H() { herdr --session "$SESSION" "$@" </dev/null; }
 W=$(mktemp -d /tmp/corral-cards-XXXXXX)
-WT="$W/wt"
 AGENT="$W/omo-agent"
-mkdir -p "$EV" "$WT"
+mkdir -p "$EV" "$W/app"
 WS_ID=""
 cleanup() {
   [ -n "$WS_ID" ] && H workspace close "$WS_ID" >/dev/null 2>&1
@@ -32,21 +31,28 @@ corral_test_herdr_start || exit 1
 trap cleanup EXIT
 
 C() { $ENVC "$CORRAL" --root "$W" "$@" </dev/null; }
+# A real dispatch seeds the running task through the v2 store. The fixture
+# harness only holds its private pane; it does not run a coding agent.
+git -C "$W/app" init -q -b main
+git -C "$W/app" config user.name "corral cards"
+git -C "$W/app" config user.email "cards@corral.invalid"
+git -C "$W/app" -c commit.gpgsign=false commit -q --allow-empty -m "cards fixture"
 C init >/dev/null
-C new "Witness shard cache" --ready >/dev/null
+C config set harnesses.omo.command 'read -r fixture_input < /dev/tty' || exit 1
+C config set harnesses.omo.flags generic || exit 1
+C config set profiles.omo.harness omo || exit 1
+C new "Witness shard cache" -p app --ready --profile omo >/dev/null
 C new "Bench seed cache" >/dev/null
-TASK=$(ls "$W"/.corral/tasks/T-001-*.md)
-STARTED=$(date -u -d '-10 min' +%Y-%m-%dT%H:%M:%SZ)
-MSG_AT=$(date -u -d '-5 min' +%Y-%m-%dT%H:%M:%S.000Z)
-sed -i 's/^  status: ready$/  status: running/' "$TASK"
-awk -v wt="$WT" -v started="$STARTED" '
-  /^---$/ && seen { print "  runs:\n  - id: R1\n    agent: omo\n    harness: omo\n    worktree: " wt "\n    branch: corral/T-001\n    base: main\n    base_sha: \"0\"\n    started: " started "\n    agent_state: working\n    seen_working: true\n    usage:\n      input: 10\n      output: 5\n      cache_read: 0\n      cache_write: 0\n      reported_usd: 1.5\n      cost_usd: 1.5" }
-  /^---$/ { seen++ }
-  { print }' "$TASK" > "$TASK.new" && mv "$TASK.new" "$TASK"
+C dispatch T-001 --profile omo >/dev/null || exit 1
+RUN=$(C show T-001 --json) || exit 1
+WT=$(jq -er '.runs[-1].worktree' <<<"$RUN") || exit 1
+STARTED=$(jq -er '.runs[-1].started' <<<"$RUN") || exit 1
+WS_ID=$(jq -er '.runs[-1].herdr.workspace_id' <<<"$RUN") || exit 1
 ENC=$(printf '%s' "${WT#/}" | tr '/' '-')
 mkdir -p "$AGENT/sessions/--$ENC--"
-printf '{"type":"session","cwd":"%s","timestamp":"%s","id":"s1"}\n{"type":"message","timestamp":"%s","id":"m1","message":{"role":"assistant","usage":{"input":10,"output":5,"cost":{"total":4.5}}}}\n' \
-  "$WT" "$STARTED" "$MSG_AT" > "$AGENT/sessions/--$ENC--/s.jsonl"
+TRANSCRIPT="$AGENT/sessions/--$ENC--/s.jsonl"
+printf '{"type":"session","cwd":"%s","timestamp":"%s","id":"s1"}\n{"type":"message","timestamp":"%s","id":"m1","message":{"role":"assistant","usage":{"input":10,"output":5,"cost":{"total":1.5}}}}\n' \
+  "$WT" "$STARTED" "$STARTED" > "$TRANSCRIPT"
 sed -i "s|^\\[sync\\]\$|[sync]\nomo_agent_dir = \"$AGENT\"|" "$W/.corral/corral.toml"
 printf '\n[board.card]\ncolumn_cost = true\n' >> "$W/.corral/corral.toml"
 C list --columns id,status,cost,profile,title > "$EV/tui-cards-list-columns.txt"
@@ -110,8 +116,11 @@ wait_for '^[0-9]+ [0-9]+$'
 SIZE=$(screen | grep -E '^[0-9]+ [0-9]+$' | head -1)
 H pane run "$PANE" "clear; $ENVC $CORRAL --root $W board"
 wait_for 'welcome to corral' && key esc
-wait_for 'T-001' && wait_for '\$1\.50|\$4\.50'
+wait_for 'T-001' && wait_for '\$1\.50'
 cap 1-board-first-paint
+# Grow the real transcript only after the cached first paint was observed.
+printf '{"type":"message","timestamp":"%s","id":"m2","message":{"role":"assistant","usage":{"input":10,"output":5,"cost":{"total":3.0}}}}\n' \
+  "$STARTED" >> "$TRANSCRIPT"
 wait_for '\$4\.50' 30 && cap 2-board-live-cost-from-transcript
 
 key ','; key 7
