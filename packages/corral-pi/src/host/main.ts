@@ -39,7 +39,8 @@ async function main(): Promise<void> {
   else checkRuntime(config.assets, compat);
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
-  const send = modules.auth.transport?.(authContext(provider)) ?? globalThis.fetch.bind(globalThis);
+  const rawFetch = globalThis.fetch.bind(globalThis);
+  const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined;
   if (PROVIDERS[provider].auth === "aws-profile") {
@@ -55,7 +56,8 @@ async function main(): Promise<void> {
     rules = hostRules(provider, bedrockRoute(config.aws, model, await resolver.profile()));
     aws = { binding: config.aws, resolver };
   }
-  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider, rules);
+  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider, rules,
+    config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined);
   if (aws) {
     const { installSocketTripwire } = await import("./smithy.ts");
     installSocketTripwire((destination) => network.refuse?.(destination) ?? new NetworkRefused(destination));

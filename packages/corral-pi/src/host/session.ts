@@ -29,6 +29,7 @@ import type { UiMode } from "./config.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
+import { webTools } from "../extensions/web/index.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -217,11 +218,17 @@ export class HostSession {
     };
     const role = options.modules.role;
     const specs = role.tools(this.roleContext);
-    this.localTools = role.localTools?.(this.roleContext) ?? [];
-    const local = this.localTools.map((tool) => tool.name);
-    if (local.join(",") !== (role.localToolNames ?? []).join(",")) {
-      throw new Error(`module_invalid: local tools ${local.join(",")} differ from localToolNames`);
+    const roleLocal = role.localTools?.(this.roleContext) ?? [];
+    const roleNames = roleLocal.map((tool) => tool.name);
+    if (roleNames.join(",") !== (role.localToolNames ?? []).join(",")) {
+      throw new Error(`module_invalid: local tools ${roleNames.join(",")} differ from localToolNames`);
     }
+    const webEnabled = options.capabilities?.enabled.includes("web.enabled") === true;
+    if (webEnabled && (options.identity.role === "pm" || !options.network.web || !options.capabilities?.web)) {
+      throw new Error("module_invalid: web.enabled needs an eligible role and its generation-bound web transport");
+    }
+    this.localTools = [...roleLocal, ...(webEnabled && options.network.web ? webTools(options.network.web) : [])];
+    const local = this.localTools.map((tool) => tool.name);
     this.loadout = [...role.upstreamTools, ...corralToolNames(specs), ...local];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
   }

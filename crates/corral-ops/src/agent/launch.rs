@@ -781,10 +781,16 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
         "todo": bootstrap.todo,
-        "capabilities": bootstrap.capabilities.as_ref().map(|snapshot| json!({
-            "catalog": snapshot.catalog, "digest": snapshot.digest,
-            "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys().collect::<Vec<_>>(),
-        })),
+        "capabilities": bootstrap.capabilities.as_ref().map(|snapshot| {
+            let mut payload = json!({
+                "catalog": snapshot.catalog, "digest": snapshot.digest,
+                "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys().collect::<Vec<_>>(),
+            });
+            if snapshot.enabled("web.enabled") && let Some(web) = &snapshot.web {
+                payload["web"] = json!(web);
+            }
+            payload
+        }),
     });
     let bytes = serde_json::to_vec(&message)?;
     if bytes.len() > MESSAGE_MAX_BYTES {

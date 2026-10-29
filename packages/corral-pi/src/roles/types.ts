@@ -4,6 +4,7 @@
 // The Rust operation table stays the authority: a loadout is a convenience.
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import type { WebSettings } from "../extensions/web/settings.ts";
 
 export type Role = "worker" | "reviewer" | "pm";
 
@@ -52,6 +53,8 @@ export interface CapabilitySet {
   readonly digest: string;
   readonly preset: string;
   readonly enabled: readonly string[];
+  /** Resolved only when web.enabled is effective for this generation. */
+  readonly web?: WebSettings;
 }
 
 /** What a role module can see when it builds its loadout and contract. */

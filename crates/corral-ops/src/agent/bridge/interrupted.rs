@@ -16,7 +16,8 @@ const CALLS_MAX: usize = 256;
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
 const TWO_PHASE: [&str; 3] = ["gate", "capture", "reply"];
-const NO_EFFECT: [&str; 4] = ["read", "grep", "find", "ls"];
+// Web tools are defined as GET-only and never receive credentials.
+const NO_EFFECT: [&str; 6] = ["read", "grep", "find", "ls", "web_fetch", "web_search"];
 pub const MUTATING: [&str; 3] = ["edit", "write", "bash"];
 
 pub fn class_name(class: ResumeClass) -> &'static str {
@@ -313,4 +314,25 @@ pub fn update_body(receipt: &RequestReceipt, class: ResumeClass, detail: &str) -
         receipt.request_id,
         class_name(class)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_only_web_tools_are_interrupted_without_local_effects() {
+        // Given known GET-only, no-credential web tools and an unknown tool.
+        for tool in ["web_fetch", "web_search"] {
+            // When classifying their unmatched calls, then retry needs no effect reconciliation.
+            assert_eq!(
+                classify_upstream(tool, Some("saved.diff")),
+                (ResumeClass::InterruptedNoEffect, None)
+            );
+        }
+        assert_eq!(
+            classify_upstream("web_post", None).0,
+            ResumeClass::OutcomeUnknown
+        );
+    }
 }

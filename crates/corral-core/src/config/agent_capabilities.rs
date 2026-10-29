@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::agent::{
     AgentRole, CATALOG, CapabilitySnapshot, CapabilitySource, CapabilityState, SnapshotPreset,
+    WebSettings,
 };
 
 /// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
@@ -89,22 +90,48 @@ impl Preset {
     }
 }
 
-/// `[agent.capabilities.<role>]`: catalog key to boolean override.
+/// `[agent.capabilities.<role>.web]`: optional preset override and GET-only web policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RoleCapabilities(BTreeMap<String, bool>);
+#[serde(default, deny_unknown_fields)]
+pub struct WebCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub settings: WebSettings,
+}
+
+/// `[agent.capabilities.<role>]`: boolean overrides plus compound web settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web: Option<WebCapabilities>,
+    #[serde(flatten)]
+    overrides: BTreeMap<String, bool>,
+}
 
 impl RoleCapabilities {
     pub fn get(&self, key: &str) -> Option<bool> {
-        self.0.get(key).copied()
+        if key == "web.enabled" {
+            self.web
+                .as_ref()
+                .and_then(|web| web.enabled)
+                .or_else(|| self.overrides.get(key).copied())
+        } else {
+            self.overrides.get(key).copied()
+        }
     }
 
     pub fn set(&mut self, key: &str, enabled: bool) {
-        self.0.insert(key.to_owned(), enabled);
+        if key == "web.enabled" {
+            self.overrides.remove(key);
+            self.web.get_or_insert_default().enabled = Some(enabled);
+        } else {
+            self.overrides.insert(key.to_owned(), enabled);
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.overrides.is_empty() && self.web.is_none()
     }
 }
 
@@ -135,7 +162,19 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
     fn try_from(raw: RawCapabilities) -> Result<Self, String> {
         let config = Self(raw);
         for role in ROLES {
-            for key in config.role(role).0.keys() {
+            let settings = config.role(role);
+            if let Some(web) = &settings.web {
+                if web.enabled.is_some() && settings.overrides.contains_key("web.enabled") {
+                    return Err("web.enabled is configured both as a key and a web setting".into());
+                }
+                validate_web(&web.settings)?;
+            }
+            for key in settings
+                .overrides
+                .keys()
+                .map(String::as_str)
+                .chain(settings.web.as_ref().map(|_| "web.enabled"))
+            {
                 let def = CATALOG.iter().find(|def| def.key == key).ok_or_else(|| {
                     let known: Vec<&str> = CATALOG.iter().map(|def| def.key).collect();
                     format!(
@@ -236,12 +275,50 @@ impl AgentCapabilities {
                 Some((def.key.to_owned(), state))
             })
             .collect();
-        CapabilitySnapshot::new(role, self.0.preset.snapshot(), features)
+        let web = overrides
+            .web
+            .as_ref()
+            .map_or_else(WebSettings::default, |web| web.settings.clone());
+        CapabilitySnapshot::with_web(role, self.0.preset.snapshot(), features, Some(web))
     }
 
     pub fn todo(&self, role: AgentRole) -> bool {
         self.resolve(role, None).enabled("todo")
     }
+}
+
+fn validate_web(web: &WebSettings) -> Result<(), String> {
+    if web.max_bytes == 0 || web.max_bytes > 9_007_199_254_740_991 {
+        return Err("web.max_bytes must be a positive JavaScript safe integer".into());
+    }
+    if web.timeout_ms == 0 || web.timeout_ms > 2_147_483_647 {
+        return Err("web.timeout_ms must be between 1 and 2147483647".into());
+    }
+    if web.max_redirects > 10 {
+        return Err("web.max_redirects must be between 0 and 10".into());
+    }
+    if let Some(url) = &web.searxng_url {
+        let endpoint = regex::Regex::new(
+            r"^https?://([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(?::([0-9]+))?(?:[/?][^\s#\\]*)?$",
+        ).map_err(|error| format!("compiling web endpoint pattern: {error}"))?;
+        let captures = endpoint
+            .captures(url)
+            .ok_or("web.searxng_url must be an HTTP(S) endpoint without userinfo or fragments")?;
+        if let Some(port) = captures.get(2)
+            && port.as_str().parse::<u16>().is_err()
+        {
+            return Err("web.searxng_url has an invalid port".into());
+        }
+        if let Some(host) = captures.get(1)
+            && host.as_str().starts_with('[')
+            && host.as_str()[1..host.as_str().len() - 1]
+                .parse::<std::net::Ipv6Addr>()
+                .is_err()
+        {
+            return Err("web.searxng_url has an invalid IPv6 host".into());
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -329,8 +406,7 @@ mod tests {
         assert!(
             standard
                 .resolve(AgentRole::Reviewer, None)
-                .features
-                .is_empty()
+                .enabled("web.enabled")
         );
         // And the round trip through TOML preserves the overrides.
         let text = toml::to_string(&overridden).unwrap();
@@ -390,5 +466,158 @@ mod tests {
             }]
         );
         assert!(current.transition_from(4, &current).is_none());
+    }
+
+    #[test]
+    fn web_presets_overrides_and_role_ceilings_share_the_catalog() {
+        // Given every preset and role.
+        for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
+            let mut config = AgentCapabilities::default();
+            config.set_preset(preset);
+            for role in [
+                AgentRole::Worker,
+                AgentRole::Reviewer,
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+            ] {
+                let snapshot = config.resolve(role, None);
+                assert_eq!(snapshot.enabled("web.enabled"), preset != Preset::Strict);
+                assert_eq!(
+                    snapshot.web,
+                    (preset != Preset::Strict).then(WebSettings::default)
+                );
+                // When web overrides the preset through the existing setter.
+                config
+                    .set(role, "web.enabled", preset == Preset::Strict)
+                    .unwrap();
+                // Then the override is honored without changing the role ceiling.
+                assert_eq!(
+                    config.resolve(role, None).enabled("web.enabled"),
+                    preset == Preset::Strict
+                );
+            }
+            assert!(config.set(AgentRole::Pm, "web.enabled", true).is_err());
+            assert!(config.resolve(AgentRole::Pm, None).web.is_none());
+        }
+        assert!(toml::from_str::<AgentCapabilities>("[pm.web]\nhosts = ['*']").is_err());
+    }
+
+    #[test]
+    fn compound_web_config_round_trips_with_todo_overrides_and_endpoint() {
+        // Given a strict preset with independent todo and compound web configuration.
+        let text = "preset = 'strict'\n[worker]\ntodo = true\n[worker.web]\n\
+                    enabled = true\nhosts = ['docs.example.org']\n\
+                    searxng_url = 'http://localhost:8080/search'";
+        // When parsed and serialized through the public configuration.
+        let config: AgentCapabilities = toml::from_str(text).unwrap();
+        let encoded = toml::to_string(&config).unwrap();
+        // Then both forms preserve overrides, policy defaults, and the localhost endpoint.
+        assert_eq!(
+            toml::from_str::<AgentCapabilities>(&encoded).unwrap(),
+            config
+        );
+        let snapshot = config.resolve(AgentRole::Worker, None);
+        assert!(snapshot.enabled("todo") && snapshot.enabled("web.enabled"));
+        let web = snapshot.web.unwrap();
+        assert_eq!(web.hosts, ["docs.example.org"]);
+        assert_eq!(web.max_bytes, 1_048_576);
+        assert_eq!(web.timeout_ms, 15_000);
+        assert_eq!(web.max_redirects, 5);
+        assert_eq!(
+            web.searxng_url.as_deref(),
+            Some("http://localhost:8080/search")
+        );
+    }
+
+    #[test]
+    fn web_config_rejects_invalid_limits_and_endpoints() {
+        // Given invalid policy values at the parsing boundary.
+        for value in [
+            "max_bytes = 0",
+            "max_bytes = 9007199254740992",
+            "timeout_ms = 0",
+            "timeout_ms = 2147483648",
+            "max_redirects = -1",
+            "max_redirects = 11",
+            "searxng_url = 'ftp://localhost/search'",
+            "searxng_url = 'https://user:pass@example.org/search'",
+            "searxng_url = 'https://example.org/search#fragment'",
+            "searxng_url = 'http://localhost:99999'",
+            "unknown = true",
+        ] {
+            // When a compound configuration is parsed, then invalid settings are refused.
+            assert!(
+                toml::from_str::<AgentCapabilities>(&format!("[worker.web]\n{value}")).is_err(),
+                "{value}"
+            );
+        }
+        for url in [
+            "http://localhost:8080",
+            "https://search.example.org/search",
+            "http://[::1]:8080/search",
+        ] {
+            assert!(
+                toml::from_str::<AgentCapabilities>(&format!(
+                    "[worker.web]\nsearxng_url = '{url}'"
+                ))
+                .is_ok(),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_and_endpoint_settings_each_change_the_snapshot_digest() {
+        // Given a standard worker policy and independent host and endpoint changes.
+        let original = AgentCapabilities::default().resolve(AgentRole::Worker, None);
+        for setting in [
+            "hosts = ['docs.example.org']",
+            "searxng_url = 'http://localhost:8080'",
+        ] {
+            let config: AgentCapabilities =
+                toml::from_str(&format!("[worker.web]\n{setting}")).unwrap();
+            // When resolving settings, then the deterministic digest and concrete diff change.
+            let snapshot = config.resolve(AgentRole::Worker, None);
+            assert_eq!(snapshot, config.resolve(AgentRole::Worker, None));
+            assert_ne!(snapshot.digest, original.digest);
+            let transition = snapshot.transition_from(1, &original).unwrap();
+            assert!(transition.changes.is_empty());
+            assert!(transition.web_change.is_some());
+        }
+    }
+
+    #[test]
+    fn bool_map_web_override_preserves_public_get_and_set_behavior() {
+        // Given the existing boolean-map form with a dotted catalog key.
+        let mut role: RoleCapabilities =
+            toml::from_str("\"web.enabled\" = false\ntodo = true").unwrap();
+        assert_eq!(role.get("web.enabled"), Some(false));
+        // When the public setter replaces that override.
+        role.set("web.enabled", true);
+        // Then both getters and the serialized compound form retain the effective values.
+        assert_eq!(role.get("web.enabled"), Some(true));
+        assert_eq!(role.get("todo"), Some(true));
+        let encoded = toml::to_string(&role).unwrap();
+        let decoded: RoleCapabilities = toml::from_str(&encoded).unwrap();
+        assert_eq!(decoded, role);
+    }
+
+    #[test]
+    fn web_policy_accepts_transport_boundaries_and_independent_search_endpoint() {
+        // Given the exact transport bounds and an empty fetch allowlist.
+        let text = "[worker.web]\nhosts = []\nmax_bytes = 9007199254740991\n\
+                    timeout_ms = 2147483647\nmax_redirects = 10\n\
+                    searxng_url = 'http://localhost:8080'";
+        // When policy resolves, then endpoint configuration does not broaden fetch hosts.
+        let config: AgentCapabilities = toml::from_str(text).unwrap();
+        let settings = config.resolve(AgentRole::Worker, None).web.unwrap();
+        assert!(settings.hosts.is_empty());
+        assert_eq!(settings.max_bytes, 9_007_199_254_740_991);
+        assert_eq!(settings.timeout_ms, 2_147_483_647);
+        assert_eq!(settings.max_redirects, 10);
+        assert_eq!(
+            settings.searxng_url.as_deref(),
+            Some("http://localhost:8080")
+        );
     }
 }

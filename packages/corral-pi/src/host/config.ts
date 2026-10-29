@@ -6,10 +6,11 @@ import { isAbsolute } from "node:path";
 import type { AwsBinding } from "../auth/aws.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
 import { ROLES, type CapabilitySet, type HostIdentity, type Role } from "../roles/types.ts";
+import { WebSettingsSchema } from "../extensions/web/settings.ts";
 
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
-export const HOST_CAPABILITIES: readonly string[] = ["todo"];
+export const HOST_CAPABILITIES: readonly string[] = ["todo", "web.enabled"];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
 export type UiMode = "rich" | "plain";
@@ -97,11 +98,17 @@ function capabilitySet(value: unknown): CapabilitySet | undefined {
   // Corral resolves against compat.json, so an unknown enabled key is a mismatched install.
   const unknown = enabled.find((key) => !HOST_CAPABILITIES.includes(key as string));
   if (unknown !== undefined) throw new LaunchMessageInvalid(`capability ${unknown} is not implemented by this host`);
+  const web = set.web === undefined ? undefined : WebSettingsSchema.safeParse(set.web);
+  if (web && !web.success) throw new LaunchMessageInvalid("capabilities.web settings are malformed");
+  if (enabled.includes("web.enabled") !== (web?.success === true)) {
+    throw new LaunchMessageInvalid("web.enabled requires exactly one resolved capabilities.web settings object");
+  }
   return {
     catalog: set.catalog,
     digest: field(set, "digest", /^[0-9a-f]{64}$/, 64),
     preset: field(set, "preset", /^[a-z_]+$/, 32),
     enabled: [...new Set(enabled as string[])],
+    ...(web?.success ? { web: web.data } : {}),
   };
 }
 
@@ -140,6 +147,9 @@ export function parseLaunchMessage(text: string): HostConfig {
   }
   const aws = awsBinding(message.aws);
   const capabilities = capabilitySet(message.capabilities);
+  if (role === "pm" && capabilities?.enabled.includes("web.enabled")) {
+    throw new LaunchMessageInvalid("web.enabled is not available to the pm role");
+  }
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
   return {

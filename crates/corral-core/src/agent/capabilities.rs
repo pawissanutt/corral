@@ -11,7 +11,7 @@ use super::AgentRole;
 use super::paths::sha256_hex;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 1;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 2;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -22,11 +22,51 @@ pub struct CapabilityDef {
 }
 
 /// Every capability Corral resolves. Each later member registers its own implemented key here.
-pub const CATALOG: &[CapabilityDef] = &[CapabilityDef {
-    key: "todo",
-    summary: "corral_todo progress ledger",
-    defaults: todo_defaults,
-}];
+pub const CATALOG: &[CapabilityDef] = &[
+    CapabilityDef {
+        key: "todo",
+        summary: "corral_todo progress ledger",
+        defaults: todo_defaults,
+    },
+    CapabilityDef {
+        key: "web.enabled",
+        summary: "GET-only web fetch and search",
+        defaults: web_defaults,
+    },
+];
+
+fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => {
+            Some([false, true, true])
+        }
+        AgentRole::Pm => None,
+    }
+}
+
+/// Resolved GET-only web policy, shared by snapshots and the host launch payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebSettings {
+    pub hosts: Vec<String>,
+    pub max_bytes: u64,
+    pub timeout_ms: u32,
+    pub max_redirects: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub searxng_url: Option<String>,
+}
+
+impl Default for WebSettings {
+    fn default() -> Self {
+        Self {
+            hosts: vec!["*".into()],
+            max_bytes: 1_048_576,
+            timeout_ms: 15_000,
+            max_redirects: 5,
+            searxng_url: None,
+        }
+    }
+}
 
 // The exhaustive match is the role seam: a new role (T-544's assistant) must decide each entry.
 fn todo_defaults(role: AgentRole) -> Option<[bool; 3]> {
@@ -88,6 +128,8 @@ pub struct CapabilitySnapshot {
     pub preset: SnapshotPreset,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub features: BTreeMap<String, CapabilityState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<WebSettings>,
     pub digest: String,
 }
 
@@ -97,6 +139,8 @@ struct Canonical<'a> {
     role: AgentRole,
     preset: SnapshotPreset,
     features: &'a BTreeMap<String, CapabilityState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    web: Option<&'a WebSettings>,
 }
 
 /// One setting that differs between two generations; `None` means absent from that snapshot.
@@ -116,6 +160,15 @@ pub struct CapabilityTransition {
     pub from_preset: SnapshotPreset,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<CapabilityChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_change: Option<WebSettingsChange>,
+}
+
+/// Concrete web policy difference without changing the boolean feature-change API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebSettingsChange {
+    pub from: Option<WebSettings>,
+    pub to: Option<WebSettings>,
 }
 
 impl CapabilitySnapshot {
@@ -124,11 +177,26 @@ impl CapabilitySnapshot {
         preset: SnapshotPreset,
         features: BTreeMap<String, CapabilityState>,
     ) -> Self {
+        Self::with_web(role, preset, features, None)
+    }
+
+    pub fn with_web(
+        role: AgentRole,
+        preset: SnapshotPreset,
+        features: BTreeMap<String, CapabilityState>,
+        web: Option<WebSettings>,
+    ) -> Self {
+        let web = web.filter(|_| {
+            features
+                .get("web.enabled")
+                .is_some_and(|state| state.enabled)
+        });
         let canonical = Canonical {
             catalog: CAPABILITY_CATALOG_VERSION,
             role,
             preset,
             features: &features,
+            web: web.as_ref(),
         };
         // A derived Serialize over fixed fields and a BTreeMap cannot fail.
         let bytes = serde_json::to_vec(&canonical).unwrap_or_default();
@@ -137,6 +205,7 @@ impl CapabilitySnapshot {
             role,
             preset,
             features,
+            web,
             digest: sha256_hex(&bytes),
         }
     }
@@ -213,11 +282,15 @@ impl CapabilitySnapshot {
             from_digest: previous.digest.clone(),
             from_preset: previous.preset,
             changes,
+            web_change: (self.web != previous.web).then(|| WebSettingsChange {
+                from: previous.web.clone(),
+                to: self.web.clone(),
+            }),
         })
     }
 
     pub fn summary(&self) -> String {
-        let features: Vec<String> = self
+        let mut features: Vec<String> = self
             .features
             .iter()
             .map(|(key, state)| {
@@ -233,6 +306,16 @@ impl CapabilitySnapshot {
                 }
             })
             .collect();
+        if let Some(web) = &self.web {
+            features.push(format!(
+                "web hosts={:?}, max_bytes={}, timeout_ms={}, max_redirects={}, searxng={}",
+                web.hosts,
+                web.max_bytes,
+                web.timeout_ms,
+                web.max_redirects,
+                web.searxng_url.as_deref().unwrap_or("not configured")
+            ));
+        }
         format!(
             "{} {} [{}]: {}",
             self.role.as_str(),
@@ -249,7 +332,7 @@ impl CapabilitySnapshot {
 
 impl CapabilityTransition {
     pub fn summary(&self) -> String {
-        let changes: Vec<String> = self
+        let mut changes: Vec<String> = self
             .changes
             .iter()
             .map(|change| {
@@ -266,6 +349,9 @@ impl CapabilityTransition {
                 )
             })
             .collect();
+        if let Some(change) = &self.web_change {
+            changes.push(format!("web settings {:?} -> {:?}", change.from, change.to));
+        }
         format!(
             "since generation {} ({} [{}]): {}",
             self.from_generation,
