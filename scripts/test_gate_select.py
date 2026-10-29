@@ -32,6 +32,10 @@ FILES: Final = {
                                    '#[path = "two/helper.rs"]\nmod helper;\n'),
     "crates/alpha/tests/two/helper.rs": "",
     "crates/alpha/tests/three.rs": "use alpha::*;\nfn f() { let _ = Gizmo; }\n",
+    "crates/alpha/tests/four.rs": ('#[path = "four/inner_cases.rs"]\nmod inner_cases;\n'
+                                   '#[path = "four/other.rs"]\nmod other;\n'),
+    "crates/alpha/tests/four/inner_cases.rs": "use alpha::b::inner;\n",
+    "crates/alpha/tests/four/other.rs": "",
     "crates/alpha/tests/fixtures/data.json": "{}",
     "crates/tool/Cargo.toml": '[package]\nname = "tool"\n',
     "crates/tool/src/main.rs": "mod cmd;\nfn main() {}\n",
@@ -44,6 +48,7 @@ SUITES: Final = {
     ("alpha::one", "test"): {"one_t": "matches", "slow_one": "default-filter"},
     ("alpha::two", "test"): {"two_t": "matches"},
     ("alpha::three", "test"): {"three_t": "matches"},
+    ("alpha::four", "test"): {"inner_cases::t": "matches", "other::t": "matches"},
     ("tool::bin/tool", "bin"): {"cmd::t": "matches"},
     ("tool::cli", "test"): {"cli_t": "matches"},
 }
@@ -113,16 +118,22 @@ class SelectTests(unittest.TestCase):
              "(binary_id(=alpha) and (test(/^widget::/) or test(/^widget_tests::/))) or "
              "(binary_id(=alpha::three)) or (binary_id(=alpha::two))",
              "included by widget (unit tests and 2 test targets)", 2, 2),
-            # A nested module selects only its own unit tests, and `b::inner` names `b`.
+            # A nested module selects only its own unit tests, and `b::inner` names `b`: the
+            # whole target whose root names it, only the test module that names it in another.
             ("crates/alpha/src/b/inner.rs",
              "(binary_id(=alpha) and (test(/^b::inner::/) or test(/^b::inner_tests::/))) or "
-             "(binary_id(=alpha::two))",
-             "module b::inner (its unit tests and 1 test targets)", 2, 2),
+             "(binary_id(=alpha::four) and (test(/^inner_cases::/) or "
+             "test(/^inner_cases_tests::/))) or (binary_id(=alpha::two))",
+             "module b::inner (its unit tests and 2 test targets)", 3, 3),
             # Test files select the targets whose module trees include them, via #[path].
             ("crates/alpha/tests/shared/mod.rs", "(binary_id(=alpha::one))",
              "test targets alpha::one", 2, 1),
             ("crates/alpha/tests/two/helper.rs", "(binary_id(=alpha::two))",
              "test targets alpha::two", 1, 1),
+            # A test module file selects only its own tests within the target.
+            ("crates/alpha/tests/four/other.rs",
+             "(binary_id(=alpha::four) and (test(/^other::/) or test(/^other_tests::/)))",
+             "test targets alpha::four", 1, 1),
         ]
         for changed, run_filter, note, selected, remaining in cases:
             with self.subTest(changed=changed):
@@ -150,14 +161,14 @@ class SelectTests(unittest.TestCase):
                 self.assertIn("Test selection: crate-wide", report)
                 self.assertEqual(values["run_filter"], "all()")
                 # Every listed, non-ignored test of the scope is selected; the slow one skips.
-                self.assertEqual((values["selected"], values["remaining"]), ("10", "9"))
+                self.assertEqual((values["selected"], values["remaining"]), ("12", "11"))
 
     def test_a_partial_fallback_keeps_the_module_terms_and_adds_the_crate(self) -> None:
         values, report = self.select(["crates/alpha/src/a.rs", "crates/tool/src/cmd.rs"])
         self.assertEqual(values["run_filter"],
                          f"{UNIT_A} or (binary_id(=alpha::one)) or (package(=tool))")
         self.assertIn("Test selection: module (crate-wide fallback: tool)", report)
-        self.assertIn("Tests: 10 in scope, 6 selected, 4 skipped by selection, 1 slow skipped "
+        self.assertIn("Tests: 12 in scope, 6 selected, 6 skipped by selection, 1 slow skipped "
                       "(full tier only), 0 expected failures excluded; 5 to run", report)
 
     def test_a_declaration_only_crate_root_defers_to_the_other_changed_paths(self) -> None:

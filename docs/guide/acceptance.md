@@ -114,13 +114,17 @@ lint configuration file changed). Nextest runs the declared tests, joined with
 - A changed library source file selects its module's unit tests (test names under
   its module path, or a sibling `<module>_tests` module) and every integration
   test target whose sources name that module: as `crate::module`, through a
-  crate-root re-export, or after a glob import of the crate. A module that
+  crate-root re-export, or after a glob import of the crate. Within a target,
+  only the test modules whose files name it are selected, or the whole target
+  when the naming file is its root or a fixture module that holds no tests of
+  its own. A module that
   selects no test that way is exercised through the library modules that use
   it, so their unit tests and the targets that name them are selected instead.
   A data file the library reads with `include_str!` or `include_bytes!` counts
   as the including module.
-- A changed file under `tests/` selects the test targets whose module trees
-  include it, counting files shared through `#[path]`.
+- A changed file under `tests/` selects its test module in the targets whose
+  module trees include it (counting files shared through `#[path]`), or those
+  whole targets when it is their root or a fixture module.
 - A crate root made only of `mod` and `use` declarations adds nothing when the
   crate's other changed paths select tests.
 - Anything the mapping cannot decide selects the whole crate, and the log names
