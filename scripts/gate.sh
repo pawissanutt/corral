@@ -80,72 +80,10 @@ pi_lane() {
   fi
 }
 
-# The quick tier's context logic. 'plan <context>' prints Bash assignments of the touched
-# packages, whether a workspace-wide input changed, the nextest selection and the expected
-# failures. 'exclude <nextest list JSON> <id>...' logs each expected failure that matches no
-# selected test, then prints how many selected tests remain and, on a second line, one exact
-# '- (binary_id(=..) and test(=..))' term per match.
+# The quick tier's context logic (selection by touched module, expected failures, counts)
+# lives in scripts/gate_select.py; its docstring states the selection rules.
 quick_helper() {
-  python3 - "$@" <<'PY'
-import json, shlex, sys, tomllib
-from pathlib import Path
-
-def package(directory):
-    manifest = directory / "Cargo.toml"
-    if not manifest.is_file():
-        return None
-    return tomllib.loads(manifest.read_text()).get("package", {}).get("name")
-
-def plan(path):
-    context = json.loads(Path(path).read_text())
-    if context.get("schema_version") != 1:
-        sys.exit(f"unsupported gate context schema {context.get('schema_version')!r}")
-    workspace_inputs = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml",
-                        "rustfmt.toml", ".rustfmt.toml", "clippy.toml", ".clippy.toml"}
-    packages, workspace = [], False
-    for changed in context["changed_paths"]:
-        if changed in workspace_inputs or changed.startswith(".cargo/"):
-            workspace = True
-            continue
-        name = next(filter(None, map(package, Path(changed).parents)), None)
-        if name is not None and name not in packages:
-            packages.append(name)
-    tests = context["tests"]
-    selection = " or ".join(f"({test})" for test in tests) if tests else "all()"
-    print(f"packages=({' '.join(map(shlex.quote, sorted(packages)))})")
-    print(f"workspace={int(workspace)}")
-    pi = any(changed.startswith("packages/corral-pi/") for changed in context["changed_paths"])
-    print(f"pi_touched={int(pi)}")
-    print(f"declared={len(tests)}")
-    print(f"selection={shlex.quote(selection)}")
-    ids = [failure["test"] for failure in context["expected_failures"]]
-    print(f"expected=({' '.join(map(shlex.quote, ids))})")
-
-def escape(value):
-    return value.replace("\\", "\\\\").replace(")", "\\)").replace(",", "\\,")
-
-def exclude(listing, ids):
-    selected = {(binary, name)
-                for binary, suite in json.loads(Path(listing).read_text())["rust-suites"].items()
-                for name, case in suite["testcases"].items()
-                if case["filter-match"]["status"] == "matches"}
-    excluded, terms = set(), []
-    for test in ids:
-        binary, name = test.split(" ", 1)
-        if (binary, name) in selected:
-            excluded.add((binary, name))
-            terms.append(f" - (binary_id(={escape(binary)}) and test(={escape(name)}))")
-        else:
-            print(f"Expected failure matches no selected test and excludes nothing: {test}",
-                  file=sys.stderr)
-    print(len(selected - excluded))
-    print("".join(terms))
-
-if sys.argv[1] == "plan":
-    plan(sys.argv[2])
-else:
-    exclude(sys.argv[2], sys.argv[3:])
-PY
+  python3 scripts/gate_select.py "$@"
 }
 
 if [[ $tier == quick ]]; then
@@ -187,26 +125,33 @@ if [[ $tier == quick ]]; then
     end_step
   fi
 
-  # Declared tests replace the touched-crate selection and may name any package.
+  # Declared tests replace the module selection and may name any package. The 'quick'
+  # nextest profile leaves out the slow group (.config/nextest.toml) unless tests are
+  # declared; the full tier runs every test.
   test_scope=("${scope[@]}")
   ((declared)) && test_scope=(--workspace)
   if ((${#test_scope[@]})); then
-    filter=$selection
-    if ((${#expected[@]})); then
-      begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest list ${test_scope[*]} -E $selection"
-      CORRAL_HERDR_SESSION=corral-test cargo nextest list "${test_scope[@]}" -E "$selection" \
-        --message-format json >"$quick_dir/list.json"
-      quick_helper exclude "$quick_dir/list.json" "${expected[@]}" >"$quick_dir/exclude.txt"
-      { read -r remaining && IFS= read -r exclusions; } <"$quick_dir/exclude.txt"
-      end_step
-      [[ -n $exclusions ]] && filter="($selection)$exclusions"
+    profile=(--profile quick)
+    list_args=("${test_scope[@]}" "${profile[@]}")
+    if ((declared)); then
+      profile+=(--ignore-default-filter)
+      list_args=("${test_scope[@]}" "${profile[@]}" -E "$selection")
     fi
-    run_args=("${test_scope[@]}")
-    [[ $filter != "all()" ]] && run_args+=(-E "$filter")
-    # Approved exclusions may cover the whole selection; nextest would call that an empty
-    # run. A selection that matched nothing to begin with still reaches nextest and fails.
-    if [[ -n ${exclusions:-} ]] && ((remaining == 0)); then
-      printf '\nSkipping cargo nextest run (every selected test is an expected failure).\n'
+    begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest list ${list_args[*]}"
+    CORRAL_HERDR_SESSION=corral-test cargo nextest list "${list_args[@]}" \
+      --message-format json >"$quick_dir/list.json"
+    quick_helper select "$CORRAL_GATE_CONTEXT" "$quick_dir/list.json" "${expected[@]}" \
+      >"$quick_dir/select.sh"
+    # shellcheck disable=SC1091
+    source "$quick_dir/select.sh"
+    end_step
+    run_args=("${test_scope[@]}" "${profile[@]}")
+    [[ $run_filter != "all()" ]] && run_args+=(-E "$run_filter")
+    # Approved exclusions or the slow group may cover the whole selection; nextest would call
+    # that an empty run. A declared selection that matched nothing still reaches nextest and
+    # fails.
+    if ((remaining == 0 && !(declared && selected == 0))); then
+      printf '\nSkipping cargo nextest run (no selected test remains to run).\n'
     else
       begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run ${run_args[*]}"
       CORRAL_HERDR_SESSION=corral-test cargo nextest run "${run_args[@]}"

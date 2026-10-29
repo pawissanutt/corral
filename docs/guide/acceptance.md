@@ -43,7 +43,8 @@ sources, Clippy, `cargo nextest run --workspace` and separate
 prints a header; the first failure reports its step and exits nonzero. All
 commands inherit null stdin. Gate identity exports are preserved, not unset
 around tests: test harnesses isolate their own subprocess environments (T-053).
-Run `python3 scripts/test_gate.py` for temporary-fixture regression checks.
+Run `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py` for
+temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
 private herdr server, and reports tests over 30 seconds without terminating them.
@@ -108,12 +109,54 @@ context file corral exports as `CORRAL_GATE_CONTEXT`. It runs `cargo fmt`, the
 800-SLOC ceiling and Clippy for the crates touched since the merge base (the
 whole workspace when `Cargo.toml`, `Cargo.lock`, `.cargo/` or a toolchain or
 lint configuration file changed). Nextest runs the declared tests, joined with
-`or`, or else the touched crates. Each expected failure that matches a selected
-test is subtracted as `(binary_id(=<id>) and test(=<name>))`, with `\`, `)` and
-`,` escaped; one that matches no test is logged and excludes nothing. When the
-expected failures cover every selected test, the run is skipped; a selection
-that matches no test at all still fails as an empty nextest run. Darwin
-checks, doctests, the work budget and the docs build are skipped.
+`or`, or else the tests of the touched modules, chosen by `scripts/gate_select.py`:
+
+- A changed library source file selects its module's unit tests (test names under
+  its module path, or a sibling `<module>_tests` module) and every integration
+  test target whose sources name that module: as `crate::module`, through a
+  crate-root re-export, or after a glob import of the crate. A module that
+  selects no test that way is exercised through the library modules that use
+  it, so their unit tests and the targets that name them are selected instead.
+  A data file the library reads with `include_str!` or `include_bytes!` counts
+  as the including module.
+- A changed file under `tests/` selects the test targets whose module trees
+  include it, counting files shared through `#[path]`.
+- A crate root made only of `mod` and `use` declarations adds nothing when the
+  crate's other changed paths select tests.
+- Anything the mapping cannot decide selects the whole crate, and the log names
+  the path and the reason: any other crate-root change, a file outside every
+  module tree, another non-Rust file, a manifest, a binary-only crate (its tests
+  drive the binary), or a selection that matches no test. A workspace-wide input
+  still selects the whole workspace.
+
+The quick tier runs nextest's `quick` profile, which leaves out the slow group
+(see below); declared tests ignore it and run as declared. Before running, the
+log prints `Test selection: <kind>` (declared tests, module, module with a
+crate-wide fallback, crate-wide or workspace) and one line counting the tests in
+scope, selected, skipped by selection, slow tests skipped, expected failures
+excluded, and the number left to run; nextest's own summary then reports what ran.
+Each expected failure that matches a selected test is subtracted as
+`(binary_id(=<id>) and test(=<name>))`, with `\`, `)` and `,` escaped; one that
+matches no test that would run is logged and excludes nothing. When nothing
+selected remains to run, the run is skipped; a declared selection that matches
+no test at all still fails as an empty nextest run. Darwin checks, doctests,
+the work budget and the docs build are skipped.
+
+The slow group is the `default-filter` of `[profile.quick]` in
+`.config/nextest.toml`: tests whose 75th-percentile duration across recent gate
+logs is at least 40 s. They run only in the full tier, so every landing on main
+and every `plan verify` still runs them. To review membership, list the current
+tests and measure the gate logs:
+
+```text
+cargo nextest list --workspace --message-format json >/tmp/tests.json
+python3 scripts/slow-tests.py --list /tmp/tests.json <workspace>/.corral/state/gates/*.log
+```
+
+It prints `enter` for a current test at p75 of 40 s or more outside the group,
+`leave` for a member below 30 s or no longer seen, and `keep` otherwise. Edit
+the filter's `binary_id(=..) & test(=..)` terms to match, and remove a term
+when its test is renamed or deleted.
 
 A tiered worker's sequence after its last commit is:
 
