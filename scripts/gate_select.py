@@ -12,12 +12,15 @@ assignments of the run filter and counts. Its report goes to stderr, which is th
 Module selection, per changed path inside a package with a library target:
 - src/<file>.rs in the library's module tree selects that module's unit tests (test names
   under its module path or a sibling `<module>_tests` module) and every integration test target whose sources name the module,
-  directly (`crate::module`), through a crate-root re-export, or after a glob import.
+  directly (`crate::module`), through a crate-root re-export, or after a glob import. Within
+  a test target only the test modules whose files name it are selected, or the whole target
+  when the naming file is its root or a fixture module that holds no tests of its own.
   A data file the library reads with include_str!/include_bytes! counts as the including
   module. A module that selects no test that way is exercised through the library modules that
   use it: their unit tests and the test targets that name them are selected instead.
 - tests/<file> that belongs to an integration test target's module tree (including files
-  shared through #[path]) selects those targets.
+  shared through #[path]) selects its test module in those targets, or the whole targets
+  when it is their root or a fixture module.
 A crate root made only of `mod` and `use` declarations adds nothing when other changed paths
 of its crate select tests. Everything else falls back to the whole crate and says why: any
 other crate root change, a file outside
@@ -213,19 +216,33 @@ class Package:
     declarations_only_root: bool
     suites: list[Suite]
     dependents: dict[str, set[str]]
-    target_files: dict[str, set[Path]]
-    target_modules: dict[str, set[str]]
+    targets: dict[str, dict[Path, tuple[str, set[str]]]]
 
     def matches(self, terms: list[tuple[str, ...]]) -> bool:
         return any(term_matches(term, suite, test) for term in terms
                    for suite in self.suites for test in suite["testcases"])
 
+    def target_terms(self, binary: str, modules: list[str]) -> list[tuple[str, ...]]:
+        """A target's test modules among the given module paths; the whole target when one
+        is its root or a fixture module that holds no tests of its own."""
+        suite = next(suite for suite in self.suites if suite["binary-id"] == binary)
+        if any(not module or not any(test.startswith(module + "::")
+                                     for test in suite["testcases"]) for module in modules):
+            return [("binary", binary)]
+        return [("module", binary, module) for module in sorted(set(modules))]
+
     def module_terms(self, modules: list[str]) -> tuple[list[tuple[str, ...]], int]:
         assert self.lib is not None
         tops = {module.split("::")[0] for module in modules}
-        users = sorted(binary for binary, used in self.target_modules.items() if tops & used)
-        return [*(("module", self.lib["binary-id"], module) for module in modules),
-                *(("binary", binary) for binary in users)], len(users)
+        terms: list[tuple[str, ...]] = [("module", self.lib["binary-id"], module)
+                                        for module in modules]
+        users = 0
+        for binary, files in sorted(self.targets.items()):
+            naming = [module for module, used in files.values() if tops & used]
+            if naming:
+                users += 1
+                terms += self.target_terms(binary, naming)
+        return terms, users
 
 
 def analyze(name: str, directory: Path, suites: list[Suite]) -> Package:
@@ -243,19 +260,17 @@ def analyze(name: str, directory: Path, suites: list[Suite]) -> Package:
                                       exported):
                 dependents.setdefault(used, set()).add(module.split("::")[0])
     ident = name.replace("-", "_")
-    files: dict[str, set[Path]] = {}
-    used_by: dict[str, set[str]] = {}
+    targets: dict[str, dict[Path, tuple[str, set[str]]]] = {}
     for suite in suites:
         if suite["kind"] != "test":
             continue
-        binary = suite["binary-id"]
         root = directory / "tests" / f"{suite['binary-name']}.rs"
-        files[binary] = set(module_tree(root)) if root.is_file() else set()
-        used_by[binary] = set()
-        for file in files[binary]:
-            used_by[binary] |= named_modules(file.read_text(errors="replace"), ident, modules,
-                                             exported)
-    return Package(lib, lib_tree, declarations_only, suites, dependents, files, used_by)
+        tree = module_tree(root) if root.is_file() else {}
+        targets[suite["binary-id"]] = {
+            file: (module, named_modules(file.read_text(errors="replace"), ident, modules,
+                                         exported))
+            for file, module in tree.items()}
+    return Package(lib, lib_tree, declarations_only, suites, dependents, targets)
 
 
 def path_terms(changed: str, directory: Path, package: Package) -> tuple[list[tuple[str, ...]], str]:
@@ -290,11 +305,12 @@ def path_terms(changed: str, directory: Path, package: Package) -> tuple[list[tu
         return terms, (f"module {module} through its {len(dependents)} dependent modules "
                        f"(their unit tests and {users} test targets)")
     if relative.parts[0] == "tests":
-        owners = sorted(binary for binary, files in package.target_files.items()
-                        if resolved in files)
+        owners = sorted(binary for binary, files in package.targets.items() if resolved in files)
         if not owners:
             return [], "not part of any test target's module tree"
-        return [("binary", binary) for binary in owners], f"test targets {', '.join(owners)}"
+        terms = [term for binary in owners
+                 for term in package.target_terms(binary, [package.targets[binary][resolved][0]])]
+        return terms, f"test targets {', '.join(owners)}"
     return [], "not a library or test module"
 
 
