@@ -142,6 +142,8 @@ export interface LoadedModules {
 /** Only the auth module, for `corral pi --bare`, which loads no role or delivery module. */
 export async function loadAuth(assetRoot: string, provider: ProviderId = "openai-codex"): Promise<AuthModule> {
   const path = "src/auth/index.ts";
+  const bundle = compiledBundle();
+  if (bundle) return checkAuth(bundle.auth, path, provider);
   if (!present(assetRoot, path)) throw new ModuleUnavailable("auth", path, "host-install");
   return checkAuth(await importDefault(assetRoot, path), path, provider);
 }

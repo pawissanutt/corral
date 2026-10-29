@@ -5,6 +5,7 @@
 //   login ...                 runs `corral agent login`'s OAuth flow (src/auth/login.ts);
 //   models --provider <id>... prints Pi's offline model catalog for harness detection
 //                             (src/auth/models.ts);
+//   bare ...                  runs `corral pi --bare` (src/host/bare.ts) on the bundled auth;
 //   anything else             runs the host (src/host/main.ts) with the bundled role, delivery and
 //                             auth modules instead of the fixed-path loader.
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -33,7 +34,7 @@ function writeInstall(dir: string): void {
   }
 }
 
-async function runHost(): Promise<void> {
+async function installBundle(): Promise<void> {
   const [{ setBundle }, worker, reviewer, pm, delivery, auth] = await Promise.all([
     import("./bundle.ts"), import("../roles/worker/index.ts"), import("../roles/reviewer/index.ts"),
     import("../roles/pm/index.ts"), import("../delivery/index.ts"), import("../auth/index.ts"),
@@ -43,6 +44,10 @@ async function runHost(): Promise<void> {
       pm: (root) => pm.pmRole(root) },
     delivery: delivery.default, auth: auth.default,
   });
+}
+
+async function runHost(): Promise<void> {
+  await installBundle();
   await import("./main.ts");
 }
 
@@ -60,6 +65,10 @@ if (command === "--version") {
   (await import("../auth/login.ts")).runLogin(process.argv);
 } else if (command === "models") {
   (await import("../auth/models.ts")).runModels(process.argv);
+} else if (command === "bare") {
+  await installBundle();
+  // The installation directory is the one this executable was installed into.
+  await (await import("./bare.ts")).bareCommand(process.argv.slice(3), dirname(process.execPath));
 } else {
   await runHost();
 }

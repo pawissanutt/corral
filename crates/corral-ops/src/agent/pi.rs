@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRunState, ContainerRef, pm_state};
 
-use super::bridge::assets::{bun_version, find_bun, read_compat, version_satisfies};
+use super::bridge::assets::{bun_version, compiled_host, find_bun, read_compat, version_satisfies};
 use super::bridge::liveness::{bound_host, gone};
 use super::hooks::pm::Overrides;
 use super::launch::Prepared;
@@ -158,8 +158,9 @@ pub struct BareArgs {
     pub effort: Option<String>,
 }
 
-/// The checked bare launch: `bun --no-env-file <assets>/src/host/bare.ts --cwd <dir> --provider
-/// <p> [--model M] [--effort E]`, run in the asset directory.
+/// The checked bare launch, run in the asset directory: `bun --no-env-file <assets>/src/host/bare.ts
+/// --cwd <dir> --provider <p> [--model M] [--effort E]`, or `<assets>/corral-pi-host bare ...` for a
+/// compiled installation, whose host bundles the auth module and checks its embedded Bun.
 pub fn bare_command(
     data_root: &Path,
     args: &BareArgs,
@@ -176,7 +177,11 @@ pub fn bare_command(
             "no pi-native asset installation; run `corral agent install`",
         )
     })?;
-    for module in [BARE_ENTRY, AUTH_MODULE] {
+    let compiled = compiled_host(&assets);
+    for module in [BARE_ENTRY, AUTH_MODULE]
+        .iter()
+        .filter(|_| compiled.is_none())
+    {
         if !assets.join(module).is_file() {
             return Err(refuse(
                 "bare_unavailable",
@@ -188,24 +193,34 @@ pub fn bare_command(
         }
     }
     let compat = read_compat(&assets)?;
-    let bun = bun.ok_or_else(|| refuse("bun_unavailable", "no executable `bun` on PATH"))?;
-    let version = bun_version(&bun)?;
-    if !version_satisfies(&version, &compat.range) {
-        return Err(refuse(
-            "bun_version_unsupported",
-            format!(
-                "bun {version} at {} is outside the GO manifest's tested range {}",
-                bun.display(),
-                compat.range
-            ),
-        ));
-    }
+    let mut command = match compiled {
+        Some(host) => {
+            let mut command = std::process::Command::new(host);
+            command.arg("bare");
+            command
+        }
+        None => {
+            let bun =
+                bun.ok_or_else(|| refuse("bun_unavailable", "no executable `bun` on PATH"))?;
+            let version = bun_version(&bun)?;
+            if !version_satisfies(&version, &compat.range) {
+                return Err(refuse(
+                    "bun_version_unsupported",
+                    format!(
+                        "bun {version} at {} is outside the GO manifest's tested range {}",
+                        bun.display(),
+                        compat.range
+                    ),
+                ));
+            }
+            let mut command = std::process::Command::new(&bun);
+            command.arg("--no-env-file").arg(assets.join(BARE_ENTRY));
+            command
+        }
+    };
     super::hooks::preflight::credential(data_root, Some(provider.vendor))?;
     let cwd = std::path::absolute(cwd).with_context(|| format!("resolving {}", cwd.display()))?;
-    let mut command = std::process::Command::new(&bun);
     command
-        .arg("--no-env-file")
-        .arg(assets.join(BARE_ENTRY))
         .arg("--cwd")
         .arg(cwd)
         .args(["--provider", provider.id]);

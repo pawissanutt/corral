@@ -287,3 +287,63 @@ fn bare_refuses_without_an_installation_or_with_an_unknown_provider() {
     assert_eq!(code(&error), Some("usage_error"), "{error}");
     assert!(!data.path().join(".corral").exists());
 }
+
+#[test]
+fn bare_runs_a_compiled_installation_without_bun_or_source_modules() {
+    use crate::agent::bridge::assets::HOST_BINARY;
+    use std::os::unix::fs::PermissionsExt;
+    // Given a compiled host installed as the managed installation, and a stored Codex login.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("data");
+    let release = tmp.path().join("release");
+    std::fs::create_dir_all(&release).unwrap();
+    let compat = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/corral-pi/compat.json");
+    let host = release.join(HOST_BINARY);
+    std::fs::write(
+        &host,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n--version) echo 'corral-pi-host pi 1.3.0 bun 1.4.2' ;;\n\
+             --write-install) cp '{}' \"$2/compat.json\" ;;\n*) exit 9 ;;\nesac\n",
+            compat.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::agent::install::install_compiled(&host, &root).unwrap();
+    let auth = root.join("auth");
+    std::fs::create_dir_all(&auth).unwrap();
+    std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(auth.join("openai-codex.json"), "{}").unwrap();
+    std::fs::set_permissions(
+        auth.join("openai-codex.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let assets = crate::agent::install::installed_in(&root).unwrap().unwrap();
+    assert!(!assets.join(BARE_ENTRY).exists() && !assets.join(AUTH_MODULE).exists());
+    // When bare mode prepares its launch with no Bun on PATH.
+    let args = BareArgs {
+        model: Some("gpt-6.1-sol".into()),
+        provider: None,
+        effort: None,
+    };
+    let command = bare_command(&root, &args, tmp.path(), None).unwrap();
+    // Then it runs the installed compiled host's bare mode.
+    assert_eq!(Path::new(command.get_program()), assets.join(HOST_BINARY));
+    let argv: Vec<_> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let cwd = tmp.path().display().to_string();
+    let expected = [
+        "bare",
+        "--cwd",
+        &cwd,
+        "--provider",
+        "openai-codex",
+        "--model",
+        "gpt-6.1-sol",
+    ];
+    assert_eq!(argv, expected);
+    assert_eq!(command.get_current_dir(), Some(assets.as_path()));
+}
