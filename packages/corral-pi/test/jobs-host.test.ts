@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -85,7 +86,7 @@ test("background_shell gives only the worker job tools, and the monitor runs onl
       await ended;
       await host.drained();
       const exited = nextEvent(events, (event) => event.kind === "job_exited");
-      writeFileSync(gate, "go\n");
+      await writeFile(gate, "go\n");
       await exited;
       // Then the nested attempt never reached corral, the direct monitor carried its tool-call request ID, and
       // the job was recorded before and after it ran.

@@ -5,6 +5,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
@@ -180,7 +181,7 @@ test("a worker starts, peeks, kills and monitors jobs; one wake answers the exit
   // When the barrier is released, the job exits and a fresh corral delivers the wake:
   transport.script([{ text: "BUILD_DONE" }]);
   const exited = nextEvent(events, (event) => event.kind === "job_exited" && event.job === built.id, 60_000);
-  writeFileSync(gate, "go\n");
+  await writeFile(gate, "go\n");
   await exited;
   const woken = turnEnded(2);
   await cliAsync("sync");

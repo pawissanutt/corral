@@ -69,13 +69,15 @@ containers too.
 
 `JobRecord` holds `id`, the owning `generation`, `command` (≤ 4 KiB), `state`
 (`prepared`, `running`, `exited`, `reaped`, `lost`), the process-group leader `pid` and its kernel
-`start_time`, timestamps, `exit_code`/`signal`, a reaper `detail` and ≤ 16 `monitors`. Each
+`start_time`, timestamps, `exit_code`/`signal`, a reaper `detail`, `group_clear` (the whole
+process group is verified gone, set by the host's exit report or the reaper) and ≤ 16 `monitors`. Each
 `JobMonitor` names its run wait (`wait`), `on` (`exit` or `line`), the line `pattern` and the
 registering `request_id`. The monitor's wait is an ordinary `Run.obligations` wait with a
 `job:<id>` channel handle and a deadline. Its wake subscription commits in the same
 transaction, and a `-job` resume receipt settles it once. Output files under the generation
-runtime directory are caches; these records are the recovery evidence. A live job of a fenced
-or superseded generation, or of an ended run, keeps the container in sync until it is reaped.
+runtime directory are caches; these records are the recovery evidence. A live job, or an exited one
+without `group_clear`, of a fenced or superseded generation or of an ended run keeps the
+container in sync until it is reaped.
 
 Workers continue to use `Run.progress`; `agent_host.todo` is not a worker shadow copy.
 The PM ledger is stored in `AgentPm.state.todo` and read through `agent::pm_state`.
