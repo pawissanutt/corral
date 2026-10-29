@@ -63,7 +63,7 @@ record. Every removal logs one `storage_reclaimed` event; a failed one logs
 
 `corral storage gc --dry-run` reports every storage class with its bytes and changes
 nothing: worktrees under each project's `.worktrees/`, registered scratch, agent
-sessions under `.corral/agent/sessions`, legacy build output under `.corral/state`,
+sessions under `.corral/agent/sessions`, `CACHEDIR.TAG` build output under the legacy `.corral/state`,
 unreferenced and stray evidence blobs, rollback archives and the fixed roots. The
 totals separate bytes reclaimed, compressed into blobs, moved outside `.corral`,
 legacy files awaiting the migration's finalize step, rollback archives, fixed roots and
@@ -82,6 +82,12 @@ unreferenced for longer than `blob_grace_hours` (and stray blob files as old). I
 leaves dirty, kept, open, non-terminal, unmanaged and unknown entries alone, never
 deletes a fixed class root or `.corral/rollback`, and logs one `storage_reclaimed`
 event per deletion plus one `storage_gc` summary. Add `--json` for the full report.
+
+Scratch (review, gate and planner attempts under `[storage] scratch_root`) is reclaimed only
+when its attempt is closed and promoted, its pane is gone or idle, no process has its cwd or an
+open fd under it, and every `.cargo-lock` under it can be try-locked. A failed check defers it
+with backoff from one minute up to an hour. See [storage](storage.md) for the roots and the
+containment matrix.
 
 `corral storage check` verifies database integrity and reads every live blob back to
 its hash. `corral storage backup DIR` copies the database and every live blob into

@@ -23,6 +23,15 @@ The role skills are procedures that point at `corral <verb> --help`; the run and
 prompts stay authoritative for their sessions. `scripts/check-docs.sh` (part of the gate) checks
 every `corral` command and flag shown in a role skill against the binary's `--help`.
 
+The PM skill uses database readbacks, not task-file paths or a tailed event file.
+`corral list --json` returns summaries with `current_run`; `corral show <id> --json`
+returns full history. `corral export tasks DIR` writes portable Markdown snapshots,
+and `corral export events --json` writes raw Event JSONL. `corral log <id> --all --json`
+instead emits TimelineEntry JSONL with the stored event under `event`.
+Subscriptions re-arm `corral wait --after SEQ --json --print-cursor` with the returned
+`cursor.seq`; a timeout does not advance that cursor. See [events](events.md) for
+condition runs and [storage](storage.md) for migration and retention.
+
 ## Versions and refresh
 
 Each managed skill carries the managed marker followed by a stamp line:

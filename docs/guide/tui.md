@@ -12,6 +12,12 @@ artifacts).
 
 ## Board
 
+Each board frame reads one consistent database `ReadView`: open task heads and bounded
+current-container projections, status aggregates and the visible Done page. Older runs,
+reviews, comments and artifacts are loaded only by the history/detail surfaces that show
+them; the board does not watch task Markdown or a JSONL event file. See
+[storage](storage.md#contracts-for-contributors) for the head and child-row APIs.
+
 Columns: **Backlog**, **Ready**, **Running** (with `n/limit` slots), **Needs me**, **Review** and **Done**.
 Preferences selects visible columns and WIP display. `D` temporarily toggles Done, which shows
 the newest finished tasks (within `[ui] done_window`, at most `done_max`) with
@@ -155,7 +161,7 @@ or click a profile; Enter/**Save** persists the task pin). Use `v` or **Set revi
 to select a profile, `pm`, `cross-vendor`, `none`, or **inherit** with Up/Down or a click,
 then Enter/**Save**. **inherit**, `c`, or **Clear reviewer** clears the task override.
 Esc cancels the picker or closes the route explanation. All saves use the operations API
-and record an event; no task files need manual editing.
+and record an event in the database; use `corral edit` for a task's editable Markdown form.
 
 **Mouse:** click a tab, a run, artifact or record row; click the selected artifact or record to preview it; the wheel
 scrolls the box under the pointer; `‹ back` is Esc.

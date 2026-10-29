@@ -6,9 +6,11 @@ description: Files and inspects work on the corral board (project management for
 
 # corral
 
-corral keeps a workspace's tasks in `.corral/` and runs each task as its own agent session in
+corral keeps a workspace's tasks in the database under `.corral/db/` and runs each task as its own agent session in
 `<project>/.worktrees/<id>` on branch `corral/<id>`. Commands work from anywhere inside the workspace;
-pass `--root <dir>` from outside it. `corral list --json` shows the configured projects' tasks.
+pass `--root <dir>` from outside it. `corral list --json` shows task summaries with `current_run`,
+not history or task-file paths. Read full records with `corral show <id> --json`, or write
+Markdown snapshots with `corral export tasks <dir>`; there is no file mirror.
 
 ## Commands
 
@@ -53,10 +55,10 @@ then follows the normal promotion, dispatch and review policy.
 ## Owner comments
 
 `corral comment` appends notes at any task status, attributed to `owner` by default or `pm`
-with `--author pm`. Comments live in the task file separately from the specification and do
+with `--author pm`. Comments are database rows separate from the specification and do
 not invalidate verification or portable checkpoints. Dispatch and reviewer prompts include
 them under "Owner comments". `--send` uses the running agent's reply path and references the
-durable task file; failed submissions can be retried with `corral reply <id> --resend`.
+durable task readback; failed submissions can be retried with `corral reply <id> --resend`.
 Use the task specification, not only a comment, to change acceptance criteria.
 
 ## Rules

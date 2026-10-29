@@ -50,17 +50,22 @@ Assumed defaults were not explicitly confirmed; revisit before building the affe
    ┌───────┴──────────────────────────────┴───────────────────┐
    │ corral binary                                            │
    │  board (TUI) · capture · artifacts · hook · CLI verbs    │
-   │  store (files + lock) · herdr client · agent adapters    │
+   │  store (facade) · herdr client · agent adapters          │
    └───────┬──────────────────────────────────────────────────┘
-           │ only write path
-      .corral/  (task files, events log, artifact snapshots)
+           │ only write path: StoreBackend (SQLite) + BlobStore
+      .corral/  (db/corral.db, blobs/sha256, lock/)
 ```
 
 - **One binary, one write path.** The board, plugin hooks, the PM agent, and task agents all
-  mutate state only through `corral <verb>`. Each mutation takes a per-task file lock and appends
-  to `.corral/events.jsonl`.
-- **Files are canonical.** The board renders from `.corral/` and layers live herdr state on top.
-  If herdr is unreachable, the board is read-only and says so.
+  mutate state only through `corral <verb>`. Each mutation is one atomic `Operation` on the
+  `StoreBackend`, committing the task change and its events together.
+- **The database is canonical.** `.corral/db/corral.db` is the only authority for every task
+  field. There is no file mirror; `corral export`, `log --json`, `show --json` and `wait` are the
+  compatibility surface. The board renders from one `ReadView` per frame and layers live herdr
+  state on top. If herdr is unreachable, the board is read-only and says so.
+- **Bounded hot paths.** Sync, board frames, watch, dispatch and admission read `TaskHead`s.
+  Budgets keep unattributed work independent of history and measure own-record, emitted and
+  declared follow-up work separately; see [storage](guide/storage.md#contracts-for-contributors).
 - **herdr client:** raw NDJSON over the Unix socket (`HERDR_SOCKET_PATH`, else the default
   session socket). Unix only for now; the CLI wrapper is the fallback if Windows ever matters.
 
@@ -72,14 +77,21 @@ Workspace ──< Project (repo) ──< Task ──< Run ──< Artifact
 
 ```
 <workspace>/.corral/
-  corral.toml            # projects, WIP limits, adapters, artifact globs
-  tasks/T-042-witness-shard-cache.md
-  events.jsonl           # append-only history of every mutation
-  artifacts/T-042/R1/<sha256-prefix>-<name>   # snapshots (gitignored by default)
-  lock/                  # per-task lock files
+  corral.toml, pins.toml # configuration
+  prompts/               # owner prompt overrides, read only
+  db/corral.db           # the authority (+ -wal, -shm), moved only as a directory
+  blobs/sha256/<2>/<62>  # content-addressed evidence, zstd
+  agent/sessions/<run>   # agent runtime sessions
+  lock/                  # process leases, migrate.lock, dispatch.lock, store gate
+  rollback/<id>/db       # databases archived by corral migrate --rollback
+  state/schema-version   # legacy fence, 4 once published
 ```
 
-Task file:
+These are fixed class roots, each with one deleter, refused when symlinked. Cache and scratch live
+under `[storage] cache_root` and `scratch_root`, validated against the containment matrix. The full
+layout, migration journal and rollback tables are in [storage](guide/storage.md).
+
+A task's fields, shown as `corral export tasks` renders them:
 
 ```markdown
 ---
@@ -112,6 +124,10 @@ artifacts:
 ## Notes
 ```
 
+An artifact's `path` is a logical reference retained in the exported task, not a file to
+read under `.corral/`. Its backend artifact row references the content-addressed blob;
+read it with `corral artifact show`.
+
 `corral.toml` (sketch):
 
 ```toml
@@ -136,11 +152,14 @@ pdf = "zathura {path}"
 html = "system"
 ```
 
-IDs are workspace-global and sequential (`T-001` and up), allocated under a lock.
+IDs are workspace-global and sequential (`T-001` and up), allocated inside the `CreateTask`
+operation. `corral edit` round-trips the task through `$EDITOR` with a spec-revision check.
 
 ### Events and task history
 
-`.corral/events.jsonl` is the append-only per-task lifecycle history. Events carry an optional
+Stored events are the append-only per-task lifecycle history, each with a strictly increasing
+`seq`. Legacy `events.jsonl` lines were imported verbatim. Identical repeats of noisy kinds fold
+into durable condition runs. Events carry an optional
 `actor`/`via` envelope: `actor` identifies the owner, PM, agent, autopilot, reviewer or system;
 `via` identifies the CLI, TUI, hook, PM surface or `run:<R-id>`. Entry points establish the
 attribution context, and scoped service overrides preserve the invoking surface. Older lines
@@ -148,8 +167,7 @@ remain readable without backfilling; the timeline falls back to legacy detail ke
 
 Store saves append an `edited` event when specification fields change, with bounded scalar
 before/after values and body line counts plus short SHA-256 hashes, never the full body.
-Runtime-only and no-op saves do not emit `edited`. Direct task-file edits bypass this history
-because there is no persistent previous task-spec observation.
+Runtime-only and no-op saves do not emit `edited`.
 
 `corral log <id> [--all] [--json]` and the task detail's Timeline tab share the same query.
 They show chronological attribution and field diffs, pair waits with their eligible resolutions,
@@ -258,32 +276,24 @@ into the terminal. Successful recovery resubmits it, and failed delivery leaves 
 The PM is a workspace coordinator, distinct from dispatched coding agents and their Run contracts.
 The installed corral skill and PM prompt share event-awareness guidance. OmO and Claude Code use
 their harness's `monitor` to subscribe to `corral wait`; omp and other harnesses run the command
-in the background with completion notification. Every one-shot wake must be re-armed using the
-emitted byte offset. Raw `tail -n0 -F .corral/events.jsonl | grep --line-buffered <pattern>` through
-`monitor` is also supported, with caller-side filtering of raw events.
+in the background with completion notification. Every one-shot wake must be re-armed from the
+emitted event seq.
 
 `corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app]`
-starts at current EOF unless `--since <RFC3339>` requests retained history or
-`--after-offset <bytes>` supplies a current-log position. Filters intersect; `--since` is inclusive
-even with an explicit offset. `--timeout 30m` bounds the wait (units `ms/s/m/h/d`), with exit 124
-on timeout and 0 for a match. `--json` preserves the raw event schema; `--print-cursor` adds
-top-level `after_offset` and `cursor: {offset, identity?, anchor?}` to JSON, or appends `cursor=<JSON>`
-to human output. The cursor's anchor is a byte array. See README for invocation examples.
-Timeout emits no output: re-arm from the previous successful `after_offset` (or `cursor.offset`),
-or retain the original `--since` timestamp until the first successful event.
-
-The bounded reader retains incomplete lines, skips malformed and oversized lines, and resets to
-zero on detected truncation or replacement. It follows the current file rather than draining
-an unlinked rotated file. An offset-only resume cannot detect replacement between processes;
-use timestamp catch-up over retained history when appropriate. Rotation is not an archive.
+starts at the newest event unless `--since <RFC3339>` requests retained history or `--after SEQ`
+resumes after an event seq. `--after-offset` is refused. Filters intersect. `--timeout 30m` bounds
+the wait (units `ms/s/m/h/d`), with exit 124 on timeout and 0 for a match. `--json` preserves the
+event schema; `--print-cursor` adds a sequence cursor to JSON, or appends `cursor=<JSON>` to human
+output. Timeout emits no output: re-arm from the previous seq. Suppressed condition repeats create
+no event and don't wake a waiter.
 
 Push is a separate opt-in: `[pm] push_events = false` by default, and `push_kinds` defaults to
 `["done", "needs_me", "stuck", "blocked", "escalated"]`. Settings General edits the toggle and a
 comma-separated kind list (empty means none); validation rejects unknown actionable kinds.
 Field-level draft merging preserves concurrent edits to other PM keys. Sync sends `[corral]`
 messages only to the remembered live PM, using normal agent-prompt delivery with its terminal
-fallback, without launching panes or targeting coding agents. A separate persisted cursor at
-`.corral/state/pm-events.json` and nonblocking sync lock serialize delivery. Disabled push or
+fallback, without launching panes or targeting coding agents. A separate persisted cursor in the
+store's `pm-events` record and a nonblocking sync lock serialize delivery. Disabled push or
 missing PM/herdr checkpoints EOF, preventing a deferred backlog. With no prior cursor, a first
 enabled sync with a live PM considers retained history; one disabled sync first skips that history.
 Wake messages confer no additional authority over dispatch, approval, or recovery.
@@ -308,7 +318,7 @@ corral artifact serve [ref | --task T-042] [--no-open] [--stop]   # loopback liv
 corral approve T-042 [--merge ff|rebase|keep] [--keep-worktree] [--keep-branch]
 corral retry T-042 [--agent omp]
 corral sync [--watch]                     # reconcile with herdr, advance the review autopilot
-corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app] [--timeout 30m] [--since <ts> | --after-offset <n>] [--json] [--print-cursor]
+corral wait [--for done,needs_me,stuck,blocked,escalated] [--task T-042] [--project app] [--timeout 30m] [--since <ts> | --after <seq>] [--json] [--print-cursor]
 corral mode [status|assist|autopilot|pause|resume]   # one workspace operating policy (see automation guide)
 corral autopilot [on|off|status]          # compatibility alias: status, workspace pause, activation guidance
 corral hook                               # herdr event hook entry (reads HERDR_PLUGIN_EVENT_JSON)
@@ -432,8 +442,10 @@ Capture, in layers:
    worktree.
 3. **Always:** the final diff (`base..HEAD`) and the done-summary.
 
-Each artifact is copied into `.corral/artifacts/<task>/<run>/`, content-hashed and size-capped;
-snapshots are gitignored by default. Viewing: markdown, logs and JSON render in the TUI, diffs in a
+Each artifact is stored once as a content-addressed blob under `.corral/blobs/sha256/` (zstd,
+size-capped) and referenced from its artifact row by a `blob:sha256:<hex>` `BlobRef`. Blob GC frees
+unreferenced bytes after `blob_grace_hours`; `corral storage backup` copies the database and every
+live blob. Viewing: markdown, logs and JSON render in the TUI, diffs in a
 diff view, and png/jpg/gif/webp images inline through ratatui-image (kitty, sixel or iTerm2 when
 the terminal answers the startup query, unicode halfblocks otherwise, which is what herdr gets).
 
@@ -762,7 +774,7 @@ herdr executable is retained across config/session reloads and never contacts a 
 `corral-test` session: dismiss the first-run tour with its **Skip tour** button, select a Ready card,
 open its detail, return, visit all original five Settings sections and the Profiles editor/model
 picker, open/cancel the dispatch sheet and its model picker, then open the operating-mode editor from
-the header and check that opening it left `corral.toml` and `state/automation.json` unchanged. The prototype scenario retains its settings edit/save/comment checks.
+the header and check that opening it left `corral.toml` and the database automation readback unchanged. The prototype scenario retains its settings edit/save/comment checks.
 Captures and the PASS receipt live under `.omo/evidence/mouse/`.
 
 ## 11. Flows

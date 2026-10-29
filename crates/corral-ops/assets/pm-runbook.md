@@ -16,7 +16,7 @@
    explicit owner action; a valid scoped Autopilot grant replaces routine repeated
    consent only for its delegated actions.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
-   event subscription; re-arm with the returned `after_offset`. Prefer task/project
+   event subscription; re-arm with `--after` and the returned `cursor.seq`. Prefer task/project
    filters and structured JSON fields to grepping event prose.
 2. Read `brief.health` first. If `sync_owned` is false, sync cannot advance this store:
    check the selected socket and original launch evidence, not live pane IDs.

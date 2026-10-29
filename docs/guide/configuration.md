@@ -37,7 +37,7 @@ corral config history --json
 corral config diff --since "2026-10-15T10:00:00Z" --json
 ```
 
-`diff` shows the last `config_changed` record in `.corral/events.jsonl` by default.
+`diff` shows the last stored `config_changed` event by default.
 With `--since`, it shows every changed record whose timestamp is at or after the supplied
 RFC3339 instant, in log order. Each record shows its timestamp, source, SHA256 hash, and
 semantic changes as `key: old -> new`. Values use JSON notation, including `null` for
@@ -52,7 +52,7 @@ message in text mode. Malformed or oversized log lines and an incomplete trailin
 ignored by the shared event reader.
 
 The board, autopilot and sync record file edits as `source = "file_edit"`; settings saves
-use `settings_ui`, and config CLI writes use `cli`. A shared observation under `.corral/state/`
+use `settings_ui`, and config CLI writes use `cli`. A shared `config-observation` store record
 deduplicates the board, its worker and independent sync processes. Comment and formatting
 changes do not emit semantic changes. Profile additions/removals appear as keys changing
 from/to `null`. Hashes identify both layers' complete content, not just the visible diff.
@@ -73,7 +73,7 @@ These commands only read recorded events; they do not reload settings or create 
 
 Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) · [projects](#projects) · [defaults](#defaults) · [harnesses](#harnesses) ·
 [profiles](#profiles) · [routing](#routing) · [automation](#automation) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
-[artifacts](#artifacts) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
+[artifacts](#artifacts) · [storage](#storage) · [pm](#pm) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
 ## limits
 
@@ -945,7 +945,34 @@ Identical contents share storage without changing artifact references.
 
 Use `corral stats --storage` for task and workspace totals, `corral artifact gc --dry-run` for proposed
 actions and bytes saved, and `corral artifact gc --yes` to apply the policy. GC is explicit; merely opening
-the board or running sync does not purge artifacts. See [artifact storage](storage.md) for commands.
+the board or running sync does not purge artifacts. See [storage](storage.md) for commands.
+
+## storage
+
+Database, blob, scratch and retention settings. Defaults come from `StorageCfg`
+(`crates/corral-core/src/storage_roots.rs`); the layout they apply to is in [storage](storage.md).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `cache_root` | `$XDG_CACHE_HOME/corral/<workspace-id>/cache` | Rebuildable cache (for example the git memo). Safe to delete at any time. |
+| `scratch_root` | `$XDG_CACHE_HOME/corral/<workspace-id>/scratch` | Review, gate and planner scratch, reclaimed only when nothing uses it. |
+| `transcript_retention_days` | absent (keep forever) | Days after Done or Dropped before raw agent, reviewer and Pi-session transcripts are purged, unless pinned or referenced by a keep-tier artifact. Must be above 0 when set. |
+| `review_scratch_warn` | `"2GiB"` | Per-attempt scratch size that emits one `storage_scratch_warning` and one steering message. Nothing is deleted. |
+| `review_evidence_max` | `"64MiB"` | Cap on files promoted by `--evidence PATH` on `verdict`, `plan verdict` and `plan aggregate-verdict`. |
+| `blob_grace_hours` | `24` | How long an unreferenced blob survives before blob GC may delete it. Must be above 0. |
+| `view_max_age` | `120` | Seconds a read view stays valid before reads fail with `Expired`. Must be above 0. |
+
+`<workspace-id>` is the first 16 hex digits of the SHA-256 of the canonical workspace root;
+without `XDG_CACHE_HOME` the base is `$HOME/.cache`. Both roots are validated against the
+containment matrix in [storage](storage.md#containers-and-the-containment-matrix): they may sit
+inside the workspace root, `$HOME` or `/`, but never equal or overlap `.corral`, a fixed class
+root, a project, its `.worktrees` or each other. A violation names both paths and creates nothing.
+
+```toml
+[storage]
+transcript_retention_days = 30
+scratch_root = "/home/me/miti-workspace/.scratch"
+```
 
 ## pm
 
@@ -963,7 +990,7 @@ agent = "claude"
 Settings General exposes PM event push and a comma-separated PM push kinds field. Existing configs keep
 push disabled. Sync checkpoints past events while disabled or when PM/herdr is absent, so skipped events
 do not form a backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
-run one sync with push disabled first to skip it. Position persists in `.corral/state/pm-events.json`.
+run one sync with push disabled first to skip it. Position persists in the store's `pm-events` record.
 See [board events](events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
 
 ## herdr
