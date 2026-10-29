@@ -179,6 +179,7 @@ fn manual_only_owner_rule_remains_eligible_through_same_profile_retries() {
             project: vec![],
             kind: vec![],
             size: vec![],
+            difficulty: vec![],
             title_regex: None,
             body_regex: None,
             profile: "fake".into(),

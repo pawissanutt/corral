@@ -2146,21 +2146,22 @@ Arguments:
   <TITLE>...  
 
 Options:
-      --origin <ORIGIN>        Who filed this task; PMs and agents should pass their own origin [default: owner]
-      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --origin <ORIGIN>          Who filed this task; PMs and agents should pass their own origin [default: owner]
+      --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
   -p, --project <PROJECT>      
       --idea                   
       --ready                  
       --body <BODY>            
       --body-file <BODY_FILE>  
-      --profile <PROFILE>      Preferred profile for dispatch [alias: --agent]
+      --profile <PROFILE>        Preferred profile for dispatch [alias: --agent]
       --depends <DEPENDS>      
       --priority <PRIORITY>    
-      --kind <KIND>            Task category used by routing rules
-      --size <SIZE>            Estimated task size used by routing rules
-      --design                 Route the idea or task through design planning before implementation [alias: --plan-required]
-      --label <LABELS>         Task labels; owner-only excludes Ideas from automatic promotion
-  -h, --help                   Print help
+      --kind <KIND>              Task category used by routing rules
+      --size <SIZE>              Estimated work volume, independent of reasoning difficulty
+      --difficulty <DIFFICULTY>  Reasoning difficulty, independent of task size: routine, standard or hard
+      --design                  Route the idea or task through design planning before implementation [alias: --plan-required]
+      --label <LABELS>           Task labels; owner-only excludes Ideas from automatic promotion
+  -h, --help                     Print help
 ```
 
 ## `corral list`

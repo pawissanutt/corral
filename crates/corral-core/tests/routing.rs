@@ -1,4 +1,6 @@
-use corral_core::{Config, ProfileChoice, RouteSource, Status, Store, Task, TaskKind, TaskSize};
+use corral_core::{
+    Config, ProfileChoice, RouteSource, Status, Store, Task, TaskDifficulty, TaskKind, TaskSize,
+};
 
 fn fixture(rules: &str) -> (tempfile::TempDir, Config, Task) {
     let dir = tempfile::tempdir().unwrap();
@@ -280,7 +282,7 @@ fn starter_rules_can_be_enabled_as_valid_config() {
         .collect::<Vec<_>>()
         .join("\n");
     let config: Config = toml::from_str(&text).unwrap();
-    assert_eq!(config.routing.rules.len(), 9);
+    assert_eq!(config.routing.rules.len(), 11);
     assert_eq!(config.profiles.len(), 5);
     assert_eq!(config.defaults.profile.as_deref(), Some("gpt-sol"));
 
@@ -311,4 +313,113 @@ fn starter_rules_can_be_enabled_as_valid_config() {
         );
         assert!(matches!(decision.route, RouteSource::Rule { .. }));
     }
+}
+
+#[test]
+fn difficulty_routes_independently_of_size_and_preserves_pins() {
+    // Given difficulty rules before legacy size rules.
+    let (_dir, config, mut task) = fixture(
+        r#"
+[[routing.rules]]
+difficulty = "hard"
+profile = "first"
+[[routing.rules]]
+difficulty = ["routine", "standard"]
+profile = "second"
+[[routing.rules]]
+size = ["l", "xl"]
+profile = "first"
+[[routing.rules]]
+profile = "second"
+"#,
+    );
+    for (size, difficulty, expected) in [
+        (TaskSize::Xl, Some(TaskDifficulty::Routine), "second"),
+        (TaskSize::L, Some(TaskDifficulty::Standard), "second"),
+        (TaskSize::Xs, Some(TaskDifficulty::Hard), "first"),
+        (TaskSize::Xl, None, "first"),
+        (TaskSize::Xs, None, "second"),
+    ] {
+        task.size = Some(size);
+        task.difficulty = difficulty;
+        // When resolving each classification.
+        let route = config
+            .route_task(&task, &ProfileChoice::default(), |_| None)
+            .unwrap();
+        // Then reasoning, not volume, determines classified tasks; old tasks keep old routes.
+        assert_eq!(route.profile, expected, "{size}/{difficulty:?}");
+    }
+    task.difficulty = Some(TaskDifficulty::Routine);
+    task.profile = Some("first".into());
+    assert_eq!(
+        config
+            .route_task(&task, &ProfileChoice::default(), |_| None)
+            .unwrap()
+            .route,
+        RouteSource::Task
+    );
+}
+
+#[test]
+fn difficulty_round_trips_and_invalid_values_are_rejected() {
+    // Given a stored task with independently classified difficulty.
+    let (dir, _, mut task) = fixture("");
+    let store = Store::open(dir.path()).unwrap();
+    task.difficulty = Some(TaskDifficulty::Routine);
+    // When saving and reloading it.
+    store.save(&task).unwrap();
+    let saved = store.get(&task.id).unwrap();
+    // Then classification survives and malformed routing configuration is rejected.
+    assert_eq!(saved.difficulty, task.difficulty);
+    assert!(
+        toml::from_str::<Config>("[[routing.rules]]\ndifficulty = 'guess'\nprofile = 'first'")
+            .is_err()
+    );
+    for value in ["routine", "standard", "hard"] {
+        assert_eq!(value.parse::<TaskDifficulty>().unwrap().to_string(), value);
+    }
+    assert!("guess".parse::<TaskDifficulty>().is_err());
+}
+
+#[test]
+fn difficulty_changes_selection_identity_without_changing_plan_identity() {
+    // Given an unclassified task with a legacy receipt identity.
+    let (_dir, _, mut task) = fixture("");
+    let plan = corral_core::plan_contract_revision(&task).unwrap();
+    let legacy = corral_core::profile_selection_revision(&task).unwrap();
+    assert_eq!(legacy, plan);
+    // When the task receives a difficulty assessment.
+    task.difficulty = Some(TaskDifficulty::Routine);
+    let routine = corral_core::profile_selection_revision(&task).unwrap();
+    // Then the old selection is stale but the approved plan stays valid.
+    assert_ne!(routine, legacy);
+    assert_eq!(corral_core::plan_contract_revision(&task).unwrap(), plan);
+    task.difficulty = Some(TaskDifficulty::Hard);
+    assert_ne!(
+        corral_core::profile_selection_revision(&task).unwrap(),
+        routine
+    );
+}
+
+#[test]
+fn starter_does_not_spend_deep_reasoning_on_large_routine_implementation() {
+    // Given the enabled starter routes and a routine XL backend task.
+    let starter = include_str!("../src/routing-starter.toml")
+        .lines()
+        .filter_map(|line| line.strip_prefix("# "))
+        .skip_while(|line| !line.starts_with("[profiles."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (_dir, mut config, mut task) = fixture(&starter);
+    let parsed: Config = toml::from_str(&starter).unwrap();
+    config.profiles.extend(parsed.profiles);
+    task.kind = Some("backend".into());
+    task.size = Some(TaskSize::Xl);
+    task.difficulty = Some(TaskDifficulty::Routine);
+    // When routing without an explicit pin.
+    let route = config
+        .route_task(&task, &ProfileChoice::default(), |_| None)
+        .unwrap();
+    // Then the ordinary implementation preset wins over the legacy XL rule.
+    assert_eq!(route.profile, "gpt-sol");
 }

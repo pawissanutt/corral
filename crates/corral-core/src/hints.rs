@@ -4,6 +4,44 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) fn default_priority() -> String {
+    "P2".to_string()
+}
+
+/// Reasoning difficulty, independent of the amount of implementation work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskDifficulty {
+    Routine,
+    Standard,
+    Hard,
+}
+
+impl fmt::Display for TaskDifficulty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Routine => "routine",
+            Self::Standard => "standard",
+            Self::Hard => "hard",
+        })
+    }
+}
+
+impl FromStr for TaskDifficulty {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "routine" => Ok(Self::Routine),
+            "standard" => Ok(Self::Standard),
+            "hard" => Ok(Self::Hard),
+            _ => Err(format!(
+                "unknown difficulty '{s}' (routine, standard, hard)"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskKind {

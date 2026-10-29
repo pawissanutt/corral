@@ -1,6 +1,6 @@
 ---
 name: corral-submit
-description: Procedure for filing work on the corral board - search for duplicates, write a well-formed spec, classify kind and size, choose idea/backlog/ready, split into dependent tasks or import a Markdown plan. Use when asked to file, capture or split corral tasks, or when a run finds follow-up work.
+description: Procedure for filing work on the corral board - search for duplicates, write a well-formed spec, classify kind, size and difficulty, choose idea/backlog/ready, split into dependent tasks or import a Markdown plan. Use when asked to file, capture or split corral tasks, or when a run finds follow-up work.
 ---
 {{marker}}
 
@@ -37,15 +37,17 @@ One or two sentences: the outcome and why it matters. No implementation recipe u
 - Paths, symbols, docs or earlier tasks (T-123) the implementer should read first.
 
 ## Classification
-<kind>, <size>: why this kind, why this size. Name related tasks and what they own.
+<kind>, <size>, <difficulty>: why this kind, this work volume and this reasoning difficulty.
+Name related tasks and what they own.
 ```
 
 Vague goals, acceptance criteria that cannot fail, and missing paths are what make a task bounce between
 agent and owner. If you cannot write testable acceptance, file an idea instead (see status below).
 
-## 3. Kind and size
+## 3. Kind, size and difficulty
 
-Pass `--kind` and `--size`; they feed model routing, so a wrong value picks the wrong profile.
+Pass `--kind`, `--size` and assessed `--difficulty`, including when using `--idea`.
+Keep Agent: Auto; classification does not add a mandatory owner choice or require a profile pin.
 
 | Kind | Use for | Example |
 |---|---|---|
@@ -69,6 +71,21 @@ Pick the kind that carries the main risk; a bug fix is `logic` or `backend`, not
 
 Say why in the Classification section. When unsure between two sizes, pick the larger and say so.
 
+Size measures work volume, not reasoning difficulty. Assess difficulty separately:
+
+| Difficulty | Shape |
+|---|---|
+| `routine` | A known pattern or repetition with a settled approach |
+| `standard` | Bounded reasoning within understood contracts |
+| `hard` | Uncertainty, algorithmic optimization, or correctness argued from invariants |
+
+A small task can be hard; large repetitive work can be routine. Read the goal, acceptance and
+repository evidence, never classify by title keywords, kind or size alone. Omit difficulty
+when not assessed; legacy routing applies, rather than an assumed routine rating.
+Persist difficulty on the task before loading `corral selection catalog` or generating an
+Auto receipt. Revise it with `corral edit <id>`, then reload the catalog and save a fresh receipt:
+difficulty affects the selection revision independently of plan identity.
+
 ## 4. Split, import or design
 
 - **Split** when the work has independent deliverables, or a later part cannot start until an earlier one
@@ -76,7 +93,7 @@ Say why in the Classification section. When unsure between two sizes, pick the l
   Do not file a dependent task that merely says "after T-x" in prose.
 - **Import** a multi-task plan with `corral import plan.md --dry-run`, then `corral import plan.md --origin <you>`.
   The file is Markdown with YAML frontmatter: `title`, optional `project`, `ready`, and `tasks` whose entries have a
-  plan-local `key`, `title`, and optional `kind`, `size`, `priority`, `profile`, `labels`, `body`, `depends`.
+  plan-local `key`, `title`, and optional `kind`, `size`, `difficulty`, `priority`, `profile`, `labels`, `body`, `depends`.
   It creates one tracker plus dependent children, in Backlog unless `ready: true`.
 - **Design first** with `--design` when the approach is a real decision (several viable architectures, a
   contract change, unclear acceptance). The task is routed through a reviewed plan run before implementation.
@@ -97,9 +114,10 @@ Say why in the Classification section. When unsure between two sizes, pick the l
   must not claim unless the owner is the one asking. A PM files with `--origin pm`; a worker with `--origin agent`.
   Where a command takes `--author` (`corral comment`, `corral move`, `corral idea`), pass your own role too.
 - Do not pin `--profile` (alias `--agent`) without a written reason in the body, such as a harness-specific
-  capability the task needs. Otherwise leave routing to kind and size, then check the selection:
+  capability the task needs. Otherwise keep Agent: Auto, follow the shared selector procedure after
+  persisting kind, size and assessed difficulty, then check the selection:
   `corral route <id>` explains the implementer and reviewer mapping without starting a run. If it looks wrong,
-  fix the kind or size rather than overriding the profile.
+  reconsider the classification and refresh the Auto receipt rather than overriding the profile.
 - Other useful flags: `-p/--project`, `--priority`, `--label`. Add the label `owner-only` only when told to keep an Idea from automatic promotion.
 
 ## 6. Workers filing follow-ups
@@ -116,5 +134,5 @@ keeps its scope:
 
 ## 7. Verify what you filed
 
-`corral show <id> --json` confirms status, kind, size, origin and dependencies. Add missing context later with
+`corral show <id> --json` confirms status, kind, size, difficulty, origin and dependencies. Add missing context later with
 `corral comment <id> "<text>"`; change status only when the owner asks, with `corral move <id> <status>`.

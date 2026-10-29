@@ -94,6 +94,32 @@ fn receipt(catalog: &SelectionCatalog) -> AutoProfileSelection {
 }
 
 #[test]
+fn difficulty_reassessment_rejects_old_receipt_and_accepts_fresh_catalog() {
+    // Given a semantic choice made before difficulty was assessed.
+    let (_dir, store, task) = fixture();
+    let catalog = selection_catalog(&store, &task.id, ProfileRole::Implementation).unwrap();
+    let old = receipt(&catalog);
+    selection_save(&store, &old).unwrap();
+    // When the task is classified as routine independently of its size.
+    store
+        .update(&task.id, |task| {
+            task.difficulty = Some(corral_core::TaskDifficulty::Routine);
+            Ok(())
+        })
+        .unwrap();
+    // Then the old choice is rejected and a fresh catalog supplies a valid identity.
+    assert!(selection_save(&store, &old).is_err());
+    let catalog = selection_catalog(&store, &task.id, ProfileRole::Implementation).unwrap();
+    assert_eq!(
+        catalog.task.difficulty,
+        Some(corral_core::TaskDifficulty::Routine)
+    );
+    let mut fresh = receipt(&catalog);
+    fresh.id = "selection-2".into();
+    selection_save(&store, &fresh).unwrap();
+}
+
+#[test]
 fn catalog_returns_complete_custom_guidance_and_revision_identities() {
     let (_dir, store, task) = fixture();
     let before_events = std::fs::read(store.dir().join("events.jsonl")).unwrap();

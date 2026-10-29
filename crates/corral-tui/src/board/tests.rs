@@ -690,6 +690,7 @@ fn board_dispatch_routes_automatically_until_profile_is_changed() {
             project: Vec::new(),
             kind: Vec::new(),
             size: Vec::new(),
+            difficulty: Vec::new(),
             title_regex: None,
             body_regex: None,
             profile: "generic".into(),

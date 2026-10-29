@@ -821,8 +821,11 @@ pub struct Task {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<crate::TaskSize>,
+    /// Reasoning difficulty, not implementation volume; absent keeps legacy routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<crate::TaskDifficulty>,
     /// "P0".."P3", default "P2".
-    #[serde(default = "default_priority")]
+    #[serde(default = "crate::hints::default_priority")]
     pub priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
@@ -914,10 +917,6 @@ pub struct Task {
     /// Absolute path of the task file (set by the store).
     #[serde(skip)]
     pub path: PathBuf,
-}
-
-fn default_priority() -> String {
-    "P2".to_string()
 }
 
 fn is_zero(n: &u32) -> bool {

@@ -1,6 +1,6 @@
 use anyhow::bail;
 use anyhow::{Context, Result};
-use corral_core::{Origin, Status, Store, TaskKind, TaskSize};
+use corral_core::{Origin, Status, Store, TaskDifficulty, TaskKind, TaskSize};
 use corral_ops::Ctx;
 
 #[derive(clap::Args)]
@@ -44,6 +44,7 @@ pub fn new_task(
     priority: Option<String>,
     kind: Option<TaskKind>,
     size: Option<TaskSize>,
+    difficulty: Option<TaskDifficulty>,
     origin: Origin,
     design: bool,
     labels: &[String],
@@ -76,6 +77,7 @@ pub fn new_task(
             }
             t.kind = kind.map(|kind| kind.to_string());
             t.size = size;
+            t.difficulty = difficulty;
             t.design = design;
             t.labels = labels.to_vec();
             Ok(())

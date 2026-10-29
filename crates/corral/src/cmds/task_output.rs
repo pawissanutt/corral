@@ -44,6 +44,9 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
     if let Some(size) = t.size {
         println!("size:     {size}");
     }
+    if let Some(difficulty) = t.difficulty {
+        println!("difficulty: {difficulty}");
+    }
     if !t.labels.is_empty() {
         println!("labels:   {}", t.labels.join(", "));
     }
