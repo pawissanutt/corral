@@ -77,6 +77,8 @@ def external_store_writes(trace: Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--corral", default=str(Path(__file__).resolve().parents[1] / "target/debug/corral"),
+                        help="storage-v2 binary used to create the disposable sentinel")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--trace-dir", type=Path, help="Use strace to audit store writes outside temp dirs")
     args = parser.parse_args()
@@ -92,12 +94,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="corral-isolation-sentinel-") as directory:
         root = Path(directory)
         store = root / ".corral"
+        # Seed a real v2 store through its CLI, never a legacy event-file mirror.
+        seed_env = {name: value for name, value in os.environ.items()
+                    if not name.startswith(("CORRAL_", "HERDR_"))}
+        subprocess.run([args.corral, "--root", str(root), "init"],
+                       env=seed_env, stdin=subprocess.DEVNULL, check=True)
+        subprocess.run([args.corral, "--root", str(root), "new", "Isolation sentinel", "--origin", "agent"],
+                       env=seed_env, stdin=subprocess.DEVNULL, check=True)
         gates = store / "state/gates"
         gates.mkdir(parents=True)
-        (store / "corral.toml").write_text("[review]\nautopilot = false\n")
-        (store / "events.jsonl").write_text(
-            '{"ts":"2026-10-15T00:00:00Z","task":null,"kind":"sentinel","detail":{}}\n'
-        )
         (gates / "sentinel.log").write_text("sentinel log: untouched\n")
         (gates / "sentinel.json").write_text('{"result":"running","attempt":"sentinel"}\n')
         before = snapshot(store)

@@ -139,8 +139,9 @@ wait_state idle done || fail "agent never reported idle"
 run "$CORRAL" --root "$W" sync
 [ "$(field .status)" = running ] || fail "idle moved the card to $(field .status)"
 [ "$(field '.runs[-1].idle_no_report')" = true ] || fail "idle_no_report not set"
-NEEDS=$(grep -c '"kind":"needs_me"' "$W/.corral/events.jsonl" || true)
-IDLE=$(grep -c '"kind":"idle_no_report"' "$W/.corral/events.jsonl" || true)
+EVENTS=$("$CORRAL" --root "$W" export events --json)
+NEEDS=$(jq -s '[.[] | select(.kind == "needs_me")] | length' <<<"$EVENTS")
+IDLE=$(jq -s '[.[] | select(.kind == "idle_no_report")] | length' <<<"$EVENTS")
 log "needs_me events=$NEEDS idle_no_report events=$IDLE"
 [ "$NEEDS" = 0 ] || fail "idle produced a needs_me event"
 [ "$IDLE" = 1 ] || fail "expected one idle_no_report event, got $IDLE"
@@ -180,10 +181,10 @@ for k in report diff summary; do
   grep -qw "$k" <<<"${KINDS//,/ }" || fail "artifact kind $k missing"
 done
 while read -r p; do
-  [ -f "$W/.corral/$p" ] || fail "snapshot $p missing"
-  log "exists: $W/.corral/$p"
+  "$CORRAL" --root "$W" artifact show "$p" --raw >/dev/null || fail "snapshot $p unreadable"
+  log "readable: $p"
 done < <(field '.artifacts[].path')
-run ls -la "$W/.corral/artifacts/$T/R1/"
+run "$CORRAL" --root "$W" artifact list --task "$T" --json
 log "summary: $(field '.runs[-1].summary')"
 pass "report, diff, summary snapshots present"
 
@@ -278,13 +279,15 @@ grep -q "$T2: fake agent autopilot change" <<<"$MAINLOG" || fail "$T2 commit not
 [ "$(tfield '.runs[-1].autopilot.stage')" = done ] || fail "autopilot stage is not done"
 [ "$(tfield '.runs[-1].autopilot.sha')" = "$(git -C "$W/app" rev-parse main)" ] || fail "landed sha is not main"
 [ "$(tfield '.runs[-1].review.verdict')" = approve ] || fail "no approve verdict"
-STAGES=$(jq -r --arg t "$T2" 'select(.task == $t and .kind == "autopilot") | .detail.to' "$W/.corral/events.jsonl" | paste -sd, -)
+EVENTS=$("$CORRAL" --root "$W" export events --json)
+STAGES=$(jq -r --arg t "$T2" 'select(.task == $t and .kind == "autopilot") | .detail.to' <<<"$EVENTS" | paste -sd, -)
 log "autopilot transitions: $STAGES"
 [ "$STAGES" = "gating,reviewing,landing,done" ] || fail "unexpected transitions $STAGES"
 RECORD=$(tfield '.artifacts[] | select(.title == "Acceptance record") | .path')
-[ -n "$RECORD" ] && [ -f "$W/.corral/$RECORD" ] || fail "acceptance record artifact missing"
-run cat "$W/.corral/$RECORD"
-grep -q "approve by fake-rev" "$W/.corral/$RECORD" || fail "acceptance record lacks the verdict"
+[ -n "$RECORD" ] || fail "acceptance record artifact missing"
+RECORD_TEXT=$("$CORRAL" --root "$W" artifact show "$RECORD" --raw) || fail "acceptance record unreadable"
+log "$RECORD_TEXT"
+grep -q "approve by fake-rev" <<<"$RECORD_TEXT" || fail "acceptance record lacks the verdict"
 pass "$T2 landed by the autopilot: gate pass, fake reviewer approve, acceptance record"
 
 step "close herdr workspace $WS2"
