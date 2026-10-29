@@ -1,4 +1,5 @@
 use super::*;
+use corral_core::Run;
 use corral_core::{Status, Store};
 
 #[test]
@@ -30,7 +31,7 @@ fn hook_intent_is_durable_before_the_landing_callback_commits() {
     .unwrap();
     // When the callback stops after preparing the independently committed Git effect.
     let result = ctx.store.update(&task.id, |task| {
-        prepare(&ctx, task, &run, &repo, "before", "after")?.unwrap();
+        prepare(&ctx, task, &run_head(&run), &repo, "before", "after")?.unwrap();
         anyhow::bail!("interrupted landing callback");
     });
     // Then restart still sees the exact intent and can reconcile Git before running hooks.
@@ -43,4 +44,9 @@ fn hook_intent_is_durable_before_the_landing_callback_commits() {
     assert!(!operations[0].landed);
     assert_eq!(operations[0].hooks[0].state, HookState::Pending);
     assert_eq!(restarted.store.get(&task.id).unwrap(), task);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

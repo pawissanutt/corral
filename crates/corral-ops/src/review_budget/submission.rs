@@ -379,8 +379,13 @@ mod fence_tests {
         fx.done(&id, "candidate.txt");
         let task = fx.ctx.store.get(&id).unwrap();
         let run = task.current_run().unwrap().clone();
-        let candidate =
-            crate::verification::capture_identity(&fx.ctx, &task, &run, "candidate").unwrap();
+        let candidate = crate::verification::capture_identity(
+            &fx.ctx,
+            &task,
+            &corral_core::RunHead::of(&run).unwrap(),
+            "candidate",
+        )
+        .unwrap();
         let pane = run.herdr.clone().unwrap();
         let mut launch =
             ReviewLaunch::reserve_origin(&fx.ctx, &id, Kind::Gate, false, Origin::Owner).unwrap();

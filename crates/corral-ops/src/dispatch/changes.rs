@@ -172,7 +172,10 @@ fn send_changes(
             &attempt,
         );
         action.candidate = Some(crate::verification::capture_identity(
-            ctx, &task, previous, &attempt,
+            ctx,
+            &task,
+            &corral_core::RunHead::of(previous)?,
+            &attempt,
         )?);
         let authorization =
             crate::operating::authorize(ctx, action, crate::operating::Origin::Automatic)?;
@@ -240,7 +243,7 @@ fn send_changes(
         })?;
         return Err(error);
     }
-    crate::watch::capture_review(ctx, &task, previous);
+    crate::watch::capture_review(ctx, &task, &corral_core::RunHead::of(previous)?);
     if let (Some(recipient), Some(message)) = (&recipient, posted) {
         let task = ctx.store.update_head(&task.id, |current| {
             if current

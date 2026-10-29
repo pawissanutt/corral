@@ -4,8 +4,8 @@
 //! any changed config, spec, verification input, environment, evidence or review route refuses.
 use anyhow::{Context, Result};
 use corral_core::{
-    CandidateIdentity, CarryMethod, EvidenceCarry, FULL_TIER, GatePromotion, GateResult, Run, Task,
-    Verdict,
+    CandidateIdentity, CarryMethod, EvidenceCarry, FULL_TIER, GatePromotion, GateResult, RunHead,
+    TaskRef, Verdict,
 };
 use serde_json::{Value, json};
 
@@ -33,7 +33,7 @@ struct Promotion {
 }
 
 /// Whether the current approval would be promoted now: a readback for PM observation.
-pub(crate) fn promotable(ctx: &Ctx, task: &Task) -> Result<bool> {
+pub(crate) fn promotable<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<bool> {
     Ok(check(ctx, task)?.is_some())
 }
 
@@ -43,11 +43,13 @@ pub(crate) fn promotable(ctx: &Ctx, task: &Task) -> Result<bool> {
 pub(crate) fn promote(ctx: &Ctx, id: &str) -> Result<bool> {
     let mut carried = None;
     ctx.store.try_update_head(id, |head| {
-        let task = &crate::reviewer::review_shell(&*head)?;
-        let Some(promotion) = check(ctx, task)? else {
+        let Some(promotion) = check(ctx, &*head)? else {
             return Ok(false);
         };
-        let run = task.current_run().context("run disappeared")?;
+        let run = head
+            .current_run_head()?
+            .context("run disappeared")?
+            .into_owned();
         let mut review = run.review.clone().context("approval disappeared")?;
         let detail = json!({"run": run.id, "method": promotion.method,
             "from_tier": promotion.from_tier, "to_tier": FULL_TIER,
@@ -84,10 +86,14 @@ pub(crate) fn promote(ctx: &Ctx, id: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn check(ctx: &Ctx, task: &Task) -> Result<Option<Promotion>> {
-    let Some(run) = task.current_run().filter(|run| !run.gate_rules.is_legacy()) else {
+fn check<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<Promotion>> {
+    let Some(run) = task
+        .current_run_head()?
+        .filter(|run| !run.gate_rules.is_legacy())
+    else {
         return Ok(None);
     };
+    let run = &*run;
     // An Approve bound to reduced-tier identity A, and the run's origin for exactly A.
     let Some(review) = run
         .review
@@ -185,10 +191,10 @@ fn check(ctx: &Ctx, task: &Task) -> Result<Option<Promotion>> {
 
 /// Same head: nothing may differ. Otherwise only corral's recorded clean replay of the approved
 /// head, with ancestry and an equal patch, may have moved head, tree and integration base.
-fn replay(
+fn replay<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     approved: &CandidateIdentity,
     rederived: &CandidateIdentity,
 ) -> Result<Option<(CarryMethod, Value)>> {

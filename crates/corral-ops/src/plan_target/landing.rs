@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::{
-    CandidateIdentity, EvidenceCarry, GateTierReceipt, Run, RunOutcome, Status, Task,
+    CandidateIdentity, EvidenceCarry, GateTierReceipt, RunHead, RunOutcome, Status, TaskRef,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,6 @@ use serde_json::json;
 
 use super::{Target, directory};
 use crate::Ctx;
-use corral_core::TaskRef as _;
 
 /// Prepared before Git mutation; retained after publication, including cleanup obligations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,10 +58,10 @@ impl LandingReceipt {
 }
 
 impl Target {
-    pub(crate) fn prepare_landing(
+    pub(crate) fn prepare_landing<T: TaskRef + ?Sized>(
         &mut self,
-        task: &Task,
-        run: &Run,
+        task: &T,
+        run: &RunHead,
         head: &str,
         strategy: &str,
         identity: Option<&CandidateIdentity>,
@@ -72,7 +71,7 @@ impl Target {
         ensure!(
             self.receipts
                 .iter()
-                .all(|receipt| receipt.task != task.id || receipt.run != run.id),
+                .all(|receipt| receipt.task != *task.id() || receipt.run != run.id),
             "task run already integrated into Plan target"
         );
         ensure!(
@@ -84,10 +83,10 @@ impl Target {
             .clone()
             .context("missing frozen Plan target")?;
         let key =
-            crate::hooks::digest(&(&self.owner, &target, &task.id, &run.id, &self.head, head))?;
+            crate::hooks::digest(&(&self.owner, &target, task.id(), &run.id, &self.head, head))?;
         self.pending = Some(LandingReceipt {
             key,
-            task: task.id.clone(),
+            task: task.id().clone(),
             run: run.id.clone(),
             branch: run.branch.clone(),
             worktree: run.worktree.clone(),
@@ -212,10 +211,12 @@ impl Target {
             )?
             .is_none()
         {
-            let task = crate::reviewer::review_shell(&task)?;
-            let run = task.current_run().context("landed run missing")?;
+            let run = &task
+                .current_run_head()?
+                .context("landed run missing")?
+                .into_owned();
             let mut warnings =
-                crate::cleanup::cleanup_report(ctx, &task, crate::cleanup::Cleanup::Task);
+                crate::cleanup::cleanup_report_head(ctx, &task, crate::cleanup::Cleanup::Task);
             let mut removed = false;
             let mut deleted = false;
             if receipt.remove_worktree && warnings.is_empty() {

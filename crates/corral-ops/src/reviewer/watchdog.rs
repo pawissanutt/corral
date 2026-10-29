@@ -131,6 +131,7 @@ pub(crate) fn reconcile_review_sampled_at(
         review.pane.as_deref(),
         pane,
     ) {
+        let run_head = corral_core::RunHead::of(run)?;
         match crate::provider_stall::advance_reviewer(
             ctx,
             id,
@@ -139,8 +140,8 @@ pub(crate) fn reconcile_review_sampled_at(
             pane_id,
             info,
             (review.reviewer != "pm")
-                .then(|| crate::availability::review_episode(id, run, &child.agent)),
-            crate::availability::review_exclusion(ctx, &task, run),
+                .then(|| crate::availability::review_episode(id, &run_head, &child.agent)),
+            crate::availability::review_exclusion(ctx, &task, &run_head),
             now,
         )? {
             // A selected fallback reviewer starts after the pane inventory is released.
@@ -202,7 +203,7 @@ pub(crate) fn reconcile_review_sampled_at(
     } else {
         None
     };
-    let notes = notes_of(ctx, id, run)?;
+    let notes = notes_of(ctx, id, &corral_core::RunHead::of(run)?)?;
     let reason = problem.map(|problem| {
         format!(
             "the reviewer ({}) {problem}; saved notes: {}",

@@ -387,6 +387,67 @@ fn grow_current(run: &mut Run, scale: usize, root: &FsPath, children: bool) {
         }));
 }
 
+/// `scale` of the acted task's current review child's own nested rows: usage, switches,
+/// applied inbox effects and observe cursors. A hot action that finishes or edits that child
+/// must not read them (review R2-1).
+pub(super) fn grow_current_child(store: &Store, id: &str, scale: usize) {
+    store
+        .update(id, |t| {
+            let Some(child) = t
+                .current_run_mut()
+                .and_then(|run| run.review_runs.last_mut())
+            else {
+                return Ok(());
+            };
+            // One model: the child's projected totals keep one size at every scale.
+            child
+                .usage
+                .get_or_insert_with(Default::default)
+                .entries
+                .extend(
+                    zero_usage(scale)
+                        .into_iter()
+                        .map(|entry| corral_core::UsageEntry {
+                            model: Some("historic".into()),
+                            ..entry
+                        }),
+                );
+            let last = child.switches.pop();
+            child
+                .switches
+                .extend((0..scale).map(|i| corral_core::ProfileSwitch {
+                    // One width: the newest switch stays in the child's row at every scale.
+                    from: format!("historic-{i:03}"),
+                    to: format!("historic-{:03}", i + 1),
+                    reason: "earlier switch".into(),
+                }));
+            child.switches.extend(last);
+            let next = child.inbox.next_seq.max(1);
+            child
+                .inbox
+                .effects_applied
+                .extend(next..next + scale as u64);
+            child.inbox.next_seq = next + scale as u64;
+            child.inbox.observe_cursors.extend((0..scale).map(|i| {
+                corral_core::inbox::SessionCursor {
+                    adapter: "historic".into(),
+                    binding: corral_core::inbox::SessionBinding {
+                        session: format!("historic-child-session-{i:03}"),
+                        endpoint: None,
+                        transcript: None,
+                    },
+                    cursor: corral_core::inbox::ObserveCursor {
+                        offset: 64,
+                        last_complete_line: 1,
+                        coverage: Default::default(),
+                    },
+                }
+            }));
+            Ok(())
+        })
+        .unwrap();
+}
+
 /// `scale` of every history family on task `id`. The acted task gets earlier coding runs only
 /// beside its own (its actions decide on whether it has run); every other task gets them always.
 pub(super) fn grow(

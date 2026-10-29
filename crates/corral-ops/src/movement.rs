@@ -395,7 +395,15 @@ fn construct(ctx: &Ctx, task: &Task, landings: &[Landing]) -> Result<Option<Noti
         .store
         .config
         .review_policy(task.project.as_deref(), task.review);
-    let mut context = IntegrationPacket::build(ctx, task, run, &policy, key, vec![], None)?;
+    let mut context = IntegrationPacket::build(
+        ctx,
+        task,
+        &corral_core::RunHead::of(run)?,
+        &policy,
+        key,
+        vec![],
+        None,
+    )?;
     let size_limits = crate::integration::effective_size_limits(ctx, task, repo, &policy)?;
     // A burst can modify then restore a path, leaving no net change in B's tree diff.
     // Retain its current size hint even when it is absent from that net path list.

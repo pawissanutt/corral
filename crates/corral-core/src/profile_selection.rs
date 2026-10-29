@@ -1,5 +1,7 @@
 //! Revision-bound selection receipts. Routing/launch integration is deliberately separate.
 use anyhow::{Context, Result, ensure};
+
+use crate::TaskFieldsRef as _;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -105,7 +107,7 @@ impl ProfileReviewSelection {
         planner: Option<crate::plan_policy::PlannerProfile<'_>>,
     ) -> Result<()> {
         ensure!(
-            &self.subject == context.subject && self.subject.task() == context.task.id,
+            &self.subject == context.subject && self.subject.task() == context.task.id(),
             "review selection names a different object/attempt"
         );
         if matches!(&self.subject, ProfileReviewSubject::Plan { .. })
@@ -119,10 +121,32 @@ impl ProfileReviewSelection {
             );
         }
         self.validate_contract(context.task)?;
-        self.validate_policy(config, context, planner)
+        self.validate_policy(config, context, planner, Some(context.task))
     }
 
-    fn validate_contract(&self, task: &Task) -> Result<()> {
+    /// [`Self::validate`] of an implementation-review selection, whose checks read only the
+    /// task's fields: an automatic launch validates it against the task's head.
+    ///
+    /// # Errors
+    /// A plan-review selection, or any check [`Self::validate`] refuses.
+    pub fn validate_implementation<T: crate::TaskFieldsRef + ?Sized>(
+        &self,
+        config: &Config,
+        context: &ReviewSelectionContext<'_, T>,
+    ) -> Result<()> {
+        ensure!(
+            matches!(self.subject, ProfileReviewSubject::Implementation { .. }),
+            "review selection is not an implementation review"
+        );
+        ensure!(
+            &self.subject == context.subject && self.subject.task() == context.task.id(),
+            "review selection names a different object/attempt"
+        );
+        self.validate_contract(context.task)?;
+        self.validate_policy(config, context, None, None)
+    }
+
+    fn validate_contract<T: crate::TaskFieldsRef + ?Sized>(&self, task: &T) -> Result<()> {
         ensure!(
             self.version == PROFILE_RECORD_VERSION
                 && self.contract.version == crate::review_contract_version(self.contract.kind),
@@ -173,16 +197,18 @@ impl ProfileReviewSelection {
         Ok(())
     }
 
-    fn validate_policy(
+    /// `plan` is the full task, which only a plan-review selection's checks read.
+    fn validate_policy<T: crate::TaskFieldsRef + ?Sized>(
         &self,
         config: &Config,
-        context: &ReviewSelectionContext<'_>,
+        context: &ReviewSelectionContext<'_, T>,
         planner: Option<crate::plan_policy::PlannerProfile<'_>>,
+        plan: Option<&Task>,
     ) -> Result<()> {
         config.check_profile_eligibility(
             &self.profile,
             self.subject.role(),
-            context.task.project.as_deref(),
+            context.task.project().as_deref(),
             false,
         )?;
         let revision = config
@@ -196,11 +222,11 @@ impl ProfileReviewSelection {
             "stale reviewer profile revision"
         );
         let policy = config.task_review_policy(context.task);
-        let source = if context.task.reviewer.is_some() {
+        let source = if context.task.reviewer().is_some() {
             PolicySource::Task
         } else {
             config
-                .review_policy_sources(context.task.project.as_deref(), context.task.review)
+                .review_policy_sources(context.task.project().as_deref(), *context.task.review())
                 .reviewer
         };
         ensure!(
@@ -218,7 +244,7 @@ impl ProfileReviewSelection {
                 );
                 return crate::plan_policy::independent_reviewer_for(
                     config,
-                    context.task,
+                    plan.context("a plan review selection needs its task")?,
                     planner,
                     &self.profile,
                 );
@@ -226,7 +252,7 @@ impl ProfileReviewSelection {
             ProfileReviewSubject::Plan { .. } => {
                 let expected = crate::plan_policy::expected_reviewer_for(
                     config,
-                    context.task,
+                    plan.context("a plan review selection needs its task")?,
                     planner,
                     context.author_vendor,
                 )?;
@@ -238,7 +264,7 @@ impl ProfileReviewSelection {
                 ensure!(self.profile == profile, "plan reviewer policy mismatch");
                 return crate::plan_policy::independent_reviewer_for(
                     config,
-                    context.task,
+                    plan.context("a plan review selection needs its task")?,
                     planner,
                     &expected,
                 );
@@ -284,8 +310,8 @@ impl ProfileReviewSelection {
     }
 }
 
-pub struct ReviewSelectionContext<'a> {
-    pub task: &'a Task,
+pub struct ReviewSelectionContext<'a, T: ?Sized = Task> {
+    pub task: &'a T,
     pub subject: &'a ProfileReviewSubject,
     pub author_vendor: Option<&'a str>,
 }
@@ -325,13 +351,17 @@ pub struct AutoProfileSelection {
 }
 
 impl AutoProfileSelection {
-    pub fn validate(&self, config: &Config, task: &Task) -> Result<()> {
+    pub fn validate<T: crate::TaskFieldsRef + ?Sized>(
+        &self,
+        config: &Config,
+        task: &T,
+    ) -> Result<()> {
         ensure!(
             self.version == PROFILE_RECORD_VERSION,
             "unsupported Auto selection version"
         );
         ensure!(
-            !self.id.trim().is_empty() && self.task == task.id,
+            !self.id.trim().is_empty() && self.task == *task.id(),
             "wrong Auto selection identity"
         );
         ensure!(
@@ -349,7 +379,7 @@ impl AutoProfileSelection {
         config.check_profile_eligibility(
             &self.profile,
             self.role,
-            task.project.as_deref(),
+            task.project().as_deref(),
             true,
         )?;
         let revision = config
@@ -367,7 +397,7 @@ impl AutoProfileSelection {
             config.check_profile_eligibility(
                 alternative,
                 self.role,
-                task.project.as_deref(),
+                task.project().as_deref(),
                 true,
             )?;
             ensure!(
@@ -385,7 +415,7 @@ impl AutoProfileSelection {
                     .context("review Auto selection lacks review contract")?;
                 ensure!(
                     review.subject.role() == self.role
-                        && review.subject.task() == task.id
+                        && review.subject.task() == task.id()
                         && review.profile == self.profile
                         && review.profile_revision == self.profile_revision,
                     "review Auto selection identity mismatch"

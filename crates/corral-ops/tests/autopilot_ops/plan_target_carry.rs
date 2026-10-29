@@ -307,7 +307,8 @@ fn interrupted_before_the_verdict_carry(
             Ok(())
         })
         .unwrap();
-    let failures = corral_ops::evidence_failures(&fx.ctx, &fx.task(), &fx.run()).unwrap();
+    let failures =
+        corral_ops::evidence_failures(&fx.ctx, &fx.task(), &run_head(&fx.run())).unwrap();
     assert!(failures.is_empty(), "{failures:?}");
     land(fx, b, ApproveStrategy::Rebase);
     fx.id = c.clone();
@@ -344,7 +345,8 @@ fn an_interrupted_verdict_carry_still_chains_the_gate_carry_through_autopilot() 
     fx.sync();
     // Then the gate carry chains from the saved receipt and the approval follows it.
     assert_chained_after_interruption(&fx, &out, &source);
-    let failures = corral_ops::evidence_failures(&fx.ctx, &fx.task(), &fx.run()).unwrap();
+    let failures =
+        corral_ops::evidence_failures(&fx.ctx, &fx.task(), &run_head(&fx.run())).unwrap();
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(ledger(&fx), before);
 }
@@ -444,7 +446,8 @@ fn carried_evidence_that_fails_refuses_the_carry_and_reports_the_failure() {
     // Then no carry happens, a new member gate runs, and the failure is reported.
     assert_regated(&fx, &out, "quick");
     fx.sync();
-    let failures = corral_ops::evidence_failures(&fx.ctx, &fx.task(), &fx.run()).unwrap();
+    let failures =
+        corral_ops::evidence_failures(&fx.ctx, &fx.task(), &run_head(&fx.run())).unwrap();
     assert!(
         failures.iter().any(|f| f.starts_with("evidence_")),
         "{failures:?}"
@@ -469,4 +472,9 @@ fn a_main_bound_replay_never_reaches_the_gate_carry() {
     let gate = fx.run().gate.unwrap();
     assert!(gate.tier.unwrap().carried.is_none());
     assert_ne!(gate.identity, receipt.identity);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

@@ -38,23 +38,6 @@ pub(super) fn finish_review_head(parent: &mut corral_core::RunHead, ended: Times
     }
 }
 
-/// Collects the usage a finished review child `child` of run `run` was owed at finish, editing
-/// only that child's rows.
-pub(super) fn collect_usage(
-    ctx: &Ctx,
-    task: &mut corral_core::TaskHeadMut,
-    run: &str,
-    child: &str,
-) -> anyhow::Result<()> {
-    task.edit_review_child(run, child, |snapshot| {
-        if snapshot.usage_pending {
-            crate::usage::collect(snapshot, &ctx.store);
-            snapshot.usage_pending = false;
-        }
-        Ok(())
-    })
-}
-
 /// End a pending review without inventing a verdict for a superseded candidate.
 pub(crate) fn supersede_review(ctx: &Ctx, parent: &mut Run, ended: Timestamp) {
     if parent.review.as_ref().is_none_or(|r| r.verdict.is_some()) {

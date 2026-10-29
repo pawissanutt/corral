@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use corral_core::{
     Config, REVIEW_ROUTE_VERSION, ResolvedProfile, ReviewCapability, ReviewContractKind,
     ReviewIndependence, ReviewRequirement, ReviewRisk, ReviewRoute, ReviewSignals,
-    ReviewSubjectKind, Reviewer, Run, RunOutcome, Task,
+    ReviewSubjectKind, Reviewer, RunHead, Task, TaskRef,
 };
 
 use crate::Ctx;
@@ -155,7 +155,7 @@ pub(crate) struct Selected {
     pub route: ReviewRoute,
 }
 
-pub(crate) fn changed_paths(run: &Run) -> Result<Vec<String>> {
+pub(crate) fn changed_paths(run: &RunHead) -> Result<Vec<String>> {
     let base = patch_base(run)?;
     Ok(corral_git::diff_stat(&run.worktree, &base)?
         .files
@@ -164,34 +164,16 @@ pub(crate) fn changed_paths(run: &Run) -> Result<Vec<String>> {
         .collect())
 }
 
-pub(crate) fn patch_base(run: &Run) -> Result<String> {
+pub(crate) fn patch_base(run: &RunHead) -> Result<String> {
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let base = corral_git::rev_sha(&run.worktree, &run.base)?;
     corral_git::merge_base(&run.worktree, &base, &head)
 }
 
-/// The superseded attempt on this candidate that consumed its one stronger-review transition.
-/// Derived from durable history, so a restarted, replaced or recovered reviewer keeps it.
-fn stronger_source(run: &Run, head: &str, exclude: Option<&str>) -> Option<String> {
-    run.review_runs
-        .iter()
-        .filter(|c| Some(c.id.as_str()) != exclude)
-        .find(|c| {
-            c.outcome == Some(RunOutcome::Superseded)
-                && c.review.as_ref().is_some_and(|r| {
-                    r.sha == head
-                        && r.route
-                            .as_deref()
-                            .is_some_and(|route| route.stronger_request.is_some())
-                })
-        })
-        .map(|c| c.id.clone())
-}
-
-pub(crate) fn implementation_signals(
+pub(crate) fn implementation_signals<T: TaskRef + ?Sized>(
     config: &Config,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     exclude: Option<&str>,
 ) -> Result<(ReviewSignals, Option<String>)> {
     let mut signals = ReviewSignals::for_task(task, ReviewSubjectKind::Implementation);
@@ -210,15 +192,15 @@ pub(crate) fn implementation_signals(
         }
     }
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
-    let escalated_from = stronger_source(run, &head, exclude);
+    let escalated_from = task.stronger_source(&run.id, &head, exclude)?;
     signals.stronger_requested = escalated_from.is_some();
     Ok((signals, escalated_from))
 }
 
-pub(crate) fn implementation_route(
+pub(crate) fn implementation_route<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     reviewer: &Reviewer,
     explicit: bool,
     vendor: Option<&str>,
@@ -355,9 +337,9 @@ struct Floor<'a> {
     receipt: Option<&'a corral_core::AutoProfileSelection>,
 }
 
-fn select(
+fn select<T: TaskRef + ?Sized>(
     config: &Config,
-    task: &Task,
+    task: &T,
     reviewer: &Reviewer,
     explicit: bool,
     author: Author<'_>,
@@ -383,7 +365,7 @@ fn select(
                 )
             })?;
             config
-                .check_profile_eligibility(profile, kind.role(), task.project.as_deref(), true)
+                .check_profile_eligibility(profile, kind.role(), task.project().as_deref(), true)
                 .with_context(|| format!("automatic {} reviewer", kind.as_str()))?;
             if !config.review_capability_ok(profile, requirement.capability) {
                 bail!(
@@ -455,10 +437,10 @@ pub(crate) fn profile_revision(config: &Config, profile: &str) -> String {
 
 /// The reviewer today's configuration selects for a recorded automatic route.
 /// Explicit and legacy policy selections are bound by the candidate's policy digest instead.
-pub(crate) fn current_selection(
+pub(crate) fn current_selection<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     route: &ReviewRoute,
     requirement: &ReviewRequirement,
     subject: Option<&corral_core::ProfileReviewSubject>,

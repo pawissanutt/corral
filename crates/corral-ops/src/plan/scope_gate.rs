@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{Config, FULL_TIER, PlanDeliveryTarget, PlanDocument, ScopeGate, Store, Task};
+use corral_core::{Config, FULL_TIER, PlanDeliveryTarget, PlanDocument, ScopeGate, Store};
 use serde::Deserialize;
 
 #[cfg(test)]
@@ -78,27 +78,31 @@ struct Binding {
 /// # Errors
 /// A [`ScopeGateError`] when a designed member's publication binding is missing or its scope
 /// digest no longer matches the accepted revision; store errors otherwise.
-pub(crate) fn resolve(store: &Store, task: &Task) -> Result<Option<MemberGate>> {
-    let Some(tracker) = store.execution_plan(task)? else {
+pub(crate) fn resolve<T: corral_core::TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+) -> Result<Option<MemberGate>> {
+    use corral_core::{TaskFieldsRef as _, TaskRef as _};
+    let Some(tracker) = store.execution_plan_ref(task)? else {
         return Ok(None);
     };
     let scope = tracker
-        .approved_scope
+        .approved_scope()
         .as_ref()
         .context("Plan scope missing")?;
-    if tracker.id == task.id || scope.delivery_target == PlanDeliveryTarget::Main {
+    if tracker.id() == task.id() || scope.delivery_target == PlanDeliveryTarget::Main {
         return Ok(None);
     }
     let member = |gate, source| {
         Ok(Some(MemberGate {
-            tracker: tracker.id.clone(),
+            tracker: tracker.id().clone(),
             gate,
             source,
         }))
     };
-    if let Some(record) = tracker.member_gates.get(&task.id) {
-        let source = format!("member-gate:{}@{}", tracker.id, record.revision);
-        return member(record.gate.clone(), source);
+    if let Some(record) = tracker.member_gate(task.id())? {
+        let source = format!("member-gate:{}@{}", tracker.id(), record.revision);
+        return member(record.gate, source);
     }
     // Imported trackers have no approved design: declared tests and expected failures come
     // only from an owner record.
@@ -107,7 +111,7 @@ pub(crate) fn resolve(store: &Store, task: &Task) -> Result<Option<MemberGate>> 
     {
         return member(gate, source);
     }
-    let policy = store.config.review_policy(task.project.as_deref(), None);
+    let policy = store.config.review_policy(task.project().as_deref(), None);
     let (tier, source) = match policy.tier_policy.plan_member {
         Some(tier) => (tier, "policy:plan_member"),
         None => (FULL_TIER.to_owned(), "default:full"),
@@ -122,30 +126,30 @@ pub(crate) fn resolve(store: &Store, task: &Task) -> Result<Option<MemberGate>> 
 
 /// The accepted scope's gate through the exact binding `<design>@<Pn>` -> member -> label,
 /// checked against the digest of the accepted revision's scope.
-fn plan_scope_gate(
+fn plan_scope_gate<T: corral_core::TaskRef + ?Sized>(
     store: &Store,
-    task: &Task,
+    task: &T,
     design: &str,
 ) -> Result<Option<(ScopeGate, String)>> {
+    use corral_core::{TaskFieldsRef as _, TaskRef as _};
     let missing = || ScopeGateError::MissingBinding {
-        member: task.id.clone(),
+        member: task.id().clone(),
         design: design.to_owned(),
     };
     let (parent, revision) = design
         .split_once('@')
         .with_context(|| format!("malformed approved design {design:?}"))?;
-    if task.plan.as_deref() != Some(design) {
+    if task.plan().as_deref() != Some(design) {
         return Err(missing().into());
     }
-    let parent = store.get(parent)?;
+    let parent = store.head(parent)?;
     let Some(plan) = parent
-        .plans
-        .iter()
-        .find(|plan| plan.id == revision && plan.approval.is_some())
+        .plan_head(revision)?
+        .filter(|plan| plan.approval.is_some())
     else {
         return Err(missing().into());
     };
-    let Some((label, digest)) = published_binding(store, &parent.id, design, &task.id)? else {
+    let Some((label, digest)) = published_binding(store, parent.id(), design, task.id())? else {
         return Err(missing().into());
     };
     let scope = plan
@@ -158,7 +162,7 @@ fn plan_scope_gate(
         .transpose()?;
     let Some(scope) = scope.filter(|_| current.as_ref() == Some(&digest)) else {
         return Err(ScopeGateError::ScopeDigestMismatch {
-            member: task.id.clone(),
+            member: task.id().clone(),
             design: design.to_owned(),
             label,
         }

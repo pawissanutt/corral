@@ -4,7 +4,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{PlanDeliveryTarget, Run, RunPlanTarget, Store, Task, TaskHead, TaskRef};
+use corral_core::{
+    PlanDeliveryTarget, Run, RunHead, RunPlanTarget, Store, Task, TaskHead, TaskRef,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
@@ -92,7 +94,10 @@ pub(crate) fn plan_head(
 
 /// The task's integration Plan as its head: its id, project, approved scope and stored
 /// contract revision are all a target needs.
-fn integration_plan(store: &Store, task: &Task) -> Result<Option<(TaskHead, String)>> {
+fn integration_plan<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+) -> Result<Option<(TaskHead, String)>> {
     let Some(plan) = store.execution_plan_ref(task)? else {
         return Ok(None);
     };
@@ -313,13 +318,17 @@ pub(crate) fn check_dispatch_target(store: &Store, task: &Task) -> Result<()> {
 }
 
 /// Validate the frozen target, never silently route a historical run to a new Plan or ref.
-pub(crate) fn validate_run(store: &Store, task: &Task, run: &Run) -> Result<Option<Target>> {
+pub(crate) fn validate_run<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    run: &RunHead,
+) -> Result<Option<Target>> {
     let current = integration_plan(store, task)?;
     match (&run.plan_target, current) {
         (None, None) => Ok(None),
         (Some(binding), Some((plan, branch))) => {
             let repo =
-                store.project_path(task.project.as_deref().context("task has no project")?)?;
+                store.project_path(task.project().as_deref().context("task has no project")?)?;
             let target =
                 Target::load(&repo, &branch)?.context("Plan target ownership receipt missing")?;
             target.check_owner(store, &plan)?;
@@ -340,12 +349,12 @@ pub(crate) fn validate_run(store: &Store, task: &Task, run: &Run) -> Result<Opti
 }
 
 /// Recover before reading a run's target. Caller holds landing_lock, outside board/task locks.
-pub(crate) fn recover_run(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
+pub(crate) fn recover_run<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> Result<()> {
     if let Some(binding) = &run.plan_target {
         let repo = ctx
             .store
-            .project_path(task.project.as_deref().context("task has no project")?)?;
-        let plan = ctx.store.get(&binding.plan)?;
+            .project_path(task.project().as_deref().context("task has no project")?)?;
+        let plan = ctx.store.head(&binding.plan)?;
         let mut target = Target::load(&repo, &binding.branch)?
             .context("Plan target ownership receipt missing")?;
         target.check_owner(&ctx.store, &plan)?;
@@ -360,7 +369,7 @@ pub(crate) fn recover_run(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn protect_cleanup(repo: &Path, run: &Run) -> Result<()> {
+pub(crate) fn protect_cleanup(repo: &Path, run: &RunHead) -> Result<()> {
     ensure!(
         run.branch != run.base,
         "refusing cleanup of integration branch"

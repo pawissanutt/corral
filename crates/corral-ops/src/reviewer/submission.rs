@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, ensure};
-use corral_core::{Run, Status, Store, Task, TaskRef};
+use corral_core::{Run, RunHead, Status, Store, Task, TaskRef};
 
 use crate::{Ctx, review_budget::ReviewLaunch, verification};
 
-pub(super) fn submit<R>(
+pub(super) fn submit<T: TaskRef + ?Sized, R>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     launch: &mut ReviewLaunch<'_>,
     pending_reply: Option<&str>,
     send: impl FnOnce() -> Result<R>,
@@ -14,7 +14,7 @@ pub(super) fn submit<R>(
     launch.submit_head(
         |store, current| {
             ensure!(
-                current.id == task.id && current.status == Status::Review,
+                current.id == *task.id() && current.status == Status::Review,
                 "review task changed before submission"
             );
             let parent = current
@@ -50,7 +50,7 @@ pub(crate) fn current_assessment(
     task: &Task,
     parent: &Run,
 ) -> Result<()> {
-    assess(ctx, store, task, parent, |at| {
+    assess(ctx, store, task, &corral_core::RunHead::of(parent)?, |at| {
         Ok(parent
             .review_runs
             .iter()
@@ -60,32 +60,30 @@ pub(crate) fn current_assessment(
     })
 }
 
-/// [`current_assessment`] over a task form: the current run comes from the shell of the
-/// head fields and current containers, the reviewing child by its review time.
+/// [`current_assessment`] over a task form: the current run is its projection, the reviewing
+/// child read by its review time.
 pub(crate) fn current_assessment_ref<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     store: &Store,
     task: &T,
     parent: &str,
 ) -> Result<()> {
-    let shell = super::review_shell(task)?;
-    let run = shell
-        .runs
-        .last()
+    let run = task
+        .current_run_head()?
         .filter(|run| run.id == parent)
         .context("review parent changed before submission")?;
-    assess(ctx, store, &shell, run, |at| {
+    assess(ctx, store, task, &run, |at| {
         Ok(task
             .review_child_by_review_at(parent, at)?
             .and_then(|child| child.vendor))
     })
 }
 
-fn assess(
+fn assess<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     store: &Store,
-    task: &Task,
-    parent: &Run,
+    task: &T,
+    parent: &RunHead,
     vendor_at: impl FnOnce(jiff::Timestamp) -> Result<Option<String>>,
 ) -> Result<()> {
     let record = parent
@@ -145,7 +143,13 @@ mod assessment_tests {
         let task = fx.ctx.store.get(&id).unwrap();
         let run = task.current_run().unwrap();
         let gate = run.gate.as_ref().unwrap().identity.as_ref().unwrap();
-        let candidate = crate::verification::identity(&fx.ctx, &task, run, gate).unwrap();
+        let candidate = crate::verification::identity(
+            &fx.ctx,
+            &task,
+            &corral_core::RunHead::of(run).unwrap(),
+            gate,
+        )
+        .unwrap();
         fx.ctx
             .store
             .update(&id, |task| {
@@ -153,7 +157,7 @@ mod assessment_tests {
                 let digest = if stale {
                     "stale".to_owned()
                 } else {
-                    crate::verification::evidence_digest(run)?
+                    crate::verification::evidence_digest(&corral_core::RunHead::of(run)?)?
                 };
                 let review = corral_core::ReviewRecord {
                     route: None,

@@ -35,7 +35,7 @@ fn continuation(task: &Task) -> Option<Subject<'_>> {
         Some(Subject {
             run: child,
             pane: review.pane.clone(),
-            episode: review_episode(&task.id, run, &child.agent),
+            episode: review_episode(&task.id, &corral_core::RunHead::of(run).ok()?, &child.agent),
             review: true,
         })
     } else if task.status.holds_slot() && run.outcome.is_none() {
@@ -113,7 +113,7 @@ pub(crate) fn review_continuation_due(ctx: &Ctx, task: &Task, run: &Run) -> Resu
     let Some(child) = run.review_runs.last() else {
         return Ok(false);
     };
-    let episode = review_episode(&task.id, run, &child.agent);
+    let episode = review_episode(&task.id, &corral_core::RunHead::of(run)?, &child.agent);
     Ok(selected(ctx, &task.id, child, &episode)?.is_some())
 }
 

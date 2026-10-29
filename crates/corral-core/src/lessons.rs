@@ -18,7 +18,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::store::atomic_write;
-use crate::{Store, Task, validate_glob};
+use crate::{Store, validate_glob};
 
 /// A reusable project rule. Confidence is stored unchanged; matching decays its rank.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -311,16 +311,16 @@ impl Store {
 /// Tags are case-insensitive whole words/phrases in title/body. File candidates
 /// include likely files, punctuation-delimited text references and write scopes.
 #[must_use]
-pub fn match_lessons(
+pub fn match_lessons<T: crate::TaskFieldsRef + ?Sized>(
     lessons: &[Lesson],
-    task: &Task,
+    task: &T,
     profile: Option<&str>,
     harness: Option<&str>,
     likely_files: &[String],
     limit: usize,
     now: Timestamp,
 ) -> Vec<Lesson> {
-    let text = format!("{}\n{}", task.title, task.body);
+    let text = format!("{}\n{}", task.title(), task.body());
     let paths: Vec<_> = text
         .split(|c: char| c.is_whitespace() || "`'\"(),;:<>".contains(c))
         .filter(|p| !p.is_empty())
@@ -336,7 +336,7 @@ pub fn match_lessons(
             let scope = &lesson.scope;
             !lesson.contradicted
                 && lesson.confidence.is_finite()
-                && matches_dimension(&scope.kinds, task.kind.as_deref())
+                && matches_dimension(&scope.kinds, task.kind().as_deref())
                 && matches_dimension(&scope.profiles, profile)
                 && matches_dimension(&scope.harnesses, harness)
                 && (scope.tags.is_empty() || scope.tags.iter().any(|tag| contains_tag(&words, tag)))
@@ -348,7 +348,7 @@ pub fn match_lessons(
                                 .map(String::as_str)
                                 .chain(paths.iter().copied())
                                 .any(|path| glob_matches(glob, path))
-                                || task.write_scope.iter().any(|other| {
+                                || task.write_scope().iter().any(|other| {
                                     validate_glob(other).is_ok() && globs_overlap(glob, other)
                                 }))
                     }))

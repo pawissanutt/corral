@@ -83,7 +83,7 @@ pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> 
         compatible_checkpoint: None,
         progress: None,
         criteria: Vec::new(),
-        evidence_failures: crate::evidence_failures(ctx, task, run)?,
+        evidence_failures: crate::evidence_failures(ctx, task, &corral_core::RunHead::of(run)?)?,
         reusable_evidence: Vec::new(),
         prior_run_obligations: source
             .map_or_else(RunObligations::default, |r| r.obligations.clone()),
@@ -183,7 +183,7 @@ pub(crate) fn resume_packet_head(
         compatible_checkpoint: None,
         progress: None,
         criteria: Vec::new(),
-        evidence_failures: crate::evidence_failures(ctx, task, run)?,
+        evidence_failures: crate::evidence_failures(ctx, task, &corral_core::RunHead::of(run)?)?,
         reusable_evidence: Vec::new(),
         prior_run_obligations: match source {
             Some(source) => head.emitted_obligations(&source.id)?,

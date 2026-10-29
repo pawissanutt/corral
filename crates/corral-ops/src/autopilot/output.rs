@@ -1,7 +1,7 @@
 //! Formatting helpers for autopilot diagnostics.
 
 use anyhow::{Context, Result};
-use corral_core::{ArtifactKind, Task};
+use corral_core::{ArtifactKind, TaskHead};
 use serde_json::json;
 
 use super::Pilot;
@@ -10,20 +10,14 @@ use crate::Ctx;
 pub(super) const LOG_TAIL_LINES: usize = 30;
 
 /// Report authority transitions once per run, including concurrent sync callers.
-/// The open Review tasks, as head shells: autopilot never reads a terminal task.
-pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<Task>> {
-    ctx.store
+/// The open Review tasks, as heads: autopilot never reads a terminal task.
+pub(super) fn review_tasks(ctx: &Ctx) -> Result<Vec<TaskHead>> {
+    Ok(ctx
+        .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?
         .into_iter()
         .filter(|head| head.status == corral_core::Status::Review)
-        .map(|head| head.to_shell_task())
-        .collect()
-}
-
-/// The task a pilot step reads: the head's fields and current run with the rows its checks
-/// read by key ([`crate::reviewer::review_shell`]); nothing earlier is read.
-pub(super) fn pilot_task<T: corral_core::TaskRef + ?Sized>(head: &T) -> Result<Task> {
-    crate::reviewer::review_shell(head)
+        .collect())
 }
 
 /// Whether the integration request `digest` was already sent for `key`'s run.
@@ -44,14 +38,14 @@ pub(super) fn requested(
         .is_some())
 }
 
-pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
+pub(super) fn record_authority(ctx: &Ctx, task: &TaskHead) -> Result<()> {
     let Some(_lock) = ctx
         .store
         .try_lock(&format!("autopilot-status-{}", task.id))?
     else {
         return Ok(());
     };
-    let run = task.current_run().map(|run| run.id.as_str());
+    let run = task.current_run.as_ref().map(|run| run.id.as_str());
     // The run's newest automation event, without reading the task's earlier runs' events.
     let previous = ctx.store.last_event_where(
         Some(&task.id),
@@ -60,7 +54,7 @@ pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
         |event| event.detail["run"].as_str() == run,
     )?;
     let previous = previous.as_ref();
-    if let Some(reason) = crate::automation_blocker(ctx, task)? {
+    if let Some(reason) = crate::automation_status::automation_blocker_ref(ctx, task)? {
         if previous.is_none_or(|event| {
             event.kind != "automation_blocked"
                 || event.detail["reason"].as_str() != Some(reason.as_str())
@@ -82,8 +76,8 @@ pub(super) fn record_authority(ctx: &Ctx, task: &Task) -> Result<()> {
 }
 
 /// A repeat of the open run's error counts on its condition run without a new event.
-pub(super) fn record_error(ctx: &Ctx, task: &Task, error: &str) -> Result<()> {
-    let run = task.current_run().map(|r| r.id.as_str());
+pub(super) fn record_error(ctx: &Ctx, task: &TaskHead, error: &str) -> Result<()> {
+    let run = task.current_run.as_ref().map(|r| r.id.as_str());
     ctx.store.log_event(
         Some(&task.id),
         "autopilot_error",
@@ -92,7 +86,7 @@ pub(super) fn record_error(ctx: &Ctx, task: &Task, error: &str) -> Result<()> {
 }
 
 /// A clean autopilot pass over a task resolves its open `autopilot_error` run.
-pub(super) fn record_clean(ctx: &Ctx, task: &Task) -> Result<()> {
+pub(super) fn record_clean(ctx: &Ctx, task: &TaskHead) -> Result<()> {
     ctx.store
         .clear_condition(Some(&task.id), "autopilot_error")
         .map(drop)

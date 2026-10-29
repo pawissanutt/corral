@@ -9,6 +9,7 @@ use serde_json::json;
 
 use super::*;
 use crate::verification;
+use corral_core::Run;
 
 const FULL: &str = "full-gate";
 const QUICK: &str = "quick-gate";
@@ -141,11 +142,11 @@ impl Fx {
     /// A passing receipt bound like a gate started now in `phase`, saved as the run's gate.
     pub(crate) fn receipt(&self, id: &str, phase: GatePhase, attempt: &str) -> GateRecord {
         let (task, run) = self.current(id);
-        let contract = select(&self.ctx, &task, &run, phase).unwrap();
+        let contract = select(&self.ctx, &task, &run_head(&run), phase).unwrap();
         let identity = verification::capture_identity_with(
             &self.ctx,
             &task,
-            &run,
+            &run_head(&run),
             attempt,
             contract.binding(),
         )
@@ -175,12 +176,12 @@ impl Fx {
 
     pub(crate) fn fresh(&self, id: &str, gate: &GateRecord) -> bool {
         let (task, run) = self.current(id);
-        verification::gate_fresh(&self.ctx, &task, &run, gate).unwrap()
+        verification::gate_fresh(&self.ctx, &task, &run_head(&run), gate).unwrap()
     }
 
     pub(crate) fn review(&self, id: &str, verdict: Verdict, identity: &CandidateIdentity) {
         let (_, run) = self.current(id);
-        let evidence = verification::evidence_digest(&run).unwrap();
+        let evidence = verification::evidence_digest(&run_head(&run)).unwrap();
         let review: corral_core::ReviewRecord = serde_json::from_value(json!({
             "identity": identity, "evidence_digest": evidence, "verdict": verdict,
             "reviewer": "owner", "sha": identity.head, "at": "2026-10-23T01:00:00Z",
@@ -283,7 +284,7 @@ fn selection_by_rules_destination_and_phase() {
     let task = fx.main_bound();
     let run = task.current_run().unwrap().clone();
     // A main-bound tiered run: quick review rounds, full at landing.
-    let review = select(&fx.ctx, &task, &run, GatePhase::Review).unwrap();
+    let review = select(&fx.ctx, &task, &run_head(&run), GatePhase::Review).unwrap();
     assert_eq!(
         (
             review.tier.as_str(),
@@ -299,7 +300,7 @@ fn selection_by_rules_destination_and_phase() {
     assert!(review.requirement.full_dominates);
     assert_eq!(review.destination.kind, DestinationKind::Main);
     assert_eq!(review.landing_tier, MAIN_LANDING_TIER);
-    let landing = select(&fx.ctx, &task, &run, GatePhase::Landing).unwrap();
+    let landing = select(&fx.ctx, &task, &run_head(&run), GatePhase::Landing).unwrap();
     assert_eq!(
         (landing.tier.as_str(), landing.commands.as_slice()),
         (FULL_TIER, [FULL.to_owned()].as_slice())
@@ -310,7 +311,7 @@ fn selection_by_rules_destination_and_phase() {
         base: "release".into(),
         ..run.clone()
     };
-    let other = select(&fx.ctx, &task, &other, GatePhase::Review).unwrap();
+    let other = select(&fx.ctx, &task, &run_head(&other), GatePhase::Review).unwrap();
     assert_eq!(
         (other.destination.kind, other.tier.as_str()),
         (DestinationKind::Other, FULL_TIER)
@@ -321,7 +322,7 @@ fn selection_by_rules_destination_and_phase() {
         gate_rules: GateRules::Legacy,
         ..run.clone()
     };
-    let legacy = select(&fx.ctx, &task, &legacy, GatePhase::Review).unwrap();
+    let legacy = select(&fx.ctx, &task, &run_head(&legacy), GatePhase::Review).unwrap();
     assert_eq!(
         (legacy.rules, legacy.tier.as_str()),
         (GateRules::Legacy, FULL_TIER)
@@ -336,7 +337,7 @@ fn untiered_project_selects_full_for_every_run() {
     let task = fx.main_bound();
     let run = task.current_run().unwrap();
     for phase in [GatePhase::Review, GatePhase::Landing] {
-        let contract = select(&fx.ctx, &task, run, phase).unwrap();
+        let contract = select(&fx.ctx, &task, &run_head(run), phase).unwrap();
         assert_eq!(
             (contract.rules, contract.tier.as_str()),
             (GateRules::Legacy, FULL_TIER)
@@ -352,7 +353,7 @@ fn members_bind_their_gate_in_every_phase_and_owner_records_win() {
     let (task, tracker) = fx.member();
     let run = task.current_run().unwrap();
     for phase in [GatePhase::Review, GatePhase::Landing] {
-        let contract = select(&fx.ctx, &task, run, phase).unwrap();
+        let contract = select(&fx.ctx, &task, &run_head(run), phase).unwrap();
         assert_eq!(contract.destination.kind, DestinationKind::PlanTarget);
         assert_eq!(contract.destination.branch, "feature/plan");
         assert_eq!(
@@ -369,7 +370,7 @@ fn members_bind_their_gate_in_every_phase_and_owner_records_win() {
     // An owner record for tier full still binds the member, so full never dominates.
     fx.amend(&tracker, &task.id, 1, FULL_TIER);
     let (task, run) = fx.current(&task.id);
-    let full = select(&fx.ctx, &task, &run, GatePhase::Review).unwrap();
+    let full = select(&fx.ctx, &task, &run_head(&run), GatePhase::Review).unwrap();
     assert_eq!(
         (full.tier.as_str(), full.commands.as_slice()),
         (FULL_TIER, [FULL.to_owned()].as_slice())
@@ -392,18 +393,20 @@ fn main_bound_receipts_fresh_by_phase_with_full_dominance() {
     assert!(fx.fresh(&id, &quick));
     fx.review(&id, Verdict::Approve, quick.identity.as_ref().unwrap());
     let (task, run) = fx.current(&id);
-    assert!(verification::review_fresh(&fx.ctx, &task, &run).unwrap());
+    assert!(verification::review_fresh(&fx.ctx, &task, &run_head(&run)).unwrap());
     // Then the landing phase refuses the quick PASS, and the audit still judges it by review.
     assert!(!fx.fresh(&id, &quick));
-    assert!(!verification::gate_passed(&fx.ctx, &task, &run).unwrap());
-    let review = requirement_for(&fx.ctx, &task, &run, GatePhase::Review).unwrap();
-    assert!(verification::gate_fresh_for(&fx.ctx, &task, &run, &quick, &review).unwrap());
+    assert!(!verification::gate_passed(&fx.ctx, &task, &run_head(&run)).unwrap());
+    let review = requirement_for(&fx.ctx, &task, &run_head(&run), GatePhase::Review).unwrap();
+    assert!(
+        verification::gate_fresh_for(&fx.ctx, &task, &run_head(&run), &quick, &review).unwrap()
+    );
     // A full receipt satisfies both phases.
     let full = fx.receipt(&id, GatePhase::Landing, "a2");
     assert_eq!(full.identity.as_ref().unwrap().gate_tier, None);
     assert!(fx.fresh(&id, &full));
     let (task, run) = fx.current(&id);
-    assert!(verification::gate_fresh_for(&fx.ctx, &task, &run, &full, &review).unwrap());
+    assert!(verification::gate_fresh_for(&fx.ctx, &task, &run_head(&run), &full, &review).unwrap());
     // And the quick and full identities differ exactly in attempt, binding and policy digest.
     let changed: Vec<_> = quick
         .identity
@@ -425,13 +428,13 @@ fn a_changed_member_selection_stales_its_receipts_of_every_tier() {
     assert!(fx.fresh(&id, &quick));
     fx.review(&id, Verdict::Approve, quick.identity.as_ref().unwrap());
     let (task, run) = fx.current(&id);
-    assert!(verification::review_fresh(&fx.ctx, &task, &run).unwrap());
+    assert!(verification::review_fresh(&fx.ctx, &task, &run_head(&run)).unwrap());
     // When the owner's record changes the member's selection, the quick receipt and its
     // review go stale.
     fx.amend(&tracker, &id, 1, FULL_TIER);
     assert!(!fx.fresh(&id, &quick));
     let (task, run) = fx.current(&id);
-    assert!(!verification::review_fresh(&fx.ctx, &task, &run).unwrap());
+    assert!(!verification::review_fresh(&fx.ctx, &task, &run_head(&run)).unwrap());
     // A full member receipt is bound too, and the next change stales it despite its tier.
     let full = fx.receipt(&id, GatePhase::Review, "m2");
     let binding = full.identity.as_ref().unwrap().gate_tier.clone().unwrap();
@@ -527,20 +530,20 @@ fn promotion_origin_is_recorded_once_kept_while_current_and_cleared_when_inert()
     let approve = Some((&a, Verdict::Approve));
     // The first landing gate while the approved quick receipt is current records it.
     assert_eq!(
-        origin_step(&origin_run(approve, Some(&a), None), &contract),
+        origin_step(&run_head(&origin_run(approve, Some(&a), None)), &contract),
         OriginStep::Record(origin.clone())
     );
     // Every later landing gate copies it, whatever replaced the receipt (or cleared it).
     for receipt in [Some(&b), None] {
         let run = origin_run(approve, receipt, Some(&origin));
         assert_eq!(
-            origin_step(&run, &contract),
+            origin_step(&run_head(&run), &contract),
             OriginStep::Copy(origin.clone())
         );
     }
     // Without a current quick receipt nothing is recorded.
     assert_eq!(
-        origin_step(&origin_run(approve, Some(&b), None), &contract),
+        origin_step(&run_head(&origin_run(approve, Some(&b), None)), &contract),
         OriginStep::Keep
     );
     // A changed approval makes the origin inert: a full-bound approval or a changes verdict.
@@ -550,12 +553,17 @@ fn promotion_origin_is_recorded_once_kept_while_current_and_cleared_when_inert()
         None,
     ] {
         let run = origin_run(review, Some(&b), Some(&origin));
-        assert_eq!(origin_step(&run, &contract), OriginStep::Clear);
+        assert_eq!(origin_step(&run_head(&run), &contract), OriginStep::Clear);
     }
     // A new promotable approval whose receipt is current replaces an inert origin.
     let a2 = identity("a2", true);
     let renewed = origin_step(
-        &origin_run(Some((&a2, Verdict::Approve)), Some(&a2), Some(&origin)),
+        &corral_core::RunHead::of(&origin_run(
+            Some((&a2, Verdict::Approve)),
+            Some(&a2),
+            Some(&origin),
+        ))
+        .unwrap(),
         &contract,
     );
     assert!(matches!(renewed, OriginStep::Record(o) if o.identity == a2));
@@ -585,10 +593,10 @@ fn promotion_origin_is_recorded_once_kept_while_current_and_cleared_when_inert()
             ..landing_contract()
         },
     ] {
-        assert_eq!(origin_step(&run, &contract), OriginStep::Keep);
+        assert_eq!(origin_step(&run_head(&run), &contract), OriginStep::Keep);
     }
     // Applying a step records or clears only what it names.
-    let mut run = origin_run(approve, Some(&a), None);
+    let mut run = corral_core::RunHead::of(&origin_run(approve, Some(&a), None)).unwrap();
     OriginStep::Record(origin.clone()).apply(&mut run);
     assert_eq!(run.promotion_origin.as_deref(), Some(&origin));
     OriginStep::Copy(origin.clone()).apply(&mut run);
@@ -850,4 +858,9 @@ fn autopilot_dispatch_reports_a_template_conflict_once_and_creates_no_run() {
     assert!(!fx.repo.join(".worktrees").join(checkout).exists());
     assert!(!fx.repo.join(".git/corral-plan-targets").exists());
     assert!(corral_git::rev_sha(&fx.repo, "refs/heads/feature/plan").is_err());
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

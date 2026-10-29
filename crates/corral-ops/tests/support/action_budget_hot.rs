@@ -265,7 +265,7 @@ pub(super) fn setup(kind: super::action_budget_fixture::Kind) -> (Fx, String) {
             let run = task.current_run().unwrap().clone();
             let base = corral_git::rev_sha(&repo, "main").unwrap();
             assert_eq!(
-                crate::verdict_carry::rebase(&fx.ctx, &task, &run, &base).unwrap(),
+                crate::verdict_carry::rebase(&fx.ctx, &task, &run_head(&run), &base).unwrap(),
                 corral_git::RebaseOutcome::Rebased
             );
             crate::gate_start(&fx.ctx, &id).unwrap();
@@ -299,4 +299,9 @@ pub(super) fn setup(kind: super::action_budget_fixture::Kind) -> (Fx, String) {
         }
         other => panic!("{other:?} is not a hot-actions kind"),
     }
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

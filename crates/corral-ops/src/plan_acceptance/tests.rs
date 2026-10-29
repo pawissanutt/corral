@@ -134,7 +134,7 @@ impl Fixture {
             target
                 .prepare_landing(
                     &task,
-                    run,
+                    &run_head(run),
                     &head,
                     "fast_forward",
                     None,
@@ -533,4 +533,9 @@ fn plain_tracker_without_plan_scope_keeps_child_completion() {
             .is_some()
     );
     assert_eq!(f.ctx.store.get(&tracker.id).unwrap().status, Status::Done);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

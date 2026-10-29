@@ -406,10 +406,13 @@ fn refresh_run(run: &mut Run, store: &Store) {
 }
 
 fn run_harness<'a>(run: &'a Run, config: &'a Config) -> &'a str {
-    run.harness
-        .as_deref()
-        .or_else(|| config.profiles.get(&run.agent).map(|p| p.harness.as_str()))
-        .unwrap_or(&run.agent)
+    harness_of(run.harness.as_deref(), &run.agent, config)
+}
+
+fn harness_of<'a>(harness: Option<&'a str>, agent: &'a str, config: &'a Config) -> &'a str {
+    harness
+        .or_else(|| config.profiles.get(agent).map(|p| p.harness.as_str()))
+        .unwrap_or(agent)
 }
 
 pub(crate) fn collect(run: &mut Run, store: &Store) {
@@ -434,14 +437,18 @@ pub(crate) fn collect(run: &mut Run, store: &Store) {
 }
 
 fn session_root(run: &Run, store: &Store) -> Result<(PathBuf, bool)> {
+    session_root_of(run_harness(run, &store.config), &run.worktree, store)
+}
+
+fn session_root_of(harness: &str, worktree: &Path, store: &Store) -> Result<(PathBuf, bool)> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
-    match run_harness(run, &store.config) {
+    match harness {
         "omo" => Ok((
             crate::omo::agent_dir(store.config.sync.omo_agent_dir.as_deref())
                 .join("sessions")
-                .join(crate::omo::encode_cwd(&run.worktree)),
+                .join(crate::omo::encode_cwd(worktree)),
             false,
         )),
         "omp" => Ok((home.join(".omp/agent/sessions"), false)),
@@ -452,10 +459,9 @@ fn session_root(run: &Run, store: &Store) -> Result<(PathBuf, bool)> {
 
 /// Only scan regular JSONL files at the session root and one project-directory level.
 /// Artifacts, subagent directories, and symlinks are not transcript candidates.
-fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
+fn session_paths(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
-    let cwd_slug: String = run
-        .worktree
+    let cwd_slug: String = worktree
         .to_string_lossy()
         .chars()
         .map(|c| {
@@ -466,12 +472,12 @@ fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
             }
         })
         .collect();
-    let omo_slug = crate::omo::encode_cwd(&run.worktree);
+    let omo_slug = crate::omo::encode_cwd(worktree);
     // omp 18 uses home-relative names, unlike Pi's absolute legacy buckets.
     // Directory names are only discovery hints; the transcript cwd remains authoritative.
     let home_slug = std::env::var_os("HOME")
         .and_then(|home| {
-            run.worktree
+            worktree
                 .strip_prefix(PathBuf::from(home))
                 .ok()
                 .map(Path::to_path_buf)
@@ -482,8 +488,7 @@ fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
                 relative.to_string_lossy().replace(['/', '\\', ':'], "-")
             )
         });
-    let temp_slug = run
-        .worktree
+    let temp_slug = worktree
         .strip_prefix(std::env::temp_dir())
         .ok()
         .map(|relative| {
@@ -526,7 +531,7 @@ fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
 
 fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result<Usage> {
     let mut total = None;
-    for path in session_paths(root, run, claude)? {
+    for path in session_paths(root, &run.worktree, claude)? {
         if let Some(usage) = transcript_cache::with_lines(&path, |lines| {
             parse_session_entries(lines, run, claude, config)
         })? {
@@ -536,12 +541,22 @@ fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result
     total.context("no assistant usage found for this worktree and run time window")
 }
 
-/// Retain only this review's cwd and time window, not other rounds sharing a session.
-pub(crate) fn transcript(run: &Run, store: &Store) -> Result<Vec<u8>> {
-    let (root, claude) = session_root(run, store)?;
-    let end = run.ended.unwrap_or_else(Timestamp::now);
+/// The reviewer transcript of a review child: only its cwd and time window, not other rounds
+/// sharing a session.
+pub(crate) fn transcript_head(run: &corral_core::RunHead, store: &Store) -> Result<Vec<u8>> {
+    let harness = harness_of(run.harness.as_deref(), &run.agent, &store.config);
+    transcript_of(harness, (&run.worktree, run.started, run.ended), store)
+}
+
+fn transcript_of(
+    harness: &str,
+    (worktree, started, ended): (&Path, Timestamp, Option<Timestamp>),
+    store: &Store,
+) -> Result<Vec<u8>> {
+    let (root, claude) = session_root_of(harness, worktree, store)?;
+    let end = ended.unwrap_or_else(Timestamp::now);
     let mut bytes = Vec::new();
-    for path in session_paths(&root, run, claude)? {
+    for path in session_paths(&root, worktree, claude)? {
         let mut matched = false;
         let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
         for line in BufReader::new(file).lines() {
@@ -552,13 +567,9 @@ pub(crate) fn transcript(run: &Run, store: &Store) -> Result<Vec<u8>> {
             let entry: Entry =
                 serde_json::from_str(&line).context("parsing reviewer transcript")?;
             if let Some(cwd) = entry.cwd {
-                matched = cwd == run.worktree;
+                matched = cwd == worktree;
             }
-            if matched
-                && entry
-                    .timestamp
-                    .is_some_and(|at| at >= run.started && at <= end)
-            {
+            if matched && entry.timestamp.is_some_and(|at| at >= started && at <= end) {
                 bytes.extend_from_slice(line.as_bytes());
                 bytes.push(b'\n');
                 if u64::try_from(bytes.len()).context("transcript length overflow")?

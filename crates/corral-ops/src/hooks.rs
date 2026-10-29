@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{ArtifactKind, PostLandHook, Run, Task};
+use corral_core::{ArtifactKind, PostLandHook, RunHead, TaskRef};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -133,15 +133,15 @@ pub fn operational_blocker(ctx: &Ctx, project: &str) -> Result<Option<String>> {
 }
 
 /// Prepare before base mutation so a crash cannot lose the obligation to run hooks.
-pub(crate) fn prepare(
+pub(crate) fn prepare<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     repo: &Path,
     base_before: &str,
     sha: &str,
 ) -> Result<Option<PostLandOperation>> {
-    let Some(project) = task.project.as_deref() else {
+    let Some(project) = task.project().as_deref() else {
         return Ok(None);
     };
     let hooks = &ctx.store.config.projects[project].post_land;
@@ -155,7 +155,7 @@ pub(crate) fn prepare(
         key,
         project: project.into(),
         repo: repo.into(),
-        task: task.id.clone(),
+        task: task.id().clone(),
         run: run.id.clone(),
         base: run.base.clone(),
         base_before: base_before.into(),

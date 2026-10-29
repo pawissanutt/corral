@@ -385,9 +385,12 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                 }
                 // The repair key names the run as it now stands: only the checkpoint refuses.
                 let full: Task = fx.ctx.store.get(&id).unwrap();
-                let key =
-                    crate::integration::RepairKey::new(&full, full.current_run().unwrap(), "lost")
-                        .unwrap();
+                let key = crate::integration::RepairKey::new(
+                    &full,
+                    &run_head(full.current_run().unwrap()),
+                    "lost",
+                )
+                .unwrap();
                 // The head form refuses and admits exactly as the full form does.
                 let head = fx.ctx.store.head(&id).unwrap();
                 let reference =
@@ -452,4 +455,9 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
             );
         }
     }
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

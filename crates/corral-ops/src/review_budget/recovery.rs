@@ -1,6 +1,6 @@
 //! Re-admit an exact never-submitted attempt, not a replacement gate or review child.
 use anyhow::{Context, Result, ensure};
-use corral_core::{OperatingOrigin, ProfileChoice};
+use corral_core::{OperatingOrigin, ProfileChoice, TaskRef as _};
 use serde_json::json;
 
 use super::{Kind, Pending, ReviewLaunch, submission};
@@ -23,9 +23,9 @@ pub(super) fn prepare(
         pending.submitted == Some(false),
         "cannot replay an uncertain auxiliary launch"
     );
-    let task = crate::reviewer::review_shell(&ctx.store.head(&pending.task)?)?;
-    let run = task
-        .current_run()
+    let task = ctx.store.head(&pending.task)?;
+    let run = &*task
+        .current_run_head()?
         .filter(|run| run.id == pending.run)
         .context("prepared parent run changed")?;
     let candidate = authorization
@@ -61,8 +61,11 @@ impl ReviewLaunch<'_> {
             .authorization
             .clone()
             .context("prepared authority missing")?;
-        let task = crate::reviewer::review_shell(&ctx.store.head(&self.pending.task)?)?;
-        let run = task.current_run().context("prepared run missing")?;
+        let task = ctx.store.head(&self.pending.task)?;
+        let run = &task
+            .current_run_head()?
+            .context("prepared run missing")?
+            .into_owned();
         let pane = match &self.pending.pane {
             Some(pane) => pane.clone(),
             None => {
@@ -102,8 +105,8 @@ impl ReviewLaunch<'_> {
             }
             Kind::Reviewer => {
                 let child = run
-                    .review_runs
-                    .last()
+                    .current_child
+                    .as_deref()
                     .context("prepared reviewer child missing")?;
                 let key = crate::reviewer::dir_attempt(child.review.as_ref(), &child.id);
                 let prompt =
@@ -143,8 +146,8 @@ impl ReviewLaunch<'_> {
         let pm = !self.pending.close_pane;
         let reviewer = self.pending.kind == Kind::Reviewer;
         let message = run
-            .review_runs
-            .last()
+            .current_child
+            .as_deref()
             .and_then(|child| child.pending_reply.clone());
         let mut started =
             json!({"run": run.id, "authorization": authorization, "recovered":true, "pane":pane});
@@ -205,8 +208,10 @@ impl ReviewLaunch<'_> {
                     store: store.clone(),
                     ..ctx.clone()
                 };
-                let task = &crate::reviewer::review_shell(&*head)?;
-                let run = task.current_run().context("prepared run disappeared")?;
+                let task = &*head;
+                let run = &*task
+                    .current_run_head()?
+                    .context("prepared run disappeared")?;
                 let candidate = authorization
                     .action
                     .candidate

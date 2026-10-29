@@ -4,7 +4,7 @@
 use std::fmt;
 
 use anyhow::Result;
-use corral_core::{ExecutionSnapshot, GateRules, Task};
+use corral_core::{ExecutionSnapshot, GateRules, Task, TaskRef};
 use serde::Serialize;
 use serde_json::json;
 
@@ -181,25 +181,26 @@ fn template_source(ctx: &Ctx, harness: &str) -> (&'static str, String) {
 }
 
 /// One `automation_blocked` event per run and reason, across concurrent sync callers.
-pub(crate) fn report_blocked(
+pub(crate) fn report_blocked<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     conflict: &GateInstructionConflict,
 ) -> Result<()> {
     let Some(_lock) = ctx
         .store
-        .try_lock(&format!("autopilot-status-{}", task.id))?
+        .try_lock(&format!("autopilot-status-{}", task.id()))?
     else {
         return Ok(());
     };
-    let run = task.current_run().map(|run| run.id.as_str());
+    let current = task.current_run_head()?;
+    let run = current.as_deref().map(|run| run.id.as_str());
     let reason = conflict.to_string();
     let previous = last_status(ctx, task, run)?;
     if previous.as_ref().is_none_or(|event| {
         event.kind != "automation_blocked" || event.detail["reason"].as_str() != Some(&reason)
     }) {
         ctx.store.log_event(
-            Some(&task.id),
+            Some(task.id()),
             "automation_blocked",
             json!({"run": run, "reason": reason, "conflict": conflict}),
         )?;
@@ -209,20 +210,21 @@ pub(crate) fn report_blocked(
 
 /// A clean scan resumes the run's instruction-conflict block. The authority reporter never
 /// resumes it, so an unchanged conflict stays reported once across syncs.
-pub(crate) fn resolve_blocked(ctx: &Ctx, task: &Task) -> Result<()> {
+pub(crate) fn resolve_blocked<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
     let Some(_lock) = ctx
         .store
-        .try_lock(&format!("autopilot-status-{}", task.id))?
+        .try_lock(&format!("autopilot-status-{}", task.id()))?
     else {
         return Ok(());
     };
-    let run = task.current_run().map(|run| run.id.as_str());
+    let current = task.current_run_head()?;
+    let run = current.as_deref().map(|run| run.id.as_str());
     if last_status(ctx, task, run)?
         .as_ref()
         .is_some_and(is_conflict_block)
     {
         ctx.store
-            .log_event(Some(&task.id), "automation_resumed", json!({"run": run}))?;
+            .log_event(Some(task.id()), "automation_resumed", json!({"run": run}))?;
     }
     Ok(())
 }
@@ -233,9 +235,13 @@ pub(crate) fn is_conflict_block(event: &corral_core::Event) -> bool {
 }
 
 /// The run's newest automation status event, read from that run's own events.
-fn last_status(ctx: &Ctx, task: &Task, run: Option<&str>) -> Result<Option<corral_core::Event>> {
+fn last_status<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: Option<&str>,
+) -> Result<Option<corral_core::Event>> {
     ctx.store.last_event_where(
-        Some(&task.id),
+        Some(task.id()),
         &["automation_blocked", "automation_resumed"],
         run,
         |event| event.detail["run"].as_str() == run,

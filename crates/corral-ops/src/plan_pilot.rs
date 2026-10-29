@@ -91,6 +91,19 @@ pub(crate) fn reconcile(
     Ok(())
 }
 
+/// [`handles`] of any task form: its current run and last planning run.
+pub(crate) fn handles_ref<T: corral_core::TaskRef + ?Sized>(task: &T) -> Result<bool> {
+    if task
+        .current_run_head()?
+        .is_some_and(|r| r.outcome.is_none())
+    {
+        return Ok(false);
+    }
+    Ok(task
+        .last_plan_run_head()?
+        .is_some_and(|r| r.state != PlanRunState::Approved))
+}
+
 pub(crate) fn handles(task: &Task) -> bool {
     if task.current_run().is_some_and(|r| r.outcome.is_none()) {
         return false;

@@ -185,7 +185,7 @@ fn advance(
     // The target and base checks read head fields and the current run's scalars only.
     let shell = task.shell_task()?;
     let run = shell.current_run().context("launch has no run")?.clone();
-    crate::plan_target::validate_run(&ctx.store, &shell, &run)?;
+    crate::plan_target::validate_run(&ctx.store, &shell, &corral_core::RunHead::of(&run)?)?;
     crate::tracker::check_dispatch_base(&ctx.store, &shell, &run.base, &run.base_sha)?;
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Reserved {
         // Recheck inside the durable claim, including recovery. A refusal flows
@@ -326,7 +326,7 @@ fn advance(
             validate_execution(&fresh, &*current)?;
             let shell = current.shell_task()?;
             let shell_run = shell.current_run().context("launch run missing")?;
-            crate::plan_target::validate_run(store, &shell, shell_run)?;
+            crate::plan_target::validate_run(store, &shell, &corral_core::RunHead::of(shell_run)?)?;
             crate::tracker::check_dispatch_base(
                 store,
                 &shell,

@@ -47,7 +47,7 @@ pub(super) fn scenario(code: bool, automatic: bool) -> (Fx, String, String, Stri
         target
             .prepare_landing(
                 &task,
-                task.current_run().unwrap(),
+                &run_head(task.current_run().unwrap()),
                 &head,
                 "fast_forward",
                 None,
@@ -206,4 +206,9 @@ pub(super) fn verified_attempt(fx: &mut Fx, id: &str, automatic: bool) -> String
     )
     .unwrap();
     attempt.id
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

@@ -95,7 +95,12 @@ fn review_view(
     match role {
         ProfileRole::ImplementationReview => {
             let run = crate::review::current_run(task)?;
-            crate::review_receipts::implementation_view(&ctx, task, &run).map(Some)
+            crate::review_receipts::implementation_view(
+                &ctx,
+                task,
+                &corral_core::RunHead::of(&run)?,
+            )
+            .map(Some)
         }
         ProfileRole::PlanReview => {
             let attempt = crate::plan_review::next_plan_attempt(&ctx, task)?;
@@ -130,8 +135,10 @@ pub fn selection_save(
             crate::review_receipts::check(
                 &ctx,
                 &task,
-                run.as_ref()
-                    .context("implementation review needs a current run")?,
+                &corral_core::RunHead::of(
+                    run.as_ref()
+                        .context("implementation review needs a current run")?,
+                )?,
                 receipt,
                 &view.requirement,
                 Some(&view.subject),

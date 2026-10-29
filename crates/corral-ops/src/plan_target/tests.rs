@@ -80,7 +80,7 @@ impl Fixture {
         self.target
             .prepare_landing(
                 &self.task,
-                run,
+                &run_head(run),
                 &head,
                 "fast_forward",
                 None,
@@ -284,7 +284,14 @@ fn wrong_store_owner_and_changed_plan_contract_refuse_target_use() {
     f.target.save().unwrap();
     // When dispatch or verification attempts to use it.
     assert!(prepare_dispatch(&f.ctx, &f.task).is_err());
-    assert!(validate_run(&f.ctx.store, &f.task, f.task.current_run().unwrap()).is_err());
+    assert!(
+        validate_run(
+            &f.ctx.store,
+            &f.task,
+            &run_head(f.task.current_run().unwrap())
+        )
+        .is_err()
+    );
     // Then no new ref or acceptance was produced.
     assert_eq!(f.approvals(), 0);
     f.untouched_main();
@@ -299,7 +306,14 @@ fn wrong_store_owner_and_changed_plan_contract_refuse_target_use() {
             Ok(())
         })
         .unwrap();
-    assert!(validate_run(&f.ctx.store, &f.task, f.task.current_run().unwrap()).is_err());
+    assert!(
+        validate_run(
+            &f.ctx.store,
+            &f.task,
+            &run_head(f.task.current_run().unwrap())
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -326,8 +340,12 @@ fn task_cleanup_cannot_remove_or_discard_the_controller_target() {
     run.worktree = f.target.checkout.clone();
     run.branch = "feature/plan".into();
     // When normal and explicit-discard cleanup inspect it.
-    assert!(crate::cleanup_worktree::remove(&f.ctx, &f.task, &f.repo, &run, false).is_err());
-    assert!(crate::cleanup_worktree::remove(&f.ctx, &f.task, &f.repo, &run, true).is_err());
+    assert!(
+        crate::cleanup_worktree::remove(&f.ctx, &f.task, &f.repo, &run_head(&run), false).is_err()
+    );
+    assert!(
+        crate::cleanup_worktree::remove(&f.ctx, &f.task, &f.repo, &run_head(&run), true).is_err()
+    );
     assert!(crate::cleanup_worktree::discard_branch(&f.repo, &run).is_err());
     // Then persistent integration data and main remain intact.
     assert!(f.target.checkout.is_dir());
@@ -432,7 +450,8 @@ fn explicit_target_reconciliation_invalidates_old_gate_identity() {
     // Given a candidate checked under the original approved Plan contract.
     let f = Fixture::new();
     let run = f.task.current_run().unwrap();
-    let old = crate::verification::capture_identity(&f.ctx, &f.task, run, "attempt").unwrap();
+    let old =
+        crate::verification::capture_identity(&f.ctx, &f.task, &run_head(run), "attempt").unwrap();
     let plan = f.ctx.store.get(&f.target.plan).unwrap();
     let mut scope = plan.approved_scope.clone().unwrap();
     scope.goal = "Reconciled scope".into();
@@ -453,7 +472,8 @@ fn explicit_target_reconciliation_invalidates_old_gate_identity() {
         .unwrap();
     // When an explicit reconciliation preserves Git SHAs but binds the new scope.
     let current =
-        crate::verification::identity(&f.ctx, &task, task.current_run().unwrap(), &old).unwrap();
+        crate::verification::identity(&f.ctx, &task, &run_head(task.current_run().unwrap()), &old)
+            .unwrap();
     // Then the old verification identity cannot authorize the new Plan contract.
     assert_eq!(old.head, current.head);
     assert_eq!(old.integration_base, current.integration_base);
@@ -488,4 +508,9 @@ fn first_owner_plan_target_approval_times_landing_from_its_recorded_start() {
     );
     assert!(landing.complete, "{landing:?}");
     assert_eq!(landing.outcome, "landed");
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

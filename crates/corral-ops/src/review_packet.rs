@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use corral_core::{
     ArtifactKind, CandidateIdentity, Criterion, GateResult, IdentityChange, ObservationStatus,
-    ReviewCheck, ReviewContractKind, ReviewRecord, ReviewRoute, Run, RunOutcome, Task, Verdict,
+    ReviewCheck, ReviewContractKind, ReviewRecord, ReviewRoute, RunHead, TaskRef, Verdict,
 };
 use serde::Serialize;
 
@@ -106,17 +106,17 @@ pub struct TierReceipt {
 }
 
 /// The contract a tiered run's review is judged against; `None` for legacy and untiered runs.
-pub(crate) fn gate_contract(
+pub(crate) fn gate_contract<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
 ) -> Result<Option<ReviewGateContract>> {
     if run.gate_rules.is_legacy() {
         return Ok(None);
     }
     let phase = crate::gate_tier::GatePhase::Review;
     let contract = crate::gate_tier::select(ctx, task, run, phase)
-        .with_context(|| format!("resolving the review gate contract of {}", task.id))?;
+        .with_context(|| format!("resolving the review gate contract of {}", task.id()))?;
     if contract.rules.is_legacy() {
         return Ok(None);
     }
@@ -146,10 +146,10 @@ pub(crate) fn gate_contract(
 /// The run's receipt when it is of `tier` (or full, where full dominates). A required tier is fresh only when the receipt
 /// satisfies the review requirement; an informational one when it re-derives under its own
 /// binding.
-fn receipt(
+fn receipt<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     tier: &str,
     requirement: Option<&crate::gate_tier::GateRequirement>,
 ) -> Result<TierReceipt> {
@@ -266,10 +266,10 @@ pub struct Finding {
 
 /// The packet and diff of review attempt `attempt`, in the scratch directory of its callback
 /// attempt (`route`).
-fn paths(
+fn paths<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     (attempt, route): (&str, &ReviewRoute),
 ) -> Result<(PathBuf, PathBuf)> {
     let key = route
@@ -277,18 +277,18 @@ fn paths(
         .clone()
         .or_else(|| route.attempt.clone())
         .unwrap_or_else(|| attempt.to_owned());
-    let dir = crate::reviewer::review_dir(ctx, &task.id, &run.id, &key)?;
-    let stem = format!("{}-{}-{attempt}", task.id, run.id);
+    let dir = crate::reviewer::review_dir(ctx, task.id(), &run.id, &key)?;
+    let stem = format!("{}-{}-{attempt}", task.id(), run.id);
     Ok((
         dir.join(format!("{stem}-review-packet.json")),
         dir.join(format!("{stem}-review.diff")),
     ))
 }
 
-pub(crate) fn evidence_gaps(
+pub(crate) fn evidence_gaps<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     route: &ReviewRoute,
 ) -> Result<Vec<EvidenceGap>> {
     let mut gaps = Vec::new();
@@ -338,7 +338,7 @@ pub(crate) fn evidence_gaps(
     }
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     for criterion in task
-        .completion
+        .completion()
         .iter()
         .flat_map(|m| &m.criteria)
         .filter(|c| c.required)
@@ -366,16 +366,16 @@ pub(crate) fn evidence_gaps(
         .checks
         .contains(&ReviewCheck::VisualEvidence)
         && !task
-            .artifacts
+            .artifacts_of(&run.id)?
             .iter()
-            .any(|a| a.run == run.id && a.kind == ArtifactKind::Screenshot)
+            .any(|a| a.kind == ArtifactKind::Screenshot)
     {
         gap(
             GapCode::VisualEvidenceMissing,
             "no screenshot artifact for this run".into(),
         );
     }
-    if run.obligations.pending_decision().is_some() {
+    if task.open_obligations(&run.id)?.pending_decision().is_some() {
         gap(
             GapCode::OwnerDecisionPending,
             "an owner decision is unresolved".into(),
@@ -390,27 +390,6 @@ fn reviewer_side(ctx: &Ctx, artifact: &corral_core::Artifact) -> bool {
         .scratch_path(crate::watch::REVIEW_WATCH)
         .is_ok_and(|watch| std::path::Path::new(&artifact.source).starts_with(watch))
         || (artifact.kind == ArtifactKind::Report && artifact.title.starts_with("Review ("))
-}
-
-fn findings(task: &Task, exclude: &str) -> Vec<Finding> {
-    task.runs
-        .iter()
-        .flat_map(|run| run.review_runs.iter().map(move |child| (run, child)))
-        .filter(|(_, child)| child.id != exclude)
-        .filter_map(|(run, child)| {
-            let review = child.review.as_ref()?;
-            let notes = review.notes.clone()?;
-            (review.verdict != Some(Verdict::Approve)).then(|| Finding {
-                run: run.id.clone(),
-                attempt: child.id.clone(),
-                reviewer: review.reviewer.clone(),
-                verdict: review.verdict,
-                superseded: child.outcome == Some(RunOutcome::Superseded),
-                sha: review.sha.clone(),
-                notes,
-            })
-        })
-        .collect()
 }
 
 /// [`findings`] of a task form, read by the emitted reader: every review finding of the task
@@ -436,10 +415,10 @@ pub(crate) fn findings_of<T: corral_core::TaskRef + ?Sized>(
         .collect())
 }
 
-pub(crate) fn build(
+pub(crate) fn build<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     attempt: &str,
     record: &ReviewRecord,
     route: &ReviewRoute,
@@ -457,7 +436,7 @@ pub(crate) fn build(
             sha: g.sha.clone(),
             fresh: verification::gate_fresh_for_review(ctx, task, run, g)?,
             log_passed: crate::gate::gate_log_passed(ctx, task, run)?,
-            log: crate::gate::gate_paths(ctx, &task.id, &run.id).log,
+            log: crate::gate::gate_paths(ctx, task.id(), &run.id).log,
             failed_cmd: g.failed_cmd.clone(),
             attempt: g.identity.as_ref().map(|i| i.attempt.clone()),
         }),
@@ -471,24 +450,24 @@ pub(crate) fn build(
     let config = &ctx.store.config;
     let bound = BoundPacket {
         version: REVIEW_PACKET_VERSION,
-        task: task.id.clone(),
-        title: task.title.clone(),
+        task: task.id().clone(),
+        title: task.title().clone(),
         run: run.id.clone(),
         attempt: attempt.into(),
         candidate: record.identity.clone(),
-        goal: task.body.clone(),
+        goal: task.body().clone(),
         criteria: task
-            .completion
+            .completion()
             .as_ref()
             .map(|m| m.criteria.clone())
             .unwrap_or_default(),
         owner_decisions: task
-            .completion
+            .completion()
             .as_ref()
             .map(|m| m.owner_decisions.clone())
             .unwrap_or_default(),
-        pending_owner_decision: run.obligations.pending_decision().is_some(),
-        approved_plan: task.plan.clone(),
+        pending_owner_decision: task.open_obligations(&run.id)?.pending_decision().is_some(),
+        approved_plan: task.plan().clone(),
         requirement: route.requirement.clone(),
         contract_digest: route.contract_digest.clone(),
         scope: route.scope,
@@ -513,9 +492,9 @@ pub(crate) fn build(
         evidence: Evidence {
             gate,
             artifacts: task
-                .artifacts
+                .artifacts_of(&run.id)?
                 .iter()
-                .filter(|a| a.run == run.id && !reviewer_side(ctx, a))
+                .filter(|a| !reviewer_side(ctx, a))
                 .map(|a| ArtifactRef {
                     kind: a.kind,
                     title: a.title.clone(),
@@ -553,10 +532,10 @@ pub(crate) fn build(
 }
 
 /// Writes the packet whose previous findings are `previous`.
-pub(crate) fn write_with(
+pub(crate) fn write_with<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     attempt: &str,
     record: &ReviewRecord,
     route: &ReviewRoute,
@@ -583,10 +562,10 @@ pub(crate) fn write_with(
 /// `packet` binds the exact candidate packet (verdicts, stronger requests). Without it the
 /// assessment is checked alone: requirement, contract text, effective reviewer selection and
 /// profile revision, so a verified unchanged-patch carry keeps its approval.
-pub(crate) fn route_changes(
+pub(crate) fn route_changes<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     record: &ReviewRecord,
     route: &ReviewRoute,
     packet: bool,
@@ -594,7 +573,7 @@ pub(crate) fn route_changes(
     let attempt = route
         .attempt
         .clone()
-        .or_else(|| run.review_runs.last().map(|c| c.id.clone()))
+        .or_else(|| run.current_child.as_ref().map(|c| c.id.clone()))
         .context("review attempt missing")?;
     let mut current = route.clone();
     let config = &ctx.store.config;
@@ -620,7 +599,7 @@ pub(crate) fn route_changes(
         subject.as_ref().filter(|_| packet),
     )?;
     if packet {
-        let previous = findings(task, &attempt);
+        let previous = findings_of(task, &attempt)?;
         let packet = build(ctx, task, run, &attempt, record, &current, previous)?;
         current.packet_digest = Some(packet.0.digest);
     }
@@ -665,10 +644,10 @@ pub(crate) fn route_changes(
 }
 
 /// An approval is recorded only when the contract's proof holds and the reviewer can meet it.
-pub(crate) fn enforce(
+pub(crate) fn enforce<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     route: &ReviewRoute,
     verdict: Verdict,
     notes: &str,

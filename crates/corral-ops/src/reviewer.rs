@@ -7,7 +7,7 @@ use std::process::Command;
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
     ArtifactKind, GateResult, HerdrRef, ProfileSwitch, ResolvedProfile, ReviewRecord, Reviewer,
-    Run, RunMode, Status, Task, Verdict,
+    Run, RunHead, RunMode, Status, Task, TaskRef, Verdict,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -18,7 +18,7 @@ use crate::pm::{live_pm_pane, open_pm};
 use crate::prompt::{corral_bin, fill, render_template};
 use crate::review::current_run;
 use crate::{Ctx, verification};
-use corral_core::{TaskMut as _, TaskRef as _};
+use corral_core::TaskMut as _;
 
 const OWNER: &str = "owner";
 const PM: &str = "pm";
@@ -57,7 +57,6 @@ pub(crate) use attempt_dir::{dir_attempt, review_dir};
 mod prompt_text;
 pub use prompt_text::review_prompt;
 mod launch;
-pub(crate) use launch::review_shell;
 
 fn pane_alive(ctx: &Ctx, pane: &str) -> Result<bool> {
     Ok(ctx.herdr.pane_get(pane)?.is_some())
@@ -86,25 +85,31 @@ pub(crate) fn review_run_automatic(
 }
 
 /// Resolve under the task lock and preserve the first successful historical vendor snapshot.
-pub(crate) fn implementer_vendor(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
+pub(crate) fn implementer_vendor<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+) -> Result<String> {
     if let Some(vendor) = &run.vendor {
         return Ok(vendor.clone());
     }
-    let saved = ctx.store.update_head(&task.id, |t| {
-        let shell = t.shell_task()?;
-        let current = shell
-            .current_run()
+    let saved = ctx.store.update_head(task.id(), |t| {
+        let current = t
+            .current_run_head()?
             .filter(|r| r.id == run.id)
             .ok_or_else(|| anyhow!("run {} is no longer current", run.id))?;
-        let vendor = ctx.store.config.run_vendor(current)?;
+        let vendor = ctx.store.config.run_vendor_head(&current)?;
         t.edit_run(&run.id, |r| {
             r.vendor = Some(vendor);
             Ok(())
         })
     })?;
+    let current = saved
+        .current_run_head()?
+        .ok_or_else(|| anyhow!("run {} is no longer current", run.id))?;
     ctx.store
         .config
-        .run_vendor(&current_run(&saved.shell_task()?)?)
+        .run_vendor_head(&current)
         .map_err(Into::into)
 }
 
@@ -215,7 +220,7 @@ fn verdict_with_clock(
     let pending = task.current_run().and_then(|run| {
         run.review.as_ref().filter(|review| {
             review.verdict.is_none()
-                && expected_attempt.is_none_or(|attempt| callback::matches(run, review, attempt))
+                && expected_attempt.is_none_or(|attempt| callback::matches(review, attempt))
         })
     });
     let bound = (expected_attempt, evidence);
@@ -249,12 +254,13 @@ fn verdict_inner(
         );
     }
     let run = current_run(&task)?;
+    let run_head = RunHead::of(&run)?;
     if !run.worktree.is_dir() {
         bail!("{}: worktree {} is gone", task.id, run.worktree.display());
     }
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let attempt_dir = match run.review_runs.last() {
-        Some(_) => notes_of(ctx, &task.id, &run)?
+        Some(_) => notes_of(ctx, &task.id, &run_head)?
             .parent()
             .map(Path::to_path_buf),
         None => None,
@@ -268,7 +274,7 @@ fn verdict_inner(
     if let Some(attempt) = expected_attempt
         && !started
             .as_ref()
-            .is_some_and(|r| callback::matches(&run, r, attempt))
+            .is_some_and(|r| callback::matches(r, attempt))
     {
         let actual = started.as_ref().and_then(callback::token);
         bail!(
@@ -283,8 +289,10 @@ fn verdict_inner(
         .map(|i| i.attempt.clone())
         .unwrap_or_else(|| format!("owner-{}", jiff::Timestamp::now().as_nanosecond()));
     let record = started.clone().unwrap_or(ReviewRecord {
-        evidence_digest: Some(verification::evidence_digest(&run)?),
-        identity: Some(verification::review_identity(ctx, &task, &run, &attempt)?),
+        evidence_digest: Some(verification::evidence_digest(&run_head)?),
+        identity: Some(verification::review_identity(
+            ctx, &task, &run_head, &attempt,
+        )?),
         verdict: None,
         process_lost: false,
         reviewer: OWNER.to_string(),
@@ -326,18 +334,19 @@ fn verdict_inner(
     }
     let (verdict, notes) = match started.as_ref() {
         Some(s) => {
-            let mut changes = verification::review_changes(ctx, &task, &run, s)?;
+            let mut changes = verification::review_changes(ctx, &task, &run_head, s)?;
             if changes.is_empty()
                 && let Some(route) = s.route.as_deref()
             {
-                changes = crate::review_packet::route_changes(ctx, &task, &run, s, route, true)?;
+                changes =
+                    crate::review_packet::route_changes(ctx, &task, &run_head, s, route, true)?;
             }
             if !changes.is_empty() {
                 bail!("stale review: {}", serde_json::to_string(&changes)?);
             }
             match s.route.as_deref() {
                 Some(route) => {
-                    crate::review_packet::enforce(ctx, &task, &run, route, verdict, notes)?
+                    crate::review_packet::enforce(ctx, &task, &run_head, route, verdict, notes)?
                 }
                 None => (verdict, notes.to_string()),
             }
@@ -352,7 +361,9 @@ fn verdict_inner(
             .and_then(|g| g.identity.as_ref())
             .map(|i| i.attempt.clone())
             .unwrap_or_else(|| format!("owner-{}", jiff::Timestamp::now().as_nanosecond()));
-        record.identity = Some(verification::review_identity(ctx, &task, &run, &attempt)?);
+        record.identity = Some(verification::review_identity(
+            ctx, &task, &run_head, &attempt,
+        )?);
     }
     record_verdict(
         ctx,

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use corral_core::{Run, Status, Task};
+use corral_core::{Run, RunHead, Status, Task};
 use corral_herdr::PaneInfo;
 use serde_json::json;
 
@@ -48,6 +48,21 @@ fn round_shell(head: &corral_core::TaskHead) -> Result<Task> {
         current.review_runs = children;
     }
     Ok(task)
+}
+
+/// [`cleanup_report`] of a head, as [`cleanup_head`] reads it.
+pub(crate) fn cleanup_report_head(
+    ctx: &Ctx,
+    head: &corral_core::TaskHead,
+    scope: Cleanup,
+) -> Vec<String> {
+    match round_shell(head) {
+        Ok(task) => cleanup_report(ctx, &task, scope),
+        Err(error) => {
+            failed(ctx, &head.id, "inventory", &error);
+            vec![format!("{error:#}")]
+        }
+    }
 }
 
 pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<String> {
@@ -209,7 +224,7 @@ fn clean_listed(
             Cleanup::Round => task.runs.last().map(std::slice::from_ref).unwrap_or(&[]),
         };
         for run in runs {
-            crate::watch::capture_review(ctx, task, run);
+            crate::watch::capture_review(ctx, *task, &RunHead::of(run)?);
         }
         let mut rows = head.unreleased_panes(scope == Cleanup::Round)?;
         for listed in live.unwrap_or_default() {

@@ -319,7 +319,11 @@ fn dispatch_with(
         promotion_origin: None,
         agent_host: None,
     };
-    run.completion.required_checks = Some(crate::gate_tier::required_checks(ctx, &task, &run)?);
+    run.completion.required_checks = Some(crate::gate_tier::required_checks(
+        ctx,
+        &task,
+        &corral_core::RunHead::of(&run)?,
+    )?);
 
     let ownership = ctx
         .store

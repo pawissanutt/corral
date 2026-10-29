@@ -61,7 +61,7 @@ fn approved(fx: &Fx, id: &str, attempt: &str) -> GateRecord {
 
 fn fresh_receipts(fx: &Fx, id: &str, gate: &GateRecord) -> (bool, bool) {
     let (task, run) = fx.current(id);
-    let review = verification::review_fresh(&fx.ctx, &task, &run).unwrap();
+    let review = verification::review_fresh(&fx.ctx, &task, &run_head(&run)).unwrap();
     (fx.fresh(id, gate), review)
 }
 
@@ -71,13 +71,14 @@ fn rederived(fx: &Fx, id: &str, gate: &GateRecord) -> Vec<u8> {
     let attempt = &gate.identity.as_ref().unwrap().attempt;
     let binding = gate.identity.as_ref().unwrap().gate_tier.clone();
     let identity =
-        verification::capture_identity_with(&fx.ctx, &task, &run, attempt, binding).unwrap();
+        verification::capture_identity_with(&fx.ctx, &task, &run_head(&run), attempt, binding)
+            .unwrap();
     serde_json::to_vec(&identity).unwrap()
 }
 
 fn target_valid(fx: &Fx, id: &str) -> bool {
     let (task, run) = fx.current(id);
-    crate::plan_target::validate_run(&fx.ctx.store, &task, &run)
+    crate::plan_target::validate_run(&fx.ctx.store, &task, &run_head(&run))
         .unwrap()
         .is_some()
 }
@@ -120,7 +121,7 @@ fn an_owner_amendment_records_a_revision_and_reconciles_only_the_amended_member(
     );
     // And the member's next gate binds the new source; its snapshot names the new commands.
     let (task, run) = fx.current(&a);
-    let contract = select(&fx.ctx, &task, &run, GatePhase::Review).unwrap();
+    let contract = select(&fx.ctx, &task, &run_head(&run), GatePhase::Review).unwrap();
     assert_eq!(
         (contract.tier.as_str(), contract.source.as_str()),
         (FULL_TIER, source.as_str())
@@ -383,14 +384,14 @@ fn main_landing_and_aggregate_gates_stay_full_after_expected_failures_are_added(
         "tier: quick\nexpected_failures: [{test: \"app::suite slow\", reason: restored by b}]\n";
     amend(&fx, &id, 0, yaml).unwrap();
     let (task, run) = fx.current(&id);
-    let member = select(&fx.ctx, &task, &run, GatePhase::Review).unwrap();
+    let member = select(&fx.ctx, &task, &run_head(&run), GatePhase::Review).unwrap();
     assert_eq!(member.expected_failures.len(), 1);
     // A main-bound landing and the aggregate are full with an empty expected-failure set.
     let main = fx.main_bound();
     let landing = select(
         &fx.ctx,
         &main,
-        main.current_run().unwrap(),
+        &run_head(main.current_run().unwrap()),
         GatePhase::Landing,
     )
     .unwrap();
@@ -404,4 +405,9 @@ fn main_landing_and_aggregate_gates_stay_full_after_expected_failures_are_added(
         assert!(contract.expected_failures.is_empty() && contract.tests.is_empty());
         assert_eq!(contract.requirement, crate::GateRequirement::full());
     }
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

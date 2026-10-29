@@ -127,7 +127,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
         "review.rs",
         "approve_landed",
         "approved",
-        "cleanup_report",
+        "cleanup_report_head",
         "closing panes and optional removal of the landed worktree and branch",
     ),
     (
@@ -141,7 +141,7 @@ pub const JOURNAL_ALLOWLIST: &[(&str, &str, &str, &str, &str)] = &[
         "plan_target/landing.rs",
         "publish",
         "approved",
-        "cleanup_report",
+        "cleanup_report_head",
         "closing panes and optional removal of the integrated worktree and branch",
     ),
     (

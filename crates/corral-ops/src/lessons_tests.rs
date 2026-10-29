@@ -100,7 +100,7 @@ fn dispatch_snapshot_survives_owner_edits_and_reviewer_uses_same_data() {
         Some(vec![original])
     );
     let dispatch = crate::task_prompt(&ctx, &task, &run).unwrap();
-    let review = crate::review_prompt(&ctx, &task, &run).unwrap();
+    let review = crate::review_prompt(&ctx, &task, &run_head(&run)).unwrap();
     let parse = |prompt: &str| -> Vec<Lesson> {
         serde_json::from_str(
             prompt
@@ -552,4 +552,9 @@ fn likely_files_derive_lesson_signals_once_per_read_only_pass() {
     assert_eq!(live_scans, 3);
     assert_eq!(scans() - start, 1);
     assert_eq!(frozen, live);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

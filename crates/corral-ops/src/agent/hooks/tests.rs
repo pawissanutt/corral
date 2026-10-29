@@ -79,7 +79,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
     let _ = preflight::check(ctx, AgentRole::Worker, profile);
     let _ = review::preflight(ctx, profile);
     let _ = pm::preflight(ctx, Some(profile));
-    let _ = review::command(ctx, task, run, profile);
+    let _ = review::command(ctx, task, &run_head(run), profile);
     crate::provider_stall::advance_agent(
         ctx,
         &ctx.store.head(&task.id).unwrap(),
@@ -118,7 +118,7 @@ fn other_harnesses_never_reach_an_agent_hook() {
         crate::delivery::owner::review_launch_mode("omo"),
         DeliveryMode::Legacy
     );
-    assert!(review::command(&fx.ctx, &task, &task.runs[0], &omo).is_none());
+    assert!(review::command(&fx.ctx, &task, &run_head(&task.runs[0]), &omo).is_none());
 }
 
 #[test]
@@ -667,4 +667,9 @@ fn a_held_reviewer_stays_live_and_its_withdrawal_restores_review() {
     let settled = fx.ctx.store.get(&id).unwrap();
     assert_eq!(settled.status, Status::Review);
     assert_eq!(settled.runs[0].blocked_excerpt, None);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

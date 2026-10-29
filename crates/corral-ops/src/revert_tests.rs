@@ -441,10 +441,16 @@ fn unresolved_post_land_obligation_blocks_revert_before_base_or_task_mutation() 
     let mut fx = Fx::new(crate::ApproveStrategy::FastForward);
     configure_hook(&mut fx);
     let run = fx.task.current_run().unwrap();
-    let mut operation =
-        crate::hooks::prepare(&fx.ctx, &fx.task, run, &fx.repo, &fx.before, &fx.landed)
-            .unwrap()
-            .unwrap();
+    let mut operation = crate::hooks::prepare(
+        &fx.ctx,
+        &fx.task,
+        &run_head(run),
+        &fx.repo,
+        &fx.before,
+        &fx.landed,
+    )
+    .unwrap()
+    .unwrap();
     operation.landed = true;
     operation.hooks[0].state = crate::HookState::Failed;
     operation.hooks[0].reason = Some("fixture unresolved operation".into());
@@ -533,4 +539,9 @@ fn missing_pre_landing_base_never_falls_back_to_dispatch_base() {
     assert!(result.is_err());
     assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), fx.landed);
     assert_eq!(fx.ctx.store.get(&fx.task.id).unwrap(), fx.task);
+}
+
+/// The run projection a converted helper takes.
+fn run_head(run: &corral_core::Run) -> corral_core::RunHead {
+    corral_core::RunHead::of(run).unwrap()
 }

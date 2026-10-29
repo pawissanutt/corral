@@ -3,13 +3,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use corral_core::{ReviewPolicy, Task};
+use corral_core::ReviewPolicy;
 
 use crate::Ctx;
 
-pub(crate) fn effective_size_limits(
+pub(crate) fn effective_size_limits<T: corral_core::TaskFieldsRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     repo: &Path,
     policy: &ReviewPolicy,
 ) -> Result<BTreeMap<String, usize>> {
@@ -22,7 +22,7 @@ pub(crate) fn effective_size_limits(
     let store = ctx.store.reopen()?;
     let global = store.config.review.size_limits.as_ref();
     let project = task
-        .project
+        .project()
         .as_ref()
         .and_then(|project| store.config.projects.get(project))
         .and_then(|project| project.review.size_limits.as_ref());

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::backend::ScratchKind;
-use corral_core::{GateRecord, GateResult, Run, Status, Task};
+use corral_core::{GateRecord, GateResult, RunHead, Status, Task, TaskRef};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
@@ -91,10 +91,10 @@ fn metadata_path(ctx: &Ctx, task: &str, run: &str, attempt: &str) -> Result<Path
         .join(format!("{run}-{attempt}.json")))
 }
 
-pub(crate) fn start_gate(
+pub(crate) fn start_gate<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     record: &GateRecord,
     commands: &[String],
     log: &Path,
@@ -105,7 +105,7 @@ pub(crate) fn start_gate(
     let attempt = GateAttempt {
         run: run.id.clone(),
         attempt: identity.attempt.clone(),
-        round: task.rounds,
+        round: *task.rounds(),
         started: record.at,
         ended: None,
         duration_ms: None,
@@ -127,7 +127,7 @@ pub(crate) fn start_gate(
         live_pane: record.pane.clone(),
         record: record.clone(),
     };
-    save_gate(ctx, &task.id, &attempt)
+    save_gate(ctx, task.id(), &attempt)
 }
 
 fn save_gate(ctx: &Ctx, task: &str, attempt: &GateAttempt) -> Result<()> {
@@ -274,7 +274,11 @@ pub fn load(ctx: &Ctx, task: &str) -> Result<StageHistory> {
 /// sidecar write follows the current run and its current review child, so the writes equal
 /// `load`'s; nothing earlier is read.
 pub(crate) fn reconcile(ctx: &Ctx, task: &str) -> Result<()> {
-    load_task(ctx, &crate::reviewer::review_shell(&ctx.store.head(task)?)?).map(drop)
+    load_task(
+        ctx,
+        &corral_core::TaskRef::shell_task(&ctx.store.head(task)?)?,
+    )
+    .map(drop)
 }
 
 fn load_task(ctx: &Ctx, task: &Task) -> Result<StageHistory> {

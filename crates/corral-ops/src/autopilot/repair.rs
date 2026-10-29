@@ -4,11 +4,11 @@ use corral_git::MergePreflight;
 impl Pilot<'_> {
     /// Re-evaluate exact SHAs before spending on gates/review, and again if main moves.
     pub(super) fn preflight(&self) -> Result<Option<Step>> {
-        crate::plan_target::validate_run(&self.ctx.store, self.task, self.run)?;
+        crate::plan_target::validate_run(&self.ctx.store, self.head, self.run)?;
         if !self.run.worktree.exists() || !corral_git::is_clean(&self.run.worktree)? {
             return Ok(None);
         }
-        let mut key = match RepairKey::new(self.task, self.run, "preflight_clean") {
+        let mut key = match RepairKey::new(self.head, self.run, "preflight_clean") {
             Ok(key) => key,
             Err(error) => {
                 return self
@@ -41,14 +41,14 @@ impl Pilot<'_> {
                 }
                 let packet = IntegrationPacket::build(
                     self.ctx,
-                    self.task,
+                    self.head,
                     self.run,
                     &self.policy,
                     key.clone(),
                     Vec::new(),
                     None,
                 )?;
-                key.check(&self.ctx.store.head(self.id())?.shell_task()?)?;
+                key.check(&self.ctx.store.head(self.id())?)?;
                 packet.attach(self.ctx)?;
                 Ok(None)
             }
@@ -75,14 +75,14 @@ impl Pilot<'_> {
     ) -> Result<Step> {
         let packet = IntegrationPacket::build(
             self.ctx,
-            self.task,
+            self.head,
             self.run,
             &self.policy,
             key.clone(),
             paths,
             details,
         )?;
-        key.check(&self.ctx.store.head(self.id())?.shell_task()?)?;
+        key.check(&self.ctx.store.head(self.id())?)?;
         let artifact = packet.attach(self.ctx)?;
         let summary = if key.reason == "base_moved" {
             format!(
@@ -113,12 +113,12 @@ impl Pilot<'_> {
     }
 
     pub(super) fn request_changes(&self, summary: &str, details: &str) -> Result<Step> {
-        let key = RepairKey::new(self.task, self.run, summary)?;
+        let key = RepairKey::new(self.head, self.run, summary)?;
         self.send_request(summary, details, &key, None)
     }
 
     pub(super) fn rebase(&self) -> Result<Step> {
-        let mut key = RepairKey::new(self.task, self.run, "rebase_conflict")?;
+        let mut key = RepairKey::new(self.head, self.run, "rebase_conflict")?;
         if self.policy.merge == MergeMode::Ff {
             key.reason = "base_moved".into();
             return self.integration_changes(key, Vec::new(), None);
@@ -130,9 +130,8 @@ impl Pilot<'_> {
             .store
             .dispatch_update_head(self.id(), |store, current| {
                 crate::operating::require(store, &*current, OperatingActionKind::Repair)?;
-                let shell = current.shell_task()?;
-                key.check(&shell)?;
-                crate::verdict_carry::rebase(self.ctx, &shell, self.run, &key.base)
+                key.check(&*current)?;
+                crate::verdict_carry::rebase(self.ctx, &*current, self.run, &key.base)
             })
             .map(|(_, outcome)| outcome);
         match rebased {

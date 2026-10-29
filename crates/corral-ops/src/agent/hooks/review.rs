@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRole, HostHealth};
 use corral_core::inbox::Recipient;
-use corral_core::{ResolvedProfile, Run, Task};
+use corral_core::{ResolvedProfile, Run};
 
 use super::consulted;
 use crate::Ctx;
@@ -15,26 +15,26 @@ pub fn preflight(ctx: &Ctx, resolved: &ResolvedProfile) -> Result<()> {
 
 /// The pane command of the review child review-run just recorded under `parent`; `None` for a
 /// reviewer of any other harness, which renders its own template.
-pub fn command(
+pub fn command<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    parent: &Run,
+    task: &T,
+    parent: &corral_core::RunHead,
     resolved: &ResolvedProfile,
 ) -> Option<Result<String>> {
-    super::is_pi_native(&resolved.harness).then(|| pi_command(ctx, task, parent))
+    super::is_pi_native(&resolved.harness).then(|| pi_command(ctx, task.id(), parent))
 }
 
-fn pi_command(ctx: &Ctx, task: &Task, parent: &Run) -> Result<String> {
+fn pi_command(ctx: &Ctx, task: &str, parent: &corral_core::RunHead) -> Result<String> {
     consulted("review");
-    let saved = ctx.store.get(&task.id)?;
+    let saved = ctx.store.head(task)?;
     let review = saved
-        .runs
-        .iter()
-        .find(|r| r.id == parent.id)
-        .and_then(|r| r.review_runs.last())
+        .current_run
+        .as_ref()
+        .filter(|r| r.id == parent.id)
+        .and_then(|r| r.current_child.as_deref())
         .context("review child disappeared before launch")?;
     super::super::launch::command(&Recipient::ReviewRun {
-        task: task.id.clone(),
+        task: task.to_owned(),
         run: parent.id.clone(),
         review: review.id.clone(),
     })

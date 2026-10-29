@@ -4,8 +4,8 @@
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     AutoProfileSelection, CandidateIdentity, Config, PolicySource, ProfileReviewSubject,
-    ProfileRole, ReviewRequirement, ReviewSelectionContext, Reviewer, ReviewerPolicyRecord, Run,
-    Task,
+    ProfileRole, ReviewRequirement, ReviewSelectionContext, Reviewer, ReviewerPolicyRecord,
+    RunHead, Task, TaskRef,
 };
 use serde::Serialize;
 
@@ -19,13 +19,16 @@ pub struct ReviewSelectionView {
     pub policy: ReviewerPolicyRecord,
 }
 
-pub(crate) fn policy_record(config: &Config, task: &Task) -> Result<ReviewerPolicyRecord> {
+pub(crate) fn policy_record<T: TaskRef + ?Sized>(
+    config: &Config,
+    task: &T,
+) -> Result<ReviewerPolicyRecord> {
     let policy = config.task_review_policy(task);
-    let source = if task.reviewer.is_some() {
+    let source = if task.reviewer().is_some() {
         PolicySource::Task
     } else {
         config
-            .review_policy_sources(task.project.as_deref(), task.review)
+            .review_policy_sources(task.project().as_deref(), *task.review())
             .reviewer
     };
     Ok(ReviewerPolicyRecord {
@@ -37,10 +40,10 @@ pub(crate) fn policy_record(config: &Config, task: &Task) -> Result<ReviewerPoli
 }
 
 /// The gate-backed candidate identity a review launch binds, with its contract floor.
-pub(crate) fn implementation_view(
+pub(crate) fn implementation_view<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
 ) -> Result<ReviewSelectionView> {
     let attempt = run
         .gate
@@ -62,10 +65,10 @@ pub(crate) fn implementation_view(
 
 /// Save, launch and verdict pass the exact subject; landing freshness passes None so a
 /// verified unchanged-patch carry keeps its receipt.
-pub(crate) fn check(
+pub(crate) fn check<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     receipt: &AutoProfileSelection,
     requirement: &ReviewRequirement,
     subject: Option<&ProfileReviewSubject>,
@@ -85,8 +88,11 @@ pub(crate) fn check(
         .as_ref()
         .context("review receipt lacks its review contract")?;
     if let Some(subject) = subject {
-        let vendor = run.vendor.clone().or_else(|| config.run_vendor(run).ok());
-        review.validate(
+        let vendor = run
+            .vendor
+            .clone()
+            .or_else(|| config.run_vendor_head(run).ok());
+        review.validate_implementation(
             config,
             &ReviewSelectionContext {
                 task,
@@ -109,15 +115,15 @@ pub(crate) fn check(
     config.check_profile_eligibility(
         &receipt.profile,
         ProfileRole::ImplementationReview,
-        task.project.as_deref(),
+        task.project().as_deref(),
         true,
     )
 }
 
-pub(crate) fn for_launch(
+pub(crate) fn for_launch<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     identity: &CandidateIdentity,
     requirement: &ReviewRequirement,
 ) -> Result<(Option<AutoProfileSelection>, Option<String>)> {
@@ -126,7 +132,7 @@ pub(crate) fn for_launch(
     };
     let receipts = ctx.store.auto_profile_selections()?;
     let Some(receipt) = receipts.iter().rev().find(|r| {
-        r.task == task.id
+        r.task == *task.id()
             && r.role == ProfileRole::ImplementationReview
             && r.review.as_ref().is_some_and(|v| v.subject == subject)
     }) else {
@@ -191,10 +197,10 @@ pub(crate) fn plan_for_launch(
     })
 }
 
-pub(crate) fn still_valid(
+pub(crate) fn still_valid<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     id: &str,
     requirement: &ReviewRequirement,
     subject: Option<&ProfileReviewSubject>,

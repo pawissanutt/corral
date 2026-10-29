@@ -241,7 +241,12 @@ fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Resu
     let base = corral_git::rev_sha(&run.worktree, &run.base)?;
     let policy = verification::policy(ctx, task)?;
     let gate = format!("corral gate {id} --wait");
-    let repair = match crate::prompt::reduced_send_back(ctx, task, run, &gate)? {
+    let repair = match crate::prompt::reduced_send_back(
+        ctx,
+        task,
+        &corral_core::RunHead::of(run)?,
+        &gate,
+    )? {
         Some((tier, text)) => (
             format!(
                 "Rebase onto current {} (observed {base}), resolve conflicts and commit. {text} Obtain a fresh independent review before landing. Do not reuse stale verdicts or gate receipts.",
@@ -297,12 +302,23 @@ fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Resu
     if !policy.gate.is_empty() {
         match &run.gate {
             Some(g) if g.result == GateResult::Pass => {
-                if !verification::gate_passed(ctx, task, run)? {
+                if !verification::gate_passed(ctx, task, &corral_core::RunHead::of(run)?)? {
                     // An approved review-round receipt still needs the full landing gate.
                     let review = crate::gate_tier::GatePhase::Review;
-                    let review = crate::gate_tier::requirement_for(ctx, task, run, review)?;
-                    if crate::gate::gate_log_passed(ctx, task, run)?
-                        && verification::gate_fresh_for(ctx, task, run, g, &review)?
+                    let review = crate::gate_tier::requirement_for(
+                        ctx,
+                        task,
+                        &corral_core::RunHead::of(run)?,
+                        review,
+                    )?;
+                    if crate::gate::gate_log_passed(ctx, task, &corral_core::RunHead::of(run)?)?
+                        && verification::gate_fresh_for(
+                            ctx,
+                            task,
+                            &corral_core::RunHead::of(run)?,
+                            g,
+                            &review,
+                        )?
                     {
                         return Ok(PmObservation::GateNeeded { task: id.clone() });
                     }
@@ -370,7 +386,7 @@ fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Resu
     }
     if (policy.reviewer != Reviewer::None || run.review.is_some())
         && !promotable
-        && !verification::review_fresh(ctx, task, run)?
+        && !verification::review_fresh(ctx, task, &corral_core::RunHead::of(run)?)?
     {
         return Ok(PmObservation::ReviewNeeded { task: id.clone() });
     }
@@ -446,9 +462,16 @@ fn landing_blocker(
             reason,
         }));
     }
-    let key = crate::integration::RepairKey::new(task, run, "pm-next")?;
-    let packet =
-        crate::integration::IntegrationPacket::build(ctx, task, run, policy, key, vec![], None)?;
+    let key = crate::integration::RepairKey::new(task, &corral_core::RunHead::of(run)?, "pm-next")?;
+    let packet = crate::integration::IntegrationPacket::build(
+        ctx,
+        task,
+        &corral_core::RunHead::of(run)?,
+        policy,
+        key,
+        vec![],
+        None,
+    )?;
     if !packet.conflict_paths.is_empty() || !packet.missing_from_candidate.is_empty() {
         return Ok(Some(PmObservation::StaleReview {
             task: id.clone(),
@@ -470,7 +493,10 @@ fn landing_blocker(
             ),
         }));
     }
-    if !promotable && !crate::completion::evidence_failures(ctx, task, run)?.is_empty() {
+    if !promotable
+        && !crate::completion::evidence_failures(ctx, task, &corral_core::RunHead::of(run)?)?
+            .is_empty()
+    {
         return Ok(Some(PmObservation::Owner {
             task: id.clone(),
             reason: "Required acceptance evidence is missing or stale.".into(),
