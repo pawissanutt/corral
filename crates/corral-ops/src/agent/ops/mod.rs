@@ -6,6 +6,7 @@ mod hello;
 mod lookup;
 pub(crate) mod pm;
 pub(crate) mod reviewer;
+pub(crate) mod todo;
 pub(crate) mod worker;
 
 use anyhow::Result;

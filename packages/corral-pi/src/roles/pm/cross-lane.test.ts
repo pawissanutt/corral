@@ -111,7 +111,7 @@ beforeAll(async () => {
   const sdk = await import("@earendil-works/pi-coding-agent");
   host = await HostSession.create({
     sdk, identity, cwd: workspace, agentDir: join(workspace, "pi-agent"), model: "gpt-6.1-sol",
-    modules, client, events, network, sessionManager: sdk.SessionManager.create(workspace, lane.sessions),
+    todo: true, modules, client, events, network, sessionManager: sdk.SessionManager.create(workspace, lane.sessions),
   });
   await host.session.bindExtensions({});
   await host.hello(lane.nonce, pane, sha256Hex("d".repeat(64)));
@@ -159,4 +159,39 @@ test("a model-issued PM comment commits once in scope and cannot mutate another 
   const results: ToolOutcome[] = host.session.messages.flatMap((message) => message.role === "toolResult"
     ? message.content.flatMap((part) => part.type === "text" ? [JSON.parse(part.text)] : []) : []);
   expect(results.some((result) => result.state === "rejected" && result.result?.code === "out_of_scope")).toBeTrue();
+}, 600_000);
+
+test("a model-issued PM todo survives fresh state reads without changing a task", async () => {
+  if (!isolated) return;
+  // Given a bound production PM and an unrelated task snapshot.
+  const before = show(lane.task);
+  transport.script([
+    { toolCalls: [{ callId: "todo-init", name: "corral_todo", arguments: { op: "init", phases: [
+      { id: "triage", label: "Triage", steps: [
+        { id: "review", label: "Review the brief" }, { id: "extra", label: "Optional follow-up" },
+      ] },
+    ] } }] },
+    { toolCalls: [{ callId: "todo-start", name: "corral_todo", arguments: { op: "start", step: "review" } }] },
+    { toolCalls: [{ callId: "todo-done", name: "corral_todo", arguments: { op: "done", step: "review" } }] },
+    { toolCalls: [{ callId: "todo-drop", name: "corral_todo", arguments: {
+      op: "drop", step: "extra", reason: "No further triage needed",
+    } }] },
+    { text: "RECORDED" },
+  ]);
+  const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 2, 120_000);
+  // When the host updates its own ledger through authenticated top-level calls.
+  await host.submit({ text: "Track triage.", busyPolicy: "prompt", idempotencyKey: "pm-todo", origin: "test" }, "rq-pm-todo");
+  await ended;
+  await host.drained();
+  // Then a fresh CLI process renders its durable ledger and leaves the task unchanged.
+  const state = JSON.parse(ok([corral, "agent", "state", "--pm", "--json"], { cwd: workspace }));
+  expect(state.container.todo.revision).toBe(4);
+  expect(state.container.todo.phases[0].steps[1].status).toEqual({
+    state: "dropped", reason: "No further triage needed",
+  });
+  expect(show(lane.task)).toEqual(before);
+  const human = ok([corral, "agent", "state", "--pm"], { cwd: workspace });
+  expect(human).toContain("Review the brief");
+  expect(human).toContain("No further triage needed");
+  process.stdout.write("PASS PM todo: real host -> own receipted ledger -> fresh human/JSON state; task unchanged\n");
 }, 600_000);

@@ -85,7 +85,7 @@ test("the package's worker role is the OD3 loadout and allows only the worker's 
   expect(tools.map((tool) => tool.name)).toEqual(CORRAL_TOOLS);
   expect([...worker.corralOps].sort()).toEqual(
     ["hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint", "evidence", "artifact",
-      "gate", "done"].sort(),
+      "gate", "done", "todo"].sort(),
   );
   expect(tools.every((tool) => worker.corralOps.includes(tool.op))).toBeTrue();
 });

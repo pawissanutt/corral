@@ -10,6 +10,16 @@ const message = {
   assets: "/assets", runtime_dir: "/runtime", session_dir: "/sessions", model: "gpt-6.1-sol",
 };
 
+test("todo is enabled only by a boolean launch snapshot and defaults off for legacy launches", () => {
+  expect(parseLaunchMessage(JSON.stringify(message)).todo).toBeFalse();
+  for (const todo of [true, false]) {
+    expect(parseLaunchMessage(JSON.stringify({ ...message, todo })).todo).toBe(todo);
+  }
+  for (const todo of [null, "true", 1, {}, []]) {
+    expect(() => parseLaunchMessage(JSON.stringify({ ...message, todo }))).toThrow(LaunchMessageInvalid);
+  }
+});
+
 test("the optional exact resume path survives launch parsing; older launch messages remain valid", () => {
   expect(parseLaunchMessage(JSON.stringify(message)).resumeSession).toBeUndefined();
   expect(parseLaunchMessage(JSON.stringify({ ...message, resume_session: null })).resumeSession).toBeUndefined();

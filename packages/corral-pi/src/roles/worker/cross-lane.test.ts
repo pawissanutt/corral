@@ -117,7 +117,7 @@ beforeAll(async () => {
   const client = new CorralClient({ corral, root: workspace, identity, hostCap: HOST_CAP, sessionId: () => host.sessionId() });
   const sdk = await import("@earendil-works/pi-coding-agent");
   host = await HostSession.create({
-    sdk, identity, cwd: app, agentDir: join(workspace, "pi-agent"), model: "gpt-6.1-sol", modules, client, events,
+    sdk, identity, cwd: app, agentDir: join(workspace, "pi-agent"), model: "gpt-6.1-sol", todo: true, modules, client, events,
     network, promptFile: lane.prompt_file, sessionManager: sdk.SessionManager.create(app, lane.sessions),
   });
   const dir = generationDir(workspace, lane.task, lane.run, lane.generation);
@@ -157,12 +157,33 @@ const turnEnded = (turn: number) => nextEvent(events, (event) => event.kind === 
 test("the production worker gates, owner input steers a bridge turn, and a fresh corral wakes it to report done", async () => {
   if (!isolated) return;
   // Given the bound production worker, whose fresh session starts its first turn with the prompt:
-  transport.script([{ toolCalls: [{ callId: "gate-1", name: "corral_gate", arguments: {} }] }, { text: "GATE_STARTED" }]);
+  transport.script([
+    { toolCalls: [{ callId: "todo-init", name: "corral_todo", arguments: { op: "init", phases: [
+      { id: "build", label: "Build", steps: [
+        { id: "wire", label: "Wire the todo tool" }, { id: "extra", label: "Optional check" },
+      ] },
+    ] } }] },
+    { toolCalls: [{ callId: "todo-start", name: "corral_todo", arguments: { op: "start", step: "wire" } }] },
+    { toolCalls: [{ callId: "todo-done", name: "corral_todo", arguments: { op: "done", step: "wire" } }] },
+    { toolCalls: [{ callId: "todo-drop", name: "corral_todo", arguments: {
+      op: "drop", step: "extra", reason: "Covered by the targeted check",
+    } }] },
+    { toolCalls: [{ callId: "gate-1", name: "corral_gate", arguments: {} }] }, { text: "GATE_STARTED" },
+  ]);
   await host.hello(lane.nonce, show(lane.task).runs[0].herdr.pane_id, sha256Hex(CTL));
   const first = turnEnded(1);
   await host.session.bindExtensions({});
   await first;
   await host.drained();
+  const progress = show(lane.task).runs[0].progress;
+  expect(progress.revision).toBe(4);
+  expect(progress.phases[0].steps.map((step: { status: unknown }) => step.status)).toEqual([
+    { state: "done" }, { state: "dropped", reason: "Covered by the targeted check" },
+  ]);
+  const human = cli("show", lane.task);
+  expect(human).toContain("Wire the todo tool");
+  expect(human).toContain("Covered by the targeted check");
+  process.stdout.write("PASS worker todo: real host -> receipted Rust progress -> human corral show with drop reason\n");
   const gateReceipt = show(lane.task).runs[0].agent_host.receipts.find((receipt: { op: string }) => receipt.op === "gate");
   expect([gateReceipt.state, gateReceipt.result.outcome]).toEqual(["committed", "started"]);
   const attempt: string = gateReceipt.result.attempt;
@@ -196,8 +217,18 @@ test("the production worker gates, owner input steers a bridge turn, and a fresh
   }), 120_000, "the gate result file");
   const readback = show(lane.task).gate_ref;
   expect(readback.attempt).toBe(attempt);
-  transport.script([{ toolCalls: [{ callId: "done-1", name: "corral_done", arguments: {
-    summary: SUMMARY, gate_ref: readback, contract_sha256: lane.contract_sha256 } }] }, { text: "DONE" }]);
+  const identity = JSON.parse(cli("run", "progress", lane.task, "--json"));
+  transport.script([
+    { toolCalls: [{ callId: "checkpoint-1", name: "corral_checkpoint", arguments: { checkpoint: {
+      task: lane.task, run: lane.run, spec_revision: identity.spec_revision, expected_revision: 0,
+      progress_revision: identity.progress.revision, head: identity.head, base: identity.base, tree: identity.tree,
+      criterion_ids: [], evidence_refs: [], next_action: "Report completion", decisions: [], waits: [], resources: [],
+    } } }] },
+    { toolCalls: [{ callId: "done-1", name: "corral_done", arguments: {
+      summary: SUMMARY, gate_ref: readback, contract_sha256: lane.contract_sha256,
+    } }] },
+    { text: "DONE" },
+  ]);
   const woken = turnEnded(3);
   const done = follower!.next((event) => event.kind === "done" && event.task === lane.task, 120_000);
   await cliAsync("sync");

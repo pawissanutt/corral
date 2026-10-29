@@ -42,6 +42,7 @@ export interface HostSessionOptions {
   readonly aws?: AwsRoute;
   readonly effort?: string;
   readonly promptFile?: string;
+  readonly todo?: boolean;
   /** Absent means rich: corral's header, footer status and compact corral_* rendering. */
   readonly ui?: UiMode;
   readonly modules: LoadedModules;
@@ -207,6 +208,7 @@ export class HostSession {
     this.provider = options.provider ?? "openai-codex";
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, model: options.model,
+      todo: options.todo === true,
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
     };
@@ -496,6 +498,7 @@ export class HostSession {
     const resources = this.runtime.services.resourceLoader;
     return {
       role: this.options.identity.role,
+      todo: this.loadout.includes("corral_todo"),
       generation: this.options.identity.generation,
       bound: this.bound,
       interactive: this.interactive,

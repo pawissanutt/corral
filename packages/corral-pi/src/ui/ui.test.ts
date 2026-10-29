@@ -42,6 +42,16 @@ test("a receipt renders as one line: its state and the result fields worth readi
     .toBe("◷ uncertain gate_start_uncertain");
 });
 
+test("todo renders its operation and step with the canonical receipt revision", () => {
+  expect(renderCallText("corral_todo", { op: "done", step: "implement" }, plain)).toBe("corral todo done implement");
+  const result = receipt("committed", { revision: 3, progress: { revision: 3, spec_revision: 1, phases: [] } }, { op: "todo" });
+  expect(renderResultText(result, false, false, plain)).toBe("✓ revision=3");
+  const renderers = corralRenderers("corral_todo");
+  const context = { isError: false } as Parameters<NonNullable<typeof renderers.renderResult>>[3];
+  const component = renderers.renderResult?.(result, { expanded: false } as never, plain as never, context);
+  expect(component?.render(40).join("").trim()).toBe("✓ revision=3");
+});
+
 test("a call without a receipt shows its error, and only the expanded view shows the raw result", () => {
   const failed: AgentToolResult<unknown> = { content: [{ type: "text", text: "call_timeout: exceeded" }], details: undefined };
   expect(renderResultText(failed, false, true, plain)).toBe("✗ call_timeout: exceeded");

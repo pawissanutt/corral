@@ -33,6 +33,48 @@ when you dispatch, before a worktree exists.
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
+### Todo progress
+
+New worker and PM generations expose `corral_todo` by default. The minimal capability
+configuration is shared with the upcoming capability catalog:
+
+```toml
+[agent.capabilities]
+preset = "standard" # default; "full" also enables todo, "strict" disables it
+
+[agent.capabilities.worker]
+todo = false       # optional per-role override
+
+[agent.capabilities.pm]
+todo = true        # optional per-role override, including under strict
+```
+
+Reviewers and planning roles cannot mutate todo ledgers. No other optional capability
+is introduced by these settings. Reinstall the host to get its todo tool.
+
+`corral_todo` accepts `init`, `append`, `start`, `done`, and `drop`. Initialize with
+`{"op":"init","phases":[{"id":"build","label":"Build","steps":[{"id":"wire","label":"Wire the tool"}]}]}`.
+Append uses `{"op":"append","phase":"build","steps":[{"id":"check","label":"Check the result"}]}`.
+Start or finish a step with `{"op":"start","step":"wire"}` or `{"op":"done","step":"wire"}`.
+Drop uses `{"op":"drop","step":"check","reason":"Covered by another check"}`.
+IDs stay stable. Only one step may be in progress; finish or drop it before starting
+another. Done/dropped steps are terminal and init cannot replace an existing ledger.
+Worker steps may include registered acceptance `criteria` IDs; PM steps cannot.
+
+The server selects the worker's current `Run.progress` or the PM's own ledger from its
+authenticated binding. The model cannot select a task, run, role, or revision. Each
+request commits progress and its receipt together; replay returns the original receipt
+without another update. The receipt includes `revision` and full `progress`, bounded
+by the existing 8 KiB receipt-result limit. Worker progress appears in board cards and
+`corral show`; the PM ledger appears in `corral agent state --pm` and its JSON output.
+The compact host transcript shows the operation, step and resulting revision.
+
+Todo settings are frozen for an active generation and resolved again on explicit resume.
+Ledgers and drop reasons survive host loss and resume; disabling todo does not delete
+them or invalidate old receipts. Legacy generations and launch messages without a todo
+setting keep the tool disabled. Todo is progress bookkeeping, never gate or acceptance
+evidence and never permission to finish a Corral task.
+
 `[agent] ui` sets how the run pane looks (default `"rich"`). In rich mode the pane uses the
 Dracula palette (a dark theme; on a light terminal background use `plain`) and shows a
 two-line header (role, task and run, generation, model, effort and worktree), names the

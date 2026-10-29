@@ -16,7 +16,7 @@ const SUMMARY_ARGS = [
   "text", "title", "path", "verdict", "condition", "query", "task", "key", "summary", "reason", "section", "status",
 ];
 const RESULT_FIELDS = [
-  "key", "id", "attempt", "tier", "verdict", "status", "state", "ref", "artifact", "task", "count", "total",
+  "key", "id", "attempt", "tier", "verdict", "status", "state", "ref", "artifact", "task", "count", "total", "revision",
 ];
 
 export function shortName(name: string): string {
@@ -47,7 +47,9 @@ export function callSummary(args: Args): string | undefined {
 }
 
 export function renderCallText(name: string, args: Args, theme: Style): string {
-  const summary = callSummary(args ?? {});
+  const summary = name === "corral_todo" && typeof args.op === "string"
+    ? oneLine([args.op, args.step ?? args.phase].filter((value) => typeof value === "string").join(" "))
+    : callSummary(args ?? {});
   const head = theme.fg("toolTitle", theme.bold(`corral ${shortName(name)}`));
   return summary ? `${head} ${theme.fg("muted", summary)}` : head;
 }

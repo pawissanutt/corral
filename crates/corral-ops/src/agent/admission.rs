@@ -346,7 +346,12 @@ fn random_secret() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn next_generation(state: &mut AgentRunState, nonce_digest: &str, pane: &str) -> Result<u32> {
+fn next_generation(
+    state: &mut AgentRunState,
+    nonce_digest: &str,
+    pane: &str,
+    capabilities: &corral_core::config::agent_capabilities::AgentCapabilities,
+) -> Result<u32> {
     ensure!(
         state.generations.len() < GENERATIONS_MAX,
         "{} already opened {GENERATIONS_MAX} generations",
@@ -369,6 +374,7 @@ fn next_generation(state: &mut AgentRunState, nonce_digest: &str, pane: &str) ->
         fenced: None,
         nudged_at: None,
         event_seq: 0,
+        todo: capabilities.todo(state.binding.role),
     });
     state.binding.generation = n;
     state.binding.health = HostHealth::Unbound;
@@ -419,8 +425,19 @@ pub fn open_generation_with(
                 pm.adopted_pane = None;
             }
             pm.pane = pane.into();
+            if pm.state.binding.project != *project {
+                pm.state.todo = None;
+            }
             pm.state.binding.project = project.clone();
-            Ok((next_generation(&mut pm.state, &digest, pane)?, true))
+            Ok((
+                next_generation(
+                    &mut pm.state,
+                    &digest,
+                    pane,
+                    &store.config.agent.capabilities,
+                )?,
+                true,
+            ))
         })?,
         (_, Some(task_id)) => {
             let (role, callback) = match target {
@@ -466,7 +483,8 @@ pub fn open_generation_with(
                     "{} is bound to another role or review attempt",
                     container.key()
                 );
-                generation = next_generation(state, &digest, pane)?;
+                generation =
+                    next_generation(state, &digest, pane, &store.config.agent.capabilities)?;
                 Ok(())
             })?;
             generation
