@@ -384,7 +384,9 @@ job's output. If the host goes away after the command finished, the launcher kil
 per call, paging with `offset`/`next_offset`. Output is written to the generation's runtime
 directory up to `max_output_bytes`; if that file is lost, the last 64 KiB still come from
 memory. `job_kill` sends SIGTERM to the group, then SIGKILL after two seconds; the runtime
-limit kills the same way. Whenever the command ends (normally, killed, or at the runtime
+limit kills the same way. With `bash_rules`, a `job_start` command is decided exactly like
+a `bash` command: a denied or not-yet-permitted command is refused before any job is recorded.
+Whenever the command ends (normally, killed, or at the runtime
 limit), the host SIGKILLs the still-anchored group, including descendants that ignore SIGTERM
 or redirect their output, and reports the exit only after the group is gone (`group_clear`).
 
