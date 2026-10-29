@@ -618,8 +618,12 @@ pub(crate) fn dir_user(dir: &Path) -> Result<Option<String>> {
         }
         let base = process.path();
         let mut links: Vec<PathBuf> = vec![base.join("cwd")];
+        // This process's own descriptors are the deleter's handles on the directory itself.
+        let own = name.to_string_lossy() == std::process::id().to_string();
         // A process that exits or is not ours to inspect mid-scan uses nothing we can see.
-        if let Ok(fds) = std::fs::read_dir(base.join("fd")) {
+        if let Ok(fds) = std::fs::read_dir(base.join("fd"))
+            && !own
+        {
             links.extend(fds.flatten().map(|fd| fd.path()));
         }
         if let Some(path) = links

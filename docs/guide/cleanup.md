@@ -8,9 +8,10 @@ Worktree removal first stops leftover processes whose current working directory 
 inside that worktree, including nested directories. Each termination pins the
 process with a Linux pidfd and rechecks its start time and command before SIGTERM;
 SIGKILL escalation uses the same pidfd. Corral never signals its current process,
-its ancestors, or recognized agent harnesses: the harnesses of the removed run and
-its review children, of every open task's current run that holds a pane, and every
-configured harness, so a finished task's still-running harness is protected too.
+its ancestors, or recognized agent harnesses: the harnesses recorded by the removed
+run and its review children, and by every task, open or finished, that still holds a
+pane cleanup has not released, so a finished task's still-running harness is
+protected even when it is no longer configured.
 A protected resident or failed termination retains the directory and branch with
 a warning. A process outside the worktree is left alone.
 
@@ -32,15 +33,18 @@ tasks, including intentionally retained worktrees. It does not delete them.
 
 ## Finished worktrees at sync
 
-Each sync pass settles the worktree of every task that became Done or Dropped since
-the previous pass, then at most a small batch of earlier decisions that are due for
-a recheck or were made under a different cleanup policy. It never walks the board's
-history. One lifecycle record per task, run and target remembers the decision, so a
+Each sync pass, headless or not, settles the worktree of every task that became Done
+or Dropped since the previous pass and a small batch of earlier discoveries, then at
+most a small batch of earlier decisions that are due for a recheck or were made under
+a different cleanup policy. It never walks the board's history: only the first pass,
+or one that fell behind the change feed's retention, reads the finished tasks once to
+discover worktrees that still exist without a record. One lifecycle record per task, run and target remembers the decision, so a
 later sync does no filesystem work for it:
 
 - a clean worktree is removed whole with `git worktree remove` (never `--force`);
   its branch is kept;
-- a dirty worktree, or one a process or a Cargo build still uses, is deferred and
+- a dirty worktree, or one a process or a Cargo build still uses (build output only
+  included), is deferred and
   checked again after one minute, doubling up to an hour, then removed once clean
   and idle;
 - a worktree approve deliberately kept (`--keep-worktree`, or `remove_worktree =
@@ -63,11 +67,15 @@ unreferenced and stray evidence blobs, rollback archives and the fixed roots. Th
 totals separate bytes reclaimed, compressed into blobs, moved outside `.corral`,
 legacy files awaiting the migration's finalize step, rollback archives, fixed roots and
 retained entries, and each retained entry carries its reason. Legacy files are
-removed only by the migration's finalize step, never by gc.
+removed only by the migration's finalize step, never by gc. A dry run only reads: Git
+inspections run without optional locks, so no worktree index is refreshed. Deletions
+go through no-follow directory handles, so a symlinked state area or worktree root is
+never followed.
 
 `corral storage gc --yes` removes clean finished worktrees (branches kept),
-closed scratch nothing uses, terminal tasks' agent sessions after promoting each
-transcript file to a log artifact, legacy build output, and evidence blobs
+closed scratch nothing uses, terminal tasks' agent sessions once no process uses them,
+no pane of theirs is working and every transcript file's exact current bytes have a
+live log artifact (it promotes the rest first), legacy build output, and evidence blobs
 unreferenced for longer than `blob_grace_hours` (and stray blob files as old). It
 leaves dirty, kept, open, non-terminal, unmanaged and unknown entries alone, never
 deletes a fixed class root or `.corral/rollback`, and logs one `storage_reclaimed`

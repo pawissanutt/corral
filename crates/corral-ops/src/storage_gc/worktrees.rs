@@ -108,14 +108,18 @@ fn finding(
         return Ok(Finding::Retain(reason));
     }
     if !git_identity(path) {
-        return Ok(if build_output_only(path)? {
-            Finding::Reclaim {
-                bytes: crate::scratch_reclaim::usage(path)?,
-                build_only: true,
-                absent: false,
-            }
-        } else {
-            Finding::Retain("unknown: no Git top-level identity and not only build output".into())
+        if !build_output_only(path)? {
+            return Ok(Finding::Retain(
+                "unknown: no Git top-level identity and not only build output".into(),
+            ));
+        }
+        if let Some(reason) = in_use(path)? {
+            return Ok(Finding::Defer(reason));
+        }
+        return Ok(Finding::Reclaim {
+            bytes: crate::scratch_reclaim::usage(path)?,
+            build_only: true,
+            absent: false,
         });
     }
     let changed = git(path, &["status", "--porcelain"])?;
@@ -147,23 +151,28 @@ fn kept(ctx: &Ctx, head: &TaskHead, run: &str) -> Result<Option<String>> {
     let approved = ctx
         .store
         .last_event_where(Some(&head.id), &["approved"], Some(run), |_| true)?;
-    if let Some(event) = approved
-        && event.detail["worktree_removed"] == json!(false)
-    {
-        // A removal approve attempted and failed is not a deliberate keep.
-        let failed = event.detail["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("warning"));
-        if !failed {
-            return Ok(Some("kept: approve kept the worktree".into()));
-        }
+    let Some(event) = approved else {
+        return Ok(None);
+    };
+    // The approval's recorded cleanup intent (`cleanup.v` 1): a requested removal that failed
+    // is retried; only a requested keep is deliberate.
+    match event.detail["cleanup"]["remove_worktree"].as_bool() {
+        Some(true) => Ok(None),
+        Some(false) => Ok(Some("kept: approve kept the worktree".into())),
+        // Approvals recorded before the intent existed: a worktree they left stays.
+        None if event.detail["worktree_removed"] == json!(false) => Ok(Some(
+            "kept: approved before cleanup intent was recorded".into(),
+        )),
+        None => Ok(None),
     }
-    Ok(None)
 }
 
+/// A read-only Git inspection: optional locks are off, so `status` never refreshes and
+/// rewrites the index of the worktree it inspects.
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
     corral_git::work::record();
     let output = Command::new("git")
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -209,6 +218,18 @@ pub(crate) fn build_output_only(dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Deletes directory `rel` below `root` through a no-follow handle: a symlink in any component
+/// of `root` or `rel` refuses, and `confirm` re-checks eligibility immediately before deletion.
+pub(crate) fn remove_below(
+    root: &Path,
+    rel: &Path,
+    confirm: &dyn Fn() -> Result<()>,
+) -> Result<()> {
+    corral_core::fs_guard::DirHandle::open(root)?
+        .remove_entry(rel, confirm)
+        .map(drop)
+}
+
 /// Why a directory is in use: a held Cargo build lock, or a process with its working directory
 /// or an open file below it. Other platforms cannot see processes and always answer in use.
 pub(crate) fn in_use(dir: &Path) -> Result<Option<String>> {
@@ -241,22 +262,32 @@ pub(crate) fn reclaim(ctx: &Ctx, found: &Assessment, via: &str) -> Result<()> {
     let Some(repo) = &found.repo else {
         anyhow::bail!("no repository recorded for {}", found.path.display());
     };
-    let head = ctx.store.head(&found.task)?;
-    let again = finding(ctx, &head, &found.generation, &found.path, &mut None)?;
-    anyhow::ensure!(
-        matches!(again, Finding::Reclaim { build_only: b, absent: false, .. } if b == build_only),
-        "{} changed before removal: {again:?}",
-        found.path.display()
-    );
+    let unchanged = || -> Result<()> {
+        let head = ctx.store.head(&found.task)?;
+        let again = finding(ctx, &head, &found.generation, &found.path, &mut None)?;
+        anyhow::ensure!(
+            matches!(again, Finding::Reclaim { build_only: b, absent: false, .. } if b == build_only),
+            "{} changed before removal: {again:?}",
+            found.path.display()
+        );
+        Ok(())
+    };
+    let root = repo
+        .canonicalize()
+        .context("resolving the project repository")?
+        .join(".worktrees");
+    let name = found
+        .path
+        .file_name()
+        .map(PathBuf::from)
+        .context("worktree path has no name")?;
     if build_only {
-        std::fs::remove_dir_all(&found.path)
-            .with_context(|| format!("removing {}", found.path.display()))?;
+        remove_below(&root, &name, &unchanged)?;
     } else {
+        unchanged()?;
         corral_git::worktree_remove(repo, &found.path, false)?;
-        if std::fs::symlink_metadata(&found.path).is_ok() {
-            std::fs::remove_dir_all(&found.path)
-                .with_context(|| format!("removing leftover {}", found.path.display()))?;
-        }
+        // Git can unregister the worktree and still fail to unlink its directory.
+        remove_below(&root, &name, &|| Ok(()))?;
     }
     ctx.store.log_event(
         Some(&found.task),

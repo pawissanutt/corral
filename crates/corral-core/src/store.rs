@@ -751,17 +751,40 @@ impl Store {
         self.lifecycle_query(&query, limit)
     }
 
-    /// At most `limit` lifecycle rows recorded under a policy digest other than `digest`, read
-    /// through the `lifecycle_policy` index.
+    /// At most `limit` lifecycle rows recorded under a policy digest other than `digest`: the
+    /// `lifecycle_policy` index range below it, then the range above it, each read in index
+    /// order so the work is bounded by `limit`, not by the rows recorded.
     pub fn lifecycle_policy_other_than(
         &self,
         digest: &str,
         limit: u32,
     ) -> Result<Vec<LifecycleRow>> {
-        let query = StorageQuery::LifecyclePolicyOtherThan {
-            digest: digest.to_owned(),
+        let digest = digest.to_owned();
+        let below = StorageQuery::LifecyclePolicyBelow {
+            digest: digest.clone(),
         };
-        self.lifecycle_query(&query, limit)
+        let mut rows = self.lifecycle_query(&below, limit)?;
+        let left = limit.saturating_sub(u32::try_from(rows.len()).unwrap_or(u32::MAX));
+        if left > 0 {
+            let above = StorageQuery::LifecyclePolicyAbove { digest };
+            rows.extend(self.lifecycle_query(&above, left)?);
+        }
+        Ok(rows)
+    }
+
+    /// The lifecycle row `(task, generation, target)`, by key.
+    pub fn lifecycle_row(
+        &self,
+        task: &str,
+        generation: &str,
+        target: &str,
+    ) -> Result<Option<LifecycleRow>> {
+        let query = StorageQuery::LifecycleKey {
+            task: task.to_owned(),
+            generation: generation.to_owned(),
+            target: target.to_owned(),
+        };
+        Ok(self.lifecycle_query(&query, 1)?.into_iter().next())
     }
 
     /// Writes one lifecycle row; a stale `expected` outcome fails with a conflict.

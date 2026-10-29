@@ -63,6 +63,9 @@ pub enum HeadQuery {
     DashboardDue {
         now: jiff::Timestamp,
     },
+    /// Tasks of any status holding an unreleased cleanup-ledger pane (open `cleanup_pane` rows,
+    /// read through `task_rows_open`), by number: bounded by panes still owed cleanup.
+    UnreleasedPanes,
 }
 
 /// Rows of one family of one task, in key order (or reverse key order), matching every given
@@ -204,15 +207,24 @@ pub enum StorageQuery {
     Lifecycle {
         task: Option<String>,
     },
+    /// The lifecycle row `(task, generation, target)` (a primary-key read).
+    LifecycleKey {
+        task: String,
+        generation: String,
+        target: String,
+    },
     /// Lifecycle rows of `outcome` whose `next_check_at` is at or before `now`, earliest check
-    /// first (the `lifecycle_due` index).
+    /// first, read in `lifecycle_due` index order so a page costs only its rows.
     LifecycleDue {
         outcome: LifecycleOutcome,
         now: jiff::Timestamp,
     },
-    /// Lifecycle rows whose `policy_digest` differs from `digest`, in digest then key order
-    /// (the `lifecycle_policy` index).
-    LifecyclePolicyOtherThan {
+    /// Lifecycle rows whose `policy_digest` sorts before `digest`, in index order.
+    LifecyclePolicyBelow {
+        digest: String,
+    },
+    /// Lifecycle rows whose `policy_digest` sorts after `digest`, in index order.
+    LifecyclePolicyAbove {
         digest: String,
     },
     Leases,

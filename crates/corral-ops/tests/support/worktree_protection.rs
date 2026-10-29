@@ -1,6 +1,7 @@
 //! Worktree-removal process checks (T-334): a resident harness is protected through the run's
-//! `harnesses` fact, open heads and the configured harnesses, with the same decision and the
-//! same counters whatever the run's review children or the board's finished history hold.
+//! `harnesses` fact and the recorded identities of every task holding an unreleased pane (open
+//! or finished, configured or not), with the same decision and the same counters whatever the
+//! run's review children or the board's finished history hold.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
@@ -10,7 +11,7 @@ use std::process::{Child, Command, Stdio};
 
 use corral_core::config::Project;
 use corral_core::work::{Counter, snapshot};
-use corral_core::{AgentCmd, Run, Status, Store};
+use corral_core::{Run, Status, Store};
 use serde_json::json;
 
 use super::remove;
@@ -97,10 +98,13 @@ struct Fx {
     worktree: PathBuf,
 }
 
-/// A Review task whose run has `children` review children (the last one's harness is
-/// `reviewbot`), `terminal` Done tasks run by `finished-agent` (a configured harness) and one
+/// A Review task run by `coder` whose run has `children` review children run by `reviewbot`, `terminal` Done tasks whose panes
+/// were released, one Done peer whose pane is unreleased and whose harness
+/// `retired-custom-harness` is absent from configuration and one
 /// open task whose live pane runs `liveagent`.
 fn fixture(children: usize, terminal: usize) -> Fx {
+    // One timestamp width at every size, as the budget fixtures pin it.
+    corral_core::clock::pin_thread(Some("2026-10-29T00:00:00Z".parse().unwrap()));
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let repo = root.join("app");
@@ -120,12 +124,6 @@ fn fixture(children: usize, terminal: usize) -> Fx {
             post_land: vec![],
         },
     );
-    store.config.agents.insert(
-        "finished-agent".into(),
-        AgentCmd {
-            command: "finished-agent run".into(),
-        },
-    );
     store.save_config().unwrap();
     let ctx = Ctx {
         resource_probe: crate::resources::FixedResourceProbe::arc(),
@@ -143,17 +141,19 @@ fn fixture(children: usize, terminal: usize) -> Fx {
             .unwrap();
         task.id
     };
+    // History: finished tasks whose panes were released (none recorded).
     for n in 0..terminal {
         add(
             Status::Done,
-            run(
-                "R1",
-                &root.join(format!("done-{n}")),
-                "finished-agent",
-                true,
-            ),
+            run("R1", &root.join(format!("done-{n}")), "old-harness", false),
         );
     }
+    // A finished peer whose pane is still unreleased, run by an unconfigured harness.
+    add(
+        Status::Done,
+        run("R1", &root.join("finished"), "retired-custom-harness", true),
+    );
+
     add(
         Status::Running,
         run("R1", &root.join("live"), "liveagent", true),
@@ -174,12 +174,12 @@ fn fixture(children: usize, terminal: usize) -> Fx {
     let mut subject = run("R1", &worktree, "coder", true);
     subject["review_runs"] = (0..children)
         .map(|n| {
-            let harness = if n + 1 == children {
-                "reviewbot"
-            } else {
-                "earlier-reviewer"
-            };
-            let mut child = run(&format!("R1-review{}", n + 1), &worktree, harness, false);
+            let mut child = run(
+                &format!("R1-review{:03}", n + 1),
+                &worktree,
+                "reviewbot",
+                false,
+            );
             child["ended"] = json!(corral_core::clock::now());
             child
         })
@@ -194,12 +194,16 @@ fn fixture(children: usize, terminal: usize) -> Fx {
     }
 }
 
-/// The removal's error and its counter totals; nothing is removed while a harness is resident.
+/// The removal's error and its counter totals, counted inside a hot scope as on Land and
+/// approve paths reached from sync; nothing is removed while a harness is resident.
 fn attempt(fx: &Fx) -> (String, BTreeMap<Counter, u64>) {
     let head = fx.ctx.store.head(&fx.id).unwrap();
     let run = head.current_run.as_deref().unwrap();
     let before = snapshot();
-    let error = remove(&fx.ctx, &head, &fx.repo, run, false).unwrap_err();
+    let error = {
+        let _hot = corral_core::work::HotScope::enter();
+        remove(&fx.ctx, &head, &fx.repo, run, false).unwrap_err()
+    };
     let after = snapshot();
     let counters = Counter::ALL
         .iter()
@@ -223,6 +227,11 @@ fn a_review_child_harness_is_protected_through_the_harnesses_fact_at_any_size() 
         results.push(counters);
     }
     assert_eq!(results[0], results[1], "identical counters at both sizes");
+    assert!(
+        results[0][&Counter::TaskHeadDecodes] > 0,
+        "counted: {:?}",
+        results[0]
+    );
     assert_eq!(results[0][&Counter::FullTaskHydrations], 0);
 }
 
@@ -232,7 +241,7 @@ fn live_and_finished_pane_harnesses_are_protected_without_reading_finished_tasks
     for terminal in [1, 10] {
         let fx = fixture(1, terminal);
         let mut live = Resident::start(&fx.worktree, "liveagent");
-        let mut finished = Resident::start(&fx.worktree, "finished-agent");
+        let mut finished = Resident::start(&fx.worktree, "retired-custom-harness");
         let (error, counters) = attempt(&fx);
         for resident in [&live, &finished] {
             assert!(
@@ -244,6 +253,11 @@ fn live_and_finished_pane_harnesses_are_protected_without_reading_finished_tasks
         results.push(counters);
     }
     assert_eq!(results[0], results[1], "identical counters at both sizes");
+    assert!(
+        results[0][&Counter::TaskHeadDecodes] > 0,
+        "counted: {:?}",
+        results[0]
+    );
     assert_eq!(results[0][&Counter::FullTaskHydrations], 0);
 }
 

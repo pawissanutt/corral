@@ -102,9 +102,9 @@ pub(super) fn worktrees(ctx: &Ctx, now: Timestamp, report: &mut GcReport) -> Res
             };
             line.task = Some(head.id.clone());
             if !report.dry_run && finished {
-                let stored = ctx.store.lifecycle_rows(&head.id)?.into_iter().find(|row| {
-                    row.generation == found.generation && row.target == worktrees::TARGET
-                });
+                let stored =
+                    ctx.store
+                        .lifecycle_row(&head.id, &found.generation, worktrees::TARGET)?;
                 let (outcome, reason) =
                     lifecycle::record(ctx, &found, stored.as_ref(), &digest, now, "gc")?;
                 if outcome == corral_core::backend::LifecycleOutcome::Failed {
@@ -243,20 +243,15 @@ pub(super) fn agent_sessions(ctx: &Ctx, report: &mut GcReport) -> Result<()> {
                 line.reason = Some("holds a symlink or special file".into());
             }
             Some(files) => {
-                if let Some(reason) = worktrees::in_use(&path)? {
+                let busy = match worktrees::in_use(&path)? {
+                    Some(reason) => Some(reason),
+                    None => pane_busy(ctx, &head)?,
+                };
+                if let Some(reason) = busy {
                     line.disposition = Disposition::Deferred;
                     line.reason = Some(reason);
                 } else {
-                    let promoted: Vec<String> = ctx
-                        .store
-                        .artifact_rows(&head.id, None)?
-                        .into_iter()
-                        .map(|artifact| artifact.source)
-                        .collect();
-                    let owed: Vec<&(String, PathBuf)> = files
-                        .iter()
-                        .filter(|(_, file)| !promoted.contains(&file.display().to_string()))
-                        .collect();
+                    let owed = unpromoted(ctx, &head.id, &files)?;
                     line.reason = Some(format!(
                         "{} transcript files promoted, {} to promote",
                         files.len() - owed.len(),
@@ -264,7 +259,7 @@ pub(super) fn agent_sessions(ctx: &Ctx, report: &mut GcReport) -> Result<()> {
                     ));
                     if !report.dry_run
                         && let Err(error) =
-                            promote_and_remove(ctx, &layout, &head, &owed, bytes, &path)
+                            promote_and_remove(ctx, &layout, &head, &files, &owed, bytes, &path)
                     {
                         line.disposition = Disposition::Failed;
                         line.reason = Some(format!("{error:#}"));
@@ -298,10 +293,59 @@ fn session_files(dir: &Path) -> Result<Option<Vec<(String, PathBuf)>>> {
     Ok(Some(files))
 }
 
+/// Why a terminal task's sessions are still in use: one of its unreleased panes is still
+/// working, or its state cannot be read.
+fn pane_busy(ctx: &Ctx, head: &corral_core::TaskHead) -> Result<Option<String>> {
+    for pane in head.unreleased_panes(false)? {
+        if pane.pane.is_empty() {
+            continue;
+        }
+        match ctx.herdr.pane_get(&pane.pane) {
+            Ok(Some(info)) if info.status == corral_herdr::AgentStatus::Working => {
+                return Ok(Some(format!("pane {} is still working", pane.pane)));
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return Ok(Some(format!(
+                    "pane {} cannot be checked: {error:#}",
+                    pane.pane
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The transcript files of `task` without a live (unpurged) artifact snapshot of their exact
+/// current bytes.
+fn unpromoted<'a>(
+    ctx: &Ctx,
+    task: &str,
+    files: &'a [(String, PathBuf)],
+) -> Result<Vec<&'a (String, PathBuf)>> {
+    let live: std::collections::BTreeSet<String> = ctx
+        .store
+        .artifact_rows(task, None)?
+        .into_iter()
+        .filter(|artifact| artifact.purged_at.is_none())
+        .map(|artifact| artifact.sha256)
+        .collect();
+    let mut owed = Vec::new();
+    for entry in files {
+        let bytes =
+            std::fs::read(&entry.1).with_context(|| format!("reading {}", entry.1.display()))?;
+        if !live.contains(&corral_core::agent::paths::sha256_hex(&bytes)) {
+            owed.push(entry);
+        }
+    }
+    Ok(owed)
+}
+
 fn promote_and_remove(
     ctx: &Ctx,
     layout: &corral_core::StorageLayout,
     head: &corral_core::TaskHead,
+    files: &[(String, PathBuf)],
     owed: &[&(String, PathBuf)],
     bytes: u64,
     path: &Path,
@@ -322,16 +366,24 @@ fn promote_and_remove(
         id: head.id.clone(),
         rel: PathBuf::from(&head.id),
     };
-    let still_terminal = || {
+    // Immediately before deletion: still terminal, and every transcript file's exact current
+    // bytes have a live snapshot (a purged or older snapshot of the same path does not count).
+    let safe = || {
         let status = ctx.store.head(&head.id)?.status;
         anyhow::ensure!(
             matches!(status, Status::Done | Status::Dropped),
             "{} was reopened",
             head.id
         );
+        let missing = unpromoted(ctx, &head.id, files)?;
+        anyhow::ensure!(
+            missing.is_empty(),
+            "transcript {} has no live snapshot of its current bytes",
+            missing[0].1.display()
+        );
         Ok(())
     };
-    deleter.remove(&registration, &still_terminal)?;
+    deleter.remove(&registration, &safe)?;
     ctx.store.log_event(
         Some(&head.id),
         "storage_reclaimed",
@@ -357,7 +409,9 @@ pub(super) fn legacy(ctx: &Ctx, report: &mut GcReport) -> Result<()> {
             continue;
         }
         let mut build = Vec::new();
-        if name == "state" {
+        // A symlinked state area is never scanned, so nothing outside `.corral` is reached.
+        let real_dir = std::fs::symlink_metadata(&path)?.is_dir();
+        if name == "state" && real_dir {
             tagged_dirs(&path, &mut build)?;
         }
         let mut build_bytes = 0;
@@ -377,7 +431,19 @@ pub(super) fn legacy(ctx: &Ctx, report: &mut GcReport) -> Result<()> {
             }
             let mut line = report.removable("legacy-build-output", target, bytes);
             if !report.dry_run {
-                match std::fs::remove_dir_all(&dir) {
+                let rel = dir.strip_prefix(&path)?;
+                let still_build_output = || {
+                    anyhow::ensure!(
+                        dir.join("CACHEDIR.TAG").is_file(),
+                        "{} is no longer tagged",
+                        dir.display()
+                    );
+                    match worktrees::in_use(&dir)? {
+                        Some(reason) => anyhow::bail!("{reason}"),
+                        None => Ok(()),
+                    }
+                };
+                match worktrees::remove_below(&path, rel, &still_build_output) {
                     Ok(()) => ctx.store.log_event(
                         None,
                         "storage_reclaimed",
@@ -385,7 +451,7 @@ pub(super) fn legacy(ctx: &Ctx, report: &mut GcReport) -> Result<()> {
                     )?,
                     Err(error) => {
                         line.disposition = Disposition::Failed;
-                        line.reason = Some(format!("removing {}: {error}", dir.display()));
+                        line.reason = Some(format!("removing {}: {error:#}", dir.display()));
                     }
                 }
             }

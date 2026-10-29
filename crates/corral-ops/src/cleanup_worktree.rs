@@ -99,51 +99,66 @@ fn protected_pids() -> Result<BTreeSet<u32>> {
     Ok(protected_set)
 }
 
-/// The runs whose harness processes stay protected while a worktree is removed: the removed
-/// run and the current run of every open task holding a pane, each once per harness its
-/// container recorded (its own and its review children's, from the `harnesses` fact), plus
-/// every configured harness, which keeps a finished pane's harness protected without reading
-/// finished tasks. No review child and no finished task is decoded.
-fn protecting_runs(ctx: &Ctx, own_run: &RunHead) -> Result<Vec<Run>> {
-    let mut runs = Vec::new();
-    let mut add = |run: &RunHead| -> Result<()> {
-        let base: Run = serde_json::from_value(serde_json::to_value(run)?)?;
-        for harness in run.facts.harnesses.keys() {
-            let mut child = base.clone();
-            child.harness = Some(harness.clone());
-            runs.push(child);
+/// The harness and profile identities a container projection recorded (`harness`, `agent`,
+/// `profile`, `reviewer`), without decoding any of its history.
+fn identities(container: &impl serde::Serialize, into: &mut BTreeSet<String>) -> Result<()> {
+    let value = serde_json::to_value(container)?;
+    for key in ["harness", "agent", "profile", "reviewer"] {
+        if let Some(name) = value.get(key).and_then(serde_json::Value::as_str) {
+            into.insert(name.to_owned());
         }
-        runs.push(base);
+    }
+    Ok(())
+}
+
+/// The runs whose harness processes stay protected while a worktree is removed: one shell of
+/// the removed run per harness identity recorded by the removed run (its own and its review
+/// children's, from the `harnesses` fact) and by every container of every task, open or
+/// finished, that still holds an unreleased pane. Owners come from the cleanup ledger's open
+/// rows, never from a walk of the board or of any task's history.
+fn protecting_runs(ctx: &Ctx, own_run: &RunHead) -> Result<Vec<Run>> {
+    let mut names = BTreeSet::new();
+    let add_run = |run: &RunHead, names: &mut BTreeSet<String>| -> Result<()> {
+        identities(run, names)?;
+        names.extend(run.facts.harnesses.keys().cloned());
+        if let Some(child) = run.current_child.as_deref() {
+            identities(child, names)?;
+        }
         Ok(())
     };
-    add(own_run)?;
-    let open = ctx
+    add_run(own_run, &mut names)?;
+    let owners = ctx
         .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
-    for head in open {
-        let Some(run) = head.current_run.as_deref() else {
-            continue;
-        };
-        if run.facts.pane_refs.is_empty() && run.herdr.is_none() {
-            continue;
+        .heads(&corral_core::backend::HeadQuery::UnreleasedPanes)?;
+    for head in owners {
+        if let Some(run) = head.current_run.as_deref() {
+            add_run(run, &mut names)?;
         }
-        add(run)?;
-    }
-    let config = &ctx.store.config;
-    let configured: Vec<String> = config
-        .harnesses
-        .keys()
-        .chain(config.agents.keys())
-        .cloned()
-        .collect();
-    let template = runs.last().cloned();
-    for key in configured {
-        if let Some(mut run) = template.clone() {
-            run.harness = Some(key);
-            runs.push(run);
+        if let Some(plan_run) = head.last_plan_run.as_deref() {
+            identities(plan_run, &mut names)?;
+        }
+        if let Some(review) = head
+            .last_plan
+            .as_deref()
+            .and_then(|p| p.current_review.as_ref())
+        {
+            identities(review, &mut names)?;
+        }
+        let attempt = head.last_aggregate_attempt.as_deref();
+        if let Some(review) = attempt.and_then(|a| a.current_review.as_ref()) {
+            identities(review, &mut names)?;
         }
     }
-    Ok(runs)
+    let base: Run = serde_json::from_value(serde_json::to_value(own_run)?)?;
+    Ok(names
+        .into_iter()
+        .map(|name| {
+            let mut run = base.clone();
+            run.harness = Some(name.clone());
+            run.agent = name;
+            run
+        })
+        .collect())
 }
 
 #[cfg(not(target_os = "linux"))]

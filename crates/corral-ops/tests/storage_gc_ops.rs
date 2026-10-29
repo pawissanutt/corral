@@ -12,3 +12,5 @@ mod fixture;
 mod gc;
 #[path = "storage_gc_ops/lifecycle.rs"]
 mod lifecycle;
+#[path = "storage_gc_ops/round1.rs"]
+mod round1;
