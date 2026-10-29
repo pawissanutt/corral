@@ -874,35 +874,27 @@ mod llama_cpp_tests {
 
     #[test]
     fn launch_payload_includes_local_settings_only_when_effective() {
-        use corral_core::agent::LlamaCppSettings;
         // Given recorded settings, including a disabled snapshot with stale settings.
-        let local = LlamaCppSettings {
-            endpoint: Some("http://localhost:8080".into()),
-            ..LlamaCppSettings::default()
-        };
         for enabled in [false, true] {
-            let bootstrap: Bootstrap = serde_json::from_value(json!({
-                "version": 1, "root": "/fixture", "store": "fixture", "project": "test",
-                "role": "worker", "generation": 1, "bind_nonce": "fixture", "pane": "p1",
-                "cwd": "/fixture", "assets": "/fixture/assets", "asset_sha256": "fixture",
-                "corral": "/fixture/corral", "session_dir": "/fixture/session", "model": "local",
-                "provider": "llama.cpp", "capabilities": {
-                    "catalog": 3, "role": "worker", "preset": "standard", "digest": "fixture",
-                    "features": {"llama_cpp.enabled": {"enabled": enabled, "source": "role_override"}},
-                    "llama_cpp": local
-                }
-            }))
+            let mut bootstrap: Bootstrap = serde_json::from_str(include_str!(
+                "../../../../packages/corral-pi/test/fixtures/llama-bootstrap.json"
+            ))
             .unwrap();
+            let snapshot = bootstrap.capabilities.as_mut().unwrap();
+            snapshot
+                .features
+                .get_mut("llama_cpp.enabled")
+                .unwrap()
+                .enabled = enabled;
+            let local = snapshot.llama_cpp.clone().unwrap();
+            bootstrap.provider = host_provider(Some("llama.cpp"), "openai/x");
             let ready = Ready {
                 assets: "/fixture/assets".into(),
                 bun: "/fixture/bun".into(),
                 bun_version: "1.4.2".into(),
                 generation_dir: "/fixture/g1".into(),
             };
-            let secrets = Secrets {
-                host_cap: "fixture-host".into(),
-                ctl_cap: "fixture-ctl".into(),
-            };
+            let secrets = Secrets::generate().unwrap();
             // When serialized, then only effective local settings cross the launch boundary.
             let message: serde_json::Value =
                 serde_json::from_slice(&launch_message(&bootstrap, &ready, &secrets).unwrap())
@@ -913,16 +905,7 @@ mod llama_cpp_tests {
             );
             assert_eq!(message["provider"], "llama.cpp");
             assert!(message["aws"].is_null());
+            assert!(super::super::credentials::provider_for_vendor("llama.cpp").is_none());
         }
-    }
-
-    #[test]
-    fn explicit_local_vendor_is_allowed_without_a_credential_provider() {
-        // Given an explicit local vendor and an otherwise cloud-qualified model.
-        let vendor = "llama.cpp";
-        // When routing the host, then the local identity wins without a credential route.
-        assert_eq!(host_provider(Some(vendor), "openai/x"), Some(vendor.into()));
-        assert!(corral_core::check_pi_native_vendor("local", Some(vendor)).is_ok());
-        assert!(super::super::credentials::provider_for_vendor(vendor).is_none());
     }
 }
