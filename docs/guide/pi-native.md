@@ -26,7 +26,7 @@ assets_dir = "/path/to/pi-assets"
 ```
 
 Model and effort travel in the host's one-shot bootstrap, not on the command line, so a
-pi-native profile takes no `args`. The `openai` and `anthropic` vendors are allowed (for
+pi-native profile takes no `args`. The `openai`, `anthropic` and `amazon-bedrock` vendors are allowed (for
 example `model = "claude-opus-5-5"` with `vendor = "anthropic"`); any other vendor is refused
 when you dispatch, before a worktree exists.
 
@@ -115,8 +115,8 @@ kernel releases it if a host dies, so concurrent hosts never double-refresh and 
 needs recovery. Without a login for that provider, dispatch from the managed installation
 refuses `credentials_unavailable` naming the provider, and the host stops with
 `credentials_unavailable`; both name the command to run, for example
-`corral agent login --provider anthropic`. Only OAuth credentials are stored. There is no
-API-key or other paid fallback: the host drops Pi's Anthropic API-key handler and clears every
+`corral agent login --provider anthropic`. For these subscription providers only OAuth credentials are stored. There is no
+API-key or other paid fallback for them: the host drops Pi's Anthropic API-key handler and clears every
 `ANTHROPIC_*` variable (API key, auth and OAuth tokens, workload federation) before Pi loads, so
 after a `/logout` or a removed credential the provider has no auth rather than a paid key, and
 any Anthropic request without the subscription OAuth token is refused before it is sent. corral
@@ -142,6 +142,71 @@ nothing is downloaded. Each model call is independent: there is no resident Clau
 session reuse or Claude Code compaction. The policy record is
 `docs/records/pi-native-claude-route.md`.
 
+## Amazon Bedrock (metered opt-in)
+
+Bedrock traffic is metered per token to your AWS account. Opt in explicitly; there is no
+per-run or per-task spending cap. Automatic availability fallback still has its existing
+spending bound and a Bedrock candidate must declare metered cost.
+
+```toml
+[profiles.bedrock]
+harness = "pi-native"
+vendor = "amazon-bedrock"
+model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+```
+
+Choose a bare Pi catalog ID, not a model or application-inference-profile ARN. The model
+listing and settings picker include regional and cross-region IDs such as `us.`, `eu.`,
+`apac.` and `global.`. Bind a named AWS profile and region before launching:
+
+```sh
+corral agent login --provider amazon-bedrock --aws-profile dev --region us-west-2
+corral agent doctor
+```
+
+On a terminal login can prompt for the profile and region, defaulting the region to the
+profile's configured region. Without a terminal supply both flags. The binding contains only
+the profile name and region, not secrets. A changed binding applies to newly launched hosts.
+Each worker, planner, reviewer and PM launch emits one `metered` notice before its host can
+make a paid call; repeated readiness checks do not emit notices.
+
+Credentials come only from the named profile in `~/.aws/config` and `~/.aws/credentials`:
+
+- static `aws_access_key_id` and `aws_secret_access_key`, optionally `aws_session_token`;
+- `role_arn` with `source_profile`, up to four role steps without cycles, rooted in static keys
+  or SSO, optionally using `external_id`, `role_session_name` and `duration_seconds`;
+- IAM Identity Center (SSO), with `sso_session` and its `[sso-session]` section, or legacy
+  `sso_start_url` and `sso_region`, plus `sso_account_id` and `sso_role_name`.
+
+`credential_process`, `web_identity_token_file`, `credential_source`, `mfa_serial` and
+`login_session` are refused. Ambient `AWS_*` variables, Bedrock API keys, ECS and EC2
+credentials are not used; Bedrock hosts and their subprocesses have `AWS_*` removed. corral
+never writes `~/.aws`, including the SSO cache, and never refreshes or logs in to SSO. Run
+`aws sso login --profile dev` yourself for a missing or expired token. Already obtained role
+credentials remain usable until their own expiry if renewal fails; fresh credentials then
+require a valid cached token.
+
+The guard permits only these destinations for the bound profile:
+
+- POST `https://bedrock-runtime.<region>.amazonaws.com/model/<URL-encoded model>/converse-stream`,
+  with AWS SigV4 authorization;
+- POST `https://sts.amazonaws.com/` or `https://sts.<region>.amazonaws.com/` only for a
+  profile chain with a role;
+- GET `https://portal.sso.<sso_region>.amazonaws.com/federation/credentials` only for SSO.
+
+OIDC token endpoints, other regions, models and methods, FIPS, dual-stack, VPC and custom
+endpoints, GovCloud and China endpoints are not allowed. Raw TCP Node connections are refused;
+Unix sockets remain available. See [the Bedrock route record](../records/pi-native-bedrock-route.md).
+For a live check with AWS access, run `scripts/bedrock-smoke.sh --aws-profile dev --region
+us-west-2 --model us.anthropic.claude-sonnet-4-5-20250929-v1:0`; it refuses to send without
+the --yes-metered opt-in and prints the intended endpoint, model and token cap first.
+
+The routing vendor selects the provider, credentials, guard and pricing; reviewer independence
+uses the model family. Bedrock Claude and Anthropic Claude both belong to `anthropic`, so they
+are not independent under `require_cross_family`. Bedrock Llama belongs to `meta`; for other
+vendors the family is the vendor. An unknown Bedrock family fails closed when cross-family
+review is required. `routing.reviewer_by_vendor` retains its name but its keys select families.
+
 ## Readback
 
 `corral agent doctor [--json]` reports, and `corral doctor` adds when a pi-native profile is
@@ -151,7 +216,8 @@ configured:
 |---|---|
 | `pi_native_bun` | The Bun on PATH, its version and whether it is inside the GO range. |
 | `pi_native` | The asset directory and its source (installed or `[agent] assets_dir`), its digest, the GO verdict, the auth module (`corral-pi`, `fixture` or `missing`), the installed roles and each role's readiness with the refusal it would get. |
-| `pi_native_credentials` | Whether any provider is logged in, each provider's state (`openai-codex`, `anthropic`) and whether the files' permissions are safe, from file metadata only; their contents are never read into the output. |
+| `pi_native_credentials` | Provider login states and file permissions; Bedrock reports its bound profile, region, mechanism and metered status without secrets. |
+| `pi_native_bedrock` | Offline readiness of the binding and named profile, including SSO token expiry or a fix hint; shown for a binding or Bedrock profile. |
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Blocked after `question_unattended_secs`. |
 
 `corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
@@ -165,14 +231,15 @@ pane or prompt exists, and refuse with a stable code naming what is missing:
 
 | Code | Meaning |
 |---|---|
-| `vendor_refused` | The profile's vendor is not on the pi-native allowlist (`openai`, `anthropic`). |
+| `vendor_refused` | The profile's vendor is not on the pi-native allowlist (`openai`, `anthropic`, `amazon-bedrock`). |
+| `metered_vendor_not_explicit` | A metered vendor was inferred rather than explicitly set on the profile. Set `vendor = "amazon-bedrock"`. |
 | `provider_unsupported_by_host` | The vendor is on the allowlist but the installed host's `compat.json` `providers` list does not include it. A `compat.json` without `providers` declares `openai` only. |
 | `assets_unavailable` | No asset installation: `[agent] assets_dir` is unset and `corral agent install` has not run, or the directory does not exist. |
 | `fixture_assets_not_allowed` | A test fixture installation (it carries `fixture.json`) was reached other than through `[agent] assets_dir`. |
 | `compat_unavailable` | The assets have no `compat.json` recording a `GO` verdict. |
 | `role_unavailable <role>` | The assets lack `src/roles/<role>/index.ts`; the reason names the stage that adds it. |
 | `delivery_unavailable` | The assets lack `src/delivery/index.ts`. |
-| `credentials_unavailable` | The assets lack `src/auth/index.ts`, or (managed installation only) the profile's provider has no login; the reason names the provider and `corral agent login --provider <provider>`. An `[agent] assets_dir` installation skips the login check, and its host refuses at launch instead. |
+| `credentials_unavailable` | Auth is missing or the provider is not ready. For Bedrock this includes a missing binding or AWS profile, unsupported mechanism, or missing or expired SSO token; the reason names a fix. |
 
 Until every stage has landed, a pi-native dispatch therefore stops at one of these refusals.
 `corral doctor` reports the same readback for each role when a pi-native profile is configured,
@@ -226,7 +293,7 @@ calls `https://api.anthropic.com` itself. Claude Code's own traffic (model reque
 whatever else it sends; its non-essential traffic is switched off with
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`) leaves from its subprocess, outside this guarded
 fetch. Every other request, the other provider's endpoints and bug-report uploads included, is
-refused. The same holds after a reload and
+refused. Bedrock uses the additional bound-profile rules described above. The same holds after a reload and
 after the session is replaced.
 
 ### Model catalog
@@ -341,10 +408,10 @@ another turn starts. The nudge is tied to the turn that spent it, an earlier rep
 for a later turn, and a nudge spent before a change request is not given back. Turns you typed in
 are never nudged.
 
-**Vendors.** The allowlist admits `openai` and `anthropic`; a worker profile with any other vendor
+**Vendors.** The allowlist admits `openai`, `anthropic` and explicit `amazon-bedrock`; a worker profile with any other vendor
 is refused `vendor_refused` before a worktree exists. A vendor also has to be one the installed
 host declares in `compat.json` `providers`; the shipped host declares `openai` and
-`anthropic`, and an older installation without the list is refused
+`anthropic` and `amazon-bedrock`, and an older installation without the list is refused
 `provider_unsupported_by_host` for Anthropic until you reinstall. Setup discovery lists only the
 vendors the installed host declares, so it does not offer an Anthropic profile the host cannot
 run. Anthropic profiles are opt-in and use subscription OAuth held only in the corral-owned Pi
@@ -630,7 +697,7 @@ is kept as a terminal transcript.
 the task in Blocked with an excerpt that starts `Pi-native provider authentication failed:` and
 asks you to run `corral agent login`; for a worker it clears when another turn starts, and a
 reviewer's review is escalated by the review watchdog (`provider_escalated`, class `auth`), to be
-restarted after the login. There is no paid fallback. A transient failure (`overload`,
+restarted after the login. There is no automatic paid fallback outside the configured availability policy. A transient failure (`overload`,
 `rate_limit` or another `provider` error) follows the provider-stall backoff: the host gets one
 `turn_nudge` to continue after 60, 120 and 300 seconds (labelled "corral automatic retry n/3", each logged
 `provider_retry`), and once those are used up the task goes to Blocked with the reason
