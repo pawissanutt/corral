@@ -1,7 +1,7 @@
 // The production auth module offline: Pi's own Codex OAuth login and refresh against a fake
 // token server, the 0700/0600 corral-owned store, and a traced child proving no other harness
 // store under HOME is ever opened. `corral agent install` never copies this file.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -119,26 +119,36 @@ describe("the production auth module", () => {
     expect(auth.state?.()).toEqual({ module: "corral-pi", credential: "absent" });
   });
 
-  test("Pi refreshes an expired credential in place inside the store's lock", async () => {
-    process.env.XDG_DATA_HOME = temp();
-    const dir = authDir();
-    const seeded = new FileCredentialStore(dir);
-    await seeded.modify("openai-codex", async () => ({
-      type: "oauth", access: syntheticAccess("old"), refresh: "refresh-old", expires: Date.now() - 1000, accountId: "synthetic",
-    }));
-    const store = auth.credentials({ provider: "openai-codex", apiEndpoint: "", refreshEndpoint: TOKEN_URL });
-    const server = fakeOAuthServer();
-    const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-    const models = await ModelRuntime.create({ credentials: store, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
-    const resolved = await models.getAuth("openai-codex");
-    expect(resolved?.auth.apiKey ?? resolved?.auth.headers).toBeDefined();
-    expect(server.requests).toEqual([TOKEN_URL]);
-    const stored = JSON.parse(readFileSync(join(dir, "openai-codex.json"), "utf8"));
-    expect(stored.refresh).toBe("refresh-refresh_token");
-    expect(stored.expires).toBeGreaterThan(Date.now());
-    expect(mode(join(dir, "openai-codex.json"))).toBe(0o600);
-    expect(mode(join(dir, "auth.json.lock"))).toBe(0o600);
-    expect(auth.state?.()).toEqual({ module: "corral-pi", credential: "present" });
+  describe("expired credential refresh", () => {
+    let dir: string;
+    let server: FakeServer;
+    let models: Awaited<ReturnType<typeof import("@earendil-works/pi-coding-agent").ModelRuntime.create>>;
+
+    // Import and runtime initialization can be slow under contention; they are not the refresh under test.
+    beforeAll(async () => {
+      process.env.XDG_DATA_HOME = temp();
+      dir = authDir();
+      const seeded = new FileCredentialStore(dir);
+      await seeded.modify("openai-codex", async () => ({
+        type: "oauth", access: syntheticAccess("old"), refresh: "refresh-old", expires: Date.now() - 1000, accountId: "synthetic",
+      }));
+      const store = auth.credentials({ provider: "openai-codex", apiEndpoint: "", refreshEndpoint: TOKEN_URL });
+      server = fakeOAuthServer();
+      const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+      models = await ModelRuntime.create({ credentials: store, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
+    }, 60_000);
+
+    test("Pi refreshes an expired credential in place inside the store's lock", async () => {
+      const resolved = await models.getAuth("openai-codex");
+      expect(resolved?.auth.apiKey ?? resolved?.auth.headers).toBeDefined();
+      expect(server.requests).toEqual([TOKEN_URL]);
+      const stored = JSON.parse(readFileSync(join(dir, "openai-codex.json"), "utf8"));
+      expect(stored.refresh).toBe("refresh-refresh_token");
+      expect(stored.expires).toBeGreaterThan(Date.now());
+      expect(mode(join(dir, "openai-codex.json"))).toBe(0o600);
+      expect(mode(join(dir, "auth.json.lock"))).toBe(0o600);
+      expect(auth.state?.()).toEqual({ module: "corral-pi", credential: "present" });
+    });
   });
 
   test("an API key is never stored: there is no paid fallback", async () => {
