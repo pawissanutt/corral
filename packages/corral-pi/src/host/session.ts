@@ -291,7 +291,7 @@ export class HostSession {
         cwd, agentDir, modelRuntime: models, settingsManager,
         resourceLoaderOptions: {
           ...resourceLoaderOptions([(pi: ExtensionAPI) => host.extension(pi)]), appendSystemPrompt: [contract],
-          additionalSkillPaths: [...guidance.skillPaths], additionalPromptTemplatePaths: [...guidance.promptPaths],
+          additionalPromptTemplatePaths: [...guidance.promptPaths],
           agentsFilesOverride: () => ({ agentsFiles: guidance.contextFiles.map((file) => ({ ...file })) }),
         },
       });
@@ -388,7 +388,9 @@ export class HostSession {
             ctx.ui.notify(`corral: session export ${receipt.state}${receipt.replayed ? " (already attached)" : ""}: ${path}`,
               receipt.state === "committed" ? "info" : "warning");
           } catch (error) {
-            ctx.ui.notify(`corral: session export failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+            const reason = error instanceof Error ? error.message : String(error);
+            this.options.events.emit("session_export_failed", { reason: reason.slice(0, 512) });
+            ctx.ui.notify(`corral: session export failed: ${reason}`, "error");
           }
         },
       });
@@ -399,6 +401,9 @@ export class HostSession {
       return { action: "continue" as const };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
+    // Registered after the role's own handler: upstream keeps the first skill of each name, so
+    // a home or repository skill can never replace the role's packaged one (corral-worker).
+    pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
   }
 
   private watch(session: AgentSession): void {
@@ -597,6 +602,7 @@ export class HostSession {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],
         context_files: this.guidance.contextFiles.map((file) => file.path),
+        skills: resources.getSkills().skills.map((skill) => ({ name: skill.name, path: skill.filePath })),
         export: this.exportable(),
       },
       settings: this.settings,
