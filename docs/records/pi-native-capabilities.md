@@ -163,6 +163,46 @@ their schemas when activated. `test/mcp-host.test.ts` prints the raw per-role
 `MCP_STATIC_COST` records. No dynamic token saving, billing result or harness comparison
 is inferred from these estimates.
 
+## Early usage checkpoint (T-570)
+
+This is a **partial early checkpoint**, not the completed standard comparison. The frozen
+cohort deliberately includes guidance/session, todo, background jobs and codemode only.
+Even when other capabilities exist on the checkout, web, MCP, configurable LSP, explore,
+oracle and native plan-role behavior are excluded from completion claims. Existing worker
+LSP declarations remain in both arms. PM costs are separate from worker/review costs.
+
+`packages/corral-pi/test/usage-baseline.test.ts` builds actual host sessions without inference,
+using a private fixture home, one fixed skill, fixed project guidance and empty MCP resources.
+It emits `EARLY_STATIC` JSON records with complete prompts/tool schemas, selected capability
+keys, SHA-256 hashes, byte counts and estimator `utf8-json-bytes/4-v1`. Disposable fixture and
+asset prefixes are normalized before estimating. These are schema/prompt estimates, not
+provider token counts; a skill body is loaded on demand, not all charged at startup.
+
+| Role | Strict prompt / tools estimate | Early standard prompt / tools estimate |
+|---|---:|---:|
+| Worker | 1,995 / 3,125 | 2,140 / 4,746 |
+| Reviewer | 1,484 / 1,757 | 1,725 / 2,290 |
+| PM | 1,064 / 1,272 | 1,119 / 1,707 |
+| Planner | not runnable | not runnable |
+| Plan reviewer | not runnable | not runnable |
+
+PL/PR have no installed native role module in this checkpoint; absent costs are null, not
+zero-cost successes. Actual owner home skills and configured resources would change these
+numbers. The role matrix resolves settings in Rust; this fixed early subset is a test control,
+not a second production default resolver.
+
+Collector fixtures exercise copied/resumed transcripts, assistant and summary requests,
+auxiliary references, all five durable container roles, repeated collection, subscription
+API-equivalent pricing, Bedrock pricing and unknown-model gaps. Implementation refresh is
+wired through `agent/hooks/usage.rs`; PM and planning readback uses
+`agent::usage::collect_container`, without changing implementation totals. Auxiliary references
+are reusable accounting infrastructure; child launch and budget enforcement remain later work.
+
+Dynamic strict/standard inference is pending a finite run-specific owner allowance (Q1).
+No dynamic usage, wall-time or outcome-validity success is inferred from deterministic fixtures
+or these static estimates. T-313 remains a qualified historical non-pass, not a causal savings
+baseline or permission to change the default harness.
+
 ## Assistant seam (T-544)
 
 T-544 consumes the same resolver; it does not get a parallel one. To add the assistant

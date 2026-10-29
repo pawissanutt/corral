@@ -270,6 +270,154 @@ fn pm_sessions_are_attributed_to_no_task() {
     );
 }
 
+#[test]
+fn auxiliary_references_survive_serialization_and_share_response_deduplication() {
+    use corral_core::agent::{UsageSession, UsageSessionKind};
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-parent");
+    write_session(&host.sessions.join("session.jsonl"), &fixture_lines().0);
+    let mut state = task(&fx, &id).runs[0].agent_host.clone().unwrap();
+    let container = ContainerRef::Worker {
+        task: id.clone(),
+        run: "R1".into(),
+    };
+    for (key, kind, text) in [
+        (
+            "summary-copy",
+            UsageSessionKind::Summary,
+            FIXTURE.to_owned(),
+        ),
+        ("oracle", UsageSessionKind::Oracle, FIXTURE.to_owned()),
+    ] {
+        let file = paths::usage_session_file(&fx.ctx.store, &container, key);
+        write_session(&file, &text.lines().collect::<Vec<_>>());
+        state.usage_sessions.push(UsageSession {
+            generation: 1,
+            kind,
+            session_id: key.into(),
+            session_file: file,
+            model: None,
+        });
+    }
+    // Give the oracle a distinct canonical session identity, independent of fixture naming.
+    let oracle = state.usage_sessions.last().unwrap();
+    let mut lines: Vec<Value> = FIXTURE
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    lines[0]["id"] = "oracle-session".into();
+    std::fs::write(
+        &oracle.session_file,
+        lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let state: AgentRunState =
+        serde_json::from_value(serde_json::to_value(state).unwrap()).unwrap();
+    let once = collect_state(&state, None, &fx.ctx.store).unwrap();
+    assert_eq!(once, collect_state(&state, None, &fx.ctx.store).unwrap());
+    assert_eq!(tokens(&once), totals().map(|n| n * 2));
+    assert_eq!(state.usage_sessions[1].generation, 1);
+    assert_eq!(state.usage_sessions[1].kind, UsageSessionKind::Oracle);
+    // The references are canonical state, not a runtime directory scan.
+    assert!(
+        paths::usage_session_file(&fx.ctx.store, &container, "../../escape")
+            .starts_with(paths::container_sessions_dir(&fx.ctx.store, &container))
+    );
+    let mut invalid = state;
+    invalid.usage_sessions[0].generation = 99;
+    assert!(collect_state(&invalid, None, &fx.ctx.store).is_err());
+}
+
+#[test]
+fn container_readback_keeps_pm_and_planning_usage_separate() {
+    use corral_core::agent::{AgentRole, pm_state};
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-worker");
+    write_session(&host.sessions.join("session.jsonl"), &fixture_lines().0);
+    let pm = bound_hello(
+        &fx,
+        &BindTarget::Pm {
+            project: "corral".into(),
+        },
+        "pm1",
+        "sess-pm",
+    );
+    write_session(&pm.sessions.join("session.jsonl"), &fixture_lines().0);
+    let pm_usage = collect_container(&ContainerRef::Pm, &fx.ctx.store).unwrap();
+    assert_eq!(tokens(&pm_usage), totals());
+    assert_eq!(
+        pm_usage,
+        collect_container(&ContainerRef::Pm, &fx.ctx.store).unwrap()
+    );
+    let mut state = pm_state::load(&fx.ctx.store).unwrap().unwrap().state;
+    // Persist actual planning containers, not implementation runs relabeled as planning.
+    state.binding.role = AgentRole::Planner;
+    let planner_file = paths::container_sessions_dir(
+        &fx.ctx.store,
+        &ContainerRef::Planner {
+            task: id.clone(),
+            run: "D1".into(),
+        },
+    )
+    .join("session.jsonl");
+    write_session(&planner_file, &fixture_lines().0);
+    state.generations[0].bound.as_mut().unwrap().session_file = planner_file;
+    let planner = serde_json::from_value(serde_json::json!({
+        "agent_host": state, "id": "D1", "profile": "planner", "harness": "pi-native",
+        "spec_revision": "fixture", "started": "2026-10-29T00:00:00Z",
+        "output_dir": "/fixture/output", "rounds": 0, "state": "planning"
+    }))
+    .unwrap();
+    state.binding.role = AgentRole::PlanReviewer;
+    let review_file = paths::container_sessions_dir(
+        &fx.ctx.store,
+        &ContainerRef::PlanReviewer {
+            task: id.clone(),
+            plan: "P1".into(),
+            review: "PR1".into(),
+        },
+    )
+    .join("session.jsonl");
+    write_session(&review_file, &fixture_lines().0);
+    state.generations[0].bound.as_mut().unwrap().session_file = review_file;
+    let plan = serde_json::from_value(serde_json::json!({
+        "id": "P1", "spec_revision": "fixture",
+        "artifact": {"run":"D1", "kind":"plan", "title":"fixture", "path":"fixture.md",
+            "source":"/fixture.md", "sha256":"fixture", "bytes":0, "added":"2026-10-29T00:00:00Z"},
+        "document": {"goal":"fixture", "non_goals":[], "decisions":[], "affected_paths":[],
+            "contracts":[], "dependencies":[], "acceptance":[], "verification":[], "owner_decisions":[]},
+        "reviews": [{"id":"PR1", "reviewer":"fixture", "policy_digest":"fixture",
+            "at":"2026-10-29T00:00:00Z", "agent_host":state}]
+    })).unwrap();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.plan_runs.push(planner);
+            task.plans.push(plan);
+            Ok(())
+        })
+        .unwrap();
+    for container in [
+        ContainerRef::Planner {
+            task: id.clone(),
+            run: "D1".into(),
+        },
+        ContainerRef::PlanReviewer {
+            task: id.clone(),
+            plan: "P1".into(),
+            review: "PR1".into(),
+        },
+    ] {
+        let first = collect_container(&container, &fx.ctx.store).unwrap();
+        assert_eq!(tokens(&first), totals());
+        assert_eq!(first, collect_container(&container, &fx.ctx.store).unwrap());
+    }
+    crate::usage::refresh_usage(&fx.ctx.store, &id).unwrap();
+    assert_eq!(tokens(&task(&fx, &id).total_usage().unwrap()), totals());
+}
+
 #[cfg(unix)]
 #[test]
 fn a_session_that_is_not_a_regular_file_is_refused() {
@@ -382,6 +530,24 @@ fn bedrock_million_token_session_prices_at_catalog_input_plus_output() {
             Some("catalog-bedrock@pi-ai-1.3.0")
         );
     }
+}
+
+#[test]
+fn response_ids_cannot_collide_with_summary_entry_ids() {
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-collision");
+    write_session(
+        &host.sessions.join("session.jsonl"),
+        &[
+            r#"{"type":"message","id":"m1","message":{"role":"assistant","responseId":"entry:s1","model":"unknown-model","usage":{"input":10,"output":1}}}"#,
+            r#"{"type":"compaction","id":"s1","usage":{"input":20,"output":2}}"#,
+        ],
+    );
+    let usage = collect(&task(&fx, &id).runs[0], &fx.ctx.store).unwrap();
+    assert_eq!(tokens(&usage), [30, 3, 0, 0]);
+    assert_eq!(usage.unpriced_tokens, 33);
+    assert_eq!(usage.estimated_usd, None);
 }
 
 #[test]

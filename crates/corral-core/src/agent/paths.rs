@@ -36,6 +36,13 @@ pub fn sessions_dir(store: &Store) -> PathBuf {
     store.dir().join("agent").join("sessions")
 }
 
+/// A launcher-selected auxiliary transcript. Hashing the opaque request key avoids path traversal.
+pub fn usage_session_file(store: &Store, container: &ContainerRef, request: &str) -> PathBuf {
+    container_sessions_dir(store, container)
+        .join("auxiliary")
+        .join(format!("{}.jsonl", sha256_hex(request.as_bytes())))
+}
+
 /// `sessions/<task>/<run>[/<review>]`, `<task>/plan-<D>`, `<task>/plan-<P>/<PR>`, or `pm`.
 pub fn container_sessions_dir(store: &Store, container: &ContainerRef) -> PathBuf {
     let base = sessions_dir(store);

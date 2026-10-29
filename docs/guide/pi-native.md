@@ -1183,8 +1183,17 @@ agent install`), and `credentials_unavailable` without the provider's login.
 
 ## What else already applies
 
-- **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`
-  until the collector lands; no cost is estimated for it.
+- **Usage.** The installed collector reads each generation's bound Pi transcript when task
+  usage is refreshed, including review children and recorded compaction/branch-summary requests.
+  Repeated collections and copied/resumed sessions deduplicate by session/response identity.
+  `estimated_usd` is API-equivalent catalog pricing (including subscription models), not an invoice;
+  Pi's own cost remains `reported_usd`. Unknown models retain `unpriced_tokens`, not a zero-dollar
+  estimate. Missing/unwritten transcripts do not imply a free request.
+  The shared `agent::usage::collect_container` readback also supports durable PM/planning records;
+  these are separate from implementation task totals. Auxiliary producers can persist
+  `AgentRunState.usage_sessions` with parent generation and launcher-selected session references.
+  That seam does not itself implement explore/oracle or a PM/planning cost CLI.
+  See [the early checkpoint](../records/pi-native-capabilities.md#early-usage-checkpoint-t-570).
 - **Messages.** Messages to a pi-native run or review child use inbox delivery through the
   `pi_native` adapter, and every sync gives each open one a delivery pass. They are never typed
   into the pane.
