@@ -39,6 +39,7 @@ mod json_path;
 pub mod legacy;
 pub mod lessons;
 pub mod messages;
+pub mod migrate;
 pub mod model;
 pub mod obligations;
 pub mod operating;

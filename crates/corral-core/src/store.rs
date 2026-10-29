@@ -38,6 +38,7 @@ mod head_reviews;
 mod head_run;
 mod heads;
 mod member_gate;
+pub(crate) mod migrate_rows;
 mod plan_member;
 mod plan_scope;
 mod read;
@@ -61,6 +62,7 @@ pub use heads::*;
 pub use member_gate::{MemberGateAmended, MemberGateAmendment};
 use plan_scope::ScopeWrite;
 pub use task_ref_head::shell_of;
+pub(crate) use write::apply_error;
 #[cfg(test)]
 #[path = "store_lock_tests.rs"]
 mod lock_tests;

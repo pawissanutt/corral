@@ -18,6 +18,7 @@ mod inbox_cmd;
 mod lessons_cmd;
 mod list_cols;
 mod log_cmd;
+mod migrate_cmd;
 mod mode_cmd;
 mod pins;
 mod plan_cmd;
@@ -151,6 +152,8 @@ pub enum Cmd {
         #[command(subcommand)]
         what: export_cmd::ExportCmd,
     },
+    /// Move a legacy file store into the database, roll it back, or finalize it
+    Migrate(migrate_cmd::MigrateArgs),
     /// Check storage integrity, report or reclaim storage by class, and take verified backups
     Storage {
         #[command(subcommand)]
