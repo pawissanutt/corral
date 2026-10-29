@@ -23,20 +23,28 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let Some(_drain) = ctx.store.try_lock("queue-drain")? else {
         return Ok(Vec::new());
     };
-    let mut queued: Vec<Task> = ctx
-        .store
+    // One read of the board selects the queue and answers every skip check until this drain
+    // attempts a dispatch, so the operating policy is resolved once per drain, not per check
+    // (T-547). An attempt may change the board, so the next check reads it again.
+    let board = ctx.store.read_only_snapshot()?;
+    let mut queued: Vec<Task> = board
         .list()?
         .into_iter()
-        .filter(|t| {
-            !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&ctx.store, t))
-        })
+        .filter(|t| !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&board, t)))
         .collect();
     crate::queue::sort_candidates(&mut queued);
     let mut refusals = Refusals::load(ctx)?;
     refusals.retain(&queued);
     let mut changes = Vec::new();
+    let mut view = Some(board);
     for (index, task) in queued.into_iter().enumerate() {
-        if still_blocked(ctx, &task, index + 1, now) {
+        let store = match view.take() {
+            Some(store) => store,
+            None => ctx.store.read_only_snapshot()?,
+        };
+        let blocked = still_blocked(ctx, &store, &task, index + 1, now);
+        view = Some(store);
+        if blocked {
             continue;
         }
         if task.launch.is_none()
@@ -45,6 +53,7 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         {
             continue;
         }
+        view = None;
         let result = (|| {
             if !task.queued && task.launch.is_none() {
                 crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
@@ -97,7 +106,14 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
 /// The attempt would only take its launch and session-ownership locks, re-resolve its route and log
 /// the same `queued` reason again. This is the claim's own check, read without locks; the claim
 /// repeats it, so a stale read can only delay a launch by one pass, never admit one.
-pub(crate) fn still_blocked(ctx: &Ctx, task: &Task, rank: usize, at: Timestamp) -> bool {
+/// `store` is the drain's read-only snapshot of the board.
+pub(crate) fn still_blocked(
+    ctx: &Ctx,
+    store: &corral_core::Store,
+    task: &Task,
+    rank: usize,
+    at: Timestamp,
+) -> bool {
     if !task.queued || task.launch.is_some() || task.dispatch_plan.is_none() {
         return false;
     }
@@ -110,7 +126,7 @@ pub(crate) fn still_blocked(ctx: &Ctx, task: &Task, rank: usize, at: Timestamp) 
         plan: admission.plan_requested(task, &opts),
         ..opts
     };
-    matches!(admission.reason(ctx, &ctx.store, task, &opts), Ok(Some(_)))
+    matches!(admission.reason(ctx, store, task, &opts), Ok(Some(_)))
 }
 
 /// Lock contention with another sync pass or launch clears by itself, and the next pass retries,

@@ -42,10 +42,7 @@ impl BoardSnapshot {
         attention: Option<crate::attention::Snapshot>,
     ) -> Result<Self> {
         let tasks = ctx.store.list()?;
-        let plan_progress = tasks
-            .iter()
-            .filter_map(|task| crate::plan::tracker::load(ctx, task).map(|p| (task.id.clone(), p)))
-            .collect();
+        let plan_progress = crate::plan::tracker::load_all(ctx, &tasks);
         let finishes = corral_ops::finishes(&ctx.store, &tasks)?;
         let resource_ctx = crate::attention::refresh_context(ctx);
         let (resources, waits) =

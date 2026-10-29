@@ -59,10 +59,12 @@ pub enum Work {
     InboxList,
     InboxHeaderWrite,
     InboxIndexRead,
+    /// A full resolution of the effective operating policy (grant, members and refusals).
+    PolicyResolve,
 }
 
 impl Work {
-    pub const ALL: [Work; 28] = [
+    pub const ALL: [Work; 29] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -91,6 +93,7 @@ impl Work {
         Work::InboxList,
         Work::InboxHeaderWrite,
         Work::InboxIndexRead,
+        Work::PolicyResolve,
     ];
 
     pub fn name(self) -> &'static str {
@@ -123,6 +126,7 @@ impl Work {
             Work::InboxList => "inbox_lists",
             Work::InboxHeaderWrite => "inbox_header_writes",
             Work::InboxIndexRead => "inbox_index_reads",
+            Work::PolicyResolve => "policy_resolves",
         }
     }
 }

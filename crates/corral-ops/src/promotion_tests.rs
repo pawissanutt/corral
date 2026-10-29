@@ -218,6 +218,28 @@ fn ranks_priority_then_age_then_conflict_risk_then_id() {
 }
 
 #[test]
+fn one_shortlist_derives_each_projects_lesson_signals_once() {
+    use corral_core::work::{Work, count};
+    // Given history similar to three Ideas and to an active task of the same project.
+    let (_tmp, ctx) = workspace();
+    ctx.store
+        .create("Repair alpha engine", Some("app"), Status::Done, "")
+        .unwrap();
+    for n in 0..3 {
+        idea(&ctx, &format!("Improve alpha engine {n}"));
+    }
+    ctx.store
+        .create("Tune alpha engine", Some("app"), Status::Running, "")
+        .unwrap();
+    // When the live board is shortlisted once (T-547).
+    let start = count(Work::LessonSignalScan);
+    let candidates = promotion_shortlist(&ctx).unwrap();
+    // Then every candidate and active comparison shares one derivation of the history.
+    assert_eq!(candidates.len(), 3);
+    assert_eq!(count(Work::LessonSignalScan) - start, 1);
+}
+
+#[test]
 fn reuses_historical_files_without_requiring_any_saved_lessons() {
     let (tmp, ctx) = workspace();
     let history = ctx

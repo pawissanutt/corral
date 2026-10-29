@@ -253,22 +253,35 @@ impl TaskCache {
         dir: &Path,
         list: impl FnOnce() -> Result<Vec<PathBuf>>,
     ) -> Result<Vec<PathBuf>> {
+        self.with_files(dir, list, <[PathBuf]>::to_vec)
+    }
+
+    /// [`Self::files`] passed to `use_paths` by reference, so a lookup copies no listing.
+    pub(super) fn with_files<R>(
+        &self,
+        dir: &Path,
+        list: impl FnOnce() -> Result<Vec<PathBuf>>,
+        use_paths: impl FnOnce(&[PathBuf]) -> R,
+    ) -> Result<R> {
         let observed = SystemTime::now();
         let metadata = match std::fs::metadata(dir) {
             Ok(metadata) => metadata,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return list(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return list().map(|paths| use_paths(&paths));
+            }
             Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
         };
         let mut listing = locked(&self.listing)?;
         if let Some((stamp, paths)) = listing.as_ref()
             && FileStamp::of(&metadata) == Some(*stamp)
         {
-            return Ok(paths.clone());
+            return Ok(use_paths(paths));
         }
         let paths = list()?;
-        *listing = FileStamp::settled(&metadata, observed, self.window())
-            .map(|stamp| (stamp, paths.clone()));
-        Ok(paths)
+        let used = use_paths(&paths);
+        *listing =
+            FileStamp::settled(&metadata, observed, self.window()).map(|stamp| (stamp, paths));
+        Ok(used)
     }
 
     /// For fixtures that cannot age a file's ctime: trust stamps of files changed earlier than

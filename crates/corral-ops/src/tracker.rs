@@ -76,7 +76,18 @@ pub struct PlanProgress {
 /// # Errors
 /// Rejects non-trackers, missing members or dependencies, cycles, and invalid membership.
 pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
-    let store = Store::open_unobserved(ctx.store.root())?;
+    plan_progress_in(ctx, &plan_board(ctx)?, id)
+}
+
+/// The board [`plan_progress`] reads: freshly opened, then frozen, so one read answers every
+/// member, dependency and membership lookup instead of decoding the board for each (T-547).
+pub fn plan_board(ctx: &Ctx) -> Result<Store> {
+    Store::open_unobserved(ctx.store.root())?.read_only_snapshot()
+}
+
+/// [`plan_progress`] over a [`plan_board`] shared by every tracker of one refresh.
+pub fn plan_progress_in(ctx: &Ctx, store: &Store, id: &str) -> Result<PlanProgress> {
+    let store = store.clone();
     let tracker = store.get(id)?;
     ensure!(tracker.tracker, "{} is not a tracker Plan", tracker.id);
     let fresh = Ctx {

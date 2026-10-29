@@ -290,7 +290,7 @@ pub use thumbnails::{artifact_thumbnail, capture_html_thumbnails, is_visual_arti
 pub use timeline::{EntryClass, TimelineEntry, TimelineFilter, Wait, timeline};
 pub use tracker::{
     PlanCoverage, PlanPrerequisite, PlanProgress, PlanWork, PlanWorkCounts, PlanWorkState,
-    plan_progress,
+    plan_board, plan_progress, plan_progress_in,
 };
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};
