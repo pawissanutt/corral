@@ -71,6 +71,8 @@ struct Line {
     #[serde(rename = "modelId")]
     model_id: Option<String>,
     message: Option<Message>,
+    /// A compaction or branch summary's own request usage, recorded on its entry.
+    usage: Option<WireUsage>,
 }
 
 #[derive(Deserialize)]
@@ -163,20 +165,26 @@ fn read_session(
                 }
                 continue;
             }
+            // Summarization requests run on the session's current model (T-564).
+            "compaction" | "branch_summary" => {}
             "message" => {}
             _ => continue,
         }
-        let Some(message) = entry.message.filter(|m| m.role == "assistant") else {
-            continue;
+        let (usage, response_id, message_model) = match entry.message {
+            Some(message) if entry.kind == "message" && message.role == "assistant" => {
+                (message.usage, message.response_id, message.model)
+            }
+            _ if entry.kind != "message" => (entry.usage, None, None),
+            _ => continue,
         };
-        let Some(usage) = message.usage else {
+        let Some(usage) = usage else {
             continue;
         };
         let reported_usd = usage.cost.and_then(|cost| cost.total);
         if reported_usd.is_some_and(|cost| !cost.is_finite() || cost < 0.0) {
             bail!("invalid usage cost at line {number} of {display}");
         }
-        let response = match (message.response_id, entry.id) {
+        let response = match (response_id, entry.id) {
             (Some(response), _) => response,
             (None, Some(id)) => format!("entry:{id}"),
             (None, None) => format!("line:{number}"),
@@ -192,8 +200,7 @@ fn read_session(
         let evidence = UsageEntry {
             at,
             latency_ms,
-            model: message
-                .model
+            model: message_model
                 .or_else(|| model.clone())
                 .map(|m| pricing_key(&m).to_owned()),
             input: usage.input,

@@ -784,7 +784,15 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "capabilities": bootstrap.capabilities.as_ref().map(|snapshot| {
             let mut payload = json!({
                 "catalog": snapshot.catalog, "digest": snapshot.digest,
-                "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys().collect::<Vec<_>>(),
+                // Rust-side keys (lessons) never reach the host, which refuses keys it lacks.
+                "preset": snapshot.preset.as_str(), "enabled": snapshot.enabled_keys()
+                    .filter(|key| corral_core::agent::capability(key).is_some_and(|def| def.host))
+                    .collect::<Vec<_>>(),
+                "settings": snapshot.features.iter()
+                    .filter(|(_, state)| state.enabled && !state.settings.is_empty())
+                    .map(|(key, state)| (key.clone(), json!(state.settings)))
+                    .collect::<serde_json::Map<_, _>>(),
+                "project_text": snapshot.project_text == Some(true),
             });
             if snapshot.enabled("web.enabled") && let Some(web) = &snapshot.web {
                 payload["web"] = json!(web);

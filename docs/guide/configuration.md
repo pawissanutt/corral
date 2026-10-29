@@ -1041,7 +1041,8 @@ Optional Pi-native features per role; only pi-native runs read them.
 | Key | Default | Meaning |
 |---|---|---|
 | `preset` | `"standard"` | `strict`, `standard` or `full`; each catalog feature defines its value per preset and role. |
-| `worker`, `reviewer`, `pm`, `planner`, `plan_reviewer` | empty | Per-role tables of catalog key = boolean overrides. Unknown keys and keys outside the role's ceiling are rejected. |
+| `trusted_projects` | `["*"]` | Projects whose repository text (context files, `.agents/skills`, `.agents/prompts`) a host may load; `"*"` is every registered project, `[]` none. |
+| `worker`, `reviewer`, `pm`, `planner`, `plan_reviewer` | empty | Per-role tables of catalog key = boolean overrides, or a compound key's table (`enabled` plus settings such as `skills.user_dirs` or `compaction.reserve_tokens`). Unknown keys, settings and keys outside the role's ceiling are rejected. |
 
 ```toml
 [agent.capabilities]

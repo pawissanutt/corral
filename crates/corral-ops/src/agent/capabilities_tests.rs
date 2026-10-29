@@ -161,7 +161,8 @@ fn explicit_resume_adapts_changed_settings_and_keeps_each_generation_snapshot() 
     assert_eq!(message["todo"], true);
     assert_eq!(
         message["capabilities"],
-        json!({"catalog": corral_core::agent::CAPABILITY_CATALOG_VERSION, "digest": snapshot.digest, "preset": "standard", "enabled": ["todo"]})
+        json!({"catalog": corral_core::agent::CAPABILITY_CATALOG_VERSION, "digest": snapshot.digest,
+            "preset": "standard", "enabled": ["todo"], "settings": {}, "project_text": true})
     );
     // When the owner disables worker todo and the run is explicitly resumed.
     fx.ctx
@@ -190,6 +191,7 @@ fn explicit_resume_adapts_changed_settings_and_keeps_each_generation_snapshot() 
             key: "todo".into(),
             from: Some(true),
             to: Some(false),
+            settings: false,
         }]
     );
     // And state reads the same snapshot and change, while an old bootstrap shape still loads.
@@ -237,13 +239,18 @@ fn a_legacy_generation_is_labeled_and_resumes_without_reconstruction() {
         .clone()
         .unwrap();
     assert_eq!(transition.from_preset, SnapshotPreset::LegacyStrict);
+    // This fixture host implements only todo, so the other keys' changes are not the point here.
     assert_eq!(
-        transition.changes,
-        vec![CapabilityChange {
+        transition
+            .changes
+            .iter()
+            .find(|change| change.key == "todo"),
+        Some(&CapabilityChange {
             key: "todo".into(),
             from: Some(false),
             to: Some(true),
-        }]
+            settings: false,
+        })
     );
     assert!(host.generation(1).unwrap().capabilities.is_none());
 }

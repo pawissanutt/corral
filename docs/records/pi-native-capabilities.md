@@ -8,13 +8,31 @@ keeps its own defaults.
 ## Catalog
 
 `crates/corral-core/src/agent/capabilities.rs` owns `CATALOG`. Each entry has a key, a
-one-line summary and `defaults(role) -> Option<[strict, standard, full]>`. `None` is the
-role's ceiling: no preset or override can enable the key for that role, and configuration
-that tries is a parse error. Today the catalog has one key:
+one-line summary, `defaults(role) -> Option<[strict, standard, full]>`, `host` and an
+optional `settings` function. `None` is the role's ceiling: no preset or override can enable
+the key for that role, and configuration that tries is a parse error. `host` says whether the
+installed Pi host must implement the key; `lessons` is Rust-side (the dispatch prompt), so an
+older host never makes it unavailable and the launch message never names it. `settings`
+validates a compound key's configured table and returns its effective settings.
 
-| Key | Worker | PM | Reviewer, planner, plan reviewer |
-|---|---|---|---|
-| `todo` | off / on / on | off / on / on | not available |
+| Key | Worker | PM | Reviewer, planner, plan reviewer | Settings |
+|---|---|---|---|---|
+| `todo` (T-562) | off / on / on | off / on / on | not available | none |
+| `web.enabled` (T-568) | off / on / on | not available | off / on / on | own `web` table and `snapshot.web` |
+| `context_files` (T-564) | off / on / on | off / on / on | off / on / on | none |
+| `skills` (T-564) | off / on / on | off / on / on | off / on / on | `user_dirs`, default `["~/.agents/skills"]` |
+| `prompt_templates` (T-564) | off / on / on | off / on / on | off / on / on | `user_dirs`, default `["~/.agents/prompts"]` |
+| `compaction` (T-564) | on / on / on | on / on / on | on / on / on | `reserve_tokens`, `keep_recent_tokens`, `branch_summary`; only configured values |
+| `lessons` (T-564, Rust-side) | on / on / on | not available | on / on / on | none |
+| `session_export` (T-564) | off / on / on | not available | off / on / on | none |
+
+An enabled key's effective settings are recorded in its feature state (`settings`) and covered
+by the digest. `trusted_projects` (default `["*"]`) is the one project-text trust decision;
+`resolve_for(role, project, supported)` records it as the snapshot's `project_text`, which
+doctor's project-free `resolve` leaves absent. A transition change sets `settings: true` when
+a key's effective settings differ, whatever its enabled state. A legacy generation takes each
+key's strict value (compaction and lessons on) except its recorded todo flag. The plan
+roles' guidance settings are resolved today; their native hosts arrive with plan-roles.
 
 `CAPABILITY_CATALOG_VERSION` (1) changes only when an entry's meaning or the snapshot's
 canonical form changes. A later member registers its own implemented key and defaults here
@@ -73,8 +91,9 @@ Protocol, credential, identity and role errors keep their existing handling.
 
 ## Launch message and host
 
-The launch message carries `capabilities: {catalog, digest, preset, enabled}` beside the
-legacy `todo` boolean. When `capabilities` is present the host takes todo from `enabled`;
+The launch message carries `capabilities: {catalog, digest, preset, enabled, settings,
+project_text}` beside the legacy `todo` boolean; `enabled` lists host keys only and
+`settings` maps each enabled compound key to its effective settings. When `capabilities` is present the host takes todo from `enabled`;
 an older corral that sends only `todo` still works. The host refuses a launch message that
 enables a key outside its own `HOST_CAPABILITIES`, since corral only does so when the
 installation is mismatched. `RoleContext.capabilities` exposes the snapshot to role modules,
