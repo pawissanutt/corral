@@ -603,6 +603,98 @@ fn validate_http_endpoint(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A JSON safe integer: the host passes token counts to upstream as JavaScript numbers.
+const SAFE_INTEGER_MAX: u64 = (1 << 53) - 1;
+
+fn tokens(value: &serde_json::Value, name: &str) -> Result<serde_json::Value, String> {
+    match value.as_u64() {
+        Some(count) if count <= SAFE_INTEGER_MAX => Ok(count.into()),
+        _ => Err(format!("{name} must be a non-negative integer token count")),
+    }
+}
+
+fn unknown(name: &str, known: &str) -> String {
+    format!("has no setting {name} (known: {known})")
+}
+
+/// `user_dirs`: absolute or `~/` directories, read as text only; `[]` loads none.
+fn user_dirs(table: &CapabilitySettings, default: &str) -> Result<CapabilitySettings, String> {
+    let mut dirs = vec![serde_json::Value::from(default)];
+    for (name, value) in table {
+        if name != "user_dirs" {
+            return Err(unknown(name, "user_dirs"));
+        }
+        let list = value
+            .as_array()
+            .ok_or("user_dirs must be a list of directories")?;
+        for dir in list {
+            let text = dir.as_str().unwrap_or_default();
+            if !(text.starts_with('/') || text.starts_with("~/")) || text.contains('\0') {
+                return Err(format!(
+                    "user_dirs entry {dir} must be an absolute or ~/ directory"
+                ));
+            }
+        }
+        dirs.clone_from(list);
+    }
+    Ok([("user_dirs".to_owned(), dirs.into())].into())
+}
+
+pub(crate) fn skill_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    user_dirs(table, "~/.agents/skills")
+}
+
+pub(crate) fn template_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
+    user_dirs(table, "~/.agents/prompts")
+}
+
+/// Compaction keeps upstream's defaults for every value left out, so only configured values
+/// are recorded: `reserve_tokens`, `keep_recent_tokens` and `branch_summary.{reserve_tokens,
+/// skip_prompt}`.
+pub(crate) fn compaction_settings(
+    table: &CapabilitySettings,
+) -> Result<CapabilitySettings, String> {
+    let mut effective = CapabilitySettings::new();
+    for (name, value) in table {
+        let value = match name.as_str() {
+            "reserve_tokens" | "keep_recent_tokens" => tokens(value, name)?,
+            "branch_summary" => {
+                let summary = value.as_object().ok_or("branch_summary must be a table")?;
+                let mut out = serde_json::Map::new();
+                for (inner, item) in summary {
+                    let checked = match inner.as_str() {
+                        "reserve_tokens" => tokens(item, "branch_summary.reserve_tokens")?,
+                        "skip_prompt" => item
+                            .as_bool()
+                            .ok_or("branch_summary.skip_prompt must be a boolean")?
+                            .into(),
+                        other => {
+                            return Err(unknown(
+                                &format!("branch_summary.{other}"),
+                                "reserve_tokens, skip_prompt",
+                            ));
+                        }
+                    };
+                    out.insert(inner.clone(), checked);
+                }
+                out.into()
+            }
+            other => {
+                return Err(unknown(
+                    other,
+                    "reserve_tokens, keep_recent_tokens, branch_summary",
+                ));
+            }
+        };
+        effective.insert(name.clone(), value);
+    }
+    Ok(effective)
+}
+
+#[cfg(test)]
+#[path = "agent_capabilities_tests.rs"]
+mod tests;
+
 #[cfg(test)]
 mod mcp_config_tests {
     use super::*;
@@ -725,95 +817,3 @@ mod mcp_config_tests {
         }
     }
 }
-
-/// A JSON safe integer: the host passes token counts to upstream as JavaScript numbers.
-const SAFE_INTEGER_MAX: u64 = (1 << 53) - 1;
-
-fn tokens(value: &serde_json::Value, name: &str) -> Result<serde_json::Value, String> {
-    match value.as_u64() {
-        Some(count) if count <= SAFE_INTEGER_MAX => Ok(count.into()),
-        _ => Err(format!("{name} must be a non-negative integer token count")),
-    }
-}
-
-fn unknown(name: &str, known: &str) -> String {
-    format!("has no setting {name} (known: {known})")
-}
-
-/// `user_dirs`: absolute or `~/` directories, read as text only; `[]` loads none.
-fn user_dirs(table: &CapabilitySettings, default: &str) -> Result<CapabilitySettings, String> {
-    let mut dirs = vec![serde_json::Value::from(default)];
-    for (name, value) in table {
-        if name != "user_dirs" {
-            return Err(unknown(name, "user_dirs"));
-        }
-        let list = value
-            .as_array()
-            .ok_or("user_dirs must be a list of directories")?;
-        for dir in list {
-            let text = dir.as_str().unwrap_or_default();
-            if !(text.starts_with('/') || text.starts_with("~/")) || text.contains('\0') {
-                return Err(format!(
-                    "user_dirs entry {dir} must be an absolute or ~/ directory"
-                ));
-            }
-        }
-        dirs.clone_from(list);
-    }
-    Ok([("user_dirs".to_owned(), dirs.into())].into())
-}
-
-pub(crate) fn skill_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
-    user_dirs(table, "~/.agents/skills")
-}
-
-pub(crate) fn template_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
-    user_dirs(table, "~/.agents/prompts")
-}
-
-/// Compaction keeps upstream's defaults for every value left out, so only configured values
-/// are recorded: `reserve_tokens`, `keep_recent_tokens` and `branch_summary.{reserve_tokens,
-/// skip_prompt}`.
-pub(crate) fn compaction_settings(
-    table: &CapabilitySettings,
-) -> Result<CapabilitySettings, String> {
-    let mut effective = CapabilitySettings::new();
-    for (name, value) in table {
-        let value = match name.as_str() {
-            "reserve_tokens" | "keep_recent_tokens" => tokens(value, name)?,
-            "branch_summary" => {
-                let summary = value.as_object().ok_or("branch_summary must be a table")?;
-                let mut out = serde_json::Map::new();
-                for (inner, item) in summary {
-                    let checked = match inner.as_str() {
-                        "reserve_tokens" => tokens(item, "branch_summary.reserve_tokens")?,
-                        "skip_prompt" => item
-                            .as_bool()
-                            .ok_or("branch_summary.skip_prompt must be a boolean")?
-                            .into(),
-                        other => {
-                            return Err(unknown(
-                                &format!("branch_summary.{other}"),
-                                "reserve_tokens, skip_prompt",
-                            ));
-                        }
-                    };
-                    out.insert(inner.clone(), checked);
-                }
-                out.into()
-            }
-            other => {
-                return Err(unknown(
-                    other,
-                    "reserve_tokens, keep_recent_tokens, branch_summary",
-                ));
-            }
-        };
-        effective.insert(name.clone(), value);
-    }
-    Ok(effective)
-}
-
-#[cfg(test)]
-#[path = "agent_capabilities_tests.rs"]
-mod tests;

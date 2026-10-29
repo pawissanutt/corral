@@ -516,6 +516,50 @@ impl CapabilitySnapshot {
     }
 }
 
+impl CapabilityTransition {
+    pub fn summary(&self) -> String {
+        let mut changes: Vec<String> = self
+            .changes
+            .iter()
+            .map(|change| {
+                let side = |value: Option<bool>| match value {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "absent",
+                };
+                format!(
+                    "{} {} -> {}{}",
+                    change.key,
+                    side(change.from),
+                    side(change.to),
+                    if change.settings {
+                        " (settings changed)"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+        if let Some(change) = &self.web_change {
+            changes.push(format!("web settings {:?} -> {:?}", change.from, change.to));
+        }
+        if let Some(change) = &self.mcp_change {
+            changes.push(format!("mcp settings {:?} -> {:?}", change.from, change.to));
+        }
+        format!(
+            "since generation {} ({} [{}]): {}",
+            self.from_generation,
+            self.from_preset.as_str(),
+            self.from_digest.get(..12).unwrap_or(&self.from_digest),
+            if changes.is_empty() {
+                "settings re-resolved with no feature change".to_owned()
+            } else {
+                changes.join(", ")
+            }
+        )
+    }
+}
+
 #[cfg(test)]
 mod mcp_tests {
     use super::*;
@@ -652,49 +696,5 @@ mod mcp_tests {
             serde_json::from_str::<serde_json::Value>(snapshot).unwrap()
         );
         assert!(old_transition.mcp_change.is_none());
-    }
-}
-
-impl CapabilityTransition {
-    pub fn summary(&self) -> String {
-        let mut changes: Vec<String> = self
-            .changes
-            .iter()
-            .map(|change| {
-                let side = |value: Option<bool>| match value {
-                    Some(true) => "on",
-                    Some(false) => "off",
-                    None => "absent",
-                };
-                format!(
-                    "{} {} -> {}{}",
-                    change.key,
-                    side(change.from),
-                    side(change.to),
-                    if change.settings {
-                        " (settings changed)"
-                    } else {
-                        ""
-                    }
-                )
-            })
-            .collect();
-        if let Some(change) = &self.web_change {
-            changes.push(format!("web settings {:?} -> {:?}", change.from, change.to));
-        }
-        if let Some(change) = &self.mcp_change {
-            changes.push(format!("mcp settings {:?} -> {:?}", change.from, change.to));
-        }
-        format!(
-            "since generation {} ({} [{}]): {}",
-            self.from_generation,
-            self.from_preset.as_str(),
-            self.from_digest.get(..12).unwrap_or(&self.from_digest),
-            if changes.is_empty() {
-                "settings re-resolved with no feature change".to_owned()
-            } else {
-                changes.join(", ")
-            }
-        )
     }
 }
