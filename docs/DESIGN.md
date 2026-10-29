@@ -91,7 +91,8 @@ These are fixed class roots, each with one deleter, refused when symlinked. Cach
 under `[storage] cache_root` and `scratch_root`, validated against the containment matrix. The full
 layout, migration journal and rollback tables are in [storage](guide/storage.md).
 
-A task's fields, shown as `corral export tasks` renders them:
+Task fields (abbreviated below). `corral export tasks` wraps these under `task:` in
+schema-versioned YAML frontmatter, followed by the Markdown body:
 
 ```markdown
 ---
