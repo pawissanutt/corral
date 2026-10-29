@@ -133,8 +133,8 @@ long_message() {
   done
 }
 message_for() {
-  jq -rs --arg text "$1" '[.[] | select(.kind == "replied" and .detail.text == $text) | .detail.message][-1]' \
-    "$W/.corral/events.jsonl"
+  "${C[@]}" export events --json </dev/null |
+    jq -rs --arg text "$1" '[.[] | select(.kind == "replied" and .detail.text == $text) | .detail.message][-1]'
 }
 entry() { "${C[@]}" inbox show "$1" --json </dev/null; }
 observed() { entry "$1" | jq -e '.observed != null' >/dev/null; }
@@ -147,17 +147,15 @@ wait_observed() {
   done
 }
 check_once() {
-  local id=$1 label=$2 payload hash count
-  payload=$(entry "$id" | jq -r '.envelope.payload_path')
+  local id=$1 label=$2 hash count
   hash=$(entry "$id" | jq -r '.envelope.payload_sha256')
-  [ -f "$payload" ] || fail "$label: no frozen envelope for $id"
-  [ "$(sha256sum "$payload" | cut -d' ' -f1)" = "$hash" ] || fail "$label: frozen payload hash mismatch"
-  count=$(python3 - "$SF" "$payload" <<'PY'
-import json, sys
-path, payload = sys.argv[1], open(sys.argv[2]).read()
+  [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || fail "$label: no frozen envelope hash for $id"
+  count=$(python3 - "$SF" "$hash" <<'PY'
+import hashlib, json, sys
+path, expected = sys.argv[1:]
 print(sum(1 for line in open(path)
           if (entry := json.loads(line)).get("customType") == "session_control_delivery"
-          and entry["details"].get("display_text") == payload))
+          and hashlib.sha256(entry["details"].get("display_text", "").encode()).hexdigest() == expected))
 PY
 )
   log "$label: $id observed; transcript entries carrying the complete envelope (sha256 $hash): $count"
@@ -210,9 +208,13 @@ check_once "$ID_DRAFT" drafting
 log "=== board state"
 "${C[@]}" inbox --for "$KEY" --all --json </dev/null >"$EVIDENCE/inbox.json"
 jq -c '.[] | {id: .message.id, kind: .message.kind, observed: (.observed != null)}' "$EVIDENCE/inbox.json" | tee -a "$LOG"
-cp -r "$W/.corral/inbox/$KEY" "$EVIDENCE/inbox-records"
-grep -E '"kind":"(message_posted|envelope_attempt|message_admitted|message_observed|replied)"' \
-  "$W/.corral/events.jsonl" >"$EVIDENCE/events.jsonl" || true
+mkdir -p "$EVIDENCE/inbox-records"
+while IFS= read -r id; do
+  "${C[@]}" inbox show "$id" --json </dev/null >"$EVIDENCE/inbox-records/${id//#/_}.json"
+done < <(jq -r '.[].message.id' "$EVIDENCE/inbox.json")
+"${C[@]}" export events --json </dev/null |
+  jq -c 'select(.kind | IN("message_posted", "envelope_attempt", "message_admitted", "message_observed", "replied"))' \
+  >"$EVIDENCE/events.jsonl"
 cp "$SF" "$EVIDENCE/session-transcript.jsonl"
 "${H[@]}" pane close "$PANE" </dev/null >/dev/null || true
 log "PASS: idle, busy and drafting deliveries each observed exactly once"

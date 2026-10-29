@@ -253,7 +253,7 @@ try {
   const text = await cli("log", "T-001");
   await writeFile(join(evidence, "timeline.jsonl"), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
   await writeFile(join(evidence, "timeline.txt"), text);
-  await writeFile(join(evidence, "events.jsonl"), await readFile(join(root, ".corral", "events.jsonl")));
+  await writeFile(join(evidence, "events.jsonl"), await cli("export", "events", "--json"));
   const one = (kind) => {
     const found = entries.filter((entry) => entry.kind === kind);
     assert.equal(found.length, 1, `Exactly one ${kind}`);

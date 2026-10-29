@@ -71,10 +71,13 @@ try {
   await set("resources.min_disk_free", '"1B"');
   const fixture = join(root, "planner.mjs");
   await writeFile(fixture, `
-import { appendFileSync, openSync, readSync, writeFileSync } from "node:fs";
+import { appendFileSync, openSync, readSync, renameSync, writeFileSync } from "node:fs";
 const prompt = process.argv[2];
+const marker = process.argv[3];
 const tty = openSync("/dev/tty", "r");
 writeFileSync(prompt + ".ready", "bun-started");
+writeFileSync(marker + ".tmp", prompt);
+renameSync(marker + ".tmp", marker);
 console.log("Planner fixture ready");
 const byte = Buffer.alloc(1);
 let text = "";
@@ -88,13 +91,16 @@ while (readSync(tty, byte) > 0) {
   }
 }
 `);
-  const harness = `bun '${fixture}' '{prompt_file}'`;
+  const harness = `bun '${fixture}' '{prompt_file}' '${root}/{task}-planner.seen'`;
   await set("agents.planner", `{command = ${JSON.stringify(harness)}}`);
   await set("defaults.profile", '"planner"');
   const create = async title => (await cli(["new", title, "-p", "app", "--ready", "--design"])).stdout.trim();
   const start = async id => {
-    const prompt = join(root, ".corral/state/plans", id, "D1/prompt.md");
-    await fileEvent(`${prompt}.ready`, x => x === "bun-started", () => cli(["dispatch", id, "--plan"]));
+    const marker = join(root, `${id}-planner.seen`);
+    await fileEvent(marker, x => x.endsWith("prompt.md"), () => cli(["dispatch", id, "--plan"]));
+    const prompt = await readFile(marker, "utf8");
+    assert.equal(await readFile(`${prompt}.ready`, "utf8"), "bun-started");
+    assert.equal(dirname(prompt), (await show(id)).plan_runs.at(-1).output_dir);
     return prompt;
   };
 
@@ -139,7 +145,7 @@ while (readSync(tty, byte) > 0) {
   const crash = await create("Immediate crash");
   const crashed = await cli(["dispatch", crash, "--plan", "--profile", "crash"], false);
   observed.crash = await show(crash);
-  observed.crashLog = await readFile(join(root, ".corral/state/plans", crash, "D1/failure-0.log"), "utf8");
+  observed.crashLog = await readFile(join(observed.crash.plan_runs.at(-1).output_dir, "failure-0.log"), "utf8");
   check("launch smoke rejects immediate crash", crashed.code !== 0 && observed.crash.status === "needs_me" && observed.crash.plan_runs[0].state === "failed");
   check("crash reason includes exit status", observed.crash.plan_runs[0].pending_reply.includes("134"));
   check("crash artifact retains the actual panic output", observed.crashLog.includes("abort()") && observed.crashLog.includes("134"));
@@ -185,7 +191,7 @@ while (readSync(tty, byte) > 0) {
     }
   }
   await writeFile(join(evidence, "commands.log"), commands.map(c => JSON.stringify(c)).join("\n") + "\n");
-  await writeFile(join(evidence, "events.jsonl"), await readFile(join(root, ".corral/events.jsonl"), "utf8").catch(() => ""));
+  await writeFile(join(evidence, "events.jsonl"), (await cli(["export", "events", "--json"])).stdout);
   await writeFile(join(evidence, "result.json"), JSON.stringify({
     status: passed ? "PASS" : "FAIL", checks, observed,
     cleanup: "private server helper terminates all owned panes; temporary fixture removed",

@@ -1,6 +1,6 @@
 // T-133 real CLI launches. Run inside scripts/test-herdr.sh's private server.
 import assert from "node:assert/strict";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -61,11 +61,10 @@ try {
     for (const target of ["plan", "implementation"]) {
       const id = (await cli(["new", `${target} ${policy}`, "-p", "app", "--ready"])).stdout.trim();
       if (target === "plan") {
-        // Keep the planner alive on an exact file event, never terminal input or a sleep.
-        const output = join(root, ".corral/state/plans", id, "D1");
-        await mkdir(output, { recursive: true });
-        await run("mkfifo", [join(output, "prompt.md.fifo")]);
-        await set("harnesses.fixture.command", `"true {model_args}; read -r fixture_input < '{prompt_file}.fifo'"`);
+        // A private FIFO keeps the planner alive without guessing its generated prompt path.
+        const fifo = join(root, `${id}-planner.fifo`);
+        await run("mkfifo", [fifo]);
+        await set("harnesses.fixture.command", `"true {model_args}; read -r fixture_input < '${fifo}'"`);
         await cli(["dispatch", id, "--plan"]);
         await cli(["plan", "submit", id, plan]);
         await set("harnesses.fixture.command", '"true {model_args}"');
@@ -117,6 +116,6 @@ try {
 } finally {
   await writeFile(join(evidence, "commands.json"), JSON.stringify(commands, null, 2) + "\n");
   await writeFile(join(evidence, "observed.json"), JSON.stringify({ passed, checks, observed }, null, 2) + "\n");
-  await writeFile(join(evidence, "events.jsonl"), await readFile(join(root, ".corral/events.jsonl"), "utf8").catch(() => ""));
+  await writeFile(join(evidence, "events.jsonl"), (await cli(["export", "events", "--json"])).stdout);
   await rm(root, { recursive: true, force: true });
 }

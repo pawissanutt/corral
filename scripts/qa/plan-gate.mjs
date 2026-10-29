@@ -6,6 +6,15 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+if (process.argv[2] === "--edit-spec") {
+  const path = process.argv[3];
+  const before = readFileSync(path, "utf8");
+  assert(before.includes("The widget spins clockwise."));
+  writeFileSync(path, before.replace("The widget spins clockwise.", "The widget spins counterclockwise."));
+  process.exit(0);
+}
 
 const binary = resolve(process.argv[2] ?? "target/debug/corral");
 const evidence = resolve(".omo/evidence/T-059");
@@ -65,7 +74,7 @@ function snapshot(id = "T-001") {
   return {
     runs: t.runs ?? [], queued: t.queued ?? false, status: t.status,
     worktrees: existsSync(join(root, "app/.worktrees")) ? readdirSync(join(root, "app/.worktrees")).sort() : [],
-    events: readFileSync(join(root, ".corral/events.jsonl"), "utf8"),
+    events: cli(["export", "events", "--json"]).stdout,
     panes: herdr(["pane", "list"]).panes ?? [],
   };
 }
@@ -86,12 +95,9 @@ function submit(id = "T-001") {
   return json(["plan", "submit", id, planFile, "--json"]);
 }
 
-// Subscribe before launch. No polling, fixed delay or timing-based completion.
-async function reviewer(id = "T-001", profile = "fake-reviewer") {
-  const history = plans(id);
-  const p = history.at(-1);
-  const attempt = `PR${(p.reviews ?? []).length + 1}`;
-  const marker = join(root, ".corral/prompts", `${id}-${p.id}-${attempt}-plan-review.md.seen`);
+// The harness publishes its actual prompt argument to a task-owned marker.
+async function promptFromHarness(marker, launch) {
+  rmSync(marker, { force: true });
   let timer;
   let watcher;
   const seen = new Promise((resolveSeen, reject) => {
@@ -103,16 +109,22 @@ async function reviewer(id = "T-001", profile = "fake-reviewer") {
     timer = setTimeout(() => reject(new Error(`reviewer did not execute prompt ${marker}`)), 10_000);
   });
   try {
-    const record = json(["plan", "review", id, "--reviewer", profile, "--json"]);
-    own(task(id));
+    const record = launch();
     const promptPath = await seen;
-    assert.equal(promptPath, marker.slice(0, -5));
-    writeFileSync(join(evidence, `${id}-${p.id}-${attempt}-review-prompt.md`), readFileSync(promptPath));
-    return { plan: p.id, attempt: record.id };
+    assert(existsSync(promptPath), "The launched prompt must exist");
+    return { record, promptPath };
   } finally {
     clearTimeout(timer);
     watcher.close();
   }
+}
+async function reviewer(id = "T-001", profile = "fake-reviewer") {
+  const p = plans(id).at(-1);
+  const { record, promptPath } = await promptFromHarness(join(root, "review-prompt.seen"),
+    () => json(["plan", "review", id, "--reviewer", profile, "--json"]));
+  own(task(id));
+  writeFileSync(join(evidence, `${id}-${p.id}-${record.id}-review-prompt.md`), readFileSync(promptPath));
+  return { plan: p.id, attempt: record.id };
 }
 function verdict(identity, value = "approve", id = "T-001") {
   return json(["plan", "verdict", id, value, "--plan", identity.plan,
@@ -144,10 +156,11 @@ try {
   invoke("git", ["add", "-A"], true, join(root, "app"));
   invoke("git", ["commit", "-qm", "initial"], true, join(root, "app"));
   cli(["init"]);
-  cli(["config", "set", "agents.fake-worker.command", '"true"']);
+  cli(["config", "set", "agents.fake-worker.command",
+    `printf '%s\\n' '{prompt_file}' > '${root}/{task}-worker.seen.tmp' && mv '${root}/{task}-worker.seen.tmp' '${root}/{task}-worker.seen'`]);
   for (const name of ["fake-reviewer", "unauthorized-reviewer"]) {
     cli(["config", "set", `agents.${name}.command`,
-      `printf '%s\\n' '{prompt_file}' > '{prompt_file}.seen.tmp' && mv '{prompt_file}.seen.tmp' '{prompt_file}.seen'`]);
+      `printf '%s\\n' '{prompt_file}' > '${root}/review-prompt.seen.tmp' && mv '${root}/review-prompt.seen.tmp' '${root}/review-prompt.seen'`]);
   }
   cli(["config", "set", "review.reviewer", "fake-reviewer"]);
   cli(["config", "set", "review.accept", "owner"]);
@@ -155,12 +168,13 @@ try {
   cli(["config", "set", "limits.running", "1"]);
   assert.equal(newTask("Plan gated widget"), "T-001");
   assert.equal(newTask("Default direct widget"), "T-002");
-  cli(["dispatch", "T-002", "--profile", "fake-worker"]);
+  const offLaunch = await promptFromHarness(join(root, "T-002-worker.seen"),
+    () => cli(["dispatch", "T-002", "--profile", "fake-worker"]));
   const off = task("T-002");
   own(off);
   assert.equal(off.status, "running");
   assert.equal(off.runs.length, 1);
-  const offPrompt = readFileSync(join(root, ".corral/prompts/T-002-R1.md"), "utf8");
+  const offPrompt = readFileSync(offLaunch.promptPath, "utf8");
   const offBindings = [...offPrompt.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]));
   assert(!offBindings.some((binding) => binding.target === "plan"));
   results.push({ name: "default_off_direct_dispatch", pass: true, task: off });
@@ -192,8 +206,14 @@ try {
 
   await approved();
   const spec = task();
-  // The task file is the canonical spec-edit surface. This is isolated QA data only.
-  writeFileSync(spec.path, readFileSync(spec.path, "utf8").replace("The widget spins clockwise.", "The widget spins counterclockwise."));
+  const editor = env.EDITOR;
+  env.EDITOR = [process.execPath, fileURLToPath(import.meta.url), "--edit-spec"]
+    .map(value => "'" + value.replaceAll("'", "'\\''") + "'").join(" ");
+  try { cli(["edit", spec.id]); }
+  finally {
+    if (editor === undefined) delete env.EDITOR;
+    else env.EDITOR = editor;
+  }
   denied("changed_task_criteria", /stale plan.*spec or criteria changed/);
 
   fresh();
@@ -223,13 +243,14 @@ try {
   own(task("T-003"));
   denied("approved_still_obeys_wip", /no free slot/);
   cli(["move", "T-003", "dropped", "--force"]);
-  cli(["dispatch", "T-001", "--profile", "fake-worker"]);
+  const workerLaunch = await promptFromHarness(join(root, "T-001-worker.seen"),
+    () => cli(["dispatch", "T-001", "--profile", "fake-worker"]));
   const running = task();
   own(running);
   assert.equal(running.status, "running");
   assert.equal(running.runs.length, 1);
   assert(existsSync(running.runs[0].worktree));
-  const workerPrompt = readFileSync(join(root, ".corral/prompts/T-001-R1.md"), "utf8");
+  const workerPrompt = readFileSync(workerLaunch.promptPath, "utf8");
   const bindings = [...workerPrompt.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]));
   const binding = bindings.find((b) => b.target === "plan");
   assert.equal(binding.sha256, final.artifact.sha256);
@@ -237,7 +258,7 @@ try {
   assert.equal(binding.path, final.artifact.path);
   assert.equal(binding.plan, final.id);
   writeFileSync(join(evidence, "prompt.md"), workerPrompt);
-  const events = readFileSync(join(root, ".corral/events.jsonl"), "utf8");
+  const events = cli(["export", "events", "--json"]).stdout;
   const ordered = events.trim().split("\n").map(JSON.parse).filter((e) => e.task === "T-001");
   const dispatchEvent = ordered.findLast((e) => e.kind === "dispatched");
   assert.equal(dispatchEvent.detail.approved_plan.sha256, final.artifact.sha256);
@@ -263,7 +284,7 @@ try {
   results.push({ name: "failure", pass: false, error: String(error), stack: error.stack });
 } finally {
   if (existsSync(join(root, ".corral/corral.toml"))) {
-    for (const t of json(["list", "--all", "--json"])) own(t);
+    for (const t of json(["list", "--all", "--json"])) own(task(t.id));
   }
   let cleanupError;
   try {

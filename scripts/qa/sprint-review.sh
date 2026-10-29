@@ -142,6 +142,7 @@ cli discard T-016 --reason "Owner decided experiment is obsolete"
 cli new "PM-filed agent discard" --origin pm
 cli discard T-017 --author agent --reason "Redundant experiment" --owner-ok
 cli review-sprint last --json | tee "$CORRAL_TEST_HERDR_ROOT/round-two-report.json"
+cli export events --json >"$CORRAL_TEST_HERDR_ROOT/events.jsonl"
 python3 -I -c '
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -155,7 +156,7 @@ expected = {
     "T-016": ("owner", "Owner decided experiment is obsolete", "agent"),
     "T-017": ("agent", "Redundant experiment", "pm"),
 }
-events = [json.loads(line) for line in (pathlib.Path(sys.argv[2]) / ".corral/events.jsonl").read_text().splitlines()]
+events = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines()]
 for task, (actor, reason, origin) in expected.items():
     row = next(row for row in sections["dropped_rejected_escalated"] if row["task"] == task)
     assert row["actor"] == actor and row["reason"] == reason, row
@@ -170,7 +171,7 @@ approval = next(e for e in events if e["task"] == "T-012" and e["kind"] == "owne
 assert approval["detail"]["actor"] == "owner"
 assert next(row for row in sections["dropped_rejected_escalated"] if row["task"] == "T-012")["owner_ok"] is True
 print("LIVE PASS: idea decisions and discards retain actual authors and reasons independently of origin and consent")
-' "$CORRAL_TEST_HERDR_ROOT" "$CORRAL_ROOT"
+' "$CORRAL_TEST_HERDR_ROOT"
 round_two_ref=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["artifact_ref"])' "$CORRAL_TEST_HERDR_ROOT/round-two-report.json")
 cli artifact show "$round_two_ref" --raw | tee "$REPO/.omo/evidence/t-068-r2-live-report.md"
 cli artifact show "$round_two_ref"

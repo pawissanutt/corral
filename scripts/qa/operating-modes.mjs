@@ -3,8 +3,9 @@
 // This is a surface/persistence journey, not an executor or acceptance-proof test.
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { fixtureWriter } from "./store-fixture.mjs";
 
 assert(process.argv[2] && process.argv[3],
   "Usage: bun scripts/qa/operating-modes.mjs CANDIDATE EVIDENCE [80|160]");
@@ -24,6 +25,7 @@ assert.equal(process.env.CORRAL_HERDR_SESSION, "corral-test");
 
 await mkdir(evidence, { recursive: true });
 const fixture = await mkdtemp(join(evidence, "fixture-"));
+const writer = await fixtureWriter(fixture);
 const env = { ...process.env, CORRAL_ROOT: fixture, CORRAL_HERDR_SESSION: "corral-test" };
 // Simulate owner input only in the disposable store. Never inherit agent provenance,
 // socket overrides, candidate gate identity, or a PM identity into fixture commands.
@@ -342,19 +344,8 @@ async function noGrantChange(name, before) {
 }
 
 async function seed(id, patch) {
-  // Only a fresh disposable fixture is ever writable. Preserve the existing task
-  // contract/body, and serialize the current schema envelope (JSON is valid YAML).
-  const directory = join(fixture, ".corral", "tasks");
-  const names = (await readdir(directory)).filter((name) => name.startsWith(`${id}-`) && name.endsWith(".md"));
-  assert.equal(names.length, 1, `Unique fixture file for ${id}`);
-  const path = join(directory, names[0]);
-  const source = await readFile(path, "utf8");
-  const envelope = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)([\s\S]*)$/);
-  assert(envelope, `Versioned task envelope for ${id}`);
-  const stored = Bun.YAML.parse(envelope[1]);
-  assert.equal(stored.schema_version, 2);
-  Object.assign(stored.task, patch);
-  await writeFile(path, `---\n${JSON.stringify(stored, null, 2)}\n---\n${envelope[2]}`);
+  const stored = JSON.parse(await cli("show", id, "--json"));
+  await writer.putTask({ ...stored, ...patch });
   const readback = JSON.parse(await cli("show", id, "--json"));
   for (const [key, value] of Object.entries(patch)) {
     // Default-valued fields may be omitted by serde.
