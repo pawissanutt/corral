@@ -288,10 +288,9 @@ impl TaskCost {
     }
 
     fn plus(&self) -> &'static str {
-        if self.partial() {
-            "+"
-        } else {
-            ""
+        match self.partial() {
+            true => "+",
+            false => "",
         }
     }
 
