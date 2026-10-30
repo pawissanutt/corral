@@ -23,7 +23,14 @@ pub(super) struct PlanFx {
 fn declare_gate(fx: &Fx, tracker: &str, member: &str, tests: &[&str], expected: &[&str]) {
     let amendment = MemberGateAmendment {
         member: member.to_owned(),
-        expected_revision: 0,
+        expected_revision: fx
+            .ctx
+            .store
+            .get(tracker)
+            .unwrap()
+            .member_gates
+            .get(member)
+            .map_or(0, |record| record.revision),
         gate: ScopeGate {
             tier: "quick".into(),
             tests: tests.iter().map(|t| (*t).to_owned()).collect(),

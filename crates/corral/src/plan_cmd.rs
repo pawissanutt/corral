@@ -114,7 +114,7 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Amend a published integration-Plan member's gate (owner only, revision-guarded)
+    /// Amend a published integration-Plan member's gate (owner or PM, revision-guarded)
     MemberGate {
         member: String,
         /// Gate YAML: tier, optional tests and expected_failures [{test, reason}]

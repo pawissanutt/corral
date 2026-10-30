@@ -89,7 +89,16 @@ impl Store {
         let _lock = fresh.lock(&plan.id)?;
         let mut plan = plan;
         plan.children.push(member.clone());
-        let saved = fresh.save_inner(&plan)?;
+        if !plan.member_gates.contains_key(&member) {
+            let gate = ScopeGate {
+                tier: "quick".into(),
+                tests: Vec::new(),
+                expected_failures: Vec::new(),
+            };
+            let record = next_record(None, &gate, "default for added member", "system")?;
+            plan.member_gates.insert(member.clone(), record);
+        }
+        let saved = fresh.save_task(&plan, ScopeWrite::MemberGate)?;
         fresh.log_event(
             Some(&saved.id),
             "plan_member_added",

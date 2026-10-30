@@ -281,6 +281,20 @@ fn a_no_op_is_refused_and_a_retry_after_a_crash_before_the_tracker_save_complete
 }
 
 #[test]
+fn pm_can_amend_member_gate() {
+    let fx = fixture(true);
+    let (members, _) = fx.members(1);
+    let entry = OwnerEntry {
+        pm: true,
+        agent: true,
+        ..owner(&fx)
+    };
+    let outcome = amend_as(&fx, &members[0].id, None, 0, "tier: full\n", &entry).unwrap();
+    assert_eq!(outcome.record.by, "pm");
+    assert_eq!(outcome.record.gate.tier, "full");
+}
+
+#[test]
 fn non_owner_stale_main_delivery_foreign_and_generic_amendments_write_nothing() {
     let fx = fixture(true);
     let (members, tracker) = fx.members(1);
@@ -297,11 +311,6 @@ fn non_owner_stale_main_delivery_foreign_and_generic_amendments_write_nothing() 
     };
     let yaml = "tier: full\n";
     for (name, result, reason) in [
-        (
-            "pm",
-            amend_as(&fx, &id, None, 0, yaml, &entry(false, true)),
-            "PM or agent",
-        ),
         (
             "agent",
             amend_as(&fx, &id, None, 0, yaml, &entry(true, false)),

@@ -58,7 +58,7 @@ pub struct MemberGateOutcome {
 /// Amends a published member's gate as the owner of this OS session.
 ///
 /// # Errors
-/// Refuses PM, agent and run-worktree entries, and every amendment [`plan_member_gate_from`]
+/// Refuses agent and non-PM run-worktree entries, and every amendment [`plan_member_gate_from`]
 /// refuses.
 pub fn plan_member_gate(ctx: &Ctx, request: &MemberGateRequest) -> Result<MemberGateOutcome> {
     plan_member_gate_from(ctx, request, &OwnerEntry::from_env()?)
@@ -76,8 +76,10 @@ pub fn plan_member_gate_from(
     request: &MemberGateRequest,
     entry: &OwnerEntry,
 ) -> Result<MemberGateOutcome> {
-    crate::automation_controls::require_owner_entry(&ctx.store, &entry.cwd, entry.agent, entry.pm)
-        .context("corral plan member-gate is owner-only")?;
+    if !entry.pm {
+        crate::automation_controls::require_owner_entry(&ctx.store, &entry.cwd, entry.agent, false)
+            .context("corral plan member-gate requires the owner or PM")?;
+    }
     let gate = read_gate(ctx, request.file)?;
     let member = ctx.store.get(request.member)?;
     let tracker = owning_tracker(&ctx.store, &member)?;
@@ -96,7 +98,7 @@ pub fn plan_member_gate_from(
         expected_revision: request.expected_revision,
         gate,
         reason: request.reason.to_owned(),
-        by: "owner".into(),
+        by: if entry.pm { "pm" } else { "owner" }.into(),
     };
     let amended = ctx.store.amend_member_gate(
         &tracker.id,
