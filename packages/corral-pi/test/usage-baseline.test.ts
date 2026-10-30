@@ -77,7 +77,7 @@ test("early strict/standard static profiles retain raw prompts and schemas for e
     }
     for (const role of ["planner", "plan_reviewer"]) {
       console.log(`EARLY_STATIC ${JSON.stringify({ role, runnable: false,
-        reason: "native role module unshipped; strict disabled-role trial is not a zero-cost success",
+        reason: "excluded from frozen early cohort; strict disabled-role trial is not a zero-cost success",
         prompt_tokens_estimate: null, tool_tokens_estimate: null })}`);
     }
   } finally {
