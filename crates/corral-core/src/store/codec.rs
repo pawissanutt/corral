@@ -676,7 +676,10 @@ fn split_nested(
     if let Some(Value::Object(mut obligations)) = doc.remove("obligations") {
         let waits = take_array(&mut obligations, "waits");
         for (i, (wait, doc)) in run.obligations.waits.iter().zip(waits).enumerate() {
-            let mut index = vec![format!("id:{}", wait.request.id)];
+            let mut index = vec![
+                format!("id:{}", wait.request.id),
+                format!("wait:id:{}", wait.request.id),
+            ];
             index.extend(wait.receipt.iter().map(|r| format!("receipt:{}", r.id)));
             if crate::card::card_obligation_visible("wait", &doc) {
                 index.push("card".into());
@@ -694,7 +697,10 @@ fn split_nested(
         }
         let decisions = take_array(&mut obligations, "decisions");
         for (i, (decision, doc)) in run.obligations.decisions.iter().zip(decisions).enumerate() {
-            let mut index = vec![format!("id:{}", decision.request.id)];
+            let mut index = vec![
+                format!("id:{}", decision.request.id),
+                format!("decision:id:{}", decision.request.id),
+            ];
             index.extend(decision.receipt.iter().map(|r| format!("receipt:{}", r.id)));
             if crate::card::card_obligation_visible("decision", &doc) {
                 index.push("card".into());

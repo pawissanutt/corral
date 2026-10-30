@@ -95,6 +95,9 @@ macro_rules! keyed_reads {
         fn decision(&self, run: &str, id: &str) -> Result<Option<DecisionRecord>> {
             self.$reads()?.decision(run, id)
         }
+        fn decision_by_id(&self, id: &str) -> Result<Option<DecisionRecord>> {
+            self.$reads()?.decision_by_id(id)
+        }
         fn receipt(&self, run: &str, id: &str) -> Result<Option<ResumeReceipt>> {
             self.$reads()?.receipt(run, id)
         }
@@ -170,6 +173,9 @@ macro_rules! keyed_reads {
             key: &str,
         ) -> Result<Option<AgentQuestion>> {
             self.$reads()?.agent_question(container, key)
+        }
+        fn question_by_key(&self, key: &str) -> Result<Option<AgentQuestion>> {
+            self.$reads()?.question_by_key(key)
         }
         fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
             self.$reads()?.pending_agent_questions(container)

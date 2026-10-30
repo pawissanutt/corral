@@ -315,6 +315,21 @@ impl TaskHead {
         self.agent_page(container, "reports", false)
     }
 
+    /// A question's globally unique identity, without enumerating any containers.
+    pub fn question_by_key(&self, key: &str) -> Result<Option<AgentQuestion>> {
+        decode_all(
+            self.query(
+                &RowQuery::part(TaskPart::AgentRecord).with_index(format!("key:{key}")),
+                1,
+                Counter::NestedRowDecodes,
+            )?
+            .into_iter()
+            .map(|row| row.doc)
+            .collect(),
+        )
+        .map(|found: Vec<AgentQuestion>| found.into_iter().next())
+    }
+
     /// The receipt of PM operation `request_id` on this task, by key.
     pub fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
         decode_all(

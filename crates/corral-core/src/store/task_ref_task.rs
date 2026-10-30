@@ -442,6 +442,16 @@ impl TaskRef for Task {
             .cloned())
     }
 
+    fn decision_by_id(&self, id: &str) -> Result<Option<DecisionRecord>> {
+        Ok(self
+            .runs
+            .iter()
+            .flat_map(|run| std::iter::once(run).chain(&run.review_runs))
+            .flat_map(|run| &run.obligations.decisions)
+            .find(|decision| decision.request.id == id)
+            .cloned())
+    }
+
     fn receipt(&self, run: &str, id: &str) -> Result<Option<ResumeReceipt>> {
         let Some(run) = find_run(self, run) else {
             return Ok(None);
@@ -563,6 +573,34 @@ impl TaskRef for Task {
         Ok(crate::agent::container_state(self, container)
             .and_then(|s| s.questions.iter().find(|q| q.key == key))
             .cloned())
+    }
+
+    fn question_by_key(&self, key: &str) -> Result<Option<AgentQuestion>> {
+        let find = |state: Option<&crate::agent::AgentRunState>| {
+            state
+                .and_then(|state| state.questions.iter().find(|question| question.key == key))
+                .cloned()
+        };
+        for run in &self.runs {
+            for owner in std::iter::once(run).chain(&run.review_runs) {
+                if let Some(question) = find(owner.agent_host.as_deref()) {
+                    return Ok(Some(question));
+                }
+            }
+        }
+        for run in &self.plan_runs {
+            if let Some(question) = find(run.agent_host.as_deref()) {
+                return Ok(Some(question));
+            }
+        }
+        for plan in &self.plans {
+            for review in &plan.reviews {
+                if let Some(question) = find(review.agent_host.as_deref()) {
+                    return Ok(Some(question));
+                }
+            }
+        }
+        Ok(None)
     }
 
     fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {

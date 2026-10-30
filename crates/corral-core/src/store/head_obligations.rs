@@ -55,6 +55,18 @@ impl TaskHead {
         .next())
     }
 
+    /// First decision by request identity in run/child order. A wait with the same id is
+    /// not a candidate; its different kind token cannot increase the read budget.
+    pub fn decision_by_id(&self, id: &str) -> Result<Option<DecisionRecord>> {
+        Ok(Self::decode(self.query(
+            &RowQuery::part(TaskPart::RunObligation).with_index(format!("decision:id:{id}")),
+            1,
+            Counter::NestedRowDecodes,
+        )?)?
+        .into_iter()
+        .next())
+    }
+
     /// The resume receipt `id` of a wait or decision of `run`.
     pub fn receipt(&self, run: &str, id: &str) -> Result<Option<ResumeReceipt>> {
         let rows = self.obligation_rows(run, "", Some(format!("receipt:{id}")), false)?;
