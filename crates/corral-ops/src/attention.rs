@@ -9,7 +9,7 @@ use corral_core::attention::{
 use corral_core::inbox::{Inbox, InboxState, OwnerEntry, Recipient};
 use corral_core::{
     AvailabilityEpisode, Config, EffectivePolicy, OperatingActionKind as Action, PlanRunState,
-    Status, Task, Verdict,
+    Status, Task, TaskFieldsRef, Verdict,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -26,6 +26,8 @@ mod dependency_labels;
 #[cfg(test)]
 mod dependency_tests;
 mod handling;
+#[cfg(test)]
+mod heads_tests;
 pub mod metrics;
 mod outbox;
 mod stopping;
@@ -85,31 +87,35 @@ impl<'a> Neighborhood<'a> {
         self.by_id.get(id).copied()
     }
 
-    pub fn allows(&self, task: &Task, action: corral_core::OperatingActionKind) -> bool {
-        self.policy.allows(&task.id, action)
-            || task.park.as_ref().is_some_and(|park| {
+    pub fn allows(
+        &self,
+        task: &(impl TaskFieldsRef + ?Sized),
+        action: corral_core::OperatingActionKind,
+    ) -> bool {
+        self.policy.allows(task.id(), action)
+            || task.park().as_ref().is_some_and(|park| {
                 self.policy
                     .tasks
-                    .get(&task.id)
+                    .get(task.id())
                     .and_then(|policy| policy.refusals.get(&action))
                     .is_some_and(|reasons| {
                         reasons
                             .iter()
-                            .all(|reason| *reason == park.refusal(&task.id))
+                            .all(|reason| *reason == park.refusal(task.id()))
                     })
             })
     }
 
-    fn authority_reason(&self, task: &Task, action: Action) -> String {
+    fn authority_reason(&self, task: &(impl TaskFieldsRef + ?Sized), action: Action) -> String {
         self.policy
             .tasks
-            .get(&task.id)
+            .get(task.id())
             .and_then(|policy| policy.refusals.get(&action))
             .map(|reasons| {
-                let Some(park) = &task.park else {
+                let Some(park) = task.park() else {
                     return reasons.join("; ");
                 };
-                let refusal = park.refusal(&task.id);
+                let refusal = park.refusal(task.id());
                 reasons
                     .iter()
                     .map(String::as_str)
@@ -372,7 +378,7 @@ pub(super) fn recipients(task: &Task) -> Vec<(Recipient, &InboxState)> {
 }
 
 pub(super) fn row(
-    task: &Task,
+    task: &(impl TaskFieldsRef + ?Sized),
     now: Timestamp,
     kind: &str,
     class: WaitClass,
@@ -382,11 +388,11 @@ pub(super) fn row(
 ) -> Condition {
     let key = source
         .0
-        .map(|anchor| ConditionKey(format!("{}/{kind}/{anchor}", task.id)));
+        .map(|anchor| ConditionKey(format!("{}/{kind}/{anchor}", task.id())));
     let canonical = source.1;
     let since = canonical.or_else(|| {
         key.as_ref()
-            .and_then(|key| task.attention.records.get(key))
+            .and_then(|key| task.attention().records.get(key))
             .map(|record| record.first_recorded)
     });
     Condition {
@@ -405,7 +411,7 @@ pub(super) fn row(
         age_secs: since.map(|since| now.duration_since(since).as_secs().max(0)),
         resume: Vec::new(),
         next_action: NextAction {
-            command: Some(format!("corral show {} --json", task.id)),
+            command: Some(format!("corral show {} --json", task.id())),
             description: "Inspect the canonical task and its executor evidence".into(),
             requires_owner: responsible == Responsible::Owner,
             recipient: None,

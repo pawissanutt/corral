@@ -98,7 +98,9 @@ fn incomplete_retry_claims_never_resolve_or_replay_a_predecessor() {
                     .unwrap();
                 if gap == 3 {
                     let successor = inbox.retry(original.seq).unwrap();
-                    std::fs::remove_file(inbox.message_path(successor.seq)).unwrap();
+                    inbox
+                        .delete_record("messages", &format!("{:020}", successor.seq))
+                        .unwrap();
                 } else {
                     let mut claim = json!({"at": at()});
                     if gap > 0 {
@@ -109,11 +111,9 @@ fn incomplete_retry_claims_never_resolve_or_replay_a_predecessor() {
                             format!("other_R1#{}", original.seq + 1).into()
                         };
                     }
-                    std::fs::write(
-                        inbox.record_path(original.seq, "retried"),
-                        serde_json::to_vec(&claim).unwrap(),
-                    )
-                    .unwrap();
+                    inbox
+                        .save_record("retried", &format!("{:020}", original.seq), &claim)
+                        .unwrap();
                 }
                 // Given a claim written before the bounded mirror existed: unverified entries.
                 store
