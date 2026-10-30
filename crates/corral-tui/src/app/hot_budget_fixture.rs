@@ -275,7 +275,7 @@ pub(crate) fn fixture(shape: Shape) -> Fixture {
 /// inventory and reconciles them.
 pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
     let root = tempfile::tempdir().unwrap();
-    let mut store = Store::init(root.path()).unwrap();
+    let mut store = Store::init_with(root.path(), |store| store.fixture_pin_now(T0)).unwrap();
     std::fs::create_dir_all(root.path().join("app").join(".git")).unwrap();
     store.config.projects.insert(
         "app".into(),
@@ -287,7 +287,12 @@ pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
     store.config.pm.push_events = false;
     store.config.review.autopilot = Some(false);
     store.save_config().unwrap();
-    let mut store = Store::open(root.path()).unwrap();
+    let mut store = store.reopen().unwrap();
+    assert_eq!(
+        store.now(),
+        T0,
+        "configuration reload must retain the fixture clock"
+    );
     store
         .config
         .validate(store.root())
@@ -370,7 +375,7 @@ pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
 /// The fixture another process built at `root`, opened afresh: a cold process on a settled
 /// store. `running` names the Running task the mutation step edits.
 pub(crate) fn reopen(root: &Path, running: &str) -> Fixture {
-    let store = Store::open(root).unwrap();
+    let store = Store::open_with(root, |store| store.fixture_pin_now(T0)).unwrap();
     let herdr = Herdr::with_bin(root.join("herdr"), Some("corral-test".into()));
     let mut checkouts: Vec<PathBuf> = std::fs::read_dir(root.join("checkouts"))
         .unwrap()

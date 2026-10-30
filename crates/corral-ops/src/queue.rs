@@ -730,7 +730,9 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
     for head in store.heads(&corral_core::backend::HeadQuery::Open { project: None })? {
         let mut task = head.to_shell_task()?;
         if let Some(run) = task.runs.last_mut() {
-            run.obligations = head.open_obligations(&run.id)?;
+            // Parked/woken queue membership only consumes receipt-free waits/decisions.
+            // Stale renderings with receipts belong to obligation reconciliation, not this read.
+            run.obligations = head.unreceipted_obligations(&run.id)?;
         }
         board.push(task);
     }
