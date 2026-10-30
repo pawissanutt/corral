@@ -875,21 +875,31 @@ Only corral decides when a question opens or settles: a committed `corral_ask` r
 and the inbox delivering its answer or correction, or a committed `corral_withdraw` receipt,
 settles it. A turn that ends, fails at the provider or is cancelled, and a nested tool call, never
 clear `blocked`, and a settled turn never stays `working`. A resumed host starts from the pending
-questions its hello receipt names. A question the PM or owner cancels sends the host no message,
-so its pane stays `blocked` until the host closes or its next generation binds.
+questions its hello receipt names. When the PM or owner escalates, cancels or answers a question,
+corral sends the asking host the container's question states over its authenticated bridge
+(`questions`), with no message to the model and no new turn: an escalation blocks, a cancellation
+releases only that question. Each question keeps its newest revision, so a late or repeated
+update cannot undo a newer fact. Should that push fail, sync's next probe of the host sends the
+states again while the host still shows other blocking questions than corral holds.
 
 One report is in flight at a time, and changes that arrive meanwhile are sent once, as the latest
-state; an unchanged state sends nothing. Sequence numbers fence generations: a generation numbers
-its reports from its hello time in milliseconds shifted left 20 bits (the hello receipt's
-`herdr_seq_epoch_ms`), and herdr ignores a report that is not above the last one it accepted from
-`custom:corral-pi` for the pane.
+state; an unchanged state sends nothing. Sequence numbers fence generations: at hello corral
+allocates the binding an epoch that is at least its hello time in milliseconds and above every
+epoch it allocated before for this user (the high-water mark is kept in the runtime directory all
+of the user's stores share), records it with the generation, and names it in the hello receipt
+(`herdr_seq_epoch_ms`). The host numbers its reports from that epoch shifted left 20 bits, and
+herdr ignores a report that is not above the last one it accepted from `custom:corral-pi` for the
+pane, so a later binding in the same pane reports above an earlier one even after the wall clock
+stepped back or within one millisecond. If no epoch can be allocated, the host reports nothing.
 
 - **Graceful exit.** When the owner quits or corral shuts the host down over the bridge, the host
   releases the pane (`pane release-agent`) and clears its display name and tokens, so the shell
   that returns is not shown as `corral-pi`.
-- **Host loss.** When sync records `agent_lost`, corral releases that generation's report and
-  clears its metadata with the last number of the generation's range, so no stale `working` or
-  `blocked` state stays. herdr itself also drops an agent whose pane is back at its shell prompt.
+- **Host loss.** Sync probes the bound host of every role (worker, reviewer, planner, plan
+  reviewer, PM and assistant). When it records `agent_lost` on that container, corral releases
+  the generation's report and clears its metadata with the last number of the generation's range,
+  so no stale `working` or `blocked` state stays. herdr itself also drops an agent whose pane is
+  back at its shell prompt.
 - **Resume and replacement.** The next generation names itself and its state as soon as hello
   binds it, with numbers above every number of the generation before. A late report or cleanup
   from the older generation is ignored and cannot overwrite or clear it.
