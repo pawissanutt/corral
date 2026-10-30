@@ -90,20 +90,17 @@ pub(crate) fn capture_review<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &Run
 /// capture stays owed; an absent source (no transcript, a closed pane) completes it. After a
 /// best-effort capture that skipped a failed read, it reads the sources that one missed. Snapshots
 /// attach to the named parent run even after a newer run started.
-pub(crate) fn capture_review_exact(ctx: &Ctx, task: &Task, run: &str, child: &str) -> Result<bool> {
-    let parent = task
-        .runs
-        .iter()
-        .find(|r| r.id == run)
-        .context("review parent run missing")?;
-    let named = parent.review_runs.iter().find(|c| c.id == child);
-    capture_child(
-        ctx,
-        &task.id,
-        &RunHead::of(parent)?,
-        &RunHead::of(named.context("review child missing")?)?,
-        true,
-    )
+pub(crate) fn capture_review_exact<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &str,
+    child: &str,
+) -> Result<bool> {
+    let parent = task.run_head(run)?.context("review parent run missing")?;
+    let named = task
+        .review_child(run, child)?
+        .context("review child missing")?;
+    capture_child(ctx, task.id(), &parent, &named, true)
 }
 
 fn capture_child(

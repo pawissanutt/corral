@@ -16,6 +16,10 @@ use serde_json::{Value, json};
 use super::admission;
 use super::call::{CallResponse, RejectCode, Rejection};
 use crate::Ctx;
+
+#[cfg(test)]
+#[path = "effects_head_tests.rs"]
+mod head_tests;
 pub use crate::review_budget::{DueWake, due_gate_wakes, fire_wake, own_attempt};
 
 /// Test-only crash and race points, a no-op in shipped builds. In-process tests install the
@@ -458,9 +462,9 @@ fn run_effect(
     receipt: &RequestReceipt,
     entry: &str,
 ) -> Result<bool> {
-    let task = ctx.store.get(task_id)?;
+    let task = ctx.store.head(task_id)?;
     let run = receipt.identity.run.as_deref();
-    let named = task.runs.iter().find(|r| Some(r.id.as_str()) == run);
+    let named = run.map(|id| task.run_head(id)).transpose()?.flatten();
     match entry {
         "effect:event" => {
             let event = receipt
@@ -472,21 +476,27 @@ fn run_effect(
             if kind == "verdict"
                 && let Home::Container(container) = home
             {
-                let child = agent::container_run(&task, container).and_then(|c| c.review.clone());
-                let review = child.or_else(|| named.and_then(|r| r.review.clone()));
+                let child = match container {
+                    ContainerRef::Worker { run, .. } => task.run_head(run)?.and_then(|r| r.review),
+                    ContainerRef::Reviewer { run, review, .. } => {
+                        task.review_child(run, review)?.and_then(|r| r.review)
+                    }
+                    _ => None,
+                };
+                let review = child.or_else(|| named.as_ref().and_then(|r| r.review.clone()));
                 detail["notes"] = json!(review.and_then(|r| r.notes));
             }
             ctx.store.log_event(Some(task_id), kind, detail)?;
             Ok(true)
         }
         "effect:reconcile_wait" => {
-            if task.current_run().map(|r| r.id.as_str()) != run {
+            if task.current_run.as_ref().map(|r| r.id.as_str()) != run {
                 return Ok(false);
             }
             crate::obligations_sync::reconcile_one(ctx, task_id, corral_core::clock::now(), None)?;
             Ok(true)
         }
-        "effect:done_audit" => match named.map(|r| (r, &r.completion.audit)) {
+        "effect:done_audit" => match named.as_ref().map(|r| (r, &r.completion.audit)) {
             Some((run, Some(audit))) => {
                 crate::review::audit_artifact(ctx, task_id, &run.id, audit, true)?;
                 Ok(true)
