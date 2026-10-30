@@ -188,6 +188,52 @@ fn landing_reaps_reviewer_orphan_left_after_verdict() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn sync_waits_for_verdict_event_before_reaping_reviewer() {
+    let fx = Fx::new();
+    fx.review();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            let run = task.current_run_mut().unwrap();
+            let now = jiff::Timestamp::now();
+            let review = run.review.as_mut().unwrap();
+            review.verdict = Some(Verdict::Approve);
+            review.at = now;
+            let child = run.review_runs.last_mut().unwrap();
+            child.ended = Some(now);
+            child.review = Some(review.clone());
+            Ok(())
+        })
+        .unwrap();
+    fx.sync();
+    assert!(
+        resident.0.try_wait().unwrap().is_none(),
+        "sync killed the unfinished verdict command"
+    );
+    fx.ctx
+        .store
+        .log_event(
+            Some(&fx.id),
+            "verdict",
+            json!({"run":run.id,"reviewer":"rev"}),
+        )
+        .unwrap();
+    fx.sync();
+    assert!(resident.0.try_wait().unwrap().is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn sync_reaps_abandoned_reviewer() {
     let fx = Fx::new();
     fx.review();
