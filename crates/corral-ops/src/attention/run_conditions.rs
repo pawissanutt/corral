@@ -60,8 +60,10 @@ fn one_ref(
         Vec::new()
     };
     let obligations = match container {
-        ContainerRef::Worker { run, .. } => task.open_obligations(run)?,
-        ContainerRef::Reviewer { run, review, .. } => task.open_review_obligations(run, review)?,
+        ContainerRef::Worker { run, .. } => task.unreceipted_obligations(run)?,
+        ContainerRef::Reviewer { run, review, .. } => {
+            task.unreceipted_review_obligations(run, review)?
+        }
         ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => {
             bail!("run conditions need a coding container")
         }

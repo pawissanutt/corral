@@ -29,7 +29,7 @@ fn dependencies(store: &Store, roots: &[TaskHead]) -> Result<BTreeSet<String>> {
                         let (part, token) = if check.kind == "answered" {
                             (TaskPart::AgentRecord, format!("key:{target}"))
                         } else {
-                            (TaskPart::RunObligation, format!("decision:{target}"))
+                            (TaskPart::RunObligation, format!("decision:id:{target}"))
                         };
                         // Cold park evidence chooses the first task owning this exact key.
                         ids.extend(
@@ -53,7 +53,7 @@ fn dependencies(store: &Store, roots: &[TaskHead]) -> Result<BTreeSet<String>> {
         if let Some(parent) = task.current_run.as_deref() {
             if parent.outcome.is_none() {
                 for wait in task
-                    .open_obligations(&parent.id)?
+                    .unreceipted_obligations(&parent.id)?
                     .waits
                     .into_iter()
                     .filter(|wait| wait.receipt.is_none())
@@ -67,7 +67,7 @@ fn dependencies(store: &Store, roots: &[TaskHead]) -> Result<BTreeSet<String>> {
                 .filter(|run| run.outcome.is_none() && run.ended.is_none())
             {
                 for wait in task
-                    .open_review_obligations(&parent.id, &child.id)?
+                    .unreceipted_review_obligations(&parent.id, &child.id)?
                     .waits
                     .into_iter()
                     .filter(|wait| wait.receipt.is_none())

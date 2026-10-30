@@ -296,7 +296,7 @@ fn project(
     let board = if let Some(board) = attention {
         board
     } else {
-        fresh = crate::attention::board(ctx, jiff::Timestamp::now())?;
+        fresh = crate::attention::board_hot(ctx, jiff::Timestamp::now())?;
         &fresh
     };
     let assessments: Vec<_> = if policy.tasks.is_empty() {
