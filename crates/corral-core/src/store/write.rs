@@ -234,6 +234,7 @@ impl Store {
             task: t.clone(),
             recoveries: stored.record.recoveries.clone(),
         };
+        self.log_status_unpark(&before, &t)?;
         for decision in decision {
             self.log_event(
                 Some(&t.id),
