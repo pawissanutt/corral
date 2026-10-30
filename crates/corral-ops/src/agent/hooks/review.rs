@@ -10,7 +10,7 @@ use corral_core::agent::{
     ReceiptState, TurnClass, TurnOriginKind, WakeState,
 };
 use corral_core::inbox::{Inbox, MessageBinding, Post, Recipient, Urgency};
-use corral_core::{AutoStage, AutopilotState, ResolvedProfile, Run, Status, Task};
+use corral_core::{AutoStage, AutopilotState, ResolvedProfile, Run, Status, Task, TaskRef};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -174,21 +174,20 @@ pub fn between_silent_turns(task: &Task) -> bool {
 /// stays pending and the child open, so `corral agent resume` can start its next generation, and
 /// `release_lost` returns the task to Review once it has. A gone pane is left to the watchdog.
 pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let task = ctx.store.get(task_id)?;
-    let Some(container) = live_reviewer(&task) else {
+    let task = ctx.store.head(task_id)?;
+    let Some(container) = live_reviewer_ref(&task)? else {
         return Ok(false);
     };
-    let lost = |task: &Task| {
-        live_reviewer(task).as_ref() == Some(&container)
-            && agent::container_state(task, &container)
-                .is_some_and(|s| s.binding.health == HostHealth::Lost)
-    };
-    let (Some(state), true) = (agent::container_state(&task, &container), lost(&task)) else {
+    if !reviewer_lost(&task, &container)? {
+        return Ok(false);
+    }
+    let Some(host) = task.agent_head(&container)? else {
         return Ok(false);
     };
-    let (Some(generation), ContainerRef::Reviewer { review, .. }) =
-        (state.current_generation(), &container)
-    else {
+    let (Some(generation), ContainerRef::Reviewer { review, .. }) = (
+        task.agent_generation(&container, host.binding.generation)?,
+        &container,
+    ) else {
         return Ok(false);
     };
     if ctx.herdr.pane_get(&generation.pane)?.is_none() {
@@ -203,8 +202,8 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
         n + 1
     );
     let mut batch = None;
-    let saved = ctx.store.try_update(task_id, |current| {
-        if !lost(current) {
+    let saved = ctx.store.try_update_head(task_id, |current| {
+        if !reviewer_lost(current, &container)? {
             return Ok(false);
         }
         let run = current
@@ -212,11 +211,11 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .context("the review's run disappeared")?;
         run.blocked_excerpt = Some(reason.clone());
         current.status = Status::NeedsMe;
-        batch = Some(crate::owner_notice::record_entry(
+        batch = Some(crate::owner_notice::record_entry_head(
             ctx,
             current,
             "native_review_host_lost",
-            Timestamp::now(),
+            ctx.store.now(),
             Vec::new(),
         )?);
         Ok(true)
@@ -241,9 +240,9 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
 /// existing process_lost path closed it because its pane went away. Back in Review, the review
 /// watchdog escalates that closed child exactly as it does any reviewer whose pane is gone.
 pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let released = ctx.store.try_update(task_id, |task| {
+    let released = ctx.store.try_update_head(task_id, |task| {
         let Some(run) = task
-            .current_run()
+            .current_run_head()?
             .filter(|_| task.status == Status::NeedsMe)
         else {
             return Ok(false);
@@ -252,7 +251,7 @@ pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .blocked_excerpt
             .as_deref()
             .is_some_and(|e| e.starts_with(LOST_PREFIX));
-        let Some(child) = run.review_runs.last().filter(|_| held) else {
+        let Some(child) = run.current_child.as_deref().filter(|_| held) else {
             return Ok(false);
         };
         let container = ContainerRef::Reviewer {
@@ -264,7 +263,7 @@ pub fn release_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .agent_host
             .as_ref()
             .is_none_or(|s| s.binding.health == HostHealth::Lost);
-        if lost && agent::container_closure(task, &container).is_none() {
+        if lost && agent::container_closure_ref(task, &container)?.is_none() {
             return Ok(false);
         }
         let run = task
@@ -330,6 +329,54 @@ fn live_reviewer(task: &Task) -> Option<ContainerRef> {
         .then_some(container)
 }
 
+fn live_reviewer_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Option<ContainerRef>> {
+    if *task.status() != Status::Review {
+        return Ok(None);
+    }
+    let Some(run) = task.current_run_head()? else {
+        return Ok(None);
+    };
+    let Some(child) = run
+        .current_child
+        .as_deref()
+        .filter(|child| child.agent_host.is_some())
+    else {
+        return Ok(None);
+    };
+    let container = ContainerRef::Reviewer {
+        task: task.id().clone(),
+        run: run.id.clone(),
+        review: child.id.clone(),
+    };
+    Ok(agent::container_closure_ref(task, &container)?
+        .is_none()
+        .then_some(container))
+}
+
+fn reviewer_lost<T: TaskRef + ?Sized>(task: &T, container: &ContainerRef) -> Result<bool> {
+    Ok(live_reviewer_ref(task)?.as_ref() == Some(container)
+        && task
+            .agent_head(container)?
+            .is_some_and(|host| host.binding.health == HostHealth::Lost))
+}
+
+pub(crate) fn between_silent_turns_ref<T: TaskRef + ?Sized>(task: &T) -> Result<bool> {
+    consulted("review");
+    let Some(container) = live_reviewer_ref(task)? else {
+        return Ok(false);
+    };
+    let Some(host) = task.agent_head(&container)? else {
+        return Ok(false);
+    };
+    Ok(super::super::turn_evidence::latest_silent(
+        task,
+        &container,
+        host.binding.generation,
+        TurnClass::NoVerdict,
+    )?
+    .is_some())
+}
+
 /// The latest turn of the current generation when it ended `no_verdict` and none of its turns is
 /// open; a lost generation's turn that never ended does not hold a later generation.
 fn latest_silent(state: &AgentRunState) -> Option<&AgentTurn> {
@@ -360,31 +407,37 @@ enum Due {
 
 /// What OD11 owes the open reviewer now: the generation's nudge for its latest silent turn, or
 /// the escalation of a later silent turn after the nudge was spent.
-fn due(task: &Task, container: &ContainerRef) -> Option<Due> {
-    if live_reviewer(task).as_ref() != Some(container) {
-        return None;
+fn due<T: corral_core::TaskRef + ?Sized>(
+    task: &T,
+    container: &ContainerRef,
+) -> Result<Option<Due>> {
+    if live_reviewer_ref(task)?.as_ref() != Some(container) {
+        return Ok(None);
     }
-    let state = agent::container_state(task, container)?;
-    let current = state.current_generation()?;
-    let latest = latest_silent(state)?;
-    let Some(nudged) = current.nudged_at else {
-        return Some(Due::Nudge {
+    let Some(host) = task.agent_head(container)? else {
+        return Ok(None);
+    };
+    let Some(current) = task.agent_generation(container, host.binding.generation)? else {
+        return Ok(None);
+    };
+    let Some(latest) = super::super::turn_evidence::latest_silent(
+        task,
+        container,
+        current.n,
+        TurnClass::NoVerdict,
+    )?
+    else {
+        return Ok(None);
+    };
+    if current.nudged_at.is_none() {
+        return Ok(latest.ended.map(|ended| Due::Nudge {
             generation: current.n,
             seq: latest.seq,
-            ended: latest.ended?,
-        });
-    };
-    let nudged_seq = state
-        .turns
-        .iter()
-        .find(|t| t.generation == current.n && t.ended == Some(nudged))
-        .map(|t| t.seq);
-    // A nudged turn evicted from the bounded history is older than every recorded turn.
-    let later = match nudged_seq {
-        Some(seq) => latest.seq > seq,
-        None => latest.ended.is_some_and(|ended| ended > nudged),
-    };
-    later.then(|| {
+            ended,
+        }));
+    }
+    let later = super::super::turn_evidence::later_than_nudge(task, container, &current, &latest)?;
+    Ok(later.then(|| {
         Due::Escalate(format!(
             "{REVIEW_HOLD_PREFIX}turn {}/{} of reviewer {} ended without corral_verdict after this \
              host's one automatic nudge",
@@ -392,19 +445,19 @@ fn due(task: &Task, container: &ContainerRef) -> Option<Due> {
             latest.seq,
             container.key()
         ))
-    })
+    }))
 }
 
 /// OD11 for the open pi-native reviewer of a Review task, from sync: posts the generation's one
 /// `turn_nudge` (the message and the spent mark commit together), or escalates the review to
 /// Needs me after a later silent turn. True when it changed anything.
 pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let task = ctx.store.get(task_id)?;
-    let Some(container) = live_reviewer(&task) else {
+    let task = ctx.store.head(task_id)?;
+    let Some(container) = live_reviewer_ref(&task)? else {
         return Ok(false);
     };
     consulted("review");
-    match due(&task, &container) {
+    match due(&task, &container)? {
         None => Ok(false),
         Some(Due::Nudge { .. }) => post_nudge(ctx, task_id, &container),
         Some(Due::Escalate(_)) => escalate(ctx, task_id, &container),
@@ -423,17 +476,17 @@ fn post_nudge(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool
     let inbox = Inbox::new(&ctx.store, recipient)?;
     let _posting = inbox.lock()?;
     let mut posted = None;
-    ctx.store.try_update(task_id, |task| {
+    ctx.store.try_update_head(task_id, |task| {
         let Some(Due::Nudge {
             generation,
             seq,
             ended,
-        }) = due(task, container)
+        }) = due(task, container)?
         else {
             return Ok(false);
         };
         let key = format!("nudge:{review}:{generation}");
-        let message = inbox.reserve_in(
+        let message = inbox.reserve_in_head(
             task,
             Post {
                 kind: NUDGE_KIND,
@@ -448,12 +501,11 @@ fn post_nudge(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool
                 max_payload: corral_core::inbox::MAX_PAYLOAD,
             },
         )?;
-        let state =
-            agent::container_state_mut(task, container).context("the agent binding disappeared")?;
-        state
-            .generation_mut(generation)
-            .context("the nudged generation disappeared")?
-            .nudged_at = Some(ended);
+        let mut entry = task
+            .agent_generation(container, generation)?
+            .context("the nudged generation disappeared")?;
+        entry.nudged_at = Some(ended);
+        task.put_agent_record(container, agent::NativeRecord::Generation(entry))?;
         posted = Some(message);
         Ok(true)
     })?;
@@ -469,11 +521,11 @@ fn post_nudge(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool
 /// The idle watchdog's escalation, reached causally: Review -> Needs me with the hold reason,
 /// the review left pending for the owner and the host left running in its pane.
 fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> {
-    let now = Timestamp::now();
+    let now = ctx.store.now();
     let mut escalated = None;
     let mut batch = None;
-    let saved = ctx.store.try_update(task_id, |task| {
-        let Some(Due::Escalate(reason)) = due(task, container) else {
+    let saved = ctx.store.try_update_head(task_id, |task| {
+        let Some(Due::Escalate(reason)) = due(task, container)? else {
             return Ok(false);
         };
         let run = task
@@ -489,7 +541,7 @@ fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> 
         });
         escalated = Some((run.id.clone(), reason));
         task.status = Status::NeedsMe;
-        batch = Some(crate::owner_notice::record_stage(
+        batch = Some(crate::owner_notice::record_stage_head(
             ctx,
             task,
             "native_review_watchdog",

@@ -124,15 +124,3 @@ pub(crate) fn record_stage_head(
     head.attention.push_notice(claim)?;
     Ok(pending)
 }
-
-pub(crate) fn record_stage(
-    ctx: &Ctx,
-    task: &mut Task,
-    producer: &str,
-    now: Timestamp,
-) -> Result<PendingNotice> {
-    let claim = stage_claim(ctx, task, producer, now)?;
-    let pending = reserve_task(ctx, &task.id, claim.batch_id.clone())?;
-    task.attention.push_notice(claim)?;
-    Ok(pending)
-}

@@ -146,7 +146,7 @@ fn stage_escalation_claim_retains_its_real_producer_and_suppresses_ladder_owner_
         let saved = fx
             .ctx
             .store
-            .update(&task.id, |task| {
+            .update_head(&task.id, |task| {
                 task.status = Status::NeedsMe;
                 let run = task.current_run_mut().unwrap();
                 run.autopilot = Some(corral_core::AutopilotState {
@@ -155,7 +155,7 @@ fn stage_escalation_claim_retains_its_real_producer_and_suppresses_ladder_owner_
                     sha: None,
                     reason: Some("integration preflight error: fixture".into()),
                 });
-                pending = Some(record_stage(&fx.ctx, task, producer, at(0))?);
+                pending = Some(record_stage_head(&fx.ctx, task, producer, at(0))?);
                 Ok(())
             })
             .unwrap();

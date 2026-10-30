@@ -264,7 +264,7 @@ pub(crate) fn reconcile_review_sampled_at(
     // A healthy pi-native host is never idle here; between its turns it is equally settled, and
     // sync runs this before the hook's nudge, so the relaunch also wins that silent turn.
     let settled =
-        idle || (agent_reports && crate::agent::hooks::review::between_silent_turns(&task));
+        idle || (agent_reports && crate::agent::hooks::review::between_silent_turns_ref(&head)?);
     if settled && !gone && stalled.is_none() && base_moved_refusal(run, review, failure)? {
         return relaunch(ctx, id, run, review, now);
     }

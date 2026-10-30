@@ -11,7 +11,8 @@ use corral_core::agent::{
     TurnClass, TurnOriginKind, WakeState,
 };
 use corral_core::inbox::{Inbox, MessageBinding, Post, Urgency};
-use corral_core::{Status, Task};
+use corral_core::{Status, Task, TaskRef};
+use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
@@ -121,41 +122,73 @@ fn nudged_turn(state: &AgentRunState) -> Option<(Option<u64>, jiff::Timestamp)> 
     Some((turn.map(|t| t.seq), nudged))
 }
 
+fn live_worker_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Option<ContainerRef>> {
+    let Some(run) = task
+        .current_run_head()?
+        .filter(|run| run.agent_host.is_some())
+    else {
+        return Ok(None);
+    };
+    let container = ContainerRef::Worker {
+        task: task.id().clone(),
+        run: run.id.clone(),
+    };
+    Ok(agent::container_closure_ref(task, &container)?
+        .is_none()
+        .then_some(container))
+}
+
+fn worker_due<T: TaskRef + ?Sized>(
+    task: &T,
+    container: &ContainerRef,
+) -> Result<Option<(u32, u64, Timestamp)>> {
+    if *task.status() != Status::Running || live_worker_ref(task)?.as_ref() != Some(container) {
+        return Ok(None);
+    }
+    let Some(host) = task.agent_head(container)? else {
+        return Ok(None);
+    };
+    let Some(current) = task.agent_generation(container, host.binding.generation)? else {
+        return Ok(None);
+    };
+    let Some(latest) =
+        super::turn_evidence::latest_silent(task, container, current.n, TurnClass::NoReport)?
+    else {
+        return Ok(None);
+    };
+    Ok(if current.nudged_at.is_none() {
+        latest.ended.map(|ended| (current.n, latest.seq, ended))
+    } else {
+        None
+    })
+}
+
 /// Posts the OD11 nudge for the live worker's latest silent turn when the task is Running and
 /// its generation has not spent the nudge; the message and the spent mark commit together.
 pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
     if super::hooks::review::nudge(ctx, task_id)? {
         return Ok(true);
     }
-    let task = ctx.store.get(task_id)?;
-    let Some(container) = live_worker(&task) else {
+    let task = ctx.store.head(task_id)?;
+    let Some(container) = live_worker_ref(&task)? else {
         return Ok(false);
     };
     let ContainerRef::Worker { run, .. } = &container else {
         return Ok(false);
     };
-    let due = |task: &Task| -> Option<(u32, u64, jiff::Timestamp)> {
-        if task.status != Status::Running || live_worker(task).as_ref() != Some(&container) {
-            return None;
-        }
-        let state = agent::container_state(task, &container)?;
-        let current = state.current_generation()?;
-        let latest = latest_silent(state)?;
-        (current.nudged_at.is_none()).then_some((current.n, latest.seq, latest.ended?))
-    };
-    if due(&task).is_none() {
+    if worker_due(&task, &container)?.is_none() {
         return Ok(false);
     }
     let recipient = crate::questions::recipient(&container).context("worker recipient")?;
     let inbox = Inbox::new(&ctx.store, recipient)?;
     let _posting = inbox.lock()?;
     let mut posted = None;
-    ctx.store.try_update(task_id, |task| {
-        let Some((generation, seq, ended)) = due(task) else {
+    ctx.store.try_update_head(task_id, |task| {
+        let Some((generation, seq, ended)) = worker_due(task, &container)? else {
             return Ok(false);
         };
         let key = format!("nudge:{run}:{generation}");
-        let message = inbox.reserve_in(
+        let message = inbox.reserve_in_head(
             task,
             Post {
                 kind: NUDGE_KIND,
@@ -170,12 +203,11 @@ pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
                 max_payload: corral_core::inbox::MAX_PAYLOAD,
             },
         )?;
-        let state = agent::container_state_mut(task, &container)
-            .context("the agent binding disappeared")?;
-        let entry = state
-            .generation_mut(generation)
+        let mut entry = task
+            .agent_generation(&container, generation)?
             .context("the nudged generation disappeared")?;
         entry.nudged_at = Some(ended);
+        task.put_agent_record(&container, agent::NativeRecord::Generation(entry))?;
         posted = Some(message);
         Ok(true)
     })?;
@@ -191,6 +223,45 @@ pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
 /// Needs me `turn_ended_without_report`: the current worker's latest turn ended silent, and it
 /// is a later turn than the one that spent this generation's nudge. It holds until a new turn
 /// starts or a reported turn settles the latest one.
+pub(crate) fn attention_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Option<String>> {
+    if !matches!(task.status(), Status::Running | Status::NeedsMe) {
+        return Ok(None);
+    }
+    let Some(container) = live_worker_ref(task)? else {
+        return Ok(None);
+    };
+    let Some(host) = task.agent_head(&container)? else {
+        return Ok(None);
+    };
+    let Some(latest) = super::turn_evidence::latest_silent(
+        task,
+        &container,
+        host.binding.generation,
+        TurnClass::NoReport,
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(current) = task.agent_generation(&container, host.binding.generation)? else {
+        return Ok(None);
+    };
+    Ok(
+        super::turn_evidence::later_than_nudge(task, &container, &current, &latest)?
+            .then(|| hold_reason(&container, &latest)),
+    )
+}
+
+fn hold_reason(container: &ContainerRef, latest: &AgentTurn) -> String {
+    format!(
+        "{HOLD_PREFIX}turn {}/{} of {} ended without corral_done after this host's one \
+             automatic nudge",
+        latest.generation,
+        latest.seq,
+        container.key()
+    )
+}
+
+/// Explicit cold full-task compatibility; hot callers use the fallible typed entry.
 pub fn attention(task: &Task) -> Option<String> {
     if !matches!(task.status, Status::Running | Status::NeedsMe) {
         return None;
@@ -204,21 +275,13 @@ pub fn attention(task: &Task) -> Option<String> {
         Some(seq) => latest.seq > seq,
         None => latest.ended.is_some_and(|ended| ended > nudged_end),
     };
-    later.then(|| {
-        format!(
-            "{HOLD_PREFIX}turn {}/{} of {} ended without corral_done after this host's one \
-             automatic nudge",
-            latest.generation,
-            latest.seq,
-            container.key()
-        )
-    })
+    later.then(|| hold_reason(&container, latest))
 }
 
 /// Returns a task this module held in Needs me to Running once its attention cleared.
 pub fn settle_hold(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let settled = ctx.store.try_update(task_id, |task| {
-        if task.status != Status::NeedsMe || attention(task).is_some() {
+    let settled = ctx.store.try_update_head(task_id, |task| {
+        if task.status != Status::NeedsMe || attention_ref(task)?.is_some() {
             return Ok(false);
         }
         let Some(run) = task.current_run_mut() else {
@@ -228,7 +291,7 @@ pub fn settle_hold(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .blocked_excerpt
             .as_deref()
             .is_some_and(|e| e.starts_with(HOLD_PREFIX));
-        if !held || run.obligations.pending_decision().is_some() {
+        if !held || run.facts.pending_decision.is_some() {
             return Ok(false);
         }
         run.blocked_excerpt = None;

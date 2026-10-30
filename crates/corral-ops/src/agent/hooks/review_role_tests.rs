@@ -540,8 +540,13 @@ fn a_new_candidate_before_the_answer_closes_the_child_and_no_answer_crosses_atte
     );
     let terminal = old_inbox.terminal(pending.seq).unwrap().unwrap();
     assert_eq!(terminal, TerminalState::Cancelled);
-    let record = old_inbox.record_path(pending.seq, TerminalState::Cancelled.suffix());
-    let record: Value = serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
+    let record: Value = old_inbox
+        .record(
+            TerminalState::Cancelled.suffix(),
+            &format!("{:020}", pending.seq),
+        )
+        .unwrap()
+        .unwrap();
     assert_eq!(record["reason"], "recipient_closed");
     let log = std::fs::read_to_string(review.ctx().store.root().join("calls.log")).unwrap();
     assert!(log.contains(&format!("pane close {old_pane}")), "{log}");
