@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use corral_core::attention::{
-    Condition, EntryNotice, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome, SourceNoticeRef,
+    Condition, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome, SourceNoticeRef,
 };
 use corral_core::{Store, Task};
 use jiff::Timestamp;
@@ -67,107 +67,8 @@ pub(crate) fn newly_committed(
     })
 }
 
-pub(crate) fn record_entry_head(
-    ctx: &Ctx,
-    head: &mut corral_core::TaskHeadMut,
-    producer: &str,
-    now: Timestamp,
-    exact: Vec<String>,
-) -> Result<PendingNotice> {
-    use corral_core::TaskRef;
-    let mut shell = head.shell_task()?;
-    let pending = record_entry(ctx, &mut shell, producer, now, exact)?;
-    head.attention = shell.attention;
-    Ok(pending)
-}
-
-pub(crate) fn record_entry(
-    ctx: &Ctx,
-    task: &mut Task,
-    producer: &str,
-    now: Timestamp,
-    exact: Vec<String>,
-) -> Result<PendingNotice> {
-    let source = crate::verification::digest(&serde_json::to_vec(&(
-        task.current_run().map(|run| run.id.as_str()),
-        task.status_since,
-        now,
-    ))?);
-    let mut coverage = vec![NoticeCoverage::Episode {
-        task: task.id.clone(),
-        run: task.current_run().map(|run| run.id.clone()),
-        stage: "needs_me".into(),
-        at: now,
-    }];
-    coverage.extend(
-        exact
-            .into_iter()
-            .map(|condition_key| NoticeCoverage::Exact { condition_key }),
-    );
-    let mut claim = prepare(ctx, task, producer, &source, now, coverage)?;
-    // Responsibility is determined from the committed entry, never from transport success.
-    let pm_entry = task
-        .current_run()
-        .is_some_and(|run| run.agent_state.as_deref() == Some("gone") || run.idle_no_report)
-        || producer == "native_review_host_lost";
-    if !pm_entry {
-        claim.exemption_basis = Some("owner_responsible_entry".into());
-    }
-    refresh_fact(&mut claim)?;
-    let batch = claim.batch_id.clone();
-    let pending = reserve_task(ctx, &task.id, batch.clone())?;
-    task.attention.entry_notice = Some(EntryNotice {
-        batch_id: batch.clone(),
-        at: now,
-        status_since: None,
-    });
-    task.attention.push_notice(claim)?;
-    Ok(pending)
-}
-
-pub(crate) fn record_stage_head(
-    ctx: &Ctx,
-    head: &mut corral_core::TaskHeadMut,
-    producer: &str,
-    now: Timestamp,
-) -> Result<PendingNotice> {
-    use corral_core::TaskRef;
-    let mut shell = head.shell_task()?;
-    let pending = record_stage(ctx, &mut shell, producer, now)?;
-    head.attention = shell.attention;
-    Ok(pending)
-}
-
-pub(crate) fn record_stage(
-    ctx: &Ctx,
-    task: &mut Task,
-    producer: &str,
-    now: Timestamp,
-) -> Result<PendingNotice> {
-    let run = task.current_run().context("stage notice has no run")?;
-    let stage = run
-        .autopilot
-        .as_ref()
-        .context("stage notice has no stage")?;
-    let source = format!("{}/{}/{now}", run.id, stage.stage.as_str());
-    let claim = prepare(
-        ctx,
-        task,
-        producer,
-        &source,
-        now,
-        vec![NoticeCoverage::Episode {
-            task: task.id.clone(),
-            run: Some(run.id.clone()),
-            stage: stage.stage.as_str().into(),
-            at: stage.at,
-        }],
-    )?;
-    let batch = claim.batch_id.clone();
-    let pending = reserve_task(ctx, &task.id, batch)?;
-    task.attention.push_notice(claim)?;
-    Ok(pending)
-}
+mod claims;
+pub(crate) use claims::{record_entry, record_entry_head, record_stage, record_stage_head};
 
 pub(crate) fn refresh_fact(claim: &mut NoticeClaim) -> Result<()> {
     anyhow::ensure!(
@@ -638,8 +539,7 @@ pub(crate) fn drain_task(ctx: &Ctx, id: &str) -> Result<()> {
 }
 
 fn publish(ctx: &Ctx, id: &str, retire: bool) -> Result<()> {
-    use corral_core::TaskRef;
-    let task = ctx.store.head(id)?.shell_task()?;
+    let task = ctx.store.head(id)?;
     let facts: Vec<_> = task
         .attention
         .notice_outbox
@@ -647,13 +547,14 @@ fn publish(ctx: &Ctx, id: &str, retire: bool) -> Result<()> {
         .flat_map(|claim| &claim.pending)
         .cloned()
         .collect();
-    let ended: Vec<_> = task
-        .attention
-        .notice_outbox
-        .iter()
-        .filter(|claim| retire && source_ended(&task, claim))
-        .map(|claim| claim.batch_id.clone())
-        .collect();
+    let mut ended = Vec::new();
+    if retire {
+        for claim in &task.attention.notice_outbox {
+            if source_ended(&task, claim)? {
+                ended.push(claim.batch_id.clone());
+            }
+        }
+    }
     if facts.is_empty() && ended.is_empty() {
         return Ok(());
     }
@@ -680,12 +581,13 @@ fn publish(ctx: &Ctx, id: &str, retire: bool) -> Result<()> {
     Ok(())
 }
 
-fn source_ended(task: &Task, claim: &NoticeClaim) -> bool {
-    match claim.producer.as_str() {
+fn source_ended<T: corral_core::TaskRef + ?Sized>(task: &T, claim: &NoticeClaim) -> Result<bool> {
+    let current = task.current_run_head()?;
+    Ok(match claim.producer.as_str() {
         "infra_hold" => !claim.coverage.iter().any(|coverage| match coverage {
             NoticeCoverage::Exact { condition_key } => {
-                task.infra_wait.as_ref().is_some_and(|wait| {
-                    *condition_key == format!("{}/infra_hold/{}", task.id, wait.first_seen)
+                task.infra_wait().as_ref().is_some_and(|wait| {
+                    *condition_key == format!("{}/infra_hold/{}", task.id(), wait.first_seen)
                 })
             }
             NoticeCoverage::Episode { .. } => false,
@@ -701,14 +603,14 @@ fn source_ended(task: &Task, claim: &NoticeClaim) -> bool {
                 stage,
                 at,
             } => {
-                *id == task.id
-                    && task.current_run().is_some_and(|current| {
+                id == task.id()
+                    && current.as_ref().is_some_and(|current| {
                         run.as_deref() == Some(current.id.as_str())
                             && current.autopilot.as_ref().is_some_and(|pilot| {
                                 pilot.stage.as_str() == stage
                                     && pilot.at == *at
                                     && matches!(
-                                        task.status,
+                                        task.status(),
                                         corral_core::Status::Review | corral_core::Status::NeedsMe
                                     )
                             })
@@ -722,28 +624,28 @@ fn source_ended(task: &Task, claim: &NoticeClaim) -> bool {
         | "native_review_host_lost"
         | "resource_escalation"
         | "question_needs_me" => task
-            .attention
+            .attention()
             .entry_notice
             .as_ref()
             .is_none_or(|entry| entry.batch_id != claim.batch_id),
         "attention_ladder" => !claim.coverage.iter().any(|coverage| match coverage {
             NoticeCoverage::Exact { condition_key } => task
-                .attention
+                .attention()
                 .records
                 .get(&corral_core::attention::ConditionKey(condition_key.clone()))
                 .is_some_and(|record| record.resolved_at.is_none()),
             NoticeCoverage::Episode { .. } => false,
         }),
         "stuck" => !claim.coverage.iter().any(|coverage| match coverage {
-            NoticeCoverage::Exact { condition_key } => task
-                .current_run()
+            NoticeCoverage::Exact { condition_key } => current
+                .as_ref()
                 .and_then(|run| run.stuck.as_ref())
                 .is_some_and(|stuck| {
                     *condition_key
                         == format!(
                             "{}/stuck_process/{}:{}:{}",
-                            task.id,
-                            task.current_run().map_or("none", |run| run.id.as_str()),
+                            task.id(),
+                            current.as_ref().map_or("none", |run| run.id.as_str()),
                             stuck.pid,
                             stuck.started
                         )
@@ -752,7 +654,7 @@ fn source_ended(task: &Task, claim: &NoticeClaim) -> bool {
         }),
         "obligation_transition" => true,
         _ => false,
-    }
+    })
 }
 
 #[cfg(test)]
