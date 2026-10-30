@@ -58,11 +58,10 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     expect(refs.at(-1)?.outcome).toBe("uncertain");
     // A tool-hallucinating oracle cannot turn its single completion into a request loop.
     const before = transport.requests;
-    transport.script([{ toolCalls: [{ callId: "forbidden", name: "read", arguments: { path: "source.txt" } }] }, { text: "must not run" }]);
+    transport.script([{ toolCalls: [{ callId: "forbidden", name: "read", arguments: { path: "source.txt" } }] }]);
     const limited = await runtime.run("oracle", "limited", "consult once");
     expect(limited.outcome).toBe("uncertain");
     expect(transport.requests - before).toBe(1);
-    transport.script([]);
     await runtime.close();
     console.log("real SDK: allowed read succeeded; write/recursive spawn failed; oracle declared zero tools; cancellation saved once");
   } finally { globalThis.fetch = originalFetch; rmSync(cwd, { recursive: true, force: true }); }

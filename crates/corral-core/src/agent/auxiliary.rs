@@ -70,6 +70,47 @@ pub(crate) fn oracle_settings(config: &CapabilitySettings) -> Result<CapabilityS
 mod tests {
     use super::*;
     #[test]
+    fn auxiliary_presets_roles_and_overrides_share_the_catalog() {
+        use crate::{agent::AgentRole, agent_capabilities::AgentCapabilities};
+        for preset in ["strict", "standard", "full"] {
+            let config: AgentCapabilities =
+                toml::from_str(&format!("preset = '{preset}'")).unwrap();
+            for role in [
+                AgentRole::Worker,
+                AgentRole::Reviewer,
+                AgentRole::Pm,
+                AgentRole::Planner,
+                AgentRole::PlanReviewer,
+            ] {
+                let snapshot = config.resolve(role, None);
+                let explore = role != AgentRole::Pm
+                    && (preset == "full" || (preset == "standard" && role != AgentRole::Reviewer));
+                assert_eq!(snapshot.enabled("subagents"), explore, "{preset}/{role:?}");
+                assert_eq!(
+                    snapshot.enabled("oracle"),
+                    preset == "full",
+                    "{preset}/{role:?}"
+                );
+                if explore {
+                    assert_eq!(snapshot.features["subagents"].settings["max_parallel"], 3);
+                }
+            }
+        }
+        let enabled: AgentCapabilities = toml::from_str("preset = 'strict'\n[worker.subagents]\nenabled = true\nmax_parallel = 2\n[worker.oracle]\nenabled = true\nmodel = 'stronger'\n").unwrap();
+        let snapshot = enabled.resolve(AgentRole::Worker, None);
+        assert!(snapshot.enabled("subagents") && snapshot.enabled("oracle"));
+        assert_eq!(snapshot.features["subagents"].settings["max_parallel"], 2);
+        assert_eq!(snapshot.features["oracle"].settings["model"], "stronger");
+        let disabled: AgentCapabilities = toml::from_str("preset = 'full'\n[worker.subagents]\nenabled = false\n[worker.oracle]\nenabled = false\n").unwrap();
+        assert!(
+            !disabled
+                .resolve(AgentRole::Worker, None)
+                .enabled("subagents")
+        );
+        assert!(!disabled.resolve(AgentRole::Worker, None).enabled("oracle"));
+        assert!(toml::from_str::<AgentCapabilities>("[pm.subagents]\nenabled = true").is_err());
+    }
+    #[test]
     fn bounded_auxiliary_settings() {
         let empty = CapabilitySettings::new();
         assert_eq!(explore_settings(&empty).unwrap()["max_parallel"], 3);

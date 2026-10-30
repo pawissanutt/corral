@@ -663,7 +663,10 @@ export class HostSession {
   }
 
   async close(): Promise<void> {
+    // Stop the parent's follow-up loop before cancelled children can return tool results.
+    const aborted = this.session.abort();
     await this.auxiliary?.close();
+    await aborted;
     await this.mcp?.close();
     this.session.dispose();
   }

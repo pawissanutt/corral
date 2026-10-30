@@ -92,6 +92,18 @@ test("oracle cancellation uses the shared attribution seam and records uncertain
   console.log("oracle: configured stronger model; response cancelled; one uncertain terminal record; duplicate request reused");
 });
 
+test("disabled/unconfigured auxiliary calls do not contact a provider or create billing records", async () => {
+  let calls = 0;
+  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: null, timeout_secs: 30 } },
+    generation: 1, provider: "fixture", model: "parent", sessionId: () => "parent",
+    record: async () => { calls++; return {}; }, execute: async () => { calls++; return { text: "bad", outcome: "completed" }; },
+  });
+  await expect(runtime.run("explore", "disabled", "question")).rejects.toThrow("disabled");
+  await expect(runtime.run("oracle", "unconfigured", "question")).rejects.toThrow("not configured");
+  expect(calls).toBe(0);
+  await runtime.close();
+});
+
 test("child ceiling denies writes, shell, MCP, hooks, recursive spawn and Corral at every depth", () => {
   const parent = ["read", "grep", "find", "ls", "lsp_definition", "web_fetch", "write", "edit", "bash", "explore", "oracle", "codemode", "mcp_call", "corral_done"];
   const allowed = new Set(exploreLoadout(parent));
