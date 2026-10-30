@@ -407,7 +407,7 @@ fn parked_review_starts_no_gate_and_refuses_explicit_owner_entrypoints() {
         // When each explicit start path is called, then the park refuses before task mutation.
         for kind in ["dispatch", "changes", "retry", "review-run", "plan"] {
             let before = fx.ctx.store.get(&task.id).unwrap();
-            let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+            let events = serde_json::to_vec(&fx.ctx.store.events().unwrap()).unwrap();
             let error = match kind {
                 "dispatch" => {
                     corral_ops::dispatch(&fx.ctx, &task.id, &DispatchOpts::default()).unwrap_err()
@@ -433,7 +433,7 @@ fn parked_review_starts_no_gate_and_refuses_explicit_owner_entrypoints() {
             );
             assert_eq!(fx.ctx.store.get(&task.id).unwrap(), before, "{kind}");
             assert_eq!(
-                std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+                serde_json::to_vec(&fx.ctx.store.events().unwrap()).unwrap(),
                 events,
                 "{kind}"
             );
@@ -731,38 +731,32 @@ fn selected_availability_retry_on_needs_me_stops_at_the_park_fence() {
         .unwrap();
     park(&fx.ctx.store, &task.id, &[]);
     let episode = format!("{}-R1-implementation", task.id);
-    let path = fx.ctx.store.state_dir();
-    for directory in ["availability", "provider-stall"] {
-        std::fs::create_dir_all(path.join(directory)).unwrap();
-    }
+    let availability = corral_core::records::RecordArea::<serde_json::Value>::new("availability");
+    let stalls = corral_core::records::RecordArea::<serde_json::Value>::new("provider-stall");
     let attempts = [
         json!({"candidate":"old","provider":"fixture","connection":"fixture","model":"old",
             "run":"R1","selected_at":at(0),"reason":"preferred","failures":[]}),
         json!({"candidate":"next","provider":"fixture","connection":"fixture","model":"next",
             "run":null,"selected_at":at(1),"reason":"selected fallback","failures":[]}),
     ];
-    std::fs::write(
-        path.join("availability").join(format!("{episode}.json")),
-        serde_json::to_vec(
+    availability
+        .save(
+            &fx.ctx.store,
+            &episode,
             &json!({"version":1,"id":episode,"task":task.id,"role":"implementation",
             "profile":"fixture","revision":"1","started":at(0),"attempts":attempts}),
         )
-        .unwrap(),
-    )
-    .unwrap();
-    let stalled = path
-        .join("provider-stall")
-        .join(format!("{}-R1.json", task.id));
-    std::fs::write(&stalled, serde_json::to_vec(&json!({
+        .unwrap();
+    let stalled = format!("{}-R1", task.id);
+    stalls.save(&fx.ctx.store,&stalled,&json!({
         "since":at(0),"error_at":at(0),"message":"model_not_found","attempts":0,
         "last_attempt":null,"escalated":true,"class":{"kind":"unavailable"},"fallback_selected":true
-    })).unwrap()).unwrap();
+    })).unwrap();
     // When real sync reaches the selected-fallback executor after inventory processing.
     let submissions = fx.records("submissions.jsonl").len();
     corral_ops::sync_at(&fx.fresh(), at(20)).unwrap();
     // Then it records the concrete park refusal instead of retrying, checkpointing or launching.
-    let state: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(stalled).unwrap()).unwrap();
+    let state = stalls.load(&fx.ctx.store, &stalled).unwrap().unwrap();
     assert!(
         state["fallback_blocked"]
             .as_str()
