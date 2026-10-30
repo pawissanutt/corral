@@ -12,9 +12,7 @@ impl Pilot<'_> {
             Ok(key) => key,
             Err(error) => {
                 return self
-                    .escalate(&format!(
-                        "integration preflight infrastructure error: {error:#}"
-                    ))
+                    .escalate_error("integration preflight infrastructure error", error)
                     .map(Some);
             }
         };
@@ -60,9 +58,7 @@ impl Pilot<'_> {
                     .map(Some)
             }
             Err(error) => self
-                .escalate(&format!(
-                    "integration preflight infrastructure error: {error:#}"
-                ))
+                .escalate_error("integration preflight infrastructure error", error)
                 .map(Some),
         }
     }
@@ -146,7 +142,7 @@ impl Pilot<'_> {
                 );
                 self.moved(AutoStage::Gating, Some(head), None, &note)
             }
-            Err(error) => self.escalate(&format!("rebase infrastructure error: {error:#}")),
+            Err(error) => self.escalate_error("rebase infrastructure error", error),
         }
     }
 }

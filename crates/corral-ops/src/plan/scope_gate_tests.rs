@@ -372,15 +372,9 @@ fn a_member_moved_into_a_designed_integration_plan_needs_the_owners_gate() {
     .unwrap();
     let imported = crate::import_plan(&ctx, &source, false, corral_core::Origin::Agent).unwrap();
     let (from, held) = (imported.tracker.id, imported.tasks[1].id.clone());
-    let owner = crate::OwnerEntry {
-        agent: false,
-        pm: false,
-        cwd: dir.path().to_path_buf(),
-    };
     let gate_file = dir.path().join("gate.yaml");
-    let move_held = |gate: Option<&crate::MoveGate>| {
-        crate::plan_move_member_from(&ctx, &from, &held, &target, gate, &owner)
-    };
+    let move_held =
+        |gate: Option<&crate::MoveGate>| crate::plan_move_member(&ctx, &from, &held, &target, gate);
     let before = (
         ctx.store.get(&target).unwrap(),
         ctx.store.get(&held).unwrap(),

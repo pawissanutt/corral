@@ -1,6 +1,5 @@
 //! `corral question`: PM and owner operations on Pi-native agent questions, by key and revision.
-//! `answer --owner` and `deadline` are owner-only (trust-based like other `--owner` verbs) and
-//! absent from every Pi role loadout.
+//! `answer --owner` and `deadline` are absent from every Pi role loadout.
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use corral_core::agent::QuestionKind;

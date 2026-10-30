@@ -44,22 +44,6 @@ struct Observation {
     invalid: bool,
 }
 
-impl OperatingActionIdentity {
-    /// A base-only drift can be re-prepared, but is never a reusable verification result.
-    /// Compare every other field exactly, including source, policy and environment inputs.
-    pub fn only_integration_base_changed(&self, actual: &Self) -> bool {
-        let mut expected = self.clone();
-        let (Some(old), Some(new)) = (&mut expected.candidate, &actual.candidate) else {
-            return false;
-        };
-        if old.integration_base == new.integration_base {
-            return false;
-        }
-        old.integration_base.clone_from(&new.integration_base);
-        expected == *actual
-    }
-}
-
 impl Store {
     /// Persist origin before executor preparation. There is deliberately no default origin.
     pub fn authorize_operating_action(
@@ -131,9 +115,9 @@ impl Store {
                     ),
                     "cannot refresh authority after a submission attempt"
                 );
-                // A fresh explicit owner request is fresh consent to the current contract.
-                // Automatic authority can also re-prepare a base-only drift before submission;
-                // retain the single submission slot and archive the superseded authorization.
+                // A fresh explicit owner request is fresh consent to the current contract, and
+                // fresh automatic authority replaces stale automatic preparation before
+                // submission; retain the single submission slot and archive the superseded one.
                 let owner_renewal = matches!(
                     (&record.authorization.origin, &authorization.origin),
                     (
@@ -152,15 +136,8 @@ impl Store {
                         ),
                     "cannot change the action's authorization origin"
                 );
-                let base_refresh = !owner_renewal
-                    && record
-                        .authorization
-                        .action
-                        .only_integration_base_changed(&authorization.action);
                 ensure!(
-                    record.authorization.workspace == authorization.workspace
-                        && (owner_renewal || record.authorization.member == authorization.member)
-                        && (record.authorization.action == authorization.action || base_refresh),
+                    record.authorization.workspace == authorization.workspace,
                     "cannot refresh a changed prepared action identity"
                 );
                 record.authorization_history.push(AuthorizationRevision {

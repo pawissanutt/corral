@@ -1,4 +1,4 @@
-//! Adding an unstarted task to a tracker Plan's required members, or moving one between tracker
+//! Adding a task to a tracker Plan's required members, or moving one between tracker
 //! Plans. Membership is part of the Plan's operating contract, so grants and member runs bound to
 //! the old contract are refused afterwards; the caller decides which member states may be stranded.
 use anyhow::{Context, Result, bail, ensure};
@@ -77,6 +77,8 @@ impl Store {
             let _lock = fresh.lock(&member)?;
             let mut task = task;
             task.parent = Some(plan.id.clone());
+            // A started member's queued dispatch named its old base; the next run starts from the Plan's.
+            task.dispatch_plan = None;
             fresh.save_inner(&task)?;
         }
         if let Some(mut design) = design.filter(|design| !design.children.contains(&member)) {

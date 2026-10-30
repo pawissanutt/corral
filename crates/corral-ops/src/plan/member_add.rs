@@ -1,11 +1,11 @@
-//! `corral plan add-member`: the owner adds an unstarted task to a Plan's required members, for
+//! `corral plan add-member`: adds a task whose runs never landed to a Plan's required members, for
 //! example a fix after a failed `corral plan verify`. Plan verify and accept then require it like
-//! any other member; no gate tier changes.
-use anyhow::{Context, Result, ensure};
+//! any other member; no gate tier changes. A started member's next run starts from the Plan's
+//! delivery branch.
+use anyhow::{Result, ensure};
 use corral_core::{Status, Store, Task};
 use serde::Serialize;
 
-use super::member_gate::OwnerEntry;
 use crate::Ctx;
 
 #[cfg(test)]
@@ -19,35 +19,17 @@ pub struct PlanMemberAdded {
     pub children: Vec<String>,
 }
 
-/// Adds `member` to `tracker` as the owner of this OS session.
+/// Adds `member` to `tracker`.
 ///
 /// # Errors
-/// Refuses PM, agent and run-worktree entries, and every addition [`plan_add_member_from`]
-/// refuses.
+/// Refuses a finished or accepted Plan, a member that landed, is live or is owned elsewhere, and
+/// any existing member with a run in flight, because that run is bound to the current membership.
 pub fn plan_add_member(ctx: &Ctx, tracker: &str, member: &str) -> Result<PlanMemberAdded> {
-    plan_add_member_from(ctx, tracker, member, &OwnerEntry::from_env()?)
-}
-
-/// [`plan_add_member`] with an explicit entry, for tests that run under an agent's environment.
-///
-/// # Errors
-/// Refuses a non-owner entry, a finished or accepted Plan, a member that is started or owned
-/// elsewhere, and any existing member with a run in flight, because that run is bound to the
-/// current membership.
-#[doc(hidden)]
-pub fn plan_add_member_from(
-    ctx: &Ctx,
-    tracker: &str,
-    member: &str,
-    entry: &OwnerEntry,
-) -> Result<PlanMemberAdded> {
-    crate::automation_controls::require_owner_entry(&ctx.store, &entry.cwd, entry.agent, entry.pm)
-        .context("corral plan add-member is owner-only")?;
     let saved = ctx
         .store
         .add_plan_member(tracker, member, |store, plan, task| {
             check_open_plan(store, plan)?;
-            check_unstarted(task)
+            super::member_move::check_unlanded(store, task)
         })?;
     Ok(PlanMemberAdded {
         tracker: saved.id,
@@ -79,16 +61,5 @@ pub(super) fn check_open_plan(store: &Store, plan: &Task) -> Result<()> {
             plan.id
         );
     }
-    Ok(())
-}
-
-pub(super) fn check_unstarted(task: &Task) -> Result<()> {
-    ensure!(
-        matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
-            && task.runs.is_empty()
-            && task.launch.is_none(),
-        "{} must be unstarted (Idea, Backlog or Ready with no runs)",
-        task.id
-    );
     Ok(())
 }

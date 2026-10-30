@@ -163,9 +163,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         match pilot.infra_guard() {
             Ok(Some(step)) => return Ok(step),
             Ok(None) => return step(ctx, id, now),
-            Err(error) => {
-                return pilot.escalate(&format!("integration preflight error: {error:#}"));
-            }
+            Err(error) => return pilot.escalate_error("integration preflight error", error),
         }
     }
     let kind = match crate::automation_status::next_action(ctx, &task) {
@@ -206,9 +204,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             Ok(None) => {}
             Err(error) if error.is::<crate::integration::StalePacket>() => return Ok(Step::Wait),
             Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
-            Err(error) => {
-                return pilot.escalate(&format!("integration preflight error: {error:#}"));
-            }
+            Err(error) => return pilot.escalate_error("integration preflight error", error),
         }
     }
     match pilot.stage() {

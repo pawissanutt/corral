@@ -123,7 +123,7 @@ pub(crate) fn authorize(
         if previous.action.plan == action.plan && previous.action.round == action.round {
             if previous.action != action {
                 ensure!(
-                    rederivable(ctx, &previous, &action, origin)?,
+                    rederivable(ctx, &previous, origin)?,
                     "prepared action identity changed"
                 );
                 // This was never submitted. Replace its authorization below, retaining the
@@ -182,18 +182,10 @@ pub(crate) fn authorize(
     Ok(authorization)
 }
 
-/// Only a definitely unsubmitted automatic action may be rebound to a moved base.
-/// All other candidate inputs (including policy, environment and source bytes) stay fenced.
-fn rederivable(
-    ctx: &Ctx,
-    previous: &ActionAuthorization,
-    action: &OperatingActionIdentity,
-    origin: Origin,
-) -> Result<bool> {
+/// A definitely unsubmitted automatic preparation is stale churn: fresh automatic authority
+/// replaces it. Its consent and verification result are never reused.
+fn rederivable(ctx: &Ctx, previous: &ActionAuthorization, origin: Origin) -> Result<bool> {
     if origin != Origin::Automatic || !is_automatic(previous) {
-        return Ok(false);
-    }
-    if !previous.action.only_integration_base_changed(action) {
         return Ok(false);
     }
     Ok(matches!(

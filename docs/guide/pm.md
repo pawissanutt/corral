@@ -80,10 +80,9 @@ the section's JSON if needed. `read_brief` lists lightweight question
 key/revision records; `read_next` uses read-only observations and selection,
 not a whole-board sync or `pm_workset`.
 
-The PM may answer `clarification` and `technical_choice` questions only with
-a cited basis inside the approved write scope and acceptance. `owner_only`
-and `permission` questions always escalate; the owner can supersede a PM
-answer. Owner answers, deadlines, acceptance and authority changes are not PM
+The PM may answer a pending question of any kind, escalated ones included, with
+a cited basis inside the approved write scope and acceptance; the owner can
+supersede a PM answer. Owner answers, deadlines, acceptance and authority changes are not PM
 tools. This role has no shell, edit, MCP or skills, including after reload or
 session replacement. These are tool boundaries, not an OS sandbox.
 

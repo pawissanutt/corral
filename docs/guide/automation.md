@@ -231,9 +231,14 @@ Notification claims and pending facts live on the task. Sync republishes pending
 facts after a restart without repeating the external notification. A missing
 notification outcome means unknown, including a crash immediately before the call
 or immediately after it. `owner_notified` means the transport returned success,
-not that the owner read the message. Unclassified preflight failures still
-escalate to Blocked; their autopilot event identifies review runs released by
-round cleanup.
+not that the owner read the message. Routine churn never escalates: a moved
+integration base, a changed prepared action identity, a slot-ordering refusal
+(`waiting for finishing work on T-x`, `waiting for a slot`), a busy machine, pane
+inventory reconciliation, or another review, gate or dispatch launch in progress
+is recorded as an `autopilot_error` and retried on the next sync, where an
+unsubmitted automatic preparation is replaced rather than refused. Other
+preflight failures still escalate to Blocked; their autopilot event identifies
+review runs released by round cleanup.
 
 ## Daily digests
 
@@ -321,7 +326,8 @@ Before starting a gate or reviewer, the autopilot simulates integration with `gi
 the exact candidate and current base SHAs. It distinguishes a clean merge, a conflict, and a Git
 infrastructure error by exit status and structured output. The simulation leaves branches, the index
 and the worktree unchanged. Conflicts use the existing change-request rounds; infrastructure errors
-escalate to Blocked instead of asking the worker to rebase.
+escalate to Blocked instead of asking the worker to rebase, except routine churn, which the next
+sync retries.
 
 An **Integration repair packet** JSON artifact records the dispatch base, merge base, candidate and
 current base SHAs; every base commit since dispatch; commits still missing from the candidate;
@@ -713,8 +719,13 @@ nonempty answer; answers remain in the run for future resume. A successfully del
 the existing pending reply, so the normal resend path remains available.
 
 Sync reconciles these records under the task lock and notifies once per recorded state
-transition. Receipt delivery uncertainty survives terminal activity and restart; corral never
-resends a command or launches another worker because a wait completed. Receipts are immutable.
+transition. Recording a new receipt with `corral run resume` wakes the worker: corral delivers
+one prompt to the run's session naming the wait or answered decision, so an idle or parked
+worker continues without anyone typing into its pane. A run still queued for a slot is told to
+wait for `slot_reacquired` first; a Pi-native wait with an armed wake gets that wake instead.
+A replayed receipt prompts nothing, and a failed delivery keeps the receipt and is reported.
+Receipt delivery uncertainty survives terminal activity and restart; corral never resends a
+command or launches another worker because a wait completed. Receipts are immutable.
 Unknown delivery requires inspection and, if necessary, an explicit owner reply rather than an
 automatic resend. All declarations leave the T-033 watchdog and its confirmed, identity-checked
 recovery path intact: a wait is never permission to suppress a stuck diagnostic or kill a process.

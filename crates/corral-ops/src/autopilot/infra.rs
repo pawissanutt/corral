@@ -13,6 +13,30 @@ pub(super) fn classified(error: &anyhow::Error) -> bool {
     error.is::<corral_git::GitLockContention>() || error.is::<corral_git::GitOperationOngoing>()
 }
 
+/// Infrastructure churn that clears by itself: the base or a prepared action moved under the
+/// step, or capacity, slot order, pane reconciliation or a concurrent launch is in the way. The
+/// next sync discards the stale preparation and retries; it is never an owner escalation.
+pub(super) fn churn(error: &anyhow::Error) -> bool {
+    const MARKERS: [&str; 10] = [
+        "stale_retry",
+        "integration base moved",
+        "prepared action identity changed",
+        "waiting for finishing work on",
+        "waiting for a slot",
+        "waiting: ",
+        "pane inventory is being reconciled",
+        "another review launch is in progress",
+        "another gate start is in progress",
+        "dispatch is already in progress",
+    ];
+    classified(error)
+        || error.is::<crate::integration::StalePacket>()
+        || error.chain().any(|cause| {
+            let cause = cause.to_string();
+            MARKERS.iter().any(|marker| cause.contains(marker))
+        })
+}
+
 fn observation(error: &anyhow::Error, now: Timestamp) -> Result<InfraWait> {
     let (class, marker, path, first_mtime) =
         if let Some(lock) = error.downcast_ref::<corral_git::GitLockContention>() {
@@ -200,6 +224,14 @@ impl Pilot<'_> {
         )
     }
 
+    /// Hands `error` to the owner under `context`, unless it is churn the next sync retries.
+    pub(super) fn escalate_error(&self, context: &str, error: anyhow::Error) -> Result<Step> {
+        if churn(&error) {
+            return Err(error);
+        }
+        self.escalate(&format!("{context}: {error:#}"))
+    }
+
     pub(super) fn escalate(&self, reason: &str) -> Result<Step> {
         let state = AutopilotState {
             stage: AutoStage::Escalated,
@@ -338,5 +370,47 @@ impl Pilot<'_> {
             self.transition(store, task, from, state, status)
         })?;
         Ok(written)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+
+    use super::churn;
+    use crate::operating::AuthorizationRefused;
+
+    fn refused(reason: &str) -> anyhow::Error {
+        AuthorizationRefused(format!("submission precondition refused: {reason}")).into()
+    }
+
+    #[test]
+    fn every_churn_case_retries_and_real_outcomes_still_escalate() {
+        // Given each kind of routine churn, as autopilot's steps actually report it.
+        let churned = [
+            anyhow::Error::new(crate::integration::StalePacket),
+            anyhow!("stale_retry: integration base moved before landing"),
+            anyhow!("prepared action identity changed"),
+            refused("cannot request changes for T-001: waiting for finishing work on T-002"),
+            refused("cannot request changes for T-001: waiting for a slot (3/3 tasks)"),
+            AuthorizationRefused("waiting: machine busy (load 2.0 per core)".into()).into(),
+            anyhow!("session-ownership")
+                .context("pane inventory is being reconciled; retry dispatch"),
+            anyhow!("another review launch is in progress; try again"),
+        ];
+        // Then every one is retried on the next sync rather than handed to the owner.
+        for error in &churned {
+            assert!(churn(error), "{error:#}");
+        }
+        // And refusals that will not clear by retrying still escalate.
+        for error in [
+            anyhow!(
+                "automatic Repair is not authorized for T-001: automatic repair rounds exhausted"
+            ),
+            anyhow!("project app has no gate configured"),
+            refused("cannot request changes for T-001: unresolved native owner decision"),
+        ] {
+            assert!(!churn(&error), "{error:#}");
+        }
     }
 }

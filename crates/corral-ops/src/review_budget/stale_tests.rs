@@ -92,7 +92,7 @@ fn automatic_preparation_rebinds_only_the_moved_integration_base() {
 }
 
 #[test]
-fn automatic_preparation_still_refuses_candidate_or_policy_conflicts() {
+fn any_changed_unsubmitted_automatic_preparation_is_replaced_not_refused() {
     for field in ["head", "tree", "policy", "inputs", "environment"] {
         let mut fx = Fixture::new(1);
         let id = fx.task();
@@ -110,15 +110,21 @@ fn automatic_preparation_still_refuses_candidate_or_policy_conflicts() {
             "inputs" => candidate.inputs_digest.push_str("changed"),
             _ => candidate.environment.push(("OTHER".into(), None)),
         }
-        let error = launch
-            .bind(&candidate, &old.action.attempt, None)
-            .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("prepared action identity changed"),
-            "{field}: {error:#}"
-        );
+        if let Err(error) = launch.bind(&candidate, &old.action.attempt, None) {
+            assert!(
+                !format!("{error:#}").contains("prepared action identity changed"),
+                "{field}: {error:#}"
+            );
+        } else {
+            let journal = fx.ctx.store.authorized_submission(&old.id).unwrap();
+            assert_eq!(
+                journal.authorization.action.candidate.as_ref(),
+                Some(&candidate),
+                "{field}"
+            );
+            let superseded = &journal.authorization_history.last().unwrap().authorization;
+            assert_eq!(superseded, &old, "{field}");
+        }
         launch.commit().unwrap();
     }
 }

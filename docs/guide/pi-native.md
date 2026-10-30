@@ -1068,9 +1068,9 @@ authorized project. Mutations check that binding and the target project again at
 The PM gets typed read-only tools for brief, next, show, list, search, route, artifacts and
 lessons, plus receipted question answer, escalate and cancel, reply, comment and capture.
 There is no shell, edit, MCP, skills, `pm act`, owner answer, deadline or acceptance tool.
-Reload and session replacement retain this loadout. Clarification and technical-choice
-answers need a cited basis within the approved write scope and acceptance; owner-only and
-permission questions escalate, and the owner may supersede any PM answer.
+Reload and session replacement retain this loadout. PM answers to any kind of pending question
+need a cited basis within the approved write scope and acceptance, and the owner may supersede
+any PM answer.
 
 PM tools never run sync or `pm_workset`. A separate board/sync loop is required for wakes:
 keep the board running or run `corral sync --watch` outside the PM. A healthy scoped Pi PM

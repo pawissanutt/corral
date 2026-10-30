@@ -1399,8 +1399,8 @@ Commands:
   review             Review a plan without starting implementation or taking a coding slot
   verdict            Record a plan-only verdict; callbacks must include their exact attempt
   member-gate        Amend a published integration-Plan member's gate (owner only, revision-guarded)
-  add-member         Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
-  move-member        Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+  add-member         Add a task whose runs never landed to a tracker Plan's required members, e.g. a fix after a failed verify
+  move-member        Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another
   policy             Set the task's plan requirement, or inherit workspace/project review policy
   help               Print this message or the help of the given subcommand(s)
 
@@ -1646,7 +1646,7 @@ Options:
 ### `corral plan add-member`
 
 ```text
-Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
+Add a task whose runs never landed to a tracker Plan's required members, e.g. a fix after a failed verify
 
 Usage: corral plan add-member [OPTIONS] <TRACKER> <MEMBER>
 
@@ -1663,7 +1663,7 @@ Options:
 ### `corral plan move-member`
 
 ```text
-Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another
 
 Usage: corral plan move-member [OPTIONS] --to <TO> <TRACKER> <MEMBER>
 
@@ -1779,7 +1779,7 @@ Usage: corral run [OPTIONS] <COMMAND>
 Commands:
   wait        Register an explicit event wait (version 1 JSON); never executes monitor commands
   decision    Ask the owner an exact question with a requested action (version 1 JSON)
-  resume      Record an event or answered decision receipt; never resends or relaunches work
+  resume      Record an event or answered decision receipt and prompt the worker to continue; never relaunches work
   progress    Read identity and state, or replace execution progress from a JSON file
   checkpoint  Read identity and state, or save a guarded checkpoint from a JSON file
   help        Print this message or the help of the given subcommand(s)
@@ -1824,7 +1824,7 @@ Options:
 ### `corral run resume`
 
 ```text
-Record an event or answered decision receipt; never resends or relaunches work
+Record an event or answered decision receipt and prompt the worker to continue; never relaunches work
 
 Usage: corral run resume [OPTIONS] --file <FILE> <ID>
 
