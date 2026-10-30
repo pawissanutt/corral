@@ -21,6 +21,9 @@ mod head;
 pub(crate) use head::{recheck_head, record_head};
 
 #[cfg(test)]
+#[path = "effects_artifact_head_tests.rs"]
+mod artifact_head_tests;
+#[cfg(test)]
 #[path = "effects_head_tests.rs"]
 mod head_tests;
 pub use crate::review_budget::{DueWake, due_gate_wakes, fire_wake, own_attempt};
@@ -508,7 +511,15 @@ fn run_effect(
             _ => Ok(false),
         },
         "effect:content_index" => {
-            crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
+            let path = receipt.result["path"]
+                .as_str()
+                .context("owed artifact path missing")?;
+            let artifact = task
+                .latest_artifact_by_path(path)?
+                .context("owed artifact registration missing")?;
+            // The same incremental attachment path as non-native artifacts. The normal
+            // change-feed refresh still owns other documents/events and cold reconstruction.
+            crate::content_index::index_artifact(ctx, task_id, &artifact)?;
             Ok(true)
         }
         other => bail!("unknown owed effect {other}"),
