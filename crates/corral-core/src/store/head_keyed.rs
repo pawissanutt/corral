@@ -330,6 +330,29 @@ impl TaskHead {
         .map(|found: Vec<AgentQuestion>| found.into_iter().next())
     }
 
+    /// A coding run's named question, including one in a retired review child, without
+    /// looking through any other run or planning container.
+    pub fn run_question_by_key(&self, run: &str, key: &str) -> Result<Option<AgentQuestion>> {
+        let Some(owner) = self.run_owner(run)? else {
+            return Ok(None);
+        };
+        let (parent, _) = owner
+            .split_once('/')
+            .context("run owner has no child ordinal")?;
+        decode_all(
+            self.query(
+                &RowQuery::under(TaskPart::AgentRecord, format!("{parent}/"))
+                    .with_index(format!("key:{key}")),
+                1,
+                Counter::NestedRowDecodes,
+            )?
+            .into_iter()
+            .map(|row| row.doc)
+            .collect(),
+        )
+        .map(|found: Vec<AgentQuestion>| found.into_iter().next())
+    }
+
     /// The receipt of PM operation `request_id` on this task, by key.
     pub fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
         decode_all(

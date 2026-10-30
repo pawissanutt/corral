@@ -481,6 +481,8 @@ pub trait TaskRef: TaskFieldsRef {
     fn agent_question(&self, container: &ContainerRef, key: &str) -> Result<Option<AgentQuestion>>;
     /// A globally named task question without enumerating the task's containers.
     fn question_by_key(&self, key: &str) -> Result<Option<AgentQuestion>>;
+    /// Named question of this coding run or one of its children, including closed children.
+    fn run_question_by_key(&self, run: &str, key: &str) -> Result<Option<AgentQuestion>>;
     /// The questions of `container` still waiting for an answer.
     fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>>;
     /// The wake subscription of request `request_id` of `container`.

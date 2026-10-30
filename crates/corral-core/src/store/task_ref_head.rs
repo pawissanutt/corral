@@ -177,6 +177,9 @@ macro_rules! keyed_reads {
         fn question_by_key(&self, key: &str) -> Result<Option<AgentQuestion>> {
             self.$reads()?.question_by_key(key)
         }
+        fn run_question_by_key(&self, run: &str, key: &str) -> Result<Option<AgentQuestion>> {
+            self.$reads()?.run_question_by_key(run, key)
+        }
         fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
             self.$reads()?.pending_agent_questions(container)
         }
