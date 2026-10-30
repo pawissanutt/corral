@@ -128,6 +128,7 @@ test("standard PM capabilities expose assistant tools and trusted guidance", asy
   }
   const resources = pmHost.runtime.services.resourceLoader;
   expect(resources.getSkills().skills.map((skill) => skill.name)).toContain("pm-fixture");
+  expect(resources.getSkills().skills.map((skill) => skill.name)).toContain("corral-pm");
   expect(resources.getAgentsFiles().agentsFiles.map((file) => file.path)).toContain(join(cwd, "AGENTS.md"));
 }, 60_000);
 
@@ -190,7 +191,7 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     expect(host.session.getActiveToolNames().sort()).toEqual([...upstream, ...names].sort());
     expect(state.loadout).toEqual([...upstream, ...names]);
     const resources = host.runtime.services.resourceLoader;
-    expect(resources.getSkills().skills).toHaveLength(0);
+    if (stage === "startup") expect(resources.getSkills().skills.map((skill) => skill.name)).toEqual(["corral-pm"]);
     expect(resources.getPrompts().prompts).toHaveLength(0);
     expect(resources.getAgentsFiles().agentsFiles).toHaveLength(0);
     expect(resources.getExtensions().extensions).toHaveLength(1);
