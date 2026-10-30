@@ -65,6 +65,14 @@ vendor = "openai"
 effort = "high"
 `);
   good = buildFixtureInstall({ parent: workspace });
+  // Hello binds before InteractiveMode.init (the documented host order). Observe the
+  // actual attached event in this disposable host, rather than racing it with get_state.
+  // Only the fixture writes this readiness signal; production startup stays unchanged.
+  const main = join(good.dir, "src/host/main.ts");
+  const source = readFileSync(main, "utf8");
+  const attach = '  session.markAttached("interactive");';
+  expect(source.split(attach)).toHaveLength(2);
+  writeFileSync(main, source.replace(attach, `${attach}\n  (await import("node:fs")).writeFileSync(${JSON.stringify(join(workspace, "interactive-ready"))}, "attached");`));
   badBun = buildFixtureInstall({ parent: workspace });
   const compat = JSON.parse(readFileSync(join(badBun.dir, "compat.json"), "utf8"));
   writeFileSync(join(badBun.dir, "compat.json"), `${JSON.stringify({ ...compat, bun: { range: "0.0.1", tested: ["0.0.1"] } })}\n`);
@@ -122,6 +130,8 @@ test("dispatch launches the host in the run pane and hello binds generation 1 wi
 
 test("a fresh corral process reaches the host through ctl.cap alone; a wrong or missing ctl_cap is refused", async () => {
   if (!isolated) return;
+  // A bounded fs.watch barrier, not a sleep, a retried assertion or repeated probes.
+  await fileAppears(workspace, "interactive-ready", 4_000);
   const first = probeOnce() as { ok: boolean; hello: Record<string, unknown>; state: Record<string, unknown> };
   expect(first.ok).toBeTrue();
   expect(first.hello.bound).toBeTrue();
