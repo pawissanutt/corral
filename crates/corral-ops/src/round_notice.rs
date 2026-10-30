@@ -17,15 +17,19 @@ pub(crate) fn reused(run: &Run) -> bool {
 
 /// The attention reason for a reused reviewer whose turn ended with the review still open.
 pub(crate) fn review_silent_reason(child: &Run) -> String {
-    let attempt = child
-        .review
-        .as_ref()
-        .and_then(crate::reviewer::review_callback_token);
+    review_silent_reason_of(&child.id, child.review.as_ref())
+}
+
+pub(crate) fn review_silent_reason_of(
+    id: &str,
+    review: Option<&corral_core::ReviewRecord>,
+) -> String {
+    let attempt = review.and_then(crate::reviewer::review_callback_token);
     format!(
         "Review attempt {} (attempt ID {}, candidate {}) ended a turn without a verdict",
-        child.id,
+        id,
         attempt.as_deref().unwrap_or("unknown"),
-        child.review.as_ref().map_or("unknown", |r| r.sha.as_str()),
+        review.map_or("unknown", |review| review.sha.as_str()),
     )
 }
 
@@ -105,10 +109,14 @@ pub(crate) fn has_changes_notice(text: &str) -> bool {
 
 /// The attention reason for a worker that answered a changes round without reporting.
 pub(crate) fn worker_silent_reason(run: &Run) -> Option<String> {
-    let round = run.changes_round.as_ref()?;
+    worker_silent_reason_of(&run.id, run.changes_round.as_ref())
+}
+
+pub(crate) fn worker_silent_reason_of(id: &str, round: Option<&ChangesRound>) -> Option<String> {
+    let round = round?;
     Some(format!(
         "Run {} ended a turn without a report in {}",
-        run.id,
+        id,
         round_identity(round)
     ))
 }
