@@ -10,7 +10,7 @@ use corral_core::agent::{
     ReceiptState, RequestOrigin, RequestReceipt, WAKES_MAX, WakeKind, WakeState, WakeSubscription,
     pm_state,
 };
-use corral_core::{Store, Task, Verdict};
+use corral_core::{Store, Task, TaskRef, Verdict};
 use serde_json::{Value, json};
 
 use super::admission;
@@ -367,11 +367,11 @@ pub fn swept(
 ) -> Result<Receipted> {
     let task = ctx
         .store
-        .get(home.task().context("swept receipts live in a task")?)?;
-    let stored = receipts(&task, &home)
-        .iter()
-        .find(|r| r.request_id == origin.request_id)
-        .cloned();
+        .head(home.task().context("swept receipts live in a task")?)?;
+    let stored = match &home {
+        Home::Container(container) => task.agent_receipt(container, &origin.request_id)?,
+        Home::PmTask(_) => task.pm_receipt(&origin.request_id)?,
+    };
     if let Some(stored) = stored {
         admission::same_request(&stored, &origin.op, &origin.payload_sha256)?;
         return finish(ctx, &home, stored, true);
@@ -429,17 +429,21 @@ fn complete(ctx: &Ctx, home: &Home, receipt: &mut RequestReceipt) -> Result<()> 
     if done.is_empty() {
         return Ok(());
     }
-    ctx.store.try_update(task_id, |task| {
-        let id = &receipt.request_id;
-        let Some(stored) = receipts_mut(task, home)?
-            .iter_mut()
-            .find(|r| r.request_id == *id)
-        else {
-            return Ok(false);
+    ctx.store.try_update_head(task_id, |task| {
+        let clear = |stored: &mut RequestReceipt| {
+            stored.post_pending.retain(|entry| !done.contains(entry));
+            Ok(())
         };
-        let before = stored.post_pending.len();
-        stored.post_pending.retain(|entry| !done.contains(entry));
-        Ok(stored.post_pending.len() != before)
+        match home {
+            Home::Container(container) => {
+                let Some(mut stored) = task.agent_receipt(container, &receipt.request_id)? else {
+                    return Ok(false);
+                };
+                clear(&mut stored)?;
+                task.put_agent_record(container, agent::NativeRecord::Receipt(stored))
+            }
+            Home::PmTask(_) => task.edit_pm_receipt(&receipt.request_id, clear),
+        }
     })?;
     receipt.post_pending.retain(|entry| !done.contains(entry));
     Ok(())

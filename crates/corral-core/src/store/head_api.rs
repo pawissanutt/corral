@@ -618,6 +618,30 @@ impl Store {
         })
     }
 
+    /// Native containers still owing settlement or indexed receipt/question/job work, including
+    /// retired containers on terminal tasks. Settled native history is never decoded.
+    pub fn unfinished_native_heads(&self) -> Result<Vec<TaskHead>> {
+        use crate::backend::{HeadQuery, TaskPart};
+        let frozen = self.read_only_snapshot()?;
+        let view = frozen.view()?;
+        let mut owners = std::collections::BTreeSet::new();
+        for part in [
+            TaskPart::Run,
+            TaskPart::ReviewRun,
+            TaskPart::PlanRun,
+            TaskPart::PlanReview,
+        ] {
+            owners.extend(view.token_owners(part, "native:unsettled", u32::MAX)?);
+        }
+        owners.extend(view.token_owners(TaskPart::AgentRecord, "native:pending", u32::MAX)?);
+        frozen.heads(&HeadQuery::Ids(
+            owners
+                .into_iter()
+                .map(|num| format!("T-{:03}", num.0))
+                .collect(),
+        ))
+    }
+
     /// Tasks that recorded pane `pane`, or a pane in workspace `workspace` (`token` is
     /// `pane:<id>` or `workspace:<id>`), by id; no row is decoded.
     ///

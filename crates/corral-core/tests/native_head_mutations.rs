@@ -8,6 +8,69 @@ use corral_core::{AgentHostHead, Store, TaskMut, TaskRef};
 use serde_json::json;
 use store_support::at;
 
+#[test]
+fn pm_receipt_effect_clear_is_keyed_and_history_independent() {
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let mut task = store_support::rich(&store, 1, 0, 0, 0);
+        task.created = at(0);
+        task.updated = at(0);
+        task.status_since = Some(at(0));
+        task.agent_pm_receipts = (0..scale)
+            .map(|n| receipt(&task.id, &format!("old-{n:04}"), "committed"))
+            .collect();
+        let mut target = receipt(&task.id, "target", "committed");
+        target.post_pending = vec!["effect:event".into()];
+        task.agent_pm_receipts.push(target.clone());
+        store.fixture_put_task(&task).unwrap();
+        {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            assert!(
+                store
+                    .try_update_head(&task.id, |head| head.edit_pm_receipt("target", |receipt| {
+                        receipt.post_pending.clear();
+                        Ok(())
+                    }))
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(
+                store
+                    .try_update_head(&task.id, |head| head
+                        .edit_pm_receipt("absent", |_| anyhow::bail!(
+                            "missing receipt must not invoke editor"
+                        )))
+                    .unwrap()
+                    .is_none()
+            );
+            let after = work::snapshot();
+            measured.push(
+                [
+                    Counter::TaskHeadDecodes,
+                    Counter::NestedRowDecodes,
+                    Counter::HistoryRowDecodes,
+                    Counter::FullTaskHydrations,
+                    Counter::DecodedDocBytes,
+                    Counter::ViewsOpened,
+                ]
+                .map(|counter| after.total(counter) - before.total(counter)),
+            );
+        }
+        target.post_pending.clear();
+        let full = store.get(&task.id).unwrap();
+        assert_eq!(full.agent_pm_receipts.last(), Some(&target));
+        assert_eq!(
+            &full.agent_pm_receipts[..scale],
+            &task.agent_pm_receipts[..scale]
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+    assert_eq!(measured[0][3], 0);
+}
+
 fn state(role: &str) -> AgentRunState {
     AgentRunState::new(
         serde_json::from_value(json!({
@@ -87,8 +150,9 @@ fn native_keyed_mutations_match_full_facade_for_all_container_roles() {
             })
             .unwrap();
         let mut records = vec![
-            turn(10000, 1),
+            // Bridge events can arrive out of order: latest means max seq, not last append.
             turn(10000, 2),
+            turn(10000, 1),
             NativeRecord::Receipt(receipt(&id, "queued", "queued")),
         ];
         for record in records.drain(..) {
@@ -161,6 +225,92 @@ fn native_keyed_mutations_match_full_facade_for_all_container_roles() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn unfinished_native_index_skips_settled_terminal_tasks_and_retains_owed_receipts() {
+    let mut results = Vec::new();
+    for scale in [1, 10] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let mut task = store
+            .create("Owed receipt", None, corral_core::Status::Done, "")
+            .unwrap();
+        for _ in 0..scale {
+            let mut task = store
+                .create("Retired", None, corral_core::Status::Done, "")
+                .unwrap();
+            task.runs = vec![store_support::coding_run(&task.id, "R0001", 0, 0, 0, true)];
+            task.runs[0].inbox.settled = Some(at(1));
+            task.runs[0].agent_host = Some(Box::new(state("worker")));
+            store.fixture_put_task(&task).unwrap();
+        }
+        task.created = at(0);
+        task.updated = at(0);
+        task.status_since = Some(at(0));
+        task.runs = vec![store_support::coding_run(&task.id, "R0001", 0, 0, 0, true)];
+        task.runs[0].inbox.settled = Some(at(1));
+        let mut native = state("worker");
+        native.receipts.push(receipt(&task.id, "queued", "queued"));
+        task.runs[0].agent_host = Some(Box::new(native));
+        store.fixture_put_task(&task).unwrap();
+        let container = ContainerRef::Worker {
+            task: task.id.clone(),
+            run: "R0001".into(),
+        };
+        {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            let heads = store.unfinished_native_heads().unwrap();
+            assert_eq!(heads.iter().map(|h| &h.id).collect::<Vec<_>>(), [&task.id]);
+            let after = work::snapshot();
+            results.push(
+                [
+                    Counter::TaskHeadDecodes,
+                    Counter::NestedRowDecodes,
+                    Counter::HistoryRowDecodes,
+                    Counter::FullTaskHydrations,
+                    Counter::DecodedDocBytes,
+                    Counter::ViewsOpened,
+                ]
+                .map(|counter| after.total(counter) - before.total(counter)),
+            );
+        }
+        store
+            .update_head(&task.id, |head| {
+                head.put_agent_record(
+                    &container,
+                    NativeRecord::Receipt(receipt(&task.id, "queued", "committed")),
+                )
+                .map(drop)
+            })
+            .unwrap();
+        assert!(store.unfinished_native_heads().unwrap().is_empty());
+        let recipient = corral_core::inbox::Recipient::Run {
+            task: task.id.clone(),
+            run: "R0001".into(),
+        };
+        store
+            .update_head(&task.id, |head| {
+                head.inbox_state_mut(&recipient, |inbox| {
+                    inbox.settled = None;
+                    Ok(())
+                })
+            })
+            .unwrap();
+        assert_eq!(store.unfinished_native_heads().unwrap().len(), 1);
+        store
+            .update_head(&task.id, |head| {
+                head.inbox_state_mut(&recipient, |inbox| {
+                    inbox.settled = Some(at(1));
+                    Ok(())
+                })
+            })
+            .unwrap();
+        assert!(store.unfinished_native_heads().unwrap().is_empty());
+    }
+    assert_eq!(results[0], results[1]);
+    assert_eq!(results[0][3], 0);
 }
 
 #[test]

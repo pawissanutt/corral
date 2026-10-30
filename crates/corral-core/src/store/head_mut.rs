@@ -101,14 +101,16 @@ fn history_row(
     doc: Value,
     index: Vec<String>,
 ) -> HistoryRow {
-    HistoryRow {
+    let mut row = HistoryRow {
         part,
         key,
         current,
         open,
         doc,
         index,
-    }
+    };
+    super::codec::decorate_native(&mut row);
+    row
 }
 
 pub(crate) fn run_row(
@@ -292,7 +294,8 @@ impl TaskHeadMut {
         self.head.last_aggregate_attempt.as_deref_mut()
     }
 
-    pub(crate) fn put(&mut self, row: HistoryRow) {
+    pub(crate) fn put(&mut self, mut row: HistoryRow) {
+        super::codec::decorate_native(&mut row);
         self.rows.insert((row.part, row.key.clone()), Some(row));
     }
 

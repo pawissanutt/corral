@@ -70,6 +70,9 @@ impl NativeRecord {
             }
             _ => self.pending(),
         };
+        if self.pending() {
+            index.push("native:pending".into());
+        }
         (open, index)
     }
     pub(crate) fn put(self, state: &mut AgentRunState) -> bool {

@@ -111,7 +111,7 @@ pub(super) fn execute(
 
 #[cfg(test)]
 pub(crate) fn advance(ctx: &Ctx) -> Result<()> {
-    advance_heads(ctx, &crate::pm_next::heads::open(&ctx.store)?)
+    advance_heads(ctx, &ctx.store.unfinished_native_heads()?)
 }
 
 /// Called after sync drops its shared pane-inventory lease, before admitting new work, with the

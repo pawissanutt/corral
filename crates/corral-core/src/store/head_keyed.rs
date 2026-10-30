@@ -245,13 +245,16 @@ impl TaskHead {
         let Some(owner) = self.agent_owner(container)? else {
             return Ok(None);
         };
-        let mut q = RowQuery::under(TaskPart::AgentRecord, format!("{owner}/turns/"))
-            .with_index(format!("generation:{generation}"));
-        q.newest_first = true;
-        self.query(&q, 1, Counter::NestedRowDecodes)?
-            .pop()
-            .map(|row| serde_json::from_value(row.doc).map_err(Into::into))
-            .transpose()
+        let mut q = RowQuery::part(TaskPart::AgentRecord);
+        q.key = Some(format!("{owner}/latest_turn/{generation:010}"));
+        let Some(row) = self.query(&q, 1, Counter::NestedRowDecodes)?.pop() else {
+            return Ok(None);
+        };
+        self.agent_turn(
+            container,
+            generation,
+            super::codec::latest_turn_seq(&row.doc)?,
+        )
     }
 
     /// Queued native gates of this task, selected by the receipt index even on older runs.
