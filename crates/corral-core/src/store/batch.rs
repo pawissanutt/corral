@@ -36,7 +36,14 @@ impl Store {
                 let number = first
                     .checked_add(u64::try_from(index)?)
                     .context("task ID exhausted")?;
-                Ok(draft_task(number, "", None, Status::Backlog, ""))
+                Ok(draft_task(
+                    number,
+                    "",
+                    None,
+                    Status::Backlog,
+                    "",
+                    fresh.now(),
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
         let snapshots = initialize(&fresh, &mut tasks)?;
@@ -122,8 +129,8 @@ pub(super) fn draft_task(
     project: Option<&str>,
     status: Status,
     body: &str,
+    now: jiff::Timestamp,
 ) -> Task {
-    let now = crate::clock::now();
     Task {
         park: None,
         landed: None,

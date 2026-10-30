@@ -130,7 +130,8 @@ mod tests {
         let earlier = Timestamp::from_second(10).unwrap();
         let now = Timestamp::from_second(20).unwrap();
         for from in STATUSES {
-            let mut before = super::super::batch::draft_task(1, "Status", None, from, "");
+            let mut before =
+                super::super::batch::draft_task(1, "Status", None, from, "", crate::clock::now());
             before.status_since = Some(earlier);
             let mut created = before.clone();
             task(&mut created, None, now).unwrap();
@@ -153,7 +154,8 @@ mod tests {
     fn normalization_preserves_legacy_unknown_until_status_changes() {
         let now = Timestamp::from_second(20).unwrap();
         for status in STATUSES {
-            let before = super::super::batch::draft_task(1, "Legacy", None, status, "");
+            let before =
+                super::super::batch::draft_task(1, "Legacy", None, status, "", crate::clock::now());
             let mut changed = before.clone();
             changed.title = "Edited".into();
             changed.body = "New body".into();

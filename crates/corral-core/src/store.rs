@@ -513,7 +513,7 @@ impl Store {
     ) -> Result<Task> {
         let _board = self.lock("dispatch")?;
         let next = self.next_task_number()?;
-        let mut task = batch::draft_task(next, title, project, status, body);
+        let mut task = batch::draft_task(next, title, project, status, body, self.now());
         let _unit = self.event_unit();
         initialize(&mut task)?;
         self.log_event(
