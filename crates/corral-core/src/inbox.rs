@@ -179,7 +179,10 @@ pub struct InboxState {
     /// Bounded owner obligations; absence on an existing recipient requires explicit indexing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_header: Option<OwnerHeader>,
+    // Stored container projections use fixed-width counters; full/export JSON stays numeric.
+    #[serde(deserialize_with = "crate::container_facts::fixed::deserialize")]
     pub next_seq: u64,
+    #[serde(deserialize_with = "crate::container_facts::fixed::deserialize")]
     pub next_envelope: u64,
     pub open_envelope: Option<u64>,
     /// Retired unsent publication whose adapter still owns its pending replacement.

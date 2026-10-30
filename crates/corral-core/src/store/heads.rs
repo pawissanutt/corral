@@ -228,7 +228,9 @@ pub struct UsageTotals {
 pub struct InboxHead {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_header: Option<crate::inbox::OwnerHeader>,
+    #[serde(with = "crate::container_facts::fixed")]
     pub next_seq: u64,
+    #[serde(with = "crate::container_facts::fixed")]
     pub next_envelope: u64,
     pub open_envelope: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

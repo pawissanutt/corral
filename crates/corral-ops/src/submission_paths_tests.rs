@@ -34,6 +34,9 @@ mod aggregate;
 mod crashes;
 #[path = "../tests/support/launch_resume.rs"]
 mod launch_resume;
+#[cfg(target_os = "linux")]
+#[path = "../tests/support/native_sync_budget.rs"]
+mod native_sync_budget;
 #[path = "../tests/support/submission_refusals.rs"]
 mod refusals;
 #[path = "../tests/support/reviewer_guard.rs"]
