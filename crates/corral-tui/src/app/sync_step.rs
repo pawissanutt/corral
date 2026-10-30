@@ -62,6 +62,9 @@ fn read_back(
 
 #[cfg(test)]
 pub(crate) fn run(ctx: &Ctx) -> Result<Vec<Change>, String> {
+    ctx.store
+        .check_runtime()
+        .map_err(|e| corral_herdr::friendly_error(&e))?;
     corral_ops::lesson_rows::prepare_evaluation(ctx)
         .map_err(|e| corral_herdr::friendly_error(&e))?;
     let synced = corral_ops::sync(ctx).map_err(|e| corral_herdr::friendly_error(&e));

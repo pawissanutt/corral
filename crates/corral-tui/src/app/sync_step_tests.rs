@@ -201,14 +201,12 @@ fn latched_board_hands_its_passes_to_the_installed_corral() {
     // Given a board latched off by an update whose cause is gone again (T-587).
     let fx = Fixture::new();
     fx.step();
-    let marker = fx.ctx.store.state_dir().join("schema-version");
+    let marker = fx.ctx.store.dir().join("state/schema-version");
     let current = std::fs::read(&marker).ok();
     std::fs::write(&marker, "999\n").unwrap();
-    assert!(
-        run(&fx.ctx)
-            .unwrap_err()
-            .contains(corral_core::UPDATE_NOTICE)
-    );
+    let (messages, _received) = std::sync::mpsc::channel();
+    let error = super::run_with_attention(&fx.ctx, &messages).unwrap_err();
+    assert!(error.contains(corral_core::UPDATE_NOTICE), "{error}");
     match current {
         Some(bytes) => std::fs::write(&marker, bytes).unwrap(),
         None => std::fs::remove_file(&marker).unwrap(),
