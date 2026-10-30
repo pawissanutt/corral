@@ -14,7 +14,7 @@ fn id(doc: &serde_json::Value) -> Result<String> {
 }
 
 impl TaskHead {
-    fn native_parent_id(
+    pub(super) fn native_parent_id(
         &self,
         part: TaskPart,
         key: &str,

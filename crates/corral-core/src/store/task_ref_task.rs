@@ -515,6 +515,15 @@ impl TaskRef for Task {
         Ok(inbox_state(self, recipient).map(inbox_head_of))
     }
 
+    fn active_worker_wakes(&self) -> Result<Vec<(ContainerRef, WakeSubscription)>> {
+        Ok(crate::agent::native_inputs::active_worker_wakes(self))
+    }
+    fn worker_queued_effect_receipt(&self, reference: &str) -> Result<Option<RequestReceipt>> {
+        Ok(crate::agent::native_inputs::worker_queued_effect_receipt(
+            self, reference,
+        ))
+    }
+
     fn unfinished_native_containers(&self) -> Result<Vec<ContainerRef>> {
         Ok(crate::agent::native_inputs::unfinished(self))
     }

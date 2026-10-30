@@ -447,6 +447,11 @@ pub trait TaskRef: TaskFieldsRef {
         })
     }
 
+    /// Active worker wakes across all runs, not reviewer/planning wakes or retained settled rows.
+    fn active_worker_wakes(&self) -> Result<Vec<(ContainerRef, WakeSubscription)>>;
+    /// First queued worker effect receipt for this exact reference, across coding runs only.
+    fn worker_queued_effect_receipt(&self, reference: &str) -> Result<Option<RequestReceipt>>;
+
     /// Unsettled or pending native containers, in append order, never settled history.
     fn unfinished_native_containers(&self) -> Result<Vec<ContainerRef>>;
 

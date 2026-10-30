@@ -149,6 +149,10 @@ impl Rows {
 
 /// Cross-task unfinished-container index, kept with the canonical container row.
 pub(super) fn decorate_native(row: &mut HistoryRow) {
+    if row.part == TaskPart::AgentRecord {
+        super::native_worker_index::decorate(row);
+        return;
+    }
     if !matches!(
         row.part,
         TaskPart::Run | TaskPart::ReviewRun | TaskPart::PlanRun | TaskPart::PlanReview
