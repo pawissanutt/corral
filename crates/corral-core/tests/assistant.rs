@@ -211,6 +211,7 @@ fn assistant_capabilities_use_the_shared_resolver() {
     assert!(standard.enabled("todo"));
     assert!(standard.enabled("lsp"));
     assert!(standard.enabled("subagents"));
+    assert!(standard.enabled("background_shell"));
     assert!(!standard.enabled("hooks"));
     assert!(!standard.enabled("browser"));
     assert!(!standard.enabled("lessons"));
@@ -220,8 +221,8 @@ fn assistant_capabilities_use_the_shared_resolver() {
     assert!(full.enabled("bash_rules"));
     assert!(full.enabled("oracle"));
     assert!(!full.enabled("llama_cpp.enabled"));
-    // Keys that need session artifacts, session-owned jobs or scratch roots stay out of the column.
-    for key in ["session_export", "background_shell", "checkpoints", "hooks"] {
+    // Keys that need session artifacts or scratch roots stay out of the column.
+    for key in ["session_export", "checkpoints", "hooks"] {
         assert!(!full.features.contains_key(key), "{key}");
     }
     assert_ne!(standard.digest, full.digest);
