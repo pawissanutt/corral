@@ -538,7 +538,9 @@ export class HostSession {
         reason,
       };
     });
+    const fixed = this.options.modules.role.shellRefusal;
     installToolControls(pi, {
+      ...(fixed ? { fixed } : {}),
       ...(this.hooks ? { hooks: this.hooks } : {}),
       ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
       ...(this.permissions ? { permissions: this.permissions } : {}),

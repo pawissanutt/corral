@@ -112,6 +112,11 @@ export interface RoleModule {
   localTools?(context: RoleContext): readonly ToolDefinition[];
   /** The role's contract, appended to the system prompt. */
   contract(context: RoleContext): string;
+  /**
+   * The role's fixed shell refusals: checked for every bash call, top-level or nested, before any
+   * configured bash rule, and never disabled by capability settings. A reason refuses the call.
+   */
+  readonly shellRefusal?: (command: string) => string | undefined;
   /** Optional role commands (slash commands). Tools registered here are never activated. */
   extend?(pi: ExtensionAPI, context: RoleContext): void;
 }

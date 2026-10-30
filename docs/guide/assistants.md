@@ -98,8 +98,22 @@ The role's core tools are read, grep, find, ls and bash, plus `corral_todo` whil
 The host exports `CORRAL_ASSISTANT=A-<n>` and `CORRAL_ASSISTANT_GENERATION` into the session's
 shell, so its `corral` commands can be attributed to the session. There is no edit or write
 tool until the scratch-root path guard lands. The packaged role contract tells the model to
-read the board through the CLI, file ideas and comments only on the owner's request, act on
-clear owner instructions only, and never type into another pane or write under `.corral/`.
+read the board through the CLI, file ideas and comments only on the owner's request, and act
+on clear owner instructions only.
+
+Two fixed shell rules apply to every assistant bash call, top-level or nested (from codemode or
+another tool), before any configured `bash_rules`. No preset, capability setting or rule can
+turn them off. Corral refuses, and runs nothing for:
+
+- input into a herdr pane: `herdr pane send-text`, `send-keys` or `run`, and `herdr agent prompt`,
+  however they are reached (options, a path, `bash -c`, `$(...)`);
+- a direct write under `.corral/`: a redirection into it, or `rm`, `mv`, `cp`, `tee`, `touch`,
+  `mkdir`, `ln`, `dd`, `sed -i` and similar writers naming a path inside it.
+
+Reading `.corral/` (`cat`, `ls`, `grep`), other herdr commands such as `herdr pane list`, and
+every `corral` command still run. These rules prevent an honest model's accidents. Like the rest
+of the assistant design, they are not a security boundary. A refusal is logged as
+`bash_rule_denied` with `fixed: true`.
 
 ## Records and lifecycle
 

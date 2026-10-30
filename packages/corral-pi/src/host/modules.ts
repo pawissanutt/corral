@@ -99,6 +99,9 @@ function checkRole(value: unknown, module: string, role: Role): RoleModule {
   if (typeof candidate.tools !== "function" || typeof candidate.contract !== "function") {
     throw new ModuleInvalid(module, "needs tools() and contract()");
   }
+  if (candidate.shellRefusal !== undefined && typeof candidate.shellRefusal !== "function") {
+    throw new ModuleInvalid(module, "shellRefusal must be a function");
+  }
   checkLocalTools(candidate, module);
   return candidate as unknown as RoleModule;
 }
