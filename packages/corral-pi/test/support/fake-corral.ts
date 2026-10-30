@@ -17,21 +17,41 @@ export interface FakeCorral {
   readonly path: string;
   calls(): FakeCall[];
   failWith(code: number): void;
+  snapshot(value: unknown): void;
 }
 
 const SCRIPT = `#!/usr/bin/env bun
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
 const stdin = readFileSync(0, "utf8");
-appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ argv: process.argv.slice(2), stdin,
+const reading = process.argv[2] === "show" || process.argv[3] === "state";
+if (!reading) appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ argv: process.argv.slice(2), stdin,
   envKeys: Object.keys(process.env) }) + "\\n");
 const fail = join(dir, "fail");
 if (existsSync(fail)) { process.stderr.write("fake corral refused\\n"); process.exit(Number(readFileSync(fail, "utf8"))); }
+const snapshot = join(dir, "snapshot.json");
+if (reading) {
+  process.stdout.write(readFileSync(snapshot, "utf8"));
+  process.exit(0);
+}
 const envelope = JSON.parse(stdin);
+let progress;
+if (envelope.op === "todo" && existsSync(snapshot)) {
+  const state = JSON.parse(readFileSync(snapshot, "utf8"));
+  progress = state.container?.todo ?? state.runs?.find(run => run.id === envelope.identity.run)?.progress;
+  if (progress && envelope.payload.op === "done") {
+    const step = progress.phases.flatMap(phase => phase.steps).find(step => step.id === envelope.payload.step);
+    if (step) {
+      step.status = { state: "done" };
+      progress.revision++;
+      writeFileSync(snapshot, JSON.stringify(state));
+    }
+  }
+}
 process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_id, op: envelope.op,
   payload_sha256: envelope.payload_sha256, identity: envelope.identity, state: "committed",
-  result: { op: envelope.op, ...(envelope.op === "ask"
+  result: { op: envelope.op, ...(progress ? { revision: progress.revision, progress } : {}), ...(envelope.op === "ask"
     ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q1" } : {}) },
   at: new Date().toISOString() }) + "\\n");
 `;
@@ -50,5 +70,6 @@ export function writeFakeCorral(dir: string): FakeCorral {
       })
       : [],
     failWith: (code) => writeFileSync(join(dir, "fail"), String(code)),
+    snapshot: (value) => writeFileSync(join(dir, "snapshot.json"), JSON.stringify(value)),
   };
 }

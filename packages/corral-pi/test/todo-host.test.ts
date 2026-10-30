@@ -16,6 +16,29 @@ import { writeFakeCorral } from "./support/fake-corral.ts";
 import { nextEvent } from "./support/wait.ts";
 import { todoTool } from "../src/roles/common/todo.ts";
 import { defineCorralTool } from "../src/tools/define.ts";
+import { snapshotProgress } from "../src/ui/todo.ts";
+
+for (const role of ["worker", "pm"] as const) {
+  test(`${role} todo snapshot restores the canonical ledger through the read-only CLI`, async () => {
+    // Given a saved ledger in the bound worker run or PM container.
+    const work = mkdtempSync(join(tmpdir(), "corral-todo-snapshot-"));
+    try {
+      const progress = { revision: 7, spec_revision: "spec", phases: [] };
+      const identity = { store: "s", project: "demo", role, task: "T-1", run: "R1", generation: 2 };
+      const corral = writeFakeCorral(work);
+      corral.snapshot(role === "worker" ? { runs: [{ id: "R1", progress }] } : { container: { todo: progress } });
+      const client = new CorralClient({ corral: corral.path, root: work, identity,
+        hostCap: "h".repeat(64), sessionId: () => "resumed-session" });
+      // When a fresh host reads progress, without a model or a tool mutation.
+      const value = await client.todoSnapshot();
+      // Then it restores the ledger without sending a receipted operation.
+      expect(snapshotProgress(value, identity)).toEqual(progress);
+      expect(corral.calls()).toEqual([]);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+}
 
 const cases: readonly { role: Role; todo?: boolean }[] = [
   { role: "worker", todo: true }, { role: "pm", todo: true },

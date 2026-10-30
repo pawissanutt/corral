@@ -33,6 +33,7 @@ import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { corralRenderers } from "../ui/render.ts";
+import { installTodo } from "../ui/todo.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import type { LoadedModules } from "./modules.ts";
@@ -494,6 +495,9 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
+      if (this.loadout.includes("corral_todo")) {
+        installTodo(pi, this.options.identity, () => this.options.client.todoSnapshot());
+      }
     }
     for (const tool of this.localTools) pi.registerTool(tool);
     // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
