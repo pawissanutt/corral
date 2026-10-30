@@ -38,6 +38,7 @@ mod phase_inputs;
 use phase_inputs::Phases;
 mod recipients;
 use recipients::recipients;
+mod snapshot_heads;
 mod stopping;
 pub use handling::{attend, guard};
 pub(crate) use handling::{reconcile, reconcile_projected};
@@ -257,7 +258,12 @@ fn refresh_overflow(
     }
 }
 
-/// One fresh task listing. Receipt reads are bounded by the existing owner header.
+/// Hot active/owed board. Unrelated settled terminal tasks are not inputs.
+pub fn board_hot(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
+    Ok(snapshot_heads::snapshot(ctx, now)?.1)
+}
+
+/// Cold complete-output compatibility, including empty terminal rows.
 pub fn board(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
     Ok(board_snapshot(ctx, now, false)?.1)
 }

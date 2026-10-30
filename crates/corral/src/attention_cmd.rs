@@ -138,7 +138,12 @@ pub fn run(ctx: &Ctx, args: AttentionArgs) -> Result<()> {
         }
         return Ok(());
     }
-    let mut board = corral_ops::attention::board(ctx, jiff::Timestamp::now())?;
+    let now = jiff::Timestamp::now();
+    let mut board = if args.all {
+        corral_ops::attention::board(ctx, now)?
+    } else {
+        corral_ops::attention::board_hot(ctx, now)?
+    };
     board.tasks.retain(|task| {
         (args.all || !matches!(task.status, Status::Done | Status::Dropped))
             && args
