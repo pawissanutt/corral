@@ -30,6 +30,7 @@ mod effects_stat_tests;
 mod effects_tests;
 mod envelope;
 pub(crate) mod gate_queue;
+pub mod herdr_status;
 pub mod hooks;
 pub mod install;
 pub mod jobs;
