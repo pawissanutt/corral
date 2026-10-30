@@ -13,6 +13,7 @@ export interface BudgetOptions {
   readonly unbounded?: boolean;
   record(payload: Record<string, unknown>): Promise<BudgetReply>;
   cancel(): void;
+  onStop?(): void;
 }
 function integer(value: number): number {
   if (!Number.isSafeInteger(value) || value < 0) throw new Error("budget_unbounded: model/usage has no finite safe bound");
@@ -50,7 +51,9 @@ export class RunBudget {
     return limits === undefined || limits.max_tokens != null || limits.max_usd_nanos != null;
   }
   private stop() {
+    if (this.stopped) return;
     this.stopped = true;
+    this.options.onStop?.();
     for (const controller of this.active) controller.abort(new Error("budget_exhausted"));
     this.options.cancel();
   }
@@ -71,8 +74,11 @@ export class RunBudget {
       try {
         this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound, unbounded: this.options.unbounded === true });
         if (this.last.admitted !== true) {
-          this.stop();
-          throw new Error("budget_exhausted: reservation refused (remaining balance, uncertainty, unbounded transport or pricing gap); inspect budget state");
+          if (this.limited()) {
+            this.stop();
+            throw new Error("budget_exhausted: reservation refused (remaining balance, uncertainty, unbounded transport or pricing gap); inspect budget state");
+          }
+          throw new Error("budget_accounting_refused: unlimited reservation could not be recorded");
         }
         admitted = true;
         if (this.last.exhausted) this.stop();
@@ -99,11 +105,9 @@ export class RunBudget {
               }
               yield event;
             }
-          } catch (error) { if (self.limited()) self.stop(); throw error; }
-          finally { self.active.delete(controller); }
+          } finally { self.active.delete(controller); }
         })();
       } catch (error) {
-        if (this.limited()) this.stop();
         this.active.delete(controller);
         // Once admission has committed, even a local setup failure is conservatively uncertain.
         if (admitted) this.last = { ...this.last, uncertain: true };

@@ -271,6 +271,9 @@ export class HostSession {
         if (receipt.state !== "committed") throw new Error(`budget record refused: ${JSON.stringify(receipt.result)}`);
         return (receipt.result ?? {}) as Record<string, unknown>;
       },
+      onStop: () => {
+        if (this.open) this.report("budget_exhausted", { budget: this.budget.state() });
+      },
       cancel: () => { void this.cancel(this.currentTurn()); void this.auxiliary?.cancelAll(); },
     });
     this.roleContext = {
@@ -606,8 +609,7 @@ export class HostSession {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
-        if (message.includes("budget_exhausted")) this.report("budget_exhausted", { budget: this.budget.state() });
-        else this.providerError(providerErrorClass(message));
+        if (!message.includes("budget_exhausted") || !this.budget.state().stopped) this.providerError(providerErrorClass(message));
       }
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
@@ -624,6 +626,7 @@ export class HostSession {
     // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
     if (this.bound) this.checkpoint("start");
     this.report("turn_started", { origin });
+    if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
   }
 
   private turnEnded(aborted: boolean): void {
