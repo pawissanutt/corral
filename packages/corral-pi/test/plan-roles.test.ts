@@ -79,7 +79,8 @@ async function bind(role: "planner" | "plan_reviewer"): Promise<Bound> {
 }
 
 async function turn(bound: Bound, n: number, calls: { callId: string; name: string; arguments: Record<string, unknown> }[]) {
-  fixtureTransport().script([{ toolCalls: calls }, { text: "DONE" }]);
+  fixtureTransport().script([{ toolCalls: calls },
+    ...(calls.every((call) => call.name === "corral_plan_verdict") ? [] : [{ text: "DONE" }])]);
   const ended = nextEvent(bound.events, (event) => event.kind === "turn_ended" && event.turn === n);
   await bound.host.submit({ text: `Turn ${n}.`, busyPolicy: "prompt", idempotencyKey: `k${n}`, origin: "test" }, `rq${n}`);
   await ended;
