@@ -197,6 +197,11 @@ fn done_inner(
     let scanned = scan_artifacts(ctx, &task.id)?;
     let thumbnails = crate::capture_html_thumbnails(ctx, &task.id)?;
 
+    // Capture before the transition: a failed promotion leaves done retryable, and never
+    // returns an error after committing its success receipt. The provider keeps its files.
+    let mut transcript_run = run.clone();
+    transcript_run.ended = Some(corral_core::clock::now());
+    crate::transcripts::worker(ctx, &task.id, &transcript_run, false)?;
     let admission = crate::delivery::owner::done_admission(ctx, &task)?;
     let detail = json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "thumbnails": thumbnails, "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base });
     let mut receipt = None;

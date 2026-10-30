@@ -212,10 +212,8 @@ fn clean_listed(
     // Workspace debts name no pane: each stays with its own owner, outside the pane map.
     let mut debts: Vec<(usize, corral_core::CleanupPane)> = Vec::new();
     for (i, (task, head)) in owners.iter().enumerate() {
-        // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
-        if crate::agent::hooks::task_is_pi_native(task)
-            && let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task)
-        {
+        // Promote closed containers before retiring their runtime/panes. Provider files stay.
+        if let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task) {
             failed(ctx, &task.id, "agent-runtime", &error);
             warnings.push(format!("agent runtime: {error:#}"));
         }

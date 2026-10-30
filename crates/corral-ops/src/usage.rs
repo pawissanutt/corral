@@ -548,6 +548,18 @@ pub(crate) fn transcript_head(run: &corral_core::RunHead, store: &Store) -> Resu
     transcript_of(harness, (&run.worktree, run.started, run.ended), store)
 }
 
+pub(crate) fn has_transcript(run: &Run, store: &Store) -> bool {
+    matches!(run_harness(run, &store.config), "omo" | "omp" | "claude")
+}
+
+pub(crate) fn transcript_run(run: &Run, store: &Store) -> Result<Vec<u8>> {
+    transcript_of(
+        run_harness(run, &store.config),
+        (&run.worktree, run.started, run.ended),
+        store,
+    )
+}
+
 fn transcript_of(
     harness: &str,
     (worktree, started, ended): (&Path, Timestamp, Option<Timestamp>),
