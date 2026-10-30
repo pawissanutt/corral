@@ -43,14 +43,14 @@ pub(crate) struct Entry {
     pub target: PinTarget,
 }
 
-/// The store's pins resolved against `tasks` (an unreadable pins.toml shows as no pins).
-pub(crate) fn load(ctx: &Ctx, tasks: &[Task]) -> Vec<Entry> {
+/// Pins resolved against task and session artifact owners (unreadable pins.toml shows as no pins).
+pub(crate) fn load(ctx: &Ctx, owners: &[Task]) -> Vec<Entry> {
     ctx.store
         .pins()
         .unwrap_or_default()
         .into_iter()
         .map(|pin| {
-            let target = resolve_pin(&pin, tasks, ctx.store.dir());
+            let target = resolve_pin(&pin, owners, ctx.store.dir());
             Entry { pin, target }
         })
         .collect()
@@ -268,10 +268,10 @@ pub(crate) fn open(ctx: &Ctx, index: usize) -> Result<Opening> {
     let Some(pin) = pins.get(index) else {
         bail!("no pin #{} ({} pinned)", index + 1, pins.len());
     };
-    let tasks = ctx.store.list()?;
-    match resolve_pin(pin, &tasks, ctx.store.dir()) {
+    let owners = ctx.store.artifact_owners()?;
+    match resolve_pin(pin, &owners, ctx.store.dir()) {
         PinTarget::Task { id, .. } => {
-            let awaiting = tasks.iter().any(|t| t.id == id && t.awaiting_owner());
+            let awaiting = owners.iter().any(|t| t.id == id && t.awaiting_owner());
             Ok(if awaiting {
                 Opening::Action(Action::OpenReview(id))
             } else {

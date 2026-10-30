@@ -51,10 +51,10 @@ impl GalleryView {
     }
 
     fn load(&mut self, ctx: &Ctx) -> Result<()> {
-        let tasks = ctx.store.list()?;
+        let owners = ctx.store.artifact_owners()?;
         let mut pins = HashMap::new();
         for pin in ctx.store.pins()? {
-            match corral_core::resolve_pin(&pin, &tasks, ctx.store.dir()) {
+            match corral_core::resolve_pin(&pin, &owners, ctx.store.dir()) {
                 PinTarget::Artifact { artifact, .. } => {
                     pins.insert(artifact.path, pin.target);
                 }
