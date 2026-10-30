@@ -148,6 +148,15 @@ macro_rules! keyed_reads {
         fn has_open_agent_turn(&self, container: &ContainerRef, generation: u32) -> Result<bool> {
             self.$reads()?.has_open_agent_turn(container, generation)
         }
+        fn agent_turn_ended_at(
+            &self,
+            container: &ContainerRef,
+            generation: u32,
+            ended: Timestamp,
+        ) -> Result<Option<AgentTurn>> {
+            self.$reads()?
+                .agent_turn_ended_at(container, generation, ended)
+        }
         fn agent_generation(
             &self,
             container: &ContainerRef,

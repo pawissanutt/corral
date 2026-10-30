@@ -59,6 +59,9 @@ impl NativeRecord {
             Self::Generation(_) | Self::Report(_) => false,
             Self::Turn(t) => {
                 index.push(format!("generation:{}", t.generation));
+                if let Some(ended) = t.ended {
+                    index.push(format!("ended:{}:{ended}", t.generation));
+                }
                 t.ended.is_none()
             }
             Self::Wake(w) => matches!(w.state, WakeState::Armed | WakeState::PendingStart),
