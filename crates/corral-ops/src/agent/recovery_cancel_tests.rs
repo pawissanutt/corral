@@ -55,8 +55,14 @@ fn consumers(root: &Path, id: &str) {
     let now = jiff::Timestamp::now();
     crate::reviewer::reconcile_review_at(&ctx, id, now, &inventory()).unwrap();
     crate::agent::hooks::sync::task(&ctx, &ctx.store.get(id).unwrap(), now).unwrap();
-    let task = ctx.store.get(id).unwrap();
-    crate::agent::hooks::stall::advance_agent(&ctx, &task, &task.runs[0], now).unwrap();
+    let task = ctx.store.head(id).unwrap();
+    crate::agent::hooks::stall::advance_agent(
+        &ctx,
+        &task,
+        task.current_run.as_deref().unwrap(),
+        now,
+    )
+    .unwrap();
 }
 
 /// The host's reports of its cancelled turn 1, failed on `provider` first when given, with every

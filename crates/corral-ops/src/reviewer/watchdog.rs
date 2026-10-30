@@ -205,7 +205,7 @@ pub(crate) fn reconcile_review_sampled_at(
         let run_head = corral_core::RunHead::of(run)?;
         match crate::provider_stall::advance_reviewer(
             ctx,
-            id,
+            &head,
             child,
             review.reviewer == "pm",
             pane_id,
