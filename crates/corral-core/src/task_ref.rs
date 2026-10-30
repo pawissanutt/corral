@@ -296,6 +296,10 @@ macro_rules! head_fields {
             $(fn $name(&self) -> &$ty { &self.$name })*
         }
 
+        impl TaskFieldsRef for TaskHeadFields {
+            $(fn $name(&self) -> &$ty { &self.$name })*
+        }
+
         impl TaskFieldsRef for TaskHead {
             $(fn $name(&self) -> &$ty { &self.task.$name })*
         }

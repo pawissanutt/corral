@@ -2,7 +2,7 @@ use corral_core::agent::{AgentQuestion, HostHealth, QuestionState};
 use corral_core::attention::*;
 use corral_core::{
     Accept, AutoStage, GateResult, OperatingActionKind as Action, Run, RunOutcome, Status, Task,
-    TaskFieldsRef, Verdict,
+    TaskFieldsRef, TaskHeadFields, Verdict,
 };
 use jiff::Timestamp;
 
@@ -77,7 +77,9 @@ pub(super) fn conditions(
     now: Timestamp,
     assessment: &mut Assessment,
 ) {
-    conditions_with_runs(task, n, now, assessment, |out| {
+    let fields = corral_core::task_head_fields(task);
+    let phases = Phases::full(task);
+    conditions_with_runs(&fields, &phases, n, now, assessment, |out| {
         if let Some(run) = task.current_run() {
             if run.outcome.is_none() {
                 run_conditions(task, run, now, out, false);
@@ -94,7 +96,8 @@ pub(super) fn conditions(
 }
 
 pub(super) fn conditions_with_runs(
-    task: &Task,
+    task: &TaskHeadFields,
+    phases: &Phases,
     n: &Neighborhood<'_>,
     now: Timestamp,
     assessment: &mut Assessment,
@@ -113,7 +116,6 @@ pub(super) fn conditions_with_runs(
         return;
     }
     runs(out);
-    let phases = Phases::full(task);
     if let Some(infra) = &task.infra_wait {
         let held = infra.held_at.is_some();
         let mut condition = row(
@@ -177,10 +179,10 @@ pub(super) fn conditions_with_runs(
             out.push(condition);
         }
     }
-    if plan(task, &phases, n, now, assessment) {
+    if plan(task, phases, n, now, assessment) {
         return;
     }
-    if aggregate(task, &phases, n, now, assessment) {
+    if aggregate(task, phases, n, now, assessment) {
         return;
     }
     if let Some(launch) = &task.launch {
@@ -223,7 +225,7 @@ pub(super) fn conditions_with_runs(
         }
     }
     match task.status {
-        Status::Ready | Status::Backlog => ready(task, &phases, n, now, assessment),
+        Status::Ready | Status::Backlog => ready(task, phases, n, now, assessment),
         Status::Running | Status::NeedsMe => {
             if let Some(run) = phases.run.as_ref().filter(|run| run.outcome.is_none())
                 && !(run.lost && (n.inventory_known || task.status == Status::NeedsMe))
@@ -245,7 +247,7 @@ pub(super) fn conditions_with_runs(
                 ));
             }
             if task.status == Status::NeedsMe {
-                escalation(task, now, &mut assessment.conditions);
+                escalation(task, phases.run.as_ref(), now, &mut assessment.conditions);
                 if assessment.conditions.is_empty() {
                     let mut condition = keyed_status(
                         task,
@@ -262,7 +264,7 @@ pub(super) fn conditions_with_runs(
                 }
             }
         }
-        Status::Review => review(task, &phases, n, now, assessment),
+        Status::Review => review(task, phases, n, now, assessment),
         Status::Idea | Status::Done | Status::Dropped => {}
     }
 }
@@ -395,9 +397,13 @@ mod run_tests;
 pub(super) use run_input::conditions_ref as run_conditions_ref;
 use run_input::run_conditions;
 
-pub(super) fn escalation(task: &Task, now: Timestamp, out: &mut Vec<Condition>) {
-    let Some(stage) = task
-        .current_run()
+pub(super) fn escalation(
+    task: &TaskHeadFields,
+    run: Option<&super::phase_inputs::RunPhase>,
+    now: Timestamp,
+    out: &mut Vec<Condition>,
+) {
+    let Some(stage) = run
         .and_then(|run| run.autopilot.as_ref())
         .filter(|stage| stage.stage == AutoStage::Escalated)
     else {
@@ -430,7 +436,7 @@ pub(super) fn escalation(task: &Task, now: Timestamp, out: &mut Vec<Condition>) 
         .resume
         .push(check("escalation_recovered", &task.id, None, false));
     if infra {
-        let gate = task.current_run().and_then(|run| run.gate.as_ref());
+        let gate = run.and_then(|run| run.gate.as_ref());
         condition.next_action.description = format!(
             "Inspect infrastructure and use the T-377 round-free recovery path when installed; retained gate receipt: {}",
             gate.map_or_else(
@@ -474,7 +480,13 @@ pub(super) fn authority(
     Some(condition)
 }
 
-fn review(task: &Task, phases: &Phases, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
+fn review(
+    task: &TaskHeadFields,
+    phases: &Phases,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) {
     let Some(run) = phases.run.as_ref() else {
         return;
     };
