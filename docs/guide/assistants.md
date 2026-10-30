@@ -96,8 +96,12 @@ assistant plan add.
 
 The role's core tools are read, grep, find, ls and bash, plus `corral_todo` while `todo` is on.
 The host exports `CORRAL_ASSISTANT=A-<n>` and `CORRAL_ASSISTANT_GENERATION` into the session's
-shell, so its `corral` commands can be attributed to the session. There is no edit or write
-tool until the scratch-root path guard lands. The packaged role contract tells the model to
+shell, so its `corral` commands can be attributed to the session. The edit and write tools
+reach only the session's recorded scratch worktrees, `.corral/artifacts/assistant/A-<n>/` and
+the system temp directory. A fixed host path guard resolves each path as Pi does (`@`, `~`,
+relative to the workspace, through symlinks) and refuses anything else, such as the main
+checkout or a task worktree, before it runs, nested calls included; no preset or setting
+widens it. A scratch created during the session counts at once. The packaged role contract tells the model to
 read the board through the CLI, file ideas and comments only on the owner's request, and act
 on clear owner instructions only.
 
@@ -207,8 +211,8 @@ An assistant makes scratch worktrees from its shell for spikes and co-work. `new
 `<repo>/.worktrees/A-<n>-<slug>` on branch `corral/A-<n>/<slug>` from `--base` (default:
 the project's `base`, else the repository's current branch) and records the path, branch,
 base commit, creation time and `kind: spike` in the session record. The slug defaults to
-`scratch-<k>`. Creation refuses `scratch_cap` when 8 scratch worktrees already exist in the
-workspace, `disk_low` when the resource probe reports a disk below
+`scratch-<k>`. Creation refuses `scratch_cap` when `assistant.scratch_max` (default 8) scratch
+worktrees already exist in the workspace, `disk_low` when the resource probe reports a disk below
 `resources.min_disk_free`, and `assistant_ended` for an ended session. A spike never lands
 by itself; promotion files a task instead.
 
@@ -231,8 +235,8 @@ scratch, its branch and its record stay unchanged. A scratch with nothing beyond
 refuses `scratch_empty`.
 
 **GC** is an owner command, refused from an assistant shell. A scratch is eligible once its
-session has ended and it has been idle for 7 days since the later of the session end and its
-newest commit. Corral saves its work as for discard before removing the worktree and branch.
+session has ended and it has been idle for `assistant.scratch_idle_days` (default 7) days
+since the later of the session end and its newest commit. Corral saves its work as for discard before removing the worktree and branch.
 It skips, with the reason, any scratch that a task run or co-work finish holds, that a
 process or herdr pane uses as its current directory, or whose repository is landing.
 `--dry-run` measures and lists without changing anything; `--yes` collects and records the
@@ -245,6 +249,12 @@ dependency and build trees such as `node_modules`, `target` and `.venv` separate
 marks a lower bound when the walk reached its entry limit. Measuring runs in stats and GC,
 never in sync. `corral doctor` warns about `.worktrees/A-<n>-*` directories that no
 session record lists; corral never removes those itself.
+
+```toml
+[assistant]
+scratch_max = 8         # scratch worktrees across all sessions
+scratch_idle_days = 7   # days an ended session's scratch stays idle before GC
+```
 
 ## Shell entry: reads, filing and refusals
 

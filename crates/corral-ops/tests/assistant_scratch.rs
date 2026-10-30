@@ -314,14 +314,15 @@ fn c10_promote_files_a_backlog_task_with_the_diff_and_leaves_the_scratch() {
 
 #[test]
 fn creation_refuses_the_cap_low_disk_and_ended_sessions() {
-    let fx = Fixture::new();
-    for n in 0..scratch::SCRATCH_MAX {
+    let mut fx = Fixture::new();
+    fx.ctx.store.config.assistant.scratch_max = 3;
+    for n in 0..3 {
         let session = if n % 2 == 0 { "A-1" } else { "A-2" };
         scratch::create(&fx.ctx, session, "corral", None, None).unwrap();
     }
-    let error = scratch::create(&fx.ctx, "A-1", "corral", Some("ninth"), None).unwrap_err();
+    let error = scratch::create(&fx.ctx, "A-1", "corral", Some("fourth"), None).unwrap_err();
     assert!(error.to_string().starts_with("scratch_cap"), "{error}");
-    assert!(!fx.root.join(".worktrees/A-1-ninth").exists());
+    assert!(!fx.root.join(".worktrees/A-1-fourth").exists());
     // Disk below resources.min_disk_free refuses before any worktree exists.
     let fresh = Fixture::new();
     let low = Ctx {

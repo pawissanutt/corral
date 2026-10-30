@@ -21,6 +21,10 @@ pub struct AssistantCfg {
     pub agent: Option<String>,
     /// Live assistant hosts a plain `corral pi` may reach before it needs `--over-cap`.
     pub max_live: u32,
+    /// Scratch worktrees the workspace may hold across all sessions.
+    pub scratch_max: u32,
+    /// Days an ended session's scratch stays idle before `corral assistant scratch gc` collects it.
+    pub scratch_idle_days: u32,
 }
 
 impl Default for AssistantCfg {
@@ -28,6 +32,8 @@ impl Default for AssistantCfg {
         Self {
             agent: None,
             max_live: 4,
+            scratch_max: 8,
+            scratch_idle_days: 7,
         }
     }
 }
