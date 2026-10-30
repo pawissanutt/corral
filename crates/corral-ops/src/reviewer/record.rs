@@ -178,13 +178,11 @@ pub(super) fn record_verdict(
         }
         Ok(())
     })?;
-    // Only signal after the verdict is durable. If the caller is inside the reviewer,
-    // its ancestors are protected here and the sync sweep will retry independently.
-    let saved = ctx.store.get(&task.id)?;
-    crate::cleanup::reap_closed_reviews(ctx, &saved);
     if report.is_some() {
+        // The agent effect emits the verdict event later; sync reaps after that event.
         return Ok((record, receipt));
     }
+    let saved = ctx.store.get(&task.id)?;
     if let Some(run) = saved.current_run() {
         crate::watch::capture_review(ctx, &saved, run);
     }
@@ -193,5 +191,8 @@ pub(super) fn record_verdict(
         "verdict",
         json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
     )?;
+    // Only signal after both verdict state and event are durable. The caller and its
+    // ancestors remain protected; a subsequent sync reaps any surviving reviewer.
+    crate::cleanup::reap_closed_reviews(ctx, &saved);
     Ok((record, None))
 }

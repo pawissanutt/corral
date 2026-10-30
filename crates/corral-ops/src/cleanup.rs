@@ -48,8 +48,28 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
 }
 
 pub(crate) fn reap_closed_reviews(ctx: &Ctx, task: &Task) {
+    // The verdict state precedes its event. A concurrent sync must not terminate the
+    // reviewer while its verdict command is still writing that event.
+    let events = match ctx.store.events_shared() {
+        Ok(events) => events,
+        Err(error) => {
+            failed(ctx, task, "review event inventory", &error);
+            return;
+        }
+    };
     for run in &task.runs {
         for child in run.review_runs.iter().filter(|child| child.ended.is_some()) {
+            if let Some(review) = child.review.as_ref().filter(|r| r.verdict.is_some())
+                && !events.iter().any(|event| {
+                    event.task.as_deref() == Some(&task.id)
+                        && event.kind == "verdict"
+                        && event.detail["run"].as_str() == Some(&run.id)
+                        && event.detail["reviewer"].as_str() == Some(&review.reviewer)
+                        && event.ts >= review.at
+                })
+            {
+                continue;
+            }
             if let Err(error) = crate::cleanup_worktree::reap_review(ctx, task, run, child) {
                 failed(
                     ctx,
