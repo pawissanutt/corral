@@ -88,7 +88,7 @@ pub struct RewindRecord {
     pub before: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_ref: Option<String>,
-    /// The generation opened on the checkpoint's cursor.
+    /// The first generation opened on the checkpoint's cursor, recorded before its host can run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
     /// When a generation's host was seen bound on a branch from `leaf`; until then every

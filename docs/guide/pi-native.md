@@ -581,16 +581,23 @@ worktree and the Pi session back to the start of that turn:
 3. `fenced`: the fenced generation's background jobs are reaped. `saved`: the worktree as the
    fence left it is committed under `refs/worktree/corral/rewind/<run>/<rewind>`.
    `restoring`: removals run first, deepest path first, then writes, so a file and a directory
-   can replace each other. Each planned path is checked immediately before it is changed: one
-   still as saved is written back (or removed, with any parent directories it leaves empty), one
-   already restored is skipped, and one that changed since the save is left as it is and listed
-   as `kept`, as is a directory that still holds something else. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
+   can replace each other. Each planned path is checked before it is changed: one already
+   restored is skipped, and one that changed since the save is left as it is and listed as
+   `kept`, as is a directory that still holds something else. One still as saved is replaced
+   without a window for an owner edit: its replacement is materialized first, then the path is
+   atomically moved aside and what was moved is compared with the save. Only then is the
+   replacement linked in, and never over a file that appeared meanwhile (a removal also removes
+   the parent directories it leaves empty). A path edited at that moment is put back and listed
+   `kept`, and every displaced byte is kept under the worktree's git directory
+   (`corral-rewind/`), so nothing an owner saved is lost. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
    restored paths' index entries are reset to it. `restored`: the next generation's launch
    continues the same Pi session file from the checkpoint's entry (Pi branches there; the
-   abandoned turns stay in the file). `launched`: that generation is recorded on the rewind. The cursor stays owed until
+   abandoned turns stay in the file); the generation it opens is recorded on the rewind before its
+   host can run. `launched`: the rewind is closed with that generation. The cursor stays owed until
    the session file shows a host of that generation or a later one bound on a branch from the
    checkpoint's entry (`applied`): a relaunch whose host died first, including a plain
-   `corral agent resume`, is given the same cursor again.
+   `corral agent resume`, is given the same cursor again, and a rewind continued after its
+   controller stopped before `launched` honors the same evidence instead of replaying the cursor.
    Each stage commits before the next starts.
 
 An interrupted rewind leaves its stage recorded, and `corral agent resume` refuses
