@@ -680,7 +680,17 @@ fn owner_acceptance_requires_the_custom_plan_receipt_to_still_validate() {
         if let Some(change) = change {
             drift(&mut ctx, change);
         }
-        let owner = owner_accept(&ctx, &id);
+        let plan = ctx.store.get(&id).unwrap().plans.last().unwrap().id.clone();
+        let owner = crate::plan_verdict(
+            &ctx,
+            &id,
+            &crate::PlanVerdict {
+                plan: &plan,
+                attempt: None,
+                verdict: corral_core::Verdict::Approve,
+                notes: "Owner accepts the plan",
+            },
+        );
         let approval = ctx
             .store
             .get(&id)
@@ -691,14 +701,15 @@ fn owner_acceptance_requires_the_custom_plan_receipt_to_still_validate() {
             .approval
             .clone();
         if change.is_none() {
-            assert_eq!(owner.verdict, Some(corral_core::Verdict::Approve));
+            assert_eq!(owner.unwrap().verdict, Some(corral_core::Verdict::Approve));
             assert_eq!(approval.unwrap().by, "owner");
             dispatch_approval(&ctx, &id).unwrap();
         } else {
-            assert_eq!(
-                owner.verdict,
-                Some(corral_core::Verdict::Escalate),
-                "{change:?}"
+            assert!(
+                owner
+                    .unwrap_err()
+                    .to_string()
+                    .contains("independent review")
             );
             assert!(approval.is_none(), "{change:?}");
             assert!(dispatch_approval(&ctx, &id).is_err(), "{change:?}");
