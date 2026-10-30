@@ -353,6 +353,7 @@ pub(super) fn transact(
     let mut posted: Option<Message> = None;
     let mut raised: Option<&'static str> = None;
     let mut notice = None;
+    let mut transitioned = false;
     ctx.store.try_update(parsed.task(), |task| {
         if let Some(pm) = actor.pm_request() {
             if let Some(stored) = pm_replay(ctx, task, pm.origin)? {
@@ -378,6 +379,7 @@ pub(super) fn transact(
             return Ok(false);
         };
         let mut question = change.question;
+        transitioned = question.revision != current.revision;
         super::bound_triage(&ctx.store, &mut question)?;
         let message = match (&inbox, change.message) {
             (Some(inbox), Some((kind, body))) => {
@@ -449,6 +451,10 @@ pub(super) fn transact(
     }
     if applied.is_some() {
         super::events::reconcile_question(&ctx.store, key)?;
+    }
+    // The asking host's herdr projection follows escalations and cancellations it did not make.
+    if transitioned && matches!(applied, Some(Applied::Fresh { .. })) {
+        crate::agent::herdr_status::push_after_transition(ctx, &container);
     }
     if let (Some(reason), Some(Applied::Fresh { outcome, .. })) = (raised, &applied) {
         crate::obligations::transition_with_notice(

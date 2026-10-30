@@ -213,6 +213,10 @@ pub struct GenerationBound {
     pub start_time: String,
     pub request_id: String,
     pub at: Timestamp,
+    /// The herdr sequence epoch hello allocated: the host reports from `epoch << 20`, and corral
+    /// releases a lost generation at the end of that range. Absent before T-605.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_seq_epoch: Option<u64>,
 }
 
 /// A fence is permanent: a fenced generation is never unfenced.

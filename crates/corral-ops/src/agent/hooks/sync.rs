@@ -233,6 +233,16 @@ fn probe_hosts(ctx: &Ctx, task: &Task) {
         }
         probe_one(ctx, &recipient, &container, state);
     }
+    // Planner and plan-reviewer hosts are probed, recorded lost and released the same way.
+    for container in super::super::ops::planning::containers(task) {
+        if container_closure(task, &container).is_some() {
+            continue;
+        }
+        let state = container_state(task, &container);
+        if let (Some(state), Some(recipient)) = (state, crate::questions::recipient(&container)) {
+            probe_one(ctx, &recipient, &container, state);
+        }
+    }
 }
 
 /// A worker or reviewer host that exits leaves its pane wrapper's launch-exit receipt. For a
@@ -298,15 +308,36 @@ fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: 
     }
 }
 
-/// Once per sync pass: the PM wake outbox, only while a Pi-native PM record exists.
+/// Once per sync pass: the PM wake outbox and the PM's host, while a Pi-native PM record exists,
+/// and the host of every open assistant session.
 pub fn pass(ctx: &Ctx) -> Result<()> {
-    if !paths::pm_state_path(&ctx.store).exists() {
-        return Ok(());
+    if paths::pm_state_path(&ctx.store).exists() {
+        consulted("sync");
+        super::super::pm_wake::repost(ctx)?;
+        if let Some(pm) = pm_state::load(&ctx.store)? {
+            probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
+        }
     }
-    consulted("sync");
-    super::super::pm_wake::repost(ctx)?;
-    if let Some(pm) = pm_state::load(&ctx.store)? {
-        probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
+    for session in ctx.store.list_assistants()? {
+        if session.ended.is_some() {
+            continue;
+        }
+        let container = ContainerRef::Assistant {
+            session: session.id.clone(),
+        };
+        match ctx.store.get_assistant_container(&session.id) {
+            Ok(assistant) => {
+                let recipient = Recipient::Assistant {
+                    session: session.id,
+                };
+                probe_one(ctx, &recipient, &container, &assistant.state);
+            }
+            Err(error) => crate::messages::report(
+                None,
+                "agent liveness",
+                format!("reading {}: {error:#}", container.key()),
+            ),
+        }
     }
     Ok(())
 }
