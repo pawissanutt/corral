@@ -81,33 +81,36 @@ test("explicit lost-host resume uses changed LSP settings and retains the prior 
     console.error(run(["herdr", "--session", "corral-test", "pane", "read", show().runs.at(-1).herdr.pane_id]));
     throw error;
   }
-  const call = async (generation: number) => {
+  // A fresh worker session starts its first turn with the run prompt (roles/worker kickoff) only
+  // once InteractiveMode binds the role's extension, after hello, so agent_bound and a bound hello
+  // can precede that turn by any time under load. Generation 2 resumes a session that already has
+  // messages, so it has no kickoff, and its recovery notice reaches it only through a sync.
+  const call = async (generation: number, kickoffTurns: number) => {
     const dir = generationDir(workspace, "T-001", "R1", generation);
     const cap = readFileSync(join(dir, "ctl.cap"), "utf8");
     const client = await connect(join(dir, "host.sock"));
     await within((async () => { for (;;) {
       if ((await client.request(frame(cap, generation, "hello", {}))).result?.bound === true) return;
     } })(), 30_000, "bound host");
-    // Drain any kickoff turn before scripting; subscribe to the exact next turn before submission.
-    let state = await client.request(frame(cap, generation, "get_state", {}));
-    const turn = state.result?.turn as { current: number; open: boolean };
-    if (turn.open) {
-      await events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation && e.detail?.turn === turn.current,
+    if (kickoffTurns > 0) {
+      await events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation && e.detail?.turn === kickoffTurns,
         90_000, `kickoff turn ${generation}`);
     }
+    // Only an idle host starts the lookup as its own turn: a follow-up queued into an open turn
+    // runs inside that turn, so no later turn would end.
+    const state = await client.request(frame(cap, generation, "get_state", {}));
+    expect(state.result?.turn).toEqual({ current: kickoffTurns, open: false });
     const scripted = await client.request(frame(cap, generation, "submit_input", { text: "/fixture-lsp", busy_policy: "follow_up", idempotency_key: `script-${generation}`, origin: "test" }));
     expect(scripted.result?.disposition).toBe("handled");
-    state = await client.request(frame(cap, generation, "get_state", {}));
-    const next = (state.result?.turn as { current: number }).current + 1;
+    const next = kickoffTurns + 1;
     const end = events!.next(e => e.kind === "agent_turn_ended" && e.task === "T-001" && e.detail?.generation === generation && e.detail?.turn === next,
       90_000, `LSP turn ${generation}/${next}`);
     const submitted = await client.request(frame(cap, generation, "submit_input", { text: "Run the lookup.", busy_policy: "follow_up", idempotency_key: `query-${generation}`, origin: "test" }));
-    expect(["started", "queued"]).toContain(submitted.result?.disposition);
-    if (submitted.result?.disposition === "started") expect(submitted.result?.turn).toBe(next);
+    expect([submitted.result?.disposition, submitted.result?.turn]).toEqual(["started", next]);
     await end;
     client.close();
   };
-  await call(1);
+  await call(1, 1);
   const old = show().runs.at(-1).agent_host.generations[0];
   const originalSnapshot = structuredClone(old.capabilities);
   expect(readFileSync(old.bound.session_file, "utf8")).toContain('\\"server\\":\\"first\\"');
@@ -124,7 +127,7 @@ test("explicit lost-host resume uses changed LSP settings and retains the prior 
     90_000, "second bind");
   expect(JSON.parse(cli("agent", "resume", "T-001")).generation).toBe(2);
   await secondBound;
-  await call(2);
+  await call(2, 0);
   const [previous, current] = show().runs.at(-1).agent_host.generations;
   expect(previous.capabilities).toEqual(originalSnapshot);
   expect(current.capabilities.digest).not.toBe(originalSnapshot.digest);
