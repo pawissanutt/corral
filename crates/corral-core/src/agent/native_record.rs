@@ -64,8 +64,19 @@ impl NativeRecord {
                 }
                 t.ended.is_none()
             }
-            Self::Wake(w) => matches!(w.state, WakeState::Armed | WakeState::PendingStart),
+            Self::Wake(w) => {
+                let active = matches!(w.state, WakeState::Armed | WakeState::PendingStart);
+                if active {
+                    index.push("wake:active".into());
+                }
+                active
+            }
             Self::Receipt(r) => {
+                if r.result["queued"] == true
+                    && let Some(effect) = &r.effect
+                {
+                    index.push(format!("queued:effect:{}", effect.reference));
+                }
                 if r.op == "gate" && r.state == ReceiptState::Queued {
                     index.push("gate:queued".into());
                 }

@@ -2,6 +2,53 @@
 use super::{AgentRunState, ContainerRef};
 use crate::{NativeRecordCounts, Task};
 
+pub(crate) fn active_worker_wakes(task: &Task) -> Vec<(ContainerRef, super::WakeSubscription)> {
+    task.runs
+        .iter()
+        .flat_map(|run| {
+            run.agent_host.iter().flat_map(move |state| {
+                state
+                    .wakes
+                    .iter()
+                    .filter(|wake| {
+                        matches!(
+                            wake.state,
+                            super::WakeState::Armed | super::WakeState::PendingStart
+                        )
+                    })
+                    .cloned()
+                    .map(move |wake| {
+                        (
+                            ContainerRef::Worker {
+                                task: task.id.clone(),
+                                run: run.id.clone(),
+                            },
+                            wake,
+                        )
+                    })
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn worker_queued_effect_receipt(
+    task: &Task,
+    reference: &str,
+) -> Option<super::RequestReceipt> {
+    task.runs
+        .iter()
+        .filter_map(|run| run.agent_host.as_deref())
+        .flat_map(|state| &state.receipts)
+        .find(|receipt| {
+            receipt
+                .effect
+                .as_ref()
+                .is_some_and(|effect| effect.reference == reference)
+                && receipt.result["queued"] == true
+        })
+        .cloned()
+}
+
 fn owes(native: bool, settled: Option<jiff::Timestamp>, host: Option<&AgentRunState>) -> bool {
     native
         && (settled.is_none()

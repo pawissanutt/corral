@@ -122,6 +122,12 @@ macro_rules! keyed_reads {
         fn inbox_head(&self, recipient: &Recipient) -> Result<Option<InboxHead>> {
             self.$reads()?.inbox_head(recipient)
         }
+        fn active_worker_wakes(&self) -> Result<Vec<(ContainerRef, WakeSubscription)>> {
+            self.$reads()?.active_worker_wakes()
+        }
+        fn worker_queued_effect_receipt(&self, reference: &str) -> Result<Option<RequestReceipt>> {
+            self.$reads()?.worker_queued_effect_receipt(reference)
+        }
         fn unfinished_native_containers(&self) -> Result<Vec<ContainerRef>> {
             self.$reads()?.unfinished_native_containers()
         }
