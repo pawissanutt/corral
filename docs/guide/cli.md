@@ -104,6 +104,7 @@ Commands:
   show     Show a session, its durable container and usage
   end      End a session (stopping a running host), keeping its record and transcript references
   summary  Replace a session's Markdown summary from a UTF-8 file
+  scratch  Scratch worktrees for spikes and co-work
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -186,6 +187,109 @@ Arguments:
 Options:
       --file <FILE>  
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral assistant scratch`
+
+```text
+Scratch worktrees for spikes and co-work
+
+Usage: corral assistant scratch [OPTIONS] <COMMAND>
+
+Commands:
+  new      Create a scratch worktree at <repo>/.worktrees/A-<n>-<slug> on corral/A-<n>/<slug>
+  list     List scratch worktrees (all sessions for the owner unless --session)
+  discard  Remove a scratch and its branch, saving any work as a session diff artifact first
+  promote  File a Backlog task with the scratch diff attached; the scratch stays unchanged
+  gc       Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant scratch new`
+
+```text
+Create a scratch worktree at <repo>/.worktrees/A-<n>-<slug> on corral/A-<n>/<slug>
+
+Usage: corral assistant scratch new [OPTIONS] --project <PROJECT>
+
+Options:
+  -p, --project <PROJECT>  
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --slug <SLUG>        Lowercase letters, digits and hyphens; default scratch-<k>
+      --base <BASE>        Ref to branch from; default the project's base, else its current branch
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch list`
+
+```text
+List scratch worktrees (all sessions for the owner unless --session)
+
+Usage: corral assistant scratch list [OPTIONS]
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch discard`
+
+```text
+Remove a scratch and its branch, saving any work as a session diff artifact first
+
+Usage: corral assistant scratch discard [OPTIONS] <SLUG>
+
+Arguments:
+  <SLUG>  
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch promote`
+
+```text
+File a Backlog task with the scratch diff attached; the scratch stays unchanged
+
+Usage: corral assistant scratch promote [OPTIONS] --title <TITLE> <SLUG>
+
+Arguments:
+  <SLUG>  
+
+Options:
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --title <TITLE>          
+  -p, --project <PROJECT>      Project for the task; default the scratch's project
+      --body-file <BODY_FILE>  
+      --session <SESSION>      
+      --json                   
+  -h, --help                   Print help
+```
+
+#### `corral assistant scratch gc`
+
+```text
+Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+
+Usage: corral assistant scratch gc [OPTIONS]
+
+Options:
+      --dry-run      List what would be collected without changing anything
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --yes          Collect; required for a real run
       --json         
   -h, --help         Print help
 ```
