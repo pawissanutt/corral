@@ -109,7 +109,18 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         at: Timestamp::now(),
     };
     let key = container.key();
+    // The host's herdr sequence range starts here (`agent::herdr_status`).
+    let epoch = bound.at.as_millisecond();
     receipts::commit(ctx, &admitted, move |state, _| {
+        // A resumed host projects its still-pending questions from the start.
+        let questions: Vec<_> = state
+            .questions
+            .iter()
+            .filter(|q| q.recorded_pending())
+            .map(
+                |q| json!({"key": q.key, "kind": q.kind, "blocking": q.blocking, "state": q.state}),
+            )
+            .collect();
         let generation = state
             .generation_mut(n)
             .context("the generation disappeared")?;
@@ -128,6 +139,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 "generation": n, "container": key, "role": role.as_str(),
                 "ops": AgentOp::implemented_for(role).into_iter()
                     .filter(|op| *op != "todo" || todo).collect::<Vec<_>>(),
+                "herdr_seq_epoch_ms": epoch, "questions": questions,
             }),
             effect: Some(ReceiptEffect {
                 kind: "generation_bound".into(),

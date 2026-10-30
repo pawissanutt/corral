@@ -263,7 +263,9 @@ fn consume_exit(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> R
             status.trim()
         ),
     };
-    super::super::bridge::liveness::record(&ctx.store, container, &loss)?;
+    if super::super::bridge::liveness::record(&ctx.store, container, &loss)? {
+        super::super::herdr_status::release_after_loss(ctx, container, generation);
+    }
     match std::fs::remove_file(&receipt) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -277,13 +279,22 @@ fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: 
     }
     consulted("sync");
     let probed = super::super::bridge::liveness::probe(&ctx.store, recipient, container, state)
-        .and_then(|probe| super::super::bridge::liveness::record(&ctx.store, container, &probe));
-    if let Err(error) = probed {
-        crate::messages::report(
+        .and_then(|probe| {
+            let recorded = super::super::bridge::liveness::record(&ctx.store, container, &probe)?;
+            Ok((recorded, probe))
+        });
+    match probed {
+        Ok((true, Probe::Lost { generation, .. })) => {
+            if let Some(lost) = state.generation(generation) {
+                super::super::herdr_status::release_after_loss(ctx, container, lost);
+            }
+        }
+        Ok(_) => {}
+        Err(error) => crate::messages::report(
             container.task(),
             "agent liveness",
             format!("probing {} failed: {error:#}", container.key()),
-        );
+        ),
     }
 }
 
