@@ -8,8 +8,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use corral_core::assistant::{AssistantLanding, AssistantScratch, validate_id};
 use corral_core::{
-    ArtifactKind, Cowork, CoworkReview, GateRules, Origin, Run, RunOutcome, Status, Task, TaskKind,
-    TaskSize, Usage,
+    ArtifactKind, Cowork, CoworkReview, GateRules, Origin, Reviewer, Run, RunOutcome, Status, Task,
+    TaskKind, TaskSize, Usage,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -367,13 +367,8 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
     )?;
     snapshot_diff(ctx, &task.id, &scratch.path, &base_sha)?;
     let gate = gate(ctx, &task.id);
-    let reviewer = (review == CoworkReview::Required).then(|| match gate.as_str() {
-        "pass" | "none" => match crate::review_run(ctx, &task.id, None) {
-            Ok(record) => record.reviewer,
-            Err(error) => format!("not started: {error:#}; run `corral review-run {}`", task.id),
-        },
-        _ => format!("not started: the gate did not pass; fix it in the scratch, then `corral gate {0}` and `corral review-run {0}`", task.id),
-    });
+    let reviewer =
+        (review == CoworkReview::Required).then(|| required_review(ctx, &task.id, &gate));
     Ok(Finished {
         status: ctx.store.get(&task.id)?.status,
         task: task.id,
@@ -397,6 +392,31 @@ fn snapshot_diff(ctx: &Ctx, task: &str, worktree: &Path, base: &str) -> Result<(
     let title = format!("Final diff +{} \u{2212}{}", stat.added, stat.removed);
     crate::artifacts::add_artifact(ctx, task, &file, Some(ArtifactKind::Diff), Some(&title))?;
     Ok(())
+}
+
+/// Starts the normal reviewer after a passing gate, or says what the owner runs instead. Approval
+/// waits for an approving verdict either way, also when no reviewer resolves.
+fn required_review(ctx: &Ctx, id: &str, gate: &str) -> String {
+    if !matches!(gate, "pass" | "none") {
+        return format!(
+            "not started: the gate did not pass; fix it in the scratch, then `corral gate {id}` and `corral review-run {id}`"
+        );
+    }
+    let policy = ctx
+        .store
+        .get(id)
+        .and_then(|task| crate::verification::policy(ctx, &task));
+    if policy.is_ok_and(|policy| policy.reviewer == Reviewer::None) {
+        return format!(
+            "not started: no reviewer resolves for {id}; run `corral review-run {id} --reviewer <profile>`; approval waits for its approving verdict"
+        );
+    }
+    match crate::review_run(ctx, id, None) {
+        Ok(record) => record.reviewer,
+        Err(error) => format!(
+            "not started: {error:#}; run `corral review-run {id}`; approval waits for its approving verdict"
+        ),
+    }
 }
 
 /// Runs the configured gate to its end. The task exists either way, so a gate that cannot run
