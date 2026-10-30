@@ -277,7 +277,7 @@ fn sync_scoped(
             });
         }
         let current = ctx.store.get(&task.id)?;
-        if let Some(change) = crate::launch_exit::plan_review(ctx, &current)? {
+        if let Some(change) = crate::launch_exit::plan_review(ctx, &current, snapshot, now)? {
             changes.push(change);
         }
         crate::plan_acceptance::reconcile_exit(ctx, &current)?;

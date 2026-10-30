@@ -52,6 +52,40 @@ fn design_review_opens_on_the_next_approved_candidate() {
 }
 
 #[test]
+fn missing_reviewer_pane_records_exit_and_allows_another_review() {
+    let fx = design_review(vec![sol().model, "anthropic/design-opus-fixture".into()]);
+    let first = corral_ops::plan_review(&fx.ctx, &fx.id, None).unwrap();
+    let receipt = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-P1-{}.exited", fx.id, first.id));
+    let _ = std::fs::remove_file(&receipt);
+    // The fake engine has a stable baseline pane and an independently removable reviewer pane.
+    std::fs::write(fx.bin_dir.join("tab-created"), "").unwrap();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.plans[0].reviews[0].herdr.as_mut().unwrap().pane_id = "w1:p2".into();
+            Ok(())
+        })
+        .unwrap();
+    fx.sync(1);
+    std::fs::write(fx.bin_dir.join("gone"), "w1:p2\n").unwrap();
+    fx.sync(2);
+    assert!(fx.task().plans[0].reviews[0].verdict.is_none());
+    fx.sync(3);
+    assert!(receipt.is_file());
+    assert_eq!(
+        fx.task().plans[0].reviews[0].verdict,
+        Some(corral_core::Verdict::Escalate)
+    );
+    let next = corral_ops::plan_review(&fx.ctx, &fx.id, None).unwrap();
+    assert_eq!(next.id, "PR2");
+}
+
+#[test]
 fn design_review_with_every_candidate_unavailable_does_not_open() {
     // Given no approved Design Review candidate enabled locally.
     let fx = design_review(vec![sol().model]);
