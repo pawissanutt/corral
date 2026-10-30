@@ -849,8 +849,7 @@ mod codemode_config_tests {
             for role in ROLES {
                 let mut config = AgentCapabilities::default();
                 config.set_preset(preset);
-                let enabled =
-                    preset == Preset::Full || (preset == Preset::Standard && role != AgentRole::Pm);
+                let enabled = preset != Preset::Strict;
                 assert_eq!(config.resolve(role, None).enabled("codemode"), enabled);
                 for key in ["mcp.enabled", "tool_search"] {
                     config.set(role, key, false).unwrap();

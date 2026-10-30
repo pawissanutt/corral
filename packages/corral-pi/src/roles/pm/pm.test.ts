@@ -103,6 +103,34 @@ afterAll(() => {
   if (work) rmSync(work, { recursive: true, force: true });
 });
 
+test("standard PM capabilities expose assistant tools and trusted guidance", async () => {
+  mkdirSync(join(cwd, ".agents/skills/pm-fixture"), { recursive: true });
+  writeFileSync(join(cwd, ".agents/skills/pm-fixture/SKILL.md"), "---\nname: pm-fixture\ndescription: fixture\n---\nGuidance.\n");
+  const modules = await loadModules(assets.dir, "pm");
+  const sdk = await import("@earendil-works/pi-coding-agent");
+  const transport = modules.auth.transport?.(authContext());
+  if (!transport) throw new Error("missing fixture transport");
+  const web = { hosts: ["*"], max_bytes: 1048576, timeout_ms: 15000, max_redirects: 5 };
+  const network = guardedFetch(transport, undefined, "openai-codex", undefined, { settings: web, send: transport });
+  const capabilities = { catalog: 8, digest: "d".repeat(64), preset: "standard" as const,
+    enabled: ["todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "mcp.enabled", "tool_search", "codemode", "lsp", "subagents"],
+    web, mcp: { servers: {} } };
+  const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host.sessionId() });
+  const pmHost = await HostSession.create({ sdk, identity, cwd, root: cwd, home: work, agentDir: join(work, "pi-agent"),
+    model: "gpt-6.1-sol", modules, client, events: new EventLog(1), network, capabilities,
+    guidance: { projectText: true, settings: { skills: { user_dirs: [] }, prompt_templates: { user_dirs: [] },
+      subagents: { max_parallel: 2, model: null, max_turns: 8, timeout_secs: 60 } } },
+    sessionManager: sdk.SessionManager.create(cwd, join(work, "pm-capability-sessions")) });
+  await pmHost.session.bindExtensions({});
+  const active = pmHost.session.getActiveToolNames();
+  for (const name of ["corral_todo", "web_fetch", "web_search", "lsp_diagnostics", "lsp_definition", "lsp_references", "explore", "mcp_connect", "tool_search", "codemode"]) {
+    expect(active).toContain(name);
+  }
+  const resources = pmHost.runtime.services.resourceLoader;
+  expect(resources.getSkills().skills.map((skill) => skill.name)).toContain("pm-fixture");
+  expect(resources.getAgentsFiles().agentsFiles.map((file) => file.path)).toContain(join(cwd, "AGENTS.md"));
+}, 60_000);
+
 test("the PM exposes only its scoped operations and requires the installed context asset", () => {
   // Given the production role, when constructing its tools and contract:
   const tools = pm.tools(context);

@@ -195,9 +195,6 @@ export function parseLaunchMessage(text: string): HostConfig {
   if (provider === "llama.cpp" && capabilities?.enabled.includes("llama_cpp.enabled") !== true) {
     throw new LaunchMessageInvalid("the llama.cpp provider requires llama_cpp.enabled");
   }
-  if (role === "pm" && capabilities?.enabled.includes("web.enabled")) {
-    throw new LaunchMessageInvalid("web.enabled is not available to the pm role");
-  }
   // Corral refuses to launch a disabled planning role; a host never runs one without its snapshot.
   if (PLANNING_ROLES.includes(role as Role) && capabilities?.enabled.includes("role_enabled") !== true) {
     throw new LaunchMessageInvalid(`the ${role} role needs an enabled role_enabled capability`);
