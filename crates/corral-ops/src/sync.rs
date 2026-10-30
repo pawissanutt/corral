@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
 use corral_core::backend::HeadQuery;
@@ -284,6 +284,12 @@ fn sync_scoped(
             changes.push(change);
         }
     }
+    let mut native: BTreeMap<_, _> = ctx
+        .store
+        .unfinished_native_heads()?
+        .into_iter()
+        .map(|head| (head.id.clone(), head))
+        .collect();
     for head in open_heads(ctx)? {
         if !crate::session_scope::owns_head(ctx, &head)? {
             continue;
@@ -314,9 +320,8 @@ fn sync_scoped(
             changes.push(change);
         }
         // One hook call per task holding live pi-native work; other tasks never reach it.
-        let shell = crate::settling::shell_with_open_children(&head)?;
-        let (head, agent) = if crate::agent::hooks::sync::wants(&shell) {
-            let synced = crate::agent::hooks::sync::task(ctx, &shell, now)?;
+        let (head, agent) = if native.remove(&head.id).is_some() {
+            let synced = crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
             (ctx.store.head(&head.id)?, synced)
         } else {
             (head, Default::default())
@@ -342,12 +347,10 @@ fn sync_scoped(
             }
         }
     }
-    // Terminal tasks whose Pi-native containers still owe their run-end duties.
-    for head in crate::settling::terminal_heads(ctx)? {
-        let shell = crate::settling::shell_with_open_children(&head)?;
-        if crate::session_scope::owns_head(ctx, &head)? && crate::agent::hooks::sync::wants(&shell)
-        {
-            crate::agent::hooks::sync::task(ctx, &shell, now)?;
+    // Indexed owed work survives terminal status and retired planning/review containers.
+    for (_, head) in native {
+        if crate::session_scope::owns_head(ctx, &head)? {
+            crate::agent::hooks::sync::task_id(ctx, &head.id, now)?;
         }
     }
     crate::delivery::owner::reconcile_all(ctx)?;
