@@ -47,7 +47,10 @@ impl BoardSnapshot {
         let resource_ctx = crate::attention::refresh_context(ctx);
         let (resources, waits) =
             crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
-        let pins = shelf::load(ctx, &tasks);
+        // Pin readers also need session artifacts; board/scheduling rows stay task-only.
+        let mut artifact_owners = tasks.clone();
+        artifact_owners.extend(ctx.store.assistant_artifact_owners()?);
+        let pins = shelf::load(ctx, &artifact_owners);
         let pinned = pins
             .iter()
             .filter_map(|entry| PinRef::parse(&entry.pin.target).ok())
