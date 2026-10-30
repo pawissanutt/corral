@@ -168,6 +168,27 @@ fn find_run<'a>(task: &'a Task, run: &str) -> Option<&'a Run> {
     task.runs.iter().find(|r| r.id == run)
 }
 
+fn unreceipted(run: Option<&Run>) -> RunObligations {
+    run.map(|run| RunObligations {
+        slot_wait: run.obligations.slot_wait.clone(),
+        waits: run
+            .obligations
+            .waits
+            .iter()
+            .filter(|wait| wait.receipt.is_none())
+            .cloned()
+            .collect(),
+        decisions: run
+            .obligations
+            .decisions
+            .iter()
+            .filter(|decision| decision.receipt.is_none())
+            .cloned()
+            .collect(),
+    })
+    .unwrap_or_default()
+}
+
 fn open_run_obligations(found: &Run) -> RunObligations {
     RunObligations {
         slot_wait: found.obligations.slot_wait.clone(),
@@ -711,6 +732,15 @@ impl TaskRef for Task {
             .find(|a| a.id == attempt)
             .map(|a| a.reviews.iter().filter(|r| r.pending()).cloned().collect())
             .unwrap_or_default())
+    }
+
+    fn unreceipted_obligations(&self, run: &str) -> Result<RunObligations> {
+        Ok(unreceipted(find_run(self, run)))
+    }
+    fn unreceipted_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations> {
+        Ok(unreceipted(find_run(self, run).and_then(|parent| {
+            parent.review_runs.iter().find(|child| child.id == review)
+        })))
     }
 
     fn open_obligations(&self, run: &str) -> Result<RunObligations> {

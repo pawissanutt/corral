@@ -75,6 +75,51 @@ impl TaskHead {
         }))
     }
 
+    fn unreceipted_owner_obligations(
+        &self,
+        owner: &str,
+        slot_wait: Option<SlotWait>,
+    ) -> Result<RunObligations> {
+        let rows = |kind: &str| {
+            self.query(
+                &RowQuery::under(TaskPart::RunObligation, format!("{owner}{kind}/"))
+                    .with_index("receipt:absent"),
+                u32::MAX,
+                Counter::NestedRowDecodes,
+            )
+        };
+        Ok(RunObligations {
+            slot_wait,
+            waits: Self::decode(rows("wait")?)?,
+            decisions: Self::decode(rows("decision")?)?,
+        })
+    }
+
+    /// Receipt-free waits/decisions only. Unlike the reconciliation-oriented open facet,
+    /// stale rendered observations with a durable receipt cannot increase this read's work.
+    pub fn unreceipted_obligations(&self, run: &str) -> Result<RunObligations> {
+        let Some(owner) = self.run_owner(run)? else {
+            return Ok(RunObligations::default());
+        };
+        let slot_wait =
+            crate::TaskRef::run_head(self, run)?.and_then(|run| run.obligations.slot_wait);
+        self.unreceipted_owner_obligations(&owner, slot_wait)
+    }
+
+    pub fn unreceipted_review_obligations(
+        &self,
+        run: &str,
+        review: &str,
+    ) -> Result<RunObligations> {
+        let Some(owner) = self.owner_key(run, Some(review))? else {
+            return Ok(RunObligations::default());
+        };
+        let slot_wait = self
+            .review_child(run, review)?
+            .and_then(|child| child.obligations.slot_wait);
+        self.unreceipted_owner_obligations(&format!("{owner}/"), slot_wait)
+    }
+
     fn open_owner_obligations(
         &self,
         owner: &str,

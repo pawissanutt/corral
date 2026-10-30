@@ -217,6 +217,16 @@ macro_rules! keyed_reads {
         fn pending_aggregate_reviews(&self, attempt: &str) -> Result<Vec<AggregateReview>> {
             self.$reads()?.pending_aggregate_reviews(attempt)
         }
+        fn unreceipted_obligations(&self, run: &str) -> Result<RunObligations> {
+            self.$reads()?.unreceipted_obligations(run)
+        }
+        fn unreceipted_review_obligations(
+            &self,
+            run: &str,
+            review: &str,
+        ) -> Result<RunObligations> {
+            self.$reads()?.unreceipted_review_obligations(run, review)
+        }
         fn open_obligations(&self, run: &str) -> Result<RunObligations> {
             self.$reads()?.open_obligations(run)
         }

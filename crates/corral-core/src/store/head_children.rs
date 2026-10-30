@@ -419,6 +419,7 @@ impl TaskHeadMut {
         row.index = std::iter::once(format!("id:{id}"))
             .chain(std::iter::once(format!("{kind}:id:{id}")))
             .chain(receipt.map(|r| format!("receipt:{r}")))
+            .chain(receipt.is_none().then(|| "receipt:absent".into()))
             .collect();
         if crate::card::card_obligation_visible(kind, &row.doc) {
             row.index.push("card".into());

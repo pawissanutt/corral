@@ -120,12 +120,20 @@ fn hot_snapshot_preserves_named_terminal_park_and_wait_sources_without_board_his
         question.answer =
             Some(serde_json::from_value(json!({"by":"owner","text":"Yes","at":at(0)})).unwrap());
         let key = question.key.clone();
+        let mut decision_source = fx.questions(0);
+        decision_source.status = Status::Done;
+        let run = decision_source.runs.last_mut().unwrap();
+        run.outcome = Some(RunOutcome::Done);
+        run.ended = Some(at(1));
+        run.agent_host.as_mut().unwrap().binding.closing = true;
+        run.inbox.settled = Some(at(1));
         run.obligations.decisions.push(serde_json::from_value(json!({
             "request":{"version":1,"id":"selected","run":"R1","question":"Proceed?","requested_action":"Answer","owner":"owner","source":"worker"},
             "registered_at":at(0),"observation":{"at":at(0),"state":"ready","detail":"answered"},
             "receipt":{"version":1,"id":"answer","run":"R1","outcome":"answered","delivery":"acknowledged","observed_at":at(0)}
         })).unwrap());
         fx.ctx.store.fixture_put_task(&source).unwrap();
+        fx.ctx.store.fixture_put_task(&decision_source).unwrap();
         let dependency = fx
             .ctx
             .store
@@ -180,6 +188,17 @@ fn hot_snapshot_preserves_named_terminal_park_and_wait_sources_without_board_his
             .into_iter()
             .filter(|row| !matches!(row.status, Status::Done | Status::Dropped))
             .collect::<Vec<_>>();
+        assert!(
+            expected
+                .iter()
+                .find(|row| row.task == parked.id)
+                .unwrap()
+                .assessment
+                .conditions
+                .iter()
+                .flat_map(|condition| &condition.resume)
+                .any(|check| check.kind == "decision" && check.satisfied == Some(true))
+        );
         let _hot = HotScope::enter();
         let before = work::snapshot();
         let (roots, hot) = snapshot(&fx.ctx, at(100)).unwrap();

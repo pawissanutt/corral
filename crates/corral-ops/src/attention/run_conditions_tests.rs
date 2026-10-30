@@ -32,6 +32,7 @@ fn grow(run: &mut Run, scale: usize) {
             .unwrap(),
         );
         old.observation = corral_core::receipt_observation(old.receipt.as_ref().unwrap(), at(0));
+        old.observation.detail = "stale rendered evidence".into();
         run.obligations.waits.insert(0, old);
     }
 }
