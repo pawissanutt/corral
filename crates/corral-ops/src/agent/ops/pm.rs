@@ -19,6 +19,24 @@ use super::super::envelope::Envelope;
 use super::worker::{answer, origin_of};
 use crate::Ctx;
 
+/// Continue a written PM session; an unprompted host has no file to resume.
+pub(crate) fn recovery_session(
+    file: Option<std::path::PathBuf>,
+    session_dir: &mut std::path::PathBuf,
+    fresh_session: &mut bool,
+) -> Result<Option<std::path::PathBuf>> {
+    let Some(file) = file else { return Ok(None) };
+    if std::fs::metadata(&file).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
+        return Ok(Some(file));
+    }
+    *session_dir = file
+        .parent()
+        .context("the bound Pi session file has no directory")?
+        .to_path_buf();
+    *fresh_session = true;
+    Ok(None)
+}
+
 /// The T-252 child that lands these handlers.
 pub const OWNER: &str = "pm-role";
 
