@@ -236,7 +236,8 @@ integration base, a changed prepared action identity, a slot-ordering refusal
 (`waiting for finishing work on T-x`, `waiting for a slot`), a busy machine, pane
 inventory reconciliation, or another review, gate or dispatch launch in progress
 is recorded as an `autopilot_error` and retried on the next sync, where an
-unsubmitted automatic preparation is replaced rather than refused. Other
+unsubmitted automatic preparation whose candidate changed is replaced rather than
+refused. A changed task or Plan contract still needs renewed consent. Other
 preflight failures still escalate to Blocked; their autopilot event identifies
 review runs released by round cleanup.
 
