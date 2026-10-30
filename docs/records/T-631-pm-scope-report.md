@@ -30,6 +30,11 @@ include the owner preview and confirmation commands.
   that reused the legacy project identity after migration and an obsolete scope-change
   refusal expectation. The fixture now reads the new bootstrap identity; the pane-safety
   refusal test uses a missing role asset instead, preserving its adoption assertions.
+- `cargo test -p corral-ops --test pm_policy`: 19 passed. The second quick gate
+  reached all 344 selected tests and found three more legacy identity/ambiguity
+  assertions in PM-policy integration tests. These now assert workspace binding,
+  authenticate with its empty project identity, and prove an actual PM launch with
+  three approved projects succeeds; missing assets and missing approval still refuse.
 - `git diff --check`: passed.
 
 The red log was obtained by temporarily restoring the old single-project refusal,

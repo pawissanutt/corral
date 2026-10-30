@@ -519,7 +519,7 @@ fn pi_pm_launch_binds_the_actual_pane_before_policy_startup_and_run() {
     let observed: Value =
         serde_json::from_slice(&std::fs::read(fx.tmp.path().join("launch-observed.json")).unwrap())
             .unwrap();
-    assert_eq!(observed["state"]["binding"]["project"], "app");
+    assert_eq!(observed["state"]["binding"]["project"], "");
     assert_eq!(observed["state"]["binding"]["role"], "pm");
     assert_eq!(observed["state"]["binding"]["generation"], 1);
     let dir = corral_ops::agent::launch::generation_dir(
@@ -540,29 +540,36 @@ fn pi_pm_launch_binds_the_actual_pane_before_policy_startup_and_run() {
 }
 
 #[test]
-fn pi_pm_preflight_refuses_missing_assets_unapproved_and_ambiguous_scopes() {
-    // Given complete assets but no approval, or an approved multi-project scope.
-    for variant in ["assets", "unapproved", "ambiguous"] {
+fn pi_pm_preflight_refuses_missing_assets_and_unapproved_scope_but_accepts_three_projects() {
+    // Given missing assets, no approval, or a valid three-project scope.
+    for variant in ["assets", "unapproved", "multiple"] {
         let mut fx = Fx::new();
         fx.pi();
         if variant == "assets" {
             fx.grant();
             std::fs::remove_file(fx.tmp.path().join("assets/src/roles/pm/index.ts")).unwrap();
-        } else if variant == "ambiguous" {
-            std::fs::create_dir_all(fx.tmp.path().join("other/.git")).unwrap();
-            fx.ctx.store.config.projects.insert(
-                "other".into(),
-                serde_json::from_value(json!({"path":"other"})).unwrap(),
-            );
-            fx.ctx.store.save_config().unwrap();
+        } else if variant == "multiple" {
             let first = fx.grant();
-            let other = fx
-                .ctx
-                .store
-                .create("other", Some("other"), Status::Ready, "")
-                .unwrap();
+            let mut tasks = [first]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            for project in ["other", "third"] {
+                std::fs::create_dir_all(fx.tmp.path().join(project).join(".git")).unwrap();
+                fx.ctx.store.config.projects.insert(
+                    project.into(),
+                    serde_json::from_value(json!({"path":project})).unwrap(),
+                );
+                fx.ctx.store.save_config().unwrap();
+                tasks.insert(
+                    fx.ctx
+                        .store
+                        .create(project, Some(project), Status::Ready, "")
+                        .unwrap()
+                        .id,
+                );
+            }
             let selection = OperatingSelection {
-                tasks: [first, other.id].into(),
+                tasks,
                 ..Default::default()
             };
             let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
@@ -571,12 +578,28 @@ fn pi_pm_preflight_refuses_missing_assets_unapproved_and_ambiguous_scopes() {
                 .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
                 .unwrap();
         }
-        // When launch preflight runs, then it refuses before any pane or policy startup.
+        if variant == "multiple" {
+            assert_eq!(open_pm(&fx.fresh()).unwrap(), "pm:p1");
+            let pm = corral_core::agent::pm_state::load(&fx.ctx.store)
+                .unwrap()
+                .unwrap();
+            assert!(pm.state.binding.project.is_empty());
+            assert_eq!(fx.calls(&["pane", "run"]).len(), 1);
+            let dir = corral_ops::agent::launch::generation_dir(
+                &fx.ctx.store,
+                &corral_core::inbox::Recipient::Pm,
+                1,
+            )
+            .unwrap();
+            std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();
+            continue;
+        }
+        // Invalid launches refuse before any pane or policy startup.
         let error = open_pm(&fx.fresh()).unwrap_err().to_string();
         let code = match variant {
             "assets" => "role_unavailable",
             "unapproved" => "pm_scope_unapproved",
-            _ => "pm_scope_ambiguous",
+            _ => unreachable!(),
         };
         assert!(error.contains(code), "{variant}: {error}");
         assert!(fx.calls(&["workspace", "create"]).is_empty());
@@ -607,7 +630,7 @@ fn omo_rollback_preserves_pi_pm_records_and_current_policy() {
         serde_json::to_vec(&json!({
             "version":1,"op":op,"request_id":request,
             "payload_sha256":agent::payload_sha256(&payload),"payload":payload,"auth":auth,
-            "identity":{"store":store_id,"project":"app","role":"pm",
+            "identity":{"store":store_id,"project":"","role":"pm",
                 "session_id":"rollback-session","generation":1},
         }))
         .unwrap()
