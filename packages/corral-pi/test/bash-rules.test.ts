@@ -63,6 +63,28 @@ test("rule settings parse only the resolved Rust shape", () => {
   }
 });
 
+test("framed answers grant or revoke only from answer members", () => {
+  const command = "git push origin main";
+  const permissions = new BashPermissions();
+  permissions.request(command, { action: "ask" });
+  expect(permissions.observeAsk({ kind: "permission", text: command,
+    context_refs: [`${PERMISSION_REF}${commandDigest(command)}`] },
+  { state: "committed", result: { key: "T/R1/Q4" } })).toBeTrue();
+  const answer = "Answer to T/R1/Q4 (revision 2) by Owner:\nfine\nChosen option: allow";
+  const envelope = (members: string) => `[corral envelope T/R1@env1]\n\n${members}`;
+  expect(permissions.observeAnswer(envelope(`[corral T/R1#1 reply]\n${answer}`))).toBeUndefined();
+  expect(permissions.consume(command)).toBeFalse();
+  expect(permissions.observeAnswer(envelope(`[corral T/R1#1 question_answer]\n${answer}\n\n[corral T/R1#2 reply]\nhello`)))
+    .toBe("granted");
+  expect(permissions.consume(command)).toBeTrue();
+  expect(permissions.observeAnswer(envelope(`[corral T/R1#3 question_answer]\n${answer.replace("Owner", "Pm")}`)))
+    .toBe("revoked");
+  expect(permissions.consume(command)).toBeFalse();
+  expect(permissions.observeAnswer(envelope(`[corral T/R1#4 question_answer]\n${answer}\n\n[corral T/R1#5 question_correction]\nCorrected answer to T/R1/Q4 (revision 3) by Owner:\nno\nChosen option: deny`)))
+    .toBe("revoked");
+  expect(permissions.consume(command)).toBeFalse();
+});
+
 test("a permission grant needs the refused command, a bound permission question and the owner's allow", () => {
   // Given a refused ask command and the question the model asks for it.
   const command = "git push origin main";
