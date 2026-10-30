@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn sync_done_reaps_every_run_including_old_gate_and_reviewer() {
+    terminal_history(Status::Done);
+}
+
+#[test]
+fn sync_dropped_reaps_every_run_including_old_gate_and_reviewer() {
+    terminal_history(Status::Dropped);
+}
+
+#[test]
 fn finished_task_sweep_keeps_pending_plan_reviewer_and_logs_closed_review() {
     let fx = Fx::new();
     let socket = fx.ctx.herdr.socket_path().unwrap();
