@@ -26,6 +26,8 @@ fn attention_batches_route_complete_membership_and_resume_without_replay() {
         (vec!["--project", "alpha"], "alpha"),
         (vec!["--project", "beta"], "beta"),
     ] {
+        let mut options = options;
+        options.extend(["--for", "attention_due"]);
         let opts = args(&options);
         let mut reader = EventReader::from_offset(&store.dir().join("events.jsonl"), 0).unwrap();
         let mut matched = None;
@@ -61,6 +63,56 @@ fn args(extra: &[&str]) -> WaitArgs {
 }
 
 #[test]
+fn default_watch_coalesces_question_mirrors_across_cursor_rearms() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::init(dir.path()).unwrap();
+    for (kind, detail) in [
+        ("question_opened", serde_json::json!({"key":"T-001/R1/Q1"})),
+        (
+            "needs_me",
+            serde_json::json!({"question_keys":["T-001/R1/Q1"]}),
+        ),
+        (
+            "attention_due",
+            serde_json::json!({"question_keys":["T-001/R1/Q1"]}),
+        ),
+        ("done", serde_json::json!({})),
+        ("autopilot", serde_json::json!({"to":"landed"})),
+        ("pm_inbox_posted", serde_json::json!({})),
+        ("review_escalated", serde_json::json!({})),
+        ("autopilot", serde_json::json!({"to":"escalated"})),
+        ("plan_awaiting_owner", serde_json::json!({})),
+    ] {
+        store.log_event(Some("T-001"), kind, detail).unwrap();
+    }
+    let path = store.dir().join("events.jsonl");
+    let mut reader = EventReader::from_offset(&path, 0).unwrap();
+    for expected in [
+        "question_opened",
+        "pm_inbox_posted",
+        "review_escalated",
+        "autopilot",
+        "plan_awaiting_owner",
+    ] {
+        let (event, cursor) = follow(&store, &args(&[]), &mut reader, |_| {
+            panic!("missing {expected}")
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.kind, expected);
+        reader = EventReader::open(&path, Some(cursor)).unwrap();
+    }
+    assert!(reader.next_event().unwrap().is_none());
+    let mut reader = EventReader::from_offset(&path, 0).unwrap();
+    let (mirror, _) = follow(&store, &args(&["--for", "needs_me"]), &mut reader, |_| {
+        panic!("explicit mirror missing")
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(mirror.detail["question_keys"][0], "T-001/R1/Q1");
+}
+
+#[test]
 fn first_event_after_subscription_ignores_history_and_nonmatching_events() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
@@ -86,8 +138,8 @@ fn first_event_after_subscription_ignores_history_and_nonmatching_events() {
     .unwrap()
     .unwrap();
     assert!(subscribed);
-    assert_eq!(found.0.task.as_deref(), Some("T-003"));
-    assert_eq!(reader.next_event().unwrap().unwrap().0.kind, "stuck");
+    assert_eq!(found.0.task.as_deref(), Some("T-004"));
+    assert!(reader.next_event().unwrap().is_none());
 }
 
 #[test]
@@ -211,7 +263,10 @@ fn config_subscriptions_include_ui_changes_and_invalid_edits_without_task_filter
         .unwrap()
         .0;
         assert_eq!(found.kind, kind);
-        assert!(args(&[]).matches(&store, &found).unwrap());
+        assert_eq!(
+            args(&[]).matches(&store, &found).unwrap(),
+            kind == "config_invalid"
+        );
         assert!(!args(&["--task", "T-001"]).matches(&store, &found).unwrap());
         assert!(!args(&["--project", "app"]).matches(&store, &found).unwrap());
     }
@@ -219,12 +274,8 @@ fn config_subscriptions_include_ui_changes_and_invalid_edits_without_task_filter
 
 #[test]
 fn for_accepts_and_defaults_to_every_pm_actionable_kind_plus_config_invalid() {
-    let all: Vec<String> = PM_ACTIONABLE_KINDS
-        .iter()
-        .chain(&["config_invalid"])
-        .map(|k| k.to_string())
-        .collect();
-    assert_eq!(args(&[]).kinds, all);
+    let all: Vec<String> = PM_ACTIONABLE_KINDS.iter().map(|k| k.to_string()).collect();
+    assert_eq!(args(&[]).kinds, PM_DEFAULT_KINDS);
     for kind in &all {
         assert_eq!(args(&["--for", kind]).kinds, std::slice::from_ref(kind));
     }
@@ -280,11 +331,11 @@ fn default_wait_wakes_on_question_opened_and_rearmed_wait_skips_question_answere
     let (next, _) = follow(&store, &args(&[]), &mut rearmed, |_| {
         assert!(
             !std::mem::replace(&mut sentinel, true),
-            "the sentinel done did not wake the re-armed wait"
+            "the sentinel inbox did not wake the re-armed wait"
         );
         {
             store
-                .log_event(Some("T-002"), "done", serde_json::json!({}))
+                .log_event(Some("T-002"), "pm_inbox_posted", serde_json::json!({}))
                 .unwrap();
         }
     })
@@ -292,6 +343,6 @@ fn default_wait_wakes_on_question_opened_and_rearmed_wait_skips_question_answere
     .unwrap();
     assert_eq!(
         (next.task.as_deref(), next.kind.as_str()),
-        (Some("T-002"), "done")
+        (Some("T-002"), "pm_inbox_posted")
     );
 }

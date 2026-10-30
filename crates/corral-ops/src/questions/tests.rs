@@ -49,6 +49,41 @@ fn ask_opens_keyed_question_at_revision_one_and_logs_it_once() {
 }
 
 #[test]
+fn worker_question_and_derived_status_have_one_default_wake_per_cause() {
+    let fx = fx();
+    let (id, worker) = worker(&fx);
+    let key = ask_ok(&fx, &worker, "wake", true);
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(super::pending_keys(&task), [key.clone()]);
+    // Sync's blocked-state projection carries these canonical keys, not just prose.
+    fx.ctx
+        .store
+        .log_event(
+            Some(&id),
+            "needs_me",
+            json!({
+                "agent_state":"blocked", "question_keys": super::pending_keys(&task)
+            }),
+        )
+        .unwrap();
+    fx.ctx
+        .store
+        .log_event(
+            Some(&id),
+            "attention_due",
+            json!({"reason":"question_open"}),
+        )
+        .unwrap();
+    let events = fx.ctx.store.events_shared().unwrap();
+    let wakes: Vec<_> = events
+        .iter()
+        .filter(|event| corral_core::default_pm_event(event))
+        .collect();
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].kind, "question_opened");
+}
+
+#[test]
 fn concurrent_first_questions_get_distinct_keys_and_answers_reach_only_their_recipient() {
     let fx = fx();
     let (a, worker_a) = worker(&fx);

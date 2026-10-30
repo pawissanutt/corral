@@ -18,8 +18,13 @@
    explicit owner action; a valid scoped Autopilot grant replaces routine repeated
    consent only for its delegated actions.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
-   event subscription; re-arm with the returned `after_offset`. Prefer task/project
-   filters and structured JSON fields to grepping event prose.
+   event subscription loop; re-arm with `{{bin}} wait --json --print-cursor --after-offset <after_offset>`
+   using the returned cursor. The defaults are PM-actionable; no hand-filtered `--for`
+   list or raw event-log tail is needed. Prefer task/project filters and structured
+   JSON fields to grepping event prose. Handle routine landings and resubmissions
+   silently; tell the owner only about decisions, escalations and inbox items.
+   An `install_due` event means corral's installed build needs updating; configured
+   post-land hooks take precedence over this reminder.
    Inspect `{{bin}} attention --json` for all outstanding conditions even when
    notifications are muted or absent. Record work on one exact condition with
    `{{bin}} attention attend <key> --note "<handling>" --next-check 30m --request <stable-id>`.

@@ -32,6 +32,7 @@ pub use ask::{
     AskPayload, NOTE_MAX_BYTES, OPTION_MAX_BYTES, Opened, REF_MAX_BYTES, WithdrawPayload, open,
     validate_ask, wake_route, withdraw,
 };
+pub(crate) use events::pending_keys;
 pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
 pub use triage::{

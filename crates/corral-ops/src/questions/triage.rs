@@ -143,7 +143,7 @@ pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
             ctx,
             task_id,
             "needs_me",
-            json!({"reason": "question_attention"}),
+            json!({"reason": "question_attention", "question_keys": super::pending_keys(&ctx.store.get(task_id)?) }),
             notice,
         )?;
     }
@@ -461,7 +461,7 @@ pub(super) fn transact(
             ctx,
             parsed.task(),
             "needs_me",
-            json!({"run": container_run(&container), "question": key,
+            json!({"run": container_run(&container), "question": key, "question_keys": [key],
                    "revision": outcome.revision, "reason": reason}),
             notice,
         )?;

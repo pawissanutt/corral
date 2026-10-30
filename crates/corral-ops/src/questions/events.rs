@@ -154,6 +154,18 @@ pub(super) fn drain(
     append_missing(store, parsed.task(), &question.key, owed, &logged).map(|_| ())
 }
 
+/// Correlate derived status notices with canonical, still-pending questions.
+pub(crate) fn pending_keys(task: &Task) -> Vec<String> {
+    super::containers(task)
+        .iter()
+        .filter(|c| !super::settled(task, c))
+        .filter_map(|c| corral_core::agent::container_state(task, c))
+        .flat_map(|state| &state.questions)
+        .filter(|q| q.blocking && q.recorded_pending())
+        .map(|q| q.key.clone())
+        .collect()
+}
+
 /// Recovers every owed question event of one task; the sync hook calls it with the sweeps.
 pub fn reconcile_events(store: &Store, task_id: &str) -> Result<usize> {
     reconcile_task(store, &store.get(task_id)?, None)

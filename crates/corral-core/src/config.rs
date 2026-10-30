@@ -376,9 +376,13 @@ pub struct PmCfg {
 }
 
 /// The one list of PM-actionable event kinds, after `actionable_kind` normalization. It is what
-/// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts
-/// (plus `config_invalid`).
-pub const PM_ACTIONABLE_KINDS: [&str; 19] = [
+/// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts.
+/// Routine lifecycle kinds stay available explicitly; defaults use `PM_DEFAULT_KINDS`.
+pub const PM_ACTIONABLE_KINDS: [&str; 23] = [
+    "config_invalid",
+    "pm_inbox_posted",
+    "plan_awaiting_owner",
+    "install_due",
     "done",
     "needs_me",
     "stuck",
@@ -400,23 +404,31 @@ pub const PM_ACTIONABLE_KINDS: [&str; 19] = [
     "slot_reacquired",
 ];
 
+/// Zero-configuration PM watch: routine lifecycle events remain opt-in.
+pub const PM_DEFAULT_KINDS: &[&str] = &[
+    "needs_me",
+    "stuck",
+    "blocked",
+    "escalated",
+    "question_opened",
+    "question_escalated",
+    "question_unattended",
+    "turn_ended_without_report",
+    "delivery_uncertain",
+    "delivery_orphaned",
+    "message_unobserved",
+    "wait_transition",
+    "config_invalid",
+    "pm_inbox_posted",
+    "plan_awaiting_owner",
+    "install_due",
+];
+
 fn default_push_kinds() -> Vec<String> {
-    [
-        "done",
-        "needs_me",
-        "stuck",
-        "blocked",
-        "escalated",
-        "config_changed",
-        "lessons_due",
-        "run_resumed",
-        "wait_transition",
-        "pm_decision_resolved",
-        "attention_due",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect()
+    PM_DEFAULT_KINDS
+        .iter()
+        .map(|kind| (*kind).to_string())
+        .collect()
 }
 
 impl Default for PmCfg {
