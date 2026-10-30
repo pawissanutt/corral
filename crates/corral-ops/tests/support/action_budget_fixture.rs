@@ -463,6 +463,7 @@ fn filler(store: &Store) {
 }
 
 pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
+    let _entropy = crate::fixture_role_entropy(1);
     corral_core::clock::pin_thread(Some(fixture::now()));
     crate::resources::pin_psi(Some(PSI));
     let (fx, id, attempt) = setup(kind);
@@ -548,6 +549,33 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
         );
     }
     corral_core::clock::pin_thread(Some(fixture::now()));
+    if kind == Kind::RepairInbox {
+        // Imported historical messages must finish main's real bounded owner-index
+        // preparation BEFORE measuring a ready Repair action. Do not forge a header
+        // or weaken the assertion that the request is actually submitted.
+        let head = store.head(&id).unwrap();
+        let run = head.current_run.as_deref().unwrap();
+        let inbox = corral_core::inbox::Inbox::new(
+            &store,
+            corral_core::inbox::Recipient::Run {
+                task: id.clone(),
+                run: run.id.clone(),
+            },
+        )
+        .unwrap();
+        let pages = run.inbox.next_seq.saturating_mul(2) / 64 + 3;
+        let mut ready = false;
+        for _ in 0..pages {
+            if inbox.index_owner(64).unwrap().legacy_debt.is_none() {
+                ready = true;
+                break;
+            }
+        }
+        assert!(
+            ready,
+            "fixture historical owner indexing did not finish within its exact two-phase bound"
+        );
+    }
     // The grant binds the acted task's contract: it is confirmed once every input is final.
     let mut fx = fx;
     let attempt = match kind {

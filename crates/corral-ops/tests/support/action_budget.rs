@@ -385,6 +385,7 @@ fn run(entry: &Entry, bench: &Bench) -> String {
 }
 
 pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
+    let _entropy = crate::fixture_role_entropy(2);
     corral_core::clock::pin_thread(Some(fixture::now()));
     crate::resources::pin_psi(Some(super::action_budget_fixture::PSI));
     let mut m = Measured::default();
@@ -729,6 +730,24 @@ fn report(m: &Measured) -> String {
         .map(|(k, n)| format!("{k}={n}"))
         .collect();
     line.join(" ")
+}
+
+#[test]
+fn action_budget_repair_inbox_submits_one_real_action() {
+    let bench = super::action_budget_fixture::build(Kind::RepairInbox, Variant::Base);
+    super::action_budget_fixture::settle(&bench);
+    let measured = measure(&bench, Kind::RepairInbox);
+    assert!(
+        measured.failures.is_empty(),
+        "{:?}\n{}",
+        measured.failures,
+        measured.output
+    );
+}
+
+#[test]
+fn action_budget_worker_uses_fixed_inputs_without_output_masks() {
+    budget(&[Kind::Worker]);
 }
 
 #[test]
