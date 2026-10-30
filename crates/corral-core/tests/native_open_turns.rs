@@ -96,6 +96,12 @@ fn current_generation_open_turn_is_not_inferred_from_the_latest_turn_or_older_ge
                 let before = work::snapshot();
                 assert_eq!(head.has_open_agent_turn(&container, 2).unwrap(), open);
                 assert!(!head.has_open_agent_turn(&container, 999).unwrap());
+                let latest = head.latest_agent_turn_any_generation(&container).unwrap();
+                assert_eq!(
+                    latest,
+                    task.latest_agent_turn_any_generation(&container).unwrap()
+                );
+                assert_eq!(latest.unwrap().generation, 2);
                 let ended = head
                     .agent_turn_ended_at(&container, 2, store_support::at(1))
                     .unwrap();
@@ -165,6 +171,22 @@ fn current_generation_open_turn_is_not_inferred_from_the_latest_turn_or_older_ge
                             .unwrap()
                     );
                 }
+                store.update_head(&task.id,|head| {
+                    head.edit_agent_head(&container,|host|{host.binding.generation=3;host.binding.health=HostHealth::Unbound;Ok(())})?;
+                    head.put_agent_record(&container,NativeRecord::Generation(serde_json::from_value(json!({"n":3,"bind_nonce_sha256":"00".repeat(32),"pane":"p1","created":store_support::at(3)}))?))?;
+                    Ok(())
+                }).unwrap();
+                let next = store.head(&task.id).unwrap();
+                assert!(next.latest_agent_turn(&container, 3).unwrap().is_none());
+                let prior = next
+                    .latest_agent_turn_any_generation(&container)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    (prior.generation, prior.seq),
+                    (2, 9),
+                    "a new empty generation must not erase latest-turn evidence"
+                );
             }
             assert_eq!(measured[0], measured[1], "role={role:?} open={open}");
         }

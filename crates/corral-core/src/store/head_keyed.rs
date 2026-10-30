@@ -260,6 +260,33 @@ impl TaskHead {
         self.agent_record(container, "turns", format!("ended:{generation}:{ended}"))
     }
 
+    /// Global maximum without walking generations: newest per-generation max pointer, then key.
+    pub fn latest_agent_turn_any_generation(
+        &self,
+        container: &ContainerRef,
+    ) -> Result<Option<AgentTurn>> {
+        let Some(owner) = self.agent_owner(container)? else {
+            return Ok(None);
+        };
+        let query =
+            RowQuery::under(TaskPart::AgentRecord, format!("{owner}/latest_turn/")).newest_first();
+        let Some(row) = self.query(&query, 1, Counter::NestedRowDecodes)?.pop() else {
+            return Ok(None);
+        };
+        let generation = row
+            .key
+            .rsplit('/')
+            .next()
+            .context("latest turn generation missing")?
+            .parse()
+            .context("latest turn generation malformed")?;
+        self.agent_turn(
+            container,
+            generation,
+            super::codec::latest_turn_seq(&row.doc)?,
+        )
+    }
+
     pub fn latest_agent_turn(
         &self,
         container: &ContainerRef,

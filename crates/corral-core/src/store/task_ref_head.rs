@@ -147,6 +147,12 @@ macro_rules! keyed_reads {
         ) -> Result<Vec<crate::agent::JobRecord>> {
             self.$reads()?.pending_agent_jobs(container)
         }
+        fn latest_agent_turn_any_generation(
+            &self,
+            container: &ContainerRef,
+        ) -> Result<Option<AgentTurn>> {
+            self.$reads()?.latest_agent_turn_any_generation(container)
+        }
         fn latest_agent_turn(
             &self,
             container: &ContainerRef,

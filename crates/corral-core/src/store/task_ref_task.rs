@@ -553,6 +553,19 @@ impl TaskRef for Task {
             .map(|s| s.jobs.iter().filter(|j| j.needs_reap()).cloned().collect())
             .unwrap_or_default())
     }
+    fn latest_agent_turn_any_generation(
+        &self,
+        container: &ContainerRef,
+    ) -> Result<Option<AgentTurn>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|state| {
+                state
+                    .turns
+                    .iter()
+                    .max_by_key(|turn| (turn.generation, turn.seq))
+            })
+            .cloned())
+    }
     fn latest_agent_turn(
         &self,
         container: &ContainerRef,

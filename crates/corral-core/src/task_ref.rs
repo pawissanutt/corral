@@ -462,6 +462,11 @@ pub trait TaskRef: TaskFieldsRef {
         id: &str,
     ) -> Result<Option<crate::agent::JobRecord>>;
     fn pending_agent_jobs(&self, container: &ContainerRef) -> Result<Vec<crate::agent::JobRecord>>;
+    /// Maximum (generation, sequence), even if the currently bound generation has no turn.
+    fn latest_agent_turn_any_generation(
+        &self,
+        container: &ContainerRef,
+    ) -> Result<Option<AgentTurn>>;
     fn latest_agent_turn(
         &self,
         container: &ContainerRef,
