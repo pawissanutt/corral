@@ -122,6 +122,9 @@ macro_rules! keyed_reads {
         fn inbox_head(&self, recipient: &Recipient) -> Result<Option<InboxHead>> {
             self.$reads()?.inbox_head(recipient)
         }
+        fn unfinished_native_containers(&self) -> Result<Vec<ContainerRef>> {
+            self.$reads()?.unfinished_native_containers()
+        }
         fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>> {
             self.$reads()?.pending_agent_receipts(container)
         }

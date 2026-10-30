@@ -447,6 +447,9 @@ pub trait TaskRef: TaskFieldsRef {
         })
     }
 
+    /// Unsettled or pending native containers, in append order, never settled history.
+    fn unfinished_native_containers(&self) -> Result<Vec<ContainerRef>>;
+
     fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>>;
     fn agent_job(
         &self,

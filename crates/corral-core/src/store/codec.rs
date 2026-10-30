@@ -165,9 +165,24 @@ pub(super) fn decorate_native(row: &mut HistoryRow) {
             .and_then(Value::as_str)
             .is_some_and(crate::is_pi_native);
     let unsettled = native && row.doc.pointer("/inbox/settled").is_none_or(Value::is_null);
-    row.index.retain(|token| token != "native:unsettled");
+    let pending = row
+        .doc
+        .get("agent_host")
+        .filter(|host| !host.is_null())
+        .is_some_and(|host| {
+            // Canonical heads encode fixed-width counts. Unknown metadata is conservative:
+            // keep the owner discoverable rather than treating it as settled work.
+            host.pointer("/_records/pending")
+                .and_then(|count| count.as_u64().or_else(|| count.as_str()?.parse().ok()))
+                .is_none_or(|count| count > 0)
+        });
+    row.index
+        .retain(|token| !matches!(token.as_str(), "native:unsettled" | "native:work"));
     if unsettled {
         row.index.push("native:unsettled".into());
+    }
+    if unsettled || pending {
+        row.index.push("native:work".into());
     }
 }
 

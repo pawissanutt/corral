@@ -34,6 +34,7 @@ mod head_finish;
 mod head_keyed;
 mod head_mut;
 mod head_native;
+mod head_native_inputs;
 mod head_obligations;
 mod head_overlay;
 mod head_reviews;
