@@ -782,6 +782,13 @@ pub(crate) fn split_inbox(
     let Some(Value::Object(inbox)) = doc.get_mut("inbox") else {
         return Ok(());
     };
+    // These positions grow with retired inbox history, not current work. Keep their
+    // physical container documents constant-size across decimal-width boundaries too.
+    for key in ["next_seq", "next_envelope"] {
+        if let Some(n) = inbox.get(key).and_then(Value::as_u64) {
+            inbox.insert(key.into(), json!(format!("{n:020}")));
+        }
+    }
     for effect in take_array(inbox, "effects_applied") {
         let n = effect
             .as_u64()
