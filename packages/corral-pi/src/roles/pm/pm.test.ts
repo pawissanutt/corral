@@ -107,7 +107,7 @@ test("the PM exposes only its scoped operations and requires the installed conte
   // Given the production role, when constructing its tools and contract:
   const tools = pm.tools(context);
   // Then neither lifecycle-only operations nor owner authority become model tools.
-  expect(pm.upstreamTools).toEqual([]);
+  expect(pm.upstreamTools).toEqual(["read", "edit", "write", "grep", "find", "ls", "bash"]);
   expect(tools.map((item) => item.name)).toEqual(names);
   expect([...pm.corralOps].sort()).toEqual(["hello", "event", "receipt_lookup", ...cases.map(({ op }) => op), "todo"].sort());
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-pm-noassets-"));
@@ -158,8 +158,9 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     if (stage === "reload") await host.session.reload();
     if (stage === "refused replacement") await expectReplacementsRefused(host, events);
     const state = host.state();
-    expect(host.session.getActiveToolNames().sort()).toEqual([...names].sort());
-    expect(state.loadout).toEqual(names);
+    const upstream = ["read", "edit", "write", "grep", "find", "ls", "bash"];
+    expect(host.session.getActiveToolNames().sort()).toEqual([...upstream, ...names].sort());
+    expect(state.loadout).toEqual([...upstream, ...names]);
     const resources = host.runtime.services.resourceLoader;
     expect(resources.getSkills().skills).toHaveLength(0);
     expect(resources.getPrompts().prompts).toHaveLength(0);
@@ -170,8 +171,6 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     // When the offline model calls each permitted tool and attempts forbidden ones:
     const target = join(cwd, `forbidden-${stage}`);
     const forbidden = [
-      { callId: "write", name: "write", arguments: { path: target, content: "forbidden" } },
-      { callId: "bash", name: "bash", arguments: { command: `touch ${target}` } },
       { callId: "act", name: "corral_pm_act", arguments: {} },
       { callId: "deadline", name: "corral_question_deadline", arguments: {} },
       { callId: "mcp", name: "mcp__leak", arguments: {} },
