@@ -8,6 +8,7 @@ mod capabilities;
 mod jobs;
 mod live;
 mod local_controls;
+mod lsp;
 pub mod paths;
 pub mod pm_state;
 mod question;
