@@ -233,6 +233,6 @@ pub fn sync_questions(
     send(client, state, &held)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, target_os = "linux"))]
 #[path = "herdr_status_tests.rs"]
 mod tests;
