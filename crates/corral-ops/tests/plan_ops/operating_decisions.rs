@@ -365,20 +365,21 @@ fn manifest_owner_decisions_without_valid_answers_refuse_fresh_automatic_authori
                     verdict: Verdict::Approve,
                     notes,
                 },
-            )
-            .unwrap();
+            );
             let unanswered = matches!(
                 invalid,
                 "unanswered" | "incomplete" | "empty-answer" | "presentation-only"
             );
-            assert_eq!(
-                verdict.verdict,
-                Some(if unanswered {
-                    Verdict::Escalate
-                } else {
-                    Verdict::Approve
-                })
-            );
+            if unanswered {
+                assert!(
+                    verdict
+                        .unwrap_err()
+                        .to_string()
+                        .contains("resolve decisions")
+                );
+            } else {
+                assert_eq!(verdict.unwrap().verdict, Some(Verdict::Approve));
+            }
             ctx.store
                 .update(&id, |task| {
                     let plan = &mut task.plans[0];

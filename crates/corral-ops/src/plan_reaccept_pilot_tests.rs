@@ -56,7 +56,7 @@ fn real_review_and_owner_reacceptance_keep_a_published_design_done() {
         assert_parked(&ctx, &id, &children);
         approval(&ctx, &id).unwrap();
 
-        // When a reviewer-policy change makes the approval stale for the children.
+        // When reviewer policy changes after publication, members retain approval.
         let mut reviewer = ctx.store.config.profiles["gpt-review"].clone();
         reviewer.model = Some("fixture-reviewer-2".into());
         ctx.store
@@ -65,7 +65,10 @@ fn real_review_and_owner_reacceptance_keep_a_published_design_done() {
             .insert("gpt-review-2".into(), reviewer);
         ctx.store.config.review.reviewer = Some("gpt-review-2".into());
         ctx.store.save_config().unwrap();
-        assert!(format!("{:#}", approval(&ctx, &id).unwrap_err()).contains("stale plan approval"));
+        approval(&ctx, &id).unwrap();
+        let child = ctx.store.get(&children[0]).unwrap();
+        corral_core::plan_policy::validate_owner_resolution(&ctx.store, &ctx.store.config, &child)
+            .unwrap();
 
         // And it is re-reviewed through the real admission path, then owner re-accepted.
         let second = crate::plan_review(&ctx, &id, None).unwrap();

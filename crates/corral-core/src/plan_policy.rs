@@ -528,7 +528,13 @@ fn approval_submission(
         .approval
         .as_ref()
         .context("plan pending: waiting for explicit owner approval")?;
-    if review.policy_digest != digest || approval.policy_digest != digest {
+    // Publication freezes the accepted review policy for this exact plan revision.
+    let published = task.status == crate::Status::Done
+        && !task.children.is_empty()
+        && task.plan.as_deref() == Some(&format!("{}@{}", task.id, plan.id));
+    if review.policy_digest != approval.policy_digest
+        || (!published && review.policy_digest != digest)
+    {
         bail!("stale plan approval: reviewer policy changed; review the plan again");
     }
     let expected = expected_reviewer(config, task)?;
@@ -541,29 +547,36 @@ fn approval_submission(
     } else {
         Some(review)
     };
-    if let Some(route) = independent.and_then(|r| r.route.as_deref()) {
+    if let Some(route) = independent
+        .and_then(|r| r.route.as_deref())
+        .filter(|_| !published)
+    {
         ensure!(
             !route.capability_mismatch && crate::plan_route_changes(config, task, route).is_empty(),
             "stale plan approval: review contract, capability or reviewer revision changed; review the plan again"
         );
     }
     if approval.by == "owner" {
-        let reviewed = match plan.reviews.iter().rev().nth(1) {
-            Some(r) => {
-                r.verdict == Some(Verdict::Approve)
-                    && r.policy_digest == digest
-                    && plan_reviewer_authorized(store, config, task, r, &expected)?
+        let reviewed = if published {
+            true
+        } else {
+            match plan.reviews.iter().rev().nth(1) {
+                Some(r) => {
+                    r.verdict == Some(Verdict::Approve)
+                        && r.policy_digest == digest
+                        && plan_reviewer_authorized(store, config, task, r, &expected)?
+                }
+                None => false,
             }
-            None => false,
         };
-        if review.reviewer != "owner" || (expected != "owner" && !reviewed) {
+        if review.reviewer != "owner" || (!published && expected != "owner" && !reviewed) {
             bail!("stale plan approval: independent review missing");
         }
         if !decisions_resolved(task, plan, review.notes.as_deref().unwrap_or("")) {
             bail!("plan escalated: owner decisions require explicit resolutions in notes");
         }
     } else if approval.by != review.reviewer
-        || !plan_reviewer_authorized(store, config, task, review, &expected)?
+        || (!published && !plan_reviewer_authorized(store, config, task, review, &expected)?)
         || owner_decisions(task, plan)
     {
         bail!("stale plan approval: automatic acceptance policy or reviewer changed");

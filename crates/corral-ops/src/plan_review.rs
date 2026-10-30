@@ -585,20 +585,21 @@ pub(crate) fn verdict_report_checked(
         let mut notes = input.notes.to_string();
         let verdict = match input.verdict {
             Verdict::Approve if owner && plan::expected_reviewer(&config, task)? != "owner" && !reviewed => {
-                notes.push_str("\nEscalated: independent review must approve before owner acceptance.");
-                Verdict::Escalate
+                bail!("independent review must approve before owner acceptance");
             }
             Verdict::Approve if !owner && !authorized => {
                 notes.push_str("\nEscalated: unauthorized reviewer.");
                 Verdict::Escalate
+            }
+            Verdict::Approve if mismatch && owner => {
+                bail!("reviewer lacks the strong capability the plan contract requires");
             }
             Verdict::Approve if mismatch => {
                 notes.push_str("\nEscalated: the reviewer lacks the strong capability the plan contract requires.");
                 Verdict::Escalate
             }
             Verdict::Approve if decisions && owner && !plan::decisions_resolved(task, selected, input.notes) => {
-                notes.push_str("\nEscalated: owner must resolve decisions explicitly in notes as `Resolved: <decision> => <resolution>`.");
-                Verdict::Escalate
+                bail!("owner must resolve decisions explicitly in notes as `Resolved: <decision> => <resolution>`");
             }
             Verdict::Approve => Verdict::Approve,
             Verdict::Changes => Verdict::Changes,
