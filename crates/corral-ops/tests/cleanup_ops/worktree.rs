@@ -70,6 +70,35 @@ fn approval_closes_every_pane_before_removing_worktree() {
     fx.assert_closed(&panes, &run.herdr.unwrap().workspace_id);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn landing_waits_for_recorded_shell_after_pane_close() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let pane = &run.herdr.as_ref().unwrap().pane_id;
+    let close_pid = fx.state.parent().unwrap().join("closing-pid");
+    let mut child = crate::support::command("python3", &run.worktree)
+        .current_dir(&run.worktree)
+        .env_remove("CORRAL_PROCESS_OWNER")
+        .env_remove("HERDR_PANE_ID")
+        .env("CLOSE_PID", close_pid)
+        .args(["-c", "import os,signal,select;\ndef close(*_):\n p=int(open(os.environ['CLOSE_PID']).read()); fd=os.pidfd_open(p); poll=select.poll(); poll.register(fd,select.POLLIN); poll.poll(); os._exit(0)\nsignal.signal(signal.SIGTERM,close); print('ready',flush=True); signal.pause()"])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "ready");
+    fx.edit(|s| s["shells"] = json!({pane: child.id()}));
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    child.wait().unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
 #[test]
 fn approval_protects_unowned_nested_cwd_and_outside_process() {
     let fx = Fx::new();
@@ -250,6 +279,47 @@ fn sync_reaps_abandoned_reviewer() {
     corral_ops::review_run(&fx.ctx, &fx.id, Some("rev")).unwrap();
     fx.sync();
     assert!(resident.0.try_wait().unwrap().is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn pane_environment_identifies_recorded_and_foreign_residents() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let pane = run.herdr.as_ref().unwrap().pane_id.clone();
+    let spawn = |name: &str| {
+        let mut child = crate::support::command("python3", &run.worktree)
+            .current_dir(&run.worktree)
+            .env_remove("CORRAL_PROCESS_OWNER")
+            .env("HERDR_PANE_ID", name)
+            .args([
+                "-c",
+                "import signal; print('ready',flush=True); signal.pause()",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        Resident(child)
+    };
+    let mut own = spawn(&pane);
+    let mut foreign = spawn("foreign:p1");
+    let line =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(
+        line.contains("HERDR_PANE_ID=foreign:p1, recorded=false"),
+        "{line}"
+    );
+    assert!(own.0.try_wait().unwrap().is_some());
+    assert!(foreign.0.try_wait().unwrap().is_none());
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
 }
 
 #[test]

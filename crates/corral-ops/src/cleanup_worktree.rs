@@ -171,6 +171,121 @@ pub(crate) fn reap_review(_ctx: &Ctx, _task: &Task, _run: &Run, _child: &Run) ->
     Ok(())
 }
 
+// Pin the pane's actual processes before closing it, then wait for kernel exit
+// notifications rather than racing the terminal server's asynchronous teardown.
+#[cfg(target_os = "linux")]
+pub(crate) fn pane_exits(ctx: &Ctx, pane: &str) -> Vec<rustix::fd::OwnedFd> {
+    use rustix::process::{Pid, PidfdFlags, pidfd_open};
+    let Ok(info) = ctx.herdr.pane_process_info(pane) else {
+        return Vec::new();
+    };
+    std::iter::once(info.shell_pid)
+        .chain(info.foreground_processes.into_iter().map(|p| p.pid))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|pid| Pid::from_raw(i32::try_from(pid).ok()?))
+        .filter_map(|pid| pidfd_open(pid, PidfdFlags::empty()).ok())
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn wait_pane_exits(exits: &[rustix::fd::OwnedFd]) {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    for fd in exits {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let timeout = Timespec {
+            tv_sec: remaining.as_secs() as _,
+            tv_nsec: remaining.subsec_nanos() as _,
+        };
+        let _ = poll(&mut [PollFd::new(fd, PollFlags::IN)], Some(&timeout));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn pane_exits(_ctx: &Ctx, _pane: &str) -> Vec<()> {
+    Vec::new()
+}
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn wait_pane_exits(_exits: &[()]) {}
+
+#[cfg(target_os = "linux")]
+fn pane_marker(process: &StuckProcess) -> Option<String> {
+    let env = std::fs::read(format!("/proc/{}/environ", process.pid)).ok()?;
+    let value = env
+        .split(|b| *b == 0)
+        .find_map(|entry| entry.strip_prefix(b"HERDR_PANE_ID="))?;
+    std::str::from_utf8(value)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+#[cfg(not(target_os = "linux"))]
+fn pane_marker(_process: &StuckProcess) -> Option<String> {
+    None
+}
+
+fn recorded_panes(ctx: &Ctx, task: &Task) -> Result<BTreeSet<String>> {
+    if !crate::session_scope::owns_task(ctx, task)? {
+        return Ok(BTreeSet::new());
+    }
+    fn collect(run: &Run, panes: &mut BTreeSet<String>) {
+        if let Some(pane) = run.gate.as_ref().and_then(|g| g.pane.as_ref()) {
+            panes.insert(pane.clone());
+        }
+        if let Some(review) = &run.review
+            && review.reviewer != "pm"
+            && let Some(pane) = &review.pane
+        {
+            panes.insert(pane.clone());
+        }
+        for child in &run.review_runs {
+            // Child herdr references can be PM accounting, not pane ownership.
+            collect(child, panes);
+        }
+    }
+    let mut panes = BTreeSet::new();
+    for run in &task.runs {
+        if let Some(h) = &run.herdr {
+            panes.insert(h.pane_id.clone());
+        }
+        collect(run, &mut panes);
+    }
+    for event in ctx
+        .store
+        .events_shared()?
+        .iter()
+        .filter(|e| e.task.as_deref() == Some(&task.id))
+    {
+        if !task
+            .runs
+            .iter()
+            .any(|run| event.detail["run"].as_str() == Some(&run.id))
+        {
+            continue;
+        }
+        if (event.kind == "gate_started"
+            || event.kind == "run_workspace_created"
+            || (event.kind == "review_started"
+                && event.detail["reviewer"].as_str().is_some_and(|r| r != "pm")))
+            && let Some(pane) = event.detail["pane"].as_str()
+        {
+            panes.insert(pane.to_owned());
+        }
+    }
+    for review in task
+        .plans
+        .iter()
+        .flat_map(|plan| &plan.reviews)
+        .filter(|r| r.verdict.is_none())
+    {
+        if let Some(h) = &review.herdr {
+            panes.remove(&h.pane_id);
+        }
+    }
+    Ok(panes)
+}
+
 fn may_terminate(linux: bool, owned: bool) -> bool {
     linux && owned
 }
@@ -291,14 +406,22 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         }
     }
     let protected_set = protected_pids()?;
+    let panes = recorded_panes(ctx, task)?;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
+        let pane = pane_marker(&process);
+        let pane_owned = pane.as_ref().is_some_and(|p| panes.contains(p));
         if protected_set.contains(&process.pid)
-            || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process))
+            || !may_terminate(
+                cfg!(target_os = "linux"),
+                owned(ctx, task, run, &process) || pane_owned,
+            )
         {
             warnings.push(format!(
-                "protected process {} still uses worktree",
-                process.pid
+                "protected process {} still uses worktree (HERDR_PANE_ID={}, recorded={})",
+                process.pid,
+                pane.as_deref().unwrap_or("unknown"),
+                pane_owned
             ));
             continue;
         }
