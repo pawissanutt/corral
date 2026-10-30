@@ -5,7 +5,7 @@ use std::io::Read;
 use anyhow::{Context, Result, bail};
 use corral_core::{
     Artifact, ArtifactKind, Checkpoint, CheckpointRecord, CheckpointUpdate, ProgressReadback,
-    ProgressUpdate, Run, RunProgress, Status, StepState, Task, TaskFieldsRef,
+    ProgressUpdate, Run, RunProgress, Status, StepState, Task, TaskFieldsRef, TaskRef,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -13,6 +13,9 @@ use sha2::{Digest, Sha256};
 use crate::Ctx;
 use crate::agent::effects::{self, Receipted};
 use corral_core::agent::{RequestOrigin, RequestReceipt};
+
+mod head;
+use head::next_progress;
 
 pub fn progress_spec_revision<T: TaskFieldsRef + ?Sized>(task: &T) -> Result<String> {
     Ok(format!(
@@ -120,8 +123,8 @@ fn active_run<'a>(task: &'a Task, run_id: &str, spec: &str, handoff: bool) -> Re
     Ok(run)
 }
 
-fn identity(task: &Task, input_task: &str) -> Result<()> {
-    if task.id != input_task {
+fn identity<T: TaskFieldsRef + ?Sized>(task: &T, input_task: &str) -> Result<()> {
+    if task.id() != input_task {
         bail!("task_identity_mismatch");
     }
     Ok(())
@@ -178,9 +181,7 @@ pub fn update_progress_request(
     input: &ProgressUpdate,
     origin: &RequestOrigin,
 ) -> Result<Receipted> {
-    effects::swept(ctx, origin, effects::Home::of(origin), || {
-        progress_inner(ctx, id, input, Some(origin)).map(|(_, receipt)| receipt)
-    })
+    head::update_progress(ctx, id, input, origin)
 }
 
 fn progress_inner(
@@ -189,72 +190,16 @@ fn progress_inner(
     input: &ProgressUpdate,
     origin: Option<&RequestOrigin>,
 ) -> Result<(Task, Option<RequestReceipt>)> {
-    let detail = json!({"run": input.run, "revision": input.expected_revision + 1});
     let mut receipt = None;
     let task = ctx.store.update(id, |task| {
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, task, origin, &effects::Home::of(origin))?;
         }
-        identity(task, &input.task)?;
-        let run = active_run(task, &input.run, &input.spec_revision, false)?;
-        let revision = run.progress.as_ref().map_or(0, |p| p.revision);
-        if revision != input.expected_revision {
-            bail!("stale_progress: expected {revision}");
-        }
-        unique(input.phases.iter().map(|p| p.id.as_str()))?;
-        let steps: Vec<_> = input.phases.iter().flat_map(|p| &p.steps).collect();
-        unique(steps.iter().map(|s| s.id.as_str()))?;
-        if input.phases.iter().any(|p| p.label.trim().is_empty())
-            || steps.iter().any(|s| s.label.trim().is_empty())
-        {
-            bail!("empty_progress_label");
-        }
-        if steps
-            .iter()
-            .filter(|s| s.status == StepState::InProgress)
-            .count()
-            > 1
-        {
-            bail!("multiple_current_steps");
-        }
-        for step in &steps {
-            validate_references(task, &step.criteria, &[])?;
-            if let StepState::Dropped { reason } = &step.status
-                && reason.trim().is_empty()
-            {
-                bail!("drop_reason_required: {}", step.id);
-            }
-        }
-        if let Some(previous) = &run.progress {
-            for phase in &previous.phases {
-                if !input.phases.iter().any(|p| p.id == phase.id) {
-                    bail!("phase_removed: {}; retain its identity", phase.id);
-                }
-            }
-            for step in previous.steps() {
-                let next = steps.iter().find(|s| s.id == step.id).with_context(|| {
-                    format!("step_removed: {}; drop with a reason instead", step.id)
-                })?;
-                match &step.status {
-                    StepState::Done | StepState::Dropped { .. } if next.status != step.status => {
-                        bail!("terminal_step_changed: {}", step.id);
-                    }
-                    StepState::Pending
-                    | StepState::InProgress
-                    | StepState::Done
-                    | StepState::Dropped { .. } => {}
-                }
-            }
-        }
-        let revision = revision
-            .checked_add(1)
-            .context("progress_revision_exhausted")?;
+        let progress = next_progress(task, input)?;
+        let revision = progress.revision;
+        let detail = json!({"run": input.run, "revision": revision});
         let run = task.current_run_mut().context("missing_run")?;
-        run.progress = Some(RunProgress {
-            revision,
-            spec_revision: input.spec_revision.clone(),
-            phases: input.phases.clone(),
-        });
+        run.progress = Some(progress);
         run.checkpoint_required = true;
         if let Some(origin) = origin {
             let event = effects::event("progress_updated", detail.clone(), origin);
