@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Reviewer, Run, RunOutcome,
-    Status, Task, Verdict,
+    Artifact, ArtifactKind, CandidateIdentity, CoworkReview, GateRecord, GateResult, ReviewPolicy,
+    Reviewer, Run, RunOutcome, Status, Task, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use jiff::Timestamp;
@@ -404,6 +404,13 @@ pub(crate) fn landing_gate_passed(ctx: &Ctx, task: &Task, run: &Run) -> Result<b
     }
 }
 
+/// A review must approve the candidate: the policy names a reviewer, or the owner finished the
+/// current co-work run with review required, which binds whatever the reviewer resolves to.
+fn review_needed(policy: &ReviewPolicy, task: &Task) -> bool {
+    policy.reviewer != Reviewer::None
+        || (task.cowork_run()).is_some_and(|cowork| cowork.review == CoworkReview::Required)
+}
+
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.
 fn quick_approval_on_full_fail(run: &Run) -> Option<&str> {
     let gate = run
@@ -445,10 +452,16 @@ fn require_manual_receipts(ctx: &Ctx, task: &Task) -> Result<()> {
             task.id
         );
     }
-    if policy.reviewer != Reviewer::None
+    if review_needed(&policy, task)
         && (!verification::review_fresh(ctx, task, run)?
             || run.review.as_ref().and_then(|r| r.verdict).is_none())
     {
+        if policy.reviewer == Reviewer::None {
+            bail!(
+                "review_required: {0} was finished with review required, but no reviewer resolves for it; run `corral review-run {0} --reviewer <profile>`, then `corral approve {0}` after its verdict",
+                task.id
+            );
+        }
         if let Some(tier) = quick_approval_on_full_fail(run) {
             bail!(
                 "stale_retry: the approval is bound to the {tier} receipt and promotion needs a full PASS, but the full landing gate failed; run `corral review-run {}` to review the failed full receipt, then `corral approve {}` after its verdict",
@@ -578,7 +591,7 @@ pub(crate) fn approve_landed(
             let policy = verification::policy(ctx, t)?;
             if verification::identity(ctx, t, current, expected)? != *expected
                 || (!policy.gate.is_empty() && !landing_gate_passed(ctx, t, current)?)
-                || (policy.reviewer != Reviewer::None && (!verification::review_fresh(ctx, t, current)?
+                || (review_needed(&policy, t) && (!verification::review_fresh(ctx, t, current)?
                     || current.review.as_ref().and_then(|r| r.verdict) != Some(Verdict::Approve)))
                 || !crate::completion::evidence_failures(ctx, t, current)?.is_empty()
             {

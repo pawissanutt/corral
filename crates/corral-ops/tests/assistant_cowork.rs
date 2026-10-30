@@ -9,6 +9,7 @@ mod support;
 use corral_core::assistant::AssistantScratch;
 use corral_core::{
     Accept, AgentCmd, Cowork, CoworkReview, GateResult, Origin, Reviewer, Run, RunOutcome, Status,
+    Verdict,
 };
 use corral_herdr::Herdr;
 use corral_ops::assistant::scratch::{self, Finish};
@@ -271,6 +272,87 @@ fn review_required_runs_the_normal_reviewer_after_the_gate() {
     let policy = fx.ctx.store.config.task_review_policy(&task);
     assert_eq!(policy.reviewer, Reviewer::parse("rev"));
     assert_eq!(policy.accept, Accept::Owner);
+    // When the reviewer configuration later changes to none, the required review still binds.
+    let mut fx = fx;
+    fx.ctx.store.config.review.reviewer = None;
+    fx.ctx.store.save_config().unwrap();
+    let refused = approve(&fx, &task.id).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("review_required"),
+        "{refused:#}"
+    );
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
+}
+
+fn approve(fx: &Fx, id: &str) -> anyhow::Result<String> {
+    corral_ops::approve(&fx.ctx, id, ApproveStrategy::FastForward, true, false)
+}
+
+#[test]
+fn review_required_binds_approval_when_no_reviewer_resolves() {
+    // Given a project whose review policy resolves no reviewer, and A-1's scratch with a commit.
+    let fx = Fx::new(None);
+    let made = fx.scratch("cache-fix");
+    fx.commit(&made.path, "cache.txt");
+    // When the owner finishes it with review required.
+    let opts = Finish {
+        title: Some("Fix the cache"),
+        review: Some(CoworkReview::Required),
+        ..Finish::default()
+    };
+    let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &opts).unwrap();
+    let id = finished.task.clone();
+    // Then the finish names how to start a review, and approval refuses until one approves.
+    let note = finished.reviewer.unwrap_or_default();
+    assert!(
+        note.contains(&format!("corral review-run {id} --reviewer")),
+        "{note}"
+    );
+    let main = git(&fx.app, &["rev-parse", "main"]);
+    let refused = approve(&fx, &id).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("review_required"),
+        "{refused:#}"
+    );
+    assert_eq!(fx.ctx.store.get(&id).unwrap().status, Status::Review);
+    assert_eq!(git(&fx.app, &["rev-parse", "main"]), main);
+    // When a named reviewer reviews the candidate and approves it, the task lands.
+    corral_ops::review_run(&fx.ctx, &id, Some("rev")).unwrap();
+    corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "reviewed").unwrap();
+    approve(&fx, &id).unwrap();
+    assert_eq!(fx.ctx.store.get(&id).unwrap().status, Status::Done);
+}
+
+#[test]
+fn review_required_into_a_task_whose_reviewer_is_none_cannot_land_unreviewed() {
+    // Given a project reviewed by rev, and T-001 overriding its own reviewer to none.
+    let fx = Fx::new(Some("rev"));
+    let task = (fx.ctx.store)
+        .create("Cache layer", Some("app"), Status::Backlog, "")
+        .unwrap();
+    let none = |t: &mut corral_core::Task| {
+        t.reviewer = Some("none".into());
+        Ok(())
+    };
+    fx.ctx.store.update(&task.id, none).unwrap();
+    let made = fx.scratch("cache-fix");
+    fx.commit(&made.path, "cache.txt");
+    // When the owner finishes the scratch into T-001 with review required.
+    let opts = Finish {
+        into: Some(&task.id),
+        review: Some(CoworkReview::Required),
+        ..Finish::default()
+    };
+    let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &opts).unwrap();
+    // Then no review starts on its own, and approval refuses without one.
+    let note = finished.reviewer.unwrap_or_default();
+    assert!(note.contains("--reviewer"), "{note}");
+    let refused = approve(&fx, &task.id).unwrap_err();
+    assert!(
+        format!("{refused:#}").contains("review_required"),
+        "{refused:#}"
+    );
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
 }
 
 #[test]

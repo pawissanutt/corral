@@ -507,7 +507,11 @@ changes nothing. Then:
 4. **Review choice.** The default `--review none` makes the co-work run resolve reviewer
    none, so `approve` needs no review. `--review required` starts the project's normal
    reviewer after a passing gate (`corral review-run`), and approval then needs its
-   verdict. Either way the co-work run lands only on the owner's approval: its acceptance
+   verdict. The required review binds whatever the reviewer resolves to: when none
+   resolves (no reviewer configured, or the task's own `reviewer: none`), now or after a
+   later configuration change, the finish says so and `approve` refuses `review_required`
+   until `corral review-run <id> --reviewer <profile>` has returned its verdict on the
+   candidate. Either way the co-work run lands only on the owner's approval: its acceptance
    resolves to `owner`, so autopilot never lands it. Both overrides apply only while the
    co-work run is the task's current run. A later run of the same task, and every other
    task, follow the project's review policy.
