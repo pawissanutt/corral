@@ -227,7 +227,6 @@ test("the production worker gates, owner input steers a bridge turn, and a fresh
     { toolCalls: [{ callId: "done-1", name: "corral_done", arguments: {
       summary: SUMMARY, gate_ref: readback, contract_sha256: lane.contract_sha256,
     } }] },
-    { text: "DONE" },
   ]);
   const woken = turnEnded(3);
   const done = follower!.next((event) => event.kind === "done" && event.task === lane.task, 120_000);
