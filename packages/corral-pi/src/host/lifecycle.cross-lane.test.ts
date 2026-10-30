@@ -27,6 +27,8 @@ const workspaces: string[] = [];
 
 const cli = (...args: string[]) => ok([corral, "--root", workspace, ...args], { cwd: workspace });
 const show = (task: string): any => JSON.parse(cli("show", task, "--json"));
+const herdr = (...args: string[]): any => JSON.parse(ok(["herdr", "--session", "corral-test", ...args])).result;
+const SOURCE = ["--source", "custom:corral-pi", "--agent", "corral-pi"];
 const frame = (cap: string, command: string, args: Record<string, unknown>) =>
   ({ version: 1, id: `rc-${command}-${Math.random().toString(36).slice(2, 10)}`, ctl_cap: cap, generation: 1, command, args });
 
@@ -121,6 +123,12 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
     text: "Reply only BEFORE.", busy_policy: "follow_up", idempotency_key: "rc-before", origin: "cross-lane" }));
   expect([started.result?.disposition, started.result?.reason]).toEqual(["started", undefined]);
   await ended;
+  // And herdr shows generation 1 as the run pane's agent corral-pi, settled, with its identity (T-605):
+  const pane: string = show("T-001").runs.at(-1).herdr.pane_id;
+  const settled = herdr("agent", "wait", pane, "--timeout", "30000").agent;
+  expect([settled.agent, settled.display_agent, settled.tokens?.corral_generation, settled.tokens?.corral_task])
+    .toEqual(["corral-pi", "corral-pi worker T-001/R1 g1", "1", "T-001"]);
+  expect(["idle", "done"]).toContain(settled.agent_status);
 
   // When the owner cancels while the host is idle, then nothing is cancelled:
   const idle = JSON.parse(cli("agent", "cancel", "T-001"));
@@ -143,6 +151,7 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
 
   // Given a third turn whose provider response is held, so the host is busy inside it:
   await heldTurn(client, cap, 3);
+  expect(herdr("agent", "wait", pane, "--until", "working", "--timeout", "30000").agent.agent_status).toBe("working");
   client.close();
   const lostGeneration = show("T-001").runs.at(-1).agent_host.generations[0];
 
@@ -162,6 +171,12 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   expect(task.status).toBe("needs_me");
   expect(task.runs.at(-1).outcome).toBeUndefined();
   expect(task.runs.at(-1).blocked_excerpt).toMatch(/^Pi-native host lost: T-001\/R1 generation 1\./);
+  // And corral's loss reconciliation released generation 1's herdr report: no stale working state or
+  // corral-pi identity is left on the pane (dispatch's own task/run tokens stay), which stays open:
+  const released = herdr("pane", "get", pane).pane;
+  const leftover = Object.keys(released.tokens ?? {}).filter((token) => token.startsWith("corral_"));
+  expect([released.pane_id, released.agent === "corral-pi", leftover, released.display_agent])
+    .toEqual([pane, false, [], undefined]);
 
   // When the owner replies while the host is lost, then resumes the run:
   cli("reply", "T-001", "Queued while the host was lost.");
@@ -202,6 +217,23 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   // And once the turn it started ends, generation 2's delivery module has recorded that envelope,
   // while Pi's session file keeps the notice's placeholder and never its classifications:
   await resumedEnded;
+  // And herdr shows generation 2 on the same bound session (T-605):
+  const second2 = herdr("agent", "wait", pane, "--timeout", "30000").agent;
+  expect([second2.agent, second2.display_agent, second2.tokens?.corral_generation, second2.tokens?.corral_session])
+    .toEqual(["corral-pi", "corral-pi worker T-001/R1 g2", "2", fenced.bound.session_id]);
+  // When a late report and cleanup arrive with generation 1's own sequence numbers:
+  const hello1 = show("T-001").runs.at(-1).agent_host.receipts.find((r: any) => r.request_id === "ev-1-0");
+  const base1 = BigInt(hello1.result.herdr_seq_epoch_ms) << 20n;
+  const end1 = String(base1 + (1n << 20n) - 1n);
+  ok(["herdr", "--session", "corral-test", "pane", "report-agent", pane, ...SOURCE, "--state", "blocked",
+    "--seq", String(base1 + 99n)]);
+  ok(["herdr", "--session", "corral-test", "pane", "release-agent", pane, ...SOURCE, "--seq", end1]);
+  ok(["herdr", "--session", "corral-test", "pane", "report-metadata", pane, "--source", "custom:corral-pi",
+    "--clear-display-agent", "--clear-token", "corral_generation", "--seq", end1]);
+  // Then none of them overwrites or clears generation 2:
+  const kept = herdr("pane", "get", pane).pane;
+  expect([kept.agent, kept.agent_status, kept.display_agent, kept.tokens?.corral_generation])
+    .toEqual(["corral-pi", second2.agent_status, "corral-pi worker T-001/R1 g2", "2"]);
   const raw = readFileSync(current.bound.session_file, "utf8");
   const entries = raw.trim().split("\n").map((line) => JSON.parse(line));
   const recorded = entries.filter((entry) => entry.customType === "corral_delivery" && entry.data?.generation === 2);

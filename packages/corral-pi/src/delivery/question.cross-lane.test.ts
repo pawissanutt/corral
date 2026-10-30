@@ -23,6 +23,7 @@ const workspaces: string[] = [];
 
 const cli = (...args: string[]) => ok([corral, "--root", workspace, ...args], { cwd: workspace });
 const show = (task: string): any => JSON.parse(cli("show", task, "--json"));
+const herdr = (...args: string[]): any => JSON.parse(ok(["herdr", "--session", "corral-test", ...args])).result;
 
 beforeAll(() => {
   if (!isolated) {
@@ -109,6 +110,11 @@ test("a question answered after the owner's refused /new is observed from the or
   expect(listed).toHaveLength(1);
   const question = listed[0].question;
   expect([question.key, question.state, question.asked.session_id]).toEqual(["T-001/R1/Q1", "open", binding.session_id]);
+  // And herdr shows the bound worker as corral-pi blocked on it, after its turn settled (T-605):
+  const pane: string = runRecord.herdr.pane_id;
+  const blocked = herdr("agent", "wait", pane, "--until", "blocked", "--timeout", "30000").agent;
+  expect([blocked.agent, blocked.agent_status, blocked.tokens?.corral_task, blocked.tokens?.corral_session])
+    .toEqual(["corral-pi", "blocked", "T-001", binding.session_id]);
 
   // When the owner's /new in the pane is refused and the owner then answers the question:
   const refused = await ownerNewIsRefused(runRecord.herdr.pane_id, generationDir(workspace, "T-001", "R1", 1), 1);
@@ -122,8 +128,13 @@ test("a question answered after the owner's refused /new is observed from the or
   expect(existsSync(receiptFile)).toBeFalse();
   // The first sync submits the answer to the host, which records it before Pi sees it; the second
   // observes that record.
+  const answerTurn = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
+    && event.detail?.turn === 2, 90_000, "the answer's agent_turn_ended");
   cli("sync");
   cli("sync");
+  await answerTurn;
+  // And the delivered answer settled the question in herdr: the host is no longer blocked.
+  expect(["idle", "done"]).toContain(herdr("agent", "wait", pane, "--timeout", "30000").agent.agent_status);
 
   // Then corral observed that answer member from the transcript hello bound, in the bound session:
   expect(existsSync(receiptFile)).toBeTrue();

@@ -37,6 +37,7 @@ import { corralRenderers } from "../ui/render.ts";
 import { installTodo } from "../ui/todo.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
+import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
@@ -90,6 +91,8 @@ export interface HostSessionOptions {
   readonly events: EventLog;
   readonly network: GuardedFetch;
   readonly sessionManager: SessionManager;
+  /** The pane's herdr projection; absent for a headless host or one outside its bound pane. */
+  readonly herdr?: HerdrLifecycle;
 }
 
 type TurnOrigin = { kind: "bridge"; idempotency_key: string } | { kind: "owner_terminal" } | { kind: "unknown" };
@@ -99,6 +102,8 @@ const STATE_SECTION_MAX_BYTES = 8 * 1024;
 /** A lifecycle report keeps its request ID, so retrying it is safe; back off from contention. */
 const REPORT_ATTEMPTS = 6;
 const REPORT_BACKOFF_MS = 250;
+/** Withdraw refusals that mean corral already holds the question as not pending. */
+const NOT_PENDING = new Set(["question_withdrawn", "question_state", "question_closed", "question_not_found"]);
 
 /** A module's own readback, replaced by its size once it could crowd a bridge frame. */
 function bounded(value: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -585,6 +590,9 @@ export class HostSession {
         },
       });
     }
+    pi.on("tool_result", (event) => {
+      if (event.parentToolCallId === undefined) this.observeQuestion(event.toolName, event.input, event.details);
+    });
     pi.on("input", (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
@@ -627,6 +635,21 @@ export class HostSession {
     if (this.bound) this.checkpoint("start");
     this.report("turn_started", { origin });
     if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
+    this.options.herdr?.turnStarted();
+  }
+
+  /** Only corral's receipts open or settle a question in the herdr projection. */
+  private observeQuestion(tool: string, input: Record<string, unknown>, details: unknown): void {
+    const receipt = details as Partial<CorralReceipt> | undefined;
+    const result = (receipt?.result ?? {}) as { key?: unknown; blocking?: unknown; code?: unknown };
+    if (tool === "corral_ask" && receipt?.state === "committed" && receipt.replayed !== true &&
+        typeof result.key === "string" && typeof input.kind === "string") {
+      const blocking = typeof result.blocking === "boolean" ? result.blocking : input.blocking === true;
+      this.options.herdr?.asked({ key: result.key, kind: input.kind, blocking });
+    }
+    const settled = receipt?.state === "committed" ||
+      (receipt?.state === "rejected" && NOT_PENDING.has(String(result.code)));
+    if (tool === "corral_withdraw" && settled && typeof input.key === "string") this.options.herdr?.resolved(input.key);
   }
 
   private turnEnded(aborted: boolean): void {
@@ -638,6 +661,7 @@ export class HostSession {
     this.ownerInput = false;
     if (this.bound) this.checkpoint("end");
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
+    this.options.herdr?.turnEnded();
   }
 
   private checkpoint(phase: "start" | "end"): void {
@@ -700,12 +724,14 @@ export class HostSession {
   }
 
   async close(): Promise<void> {
+    const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
     const aborted = this.session.abort();
     await this.auxiliary?.close();
     await aborted;
     await this.mcp?.close();
     this.session.dispose();
+    await released;
   }
 
   async hello(bindNonce: string, pane: string, ctlCapSha256: string): Promise<CorralReceipt> {
@@ -732,6 +758,8 @@ export class HostSession {
       bind_nonce_sha256: sha256Hex(bindNonce),
     });
     this.boundSessionId = sessionId;
+    const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
+    this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
     if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     return receipt;
@@ -759,6 +787,7 @@ export class HostSession {
     // Only a corral inbox delivery can carry the owner's answer to a bound permission question.
     const permission = input.origin === "corral-inbox" ? this.permissions?.observeAnswer(input.text) : undefined;
     if (permission) this.options.events.emit("bash_permission_answer", { decision: permission });
+    if (input.origin === "corral-inbox") for (const key of answeredKeys(input.text)) this.options.herdr?.resolved(key);
     return new Promise<SubmitResult>((resolve) => {
       let settled = false;
       const settle = (result: SubmitResult) => {
@@ -839,6 +868,7 @@ export class HostSession {
         ...this.options.network.ledger(),
       },
       corral_calls: { ...this.stats },
+      herdr: this.options.herdr?.readback() ?? null,
       delivery: bounded(this.options.modules.delivery.state?.() ?? null),
       auth: bounded(this.options.modules.auth.state?.() ?? null),
     };
