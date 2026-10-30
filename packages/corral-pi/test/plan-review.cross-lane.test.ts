@@ -52,7 +52,16 @@ test("launched pi-native plan reviewer records a fixture verdict", async () => {
     ]); return fixtureTransport().send;`);
     writeFileSync(authPath, auth);
     const configPath = join(workspace, ".corral/corral.toml");
-    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n[agent.capabilities.plan_reviewer]\nrole_enabled = true\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\neffort = "high"\n`);
+    let config = readFileSync(configPath, "utf8");
+    // This fixture launches only one offline reviewer; host load must not affect admission.
+    if (/^max_load_per_core\s*=/m.test(config)) {
+      config = config.replace(/^max_load_per_core\s*=.*$/m, "max_load_per_core = 1000000.0");
+    } else if (/^\[resources\]/m.test(config)) {
+      config = config.replace(/^\[resources\]/m, "[resources]\nmax_load_per_core = 1000000.0");
+    } else {
+      config += "\n[resources]\nmax_load_per_core = 1000000.0\n";
+    }
+    writeFileSync(configPath, `${config}\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n[agent.capabilities.plan_reviewer]\nrole_enabled = true\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\neffort = "high"\n`);
     cli("new", "Fixture plan", "-p", "app", "--ready");
     const plan = join(workspace, "plan.md");
     writeFileSync(plan, PLAN);
