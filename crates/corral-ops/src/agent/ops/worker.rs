@@ -20,6 +20,10 @@ use super::super::effects::{self, Receipted, Report};
 use super::super::envelope::Envelope;
 use crate::Ctx;
 
+#[cfg(test)]
+#[path = "worker_path_tests.rs"]
+mod tests;
+
 /// The T-252 child that lands these handlers.
 pub const OWNER: &str = "worker-role";
 
@@ -156,12 +160,11 @@ pub(super) fn artifact_path(ctx: &Ctx, task: &str, run: &str, path: PathBuf) -> 
     if path.is_absolute() {
         return Ok(path);
     }
-    let task = ctx.store.get(task)?;
-    let worktree = task
-        .runs
-        .iter()
-        .find(|r| r.id == run)
-        .map(|r| r.worktree.clone())
+    let worktree = ctx
+        .store
+        .head(task)?
+        .run_head(run)?
+        .map(|r| r.worktree)
         .context("the bound run disappeared")?;
     Ok(worktree.join(path))
 }
