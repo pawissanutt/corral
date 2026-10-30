@@ -1,6 +1,5 @@
 //! Capability framework (T-563): one resolved snapshot per generation, adaptive explicit
 //! resume, legacy records and an older installed host, through the real dispatch path.
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use corral_core::agent::{AgentRole, CapabilityChange, SnapshotPreset};
@@ -130,8 +129,7 @@ impl Fixture {
 
     fn message(&self, bootstrap: &Bootstrap) -> Value {
         let bun = self.tmp.path().join("bun");
-        write(&bun, "#!/bin/sh\necho 1.4.2\n");
-        std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+        super::test_support::write_executable(&bun, "#!/bin/sh\necho 1.4.2\n");
         let dir = generation_dir(&self.ctx.store, &self.recipient(), bootstrap.generation).unwrap();
         let ready = check_with(bootstrap, &dir, None, Some(bun)).unwrap();
         serde_json::from_slice(

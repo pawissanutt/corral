@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -213,15 +212,13 @@ fn fake_bun(dir: &Path) -> std::path::PathBuf {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let path = bin.join("bun");
-    std::fs::write(
+    crate::agent::test_support::write_executable(
         &path,
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.4.2; exit 0; fi\n\
          out=\"$CORRAL_FAKE_BUN_OUT\"\nprintf '%s\\n' \"$@\" > \"$out/argv\"\n\
          ls -A \"$CORRAL_FAKE_BUN_GEN\" > \"$out/generation\"\n\
          cat \"/proc/self/fd/$4\" > \"$out/message\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     bin
 }
 

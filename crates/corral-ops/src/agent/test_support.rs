@@ -11,6 +11,23 @@ use serde_json::{Value, json};
 use super::*;
 use crate::Ctx;
 
+/// Only the short-lived `install` child opens the executable for writing. Other
+/// test threads can fork without inheriting a writable descriptor to its inode.
+#[cfg(unix)]
+pub(crate) fn write_executable(path: &std::path::Path, contents: &str) {
+    use std::io::Write;
+
+    let mut source = tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
+    source.write_all(contents.as_bytes()).unwrap();
+    let status = std::process::Command::new("install")
+        .args(["-m", "0700"])
+        .arg(source.path())
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 thread_local! {
     static DATA_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
