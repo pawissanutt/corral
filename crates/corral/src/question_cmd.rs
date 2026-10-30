@@ -9,11 +9,11 @@ use corral_ops::questions::{self, Actor, AnswerInput, Applied, QuestionView};
 #[derive(Args)]
 pub struct QuestionArgs {
     #[command(subcommand)]
-    cmd: QuestionCmd,
+    pub(crate) cmd: QuestionCmd,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum Kind {
+pub(crate) enum Kind {
     Clarification,
     TechnicalChoice,
     Permission,
@@ -32,7 +32,7 @@ impl From<Kind> for QuestionKind {
 }
 
 #[derive(Subcommand)]
-enum QuestionCmd {
+pub(crate) enum QuestionCmd {
     /// List Pi-native agent questions; pending ones (open or escalated) by default
     List {
         /// Only this task's questions

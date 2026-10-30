@@ -807,6 +807,10 @@ fn main() {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
         }
+        if err.is::<entry::AssistantRefused>() {
+            eprintln!("error: {err}");
+            std::process::exit(2);
+        }
         if let Some(command) = selection_json {
             eprintln!(
                 "{}",

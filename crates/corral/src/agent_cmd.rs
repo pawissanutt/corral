@@ -13,11 +13,11 @@ use crate::entry::Entry;
 #[derive(Args)]
 pub struct AgentArgs {
     #[command(subcommand)]
-    cmd: AgentCmd,
+    pub(crate) cmd: AgentCmd,
 }
 
 #[derive(Subcommand)]
-enum AgentCmd {
+pub(crate) enum AgentCmd {
     /// Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
     Call {
         /// Enumerated v1 operation; must equal the envelope's op
@@ -106,7 +106,7 @@ enum AgentCmd {
 }
 
 #[derive(Args)]
-struct TargetArgs {
+pub(crate) struct TargetArgs {
     /// Task of the worker run or review child
     #[arg(required_unless_present = "pm", conflicts_with = "pm")]
     task: Option<String>,

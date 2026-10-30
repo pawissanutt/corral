@@ -81,6 +81,50 @@ keep-tier artifacts, screenshots and pinned snapshots have the same protection a
 artifacts. GC is an owner operation, not an assistant shell operation. `--dry-run` previews;
 `--yes` applies. Purged metadata remains resolvable; re-adding identical content revives it.
 
-This surface does not yet provide Pi assistant launch, general shell entry guards,
-PM inbox operations, scratch management or owner-authorized actions. Those are separate
-members of the [reviewed assistant plan](../plans/assistant-sessions.md).
+## Shell entry: reads, filing and refusals
+
+An assistant's host exports `CORRAL_ASSISTANT=A-<n>` into the session's shell. Every
+`corral` command run with that variable is classified at the CLI entry point, before the
+store opens, as Read, File or Refused. The classification is one exhaustive match over
+every command and subcommand, so a command added later does not build until it has a
+class; nothing reaches an assistant by default.
+
+- **Read**: inspection such as `corral show`, `corral list`, `corral search`,
+  `corral log`, `corral review`, `corral stats`, `corral pins`, `corral open` and
+  `corral wait`; readbacks such as `corral plan show`, `corral pm next`,
+  `corral config get`, `corral artifact list` and `corral agent state`; and read-only
+  forms of mutating commands: `corral dispatch --explain`, `corral done --check`,
+  `corral doctor` without `--fix`, `corral agent rewind --list`, and `corral run progress`
+  or `corral run checkpoint` without `--file`.
+- **File**: `corral new` for an Idea or Backlog task, `corral comment`,
+  `corral assistant summary` for the calling session, and `corral artifact add --session`
+  for the calling session only (never a task run or another session). `corral agent call`,
+  the host's authenticated channel, is admitted too; its operation table decides what the
+  assistant role may do there.
+- **Refused**: everything else, including `corral approve`, `corral move`,
+  `corral dispatch`, `corral config set`, `corral pi`, `corral artifact gc` (even with
+  `--dry-run`), the board, capture and settings screens, and every owner-only command. Filing stops short of authority:
+  `corral new --ready`, `corral new --origin pm`, `corral comment --send`,
+  `corral comment --author pm` and owner approvals written as `owner-ok:` comments are
+  refused as well.
+
+Read and File commands run as actor `assistant` with via `assistant:A-<n>` on every event
+they record, whatever the current directory, `CORRAL_PM` or an explicit `--author` or
+`--origin` says. Task and comment records keep their existing fields (the CLI defaults
+record the owner as filer and comment author); the event log carries the assistant
+attribution. A refused command changes nothing and exits 2 with
+`"assistant_refused: corral approve needs the owner; use corral_owner_action or corral pm inbox post"`,
+naming the command it refused. The owner action and the PM inbox are separate members of
+the plan.
+
+The owner-only guards behind `corral automation confirm`, the `corral mode` grants
+(autopilot confirmation, resume and turbo), agent inbox recovery and retry, and
+`corral plan member-gate` treat `CORRAL_ASSISTANT` like `AI_AGENT`, independently of this
+classification. The agent inbox treats an assistant shell as an agent even when it
+inherits `CORRAL_PM=1`. `corral ext` and unknown subcommands start external
+`corral-ext-<name>` executables without classification, as the shell could; any `corral`
+command they run inherits the variable and is classified.
+
+This surface does not yet provide Pi assistant launch, PM inbox operations, scratch
+management or owner-authorized actions. Those are separate members of the
+[reviewed assistant plan](../plans/assistant-sessions.md).

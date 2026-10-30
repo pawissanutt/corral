@@ -4,11 +4,18 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use corral_core::{OperatingPreview, OperatingSelection, Store};
 
-/// Reject agent and PM entry points independently of caller-supplied attribution.
+/// Whether this process runs in an agent or assistant shell (`AI_AGENT`, `PI_CODING_AGENT` or
+/// `CORRAL_ASSISTANT`). Owner guards refuse every such entry, whatever attribution flags say.
+pub fn agent_entry() -> bool {
+    ["AI_AGENT", "PI_CODING_AGENT", "CORRAL_ASSISTANT"]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some())
+}
+
+/// Reject agent, assistant and PM entry points independently of caller-supplied attribution.
 /// Like other local owner controls, this trusts the owner's OS session, not a CLI flag.
 pub fn require_automation_owner(store: &Store) -> Result<()> {
-    let agent =
-        std::env::var_os("AI_AGENT").is_some() || std::env::var_os("PI_CODING_AGENT").is_some();
+    let agent = agent_entry();
     let pm = std::env::var("CORRAL_PM").as_deref() == Ok("1");
     let cwd = std::env::current_dir().context("reading automation control directory")?;
     require_owner_entry(store, &cwd, agent, pm)
@@ -86,6 +93,48 @@ mod tests {
             // Then owner controls fail closed.
             assert!(require_owner_entry(&store, root.path(), agent, pm).is_err());
         }
+    }
+
+    #[test]
+    fn assistant_shell_is_refused_by_owner_guards_without_agent_markers() {
+        // Given a child process whose only entry marker is CORRAL_ASSISTANT.
+        let root = tempfile::tempdir().unwrap();
+        Store::init(root.path()).unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "automation_controls::tests::assistant_guard_subprocess",
+                "--nocapture",
+            ])
+            .env("ASSISTANT_GUARD_ROOT", root.path())
+            .env("CORRAL_ASSISTANT", "A-1")
+            .current_dir(root.path());
+        for key in ["AI_AGENT", "PI_CODING_AGENT", "CORRAL_PM"] {
+            command.env_remove(key);
+        }
+        // When the automation and plan member-gate owner guards run there.
+        let output = command.stdin(std::process::Stdio::null()).output().unwrap();
+        // Then the child ran exactly that test and every guard refused.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn assistant_guard_subprocess() {
+        let Ok(root) = std::env::var("ASSISTANT_GUARD_ROOT") else {
+            return;
+        };
+        let store = Store::open(Path::new(&root)).unwrap();
+        assert!(agent_entry());
+        assert!(require_automation_owner(&store).is_err());
+        let entry = crate::plan::member_gate::OwnerEntry::from_env().unwrap();
+        assert!(entry.agent && !entry.pm);
+        assert!(require_owner_entry(&store, &entry.cwd, entry.agent, entry.pm).is_err());
     }
 
     #[test]

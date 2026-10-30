@@ -52,7 +52,7 @@ pub struct RunArgs {
     pub id: String,
     /// Ordinary regular JSON file, bounded by artifacts.max_bytes; omitted means read-only
     #[arg(long, value_name = "JSON")]
-    file: Option<PathBuf>,
+    pub(crate) file: Option<PathBuf>,
     /// Print identity and state as JSON; errors are JSON on stderr
     #[arg(long)]
     pub json: bool,
