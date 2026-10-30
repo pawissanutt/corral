@@ -339,7 +339,7 @@ export class HostSession {
     }
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
-      ...(this.jobs ? jobTools(this.jobs) : []),
+      ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd }) : [])];
@@ -379,25 +379,26 @@ export class HostSession {
   }
 
   /**
-   * background_shell: worker only, with its generation-bound settings and runtime directory. Like
-   * todo, the role module decides its loadout: a role that allows no job ops offers no job tools.
+   * Worker jobs are receipted against their run. Interactive jobs live only as long as this host;
+   * they have no task-scoped monitor or durable wake.
    */
   private jobRuntime(): JobRuntime | undefined {
     const { options } = this;
     if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
     const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
-    if (options.identity.role !== "worker" || !settings.success || !options.runtimeDir) {
-      throw new Error("module_invalid: background_shell needs the worker role, its settings and a runtime directory");
+    const worker = options.identity.role === "worker";
+    if ((!worker && options.identity.role !== "pm" && options.identity.role !== "assistant") || !settings.success || !options.runtimeDir) {
+      throw new Error("module_invalid: background_shell needs an eligible role, settings and a runtime directory");
     }
     const ops = options.modules.role.corralOps;
-    if (!ops.includes("job") || !ops.includes("job_monitor")) return undefined;
+    if (worker && (!ops.includes("job") || !ops.includes("job_monitor"))) return undefined;
     return new JobRuntime({
       cwd: options.cwd, runtimeDir: options.runtimeDir, generation: options.identity.generation,
       settings: settings.data,
       onEvent: (kind, data) => options.events.emit(kind, data),
-      call: (op, key, payload) => options.client.call(op, {
+      call: (op, key, payload) => worker ? options.client.call(op, {
         requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
-      }),
+      }) : Promise.resolve({ state: "committed", result: {} }),
     });
   }
 
@@ -525,7 +526,7 @@ export class HostSession {
     }
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
-    const corral = new Set([...corralToolNames(specs), ...(this.jobs ? [JOB_MONITOR_TOOL] : [])]);
+    const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
     const rich = this.options.ui !== "plain";
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
@@ -801,6 +802,7 @@ export class HostSession {
     // Stop the parent's follow-up loop before cancelled children can return tool results.
     const aborted = this.session.abort();
     await this.auxiliary?.close();
+    await this.jobs?.shutdown();
     await aborted;
     await this.mcp?.close();
     this.session.dispose();

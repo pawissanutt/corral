@@ -572,9 +572,8 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
 }
 
 #[test]
-fn background_shell_is_worker_only_with_recorded_bounds() {
-    // Given each preset, then only workers resolve background_shell, off in strict; assistant
-    // jobs wait for session-owned job semantics.
+fn background_shell_is_available_to_worker_and_interactive_roles_with_recorded_bounds() {
+    // Given each preset, worker and interactive roles resolve background_shell, off in strict.
     for (index, preset) in [Preset::Strict, Preset::Standard, Preset::Full]
         .into_iter()
         .enumerate()
@@ -583,9 +582,15 @@ fn background_shell_is_worker_only_with_recorded_bounds() {
         config.set_preset(preset);
         for role in ALL {
             let snapshot = config.resolve(role, None);
-            let worker = role == AgentRole::Worker;
-            assert_eq!(snapshot.features.contains_key("background_shell"), worker);
-            assert_eq!(snapshot.enabled("background_shell"), worker && index > 0);
+            let available = matches!(
+                role,
+                AgentRole::Worker | AgentRole::Pm | AgentRole::Assistant
+            );
+            assert_eq!(
+                snapshot.features.contains_key("background_shell"),
+                available
+            );
+            assert_eq!(snapshot.enabled("background_shell"), available && index > 0);
         }
     }
     // When a worker narrows the bounds, they are recorded effective and change the digest.
@@ -609,7 +614,6 @@ fn background_shell_is_worker_only_with_recorded_bounds() {
     // And other roles, unknown settings and out-of-range bounds are configuration errors.
     for text in [
         "[capabilities.reviewer]\nbackground_shell = true",
-        "[capabilities.pm.background_shell]\nmax_jobs = 1",
         "[capabilities.worker.background_shell]\nmax_jobs = 0",
         "[capabilities.worker.background_shell]\nmax_output_bytes = 10",
         "[capabilities.worker.background_shell]\nshell = \"zsh\"",
