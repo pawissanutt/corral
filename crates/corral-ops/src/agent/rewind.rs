@@ -10,7 +10,7 @@
 //! checkpoint are restored; a path that also changed outside them refuses the rewind, and every
 //! other change stays. Receipts, turns, usage and approvals are never rewound.
 //! Owner: T-460 child checkpoints-rewind.
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
@@ -108,11 +108,12 @@ fn session_file(state: &AgentRunState) -> Option<PathBuf> {
         .map(|(_, b)| b.session_file.clone())
 }
 
-/// Every complete checkpoint entry of the session, in session order; read, never written.
-fn scan(path: &Path) -> Result<Vec<Checkpoint>> {
+/// Calls `f` with each JSON entry of the session, in order, within byte bounds; read, never
+/// written. Lines over `LINE_MAX_BYTES` are messages, never checkpoint or bind entries.
+fn entries(path: &Path, mut f: impl FnMut(Value) -> Result<()>) -> Result<()> {
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).with_context(|| format!("opening {}", path.display())),
     };
     ensure!(
@@ -121,7 +122,7 @@ fn scan(path: &Path) -> Result<Vec<Checkpoint>> {
         path.display()
     );
     let mut reader = BufReader::new(file.take(SESSION_MAX_BYTES));
-    let (mut found, mut line) = (Vec::new(), Vec::new());
+    let mut line = Vec::new();
     loop {
         line.clear();
         let read = (&mut reader)
@@ -129,30 +130,36 @@ fn scan(path: &Path) -> Result<Vec<Checkpoint>> {
             .read_until(b'\n', &mut line)
             .context("reading the Pi session")?;
         if read == 0 {
-            break;
+            return Ok(());
         }
         if read as u64 == LINE_MAX_BYTES && line.last() != Some(&b'\n') {
-            // A long line is a message, never a checkpoint entry; skip the rest of it.
             let mut rest = Vec::new();
             reader
                 .read_until(b'\n', &mut rest)
                 .context("reading the Pi session")?;
             continue;
         }
-        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
-            continue;
-        };
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+            f(value)?;
+        }
+    }
+}
+
+/// Every complete checkpoint entry of the session, in session order.
+fn scan(path: &Path) -> Result<Vec<Checkpoint>> {
+    let mut found = Vec::new();
+    entries(path, |value| {
         if value["type"] != "custom" || value["customType"] != CHECKPOINT_ENTRY {
-            continue;
+            return Ok(());
         }
         let Ok(entry) = serde_json::from_value::<CheckpointEntry>(value["data"].clone()) else {
-            continue;
+            return Ok(());
         };
         let (Some(commit), Some(head)) = (entry.commit.clone(), entry.head.clone()) else {
-            continue;
+            return Ok(());
         };
         if entry.phase == CheckpointPhase::Start && entry.leaf.is_none() {
-            continue;
+            return Ok(());
         }
         ensure!(
             found.len() < CHECKPOINTS_MAX,
@@ -165,8 +172,83 @@ fn scan(path: &Path) -> Result<Vec<Checkpoint>> {
             head,
             at,
         });
-    }
+        Ok(())
+    })?;
     Ok(found)
+}
+
+/// Whether a host of generation `from` or later bound the session on a branch from `leaf`: its
+/// `corral_host_bound` entry descends from that entry.
+fn bound_from(path: &Path, leaf: &str, from: u32) -> Result<bool> {
+    let (mut parents, mut markers) = (HashMap::new(), Vec::new());
+    entries(path, |value| {
+        let Some(id) = value["id"].as_str() else {
+            return Ok(());
+        };
+        let generation = value["data"]["generation"].as_u64();
+        if value["type"] == "custom"
+            && value["customType"] == "corral_host_bound"
+            && generation.is_some_and(|g| g >= u64::from(from))
+        {
+            markers.push(id.to_owned());
+        }
+        if let Some(parent) = value["parentId"].as_str() {
+            parents.insert(id.to_owned(), parent.to_owned());
+        }
+        Ok(())
+    })?;
+    Ok(markers.iter().any(|marker| {
+        let mut at = marker.as_str();
+        for _ in 0..=parents.len() {
+            match parents.get(at) {
+                Some(parent) if parent == leaf => return true,
+                Some(parent) => at = parent,
+                None => return false,
+            }
+        }
+        false
+    }))
+}
+
+/// The session entry a relaunch of the worker must open at: a restored rewind's, then the last
+/// launched one's until a host is seen bound on a branch from it, which settles it (`applied`).
+/// A relaunch whose host died before opening the session is therefore given it again.
+pub(crate) fn owed_cursor(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    state: &AgentRunState,
+) -> Result<Option<String>> {
+    if let Some(pending) = state.pending_rewind() {
+        return Ok((pending.stage == RewindStage::Restored).then(|| pending.leaf.clone()));
+    }
+    let launched = state.rewinds.iter().rev();
+    let Some(last) = launched
+        .into_iter()
+        .find(|r| r.stage == RewindStage::Launched)
+    else {
+        return Ok(None);
+    };
+    if last.applied.is_some() {
+        return Ok(None);
+    }
+    let from = last
+        .generation
+        .context("a launched rewind names its generation")?;
+    let bound = match session_file(state) {
+        Some(path) => bound_from(&path, &last.leaf, from)?,
+        None => false,
+    };
+    if !bound {
+        return Ok(Some(last.leaf.clone()));
+    }
+    let id = last.id.clone();
+    update(ctx, container, |state| {
+        if let Some(record) = state.rewind_mut(&id) {
+            record.applied.get_or_insert_with(Timestamp::now);
+        }
+        Ok(())
+    })?;
+    Ok(None)
 }
 
 /// The checkpoints on the current timeline: a launched rewind abandons every checkpoint after
@@ -532,6 +614,7 @@ fn prepare(ctx: &Ctx, container: &ContainerRef, w: &Worker, to: Option<&str>) ->
             before: None,
             before_ref: None,
             generation: None,
+            applied: None,
             restored: Vec::new(),
             restored_count: 0,
             kept: Vec::new(),

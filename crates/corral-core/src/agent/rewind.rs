@@ -91,6 +91,10 @@ pub struct RewindRecord {
     /// The generation opened on the checkpoint's cursor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generation: Option<u32>,
+    /// When a generation's host was seen bound on a branch from `leaf`; until then every
+    /// relaunch of the container is given the cursor again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied: Option<Timestamp>,
     /// Paths written back (at most `REWIND_PATHS_MAX`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub restored: Vec<String>,
@@ -113,13 +117,6 @@ impl AgentRunState {
 
     pub fn rewind_mut(&mut self, id: &str) -> Option<&mut RewindRecord> {
         self.rewinds.iter_mut().find(|r| r.id == id)
-    }
-
-    /// The session cursor the next generation opens at: only a restored, unlaunched rewind's.
-    pub fn rewind_cursor(&self) -> Option<&str> {
-        self.pending_rewind()
-            .filter(|r| r.stage == RewindStage::Restored)
-            .map(|r| r.leaf.as_str())
     }
 
     /// Appends a record, evicting the oldest finished ones beyond `REWINDS_MAX`.

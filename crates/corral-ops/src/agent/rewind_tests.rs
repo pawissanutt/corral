@@ -266,10 +266,9 @@ fn an_interrupted_rewind_continues_to_the_checkpoint_and_keeps_receipts_usage_an
         bootstrap["resume_session"],
         json!(f::session_file(&wt.bound))
     );
-    assert_eq!(
-        wt.state().rewind_cursor(),
-        None,
-        "a launched rewind's cursor is used once"
+    assert!(
+        wt.state().rewinds[0].applied.is_none(),
+        "the cursor stays owed until a host binds on it"
     );
 
     // And nothing that was recorded is rolled back: the saved worktree, receipts and usage:
@@ -411,6 +410,163 @@ fn a_snapshot_rehashes_a_racily_clean_file_as_git_does() {
     let (commit, _) = snapshot(dir, "racy").unwrap();
     assert_eq!(run_git(dir, &["show", &format!("{commit}:a.txt")]), "two");
     assert_eq!(run_git(dir, &["status", "--porcelain"]), "M a.txt");
+}
+
+/// A throwaway repository whose `files` are committed, so snapshots have a HEAD to sit on.
+fn repo(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    run_git(tmp.path(), &["init", "-qb", "main"]);
+    for (key, value) in [("user.name", "t"), ("user.email", "t@example.invalid")] {
+        run_git(tmp.path(), &["config", key, value]);
+    }
+    for (path, text) in files {
+        write(tmp.path(), path, text);
+    }
+    run_git(tmp.path(), &["add", "-A"]);
+    run_git(tmp.path(), &["commit", "-qm", "initial", "--allow-empty"]);
+    tmp
+}
+
+fn restore_snapshots(dir: &Path, target: &str, saved: &str) -> Restored {
+    let paths = changed(dir, target, saved).unwrap();
+    restore(dir, &paths, target, saved).unwrap()
+}
+
+#[test]
+fn an_owner_edit_made_while_a_restore_runs_is_kept_not_overwritten() {
+    // Given a checkpoint of a and b, then agent edits to both saved before the restore:
+    let tmp = repo(&[]);
+    let dir = tmp.path().to_path_buf();
+    write(&dir, "a", "prior\n");
+    write(&dir, "b", "prior\n");
+    let (target, _) = snapshot(&dir, "checkpoint").unwrap();
+    write(&dir, "a", "agent\n");
+    write(&dir, "b", "agent\n");
+    let (saved, _) = snapshot(&dir, "saved").unwrap();
+
+    // When the owner edits b right after the restore wrote a:
+    let owner = dir.clone();
+    let edited = std::cell::Cell::new(false);
+    let hook = move |point: &str| {
+        if point == "rewind_restored_path" && !edited.replace(true) {
+            write(&owner, "b", "owner edit\n");
+        }
+    };
+    crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let done = restore_snapshots(&dir, &target, &saved);
+    crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = None);
+
+    // Then a is restored, b keeps the owner's edit and is reported kept:
+    assert_eq!(read(&dir, "a").as_deref(), Some("prior\n"));
+    assert_eq!(read(&dir, "b").as_deref(), Some("owner edit\n"));
+    assert_eq!(done.kept, ["b"]);
+}
+
+fn assert_file(dir: &Path, path: &str, text: &str) {
+    assert!(dir.join(path).is_file(), "{path} is a file");
+    assert_eq!(read(dir, path).as_deref(), Some(text));
+}
+
+#[test]
+fn a_file_and_a_directory_that_replaced_each_other_restore_both_ways_and_after_interruption() {
+    for interrupted in [false, true] {
+        // Given a checkpoint with file a, then the agent replacing it with directory a/b:
+        let tmp = repo(&[]);
+        let dir = tmp.path();
+        write(dir, "a", "file\n");
+        let (file, _) = snapshot(dir, "file").unwrap();
+        std::fs::remove_file(dir.join("a")).unwrap();
+        write(dir, "a/b", "child\n");
+        let (directory, _) = snapshot(dir, "directory").unwrap();
+
+        // When the restore runs (the first time cut off after its first change):
+        if interrupted {
+            let hook = |point: &str| {
+                if point == "rewind_restored_path" {
+                    panic!("restore interrupted");
+                }
+            };
+            crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+            let cut = catch_unwind(AssertUnwindSafe(|| {
+                restore_snapshots(dir, &file, &directory)
+            }));
+            crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = None);
+            assert!(cut.is_err());
+        }
+        let done = restore_snapshots(dir, &file, &directory);
+
+        // Then file a is back, nothing is kept, and the reverse restore brings a/b back:
+        assert_file(dir, "a", "file\n");
+        assert!(done.kept.is_empty(), "{:?}", done.kept);
+        let back = restore_snapshots(dir, &directory, &file);
+        assert_file(dir, "a/b", "child\n");
+        assert!(back.kept.is_empty(), "{:?}", back.kept);
+    }
+}
+
+#[test]
+fn a_directory_with_foreign_files_left_in_it_is_kept_instead_of_replaced() {
+    // Given file a replaced by the agent's directory a/b, plus an ignored file the agent never
+    // snapshotted inside it:
+    let tmp = repo(&[(".gitignore", "*.log\n")]);
+    let dir = tmp.path();
+    write(dir, "a", "file\n");
+    let (file, _) = snapshot(dir, "file").unwrap();
+    std::fs::remove_file(dir.join("a")).unwrap();
+    write(dir, "a/b", "child\n");
+    let (directory, _) = snapshot(dir, "directory").unwrap();
+    write(dir, "a/keep.log", "foreign\n");
+
+    // When the restore runs, then the directory stays with the foreign file and a is kept:
+    let done = restore_snapshots(dir, &file, &directory);
+    assert_eq!(read(dir, "a/keep.log").as_deref(), Some("foreign\n"));
+    assert_eq!(done.kept, ["a"]);
+}
+
+fn bootstrap(wt: &Wt, generation: u32) -> Value {
+    let recipient = Recipient::Run {
+        task: wt.fx.id.clone(),
+        run: "R1".into(),
+    };
+    let dir = generation_dir(&wt.fx.ctx.store, &recipient, generation).unwrap();
+    serde_json::from_slice(&std::fs::read(dir.join(BOOTSTRAP_FILE)).unwrap()).unwrap()
+}
+
+#[test]
+fn the_cursor_is_owed_to_every_relaunch_until_a_host_binds_on_a_branch_from_it() {
+    // Given a launched rewind whose generation 2 died before it opened the session:
+    let mut wt = worktree();
+    wt.two_turns();
+    rewind_container(&wt.fx.ctx, &wt.container(), Some("g1-t2"), false).unwrap();
+    assert_eq!(bootstrap(&wt, 2)["resume_leaf"], "a1");
+
+    // When the owner resumes, then generation 3 still opens at the checkpoint's entry:
+    let resumed = resume_container(&wt.fx.ctx, &wt.container(), false).unwrap();
+    assert_eq!(resumed["generation"], 3);
+    assert_eq!(bootstrap(&wt, 3)["resume_leaf"], "a1");
+    assert!(wt.state().rewinds[0].applied.is_none());
+
+    // And once generation 3's host binds on a branch from that entry and is then lost:
+    let mut host = HostProc::spawn(true);
+    let mut second = wt.bound.clone();
+    second.identity.generation = 2;
+    let recipient = Recipient::Run {
+        task: wt.fx.id.clone(),
+        run: "R1".into(),
+    };
+    wt.fx.hello_next(&second, &recipient, &host);
+    let marker = json!({"generation": 3, "session_id": f::SESSION});
+    wt.entry(
+        "hb3",
+        json!({"type": "custom", "customType": "corral_host_bound", "parentId": "a1", "data": marker}),
+    );
+    host.kill();
+
+    // Then the next generation resumes the session where it is, and the cursor is settled:
+    let again = resume_container(&wt.fx.ctx, &wt.container(), false).unwrap();
+    assert_eq!(again["generation"], 4);
+    assert!(bootstrap(&wt, 4).get("resume_leaf").is_none());
+    assert!(wt.state().rewinds[0].applied.is_some());
 }
 
 fn point(id: &str, phase: CheckpointPhase, generation: u32) -> Checkpoint {
