@@ -331,6 +331,8 @@ pub(super) struct Measured {
     /// Each emitted section's expected rendering, from the full task's stored rows.
     references: BTreeMap<String, String>,
     pub(super) failures: Vec<String>,
+    #[serde(default)]
+    inputs: super::action_budget_trace::Inputs,
 }
 
 /// The action's real entry, its inputs read before counting starts.
@@ -406,9 +408,11 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
     let prompts = prompt_files(bench);
     let events = bench.ctx.store.events().unwrap().len();
     let events_before = events;
+    let capture = super::action_budget_trace::Capture::start();
     let start = work::snapshot();
     let output = run(&entry, bench);
     let delta = work::snapshot().since(&start);
+    m.inputs = capture.finish();
     let (herdr, git) = (
         corral_herdr::work::invocations() - herdr,
         corral_git::work::invocations() - git,
@@ -775,12 +779,22 @@ fn budget(kinds: &[Kind]) {
                 );
                 text.push_str(&format!("{kind:?} {mode}/{variant}: {}\n", report(m)));
             }
+            let failed_before = failures.len();
             for (other, variant) in [(&grown, Variant::Grown), (&emitted, Variant::Emitted)] {
                 failures.extend(
                     compare(kind, &base, other, variant)
                         .into_iter()
                         .map(|f| format!("{kind:?} {mode}: {f}")),
                 );
+            }
+            if failures.len() != failed_before
+                || [&base, &grown, &emitted]
+                    .iter()
+                    .any(|m| !m.failures.is_empty())
+            {
+                for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {
+                    m.inputs.print(&format!("{kind:?} {mode}/{variant}"));
+                }
             }
         }
     }
