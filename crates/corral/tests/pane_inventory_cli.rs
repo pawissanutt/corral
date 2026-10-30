@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 const STARTED: &str = "2000-01-01T00:00:00Z";
 
 mod resource_support;
+#[path = "pane_inventory/unknown.rs"]
+mod unknown;
 
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -419,31 +421,6 @@ fn assert_unknown_inventory(mode: &str) {
                 || call.starts_with("notification show ")),
         "unexpected engine side effect: {calls}"
     );
-}
-
-#[test]
-fn tasks_and_review_capacity_survive_nonzero_inventory() {
-    assert_unknown_inventory("nonzero");
-}
-
-#[test]
-fn tasks_and_review_capacity_survive_timeout_inventory() {
-    assert_unknown_inventory("timeout");
-}
-
-#[test]
-fn tasks_and_review_capacity_survive_malformed_success_inventory() {
-    assert_unknown_inventory("malformed");
-}
-
-#[test]
-fn tasks_and_review_capacity_survive_invalid_json_inventory() {
-    assert_unknown_inventory("invalid-json");
-}
-
-#[test]
-fn tasks_and_review_capacity_survive_empty_inventory() {
-    assert_unknown_inventory("empty");
 }
 
 fn assert_foreign_session(legacy: bool) {
