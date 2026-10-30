@@ -283,7 +283,7 @@ fn sync_reaps_abandoned_reviewer() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn pane_environment_identifies_recorded_and_foreign_residents() {
+fn foreign_resident_with_recorded_pane_id_is_protected() {
     let fx = Fx::new();
     fx.owner_ready();
     let run = fx.run();
@@ -308,7 +308,7 @@ fn pane_environment_identifies_recorded_and_foreign_residents() {
         assert_eq!(line.trim(), "ready");
         Resident(child)
     };
-    let mut own = spawn(&pane);
+    let mut matching = spawn(&pane);
     let mut foreign = spawn("foreign:p1");
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
@@ -316,7 +316,11 @@ fn pane_environment_identifies_recorded_and_foreign_residents() {
         line.contains("HERDR_PANE_ID=foreign:p1, recorded=false"),
         "{line}"
     );
-    assert!(own.0.try_wait().unwrap().is_some());
+    assert!(
+        line.contains(&format!("HERDR_PANE_ID={pane}, recorded=true")),
+        "{line}"
+    );
+    assert!(matching.0.try_wait().unwrap().is_none());
     assert!(foreign.0.try_wait().unwrap().is_none());
     assert!(run.worktree.exists());
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
