@@ -168,6 +168,26 @@ fn find_run<'a>(task: &'a Task, run: &str) -> Option<&'a Run> {
     task.runs.iter().find(|r| r.id == run)
 }
 
+fn open_run_obligations(found: &Run) -> RunObligations {
+    RunObligations {
+        slot_wait: found.obligations.slot_wait.clone(),
+        waits: found
+            .obligations
+            .waits
+            .iter()
+            .filter(|wait| wait.open(&found.id))
+            .cloned()
+            .collect(),
+        decisions: found
+            .obligations
+            .decisions
+            .iter()
+            .filter(|decision| decision.receipt.is_none())
+            .cloned()
+            .collect(),
+    }
+}
+
 fn children_where(
     task: &Task,
     run: &str,
@@ -649,23 +669,14 @@ impl TaskRef for Task {
         let Some(found) = find_run(self, run) else {
             return Ok(RunObligations::default());
         };
-        Ok(RunObligations {
-            slot_wait: found.obligations.slot_wait.clone(),
-            waits: found
-                .obligations
-                .waits
-                .iter()
-                .filter(|w| w.open(&found.id))
-                .cloned()
-                .collect(),
-            decisions: found
-                .obligations
-                .decisions
-                .iter()
-                .filter(|d| d.receipt.is_none())
-                .cloned()
-                .collect(),
-        })
+        Ok(open_run_obligations(found))
+    }
+
+    fn open_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations> {
+        Ok(find_run(self, run)
+            .and_then(|run| run.review_runs.iter().find(|child| child.id == review))
+            .map(open_run_obligations)
+            .unwrap_or_default())
     }
 
     fn checkpoint_metas_newest_first(
