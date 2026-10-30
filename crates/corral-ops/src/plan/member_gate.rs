@@ -39,8 +39,7 @@ impl OwnerEntry {
     /// The current directory cannot be read.
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            agent: std::env::var_os("AI_AGENT").is_some()
-                || std::env::var_os("PI_CODING_AGENT").is_some(),
+            agent: crate::automation_controls::agent_entry(),
             pm: std::env::var("CORRAL_PM").as_deref() == Ok("1"),
             cwd: std::env::current_dir().context("reading member-gate amendment directory")?,
         })

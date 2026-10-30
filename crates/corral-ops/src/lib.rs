@@ -155,7 +155,9 @@ pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_document, artifact_preview,
     scan_artifacts,
 };
-pub use automation_controls::{automation_confirm, automation_preview, require_automation_owner};
+pub use automation_controls::{
+    agent_entry, automation_confirm, automation_preview, require_automation_owner,
+};
 pub use automation_status::{automation_blocker, automation_summary};
 pub use comments::comment;
 pub use completion::{

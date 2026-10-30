@@ -43,11 +43,11 @@ pub struct InboxArgs {
     #[arg(long)]
     all: bool,
     #[command(subcommand)]
-    cmd: Option<InboxCmd>,
+    pub(crate) cmd: Option<InboxCmd>,
 }
 
 #[derive(Subcommand)]
-enum InboxCmd {
+pub(crate) enum InboxCmd {
     /// Show the complete message, receipts, and effect state
     Show { id: MessageId },
     /// Request that held information be flushed by the delivery service
@@ -86,7 +86,7 @@ struct RecoveryAction {
 }
 
 #[derive(Args)]
-struct RecoverArgs {
+pub(crate) struct RecoverArgs {
     #[arg(value_parser = parse_recipient)]
     key: Recipient,
     #[command(flatten)]
@@ -103,7 +103,7 @@ struct MarkAction {
 }
 
 #[derive(Args)]
-struct MarkArgs {
+pub(crate) struct MarkArgs {
     id: MessageId,
     #[command(flatten)]
     action: MarkAction,
@@ -119,10 +119,14 @@ enum Caller {
 }
 
 fn caller(store: &Store) -> Result<Caller> {
+    // An assistant shell is never the PM, even when it inherits CORRAL_PM.
+    if std::env::var_os("CORRAL_ASSISTANT").is_some() {
+        return Ok(Caller::Agent);
+    }
     if std::env::var("CORRAL_PM").as_deref() == Ok("1") {
         return Ok(Caller::Pm);
     }
-    if std::env::var_os("AI_AGENT").is_some() || std::env::var_os("PI_CODING_AGENT").is_some() {
+    if corral_ops::agent_entry() {
         return Ok(Caller::Agent);
     }
     let cwd = std::env::current_dir()
@@ -323,4 +327,47 @@ pub fn run(store: &Store, args: InboxArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assistant_shell_is_an_agent_caller_even_with_the_pm_marker() {
+        // Given a child with CORRAL_ASSISTANT and an inherited CORRAL_PM, but no agent marker.
+        let root = tempfile::tempdir().unwrap();
+        Store::init(root.path()).unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "inbox_cmd::tests::assistant_caller_subprocess",
+                "--nocapture",
+            ])
+            .env("INBOX_CALLER_ROOT", root.path())
+            .env("CORRAL_ASSISTANT", "A-1")
+            .env("CORRAL_PM", "1")
+            .env_remove("AI_AGENT")
+            .env_remove("PI_CODING_AGENT")
+            .current_dir(root.path());
+        // When the inbox owner guard classifies that caller.
+        let output = command.stdin(std::process::Stdio::null()).output().unwrap();
+        // Then the child ran exactly that test and saw an agent, not the PM or the owner.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn assistant_caller_subprocess() {
+        let Ok(root) = std::env::var("INBOX_CALLER_ROOT") else {
+            return;
+        };
+        let store = Store::open(std::path::Path::new(&root)).unwrap();
+        assert_eq!(caller(&store).unwrap(), Caller::Agent);
+    }
 }

@@ -1,20 +1,42 @@
 //! Attribution established before a command starts producing events.
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{ArgMatches, parser::ValueSource};
 use corral_core::{Actor, Store};
 use corral_ops::Ctx;
 
 use crate::Cmd;
 
+mod class;
+
+/// An assistant shell ran a command outside its Read and File classes; the CLI exits 2.
+#[derive(Debug)]
+pub struct AssistantRefused(String);
+
+impl std::fmt::Display for AssistantRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "assistant_refused: {} needs the owner; use corral_owner_action or corral pm inbox post",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for AssistantRefused {}
+
 pub struct Entry {
     actor: Option<Actor>,
     via: &'static str,
+    assistant: Option<String>,
 }
 
 impl Entry {
     pub fn new(cmd: &Cmd, matches: &ArgMatches) -> Result<Self> {
+        if let Some(session) = std::env::var_os("CORRAL_ASSISTANT") {
+            return Self::assistant(cmd, matches, session);
+        }
         let explicit = matches.subcommand().and_then(|(_, args)| {
             ["author", "origin"].into_iter().find_map(|key| {
                 (args.try_contains_id(key).unwrap_or(false)
@@ -43,7 +65,28 @@ impl Entry {
             }
             _ => (actor, "cli"),
         };
-        Ok(Self { actor, via })
+        Ok(Self {
+            actor,
+            via,
+            assistant: None,
+        })
+    }
+
+    /// An assistant shell outranks the PM marker, a run worktree cwd and explicit author flags.
+    fn assistant(cmd: &Cmd, matches: &ArgMatches, session: std::ffi::OsString) -> Result<Self> {
+        let session = session
+            .into_string()
+            .map_err(|_| anyhow!("CORRAL_ASSISTANT is not valid UTF-8"))?;
+        corral_core::assistant::validate_id(&session)
+            .context("CORRAL_ASSISTANT must name this shell's assistant session")?;
+        if class::of(cmd, &session) == class::CommandClass::Refused {
+            return Err(AssistantRefused(command_path(matches)).into());
+        }
+        Ok(Self {
+            actor: Some(Actor::Assistant),
+            via: "assistant",
+            assistant: Some(session),
+        })
     }
 
     pub fn open(&self, start: &Path) -> Result<Ctx> {
@@ -64,6 +107,9 @@ impl Entry {
     }
 
     fn resolve(&self, store: &Store) -> Result<(Actor, String)> {
+        if let Some(session) = &self.assistant {
+            return Ok((Actor::Assistant, format!("assistant:{session}")));
+        }
         if self.via != "cli" {
             return Ok((self.actor.unwrap_or(Actor::Owner), self.via.into()));
         }
@@ -84,6 +130,20 @@ impl Entry {
             Actor::System => "system",
         })
     }
+}
+
+fn command_path(matches: &ArgMatches) -> String {
+    if matches.subcommand().is_none() {
+        return "corral up".into();
+    }
+    let mut path = String::from("corral");
+    let mut current = matches;
+    while let Some((name, sub)) = current.subcommand() {
+        path.push(' ');
+        path.push_str(name);
+        current = sub;
+    }
+    path
 }
 
 fn run_from_cwd(store: &Store, cwd: &Path) -> Result<Option<String>> {
