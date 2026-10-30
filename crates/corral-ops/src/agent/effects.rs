@@ -693,56 +693,9 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     super::receipts::respond(ctx, &container, settled, true)
 }
 
-/// Sync and resume: settles one task's gate reservations whose executor is verified gone and
-/// its uncertain gates, and completes owed effects in every receipt home the task holds: each
-/// worker run, each review child (closed and historical ones too) and its PM receipts.
-pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
-    super::ops::planning::reconcile(ctx, task_id)?;
-    let task = ctx.store.get(task_id)?;
-    let mut homes = Vec::new();
-    for run in &task.runs {
-        let (id, run_id) = (task.id.clone(), run.id.clone());
-        if run.agent_host.is_some() {
-            homes.push(Home::Container(ContainerRef::Worker {
-                task: id.clone(),
-                run: run_id.clone(),
-            }));
-        }
-        for child in run.review_runs.iter().filter(|c| c.agent_host.is_some()) {
-            let review = child.id.clone();
-            homes.push(Home::Container(ContainerRef::Reviewer {
-                task: id.clone(),
-                run: run_id.clone(),
-                review,
-            }));
-        }
-    }
-    if !task.agent_pm_receipts.is_empty() {
-        homes.push(Home::PmTask(task.id.clone()));
-    }
-    let mut settled = Vec::new();
-    for home in homes {
-        for receipt in receipts(&task, &home).to_vec() {
-            let mut receipt = match (receipt.op.as_str(), receipt.state) {
-                ("gate", ReceiptState::Reserved | ReceiptState::Queued) => {
-                    match &receipt.executor {
-                        Some(running) if !executor_gone(running)? => receipt,
-                        seen => {
-                            crate::review_budget::settle(ctx, &receipt, seen.as_ref(), false, None)?
-                        }
-                    }
-                }
-                ("gate", ReceiptState::Uncertain) => {
-                    crate::review_budget::settle(ctx, &receipt, None, false, None)?
-                }
-                _ => receipt,
-            };
-            complete(ctx, &home, &mut receipt)?;
-            settled.push(receipt);
-        }
-    }
-    Ok(settled)
-}
+mod reconcile;
+pub use reconcile::reconcile_task;
+pub(crate) use reconcile::reconcile_task_hot;
 
 /// The PM two-phase journal (capture, legacy reply): a reservation naming its executor commits
 /// in AgentPm before the effect runs. An identical replay returns the stored receipt.

@@ -20,7 +20,7 @@ use corral_core::agent::{
 use corral_core::inbox::Recipient;
 
 use super::super::bridge::liveness::{LossReason, Probe};
-use corral_core::{Run, Status, Task};
+use corral_core::{Run, Status, Task, TaskRef};
 use jiff::Timestamp;
 
 use super::{consulted, run_is_pi_native};
@@ -100,6 +100,12 @@ pub fn wants(task: &Task) -> bool {
     containers(task).iter().any(|(container, run)| {
         container_closure(task, container).is_none() || owes(task, container, run)
     }) || super::super::ops::planning::wants_sync(task)
+        || task.agent_pm_receipts.iter().any(|receipt| {
+            matches!(
+                receipt.state,
+                ReceiptState::Reserved | ReceiptState::Queued | ReceiptState::Uncertain
+            ) || !receipt.post_pending.is_empty()
+        })
 }
 
 pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
@@ -108,49 +114,60 @@ pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
 
 /// Indexed sync callers already hold the task identity, not a manufactured Task facade.
 pub(crate) fn task_id(ctx: &Ctx, id: &str, now: Timestamp) -> Result<TaskSync> {
-    super::super::effects::reconcile_task(ctx, id)?;
+    super::super::effects::reconcile_task_hot(ctx, id)?;
     crate::questions::terminalize(ctx, id)?;
     crate::questions::expire_deadlines(ctx, id, now)?;
     crate::questions::unattended(ctx, id, now)?;
     crate::questions::hold_owner_attention(ctx, id)?;
     super::super::turns::nudge(ctx, id)?;
     super::super::turns::settle_hold(ctx, id)?;
-    probe_hosts(ctx, &ctx.store.get(id)?);
+    probe_hosts(ctx, &ctx.store.head(id)?)?;
     super::super::recovery::post_updates(ctx, id)?;
     settle_lost(ctx, id)?;
     super::super::jobs::reap(ctx, id, now)?;
     super::review::hold_lost(ctx, id)?;
     super::review::release_lost(ctx, id)?;
-    let current = ctx.store.get(id)?;
+    let current = ctx.store.head(id)?;
     let uncertain = Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs);
-    let mut due = super::super::effects::due_gate_wakes(&current, now, uncertain);
-    due.extend(super::super::wake::due_wait_wakes(&current));
+    let mut due = crate::review_budget::due_gate_wakes_ref(&current, now, uncertain)?;
+    due.extend(super::super::wake::due_wait_wakes_ref(&current)?);
     super::super::wake::post_due(ctx, &due)?;
-    super::cleanup::run_end(ctx, &current)?;
+    super::cleanup::run_end_ref(ctx, &current)?;
     settle(ctx, &current, now)?;
     let mut synced = TaskSync {
-        attention: attention(&current),
+        attention: attention_ref(&current)?,
         ..TaskSync::default()
     };
-    for (container, _) in containers(&current) {
-        if container_closure(&current, &container).is_some() {
+    for container in current.unfinished_native_containers()? {
+        if !matches!(
+            container,
+            ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. }
+        ) || corral_core::agent::container_closure_ref(&current, &container)?.is_some()
+        {
             continue;
         }
         consulted("sync");
-        let state = container_state(&current, &container);
-        let healthy = state.is_some_and(|s| s.binding.health == HostHealth::Healthy);
+        let healthy = current
+            .agent_head(&container)?
+            .is_some_and(|host| host.binding.health == HostHealth::Healthy);
         if synced.attention.is_none() {
-            synced.attention = state.and_then(|s| {
-                s.questions
-                    .iter()
-                    .find(|q| q.recorded_pending() && crate::questions::needs_owner(q))
-                    .map(|q| format!("Pi-native question {} needs you: {}", q.key, q.text))
-            });
+            synced.attention = current
+                .pending_agent_questions(&container)?
+                .into_iter()
+                .find(|question| {
+                    question.recorded_pending() && crate::questions::needs_owner(question)
+                })
+                .map(|question| {
+                    format!(
+                        "Pi-native question {} needs you: {}",
+                        question.key, question.text
+                    )
+                });
         }
         synced.open.push(ContainerSync { container, healthy });
     }
     if synced.attention.is_none() {
-        synced.attention = super::super::turns::attention(&current);
+        synced.attention = super::super::turns::attention_ref(&current)?;
     }
     Ok(synced)
 }
@@ -158,15 +175,25 @@ pub(crate) fn task_id(ctx: &Ctx, id: &str, now: Timestamp) -> Result<TaskSync> {
 /// Records each newly closed container as settled once terminalization cancelled its
 /// undelivered Pi messages, run-end cleanup removed its runtime above, and owner delivery has
 /// nothing left to retire or finish for it (otherwise the next pass settles it).
-fn settle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
+fn settle<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, now: Timestamp) -> Result<()> {
     let mut closed = Vec::new();
-    for (container, run) in containers(task) {
-        if run.inbox.settled.is_some() || container_closure(task, &container).is_none() {
+    for container in task.unfinished_native_containers()? {
+        if !matches!(
+            container,
+            ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. }
+        ) || corral_core::agent::container_closure_ref(task, &container)?.is_none()
+        {
             continue;
         }
         let Some(recipient) = crate::questions::recipient(&container) else {
             continue;
         };
+        if task
+            .inbox_head(&recipient)?
+            .is_none_or(|inbox| inbox.settled.is_some())
+        {
+            continue;
+        }
         // Late evidence for an orphaned attempt may never come once the host is gone.
         let work = crate::delivery::owner::work(ctx, &recipient)?;
         if !work.unsettled && !work.effects {
@@ -177,12 +204,10 @@ fn settle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
         return Ok(());
     }
     let mut settled = Vec::new();
-    ctx.store.try_update(&task.id, |current| {
+    ctx.store.try_update_head(task.id(), |current| {
         settled.clear();
-        for (container, recipient) in &closed {
-            let state = recipient.state_mut(current)?;
-            if state.settled.is_none() {
-                state.settled = Some(now);
+        for (container, _) in &closed {
+            if current.settle_native_inbox(container, now)? {
                 settled.push(container.clone());
             }
         }
@@ -196,7 +221,7 @@ fn settle(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<()> {
 
 /// A settled container's Pi sessions stop being recovery-critical: they stay where they are as
 /// its terminal transcript, recorded once by `agent_session_reclassified`.
-fn reclassify(ctx: &Ctx, task: &Task, container: &ContainerRef) -> Result<()> {
+fn reclassify<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, container: &ContainerRef) -> Result<()> {
     let dir = paths::container_sessions_dir(&ctx.store, container);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Ok(());
@@ -206,7 +231,8 @@ fn reclassify(ctx: &Ctx, task: &Task, container: &ContainerRef) -> Result<()> {
         .filter(|name| name.ends_with(".jsonl"))
         .collect();
     sessions.sort();
-    let closure = container_closure(task, container).map(|reason| reason.as_str());
+    let closure =
+        corral_core::agent::container_closure_ref(task, container)?.map(|reason| reason.as_str());
     ctx.store.log_event(
         container.task(),
         "agent_session_reclassified",
@@ -220,34 +246,65 @@ fn reclassify(ctx: &Ctx, task: &Task, container: &ContainerRef) -> Result<()> {
 
 /// Probes every open container's healthy host and records a verified loss or the reconciled
 /// event sequence. A failed probe is reported and retried next pass, never fatal to sync.
-fn probe_hosts(ctx: &Ctx, task: &Task) {
-    for (container, _) in containers(task) {
-        if container_closure(task, &container).is_some() {
+fn probe_hosts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
+    for container in task.unfinished_native_containers()? {
+        if !matches!(
+            container,
+            ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. }
+        ) || corral_core::agent::container_closure_ref(task, &container)?.is_some()
+        {
             continue;
         }
-        let Some(state) = container_state(task, &container) else {
+        let Some(host) = task.agent_head(&container)? else {
             continue;
         };
         let Some(recipient) = crate::questions::recipient(&container) else {
             continue;
         };
-        if let Err(error) = consume_exit(ctx, &container, state) {
+        if let Err(error) = consume_exit(ctx, task, &container) {
             let reason = format!("reading the host exit of {}: {error:#}", container.key());
             crate::messages::report(container.task(), "agent liveness", reason);
         }
-        probe_one(ctx, &recipient, &container, state);
+        if host.binding.health != HostHealth::Healthy || !super::super::bridge::liveness::probing()
+        {
+            continue;
+        }
+        consulted("sync");
+        let probed =
+            super::super::bridge::liveness::probe_ref(&ctx.store, task, &recipient, &container)
+                .and_then(|probe| {
+                    super::super::bridge::liveness::record(&ctx.store, &container, &probe)
+                });
+        if let Err(error) = probed {
+            crate::messages::report(
+                container.task(),
+                "agent liveness",
+                format!("probing {} failed: {error:#}", container.key()),
+            );
+        }
     }
+    Ok(())
 }
 
 /// A worker host that exits leaves its pane wrapper's launch-exit receipt. For a generation that
 /// completed hello that is a host loss, resumable, not a launch failure: the receipt is consumed
 /// into `agent_lost`, so sync's launch-exit rule never ends the run. A generation that exited
 /// before hello keeps its receipt and fails at launch as before.
-fn consume_exit(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Result<()> {
+fn consume_exit<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    source: &T,
+    container: &ContainerRef,
+) -> Result<()> {
     let ContainerRef::Worker { task, run } = container else {
         return Ok(());
     };
-    let Some(generation) = state.current_generation().filter(|g| g.bound.is_some()) else {
+    let Some(host) = source.agent_head(container)? else {
+        return Ok(());
+    };
+    let Some(generation) = source
+        .agent_generation(container, host.binding.generation)?
+        .filter(|generation| generation.bound.is_some())
+    else {
         return Ok(());
     };
     let receipt = crate::launch_exit::receipt(ctx, task, run)?;
@@ -344,11 +401,45 @@ pub fn attention(task: &Task) -> Option<String> {
     })
 }
 
+/// The same worker cause from actual bounded metadata and its keyed latest turn.
+pub(crate) fn attention_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Option<String>> {
+    let Some(run) = task.current_run_head()? else {
+        return Ok(None);
+    };
+    let Some(host) = run.agent_host.as_deref() else {
+        return Ok(None);
+    };
+    let container = ContainerRef::Worker {
+        task: task.id().clone(),
+        run: run.id.clone(),
+    };
+    if corral_core::agent::container_closure_ref(task, &container)?.is_some() {
+        return Ok(None);
+    }
+    let n = host.binding.generation;
+    if host.binding.health == HostHealth::Lost {
+        return Ok(Some(format!(
+            "{LOST_PREFIX}{} generation {n}. `corral agent resume {}` starts generation {} in \
+             the same pane; `corral retry {1}` or `corral discard {1}` end the run instead.",
+            container.key(),
+            task.id(),
+            n + 1
+        )));
+    }
+    let latest = task.latest_agent_turn(&container, n)?;
+    Ok(latest.filter(|turn| turn.class == Some(TurnClass::ProviderFailed)
+        && turn.ended.is_some() && turn.provider_error.as_deref() == Some("auth"))
+        .map(|turn| format!(
+            "{AUTH_PREFIX}turn {n}/{} of {}. Run `corral agent login`, then reply to the run to \
+             continue; no paid fallback is used.", turn.seq, container.key()
+        )))
+}
+
 /// Returns a task this module held in Needs me to Running once its cause is gone: resume bound
 /// another generation, or a later turn followed the failed authentication.
 pub fn settle_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
-    let settled = ctx.store.try_update(task_id, |task| {
-        if task.status != Status::NeedsMe || attention(task).is_some() {
+    let settled = ctx.store.try_update_head(task_id, |task| {
+        if task.status != Status::NeedsMe || attention_ref(task)?.is_some() {
             return Ok(false);
         }
         let Some(run) = task.current_run_mut() else {
@@ -358,7 +449,7 @@ pub fn settle_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .blocked_excerpt
             .as_deref()
             .is_some_and(|e| e.starts_with(LOST_PREFIX) || e.starts_with(AUTH_PREFIX));
-        if !held || run.obligations.pending_decision().is_some() {
+        if !held || run.facts.pending_decision.is_some() {
             return Ok(false);
         }
         run.blocked_excerpt = None;

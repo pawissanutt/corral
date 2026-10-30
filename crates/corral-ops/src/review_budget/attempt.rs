@@ -162,26 +162,7 @@ pub fn due_gate_wakes(task: &Task, now: Timestamp, uncertain_after: Duration) ->
                     .is_some_and(|i| i.attempt == wake.target)
             });
             let receipt = state.receipt(&wake.request_id);
-            let reason = match gate {
-                Some(gate) if gate.process_lost => Some("lost".to_owned()),
-                Some(gate) if gate.result != GateResult::Running => {
-                    Some(gate.result.as_str().to_owned())
-                }
-                _ if receipt.is_some_and(|r| {
-                    r.state == ReceiptState::Rejected && r.result["queued"] == true
-                }) =>
-                {
-                    Some("not_started".to_owned())
-                }
-                _ if receipt.is_some_and(|r| {
-                    r.state == ReceiptState::Uncertain
-                        && now.duration_since(r.at).unsigned_abs() >= uncertain_after
-                }) =>
-                {
-                    Some("gate_start_uncertain".to_owned())
-                }
-                _ => None,
-            };
+            let reason = gate_wake_reason(gate, receipt, now, uncertain_after);
             if let Some(reason) = reason {
                 let container = ContainerRef::Worker {
                     task: task.id.clone(),
@@ -196,6 +177,66 @@ pub fn due_gate_wakes(task: &Task, now: Timestamp, uncertain_after: Duration) ->
         }
     }
     due
+}
+
+fn gate_wake_reason(
+    gate: Option<&corral_core::GateRecord>,
+    receipt: Option<&agent::RequestReceipt>,
+    now: Timestamp,
+    uncertain_after: Duration,
+) -> Option<String> {
+    match gate {
+        Some(gate) if gate.process_lost => Some("lost".into()),
+        Some(gate) if gate.result != GateResult::Running => Some(gate.result.as_str().into()),
+        _ if receipt.is_some_and(|receipt| {
+            receipt.state == ReceiptState::Rejected && receipt.result["queued"] == true
+        }) =>
+        {
+            Some("not_started".into())
+        }
+        _ if receipt.is_some_and(|receipt| {
+            receipt.state == ReceiptState::Uncertain
+                && now.duration_since(receipt.at).unsigned_abs() >= uncertain_after
+        }) =>
+        {
+            Some("gate_start_uncertain".into())
+        }
+        _ => None,
+    }
+}
+
+/// Output-sized indexed worker subscriptions and keyed gate/receipt evidence.
+pub(crate) fn due_gate_wakes_ref<T: corral_core::TaskRef + ?Sized>(
+    task: &T,
+    now: Timestamp,
+    uncertain_after: Duration,
+) -> Result<Vec<DueWake>> {
+    let mut due = Vec::new();
+    for (container, wake) in task.active_worker_wakes()? {
+        if wake.kind != WakeKind::Gate || wake.state != WakeState::Armed {
+            continue;
+        }
+        let ContainerRef::Worker { run, .. } = &container else {
+            continue;
+        };
+        let Some(run) = task.run_head(run)? else {
+            continue;
+        };
+        let gate = run.gate.as_ref().filter(|gate| {
+            gate.identity
+                .as_ref()
+                .is_some_and(|identity| identity.attempt == wake.target)
+        });
+        let receipt = task.agent_receipt(&container, &wake.request_id)?;
+        if let Some(reason) = gate_wake_reason(gate, receipt.as_ref(), now, uncertain_after) {
+            due.push(DueWake {
+                container,
+                request_id: wake.request_id,
+                reason,
+            });
+        }
+    }
+    Ok(due)
 }
 
 /// Records one wake as fired, keyed `wake:<task>/<run>/<target>/<reason>`; false when it

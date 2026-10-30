@@ -13,6 +13,8 @@ pub mod review;
 pub mod stall;
 pub mod surfaces;
 pub mod sync;
+#[cfg(test)]
+mod sync_head_tests;
 pub mod usage;
 
 #[cfg(all(test, target_os = "linux"))]
