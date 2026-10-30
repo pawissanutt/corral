@@ -129,7 +129,7 @@ test("a fresh corral process reaches the host through ctl.cap alone; a wrong or 
   expect(first.state.generation).toBe(1);
   expect(first.state.interactive).toBeTrue();
   expect([...(first.state.active_tools as string[])].sort()).toEqual([
-    "browser_navigate", "browser_screenshot", "codemode", "corral_receipt_lookup", "mcp_activate", "mcp_connect",
+    "browser_navigate", "browser_screenshot", "codemode", "corral_receipt_lookup", "explore", "mcp_activate", "mcp_connect",
     "mcp_read_resource", "mcp_resources",
     "read", "tool_search", "web_fetch", "web_search",
   ]);
