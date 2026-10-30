@@ -634,6 +634,13 @@ pub trait TaskMut: TaskRef {
     fn push_switch(&mut self, run: &str, switch: ProfileSwitch) -> Result<()>;
     fn push_wait(&mut self, run: &str, wait: WaitRecord) -> Result<()>;
     fn push_decision(&mut self, run: &str, decision: DecisionRecord) -> Result<()>;
+    /// A keyed wait edit explicitly permitting any named coding run, current or historical.
+    fn edit_run_wait(
+        &mut self,
+        run: &str,
+        id: &str,
+        edit: impl FnOnce(&mut WaitRecord) -> Result<()>,
+    ) -> Result<()>;
     fn edit_wait(
         &mut self,
         run: &str,

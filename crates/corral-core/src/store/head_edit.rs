@@ -392,6 +392,15 @@ impl TaskMut for TaskHeadMut {
         synced!(self, TaskHeadMut::push_decision(self, run, decision))
     }
 
+    fn edit_run_wait(
+        &mut self,
+        run: &str,
+        id: &str,
+        edit: impl FnOnce(&mut WaitRecord) -> Result<()>,
+    ) -> Result<()> {
+        synced!(self, TaskHeadMut::edit_run_wait(self, run, id, edit))
+    }
+
     fn edit_wait(
         &mut self,
         run: &str,
