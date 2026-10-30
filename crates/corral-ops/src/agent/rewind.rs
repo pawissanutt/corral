@@ -219,7 +219,22 @@ pub(crate) fn owed_cursor(
     state: &AgentRunState,
 ) -> Result<Option<String>> {
     if let Some(pending) = state.pending_rewind() {
-        return Ok((pending.stage == RewindStage::Restored).then(|| pending.leaf.clone()));
+        if pending.stage != RewindStage::Restored || pending.applied.is_some() {
+            return Ok(None);
+        }
+        // A launch can reach its host before `Launched` is recorded; the first relaunch records
+        // the generation it opens before that host can run, and later ones check its evidence.
+        let Some(from) = pending.generation else {
+            let (id, next) = (pending.id.clone(), state.binding.generation + 1);
+            update(ctx, container, |state| {
+                if let Some(record) = state.rewind_mut(&id) {
+                    record.generation.get_or_insert(next);
+                }
+                Ok(())
+            })?;
+            return Ok(Some(pending.leaf.clone()));
+        };
+        return settle_cursor(ctx, container, state, pending, from);
     }
     let launched = state.rewinds.iter().rev();
     let Some(last) = launched
@@ -234,14 +249,26 @@ pub(crate) fn owed_cursor(
     let from = last
         .generation
         .context("a launched rewind names its generation")?;
+    settle_cursor(ctx, container, state, last, from)
+}
+
+/// The rewind's cursor until a host of generation `from` or later is seen bound in the session on
+/// a branch from it; that evidence records it `applied` and nothing is owed any more.
+fn settle_cursor(
+    ctx: &Ctx,
+    container: &ContainerRef,
+    state: &AgentRunState,
+    record: &RewindRecord,
+    from: u32,
+) -> Result<Option<String>> {
     let bound = match session_file(state) {
-        Some(path) => bound_from(&path, &last.leaf, from)?,
+        Some(path) => bound_from(&path, &record.leaf, from)?,
         None => false,
     };
     if !bound {
-        return Ok(Some(last.leaf.clone()));
+        return Ok(Some(record.leaf.clone()));
     }
-    let id = last.id.clone();
+    let id = record.id.clone();
     update(ctx, container, |state| {
         if let Some(record) = state.rewind_mut(&id) {
             record.applied.get_or_insert_with(Timestamp::now);
@@ -519,8 +546,9 @@ pub fn rewind_container(
     let generation = outcome["generation"]
         .as_u64()
         .and_then(|g| u32::try_from(g).ok());
+    super::failpoint("rewind_launch_submitted");
     let done = set_stage(ctx, container, &id, RewindStage::Launched, |r| {
-        r.generation = generation
+        r.generation = r.generation.or(generation)
     })?;
     ctx.store.log_event(
         Some(&w.task),

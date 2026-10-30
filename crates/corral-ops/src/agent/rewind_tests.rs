@@ -569,6 +569,141 @@ fn the_cursor_is_owed_to_every_relaunch_until_a_host_binds_on_a_branch_from_it()
     assert!(wt.state().rewinds[0].applied.is_some());
 }
 
+fn with_hook(
+    point: &'static str,
+    act: impl Fn() + 'static,
+    run: impl FnOnce() -> Restored,
+) -> Restored {
+    let fired = std::cell::Cell::new(false);
+    let hook = move |at: &str| {
+        if at == point && !fired.replace(true) {
+            act();
+        }
+    };
+    crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let done = run();
+    crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = None);
+    done
+}
+
+#[test]
+fn an_owner_edit_at_the_moment_a_path_is_replaced_is_kept_and_nothing_displaced_is_lost() {
+    for (point, removal) in [
+        ("rewind_materialized", false),
+        ("rewind_materialized", true),
+        ("rewind_displaced", false),
+    ] {
+        let case = format!("{point} removal={removal}");
+        // Given a checkpoint where a is "prior" (or absent), and the agent's saved edit to it:
+        let tmp = repo(&[]);
+        let dir = tmp.path().to_path_buf();
+        if !removal {
+            write(&dir, "a", "prior turn\n");
+        }
+        let (target, _) = snapshot(&dir, "checkpoint").unwrap();
+        write(&dir, "a", "agent edit\n");
+        let (saved, _) = snapshot(&dir, "saved").unwrap();
+
+        // When the owner saves a after it was checked, as its replacement is materialized or
+        // once it was moved aside (recreating it):
+        let owner = dir.clone();
+        let edit = move || write(&owner, "a", "owner edit after hash\n");
+        let done = with_hook(point, edit, || restore_snapshots(&dir, &target, &saved));
+
+        // Then the owner's file is left as it is and reported kept, nothing is lost: the agent's
+        // displaced bytes, if they were moved aside, are kept under the git dir:
+        assert_eq!(
+            read(&dir, "a").as_deref(),
+            Some("owner edit after hash\n"),
+            "{case}"
+        );
+        assert_eq!(done.kept, ["a"], "{case}");
+        let leftovers = run_git(&dir, &["status", "--porcelain", "--untracked-files=all"]);
+        assert!(!leftovers.contains(".corral-rewind"), "{case}: {leftovers}");
+        if point == "rewind_displaced" {
+            let git_dir = run_git(&dir, &["rev-parse", "--path-format=absolute", "--git-dir"]);
+            let found = walk(&Path::new(&git_dir).join("corral-rewind"));
+            assert!(
+                found.iter().any(|text| text == "agent edit\n"),
+                "{case}: {found:?}"
+            );
+        }
+    }
+}
+
+fn walk(root: &Path) -> Vec<String> {
+    let mut texts = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                texts.push(text);
+            }
+        }
+    }
+    texts
+}
+
+#[test]
+fn a_controller_lost_after_submitting_the_launch_never_replays_an_applied_cursor() {
+    // Given a rewind whose launch reached the pane, but whose controller died before it was
+    // recorded launched:
+    let mut wt = worktree();
+    wt.two_turns();
+    let hook = |point: &str| {
+        if point == "rewind_launch_submitted" {
+            panic!("controller lost");
+        }
+    };
+    crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let lost = catch_unwind(AssertUnwindSafe(|| {
+        rewind_container(&wt.fx.ctx, &wt.container(), Some("g1-t2"), false)
+    }));
+    crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = None);
+    assert!(lost.is_err());
+    assert_eq!(bootstrap(&wt, 2)["resume_leaf"], "a1");
+    let pending = wt.state().pending_rewind().cloned().unwrap();
+    assert_eq!(
+        (pending.stage, pending.generation),
+        (RewindStage::Restored, Some(2))
+    );
+
+    // And generation 2's host binds on a branch from the checkpoint's entry and takes a turn:
+    let host = HostProc::spawn(true);
+    let recipient = Recipient::Run {
+        task: wt.fx.id.clone(),
+        run: "R1".into(),
+    };
+    wt.fx.hello_next(&wt.bound, &recipient, &host);
+    let marker = json!({"generation": 2, "session_id": f::SESSION});
+    wt.entry(
+        "hb2",
+        json!({"type": "custom", "customType": "corral_host_bound", "parentId": "a1", "data": marker}),
+    );
+    wt.entry(
+        "u3",
+        json!({"type": "message", "parentId": "hb2", "message": {"role": "user", "content": "new turn"}}),
+    );
+
+    // When the owner continues the rewind, replacing that host:
+    let outcome = rewind_container(&wt.fx.ctx, &wt.container(), None, true).unwrap();
+
+    // Then the cursor counts as applied: generation 3 continues where generation 2 left the
+    // session (its new turn included) instead of going back to the checkpoint's entry:
+    assert_eq!(outcome["resume"]["replaced"], true);
+    assert_eq!(outcome["resume"]["generation"], 3);
+    assert!(bootstrap(&wt, 3).get("resume_leaf").is_none());
+    let done = &wt.state().rewinds[0];
+    assert_eq!(
+        (done.stage, done.generation),
+        (RewindStage::Launched, Some(2))
+    );
+    assert!(done.applied.is_some());
+}
+
 fn point(id: &str, phase: CheckpointPhase, generation: u32) -> Checkpoint {
     let entry = CheckpointEntry {
         id: id.into(),

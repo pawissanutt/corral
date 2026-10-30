@@ -163,13 +163,12 @@ pub(super) fn changed(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Strin
         .collect())
 }
 
-/// The worktree's blob at `path` now: `None` when absent, also when a parent is a file, and mode
-/// `dir` for a directory.
-fn blob_now(dir: &Path, path: &str) -> Result<Option<Blob>> {
+/// The blob `file` holds when checked out at `path` (whose attributes and filters apply):
+/// `None` when absent, also when a parent is a file, and mode `dir` for a directory.
+fn blob_at(dir: &Path, path: &str, file: &Path) -> Result<Option<Blob>> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
-    let full = dir.join(path);
-    let meta = match std::fs::symlink_metadata(&full) {
+    let meta = match std::fs::symlink_metadata(file) {
         Ok(meta) => meta,
         Err(error)
             if matches!(
@@ -182,13 +181,15 @@ fn blob_now(dir: &Path, path: &str) -> Result<Option<Blob>> {
         Err(error) => return Err(error).with_context(|| format!("inspecting {path}")),
     };
     let (mode, sha) = if meta.file_type().is_symlink() {
-        let target = std::fs::read_link(&full)?;
+        let target = std::fs::read_link(file)?;
         let input = target.as_os_str().as_bytes();
         let sha = git_output(dir, &["hash-object", "--stdin"], &[], input)?;
         ("120000", String::from_utf8_lossy(&sha).trim().to_owned())
     } else if meta.is_file() {
         let exec = meta.permissions().mode() & 0o111 != 0;
-        let sha = git_output(dir, &["hash-object", "--", path], &[], b"")?;
+        let attributes = format!("--path={path}");
+        let file = file.to_string_lossy();
+        let sha = git_output(dir, &["hash-object", &attributes, "--", &file], &[], b"")?;
         let mode = if exec { "100755" } else { "100644" };
         (mode, String::from_utf8_lossy(&sha).trim().to_owned())
     } else {
@@ -200,28 +201,17 @@ fn blob_now(dir: &Path, path: &str) -> Result<Option<Blob>> {
     }))
 }
 
-/// Writes `want` (or removes the path) through a renamed sibling, with smudge filters applied.
-/// A removal also removes the parents it left empty. False when a parent cannot be a directory
-/// (something other than the agent's file is in the way), so the path is kept.
-fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<bool> {
+fn sibling(target: &Path, role: &str) -> Result<std::path::PathBuf> {
+    let parent = target.parent().context("a restored path has no parent")?;
+    Ok(parent.join(format!(".corral-rewind-{role}-{}", std::process::id())))
+}
+
+/// Materializes `blob` (smudge filters applied) beside `path`; `None` when a parent cannot be a
+/// directory because something other than the agent's file is in the way.
+fn stage(dir: &Path, path: &str, blob: &Blob) -> Result<Option<std::path::PathBuf>> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
     let target = dir.join(path);
-    let Some(blob) = want else {
-        match std::fs::remove_file(&target) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).with_context(|| format!("removing {path}")),
-        }
-        let mut parent = target.parent();
-        while let Some(dir_path) = parent.filter(|p| *p != dir) {
-            if std::fs::remove_dir(dir_path).is_err() {
-                break;
-            }
-            parent = dir_path.parent();
-        }
-        return Ok(true);
-    };
     let parent = target.parent().context("a restored path has no parent")?;
     match std::fs::create_dir_all(parent) {
         Ok(()) => {}
@@ -231,11 +221,11 @@ fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<bool> {
                 std::io::ErrorKind::NotADirectory | std::io::ErrorKind::AlreadyExists
             ) =>
         {
-            return Ok(false);
+            return Ok(None);
         }
         Err(error) => return Err(error).with_context(|| format!("creating {}", parent.display())),
     }
-    let staged = parent.join(format!(".corral-rewind-{}", std::process::id()));
+    let staged = sibling(&target, "staged")?;
     let _ = std::fs::remove_file(&staged);
     match blob.mode.as_str() {
         "120000" => {
@@ -253,8 +243,117 @@ fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<bool> {
         }
         other => bail!("rewind cannot restore {path}: git mode {other}"),
     }
-    std::fs::rename(&staged, &target).with_context(|| format!("installing {path}"))?;
-    Ok(true)
+    Ok(Some(staged))
+}
+
+/// Moves `aside` into the restore's keep directory (under the worktree's git dir), so bytes a
+/// restore displaced are never destroyed; returns where they went.
+fn stash(aside: &Path, keep: &Path, path: &str) -> Result<std::path::PathBuf> {
+    let mut dest = keep.join(path);
+    let parent = dest.parent().context("a kept path has no parent")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    for n in 1.. {
+        if std::fs::symlink_metadata(&dest).is_err() {
+            break;
+        }
+        dest = keep.join(format!("{path}.{n}"));
+    }
+    match std::fs::rename(aside, &dest) {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(18) => {
+            std::fs::copy(aside, &dest).with_context(|| format!("keeping {path}"))?;
+            std::fs::remove_file(aside).with_context(|| format!("removing the copy of {path}"))?;
+        }
+        Err(error) => return Err(error).with_context(|| format!("keeping {path}")),
+    }
+    Ok(dest)
+}
+
+/// Links `from` at `target` only while `target` does not exist; false when something appeared.
+fn link_new(from: &Path, target: &Path) -> Result<bool> {
+    match std::fs::hard_link(from, target) {
+        Ok(()) => {
+            std::fs::remove_file(from).with_context(|| format!("removing {}", from.display()))?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("installing {}", target.display())),
+    }
+}
+
+/// Replaces `path`, which was `previous`, with `want` (or removes it). The replacement is
+/// materialized first; then whatever is at the path is atomically moved aside, and only if what
+/// was moved is still `previous` is the replacement linked in, and only where nothing new
+/// appeared. Anything else (an edit after the check, a file created meanwhile) is put back or,
+/// when its place was taken, kept in `keep`; displaced agent bytes are kept there too, in case
+/// an editor still writes through an open handle. False when the path was left to its owner.
+fn replace(
+    dir: &Path,
+    path: &str,
+    (want, previous): (Option<&Blob>, Option<&Blob>),
+    keep: &Path,
+) -> Result<bool> {
+    let target = dir.join(path);
+    let staged = match want {
+        Some(blob) => match stage(dir, path, blob)? {
+            Some(staged) => Some(staged),
+            None => return Ok(false),
+        },
+        None => None,
+    };
+    crate::agent::failpoint("rewind_materialized");
+    let aside = sibling(&target, "displaced")?;
+    let displaced = match std::fs::rename(&target, &aside) {
+        Ok(()) => Some(aside),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            None
+        }
+        Err(error) => return Err(error).with_context(|| format!("moving {path} aside")),
+    };
+    crate::agent::failpoint("rewind_displaced");
+    let was = match &displaced {
+        Some(aside) => blob_at(dir, path, aside)?,
+        None => None,
+    };
+    let discard = |staged: Option<std::path::PathBuf>| {
+        staged.map_or(Ok(()), |s| {
+            std::fs::remove_file(&s).with_context(|| format!("removing {}", s.display()))
+        })
+    };
+    if was.as_ref() != previous {
+        discard(staged)?;
+        if let Some(aside) = displaced
+            && !link_new(&aside, &target)?
+        {
+            stash(&aside, keep, path)?;
+        }
+        return Ok(false);
+    }
+    let installed = match &staged {
+        Some(staged) => link_new(staged, &target)?,
+        None => true,
+    };
+    if !installed {
+        discard(staged)?;
+    }
+    if let Some(aside) = displaced {
+        stash(&aside, keep, path)?;
+    }
+    if installed && want.is_none() {
+        let mut parent = target.parent();
+        while let Some(dir_path) = parent.filter(|p| *p != dir) {
+            if std::fs::remove_dir(dir_path).is_err() {
+                break;
+            }
+            parent = dir_path.parent();
+        }
+    }
+    Ok(installed)
 }
 
 /// What a restore did: the paths now as `want` that differed in `pre`, and those left as they
@@ -266,8 +365,9 @@ pub(super) struct Restored {
 }
 
 /// Idempotent: a path already as wanted is done, a path still as `pre` is written, anything else
-/// is kept. Each path is checked immediately before it is changed, so an edit made while earlier
-/// paths were restored is kept. Removals run deepest first and before writes, so a file and a
+/// is kept. Each path is checked before it is changed and verified again, on the bytes actually
+/// moved aside, at the moment it is replaced (`replace`), so an owner edit is never overwritten;
+/// displaced bytes are kept under `<git-dir>/corral-rewind/`. Removals run deepest first and before writes, so a file and a
 /// directory can replace each other; a directory something else still occupies is kept. HEAD
 /// moves only from `pre`'s parent, by compare-and-swap.
 pub(super) fn restore(
@@ -281,15 +381,21 @@ pub(super) fn restore(
         paths.iter().partition(|p| !wanted.contains_key(*p));
     // A path sorts before every path under it, so reversed order removes children first.
     removals.reverse();
+    let git_dir = git(dir, &["rev-parse", "--path-format=absolute", "--git-dir"])?;
+    let keep = Path::new(&git_dir).join("corral-rewind").join(format!(
+        "{}-{}",
+        &pre[..pre.len().min(12)],
+        &want[..want.len().min(12)]
+    ));
     let mut done = Restored::default();
     for path in removals.into_iter().chain(writes) {
         let (target, previous) = (wanted.get(path), before.get(path));
-        let now = blob_now(dir, path)?;
+        let now = blob_at(dir, path, &dir.join(path))?;
         if now.as_ref() == target {
             if target != previous {
                 done.restored.push(path.clone());
             }
-        } else if now.as_ref() == previous && write_path(dir, path, target)? {
+        } else if now.as_ref() == previous && replace(dir, path, (target, previous), &keep)? {
             done.restored.push(path.clone());
             crate::agent::failpoint("rewind_restored_path");
         } else {

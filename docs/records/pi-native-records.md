@@ -237,12 +237,13 @@ and never written by corral. Fields: `id` (`g<generation>-t<turn>`), `phase` (`s
 
 `RewindRecord` (`AgentRunState.rewinds`) holds `id` (`rw-<n>`), `checkpoint`, its `commit`,
 `head` and `leaf`, `from_generation`, `stage` (`prepared`, `fenced`, `saved`, `restoring`,
-`restored`, `launched`, `aborted`), the saved `before` commit and `before_ref`, the launched
-`generation`, `applied` (when a host of that generation or later was seen bound on a branch from
+`restored`, `launched`, `aborted`), the saved `before` commit and `before_ref`, the
+`generation` first opened on its cursor (recorded at stage `restored`, before its host can run),
+`applied` (when a host of that generation or later was seen bound on a branch from
 `leaf`), `restored` (≤ 64 paths, `REWIND_PATHS_MAX`) with `restored_count`, `kept`, `detail`,
 `at` and `updated`. Storage class: canonical. Writer: checkpoints-rewind. At most one rewind is
 unfinished per container. Launch gives its `leaf` as bootstrap `resume_leaf` at stage `restored`,
-and for the last `launched` rewind until `applied` is set: every relaunch first checks the bound
+and for the last `launched` rewind, until `applied` is set: every relaunch after the first checks the bound
 session for a `corral_host_bound` entry of the launched generation or later that descends from
 `leaf`, and records `applied` when it finds one.
 
