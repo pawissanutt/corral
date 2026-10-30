@@ -114,6 +114,18 @@ fn row_queries(make: MakeFixture<'_>) -> Result<()> {
         ),
         (part.clone().with_index("sha:x"), vec!["000002/000002"]),
         (
+            under.clone().after_key("000002/000001"),
+            vec!["000002/000002", "000002/000003"],
+        ),
+        (
+            under.clone().with_index("at:c").after_key("000002/000002"),
+            vec!["000002/000003"],
+        ),
+        (
+            under.clone().newest_first().after_key("000002/000002"),
+            vec!["000002/000003"],
+        ),
+        (
             under.clone().newest_first(),
             vec!["000002/000003", "000002/000002", "000002/000001"],
         ),
@@ -125,6 +137,24 @@ fn row_queries(make: MakeFixture<'_>) -> Result<()> {
         ensure!(keys(&page) == expected, "{q:?} returned {:?}", keys(&page));
         ensure!(page.items.iter().all(|row| q.matches(row)), "{q:?} filter");
     }
+    let bounded = under.clone().after_key("000002/000001");
+    let bounded_first = query(&fx, num, &bounded, 1)?;
+    ensure!(
+        keys(&bounded_first) == ["000002/000002"],
+        "bounded first page"
+    );
+    let bounded_next = fx.backend.view()?.rows(
+        num,
+        &bounded,
+        PageReq {
+            after: bounded_first.next,
+            limit: 1,
+        },
+    )?;
+    ensure!(
+        keys(&bounded_next) == ["000002/000003"],
+        "bounded opaque-cursor continuation"
+    );
     let first = query(&fx, num, &under, 2)?;
     ensure!(
         keys(&first) == ["000002/000001", "000002/000002"],

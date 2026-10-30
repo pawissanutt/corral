@@ -355,6 +355,15 @@ impl TaskRef for Task {
             .transpose()
     }
 
+    fn submitted_plan_after(&self, run: &str, before: usize) -> Result<Option<(String, String)>> {
+        Ok(self
+            .plans
+            .iter()
+            .skip(before)
+            .find(|plan| plan.run.as_deref() == Some(run))
+            .map(|plan| (plan.id.clone(), plan.artifact.sha256.clone())))
+    }
+
     fn plan_head(&self, id: &str) -> Result<Option<PlanHead>> {
         self.plans
             .iter()
@@ -732,7 +741,7 @@ impl TaskRef for Task {
         Ok(self
             .agent_pm_receipts
             .iter()
-            .filter(|receipt| crate::agent::NativeRecord::Receipt((*receipt).clone()).pending())
+            .filter(|receipt| receipt.effects_pending())
             .cloned()
             .collect())
     }

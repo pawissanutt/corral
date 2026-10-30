@@ -135,6 +135,7 @@ impl Store {
         let query = RowQuery {
             part,
             key,
+            after_key: None,
             prefix: None,
             index,
             current_only: false,

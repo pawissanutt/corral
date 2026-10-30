@@ -76,6 +76,8 @@ pub struct RowQuery {
     pub part: TaskPart,
     /// Exactly this key.
     pub key: Option<String>,
+    /// Keys strictly greater than this key, independent of the opaque page cursor.
+    pub after_key: Option<String>,
     /// Keys starting with this text (a parent key followed by `/`).
     pub prefix: Option<String>,
     /// Rows carrying this index token.
@@ -90,6 +92,7 @@ impl RowQuery {
         Self {
             part,
             key: None,
+            after_key: None,
             prefix: None,
             index: None,
             current_only: false,
@@ -110,6 +113,11 @@ impl RowQuery {
             prefix: Some(prefix.into()),
             ..Self::part(part)
         }
+    }
+
+    pub fn after_key(mut self, key: impl Into<String>) -> Self {
+        self.after_key = Some(key.into());
+        self
     }
 
     pub fn with_index(mut self, token: impl Into<String>) -> Self {
@@ -136,6 +144,7 @@ impl RowQuery {
     pub fn matches(&self, row: &super::HistoryRow) -> bool {
         row.part == self.part
             && self.key.as_ref().is_none_or(|key| &row.key == key)
+            && self.after_key.as_ref().is_none_or(|key| &row.key > key)
             && self
                 .prefix
                 .as_ref()

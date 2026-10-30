@@ -42,12 +42,7 @@ impl NativeRecord {
     /// Work that makes an otherwise settled container owe another reconciliation tick.
     pub fn pending(&self) -> bool {
         match self {
-            Self::Receipt(r) => {
-                matches!(
-                    r.state,
-                    ReceiptState::Reserved | ReceiptState::Queued | ReceiptState::Uncertain
-                ) || !r.post_pending.is_empty()
-            }
+            Self::Receipt(r) => r.effects_pending() || r.recovery_update_due(),
             Self::Question(q) => q.recorded_pending(),
             Self::Job(j) => j.needs_reap(),
             _ => false,

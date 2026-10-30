@@ -3,6 +3,14 @@ use crate::backend::{HistoryRow, TaskPart};
 use serde_json::Value;
 
 pub(super) fn decorate_native(row: &mut HistoryRow) {
+    if row.part == TaskPart::Plan {
+        row.index
+            .retain(|token| !token.starts_with("native:submitted_run:"));
+        if let Some(run) = row.doc.get("run").and_then(Value::as_str) {
+            row.index.push(format!("native:submitted_run:{run}"));
+        }
+        return;
+    }
     if row.part == TaskPart::PmReceipt {
         // Same canonical receipt debt as native containers, indexed before decode.
         // Unknown metadata remains discoverable so decoding reports corruption.

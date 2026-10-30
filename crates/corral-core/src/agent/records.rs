@@ -270,6 +270,28 @@ pub struct RequestReceipt {
     pub committed_at: Option<Timestamp>,
 }
 
+impl RequestReceipt {
+    /// Reservation settlement or explicitly owed post-commit effects.
+    pub fn effects_pending(&self) -> bool {
+        matches!(
+            self.state,
+            ReceiptState::Reserved | ReceiptState::Queued | ReceiptState::Uncertain
+        ) || !self.post_pending.is_empty()
+    }
+
+    /// A coding-role recovery notice reported this call in progress and owes its one update.
+    /// The evidence source labels are the persisted recovery protocol, not transient UI.
+    pub fn recovery_update_due(&self) -> bool {
+        matches!(self.identity.role, AgentRole::Worker | AgentRole::Reviewer)
+            && self.state != ReceiptState::Reserved
+            && self
+                .evidence
+                .iter()
+                .any(|e| e.source == "recovery_notice" && e.state == "in_progress")
+            && !self.evidence.iter().any(|e| e.source == "recovery_update")
+    }
+}
+
 /// pid plus start time rejects pid reuse when a reservation is reconciled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Executor {
