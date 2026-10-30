@@ -80,7 +80,18 @@ elif op == ['pane', 'get']:
     if a[2] not in s['panes']:
         fail('pane_not_found', a[2])
     finish({'pane': s['panes'][a[2]]})
+elif op == ['pane', 'process-info']:
+    pane = a[a.index('--pane') + 1]
+    pid = s.get('shells', {}).get(pane)
+    if not pid:
+        fail('pane_not_found', pane)
+    finish({'process_info': {'shell_pid': pid, 'foreground_processes': []}})
 elif op == ['pane', 'close']:
+    pid = s.get('shells', {}).get(a[2])
+    if pid:
+        import signal
+        (root / 'closing-pid').write_text(str(os.getpid()))
+        os.kill(pid, signal.SIGTERM)
     if s.get('require_worktree') and not pathlib.Path(s['require_worktree']).is_dir():
         fail('worktree_removed_too_soon', s['require_worktree'])
     if a[2] not in s['panes']:

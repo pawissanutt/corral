@@ -151,6 +151,12 @@ fn clean<'a>(
         }
     }
     for task in tasks {
+        if !crate::session_scope::owns_task(ctx, task)? {
+            warnings.push(
+                "pane cleanup refused: selected herdr session does not own task panes".into(),
+            );
+            continue;
+        }
         // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
         if crate::agent::hooks::task_is_pi_native(task)
             && let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task)
@@ -241,8 +247,10 @@ fn clean<'a>(
     }
     let panes = ctx.herdr.pane_list()?;
     for pane in &panes {
-        if let Some(task) = owned.get(pane.pane_id.as_str())
-            && let Err(error) = ctx.herdr.pane_close(&pane.pane_id).and_then(|()| {
+        if let Some(task) = owned.get(pane.pane_id.as_str()) {
+            let exits = crate::cleanup_worktree::pane_exits(ctx, &pane.pane_id);
+            if let Err(error) = ctx.herdr.pane_close(&pane.pane_id).and_then(|()| {
+                crate::cleanup_worktree::wait_pane_exits(&exits);
                 if review_pane_ids.contains(pane.pane_id.as_str()) {
                     ctx.store.log_event(
                         Some(&task.id),
@@ -285,10 +293,10 @@ fn clean<'a>(
                         Ok(())
                     })
                     .map(|_| ())
-            })
-        {
-            failed(ctx, task, &pane.pane_id, &error);
-            warnings.push(format!("pane {}: {error:#}", pane.pane_id));
+            }) {
+                failed(ctx, task, &pane.pane_id, &error);
+                warnings.push(format!("pane {}: {error:#}", pane.pane_id));
+            }
         }
     }
     if scope == Cleanup::Task && !workspaces.is_empty() {
