@@ -517,7 +517,7 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
         .map(|(_, limit)| *limit)
 }
 
-/// T-343: the fingerprint and escalation passes must have run in every measured sync tick
+/// T-343 / storage-v2: the feed observer and escalation must run in every measured sync tick
 /// before their zeros mean anything. Only then: no artifact file is stat'ed when nothing
 /// changed, and a worktree is sized only for a run still in flight, on the tick that raises the
 /// severe sample. Reviewer scratch is unreadable in the fixture, so any read fails the tick.
@@ -533,7 +533,7 @@ fn pass_failures(rows: &[Row], in_flight: u64) -> Vec<String> {
                 get(Work::AttentionVisit)
             ));
         }
-        let ran = [Work::FingerprintPass, Work::ResourcePass].map(|work| {
+        let ran = [Work::IndexRefreshPass, Work::ResourcePass].map(|work| {
             let ran = get(work) >= 1;
             if !ran {
                 failures.push(format!(
@@ -587,7 +587,7 @@ fn pass_row(path: &str, passes: [(Work, u64); 5]) -> Row {
 
 fn passes(artifact_stats: u64, walks: u64) -> [(Work, u64); 5] {
     [
-        (Work::FingerprintPass, 1),
+        (Work::IndexRefreshPass, 1),
         (Work::ResourcePass, 1),
         (Work::ArtifactStat, artifact_stats),
         (Work::WorktreeWalk, walks),
@@ -621,7 +621,18 @@ fn passes_that_did_not_run_fail_before_their_zeros_count() {
     ];
     assert_eq!(
         pass_failures(&rows, 5),
-        ["sync_tick_board: fingerprint_passes = 0, the pass did not run"]
+        ["sync_tick_board: index_refresh_passes = 0, the pass did not run"]
+    );
+}
+
+#[test]
+fn a_fingerprint_does_not_stand_in_for_the_feed_observer() {
+    let mut row = pass_row("sync_tick_board", passes(0, 0));
+    row.work.work[Work::IndexRefreshPass as usize] = 0;
+    row.work.work[Work::FingerprintPass as usize] = 1;
+    assert_eq!(
+        pass_failures(&[row, pass_row("sync_tick_board_severe", passes(0, 5))], 5),
+        ["sync_tick_board: index_refresh_passes = 0, the pass did not run"]
     );
 }
 

@@ -62,10 +62,12 @@ pub enum Work {
     InboxIndexRead,
     /// A full resolution of the effective operating policy (grant, members and refusals).
     PolicyResolve,
+    /// A search-index refresh observes a pinned change-feed position and its cursor.
+    IndexRefreshPass,
 }
 
 impl Work {
-    pub const ALL: [Work; 29] = [
+    pub const ALL: [Work; 30] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -95,6 +97,7 @@ impl Work {
         Work::InboxHeaderWrite,
         Work::InboxIndexRead,
         Work::PolicyResolve,
+        Work::IndexRefreshPass,
     ];
 
     pub fn name(self) -> &'static str {
@@ -128,6 +131,7 @@ impl Work {
             Work::InboxHeaderWrite => "inbox_header_writes",
             Work::InboxIndexRead => "inbox_index_reads",
             Work::PolicyResolve => "policy_resolves",
+            Work::IndexRefreshPass => "index_refresh_passes",
         }
     }
 }

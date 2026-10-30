@@ -189,6 +189,7 @@ fn follow_index(ctx: &Ctx) -> Result<bool> {
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let root = ctx.store.cache_root()?;
     let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
+    corral_core::work::record(corral_core::work::Work::IndexRefreshPass, 1);
     let Some(at) = read_cursor(&root)?.filter(|_| root.join("content-search.json").is_file())
     else {
         return Ok(false);
