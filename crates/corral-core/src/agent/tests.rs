@@ -312,6 +312,7 @@ fn records_round_trip_through_the_task_file_and_default_to_absent() {
             run: Some("R1".into()),
             review: None,
             callback: None,
+            assistant: None,
             session_id: "s".into(),
             generation: 1,
             turn: Some(1),

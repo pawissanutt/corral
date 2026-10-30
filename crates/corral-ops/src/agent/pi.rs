@@ -1,5 +1,9 @@
 //! `corral pi`: start the Pi-native host from nothing (T-490), as `pi` starts plain Pi.
 //!
+//! In a workspace `corral pi` opens a new assistant session in the owner's herdr pane and
+//! `--resume A-<n>` continues one there (T-544); both run the host as a child so a clean exit
+//! ends the session. `--pm` is the PM's bound mode below, unchanged.
+//!
 //! Bound mode adopts the herdr pane it runs in as the PM pane. It resolves the PM profile through
 //! the `corral pm` and resume checks, opens the next PM generation in that pane (taking over a dead
 //! PM with resume's fencing, never a rival generation), writes the one-shot bootstrap and launches
@@ -50,7 +54,7 @@ pub(crate) fn refuse(code: &'static str, detail: impl Into<String>) -> anyhow::E
     .into()
 }
 
-fn platform() -> Result<()> {
+pub(crate) fn platform() -> Result<()> {
     if cfg!(unix) {
         Ok(())
     } else {
@@ -75,7 +79,7 @@ pub fn current_pane(value: Option<&str>) -> Result<String> {
         })
 }
 
-fn host_alive(state: &AgentRunState) -> Result<bool> {
+pub(crate) fn host_alive(state: &AgentRunState) -> Result<bool> {
     Ok(bound_host(state).as_ref().map(gone).transpose()? == Some(false))
 }
 
@@ -149,6 +153,84 @@ pub fn bound(start: &Path, ctx: &Ctx, overrides: &Overrides) -> Result<()> {
     let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
     let prepared = adopt(ctx, &pane, overrides)?;
     super::launch::launch(start, &prepared.launch_args())
+}
+
+/// `corral pi [--over-cap]` in a workspace: a new assistant session in this pane.
+pub fn assistant(ctx: &Ctx, overrides: &Overrides, over_cap: bool) -> Result<()> {
+    platform()?;
+    let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
+    let (session, prepared, warning) =
+        super::ops::assistant::open(ctx, &pane, overrides, over_cap)?;
+    if let Some(warning) = warning {
+        eprintln!("corral pi: {warning}");
+    }
+    eprintln!(
+        "corral pi: assistant {} (role assistant) in pane {pane}; `corral pi --pm` opens the PM",
+        session.id
+    );
+    // A host that never started leaves no half-open session behind.
+    let status = super::ops::assistant::run_host(&prepared).or_else(|error| {
+        ctx.store.end_assistant(&session.id)?;
+        Err(error)
+    })?;
+    finish(ctx, &session.id, status)
+}
+
+/// `corral pi --resume A-<n>`: fence the session's generation and open the next in this pane.
+pub fn resume_assistant(ctx: &Ctx, id: &str, overrides: &Overrides) -> Result<()> {
+    platform()?;
+    let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
+    let (fenced, prepared) = super::ops::assistant::resume(ctx, id, &pane, overrides)?;
+    eprintln!(
+        "corral pi: assistant {id} resumed in pane {pane} (generation {fenced} fenced, \
+         generation {} opened)",
+        fenced + 1
+    );
+    finish(ctx, id, super::ops::assistant::run_host(&prepared)?)
+}
+
+/// A clean host exit (Pi's `/quit`) ends the session; any other exit leaves it resumable.
+fn finish(ctx: &Ctx, id: &str, status: std::process::ExitStatus) -> Result<()> {
+    if !status.success() {
+        #[cfg(unix)]
+        restore_terminal()?;
+        anyhow::bail!("{id}'s host stopped ({status}); `corral pi --resume {id}` resumes it");
+    }
+    end_assistant(ctx, id)?;
+    eprintln!("corral pi: assistant {id} ended");
+    Ok(())
+}
+
+/// Pi's TUI turns on mouse, focus, paste and keyboard reporting and hides the cursor. A host that
+/// is killed cannot turn them off, so the owner's shell would read the reports as typed input.
+const TERMINAL_RESET: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\
+    \x1b[?2031l\x1b[<u\x1b[?7h\x1b[?25h\r\n";
+
+#[cfg(unix)]
+fn restore_terminal() -> Result<()> {
+    use std::io::{IsTerminal, Write};
+    let mut stderr = std::io::stderr();
+    if stderr.is_terminal() {
+        stderr
+            .write_all(TERMINAL_RESET)
+            .and_then(|()| stderr.flush())
+            .context("restoring the terminal after the host stopped")?;
+    }
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        rustix::termios::tcflush(&stdin, rustix::termios::QueueSelector::IFlush)
+            .context("discarding the stopped host's stray terminal reports")?;
+    }
+    Ok(())
+}
+
+/// `corral assistant end`: shut a running host down, then close the session record.
+pub fn end_assistant(ctx: &Ctx, id: &str) -> Result<corral_core::assistant::AssistantSession> {
+    let (session, warning) = super::ops::assistant::end(ctx, id)?;
+    if let Some(warning) = warning {
+        eprintln!("{warning}");
+    }
+    Ok(session)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

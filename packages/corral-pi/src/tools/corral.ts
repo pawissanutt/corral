@@ -88,7 +88,9 @@ export class CorralClient {
     const { identity, corral, root } = this.options;
     const args = identity.role === "pm"
       ? ["agent", "state", "--pm", "--json"]
-      : ["show", identity.task ?? "", "--json"];
+      : identity.role === "assistant"
+        ? ["assistant", "show", identity.assistant ?? "", "--json"]
+        : ["show", identity.task ?? "", "--json"];
     return new Promise((resolve, reject) => {
       const child = execFile(corral, args, {
         cwd: root, timeout: CALL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
@@ -122,6 +124,7 @@ export class CorralClient {
         run: identity.run,
         review: identity.review,
         callback: identity.callback,
+        assistant: identity.assistant,
         session_id: this.options.sessionId(),
         generation: identity.generation,
         turn: call.turn,

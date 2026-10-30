@@ -72,10 +72,16 @@ fn continued_reviewer_hello_refuses_a_different_session_id() {
 
 #[test]
 fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
-    // Given one bound host per role: a worker run, a review child and the AgentPm area.
+    // Given one bound host per role: a worker run, a review child, the AgentPm area and an
+    // assistant session.
     let fx = fx();
     let worker = worker_task(&fx, "p1");
     let (reviewed, review_target) = reviewer_task(&fx);
+    let assistant = fx
+        .ctx
+        .store
+        .create_assistant("pi", None, Some("a-pane"), None)
+        .unwrap();
     let targets = [
         (
             BindTarget::Worker {
@@ -91,6 +97,12 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
             },
             "pm-pane",
         ),
+        (
+            BindTarget::Assistant {
+                session: assistant.id.clone(),
+            },
+            "a-pane",
+        ),
     ];
     for (target, pane) in targets {
         let host = bind(&fx, &target, pane, &format!("s-{pane}"));
@@ -99,6 +111,7 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
             BindTarget::Planner { .. } | BindTarget::PlanReviewer { .. } => {
                 json!(["hello", "event", "receipt_lookup"])
             }
+            BindTarget::Assistant { .. } => json!(["hello", "event", "receipt_lookup", "todo"]),
             BindTarget::Pm { .. } => json!([
                 "hello",
                 "event",

@@ -209,7 +209,9 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
         ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
             bail!("planning hosts relaunch through the plan pipeline");
         }
-        ContainerRef::Pm => unreachable!("the PM has no task"),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => {
+            unreachable!("the PM and assistants have no task")
+        }
     };
     let spec = HostSpec {
         cwd: run.worktree.clone(),
@@ -709,7 +711,7 @@ fn binding(container: &ContainerRef) -> MessageBinding {
         ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
             Some(review.clone())
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     };
     MessageBinding {
         run,

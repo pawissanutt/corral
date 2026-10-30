@@ -92,6 +92,20 @@ pub(crate) fn commit(
     let origin = &admitted.origin;
     let container = &origin.binding.container;
     let mut outcome: Option<(RequestReceipt, bool)> = None;
+    if let Some(id) = container.assistant() {
+        let (receipt, replayed) =
+            ctx.store
+                .settle_assistant_container(id, |assistant, ended| {
+                    if let Some(stored) = assistant.state.receipt(&origin.request_id) {
+                        admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                        return Ok((stored.clone(), true));
+                    }
+                    admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
+                    let commit = apply(&mut assistant.state, None)?;
+                    Ok((append(&mut assistant.state, origin, commit)?, false))
+                })?;
+        return respond(ctx, container, receipt, replayed);
+    }
     match container.task() {
         None => pm_state::update(&ctx.store, |pm| {
             let pm = pm.as_mut().ok_or_else(|| {
@@ -211,12 +225,15 @@ fn complete_post_pending(
             stored.post_pending.len() != before
         })
     };
-    match container.task() {
-        None => pm_state::update(store, |pm| {
+    match (container.assistant(), container.task()) {
+        (Some(id), _) => {
+            store.settle_assistant_container(id, |assistant, _| Ok(clear(&mut assistant.state)))?;
+        }
+        (None, None) => pm_state::update(store, |pm| {
             let changed = pm.as_mut().is_some_and(|pm| clear(&mut pm.state));
             Ok(((), changed))
         })?,
-        Some(task_id) => {
+        (None, Some(task_id)) => {
             store.try_update(task_id, |task| {
                 Ok(agent::container_state_mut(task, container).is_some_and(clear))
             })?;

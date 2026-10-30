@@ -162,16 +162,20 @@ pub(crate) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> H
             Some(callback),
         ),
         BindTarget::Pm { .. } => (AgentRole::Pm, None, None, None, None),
+        BindTarget::Assistant { .. } => (AgentRole::Assistant, None, None, None, None),
     };
+    // An assistant session names no project; its identity carries the session instead.
+    let assistant = grant.container.assistant().map(str::to_owned);
     Host {
         identity: RequestIdentity {
             store: paths::store_id(&fx.ctx.store),
-            project: "corral".into(),
+            project: if assistant.is_some() { "" } else { "corral" }.into(),
             role,
             task: task.cloned(),
             run: run.cloned(),
             review: review.cloned(),
             callback: callback.cloned(),
+            assistant,
             session_id: session.into(),
             generation: grant.generation,
             turn: None,
@@ -269,7 +273,10 @@ pub(crate) fn state(fx: &Fx, container: &ContainerRef) -> AgentRunState {
                 .unwrap()
                 .clone()
         }
-        None => pm_state::load(&fx.ctx.store).unwrap().unwrap().state,
+        None => match container.assistant() {
+            Some(id) => fx.ctx.store.get_assistant_container(id).unwrap().state,
+            None => pm_state::load(&fx.ctx.store).unwrap().unwrap().state,
+        },
     }
 }
 

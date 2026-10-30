@@ -56,6 +56,9 @@ pub struct Bootstrap {
     pub review: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback: Option<String>,
+    /// Assistant only: the session `A-<n>` the host is bound to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<String>,
     pub generation: u32,
     pub bind_nonce: String,
     pub pane: String,
@@ -141,9 +144,21 @@ impl Bootstrap {
                     .context("the bootstrap names no review")?,
             },
             AgentRole::Pm => Recipient::Pm,
-            AgentRole::Assistant => anyhow::bail!("assistant launch is not available yet"),
+            AgentRole::Assistant => anyhow::bail!("an assistant session has no inbox recipient"),
         })
     }
+
+    /// The key of the container's runtime directory: its recipient's, or the assistant session's.
+    pub fn runtime_key(&self) -> Result<String> {
+        match (self.role, &self.assistant) {
+            (AgentRole::Assistant, Some(session)) => Ok(assistant_key(session)),
+            _ => self.recipient()?.key(),
+        }
+    }
+}
+
+fn assistant_key(session: &str) -> String {
+    format!("assistant_{session}")
 }
 
 /// A launch refused before exec: a stable code and what is wrong. No secret exists yet.
@@ -315,6 +330,11 @@ pub fn prepare_bootstrap(
             project.clone(),
             pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state)),
         ),
+        BindTarget::Assistant { session } => {
+            let file = super::ops::assistant::continued_session(ctx, session)?;
+            fresh_session = file.is_none();
+            (String::new(), file)
+        }
         BindTarget::Worker { .. } | BindTarget::Reviewer { .. } => {
             let task = ctx.store.get(
                 container
@@ -389,7 +409,7 @@ pub fn prepare_bootstrap(
         ContainerRef::PlanReviewer { task, plan, review } => {
             (Some(task.clone()), Some(plan.clone()), Some(review.clone()))
         }
-        ContainerRef::Pm => (None, None, None),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => (None, None, None),
     };
     let project_dir = match target {
         BindTarget::Pm { .. } => ctx.store.project_path(&project).ok(),
@@ -400,13 +420,7 @@ pub fn prepare_bootstrap(
         root: ctx.store.root().to_path_buf(),
         store: paths::store_id(&ctx.store),
         project,
-        role: match target {
-            BindTarget::Worker { .. } => AgentRole::Worker,
-            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
-            BindTarget::Planner { .. } => AgentRole::Planner,
-            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
-            BindTarget::Pm { .. } => AgentRole::Pm,
-        },
+        role: target.role(),
         task,
         run,
         review,
@@ -414,6 +428,7 @@ pub fn prepare_bootstrap(
             BindTarget::Reviewer { callback, .. } => Some(callback.clone()),
             _ => None,
         },
+        assistant: container.assistant().map(str::to_owned),
         generation: grant.generation,
         bind_nonce: grant.bind_nonce,
         pane: pane.into(),
@@ -435,7 +450,8 @@ pub fn prepare_bootstrap(
         capabilities: Some(grant.capabilities),
         project_dir,
     };
-    let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
+    let dir = runtime_dir_for(&ctx.store, &bootstrap.runtime_key()?)
+        .join(format!("g{}", grant.generation));
     let path = write_bootstrap(&dir, &bootstrap)?;
     Ok(Prepared {
         bootstrap: path,
@@ -459,14 +475,26 @@ pub fn runtime_dir(store: &Store, recipient: &Recipient) -> Result<PathBuf> {
 
 /// `runtime_dir` under an explicit root.
 pub fn runtime_dir_in(root: &Path, store: &Store, recipient: &Recipient) -> Result<PathBuf> {
-    container_dir(root, &paths::store_id(store), recipient)
+    Ok(container_dir(
+        root,
+        &paths::store_id(store),
+        &recipient.key()?,
+    ))
 }
 
-fn container_dir(root: &Path, store_id: &str, recipient: &Recipient) -> Result<PathBuf> {
-    let key = recipient.key()?;
-    Ok(root
-        .join(store_id)
-        .join(&paths::sha256_hex(key.as_bytes())[..16]))
+/// The runtime directory of the container whose runtime key is `key`.
+pub fn runtime_dir_for(store: &Store, key: &str) -> PathBuf {
+    container_dir(&runtime_root(), &paths::store_id(store), key)
+}
+
+/// The runtime directory of an assistant session: it has no inbox recipient.
+pub fn assistant_runtime_dir(store: &Store, session: &str) -> PathBuf {
+    runtime_dir_for(store, &assistant_key(session))
+}
+
+fn container_dir(root: &Path, store_id: &str, key: &str) -> PathBuf {
+    root.join(store_id)
+        .join(&paths::sha256_hex(key.as_bytes())[..16])
 }
 
 /// `g<n>/` of a container: its bootstrap, `ctl.cap` and `host.sock`.
@@ -608,7 +636,7 @@ pub fn consume_bootstrap(path: &Path) -> Result<Bootstrap> {
     if bootstrap.version != BOOTSTRAP_VERSION {
         return Err(refuse("bootstrap_invalid", "unsupported bootstrap version").into());
     }
-    let tail = container_dir(Path::new(""), &bootstrap.store, &bootstrap.recipient()?)?
+    let tail = container_dir(Path::new(""), &bootstrap.store, &bootstrap.runtime_key()?)
         .join(format!("g{}", bootstrap.generation));
     let dir = path.parent().unwrap_or(Path::new(""));
     let root = dir
@@ -790,6 +818,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "version": 1, "store": bootstrap.store, "project": bootstrap.project,
         "role": bootstrap.role.as_str(), "task": bootstrap.task, "run": bootstrap.run,
         "review": bootstrap.review, "callback": bootstrap.callback,
+        "assistant": bootstrap.assistant,
         "generation": bootstrap.generation,
         "secrets": {"host_cap": secrets.host_cap, "ctl_cap": secrets.ctl_cap,
                     "bind_nonce": bootstrap.bind_nonce},

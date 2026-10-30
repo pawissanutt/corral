@@ -216,8 +216,12 @@ fn assistant_capabilities_use_the_shared_resolver() {
     caps.set_preset(Preset::Full);
     let full = caps.resolve(AgentRole::Assistant, None);
     assert!(full.enabled("browser"));
-    assert!(full.enabled("hooks"));
-    assert!(full.enabled("checkpoints"));
+    assert!(full.enabled("bash_rules"));
+    assert!(full.enabled("oracle"));
     assert!(!full.enabled("llama_cpp.enabled"));
+    // Keys that need session artifacts, session-owned jobs or scratch roots stay out of the column.
+    for key in ["session_export", "background_shell", "checkpoints", "hooks"] {
+        assert!(!full.features.contains_key(key), "{key}");
+    }
     assert_ne!(standard.digest, full.digest);
 }

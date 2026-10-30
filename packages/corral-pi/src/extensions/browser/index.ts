@@ -1,4 +1,4 @@
-// Worker-only browser navigation and screenshots (T-574). Each call launches one fresh-profile
+// Worker and assistant browser navigation and screenshots (T-574). Each call launches one fresh-profile
 // headless browser, checks the top-level target before and after loading, and always cleans up.
 import { lstatSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
@@ -19,7 +19,7 @@ export function browserSettings(
   role: Role, enabled: readonly string[], settings: Readonly<Record<string, unknown>> | undefined,
 ): BrowserSettings | undefined {
   if (!enabled.includes("browser")) return undefined;
-  if (role !== "worker") throw new Error(`browser is not available to the ${role} role`);
+  if (role !== "worker" && role !== "assistant") throw new Error(`browser is not available to the ${role} role`);
   const parsed = BrowserSettingsSchema.safeParse(settings?.browser);
   if (!parsed.success) throw new Error("capabilities.settings.browser is missing or malformed");
   return parsed.data;

@@ -237,6 +237,9 @@ pub struct RequestIdentity {
     pub review: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback: Option<String>,
+    /// Assistant only: the launcher-bound session `A-<n>`; every other role leaves it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<String>,
     pub session_id: String,
     pub generation: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

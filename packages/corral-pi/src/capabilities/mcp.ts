@@ -5,7 +5,9 @@ import { McpClient, StdioTransport, StreamableHttpTransport, toLlmContent, type 
 import { Type } from "typebox";
 
 import type { Fetch } from "../auth/types.ts";
-import { McpDenied, resourceAllowed, toolAllowed, type McpServer, type McpSettings } from "../host/mcp-settings.ts";
+import {
+  McpDenied, resourceAllowed, serverVisible, toolAllowed, type McpServer, type McpSettings,
+} from "../host/mcp-settings.ts";
 import { mcpControlTools } from "../host/mcp-tools.ts";
 import { sha256Hex } from "../tools/corral.ts";
 
@@ -34,7 +36,7 @@ export class McpAccess {
     private readonly cwd: string, private readonly send?: Fetch,
   ) {
     for (const [name, server] of Object.entries(settings.servers)) {
-      if (server.projects.includes(project)) this.servers.set(name, { settings: server, tools: [] });
+      if (serverVisible(server, role, project)) this.servers.set(name, { settings: server, tools: [] });
     }
   }
 

@@ -184,7 +184,7 @@ fn retry(
         ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
             Some(review.clone())
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     };
     let key = format!("provider-retry:{}:{generation}:{attempt}", container.key());
     let mut posted = None;

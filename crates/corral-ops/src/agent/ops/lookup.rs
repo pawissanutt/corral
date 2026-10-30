@@ -77,7 +77,10 @@ pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallRespo
         (Resolved::Task(task), None) => agent::container_state(task, container)
             .and_then(|state| state.receipt(&payload.request_id))
             .cloned(),
-        (Resolved::Task(_), Some(_)) => {
+        (Resolved::Assistant(assistant, _), None) => {
+            assistant.state.receipt(&payload.request_id).cloned()
+        }
+        (Resolved::Task(_) | Resolved::Assistant(..), Some(_)) => {
             return Err(reject(
                 RejectCode::BadRequest,
                 "payload.task applies only to PM lookups",

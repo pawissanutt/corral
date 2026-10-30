@@ -79,7 +79,7 @@ pub enum Cmd {
     Attention(attention_cmd::AttentionArgs),
     /// Pi-native agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
-    /// Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+    /// Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
     Pi(pi_cmd::PiArgs),
     /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
     Question(question_cmd::QuestionArgs),

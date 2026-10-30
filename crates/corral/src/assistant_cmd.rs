@@ -1,4 +1,4 @@
-//! Durable assistant session inspection and lifecycle (launch is owned by `corral pi`).
+//! Durable assistant session inspection and lifecycle (launch and resume are `corral pi`'s).
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -26,7 +26,7 @@ pub enum AssistantCmd {
         #[arg(long)]
         json: bool,
     },
-    /// List live and ended assistant sessions
+    /// List assistant sessions: live (host running), open (resumable) or ended
     List {
         #[arg(long)]
         json: bool,
@@ -37,7 +37,7 @@ pub enum AssistantCmd {
         #[arg(long)]
         json: bool,
     },
-    /// End a session, keeping its record and transcript references
+    /// End a session (stopping a running host), keeping its record and transcript references
     End {
         id: String,
         #[arg(long)]
@@ -51,6 +51,14 @@ pub enum AssistantCmd {
         #[arg(long)]
         json: bool,
     },
+}
+
+fn status(ended: bool, live: bool) -> &'static str {
+    match (ended, live) {
+        (true, _) => "ended",
+        (false, true) => "live",
+        (false, false) => "open",
+    }
 }
 
 pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
@@ -84,7 +92,7 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                     println!(
                         "{} {} {} {} {} {} {}",
                         row.session,
-                        if row.ended.is_some() { "ended" } else { "open" },
+                        status(row.ended.is_some(), row.live),
                         row.focus,
                         row.pane.as_deref().unwrap_or("-"),
                         row.cost,
@@ -137,7 +145,7 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
             }
         }
         AssistantCmd::End { id, json } => {
-            let session = ctx.store.end_assistant(&id)?;
+            let session = corral_ops::agent::pi::end_assistant(ctx, &id)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&session)?);
             } else {

@@ -75,6 +75,7 @@ fn bind_in(fx: &Fx, target: &BindTarget, pane: &str, session: &str, project: &st
             Some(callback),
         ),
         BindTarget::Pm { .. } => (AgentRole::Pm, None, None, None, None),
+        BindTarget::Assistant { .. } => (AgentRole::Assistant, None, None, None, None),
     };
     let host = Host {
         identity: RequestIdentity {
@@ -85,6 +86,7 @@ fn bind_in(fx: &Fx, target: &BindTarget, pane: &str, session: &str, project: &st
             run: run.cloned(),
             review: review.cloned(),
             callback: callback.cloned(),
+            assistant: None,
             session_id: session.into(),
             generation: grant.generation,
             turn: None,

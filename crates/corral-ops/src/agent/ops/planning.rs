@@ -111,7 +111,10 @@ pub(crate) fn output_path(ctx: &Ctx, task: &Task, container: &ContainerRef) -> R
             .state_dir()
             .join("reviews")
             .join(format!("{task}-{plan}-{review}-plan-notes.md"))),
-        ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } | ContainerRef::Pm => {
+        ContainerRef::Worker { .. }
+        | ContainerRef::Reviewer { .. }
+        | ContainerRef::Pm
+        | ContainerRef::Assistant { .. } => {
             Err(bad("only a planning container writes plan output"))
         }
     }

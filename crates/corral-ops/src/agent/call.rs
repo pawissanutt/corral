@@ -62,6 +62,7 @@ const ALL_ROLES: &[AgentRole] = &[
     AgentRole::Planner,
     AgentRole::PlanReviewer,
     AgentRole::Pm,
+    AgentRole::Assistant,
 ];
 const AGENTS: &[AgentRole] = &[AgentRole::Worker, AgentRole::Reviewer];
 const ASKERS: &[AgentRole] = &[
@@ -76,7 +77,7 @@ const PLAN_REVIEWER: &[AgentRole] = &[AgentRole::PlanReviewer];
 const WORKER: &[AgentRole] = &[AgentRole::Worker];
 const REVIEWER: &[AgentRole] = &[AgentRole::Reviewer];
 const PM: &[AgentRole] = &[AgentRole::Pm];
-const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm];
+const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
     pub const ALL: [AgentOp; 33] = [

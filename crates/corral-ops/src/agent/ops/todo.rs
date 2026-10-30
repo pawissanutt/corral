@@ -1,4 +1,4 @@
-//! Top-level receipted todo commands over server-selected worker/PM progress.
+//! Top-level receipted todo commands over server-selected worker, PM or assistant progress.
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRole, ReceiptEffect, TodoAction};
 use corral_core::{RunProgress, Task};
@@ -76,21 +76,26 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             run.checkpoint_required = true;
             Ok(commit)
         }),
-        AgentRole::Pm => receipts::commit(ctx, &admitted, |state, _| {
-            let spec = format!("pm:{}", state.binding.project);
+        AgentRole::Pm | AgentRole::Assistant => receipts::commit(ctx, &admitted, |state, _| {
+            // The ledger is the container's own: the PM's project or the assistant session.
+            let spec = match container.assistant() {
+                Some(session) => format!("assistant:{session}"),
+                None => format!("pm:{}", state.binding.project),
+            };
             let progress = action.apply(state.todo.as_ref(), &spec).map_err(bad)?;
             if progress.steps().any(|step| !step.criteria.is_empty()) {
-                return Err(bad("PM todo cannot link task acceptance criteria"));
+                return Err(bad(
+                    "a PM or assistant todo cannot link task acceptance criteria",
+                ));
             }
             let commit = committed(&progress);
             state.todo = Some(progress);
             Ok(commit)
         }),
-        AgentRole::Reviewer
-        | AgentRole::Planner
-        | AgentRole::PlanReviewer
-        | AgentRole::Assistant => {
-            Err(Rejection::new(RejectCode::OpNotAllowed, "todo belongs to worker and PM").into())
-        }
+        AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => Err(Rejection::new(
+            RejectCode::OpNotAllowed,
+            "todo belongs to worker, PM and assistant",
+        )
+        .into()),
     }
 }
