@@ -304,8 +304,6 @@ fn registered_project_worktree_ignores_scratch_idempotently() {
     assert!(!ws.root.join(".git").exists());
     let task = running_task(&ws, "Scratch setup");
     let wt = worktree(&task);
-    corral_git::ensure_evidence_excluded(&ws.app).unwrap();
-    corral_git::ensure_evidence_excluded(&ws.app).unwrap();
     let exclude = std::fs::read_to_string(ws.app.join(".git/info/exclude")).unwrap();
     assert_eq!(
         exclude
@@ -323,6 +321,12 @@ fn registered_project_worktree_ignores_scratch_idempotently() {
     assert!(corral_git::is_clean(&wt).unwrap());
     git(&wt, &["add", "-A"]);
     assert!(corral_git::is_clean(&wt).unwrap());
+    corral_git::ensure_evidence_excluded(&ws.app).unwrap();
+    corral_git::ensure_evidence_excluded(&ws.app).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(ws.app.join(".git/info/exclude")).unwrap(),
+        exclude
+    );
 }
 
 #[test]

@@ -270,6 +270,53 @@ fn every_coding_revocation_retains_preparation_without_submitting_or_stopping_ru
 }
 
 #[test]
+fn reserved_launch_recovery_restores_scratch_exclusion_for_existing_worktree() {
+    let mut fx = Fx::new();
+    let task = fx.task("recover scratch", Status::Ready);
+    let keep = fx.task("keep", Status::Ready);
+    fx.start(&keep.id);
+    fx.grant(&[&task.id, &keep.id]);
+    let barrier = Barrier::subscribe(&fx);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| corral_ops::sync_at(&fx.fresh(), now()).unwrap());
+        let mut release = barrier.arrival();
+        revoke(&fx, &task.id, &keep.id, Revoke::Pause);
+        release.write_all(b"R").unwrap();
+        worker.join().unwrap();
+    });
+    drop(barrier);
+    let worktree = fx
+        .ctx
+        .store
+        .get(&task.id)
+        .unwrap()
+        .current_run()
+        .unwrap()
+        .worktree
+        .clone();
+    let exclude = fx.temp.path().join("app/.git/info/exclude");
+    let original = std::fs::read_to_string(&exclude).unwrap();
+    std::fs::write(&exclude, original.replace("/.evidence/\n", "")).unwrap();
+    std::fs::create_dir_all(worktree.join(".evidence")).unwrap();
+    std::fs::write(worktree.join(".evidence/probe"), "scratch").unwrap();
+    assert!(!corral_git::is_clean(&worktree).unwrap());
+    fx.ctx
+        .store
+        .update(&task.id, |task| {
+            task.launch.as_mut().unwrap().stage = LaunchStage::Reserved;
+            Ok(())
+        })
+        .unwrap();
+    fx.grant(&[&task.id, &keep.id]);
+    corral_ops::sync_at(&fx.fresh(), now()).unwrap();
+    assert_eq!(
+        fixture::git(&worktree, &["check-ignore", ".evidence/probe"]),
+        ".evidence/probe"
+    );
+    assert!(corral_git::is_clean(&worktree).unwrap());
+}
+
+#[test]
 fn interrupted_coding_stages_keep_automatic_origin_and_never_replay_submitting() {
     for (stage, change) in [
         LaunchStage::Reserved,
