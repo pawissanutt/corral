@@ -55,7 +55,7 @@ function glob(pattern: string): RegExp {
  * substitutions and `sh -c`/`bash -c` arguments, recursively. Quotes are not parsed, so a
  * quoted operator splits too: matching errs toward more pieces, never fewer.
  */
-export function pieces(command: string, depth = 0): string[] {
+function pieces(command: string, depth = 0): string[] {
   const found = new Set<string>();
   for (const part of command.split(/\|\||&&|[;|&\n]/)) {
     const piece = normalize(part);

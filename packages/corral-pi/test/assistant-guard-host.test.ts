@@ -97,6 +97,9 @@ for (const { preset, enabled, settings } of PRESETS) {
         { toolCalls: [{ callId: "read", name: "bash", arguments: { command: "cat .corral/keep.txt" } }] },
         { toolCalls: [{ callId: "list", name: "bash", arguments: { command: "herdr pane list" } }] },
         { toolCalls: [{ callId: "allowed", name: "bash", arguments: { command: "echo ok > notes.txt" } }] },
+        { toolCalls: [{ callId: "quoted", name: "bash", arguments: {
+          command: "printf '%s\\n' \"Do not use herdr pane run w1:p1 ls\" \"echo x > .corral/tasks/T-1.md\" > example.txt" } }] },
+        { toolCalls: [{ callId: "copy", name: "bash", arguments: { command: "cp .corral/keep.txt copy.txt" } }] },
         { text: "Finished" },
       ]);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
@@ -120,6 +123,13 @@ for (const { preset, enabled, settings } of PRESETS) {
       expect(readFileSync(join(work, "herdr.log"), "utf8")).toBe("pane list\n");
       expect(result("read")).toEqual({ isError: false, text: "keep\n" });
       expect(readFileSync(join(cwd, "notes.txt"), "utf8")).toBe("ok\n");
+      // And quoted examples are data and a store file may be copied out: both ran.
+      expect(result("quoted").isError).toBeFalse();
+      expect(readFileSync(join(cwd, "example.txt"), "utf8"))
+        .toBe("Do not use herdr pane run w1:p1 ls\necho x > .corral/tasks/T-1.md\n");
+      expect(result("copy").isError).toBeFalse();
+      expect(readFileSync(join(cwd, "copy.txt"), "utf8")).toBe("keep\n");
+      expect(existsSync(join(cwd, ".corral", "tasks", "T-1.md"))).toBeFalse();
       const denied = events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
         .filter((event) => event.kind === "bash_rule_denied");
       expect(denied).toHaveLength(5);

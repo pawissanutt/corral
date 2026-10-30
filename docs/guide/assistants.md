@@ -105,13 +105,16 @@ Two fixed shell rules apply to every assistant bash call, top-level or nested (f
 another tool), before any configured `bash_rules`. No preset, capability setting or rule can
 turn them off. Corral refuses, and runs nothing for:
 
-- input into a herdr pane: `herdr pane send-text`, `send-keys` or `run`, and `herdr agent prompt`,
-  however they are reached (options, a path, `bash -c`, `$(...)`);
-- a direct write under `.corral/`: a redirection into it, or `rm`, `mv`, `cp`, `tee`, `touch`,
-  `mkdir`, `ln`, `dd`, `sed -i` and similar writers naming a path inside it.
+- input into a herdr pane: an executed `herdr pane send-text`, `send-keys` or `run`, or
+  `herdr agent prompt`, also when reached through options, a path, `bash -c`, `eval` or `$(...)`;
+- a direct write under `.corral/`: an unquoted output redirection into it, or a writer whose
+  written path is inside it (`rm`, `mv`, `tee`, `touch`, `mkdir`, `dd of=`, `sed -i` and similar;
+  for `cp`, `install`, `rsync` and `ln` only the destination counts).
 
-Reading `.corral/` (`cat`, `ls`, `grep`), other herdr commands such as `herdr pane list`, and
-every `corral` command still run. These rules prevent an honest model's accidents. Like the rest
+Quoted text is data: a comment or spec that quotes such a command, or a printed example of a
+redirection, runs. So do reads of `.corral/` (`cat`, `ls`, `grep`, copying a file out of it),
+other herdr commands such as `herdr pane list`, and `corral` commands, whose own redirections are
+still checked. These rules prevent an honest model's accidents. Like the rest
 of the assistant design, they are not a security boundary. A refusal is logged as
 `bash_rule_denied` with `fixed: true`.
 
