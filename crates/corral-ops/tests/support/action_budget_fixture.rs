@@ -549,7 +549,7 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
         );
     }
     corral_core::clock::pin_thread(Some(fixture::now()));
-    if kind == Kind::RepairInbox {
+    if matches!(kind, Kind::RepairInbox | Kind::RepairTickInbox) {
         // Imported historical messages must finish main's real bounded owner-index
         // preparation BEFORE measuring a ready Repair action. Do not forge a header
         // or weaken the assertion that the request is actually submitted.
