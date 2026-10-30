@@ -19,7 +19,7 @@ use corral_core::agent::{
     self, AGENT_RECORD_VERSION, AgentRunState, ContainerRef, Executor, RECEIPTS_MAX,
     RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths,
 };
-use corral_core::{Task, Verdict};
+use corral_core::{Task, TaskRef, Verdict};
 use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -265,19 +265,19 @@ fn settle(
         .task()
         .context("a planning container names its task")?;
     let mut out = None;
-    ctx.store.try_update(task_id, |task| {
-        let stored = agent::container_state_mut(task, container)
-            .and_then(|s| s.receipts.iter_mut().find(|r| r.request_id == request))
+    ctx.store.try_update_head(task_id, |task| {
+        let mut stored = task
+            .agent_receipt(container, request)?
             .context("the planning reservation disappeared")?;
         let changed = stored.state == ReceiptState::Reserved && stored.executor.as_ref() == seen;
         if changed {
-            let now = Timestamp::now();
             stored.state = state;
             stored.result = result;
             stored.executor = None;
-            stored.committed_at = (state == ReceiptState::Committed).then_some(now);
+            stored.committed_at = (state == ReceiptState::Committed).then_some(ctx.store.now());
+            task.put_agent_record(container, agent::NativeRecord::Receipt(stored.clone()))?;
         }
-        out = Some(stored.clone());
+        out = Some(stored);
         Ok(changed)
     })?;
     out.context("the settlement produced no receipt")
@@ -357,17 +357,52 @@ fn reconcile_one(
     if receipt.state != ReceiptState::Reserved || !effects::executor_gone(&executor)? {
         return Ok(receipt);
     }
-    let task = ctx.store.get(
+    let task = ctx.store.head(
         container
             .task()
             .context("planning containers name a task")?,
     )?;
     let outcome = match container {
         ContainerRef::Planner { run, .. } if receipt.op == "plan_submit" => {
-            submit_outcome(&task, run, &receipt.result, None)
+            let before = receipt.result["plans_before"].as_u64().unwrap_or(0) as usize;
+            match task.submitted_plan_after(run, before)? {
+                Some((id, sha)) => (
+                    ReceiptState::Committed,
+                    json!({"outcome":"submitted", "plan":id, "sha256":sha}),
+                ),
+                None => (
+                    ReceiptState::Abandoned,
+                    json!({"outcome":"refused", "reason":"not submitted"}),
+                ),
+            }
         }
         ContainerRef::PlanReviewer { plan, review, .. } if receipt.op == "plan_verdict" => {
-            verdict_outcome(&task, (plan, review), &receipt.result, None)
+            let recorded = task.plan_review(plan, review)?;
+            let len = receipt.result["notes_bytes"].as_u64().unwrap_or(u64::MAX) as usize;
+            match recorded.as_ref().and_then(|recorded| {
+                Some((
+                    recorded.verdict?,
+                    recorded.notes.as_deref().unwrap_or_default(),
+                ))
+            }) {
+                Some((verdict, notes))
+                    if notes
+                        .as_bytes()
+                        .get(..len)
+                        .map(paths::sha256_hex)
+                        .as_deref()
+                        == receipt.result["notes_sha256"].as_str() =>
+                {
+                    (
+                        ReceiptState::Committed,
+                        json!({"outcome":"recorded", "plan":plan, "review":review, "verdict":verdict}),
+                    )
+                }
+                _ => (
+                    ReceiptState::Abandoned,
+                    json!({"outcome":"refused", "reason":"not recorded"}),
+                ),
+            }
         }
         _ => return Ok(receipt),
     };
@@ -425,14 +460,18 @@ pub(crate) fn wants_sync(task: &Task) -> bool {
 
 /// Sync and recovery: settles every planning reservation of the task whose executor is gone.
 pub(crate) fn reconcile(ctx: &Ctx, task_id: &str) -> Result<()> {
-    let task = ctx.store.get(task_id)?;
-    for (container, state) in hosts(&task) {
-        let reserved = state
-            .receipts
-            .iter()
-            .filter(|r| r.state == ReceiptState::Reserved && r.executor.is_some());
-        for receipt in reserved.cloned().collect::<Vec<_>>() {
-            reconcile_one(ctx, &container, receipt)?;
+    let task = ctx.store.head(task_id)?;
+    for container in task.unfinished_native_containers()? {
+        if !matches!(
+            container,
+            ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+        ) {
+            continue;
+        }
+        for receipt in task.pending_agent_receipts(&container)? {
+            if receipt.state == ReceiptState::Reserved && receipt.executor.is_some() {
+                reconcile_one(ctx, &container, receipt)?;
+            }
         }
     }
     Ok(())

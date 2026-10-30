@@ -15,7 +15,7 @@ use corral_core::agent::{
     ReceiptState, RequestReceipt, ResumeClass, pm_state,
 };
 use corral_core::inbox::{Inbox, Message, MessageBinding, Post, Recipient, Urgency};
-use corral_core::{ArtifactKind, Task};
+use corral_core::{ArtifactKind, Task, TaskRef};
 use serde_json::{Value, json};
 
 use super::admission::{BindTarget, fence_generation};
@@ -750,57 +750,42 @@ fn binding(container: &ContainerRef) -> MessageBinding {
 }
 
 fn update_due(receipt: &RequestReceipt) -> bool {
-    let noticed = receipt
-        .evidence
-        .iter()
-        .any(|e| e.source == NOTICE_SOURCE && e.state == "in_progress");
-    let updated = receipt.evidence.iter().any(|e| e.source == UPDATE_SOURCE);
-    noticed && !updated && receipt.state != ReceiptState::Reserved
+    receipt.recovery_update_due()
 }
 
 /// Every pi-native container of the task with a receipt owed its one `recovery_update`.
-fn due_updates(task: &Task) -> Vec<(ContainerRef, String)> {
+fn due_updates<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<(ContainerRef, String)>> {
     let mut due = Vec::new();
-    for run in &task.runs {
-        let worker = ContainerRef::Worker {
-            task: task.id.clone(),
-            run: run.id.clone(),
-        };
-        let children = run.review_runs.iter().map(|c| {
-            let reviewer = ContainerRef::Reviewer {
-                task: task.id.clone(),
-                run: run.id.clone(),
-                review: c.id.clone(),
-            };
-            (reviewer, c)
-        });
-        for (container, record) in std::iter::once((worker, run)).chain(children) {
-            let Some(state) = record.agent_host.as_deref() else {
-                continue;
-            };
-            for receipt in state.receipts.iter().filter(|r| update_due(r)) {
-                due.push((container.clone(), receipt.request_id.clone()));
-            }
+    for container in task.unfinished_native_containers()? {
+        if !matches!(
+            container,
+            ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. }
+        ) {
+            continue;
+        }
+        for receipt in task
+            .pending_agent_receipts(&container)?
+            .into_iter()
+            .filter(update_due)
+        {
+            due.push((container.clone(), receipt.request_id));
         }
     }
-    due
+    Ok(due)
 }
 
 /// Sync: posts one `recovery_update` for each call a notice reported `in_progress` once its
 /// receipt settled, and marks the receipt in the same commit. A closed container gets none.
 pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
-    let due = due_updates(&ctx.store.get(task_id)?);
+    let due = due_updates(&ctx.store.head(task_id)?)?;
     let mut posted = 0;
     for (container, request) in due {
         let inbox = Inbox::new(&ctx.store, recipient(&container))?;
         let _posting = inbox.lock()?;
         let mut message = None;
-        ctx.store.try_update(task_id, |task| {
-            let closed = agent::container_closure(task, &container).is_some();
-            let Some(receipt) = agent::container_state(task, &container)
-                .and_then(|s| s.receipt(&request))
-                .filter(|r| update_due(r))
-                .cloned()
+        ctx.store.try_update_head(task_id, |task| {
+            let closed = agent::container_closure_ref(task, &container)?.is_some();
+            let Some(mut receipt) = task.agent_receipt(&container, &request)?.filter(update_due)
             else {
                 return Ok(false);
             };
@@ -809,7 +794,7 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
                 true => None,
                 false => {
                     let body = interrupted::update_body(&receipt, class, &detail);
-                    Some(inbox.reserve_in(
+                    Some(inbox.reserve_in_head(
                         task,
                         Post {
                             kind: UPDATE_KIND,
@@ -826,13 +811,6 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
                     )?)
                 }
             };
-            let state = agent::container_state_mut(task, &container)
-                .context("the agent binding disappeared")?;
-            let stored = state
-                .receipts
-                .iter_mut()
-                .find(|r| r.request_id == request)
-                .context("the receipt disappeared")?;
             let outcome = if closed {
                 "closed"
             } else {
@@ -840,11 +818,12 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
             };
             let mark = json!({ "outcome": outcome });
             crate::review_budget::evidence(
-                stored,
+                &mut receipt,
                 &mark,
                 UPDATE_SOURCE,
                 reserved.as_ref().map(|m| m.id.clone()),
             );
+            task.put_agent_record(&container, agent::NativeRecord::Receipt(receipt))?;
             message = reserved;
             Ok(true)
         })?;
@@ -855,6 +834,10 @@ pub fn post_updates(ctx: &Ctx, task_id: &str) -> Result<usize> {
     }
     Ok(posted)
 }
+
+#[cfg(test)]
+#[path = "recovery_update_head_tests.rs"]
+mod update_head_tests;
 
 #[cfg(all(test, target_os = "linux"))]
 #[path = "recovery_cancel_tests.rs"]
