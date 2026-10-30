@@ -159,7 +159,16 @@ pub fn run(
         return write_html_report(ctx, by_kind, cutoff, out);
     }
     let rows = corral_ops::stats(&ctx.store, by_kind, cutoff)?;
+    let assistants = corral_ops::assistant_role_stats(&ctx.store, cutoff)?;
     if json {
+        let mut rows = rows
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        // Preserve the task cohort array; a role row has sessions instead of invented runs.
+        if !assistants.sessions.is_empty() {
+            rows.push(serde_json::to_value(&assistants)?);
+        }
         println!("{}", serde_json::to_string_pretty(&rows)?);
     } else {
         let tokens = rows.iter().any(|r| r.total_tokens.is_some());
@@ -278,6 +287,17 @@ pub fn run(
         }
         if by_kind == StatsBy::Mode {
             print_mode_throughput(ctx, cutoff)?;
+        }
+        if !assistants.sessions.is_empty() {
+            println!("\nROLE         SESSIONS COST");
+            println!(
+                "assistant    {} {}",
+                assistants.sessions.len(),
+                assistants.cost
+            );
+            for session in &assistants.sessions {
+                println!("  {} cost: {}", session.session, session.cost);
+            }
         }
     }
     Ok(())

@@ -245,7 +245,9 @@ fn todo_foreign_roles_and_model_selected_identity_cannot_mutate_ledgers() {
                 foreign.identity.run = Some("P1".into());
                 foreign.identity.review = Some("PR1".into());
             }
-            corral_core::agent::AgentRole::Worker | corral_core::agent::AgentRole::Pm => {}
+            corral_core::agent::AgentRole::Worker
+            | corral_core::agent::AgentRole::Pm
+            | corral_core::agent::AgentRole::Assistant => {}
         }
         assert_eq!(
             ts::code(&todo(&fx, &foreign, role.as_str(), init())),

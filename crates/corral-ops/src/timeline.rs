@@ -120,6 +120,7 @@ pub fn timeline(
                     Actor::Autopilot => "autopilot",
                     Actor::Reviewer => "reviewer",
                     Actor::System => "system",
+                    Actor::Assistant => "assistant",
                 })
                 .or_else(|| event.detail["actor"].as_str())
                 .or_else(|| event.detail["by"].as_str())

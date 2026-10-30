@@ -85,6 +85,80 @@ pub struct StatsRow {
     pub cost_basis: Option<CostBasis>,
 }
 
+/// Workspace sessions are separate from task cohorts and never affect acceptance rates.
+#[derive(Debug, Serialize)]
+pub struct AssistantStats {
+    pub session: String,
+    pub created: Timestamp,
+    pub ended: Option<Timestamp>,
+    pub focus: String,
+    pub profile: String,
+    pub pane: Option<String>,
+    pub scratch: usize,
+    pub inbox_items: usize,
+    pub usage: Option<corral_core::Usage>,
+    pub cost: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssistantRoleStats {
+    pub group: &'static str,
+    pub role: &'static str,
+    pub sessions: Vec<AssistantStats>,
+    pub usage: Option<corral_core::Usage>,
+    pub cost: String,
+}
+
+pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<AssistantStats>> {
+    store
+        .list_assistants()?
+        .into_iter()
+        .filter(|session| since.is_none_or(|since| session.created >= since))
+        .map(|session| {
+            let container = store.get_assistant_container(&session.id)?;
+            let usage = crate::usage::assistant_usage(store, &session)?;
+            let cost = usage
+                .as_ref()
+                .map(|u| u.summary())
+                .unwrap_or_else(|| "unknown".into());
+            Ok(AssistantStats {
+                session: session.id,
+                created: session.created,
+                ended: session.ended,
+                focus: session.focus,
+                profile: session.profile,
+                pane: container.pane,
+                scratch: session.scratch.len(),
+                inbox_items: session.inbox_items.len(),
+                usage,
+                cost,
+            })
+        })
+        .collect()
+}
+
+pub fn assistant_role_stats(store: &Store, since: Option<Timestamp>) -> Result<AssistantRoleStats> {
+    let sessions = assistant_stats(store, since)?;
+    let usage = corral_core::Usage::combine(sessions.iter().filter_map(|s| s.usage.clone()));
+    let known = sessions.iter().filter(|s| s.usage.is_some()).count();
+    let cost = match usage.as_ref() {
+        Some(usage) if known == sessions.len() => usage.summary(),
+        Some(usage) => format!(
+            "{} (partial; {known}/{} sessions known)",
+            usage.summary(),
+            sessions.len()
+        ),
+        None => "unknown".into(),
+    };
+    Ok(AssistantRoleStats {
+        group: "assistant",
+        role: "assistant",
+        sessions,
+        usage,
+        cost,
+    })
+}
+
 #[derive(Default)]
 struct Totals {
     analytics: crate::analytics::FacetTotals,

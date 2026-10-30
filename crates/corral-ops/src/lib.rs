@@ -283,7 +283,10 @@ pub use sprint::{
     SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,
     SprintTotals, collect_sprint_review, review_sprint,
 };
-pub use stats::{StatsBy, StatsRow, stats};
+pub use stats::{
+    AssistantRoleStats, AssistantStats, StatsBy, StatsRow, assistant_role_stats, assistant_stats,
+    stats,
+};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook, sync_with_attention};
 pub use sync_installed::sync_installed;
 pub use tasks::{
@@ -296,6 +299,7 @@ pub use tracker::{
     PlanCoverage, PlanPrerequisite, PlanProgress, PlanWork, PlanWorkCounts, PlanWorkState,
     plan_board, plan_progress, plan_progress_in,
 };
+pub use usage::assistant_usage;
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

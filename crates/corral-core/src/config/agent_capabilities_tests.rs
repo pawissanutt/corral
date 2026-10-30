@@ -303,7 +303,7 @@ fn web_policy_accepts_transport_boundaries_and_independent_search_endpoint() {
     );
 }
 
-const ALL: [AgentRole; 5] = ROLES;
+const ALL: [AgentRole; 6] = ROLES;
 
 #[test]
 fn guidance_and_session_keys_follow_the_role_matrix() {
@@ -325,8 +325,9 @@ fn guidance_and_session_keys_follow_the_role_matrix() {
             }
             assert!(snapshot.enabled("compaction"));
             let pm = role == AgentRole::Pm;
-            assert_eq!(snapshot.features.contains_key("lessons"), !pm);
-            assert_eq!(snapshot.enabled("lessons"), !pm);
+            let lessons = !matches!(role, AgentRole::Pm | AgentRole::Assistant);
+            assert_eq!(snapshot.features.contains_key("lessons"), lessons);
+            assert_eq!(snapshot.enabled("lessons"), lessons);
             assert_eq!(snapshot.enabled("session_export"), optional && !pm);
             assert_eq!(snapshot.features.contains_key("session_export"), !pm);
         }
@@ -578,8 +579,8 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
 }
 
 #[test]
-fn background_shell_is_worker_only_with_recorded_bounds() {
-    // Given each preset, then only the worker resolves background_shell, off in strict.
+fn background_shell_is_worker_or_assistant_with_recorded_bounds() {
+    // Given each preset, then workers and assistants resolve background_shell, off in strict.
     for (index, preset) in [Preset::Strict, Preset::Standard, Preset::Full]
         .into_iter()
         .enumerate()
@@ -588,7 +589,7 @@ fn background_shell_is_worker_only_with_recorded_bounds() {
         config.set_preset(preset);
         for role in ALL {
             let snapshot = config.resolve(role, None);
-            let worker = role == AgentRole::Worker;
+            let worker = matches!(role, AgentRole::Worker | AgentRole::Assistant);
             assert_eq!(snapshot.features.contains_key("background_shell"), worker);
             assert_eq!(snapshot.enabled("background_shell"), worker && index > 0);
         }
