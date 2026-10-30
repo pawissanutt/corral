@@ -309,7 +309,8 @@ class; nothing reaches an assistant by default.
   assistant role may do there.
 - **Refused**: everything else, including `corral approve`, `corral move`,
   `corral dispatch`, `corral config set`, `corral pi`, `corral artifact gc` and
-  `corral assistant scratch gc` (even with `--dry-run`), the board, capture and settings screens, and every owner-only command. Filing stops short of authority:
+  `corral assistant scratch gc` (even with `--dry-run`), `corral assistant scratch finish`
+  (finishing is an owner action), the board, capture and settings screens, and every owner-only command. Filing stops short of authority:
   `corral new --ready`, `corral new --origin pm`, `corral comment --send`,
   `corral comment --author pm` and owner approvals written as `owner-ok:` comments are
   refused as well.
@@ -411,12 +412,12 @@ owner (never `--root`, `--author` or output flags):
 
 | Class | Kinds (command) |
 |---|---|
-| Ordinary: runs on the instruction | `approve`, `verdict`, `review_run` (review-run), `dispatch` (incl. `--plan`), `queue` (queue add), `unqueue` (queue remove), `move` to any status but dropped, `park` and `unpark` (attention park/unpark), `revert`, `plan_accept`, `plan_verdict`, `plan_review`, `plan_member_gate`, `plan_add_member`, `plan_move_member` |
+| Ordinary: runs on the instruction | `approve`, `verdict`, `review_run` (review-run), `dispatch` (incl. `--plan`), `queue` (queue add), `unqueue` (queue remove), `move` to any status but dropped, `park` and `unpark` (attention park/unpark), `revert`, `plan_accept`, `plan_verdict`, `plan_review`, `plan_member_gate`, `plan_add_member`, `plan_move_member`, `finish` (assistant scratch finish; target: the scratch slug) |
 | Confirm: waits for the owner | `move` to dropped or with `--force`, `discard` (with or without `--keep-branch`), `config_set` (config set), `mode` (autopilot, assist, turbo, pause, resume) |
 
 Anything else refuses `unsupported_action`; the assistant then routes it to the PM. Finishing
-co-work lands with the co-work member and refuses `unsupported_action` until then. Disposing
-of the assistant's own scratch stays a File command (`corral assistant scratch discard`).
+co-work is described [below](#co-work-finish-and-landing). Disposing of the assistant's own
+scratch stays a File command (`corral assistant scratch discard`).
 `expected_revision` is passed as `--expected-revision` to the two kinds whose command takes
 one (unpark and plan member-gate).
 
@@ -460,7 +461,69 @@ corral pm inbox post --kind routing --subject "Land whatever is ready" --quote "
 corral pm inbox show PMI-1
 ```
 
-## Not here yet
+## Co-work finish and landing
 
-Co-work landing (finishing a scratch into a task) is a separate member of the
-[reviewed assistant plan](../plans/assistant-sessions.md).
+```sh
+corral assistant scratch finish cache-fix --title "Fix the cache" --session A-1
+corral assistant scratch finish cache-fix --title "Fix the cache" --review required --session A-1
+corral assistant scratch finish cache-fix --into T-042 --session A-1
+corral approve T-060
+```
+
+The owner and an assistant can work together in one of the assistant's scratch worktrees
+without a task. No task exists before or during that work. When the owner says to finish
+it ("finish this as a fix for the cache, no review"), the assistant runs the `finish` owner
+action with the scratch slug as target and the title and review choice from the
+instruction. It is an ordinary owner action, so no confirmation is shown. The assistant
+asks only when the scratch, the title or the review choice is unclear ("ship something like
+this"), or hands the request to the PM; nothing finishes on a guess. From the owner's own
+shell the same command takes `--session A-<n>`. An assistant shell is refused with
+`assistant_refused`: finishing is an owner action and reaches an assistant only through
+`corral_owner_action`.
+
+A finish needs a scratch with at least one commit beyond its base and no uncommitted
+changes (`scratch_empty`, `scratch_dirty`). Corral rebases the scratch branch onto the
+project's base when the base has moved, and refuses `rebase_conflict` with the conflicting
+paths after aborting the rebase. Each of these refusals happens before any task exists and
+changes nothing. Then:
+
+1. **Materialize.** Corral creates task `T-<m>` in Review with origin `assistant`, label
+   `cowork` and `cowork: {session, scratch, run, review}`. The body is the session's
+   summary followed by the owner's finish words, and `--kind`, `--size` and `--note` are
+   optional. The task's run `R1` is already finished: its worktree and branch are the
+   scratch's own, its agent is the session's profile, and it owns no pane. Its usage is the
+   part of the session's usage recorded between scratch creation and finish. A diff
+   artifact is saved on the run as for `corral done`. The scratch's kind becomes `cowork`;
+   discard and GC then leave it to the task (`scratch_attached`).
+2. **Into an existing task.** `--into T-x` (instead of a title) adds a new finished run to
+   T-x instead of creating a task. T-x gets the `cowork` label and record, and its title and
+   body stay as they are. It refuses `task_busy` while T-x has a live run, a review or a
+   queued, launching or slot-holding dispatch, `task_status` for Idea, Done and Dropped
+   tasks, and `project_mismatch` when T-x belongs to another project.
+3. **Gate.** The project's gate runs on the run to its end, as `corral gate <id> --wait`
+   would, with the run's tier rules fixed as a dispatch fixes them. A failed gate leaves
+   the task in Review with the failed receipt, as for a worker. The finish reports the
+   result (`pass`, `fail`, `none` without a configured gate) instead of undoing itself.
+4. **Review choice.** The default `--review none` makes the co-work run resolve reviewer
+   none, so `approve` needs no review. `--review required` starts the project's normal
+   reviewer after a passing gate (`corral review-run`), and approval then needs its
+   verdict. Either way the co-work run lands only on the owner's approval: its acceptance
+   resolves to `owner`, so autopilot never lands it. Both overrides apply only while the
+   co-work run is the task's current run. A later run of the same task, and every other
+   task, follow the project's review policy.
+5. **Land.** Landing is a separate `approve` the owner asks for (from the shell, or as the
+   `approve` owner action). It runs the normal path: landing lock, integration, size and
+   freshness checks, and the full gate where the project is tiered. The `approved` event
+   records `owner via assistant:A-<n>` when an assistant ran it. After the landing the
+   session record's `landed` list gains `{task, run, base, sha, commits}` (the commits the
+   landing added to the base, oldest first), the session's scratch record is removed (the
+   task run owns the worktree, and `approve` removes it with the run's branch), and corral
+   logs `cowork_landed`. Discarding the task instead removes the worktree as for any task,
+   and the session forgets the scratch record too.
+
+Events: `cowork_finished` (session, scratch, run, branch, head, base, review) and
+`cowork_landed` (session, run, sha, commits). Through an owner action, both carry the owner
+authority like every owner-action event. `corral stats` keeps co-work tasks in the ordinary
+task cohorts. The assistant role row adds `cowork: {finished, review_none, landed}`
+and a per-session `landed` count, so the acceptance path without a review can be counted.
+The run's usage is a slice of the session's usage, not extra spending.

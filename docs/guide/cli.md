@@ -203,6 +203,7 @@ Commands:
   list     List scratch worktrees (all sessions for the owner unless --session)
   discard  Remove a scratch and its branch, saving any work as a session diff artifact first
   promote  File a Backlog task with the scratch diff attached; the scratch stays unchanged
+  finish   Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
   gc       Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
   help     Print this message or the help of the given subcommand(s)
 
@@ -277,6 +278,30 @@ Options:
       --session <SESSION>      
       --json                   
   -h, --help                   Print help
+```
+
+#### `corral assistant scratch finish`
+
+```text
+Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
+
+Usage: corral assistant scratch finish [OPTIONS] <SLUG>
+
+Arguments:
+  <SLUG>  
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --title <TITLE>      Title of the new task
+  -p, --project <PROJECT>  Project for the task; default the scratch's project
+      --kind <KIND>        
+      --size <SIZE>        
+      --review <REVIEW>    none, or required to run the normal reviewer after a passing gate [default: none] [possible values: none, required]
+      --into <INTO>        Add the run to this existing task instead; refused while it has a live run
+      --note <NOTE>        Context for the run summary and a new task's body
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
 ```
 
 #### `corral assistant scratch gc`
@@ -1598,7 +1623,7 @@ Commands:
   show               Inspect current and historical plan snapshots and verdicts
   review             Review a plan without starting implementation or taking a coding slot
   verdict            Record a plan-only verdict; callbacks must include their exact attempt
-  member-gate        Amend a published integration-Plan member's gate (owner only, revision-guarded)
+  member-gate        Amend a published integration-Plan member's gate (owner or PM, revision-guarded)
   add-member         Add a task whose runs never landed to a tracker Plan's required members, e.g. a fix after a failed verify
   move-member        Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another
   policy             Set the task's plan requirement, or inherit workspace/project review policy
@@ -1819,7 +1844,7 @@ Options:
 ### `corral plan member-gate`
 
 ```text
-Amend a published integration-Plan member's gate (owner only, revision-guarded)
+Amend a published integration-Plan member's gate (owner or PM, revision-guarded)
 
 Usage: corral plan member-gate [OPTIONS] --file <FILE> --expected-revision <EXPECTED_REVISION> --reason <REASON> <MEMBER>
 
