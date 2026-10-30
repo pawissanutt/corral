@@ -222,6 +222,9 @@ impl Fx {
             serde_json::from_slice(&std::fs::read(dir.join(BOOTSTRAP_FILE)).unwrap()).unwrap();
         let mut next = previous.clone();
         next.identity.generation = n;
+        // Like the real host, take identity from the new bootstrap, including migration
+        // from a legacy project-bound PM to a workspace-bound PM.
+        next.identity.project = bootstrap["project"].as_str().unwrap().into();
         next.host_cap = ts::secret(&format!("{SESSION}-host"), n);
         next.ctl_cap = ts::secret(&format!("{SESSION}-ctl"), n);
         next.nonce = bootstrap["bind_nonce"].as_str().unwrap().into();

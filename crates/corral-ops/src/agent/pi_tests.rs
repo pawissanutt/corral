@@ -223,10 +223,14 @@ fn a_refused_takeover_keeps_the_original_pane_adopted_and_resume_never_types_int
         )
         .unwrap();
     approve(&fx, &other.id);
-    // When `corral pi` in pane B is refused by recovery.
+    // A scope change is valid now; use a missing role asset to refuse pane B's takeover.
+    let asset = fx.root().join("assets/src/roles/pm/index.ts");
+    let module = std::fs::read(&asset).unwrap();
+    std::fs::remove_file(&asset).unwrap();
     std::fs::write(fx.root().join("w1:p8"), "").unwrap();
     let error = adopt(&f::ctx_at(fx.root()), "w1:p8", &Overrides::default()).unwrap_err();
-    assert!(error.to_string().starts_with("out_of_scope"), "{error}");
+    assert!(error.to_string().contains("role_unavailable"), "{error}");
+    std::fs::write(asset, module).unwrap();
     // Then pane A is still the adopted PM pane.
     let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
     assert_eq!(pm.pane, PANE);
