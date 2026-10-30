@@ -10,7 +10,8 @@ const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...pmTools
 export function pmRole(root: string): RoleModule {
   return {
     role: "pm",
-    upstreamTools: [],
+    // Owner direction 2026-10-30: the PM can read, edit and run commands like an assistant.
+    upstreamTools: ["read", "edit", "write", "grep", "find", "ls", "bash"],
     corralOps: OPS,
     tools: (context) => context.todo === true ? [...pmTools, todoTool] : pmTools,
     contract: (context) => renderContract(readAsset(root, CONTEXT_ASSET), context.identity),
