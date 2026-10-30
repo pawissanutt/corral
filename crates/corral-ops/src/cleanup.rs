@@ -138,6 +138,7 @@ fn clean<'a>(
 ) -> Result<Vec<String>> {
     let mut warnings = Vec::new();
     let mut owned = BTreeMap::new();
+    let mut review_pane_ids = BTreeSet::new();
     let mut workspaces = BTreeMap::new();
     // Gate records are replaced each round. Creation events retain earlier panes, including
     // ones whose previous close failed, and record fallback workspace ownership explicitly.
@@ -162,12 +163,21 @@ fn clean<'a>(
             Cleanup::Round => task.runs.last().map(std::slice::from_ref).unwrap_or(&[]),
         };
         let mut panes = BTreeSet::new();
+        let pending: BTreeSet<&str> = task
+            .plans
+            .iter()
+            .flat_map(|plan| &plan.reviews)
+            .filter(|review| review.verdict.is_none())
+            .filter_map(|review| review.herdr.as_ref().map(|h| h.pane_id.as_str()))
+            .collect();
         if scope == Cleanup::Task {
             for review in task.plans.iter().flat_map(|plan| &plan.reviews) {
                 if review.reviewer != "pm"
+                    && review.verdict.is_some()
                     && let Some(h) = &review.herdr
                 {
                     panes.insert(h.pane_id.as_str());
+                    review_pane_ids.insert(h.pane_id.as_str());
                     workspaces.insert(h.workspace_id.as_str(), task);
                 }
             }
@@ -175,6 +185,12 @@ fn clean<'a>(
         for run in runs {
             crate::watch::capture_review(ctx, task, run);
             review_panes(run, &mut panes);
+            if let Some(review) = &run.review
+                && review.reviewer != "pm"
+                && let Some(pane) = review.pane.as_deref()
+            {
+                review_pane_ids.insert(pane);
+            }
             if scope == Cleanup::Task
                 && let Some(h) = &run.herdr
             {
@@ -197,6 +213,9 @@ fn clean<'a>(
                 && let Some(pane) = event.detail["pane"].as_str()
             {
                 panes.insert(pane);
+                if event.kind == "review_started" {
+                    review_pane_ids.insert(pane);
+                }
             }
             if scope == Cleanup::Task
                 && event.kind == "run_workspace_created"
@@ -212,6 +231,9 @@ fn clean<'a>(
         {
             panes.remove(worker.pane_id.as_str());
         }
+        for pane in pending {
+            panes.remove(pane);
+        }
         owned.extend(panes.into_iter().map(|pane| (pane, task)));
     }
     if owned.is_empty() && workspaces.is_empty() {
@@ -221,6 +243,13 @@ fn clean<'a>(
     for pane in &panes {
         if let Some(task) = owned.get(pane.pane_id.as_str())
             && let Err(error) = ctx.herdr.pane_close(&pane.pane_id).and_then(|()| {
+                if review_pane_ids.contains(pane.pane_id.as_str()) {
+                    ctx.store.log_event(
+                        Some(&task.id),
+                        "cleanup_review_closed",
+                        json!({"pane": pane.pane_id}),
+                    )?;
+                }
                 // A successful explicit close is stronger evidence than a listing miss.
                 // Release only the records that owned this pane in our cleanup snapshot.
                 ctx.store
