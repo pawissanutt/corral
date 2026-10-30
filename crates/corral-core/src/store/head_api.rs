@@ -618,6 +618,29 @@ impl Store {
         })
     }
 
+    /// The first task-held PM receipt for this globally scoped request identity. The token
+    /// owner lookup is indexed and ordered by task number, just like the cold task listing;
+    /// neither unrelated tasks nor their settled receipt histories are decoded.
+    pub fn pm_request_receipt(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<(String, crate::agent::RequestReceipt)>> {
+        let frozen = self.read_only_snapshot()?;
+        let owners = frozen.view()?.token_owners(
+            crate::backend::TaskPart::PmReceipt,
+            &format!("request:{request_id}"),
+            1,
+        )?;
+        let Some(owner) = owners.first() else {
+            return Ok(None);
+        };
+        let id = format!("T-{:03}", owner.0);
+        Ok(frozen
+            .head(&id)?
+            .pm_receipt(request_id)?
+            .map(|receipt| (id, receipt)))
+    }
+
     /// Native containers still owing settlement or indexed receipt/question/job work, including
     /// retired containers on terminal tasks. Settled native history is never decoded.
     pub fn unfinished_native_heads(&self) -> Result<Vec<TaskHead>> {

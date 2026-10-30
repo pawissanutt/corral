@@ -198,6 +198,87 @@ fn task_hello_commit_has_equal_work_with_tenfold_settled_native_history() {
 }
 
 #[test]
+fn swept_progress_commits_and_replays_without_history_hydration() {
+    use corral_core::work::{self, Counter, HotScope};
+    struct Unpin;
+    impl Drop for Unpin {
+        fn drop(&mut self) {
+            corral_core::clock::pin_thread(None);
+        }
+    }
+    let at = "2026-01-01T00:00:00Z".parse().unwrap();
+    corral_core::clock::pin_thread(Some(at));
+    let _clock = Unpin;
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = fx();
+        let id = worker_task(&fx, "p1");
+        let host = worker(&fx, &id);
+        let mut task = fx.ctx.store.get(&id).unwrap();
+        let state = task.current_run_mut().unwrap().agent_host.as_mut().unwrap();
+        let template = state.receipts[0].clone();
+        for n in 0..2 * scale {
+            state.receipts.push(stored(
+                &template,
+                &format!("older-{n:06}"),
+                json!({"finished":true}),
+            ));
+            state.turns.push(
+                serde_json::from_value(json!({
+                    "generation":1,"seq":n+1,"origin":{"kind":"bridge"},"started":at,"ended":at
+                }))
+                .unwrap(),
+            );
+        }
+        let spec = crate::progress_spec_revision(&task).unwrap();
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        let bytes = envelope(
+            &host,
+            "progress",
+            "rq-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            json!({
+                "task":id,"run":"R1","spec_revision":spec,"expected_revision":0,
+                "phases":[{"id":"work","label":"Work","steps":[{"id":"build","label":"Build","status":{"state":"pending"}}]}]
+            }),
+            false,
+        );
+        {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            let receipt = committed(&send(&fx, &bytes, "progress"));
+            assert_eq!(receipt.result["revision"], 1);
+            assert!(receipt.post_pending.is_empty());
+            assert_eq!(send(&fx, &bytes, "progress").receipt(), Some(&receipt));
+            let after = work::snapshot();
+            measured.push(
+                [
+                    Counter::TaskHeadDecodes,
+                    Counter::NestedRowDecodes,
+                    Counter::HistoryRowDecodes,
+                    Counter::FullTaskHydrations,
+                    Counter::DecodedDocBytes,
+                    Counter::ViewsOpened,
+                ]
+                .map(|counter| after.total(counter) - before.total(counter)),
+            );
+        }
+        let full = fx.ctx.store.get(&id).unwrap();
+        assert_eq!(
+            full.current_run()
+                .unwrap()
+                .progress
+                .as_ref()
+                .unwrap()
+                .revision,
+            1
+        );
+        assert!(full.current_run().unwrap().checkpoint_required);
+    }
+    assert_eq!(measured[0], measured[1]);
+    assert_eq!(measured[0][3], 0);
+}
+
+#[test]
 fn a_lookup_reusing_a_committed_request_id_is_rejected_as_a_payload_mismatch() {
     let fx = fx();
     let id = worker_task(&fx, "p1");

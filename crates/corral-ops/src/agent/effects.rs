@@ -17,6 +17,9 @@ use super::admission;
 use super::call::{CallResponse, RejectCode, Rejection};
 use crate::Ctx;
 
+mod head;
+pub(crate) use head::{recheck_head, record_head};
+
 #[cfg(test)]
 #[path = "effects_head_tests.rs"]
 mod head_tests;
@@ -254,17 +257,11 @@ pub(crate) fn pm_task_receipt(
     store: &Store,
     origin: &RequestOrigin,
 ) -> Result<Option<(String, RequestReceipt)>> {
-    for task in store.list_shared()?.iter() {
-        if let Some(stored) = task
-            .agent_pm_receipts
-            .iter()
-            .find(|r| r.request_id == origin.request_id)
-        {
-            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
-            return Ok(Some((task.id.clone(), stored.clone())));
-        }
+    let found = store.pm_request_receipt(&origin.request_id)?;
+    if let Some((_, stored)) = &found {
+        admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
     }
-    Ok(None)
+    Ok(found)
 }
 
 /// What a swept operation commits with its receipt. `owed` names post-commit effects:
