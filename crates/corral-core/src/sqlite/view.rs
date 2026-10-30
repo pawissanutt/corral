@@ -420,6 +420,10 @@ impl ReadView for SqliteView {
             filters.push("r.key = ?".to_owned());
             args.push(Sql::Text(key.clone()));
         }
+        if let Some(after) = &q.after_key {
+            filters.push("r.key > ?".to_owned());
+            args.push(Sql::Text(after.clone()));
+        }
         if let Some(prefix) = &q.prefix {
             // A half-open key range: every key that starts with the prefix sorts in it.
             filters.push("r.key >= ? AND r.key < ?".to_owned());

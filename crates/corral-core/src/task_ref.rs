@@ -392,6 +392,8 @@ pub trait TaskRef: TaskFieldsRef {
     fn plan_head(&self, id: &str) -> Result<Option<PlanHead>>;
     fn aggregate_attempt_head(&self, id: &str) -> Result<Option<AttemptHead>>;
     fn has_plan(&self, id: &str) -> Result<bool>;
+    /// First plan submitted by `run` after `before` prior plans: its ID and artifact SHA.
+    fn submitted_plan_after(&self, run: &str, before: usize) -> Result<Option<(String, String)>>;
     /// The coding run before the current one (`runs.iter().rev().nth(1)`).
     fn previous_run_head(&self) -> Result<Option<RunHead>>;
 

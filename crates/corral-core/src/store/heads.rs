@@ -391,14 +391,7 @@ impl NativeRecordCounts {
         let pending = state
             .receipts
             .iter()
-            .filter(|r| {
-                matches!(
-                    r.state,
-                    crate::agent::ReceiptState::Reserved
-                        | crate::agent::ReceiptState::Queued
-                        | crate::agent::ReceiptState::Uncertain
-                ) || !r.post_pending.is_empty()
-            })
+            .filter(|r| r.effects_pending() || r.recovery_update_due())
             .count()
             + state
                 .questions

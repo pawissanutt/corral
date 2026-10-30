@@ -38,6 +38,13 @@ macro_rules! keyed_reads {
             }
             self.$reads()?.plan_run_head(id)
         }
+        fn submitted_plan_after(
+            &self,
+            run: &str,
+            before: usize,
+        ) -> Result<Option<(String, String)>> {
+            self.$reads()?.submitted_plan_after(run, before)
+        }
         fn plan_head(&self, id: &str) -> Result<Option<PlanHead>> {
             if let Some(current) = self.last_plan_head()?.filter(|p| p.id == id) {
                 return Ok(Some(current.into_owned()));

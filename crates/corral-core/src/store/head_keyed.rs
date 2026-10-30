@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use jiff::Timestamp;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use super::codec::seq;
 use super::head::{TaskHead, projection};
@@ -401,6 +402,35 @@ impl TaskHead {
             .collect(),
         )
         .map(|found: Vec<AgentQuestion>| found.into_iter().next())
+    }
+
+    /// Indexed first matching submission after the reservation's append cursor.
+    pub fn submitted_plan_after(
+        &self,
+        run: &str,
+        before: usize,
+    ) -> Result<Option<(String, String)>> {
+        let mut query =
+            RowQuery::part(TaskPart::Plan).with_index(format!("native:submitted_run:{run}"));
+        query.after_key = Some(super::codec::seq(before));
+        self.query(&query, 1, Counter::HistoryRowDecodes)?
+            .into_iter()
+            .next()
+            .map(|row| {
+                Ok((
+                    row.doc
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .context("submitted plan ID missing")?
+                        .into(),
+                    row.doc
+                        .pointer("/artifact/sha256")
+                        .and_then(Value::as_str)
+                        .context("submitted plan SHA missing")?
+                        .into(),
+                ))
+            })
+            .transpose()
     }
 
     /// Indexed task-held PM debt, never decoding settled receipt history.
