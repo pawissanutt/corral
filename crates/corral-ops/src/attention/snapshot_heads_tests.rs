@@ -7,6 +7,47 @@ use corral_core::{ResumeCheck, RunOutcome, WaitRecord};
 use serde_json::json;
 
 #[test]
+fn queue_parking_ignores_receipted_stale_history_but_preserves_a_live_dependency_wait() {
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = Fx::new();
+        fx.ctx.store.fixture_pin_now(at(0)).unwrap();
+        let mut task = fx.questions(0);
+        let run = task.runs.last_mut().unwrap();
+        let live:WaitRecord=serde_json::from_value(json!({
+            "request":{"version":1,"id":"W-live","run":"R1","condition":"Dependency","owner":"worker","source":"worker",
+                "handle":{"kind":"channel","channel_id":"task:T-999:landed","capability":"wait_v1"}},
+            "registered_at":at(0),"observation":{"at":at(0),"state":"pending","detail":"waiting"},"receipt":null
+        })).unwrap();
+        for n in 0..2 * scale {
+            let mut old = live.clone();
+            old.request.id = format!("W{n:06}");
+            old.receipt=Some(serde_json::from_value(json!({"version":1,"id":format!("receipt-{n:06}"),"run":"R1","outcome":"ready","delivery":"acknowledged","observed_at":at(0)})).unwrap());
+            run.obligations.waits.push(old);
+        }
+        run.obligations.waits.push(live);
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        let (woken, expected) = crate::parked::queue_entries(&[task]);
+        assert!(woken.is_empty());
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].parked.as_ref().unwrap().on, vec!["T-999"]);
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        assert_eq!(
+            serde_json::to_value(crate::dispatch_queue(&fx.ctx).unwrap()).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        let after = work::snapshot();
+        measured.push(Counter::ALL.map(|counter| after.total(counter) - before.total(counter)));
+        assert_eq!(
+            after.total(Counter::FullTaskHydrations) - before.total(Counter::FullTaskHydrations),
+            0
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+}
+
+#[test]
 fn indexed_reconcile_publishes_and_retires_terminal_debt_without_hydration_or_history_work() {
     let mut measured = Vec::new();
     for scale in [1, 10] {

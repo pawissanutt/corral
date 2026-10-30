@@ -36,7 +36,7 @@ struct LoadCheck {
 }
 
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
-    let board = crate::attention::board_hot(ctx, jiff::Timestamp::now())?;
+    let board = crate::attention::board_hot(ctx, ctx.store.now())?;
     with_assessments(ctx, &board.tasks)
 }
 

@@ -12,13 +12,14 @@ use super::hot_budget::Cells;
 use super::hot_budget_fixture::Fixture;
 
 /// Resource samples each measured path takes on its normal branch, the same at every size:
-/// pm next samples in the workset's scoped admission read and its free-slot and dispatch
-/// checks, automation status additionally in `automatic_dispatch_status`, and a frame once in
-/// `sample_board`.
+/// Main d0782aa5 replaced the workset's duplicate scoped-admission fallback with canonical
+/// attention. Its free-slot/dispatch checks still sample; automation status additionally
+/// samples in `automatic_dispatch_status`, and a frame once in `sample_board`.
+/// Only producer counts changed; every per-call FU-3 work/bucket assertion remains intact.
 fn expected_samples(path: &str) -> u64 {
     match path {
-        "pm_next" => 4,
-        "automation_status" => 5,
+        "pm_next" => 3,
+        "automation_status" => 4,
         // A sync tick: resources::observe, then the admission reads of dispatch_policy.
         super::sync_budget::PATH => 3,
         _ => 1,
