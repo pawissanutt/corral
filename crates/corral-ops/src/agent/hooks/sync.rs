@@ -103,7 +103,11 @@ pub fn wants(task: &Task) -> bool {
 }
 
 pub fn task(ctx: &Ctx, task: &Task, now: Timestamp) -> Result<TaskSync> {
-    let id = task.id.as_str();
+    task_id(ctx, &task.id, now)
+}
+
+/// Indexed sync callers already hold the task identity, not a manufactured Task facade.
+pub(crate) fn task_id(ctx: &Ctx, id: &str, now: Timestamp) -> Result<TaskSync> {
     super::super::effects::reconcile_task(ctx, id)?;
     crate::questions::terminalize(ctx, id)?;
     crate::questions::expire_deadlines(ctx, id, now)?;
