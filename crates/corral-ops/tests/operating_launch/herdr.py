@@ -2,10 +2,33 @@
 """Disposable terminal engine with an acknowledged, pre-submission IPC barrier."""
 import json
 import os
+import selectors
 import socket
 import subprocess
 import sys
 from pathlib import Path
+
+
+# One hang guard for the whole controller operation (store locks, git and sync),
+# not an IPC latency expectation. Keep in step with Barrier::arrival in Rust.
+BARRIER_BUDGET = 300
+
+
+def wait_for_release(channel: socket.socket) -> None:
+    """Wait for the controller's release event; EOF is a failed barrier, not release."""
+    with selectors.DefaultSelector() as events:
+        events.register(channel, selectors.EVENT_READ)
+        if not events.select(BARRIER_BUDGET):
+            raise TimeoutError("controller did not release the prepared barrier")
+        if channel.recv(1) != b"R":
+            raise AssertionError("controller disconnected without releasing the barrier")
+
+
+def publish(path: Path, value: object) -> None:
+    """Publish complete JSON before readers can observe the new state."""
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value) + "\n")
+    temporary.replace(path)
 
 
 def main() -> None:
@@ -33,8 +56,8 @@ def main() -> None:
                 "agent_status": "idle",
             }
             state.append(pane)
-            state_path.write_text(json.dumps(state))
-            (directory / f"{pane['pane_id']}.json").write_text(json.dumps(pane) + "\n")
+            publish(state_path, state)
+            publish(directory / f"{pane['pane_id']}.json", pane)
             result = {"workspace": pane, "root_pane": pane}
         case ("pane", "list"):
             result = {"panes": [
@@ -53,10 +76,9 @@ def main() -> None:
             barrier = directory / "barrier.sock"
             if barrier.exists():
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
-                    channel.settimeout(10)
                     channel.connect(str(barrier))
                     channel.sendall(json.dumps(args).encode() + b"\n")
-                    assert channel.recv(1) == b"R"
+                    wait_for_release(channel)
         case ("pane", "run"):
             with (directory / "submissions.jsonl").open("a") as log:
                 log.write(json.dumps(args) + "\n")
