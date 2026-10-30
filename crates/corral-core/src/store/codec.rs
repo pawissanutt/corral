@@ -147,48 +147,7 @@ impl Rows {
     }
 }
 
-/// Cross-task unfinished-container index, kept with the canonical container row.
-pub(super) fn decorate_native(row: &mut HistoryRow) {
-    if row.part == TaskPart::AgentRecord {
-        super::native_worker_index::decorate(row);
-        return;
-    }
-    if !matches!(
-        row.part,
-        TaskPart::Run | TaskPart::ReviewRun | TaskPart::PlanRun | TaskPart::PlanReview
-    ) {
-        return;
-    }
-    let native = row
-        .doc
-        .get("agent_host")
-        .is_some_and(|host| !host.is_null())
-        || row
-            .doc
-            .get("harness")
-            .and_then(Value::as_str)
-            .is_some_and(crate::is_pi_native);
-    let unsettled = native && row.doc.pointer("/inbox/settled").is_none_or(Value::is_null);
-    let pending = row
-        .doc
-        .get("agent_host")
-        .filter(|host| !host.is_null())
-        .is_some_and(|host| {
-            // Canonical heads encode fixed-width counts. Unknown metadata is conservative:
-            // keep the owner discoverable rather than treating it as settled work.
-            host.pointer("/_records/pending")
-                .and_then(|count| count.as_u64().or_else(|| count.as_str()?.parse().ok()))
-                .is_none_or(|count| count > 0)
-        });
-    row.index
-        .retain(|token| !matches!(token.as_str(), "native:unsettled" | "native:work"));
-    if unsettled {
-        row.index.push("native:unsettled".into());
-    }
-    if unsettled || pending {
-        row.index.push("native:work".into());
-    }
-}
+pub(super) use super::native_work_index::decorate_native;
 
 fn take_array(object: &mut Map<String, Value>, key: &str) -> Vec<Value> {
     match object.remove(key) {

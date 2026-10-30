@@ -521,6 +521,8 @@ pub trait TaskRef: TaskFieldsRef {
     fn agent_reports(&self, container: &ContainerRef) -> Result<Vec<AgentReport>>;
     /// The receipt of a Pi-native PM operation `request_id` that targeted this task.
     fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>>;
+    /// Task-held PM receipts still owing settlement or post-commit work, in append order.
+    fn pending_pm_receipts(&self) -> Result<Vec<RequestReceipt>>;
     /// The current gate of plan member `member`.
     fn member_gate(&self, member: &str) -> Result<Option<crate::MemberGateHead>>;
     /// The superseded revisions of `member`'s gate, oldest first: its own records.

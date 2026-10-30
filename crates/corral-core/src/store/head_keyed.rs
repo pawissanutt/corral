@@ -403,6 +403,20 @@ impl TaskHead {
         .map(|found: Vec<AgentQuestion>| found.into_iter().next())
     }
 
+    /// Indexed task-held PM debt, never decoding settled receipt history.
+    pub fn pending_pm_receipts(&self) -> Result<Vec<RequestReceipt>> {
+        decode_all(
+            self.query(
+                &RowQuery::part(TaskPart::PmReceipt).with_index("native:work"),
+                u32::MAX,
+                Counter::HistoryRowDecodes,
+            )?
+            .into_iter()
+            .map(|row| row.doc)
+            .collect(),
+        )
+    }
+
     /// The receipt of PM operation `request_id` on this task, by key.
     pub fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
         decode_all(

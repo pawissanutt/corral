@@ -657,6 +657,7 @@ impl Store {
             owners.extend(view.token_owners(part, "native:unsettled", u32::MAX)?);
         }
         owners.extend(view.token_owners(TaskPart::AgentRecord, "native:pending", u32::MAX)?);
+        owners.extend(view.token_owners(TaskPart::PmReceipt, "native:work", u32::MAX)?);
         frozen.heads(&HeadQuery::Ids(
             owners
                 .into_iter()
