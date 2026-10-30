@@ -49,6 +49,12 @@ import { JOB_MONITOR_TOOL, jobTools } from "../extensions/jobs/index.ts";
 import { JobRuntime } from "../extensions/jobs/runtime.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { toolRequestId } from "../tools/corral.ts";
+import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
+import { auxiliarySettings } from "../extensions/subagent/settings.ts";
+import { exploreTool } from "../extensions/subagent/index.ts";
+import { oracleTool } from "../extensions/oracle/index.ts";
+import { runAuxiliarySession } from "../extensions/subagent/session.ts";
+import { executionRefusal } from "../roles/common/execution.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -242,6 +248,8 @@ export class HostSession {
   private readonly additionalLsp: LspToolkit | undefined;
   private readonly permissions: BashPermissions | undefined;
   private readonly checkpoints: Checkpoints | undefined;
+  private readonly auxiliary: AuxiliaryRuntime | undefined;
+  private auxiliaryModels: Models | undefined;
 
   readonly provider: ProviderId;
 
@@ -278,9 +286,33 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp) });
     }
     this.jobs = this.jobRuntime();
+    const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+    if (auxiliary.explore || auxiliary.oracle) {
+      this.auxiliary = new AuxiliaryRuntime({
+        settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
+        sessionId: () => this.sessionId(),
+        record: async (payload) => {
+          if (!this.bound) throw new Error("host_not_bound");
+          await this.drained();
+          const event = options.events.emit("auxiliary", payload);
+          const receipt = await options.client.call("event", {
+            requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+          });
+          if (receipt.state !== "committed") throw new Error(`auxiliary record refused: ${JSON.stringify(receipt.result)}`);
+          return receipt.result as Record<string, unknown>;
+        },
+        execute: (invocation, signal) => {
+          if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
+          return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
+            cwd: options.cwd, agentDir: options.agentDir, parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
+        },
+      });
+    }
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
       ...(this.jobs ? jobTools(this.jobs) : []),
+      ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
+      ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd }) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
@@ -379,6 +411,7 @@ export class HostSession {
       restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
         { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
     }
+    host.auxiliaryModels = models;
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);
@@ -468,14 +501,13 @@ export class HostSession {
     pi.on("tool_call", (event) => {
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
-      if (allowed.has(event.toolName) && !(nested && corral.has(event.toolName))) return undefined;
+      const reason = executionRefusal(event.toolName, nested, allowed, corral);
+      if (!reason) return undefined;
       this.deniedTools++;
       this.options.events.emit("tool_denied", { tool: event.toolName, ...(nested ? { nested: true } : {}) });
       return {
         block: true,
-        reason: allowed.has(event.toolName)
-          ? `${event.toolName} is a corral operation; call it directly, not from another tool`
-          : `${event.toolName} is not in the ${this.options.identity.role} loadout`,
+        reason,
       };
     });
     installToolControls(pi, {
@@ -528,7 +560,10 @@ export class HostSession {
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
-    pi.on("session_shutdown", () => this.jobs?.shutdown());
+    pi.on("session_shutdown", async (event) => {
+      if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
+      await this.jobs?.shutdown();
+    });
   }
 
   private watch(session: AgentSession): void {
@@ -628,6 +663,7 @@ export class HostSession {
   }
 
   async close(): Promise<void> {
+    await this.auxiliary?.close();
     await this.mcp?.close();
     this.session.dispose();
   }
@@ -746,6 +782,7 @@ export class HostSession {
       },
       jobs: this.jobs?.state() ?? null,
       checkpoints: this.checkpoints !== undefined,
+      auxiliary: this.auxiliary?.state() ?? null,
       guidance: {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],

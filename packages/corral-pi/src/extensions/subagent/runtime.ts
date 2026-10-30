@@ -119,7 +119,10 @@ export class AuxiliaryRuntime {
   /** Fence/close is permanent. Ordinary turn cancellation uses each tool's operation signal. */
   async close(): Promise<void> {
     this.stopped = true;
-    for (const controller of this.controllers) controller.abort(new Error("parent fenced/closed"));
+    await this.cancelAll();
+  }
+  async cancelAll(): Promise<void> {
+    for (const controller of this.controllers) controller.abort(new Error("parent cancelled/reloaded/fenced"));
     await Promise.allSettled(this.requests.values());
   }
   state() { return { explore: this.explore.state(), oracle: this.oracle.state(), stopped: this.stopped }; }
