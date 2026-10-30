@@ -136,7 +136,9 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         owner_input,
         cancelled,
     } = payload;
-    receipts::commit(ctx, &admitted, move |state, closure| {
+    // T-626: keep native event/replay/retention behavior intact. Only the retained
+    // mutation is attributed; admission and post-commit effects remain bounded work.
+    receipts::commit_native_event(ctx, &admitted, move |state, closure| {
         let now = corral_core::clock::now();
         let index = state
             .turns
