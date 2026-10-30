@@ -25,6 +25,9 @@ use super::{BindTarget, fence_generation, open_generation, tool_request_id};
 use crate::Ctx;
 use crate::review_budget::{AttemptState, Kind};
 
+#[path = "effects_done_tests.rs"]
+mod done;
+
 const FAKE: &str = r#"#!/usr/bin/env bash
 cd "$(dirname "$0")" || exit 1
 printf '%s\n' "$*" >> calls.log
@@ -419,30 +422,7 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
         "checkpoint_saved",
     );
 
-    let done: &SweptOp = &|ctx, o| {
-        let report = Report {
-            origin: o,
-            gate_ref: None,
-            contract_sha256: Some("c0".into()),
-        };
-        let _hot = corral_core::work::HotScope::enter();
-        let before = corral_core::work::snapshot();
-        let result = crate::review::done_request(
-            ctx,
-            o.identity.task.as_deref().unwrap(),
-            SUMMARY,
-            None,
-            &report,
-        );
-        let delta = corral_core::work::snapshot().since(&before);
-        assert_eq!(
-            delta.total(corral_core::work::Counter::FullTaskHydrations),
-            0,
-            "{:?}",
-            delta.sites
-        );
-        result
-    };
+    let done: &SweptOp = &done::call;
     let finished = |_: &Fx, t: &Task| {
         let diffs = t
             .artifacts
