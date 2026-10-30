@@ -208,6 +208,7 @@ fn done_inner(
     let admission = crate::delivery::owner::done_admission(ctx, &task)?;
     let detail = json!({ "run": run.id, "added": stat.added, "removed": stat.removed, "files": stat.files.len(), "scanned": scanned.len(), "thumbnails": thumbnails, "completion_audited":audit.audited, "identity":audit.identity, "dispatch_base":run.base_sha, "integration_base":base });
     let mut receipt = None;
+    let mut finished = None;
     if report.is_some() {
         effects::failpoint("swept_before_commit");
     }
@@ -280,9 +281,11 @@ fn done_inner(
             ctx.store.log_event(Some(&t.id), "done", detail.clone())?;
         }
         save_finish(head, &value)?;
+        finished = Some(value);
         Ok(())
     })?;
-    let task = finish_task(&head)?;
+    let mut task = finished.context("done update produced no result")?;
+    task.artifacts = head.artifacts_of(&run.id)?;
     drop(admission);
     if report.is_some() {
         return Ok((task, receipt));

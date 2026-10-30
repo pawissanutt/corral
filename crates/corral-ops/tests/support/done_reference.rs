@@ -158,7 +158,7 @@ fn done_matches_the_legacy_full_task_transition() {
                 let _hot = corral_core::work::HotScope::enter();
                 let baseline = corral_core::work::snapshot();
                 let expected = legacy(&fx.ctx, &id, "finished the change", result)
-                    .map(|t| t.status)
+                    .map(|t| (t.status, t.artifacts))
                     .map_err(|e| format!("{e:#}"));
                 let legacy_work = corral_core::work::snapshot().since(&baseline);
                 assert!(legacy_work.total(corral_core::work::Counter::FullTaskHydrations) > 0);
@@ -171,7 +171,7 @@ fn done_matches_the_legacy_full_task_transition() {
                     })
                     .unwrap();
                 let actual = crate::done_with_result(&fx.ctx, &id, "finished the change", result)
-                    .map(|t| t.status)
+                    .map(|t| (t.status, t.artifacts))
                     .map_err(|e| format!("{e:#}"));
                 assert_eq!(actual, expected);
                 let actual_task = fx.ctx.store.get(&id).unwrap();
