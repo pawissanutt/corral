@@ -163,76 +163,47 @@ pub(super) fn changed(dir: &Path, from: &str, to: &str) -> Result<BTreeSet<Strin
         .collect())
 }
 
-/// The worktree's current blob of each path: `None` when absent, mode `dir` for a directory.
-pub(super) fn worktree_blobs(
-    dir: &Path,
-    paths: &BTreeSet<String>,
-) -> Result<BTreeMap<String, Option<Blob>>> {
+/// The worktree's blob at `path` now: `None` when absent, also when a parent is a file, and mode
+/// `dir` for a directory.
+fn blob_now(dir: &Path, path: &str) -> Result<Option<Blob>> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
-    let (mut blobs, mut files) = (BTreeMap::new(), Vec::new());
-    for path in paths {
-        let blob = match std::fs::symlink_metadata(dir.join(path)) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error).with_context(|| format!("inspecting {path}")),
-            Ok(meta) if meta.file_type().is_symlink() => {
-                let target = std::fs::read_link(dir.join(path))?;
-                let sha = git_output(
-                    dir,
-                    &["hash-object", "--stdin"],
-                    &[],
-                    target.as_os_str().as_bytes(),
-                )?;
-                let sha = String::from_utf8_lossy(&sha).trim().to_owned();
-                Some(Blob {
-                    mode: "120000".into(),
-                    sha,
-                })
-            }
-            Ok(meta) if meta.is_file() => {
-                let mode = if meta.permissions().mode() & 0o111 != 0 {
-                    "100755"
-                } else {
-                    "100644"
-                };
-                files.push((path.clone(), mode));
-                continue;
-            }
-            Ok(_) => Some(Blob {
-                mode: "dir".into(),
-                sha: String::new(),
-            }),
-        };
-        blobs.insert(path.clone(), blob);
-    }
-    if !files.is_empty() {
-        let input: String = files.iter().map(|(p, _)| format!("{p}\n")).collect();
-        let out = git_output(
-            dir,
-            &["hash-object", "--stdin-paths"],
-            &[],
-            input.as_bytes(),
-        )?;
-        let shas = String::from_utf8_lossy(&out);
-        let mut shas = shas.lines();
-        for (path, mode) in files {
-            let sha = shas
-                .next()
-                .context("git hash-object returned too few hashes")?;
-            blobs.insert(
-                path,
-                Some(Blob {
-                    mode: mode.into(),
-                    sha: sha.into(),
-                }),
-            );
+    let full = dir.join(path);
+    let meta = match std::fs::symlink_metadata(&full) {
+        Ok(meta) => meta,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
         }
-    }
-    Ok(blobs)
+        Err(error) => return Err(error).with_context(|| format!("inspecting {path}")),
+    };
+    let (mode, sha) = if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(&full)?;
+        let input = target.as_os_str().as_bytes();
+        let sha = git_output(dir, &["hash-object", "--stdin"], &[], input)?;
+        ("120000", String::from_utf8_lossy(&sha).trim().to_owned())
+    } else if meta.is_file() {
+        let exec = meta.permissions().mode() & 0o111 != 0;
+        let sha = git_output(dir, &["hash-object", "--", path], &[], b"")?;
+        let mode = if exec { "100755" } else { "100644" };
+        (mode, String::from_utf8_lossy(&sha).trim().to_owned())
+    } else {
+        ("dir", String::new())
+    };
+    Ok(Some(Blob {
+        mode: mode.into(),
+        sha,
+    }))
 }
 
 /// Writes `want` (or removes the path) through a renamed sibling, with smudge filters applied.
-pub(super) fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<()> {
+/// A removal also removes the parents it left empty. False when a parent cannot be a directory
+/// (something other than the agent's file is in the way), so the path is kept.
+fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<bool> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
     let target = dir.join(path);
@@ -249,10 +220,21 @@ pub(super) fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<
             }
             parent = dir_path.parent();
         }
-        return Ok(());
+        return Ok(true);
     };
     let parent = target.parent().context("a restored path has no parent")?;
-    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    match std::fs::create_dir_all(parent) {
+        Ok(()) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotADirectory | std::io::ErrorKind::AlreadyExists
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error).with_context(|| format!("creating {}", parent.display())),
+    }
     let staged = parent.join(format!(".corral-rewind-{}", std::process::id()));
     let _ = std::fs::remove_file(&staged);
     match blob.mode.as_str() {
@@ -262,24 +244,17 @@ pub(super) fn write_path(dir: &Path, path: &str, want: Option<&Blob>) -> Result<
                 .with_context(|| format!("restoring the symlink {path}"))?;
         }
         "100644" | "100755" => {
-            let content = git_output(
-                dir,
-                &[
-                    "cat-file",
-                    "--filters",
-                    &format!("--path={path}"),
-                    &blob.sha,
-                ],
-                &[],
-                b"",
-            )?;
+            let filter = format!("--path={path}");
+            let args = ["cat-file", "--filters", filter.as_str(), blob.sha.as_str()];
+            let content = git_output(dir, &args, &[], b"")?;
             std::fs::write(&staged, content).with_context(|| format!("restoring {path}"))?;
             let mode = if blob.mode == "100755" { 0o755 } else { 0o644 };
             std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(mode))?;
         }
         other => bail!("rewind cannot restore {path}: git mode {other}"),
     }
-    std::fs::rename(&staged, &target).with_context(|| format!("installing {path}"))
+    std::fs::rename(&staged, &target).with_context(|| format!("installing {path}"))?;
+    Ok(true)
 }
 
 /// What a restore did: the paths now as `want` that differed in `pre`, and those left as they
@@ -291,7 +266,10 @@ pub(super) struct Restored {
 }
 
 /// Idempotent: a path already as wanted is done, a path still as `pre` is written, anything else
-/// is kept. HEAD moves only from `pre`'s parent, by compare-and-swap.
+/// is kept. Each path is checked immediately before it is changed, so an edit made while earlier
+/// paths were restored is kept. Removals run deepest first and before writes, so a file and a
+/// directory can replace each other; a directory something else still occupies is kept. HEAD
+/// moves only from `pre`'s parent, by compare-and-swap.
 pub(super) fn restore(
     dir: &Path,
     paths: &BTreeSet<String>,
@@ -299,17 +277,19 @@ pub(super) fn restore(
     pre: &str,
 ) -> Result<Restored> {
     let (wanted, before) = (tree(dir, want)?, tree(dir, pre)?);
-    let current = worktree_blobs(dir, paths)?;
+    let (mut removals, writes): (Vec<&String>, Vec<&String>) =
+        paths.iter().partition(|p| !wanted.contains_key(*p));
+    // A path sorts before every path under it, so reversed order removes children first.
+    removals.reverse();
     let mut done = Restored::default();
-    for path in paths {
+    for path in removals.into_iter().chain(writes) {
         let (target, previous) = (wanted.get(path), before.get(path));
-        let now = current.get(path).cloned().flatten();
+        let now = blob_now(dir, path)?;
         if now.as_ref() == target {
             if target != previous {
                 done.restored.push(path.clone());
             }
-        } else if now.as_ref() == previous {
-            write_path(dir, path, target)?;
+        } else if now.as_ref() == previous && write_path(dir, path, target)? {
             done.restored.push(path.clone());
             crate::agent::failpoint("rewind_restored_path");
         } else {

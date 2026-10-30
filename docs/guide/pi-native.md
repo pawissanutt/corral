@@ -580,12 +580,17 @@ worktree and the Pi session back to the start of that turn:
    generation's calls are classified for the `recovery_notice` exactly as on a resume.
 3. `fenced`: the fenced generation's background jobs are reaped. `saved`: the worktree as the
    fence left it is committed under `refs/worktree/corral/rewind/<run>/<rewind>`.
-   `restoring`: each planned path still as saved is written back (or removed), a path already
-   restored is skipped, and a path that changed since the save is left as it is and listed as
-   `kept`. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
+   `restoring`: removals run first, deepest path first, then writes, so a file and a directory
+   can replace each other. Each planned path is checked immediately before it is changed: one
+   still as saved is written back (or removed, with any parent directories it leaves empty), one
+   already restored is skipped, and one that changed since the save is left as it is and listed
+   as `kept`, as is a directory that still holds something else. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
    restored paths' index entries are reset to it. `restored`: the next generation's launch
    continues the same Pi session file from the checkpoint's entry (Pi branches there; the
-   abandoned turns stay in the file). `launched`: that generation is recorded on the rewind.
+   abandoned turns stay in the file). `launched`: that generation is recorded on the rewind. The cursor stays owed until
+   the session file shows a host of that generation or a later one bound on a branch from the
+   checkpoint's entry (`applied`): a relaunch whose host died first, including a plain
+   `corral agent resume`, is given the same cursor again.
    Each stage commits before the next starts.
 
 An interrupted rewind leaves its stage recorded, and `corral agent resume` refuses

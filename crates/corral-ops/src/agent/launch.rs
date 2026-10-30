@@ -335,8 +335,9 @@ pub fn prepare_bootstrap(
                     resume_session = session.transcript.clone();
                 }
             }
-            let state = run.agent_host.as_deref();
-            resume_leaf = state.and_then(|s| s.rewind_cursor()).map(str::to_owned);
+            if let Some(state) = run.agent_host.as_deref() {
+                resume_leaf = super::rewind::owed_cursor(ctx, &container, state)?;
+            }
             (
                 task.project
                     .clone()
