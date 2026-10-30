@@ -250,7 +250,7 @@ fn withdrawn_reviewer_questions_refuse_new_triage_as_closed_after_closure() {
                 })
                 .unwrap();
             let before = serde_json::to_value(fx.ctx.store.get(&id).unwrap()).unwrap();
-            let events_before = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+            let events_before = serde_json::to_value(fx.ctx.store.events().unwrap()).unwrap();
             let inbox_before = review_messages(&fx, &id, "R1-review1");
             assert_closed_everywhere(&fx, &key, question(&fx, &key).revision);
             assert!(super::terminalize(&fx.ctx, &id).unwrap().is_empty());
@@ -260,7 +260,7 @@ fn withdrawn_reviewer_questions_refuse_new_triage_as_closed_after_closure() {
                 "{name}"
             );
             assert_eq!(
-                std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+                serde_json::to_value(fx.ctx.store.events().unwrap()).unwrap(),
                 events_before,
                 "{name}"
             );

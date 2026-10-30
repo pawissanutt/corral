@@ -58,6 +58,91 @@ fn todo_worker_updates_canonical_progress_once_per_request() {
 }
 
 #[test]
+fn worker_todo_commit_is_history_independent_and_preserves_the_spec_digest() {
+    use corral_core::work::{self, Counter, HotScope};
+    struct Unpin;
+    impl Drop for Unpin {
+        fn drop(&mut self) {
+            corral_core::clock::pin_thread(None);
+        }
+    }
+    let at = "2026-01-01T00:00:00Z".parse().unwrap();
+    corral_core::clock::pin_thread(Some(at));
+    let _clock = Unpin;
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = ts::fx();
+        let id = ts::worker_task(&fx, "p1");
+        let host = ts::bind(
+            &fx,
+            &BindTarget::Worker {
+                task: id.clone(),
+                run: "R1".into(),
+            },
+            "p1",
+            "worker",
+        );
+        let template = committed(&hello(&fx, &host));
+        let mut task = fx.ctx.store.get(&id).unwrap();
+        let state = task.current_run_mut().unwrap().agent_host.as_mut().unwrap();
+        for n in 0..2 * scale {
+            let mut older = template.clone();
+            older.request_id = format!("older-{n:06}");
+            older.op = "event".into();
+            older.result =
+                json!({"kind":"turn_ended","turn":n+1,"generation":1,"class":null,"fenced":false});
+            state.receipts.push(older);
+            state.turns.push(
+                serde_json::from_value(json!({
+                    "generation":1,"seq":n+1,"origin":{"kind":"bridge"},"started":at,"ended":at
+                }))
+                .unwrap(),
+            );
+        }
+        let expected = corral_core::agent::paths::sha256_hex(
+            &serde_json::to_vec(&(
+                &task.id,
+                &task.title,
+                &task.project,
+                &task.body,
+                &task.completion,
+            ))
+            .unwrap(),
+        );
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        {
+            let _hot = HotScope::enter();
+            let before = work::snapshot();
+            assert_eq!(
+                committed(&todo(&fx, &host, "init", init())).result["revision"],
+                1
+            );
+            let after = work::snapshot();
+            measured.push(
+                [
+                    Counter::TaskHeadDecodes,
+                    Counter::NestedRowDecodes,
+                    Counter::HistoryRowDecodes,
+                    Counter::FullTaskHydrations,
+                    Counter::DecodedDocBytes,
+                    Counter::ViewsOpened,
+                ]
+                .map(|counter| after.total(counter) - before.total(counter)),
+            );
+        }
+        let full = fx.ctx.store.get(&id).unwrap();
+        assert_eq!(crate::progress_spec_revision(&full).unwrap(), expected);
+        assert_eq!(
+            crate::progress_spec_revision(&fx.ctx.store.head(&id).unwrap()).unwrap(),
+            expected
+        );
+        assert!(full.current_run().unwrap().checkpoint_required);
+    }
+    assert_eq!(measured[0], measured[1]);
+    assert_eq!(measured[0][3], 0);
+}
+
+#[test]
 fn todo_pm_updates_own_ledger_without_changing_worker_progress() {
     // Given a PM and a separate worker task.
     let fx = ts::fx();
