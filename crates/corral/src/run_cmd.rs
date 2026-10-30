@@ -14,6 +14,17 @@ use serde::de::DeserializeOwned;
 
 #[derive(Subcommand)]
 pub enum RunCmd {
+    /// Read a bounded JSONL transcript page (context only, no run authority)
+    Transcript {
+        id: String,
+        run: String,
+        /// One-based review child number
+        #[arg(long)]
+        review: Option<usize>,
+        /// Inclusive one-based range, at most 200 lines and 24 KiB per page
+        #[arg(long, default_value = "1-200", value_parser = parse_lines)]
+        lines: (usize, usize),
+    },
     /// Register an explicit event wait (version 1 JSON); never executes monitor commands
     Wait {
         id: String,
@@ -62,12 +73,16 @@ impl RunCmd {
     pub fn args(&self) -> Option<&RunArgs> {
         match self {
             Self::Progress(args) | Self::Checkpoint(args) => Some(args),
-            Self::Wait { .. } | Self::Decision { .. } | Self::Resume { .. } => None,
+            Self::Wait { .. }
+            | Self::Decision { .. }
+            | Self::Resume { .. }
+            | Self::Transcript { .. } => None,
         }
     }
 
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Transcript { .. } => "transcript",
             Self::Progress(_) => "progress",
             Self::Checkpoint(_) => "checkpoint",
             Self::Wait { .. } => "wait",
@@ -75,6 +90,16 @@ impl RunCmd {
             Self::Resume { .. } => "resume",
         }
     }
+}
+
+fn parse_lines(text: &str) -> std::result::Result<(usize, usize), String> {
+    let (a, b) = text.split_once('-').ok_or("use --lines 1-200")?;
+    let a: usize = a.parse().map_err(|_| "invalid first line")?;
+    let b: usize = b.parse().map_err(|_| "invalid last line")?;
+    if a == 0 || b < a || b - a >= 200 {
+        return Err("range must contain 1 to 200 lines, starting at 1 or later".into());
+    }
+    Ok((a, b))
 }
 
 fn read_input<T: DeserializeOwned>(path: &Path, max: u64) -> Result<T> {
@@ -129,6 +154,18 @@ fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
     let now = Timestamp::now();
     let task = match cmd {
+        RunCmd::Transcript {
+            id,
+            run,
+            review,
+            lines: (a, b),
+        } => {
+            print!(
+                "{}",
+                corral_ops::transcript_page(&ctx.store, &id, &run, review, a, b)?
+            );
+            return Ok(());
+        }
         RunCmd::Progress(args) => return run_progress(ctx, args, false),
         RunCmd::Checkpoint(args) => return run_progress(ctx, args, true),
         RunCmd::Wait { id, file } => {

@@ -157,10 +157,24 @@ pub fn bound(start: &Path, ctx: &Ctx, overrides: &Overrides) -> Result<()> {
 
 /// `corral pi [--over-cap]` in a workspace: a new assistant session in this pane.
 pub fn assistant(ctx: &Ctx, overrides: &Overrides, over_cap: bool) -> Result<()> {
+    assistant_focused(ctx, overrides, over_cap, None)
+}
+
+/// Task focus supplies context only; admission and authority are unchanged.
+pub fn assistant_focused(
+    ctx: &Ctx,
+    overrides: &Overrides,
+    over_cap: bool,
+    focus: Option<&str>,
+) -> Result<()> {
     platform()?;
     let pane = current_pane(std::env::var(PANE_ENV).ok().as_deref())?;
-    let (session, prepared, warning) =
-        super::ops::assistant::open(ctx, &pane, overrides, over_cap)?;
+    let (session, prepared, warning) = match focus {
+        Some(task) => {
+            super::ops::assistant::open_focused(ctx, &pane, overrides, over_cap, Some(task))?
+        }
+        None => super::ops::assistant::open(ctx, &pane, overrides, over_cap)?,
+    };
     if let Some(warning) = warning {
         eprintln!("corral pi: {warning}");
     }

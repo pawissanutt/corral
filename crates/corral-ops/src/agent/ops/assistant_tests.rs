@@ -84,6 +84,37 @@ fn two_launches_open_separate_assistant_sessions_without_a_task_or_slot() {
 }
 
 #[test]
+fn focused_launch_preloads_a_bounded_brief_without_task_binding_or_mutation() {
+    let fx = assistant_fixture();
+    let task = fx
+        .ctx
+        .store
+        .create(
+            "Task focus",
+            None,
+            corral_core::Status::Backlog,
+            "focus spec",
+        )
+        .unwrap();
+    let before = fx.ctx.store.get(&task.id).unwrap();
+    let ctx = f::ctx_at(fx.root());
+    let (session, _, _) =
+        open_focused(&ctx, PANE, &Overrides::default(), false, Some(&task.id)).unwrap();
+    assert_eq!(session.focus, task.id);
+    let saved = bootstrap(&fx, &session.id, 1);
+    let prompt = std::path::Path::new(saved["prompt_file"].as_str().unwrap());
+    let brief = std::fs::read_to_string(prompt).unwrap();
+    assert!(brief.len() <= crate::assistant::BRIEF_BYTES);
+    assert!(brief.contains("focus spec") && brief.contains("not authority"));
+    assert_eq!(saved["role"], "assistant");
+    assert!(saved["task"].is_null());
+    assert_eq!(fx.ctx.store.get(&task.id).unwrap(), before);
+    let count = fx.ctx.store.list_assistants().unwrap().len();
+    assert!(open_focused(&ctx, OTHER, &Overrides::default(), false, Some("T-999999")).is_err());
+    assert_eq!(fx.ctx.store.list_assistants().unwrap().len(), count);
+}
+
+#[test]
 fn a_launch_refused_before_its_record_leaves_nothing_and_a_late_failure_ends_it() {
     let fx = assistant_fixture();
     let ctx = f::ctx_at(fx.root());

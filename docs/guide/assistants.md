@@ -10,6 +10,7 @@ PM. An assistant takes no coding slot, creates no task and names no project.
 corral pi                      # in a herdr pane inside a workspace: a new assistant here
 corral pi --over-cap           # one more than assistant.max_live
 corral pi --resume A-1         # A-1's next generation, in this pane
+corral pi --task T-42          # new assistant with read-only task context
 corral pi --pm                 # the PM instead (see the Pi-native guide)
 corral pi --bare               # plain Pi; also what `corral pi` does outside a workspace
 ```
@@ -27,7 +28,7 @@ vendor and login preflight as any Pi-native launch. The assistant needs no appro
 scope: it is not bound to a project and has no board authority of its own.
 
 Outside a workspace, `corral pi` prints a one-line notice that no corral workspace was found
-and starts plain Pi; `--pm`, `--resume` and `--over-cap` there refuse
+and starts plain Pi; `--pm`, `--resume`, `--task` and `--over-cap` there refuse
 `not_in_workspace`.
 
 ### Admission
@@ -356,7 +357,38 @@ once sync finds the host live, for example after `corral pi --resume`. An ended 
 gets no message; the outcome stays in the item. The
 [PM guide](pm.md#the-pm-inbox) has the full state machine and the PM side.
 
+## Task focus and run transcripts
+
+`corral pi --task T-42` opens a new assistant with a preloaded task brief of at most
+24 KiB: spec, latest plan summary, runs and their results and recorded costs, latest
+review notes, questions and artifact refs. Each section has a budget; omitted text is
+marked `[truncated]`. Use `corral show`, plan and artifact readbacks for the rest.
+The session records its task focus; resume refreshes the brief. `--task` cannot be
+combined with `--bare`, `--pm` or `--resume`. Focus grants no task authority and consumes
+no coding slot; the assistant's capabilities and shell classification are unchanged.
+
+```sh
+corral run transcript T-42 R1 --lines 1-200
+corral run transcript T-42 R1 --review 1 --lines 1-200
+corral run transcript T-42 R1 --lines 201-400
+```
+
+This read command returns raw JSONL text for OmO, Claude and Pi-native worker runs and
+review children. `--review` selects the one-based child in the run's `review_runs` list.
+The default range is `1-200`; ranges are inclusive and limited to 200 records and 24 KiB
+of output. A byte-limited page names the next line to request. Line numbers count matching
+records across the selected transcript files, not screen-wrapped lines. Legacy locators
+filter by worktree and run time window; Pi uses only hello-bound generation paths,
+deduplicating repeated files. It does not scan other tasks' Pi sessions.
+
+Missing files, no matching records, unsupported harnesses or unreadable formats report
+`transcript_unavailable` with the searched location. Files must be regular files; each
+record read is capped at 1 MiB and scanning at 256 MiB per request. A record larger than
+the output budget is explicitly truncated, with continuation at the next record; a record
+over the read cap or corrupt JSONL produces a named diagnostic rather than an unbounded read. A range beyond the end returns
+empty text. This reader is read-only, including from an assistant shell.
+
 ## Not here yet
 
-Owner-authorized actions, co-work landing and task focus (`--task`) are separate members
-of the [reviewed assistant plan](../plans/assistant-sessions.md).
+Owner-authorized actions and co-work landing are separate members of the
+[reviewed assistant plan](../plans/assistant-sessions.md).

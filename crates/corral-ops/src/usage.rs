@@ -10,6 +10,7 @@ use corral_core::{Config, Event, ProfileChoice, Run, Status, Store, Usage, Usage
 use jiff::Timestamp;
 use serde::Deserialize;
 
+pub mod pages;
 mod transcript_cache;
 
 #[cfg(test)]

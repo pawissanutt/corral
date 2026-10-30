@@ -306,6 +306,7 @@ pub use tracker::{
     plan_board, plan_progress, plan_progress_in,
 };
 pub use usage::assistant_usage;
+pub use usage::pages::transcript_page;
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};
