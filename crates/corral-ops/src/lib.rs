@@ -115,6 +115,7 @@ mod slots;
 mod sprint;
 mod stats;
 mod sync;
+mod sync_installed;
 mod tasks;
 pub mod throughput;
 mod thumbnails;
@@ -284,6 +285,7 @@ pub use sprint::{
 };
 pub use stats::{StatsBy, StatsRow, stats};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook, sync_with_attention};
+pub use sync_installed::sync_installed;
 pub use tasks::{
     infer_project, move_task, move_task_with_decision, new_task, new_task_initialized,
     new_task_with_origin, slots,

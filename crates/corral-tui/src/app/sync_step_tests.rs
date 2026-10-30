@@ -197,6 +197,80 @@ fn unknown_inventory_collects_completed_receipt_without_pane_reconciliation() {
 }
 
 #[test]
+fn latched_board_hands_its_passes_to_the_installed_corral() {
+    // Given a board latched off by an update whose cause is gone again (T-587).
+    let fx = Fixture::new();
+    fx.step();
+    let marker = fx.ctx.store.state_dir().join("schema-version");
+    let current = std::fs::read(&marker).ok();
+    std::fs::write(&marker, "999\n").unwrap();
+    assert!(
+        run(&fx.ctx)
+            .unwrap_err()
+            .contains(corral_core::UPDATE_NOTICE)
+    );
+    match current {
+        Some(bytes) => std::fs::write(&marker, bytes).unwrap(),
+        None => std::fs::remove_file(&marker).unwrap(),
+    }
+    // The stall: the process stays latched, so every in-process pass refuses for good.
+    assert!(fx.ctx.store.runtime_latched());
+    assert!(
+        run(&fx.ctx)
+            .unwrap_err()
+            .contains(corral_core::UPDATE_NOTICE)
+    );
+    let installed = fx.root.path().join("installed-corral");
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/app/installed_corral.sh"),
+        &installed,
+    )
+    .unwrap();
+    // A current process's write, as the installed corral makes during its pass.
+    let written = Store::open(fx.root.path())
+        .unwrap()
+        .create(
+            "Written by a current corral",
+            Some("app"),
+            Status::Ready,
+            "",
+        )
+        .unwrap();
+    let events = fx.ctx.store.events().unwrap().len();
+    let (sender, _messages) = std::sync::mpsc::channel();
+
+    // When the board worker takes its next pass.
+    let pass = super::super::WorkerMsg::pass(&fx.ctx, &sender, &installed);
+
+    // Then the installed corral synced this store, herdr and session; the board only read back.
+    let super::super::WorkerMsg::Synced(Ok((_, snapshot))) = pass else {
+        panic!("the latched pass did not complete through the installed corral");
+    };
+    assert!(snapshot.tasks.iter().any(|task| task.id == written.id));
+    let argv = std::fs::read_to_string(fx.root.path().join("installed-argv")).unwrap();
+    let root = fx.ctx.store.root().to_str().unwrap();
+    let herdr = fx.ctx.herdr.bin().to_str().unwrap();
+    assert_eq!(
+        argv.lines().collect::<Vec<_>>(),
+        ["--root", root, "sync", herdr, "corral-test"]
+    );
+    assert_eq!(fx.ctx.store.events().unwrap().len(), events);
+
+    // A failing installed pass is an error naming its last diagnostic, never a silent idle.
+    std::fs::write(
+        fx.root.path().join("installed-fails"),
+        "schema 7 is unknown\n",
+    )
+    .unwrap();
+    let super::super::WorkerMsg::Synced(Err(error)) =
+        super::super::WorkerMsg::pass(&fx.ctx, &sender, &installed)
+    else {
+        panic!("a failed installed pass must be reported");
+    };
+    assert!(error.contains("schema 7 is unknown"), "{error}");
+}
+
+#[test]
 fn unknown_inventory_preserves_gate_state_and_warns_through_board_sink() {
     let fx = Fixture::new();
     let (id, gate) = fx.start_gate();

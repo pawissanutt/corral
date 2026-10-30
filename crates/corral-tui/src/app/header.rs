@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
 use super::App;
@@ -16,11 +16,56 @@ use crate::theme;
 impl App {
     pub(super) fn automation_header_height(&self, width: u16) -> u16 {
         u16::try_from(
-            Paragraph::new(self.operating_header.as_str())
+            Paragraph::new(self.status_text())
                 .wrap(Wrap { trim: false })
                 .line_count(width),
         )
         .unwrap_or(u16::MAX)
+    }
+
+    /// The operating summary, under any sync trouble that leaves autopilot idle without it (T-587).
+    fn status_text(&self) -> Text<'_> {
+        let notices = self.sync_notices();
+        if notices.is_empty() {
+            return Text::from(self.operating_header.as_str());
+        }
+        let alert = Style::new().fg(theme::RED).add_modifier(Modifier::BOLD);
+        let mut text = Text::from_iter(
+            notices
+                .into_iter()
+                .map(|notice| Line::styled(notice, alert)),
+        );
+        text.extend(Text::from(self.operating_header.as_str()));
+        text
+    }
+
+    /// An update this process survives only by handing passes to the installed corral, and work
+    /// waiting on passes that stopped completing.
+    pub(super) fn sync_notices(&self) -> Vec<String> {
+        let mut notices = Vec::new();
+        if self.mode != super::Mode::Board {
+            return notices;
+        }
+        if self.ctx.store.runtime_latched() {
+            notices.push(format!(
+                "{}; until then the installed corral runs this board's syncs",
+                corral_core::UPDATE_NOTICE
+            ));
+        }
+        let c = self.counts;
+        let waiting = c.review + c.ready + c.tasks;
+        let idle = self.clock.now().saturating_duration_since(self.synced_at);
+        if waiting > 0 && idle >= super::SYNC_STALL_AFTER {
+            let cause = self
+                .last_sync_error
+                .as_deref()
+                .unwrap_or("the current pass has not returned");
+            notices.push(format!(
+                "Autopilot stalled: no sync completed for {}m while {waiting} tasks wait; {cause}",
+                idle.as_secs() / 60
+            ));
+        }
+        notices
     }
 
     /// Each counter focuses its board column; the switches press their ordinary board keys.
@@ -134,7 +179,7 @@ impl App {
         }
         let mut targets = Vec::new();
         f.render_widget(
-            Paragraph::new(self.operating_header.as_str())
+            Paragraph::new(self.status_text())
                 .wrap(Wrap { trim: false })
                 .style(Style::new().fg(theme::YELLOW).bg(theme::BG2)),
             status_area,

@@ -88,6 +88,11 @@ impl Executable {
         Ok(Arc::clone(RUNNING.get_or_init(|| exe)))
     }
 
+    /// The installed path this process started from; an update puts the new executable there.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub(crate) fn check(&self) -> Result<()> {
         if Fingerprint::read(&self.path).ok().as_ref() != Some(&self.running) {
             bail!("{UPDATE_NOTICE}");

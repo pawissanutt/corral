@@ -410,6 +410,16 @@ impl Store {
         Ok(())
     }
 
+    /// True once [`Self::check_runtime`] latched this process off; it stays true until exit.
+    pub fn runtime_latched(&self) -> bool {
+        self.skew_reported.load(Ordering::Relaxed)
+    }
+
+    /// The installed executable path this process started from, where an update installs.
+    pub fn installed_executable(&self) -> &Path {
+        self.executable.path()
+    }
+
     fn check_schema(&self) -> Result<()> {
         crate::schema::store_version(self).map(|_| ())
     }

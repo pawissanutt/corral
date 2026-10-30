@@ -421,8 +421,15 @@ fast-forward, cannot reuse the old receipts.
 
 The board, watch loop and autopilot check the running executable on every sync before side effects.
 Replacing or deleting that executable stops new gates, reviews and dispatches, records `version_skew`,
-and reports "corral was updated; restart the board (q, then corral up)". Restart explicitly; automatic
-re-execution is not enabled.
+and reports "corral was updated; restart the board (q, then corral up)". The outdated process never
+writes again, but the board keeps autopilot running: it hands each later sync pass to the installed
+executable (`corral sync` against the same store, herdr and session) and only reads the result back,
+with the restart notice in its header until you restart it. The headless `corral sync --watch` loop
+only refuses. Restart explicitly; automatic re-execution is not enabled.
+
+When no sync pass completes for five minutes while tasks wait in Review, Ready or Running, the board
+header reports that autopilot stalled, with the last sync error or that the current pass has not
+returned, until a pass completes.
 
 Saved task frontmatter uses a `schema_version: 2` envelope with the record under `task`.
 Legacy flat records remain readable for recovery, but legacy receipts without candidate identity

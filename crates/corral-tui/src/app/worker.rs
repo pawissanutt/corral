@@ -1,4 +1,6 @@
 //! Background synchronization transport.
+use std::path::Path;
+
 use super::*;
 
 pub(super) enum WorkerMsg {
@@ -7,17 +9,32 @@ pub(super) enum WorkerMsg {
 }
 
 impl WorkerMsg {
+    /// One board pass: in process while this executable is current; once an update latched it
+    /// off, through `installed`, so autopilot keeps running until the board restarts (T-587).
+    pub(super) fn pass(ctx: &Ctx, messages: &Sender<Message>, installed: &Path) -> Self {
+        if ctx.store.runtime_latched() {
+            Self::loaded(ctx, sync_step::run_installed(ctx, installed))
+        } else {
+            Self::synced_with_attention(ctx, messages)
+        }
+    }
+
     pub(super) fn synced_with_attention(ctx: &Ctx, messages: &Sender<Message>) -> Self {
-        Self::Synced(sync_step::run_with_attention(ctx, messages).and_then(
-            |(changes, attention, operating_header)| {
-                crate::board::BoardSnapshot::load_with_attention(ctx, attention)
-                    .map(|mut snapshot| {
-                        snapshot.operating_header = operating_header;
-                        (changes, Box::new(snapshot))
-                    })
-                    .map_err(|error| corral_herdr::friendly_error(&error))
-            },
-        ))
+        Self::loaded(ctx, sync_step::run_with_attention(ctx, messages))
+    }
+
+    fn loaded(
+        ctx: &Ctx,
+        synced: Result<(Vec<Change>, crate::attention::Snapshot, String), String>,
+    ) -> Self {
+        Self::Synced(synced.and_then(|(changes, attention, operating_header)| {
+            crate::board::BoardSnapshot::load_with_attention(ctx, attention)
+                .map(|mut snapshot| {
+                    snapshot.operating_header = operating_header;
+                    (changes, Box::new(snapshot))
+                })
+                .map_err(|error| corral_herdr::friendly_error(&error))
+        }))
     }
 
     #[cfg(test)]
@@ -43,6 +60,7 @@ pub(super) fn spawn_worker(
     let (msg_tx, msg_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _messages = corral_ops::capture_messages(messages.clone());
+        let installed = ctx.store.installed_executable().to_path_buf();
         let mut herdr_checked: Option<Instant> = None;
         loop {
             let (started, cpu_before) = (Instant::now(), process_cpu());
@@ -68,13 +86,14 @@ pub(super) fn spawn_worker(
                 }
             }
             if msg_tx
-                .send(WorkerMsg::synced_with_attention(&ctx, &messages))
+                .send(WorkerMsg::pass(&ctx, &messages, &installed))
                 .is_err()
             {
                 return;
             }
-            let spent = match (cpu_before, process_cpu()) {
-                (Some(before), Some(after)) => after.saturating_sub(before),
+            // A handed-off pass spends its CPU in the child, so its wall time bounds the cost.
+            let spent = match (ctx.store.runtime_latched(), cpu_before, process_cpu()) {
+                (false, Some(before), Some(after)) => after.saturating_sub(before),
                 _ => started.elapsed(),
             };
             match trigger_rx.recv_timeout(periodic_wait(spent)) {
