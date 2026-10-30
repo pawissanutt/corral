@@ -15,9 +15,10 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
         if let Some(record) = gate_collect(ctx, id)? {
             return Ok(record);
         }
-        let task = ctx.store.get(id)?;
+        let task = ctx.store.head(id)?;
         let gate = task
-            .current_run()
+            .current_run
+            .as_deref()
             .and_then(|r| r.gate.as_ref())
             .context("task has no running gate")?;
         let pane = gate.pane.as_deref();
@@ -41,6 +42,9 @@ pub fn gate_wait(ctx: &Ctx, id: &str) -> Result<GateRecord> {
                 },
             )?
         {
+            // Collection can block on artifact storage: never retain the inventory lease.
+            drop(listed);
+            crate::agent::effects::failpoint("gate_wait_collect");
             // The script may have finished just before the pane closed.
             if let Some(record) = gate_collect(ctx, id)? {
                 return Ok(record);
