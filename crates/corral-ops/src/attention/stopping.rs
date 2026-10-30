@@ -7,11 +7,12 @@ use corral_core::{GateResult, Run, WaitHandle, awaited_task};
 #[path = "stopping_tests.rs"]
 mod tests;
 
-pub(super) fn planner_owns_stop(task: &Task, run: &corral_core::PlanRun) -> bool {
+pub(super) fn planner_owns_stop(
+    plan: Option<&super::phase_inputs::PlanPhase>,
+    run: &super::phase_inputs::PlanningPhase,
+) -> bool {
     run.state == PlanRunState::AwaitingOwner
-        || task
-            .plans
-            .last()
+        || plan
             .filter(|plan| plan.approval.is_none())
             .is_none_or(|plan| {
                 plan.run.as_deref() == Some(run.id.as_str())
