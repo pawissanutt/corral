@@ -38,6 +38,11 @@ const ROWS: &[(&str, &[&str], Class)] = &[
         File,
     ),
     ("assistant scratch gc", &["--dry-run"], Refused),
+    (
+        "assistant scratch finish",
+        &["spike", "--title", "Ship it"],
+        Refused,
+    ),
     ("assistant scratch gc", &["--yes"], Refused),
     ("mode status", &[], Read),
     ("mode assist", &[], Refused),

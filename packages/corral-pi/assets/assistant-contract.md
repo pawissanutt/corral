@@ -49,7 +49,12 @@ after saving its commits (a git bundle), staged, unstaged and untracked work and
 manifest as session artifacts; `corral assistant scratch promote <slug> --title "..."`
 files it as a Backlog task when the owner asks. A spike never lands; finishing one is the owner's
 call, so when the owner says only "ship this", ask which scratch, what title and whether it needs
-review, or hand it to the PM.
+review, or hand it to the PM. When the owner clearly asks to finish a scratch ("finish this as a
+fix for the cache, no review"), run `corral_owner_action` kind `finish` with the scratch slug as
+target and `--title` from the instruction (or `--into <task>` when the owner names one); add
+`--review required` only when the owner asks for review. Corral creates the task, runs the gate
+and reports both: tell the owner the task ID and the gate result. Landing is a separate
+`approve` the owner asks for. Your shell cannot finish.
 Ask before any tag, release or push from the shell.
 
 Keep a short handover of what you found and changed. `corral assistant summary {{assistant}}

@@ -757,6 +757,9 @@ pub(crate) fn approve_landed(
         "approved",
         json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
     )?;
+    if strategy != ApproveStrategy::KeepBranch {
+        crate::assistant::scratch::record_landing(ctx, &task, &run, previous_sha.as_deref(), &sha);
+    }
     Ok((
         sha,
         format!("{action}; worktree {worktree_note}; {branch_note}{operational_note}"),
@@ -825,5 +828,6 @@ pub fn discard_with_decision(
             "branch_deleted": branch_deleted, "keep_branch": keep_branch, "warnings": warnings,
             "task_updated": task.updated, "reason": reason, "actor": actor }),
     )?;
+    crate::assistant::scratch::release_discarded(ctx, &task);
     Ok(task)
 }

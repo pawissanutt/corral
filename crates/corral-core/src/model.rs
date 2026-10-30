@@ -730,6 +730,23 @@ pub struct LandingReceipt {
     pub sha: String,
 }
 
+/// An owner-instructed co-work finish: the assistant scratch run `run` came from and the owner's
+/// review choice. The choice and owner-only landing apply only while `run` is the current run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cowork {
+    pub session: String,
+    pub scratch: String,
+    pub run: String,
+    pub review: CoworkReview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoworkReview {
+    None,
+    Required,
+}
+
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
@@ -745,6 +762,8 @@ pub struct Task {
     pub dashboard: Option<crate::DashboardSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cowork: Option<Cowork>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idea_decision: Option<crate::IdeaDecision>,
     /// Owner context does not participate in spec or verification identities.
@@ -913,6 +932,14 @@ impl Task {
     /// The most recent run, if any.
     pub fn current_run(&self) -> Option<&Run> {
         self.runs.last()
+    }
+
+    /// The co-work finish whose run is the current run.
+    pub fn cowork_run(&self) -> Option<&Cowork> {
+        let current = self.current_run()?;
+        self.cowork
+            .as_ref()
+            .filter(|cowork| cowork.run == current.id)
     }
 
     pub fn current_run_mut(&mut self) -> Option<&mut Run> {

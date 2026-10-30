@@ -298,6 +298,13 @@ pub fn run(
             for session in &assistants.sessions {
                 println!("  {} cost: {}", session.session, session.cost);
             }
+            let cowork = &assistants.cowork;
+            if cowork.finished > 0 {
+                println!(
+                    "  cowork: {} finished ({} without review), {} landed",
+                    cowork.finished, cowork.review_none, cowork.landed
+                );
+            }
         }
     }
     Ok(())

@@ -13,10 +13,13 @@ use serde::Serialize;
 use crate::Ctx;
 use crate::cleanup_worktree::Callers;
 
+mod finish;
 mod gc;
 mod git;
 mod measure;
 
+pub use finish::{Finish, Finished, LABEL, finish, session_for as finish_session};
+pub(crate) use finish::{record_landing, release_discarded};
 pub use gc::{GcItem, GcReport, gc, orphans};
 pub use measure::{Measured, measure};
 
@@ -99,7 +102,7 @@ pub fn session_for(named: Option<&str>) -> Result<String> {
     Ok(session)
 }
 
-fn validate_slug(slug: &str) -> Result<()> {
+pub(crate) fn validate_slug(slug: &str) -> Result<()> {
     let valid = (1..=40).contains(&slug.len())
         && slug
             .bytes()

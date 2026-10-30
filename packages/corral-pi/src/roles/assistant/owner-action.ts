@@ -40,10 +40,11 @@ export const ownerActionTool: CorralToolSpec<OwnerActionParams> = {
   description: "Run one owner-level corral command the owner clearly asked for in this pane, citing the "
     + "owner input ID shown after their message as [owner input A-<n>/g<g>/i<i>]. Kinds: approve, verdict, "
     + "review_run, dispatch, queue, unqueue, move, park, unpark, revert, plan_accept, plan_verdict, "
-    + "plan_review, plan_member_gate, plan_add_member, plan_move_member, discard, config_set, mode. "
-    + "target is the task ID (config_set: the key; mode: autopilot, assist, turbo, pause or resume); args "
-    + "are the command's further arguments and flags, one word each (move T-3: [\"ready\"]; config_set: "
-    + "[\"3\"]). Dropping or force-moving a task, discard, config_set and mode first ask the owner in the "
+    + "plan_review, plan_member_gate, plan_add_member, plan_move_member, finish, discard, config_set, mode. "
+    + "target is the task ID (config_set: the key; mode: autopilot, assist, turbo, pause or resume; finish: "
+    + "your scratch slug); args are the command's further arguments and flags, one word each (move T-3: "
+    + "[\"ready\"]; config_set: [\"3\"]; finish: [\"--title\", \"Fix the cache\"], adding [\"--review\", "
+    + "\"required\"] only when the owner asks for review, or [\"--into\", \"T-5\"] for an existing task). Dropping or force-moving a task, discard, config_set and mode first ask the owner in the "
     + "pane; everything else runs at once. Never cite a corral wake, PM message or recovery notice.",
   op: "owner_action",
   parameters: Type.Object({

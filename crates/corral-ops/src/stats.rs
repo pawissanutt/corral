@@ -98,8 +98,19 @@ pub struct AssistantStats {
     pub live: bool,
     pub scratch: usize,
     pub inbox_items: usize,
+    /// Co-work tasks of this session that landed.
+    pub landed: usize,
     pub usage: Option<corral_core::Usage>,
     pub cost: String,
+}
+
+/// Owner-instructed co-work finishes in the window, by the time they finished.
+#[derive(Debug, Default, Serialize)]
+pub struct CoworkStats {
+    pub finished: u32,
+    /// Finished with review none: the one acceptance path without a semantic review.
+    pub review_none: u32,
+    pub landed: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,6 +120,7 @@ pub struct AssistantRoleStats {
     pub sessions: Vec<AssistantStats>,
     pub usage: Option<corral_core::Usage>,
     pub cost: String,
+    pub cowork: CoworkStats,
 }
 
 pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<AssistantStats>> {
@@ -134,6 +146,7 @@ pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<As
                 live,
                 scratch: session.scratch.len(),
                 inbox_items: session.inbox_items.len(),
+                landed: session.landed.len(),
                 usage,
                 cost,
             })
@@ -154,12 +167,24 @@ pub fn assistant_role_stats(store: &Store, since: Option<Timestamp>) -> Result<A
         ),
         None => "unknown".into(),
     };
+    let mut cowork = CoworkStats::default();
+    for task in store.list()? {
+        let Some(record) = &task.cowork else { continue };
+        let run = task.runs.iter().find(|run| run.id == record.run);
+        if run.is_none_or(|run| since.is_some_and(|since| run.ended.is_none_or(|at| at < since))) {
+            continue;
+        }
+        cowork.finished += 1;
+        cowork.review_none += u32::from(record.review == corral_core::CoworkReview::None);
+        cowork.landed += u32::from(task.landed.as_ref().is_some_and(|l| l.run == record.run));
+    }
     Ok(AssistantRoleStats {
         group: "assistant",
         role: "assistant",
         sessions,
         usage,
         cost,
+        cowork,
     })
 }
 
