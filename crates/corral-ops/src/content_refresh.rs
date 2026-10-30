@@ -247,7 +247,9 @@ fn changes_after(
                         let id = corral_core::Store::normalize_id(&num.0.to_string())?;
                         let task = delta.tasks.entry(id).or_default();
                         task.parts.extend(parts.iter().copied());
-                        task.history |= history;
+                        // Several demotions since the cursor can involve more than the
+                        // immediately previous container. Re-derive history in that case.
+                        task.history |= *history || (*demoted && task.demoted);
                         task.demoted |= demoted;
                     }
                     ChangeScope::Artifact { task } => {

@@ -474,6 +474,18 @@ impl TaskHead {
         )
     }
 
+    /// The newest review child of `run`, using a bounded row query.
+    pub fn latest_review_child(&self, run: &str) -> Result<Option<RunHead>> {
+        Ok(self
+            .run_children(
+                run,
+                |p| RowQuery::under(TaskPart::ReviewRun, p).newest_first(),
+                1,
+            )?
+            .into_iter()
+            .next())
+    }
+
     /// Every review child of `run` (output-sized; outside hot scopes only).
     pub fn review_children(&self, run: &str) -> Result<Vec<RunHead>> {
         self.run_children(run, |p| RowQuery::under(TaskPart::ReviewRun, p), u32::MAX)

@@ -9,6 +9,9 @@ use corral_ops::{
 };
 use serde_json::{Value, json};
 
+#[path = "content_search/demotion.rs"]
+mod demotion;
+
 #[path = "content_search/long_lines.rs"]
 mod long_lines;
 
