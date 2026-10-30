@@ -64,7 +64,12 @@ pub(super) fn conditions(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &
     }
     reviewers(task, n, now, a);
     if task.status != Status::NeedsMe {
-        classify::escalation(task, now, &mut a.conditions);
+        classify::escalation(
+            &corral_core::task_head_fields(task),
+            Phases::full(task).run.as_ref(),
+            now,
+            &mut a.conditions,
+        );
     }
     // An old working observation is not evidence of progress past a native suspension.
     if let Some(parent) = task.current_run() {

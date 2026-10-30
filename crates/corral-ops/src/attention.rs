@@ -12,7 +12,8 @@ use corral_core::inbox::Inbox;
 #[cfg(test)]
 use corral_core::{Config, EffectivePolicy};
 use corral_core::{
-    OperatingActionKind as Action, PlanRunState, Status, Task, TaskFieldsRef, Verdict,
+    OperatingActionKind as Action, PlanRunState, Status, Task, TaskFieldsRef, TaskHeadFields,
+    Verdict,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -67,21 +68,30 @@ pub struct AttentionBoard {
 
 /// Assess all conditions, independently of progress and display precedence.
 pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> Assessment {
+    if matches!(task.status, Status::Done | Status::Dropped) {
+        return Assessment::default();
+    }
+    let fields = corral_core::task_head_fields(task);
+    let phases = Phases::full(task);
     assess_with_sources(
-        task,
+        &fields,
+        &phases,
         neighborhood,
         now,
         |assessment| classify::conditions(task, neighborhood, now, assessment),
         |out| delivery::conditions(task, neighborhood, now, out),
+        |assessment| stopping::conditions(task, neighborhood, now, assessment),
     )
 }
 
 fn assess_with_sources(
-    task: &Task,
+    task: &TaskHeadFields,
+    phases: &Phases,
     neighborhood: &Neighborhood<'_>,
     now: Timestamp,
     classify: impl FnOnce(&mut Assessment),
     delivery: impl FnOnce(&mut Vec<Condition>),
+    stop: impl FnOnce(&mut Assessment),
 ) -> Assessment {
     if matches!(task.status, Status::Done | Status::Dropped) {
         return Assessment::default();
@@ -90,9 +100,9 @@ fn assess_with_sources(
     let mut assessment = Assessment::default();
     classify(&mut assessment);
     delivery(&mut assessment.conditions);
-    stopping::conditions(task, neighborhood, now, &mut assessment);
+    stop(&mut assessment);
     if assessment.progress.is_none() && assessment.conditions.is_empty() {
-        let run = task.current_run();
+        let run = phases.run.as_ref();
         let stage = run.and_then(|run| run.autopilot.as_ref());
         let anchor = format!(
             "{}:{}:{}",
@@ -131,12 +141,16 @@ fn assess_with_sources(
 
 // Publication changes only ledger capacity, not the canonical inputs of ordinary rows.
 // Reuse this projection after reclaim without another board listing or receipt reads.
-fn refresh_overflow(task: &Task, assessment: &mut Assessment, now: Timestamp) {
+fn refresh_overflow(
+    task: &(impl TaskFieldsRef + ?Sized),
+    assessment: &mut Assessment,
+    now: Timestamp,
+) {
     assessment
         .conditions
         .retain(|condition| condition.kind != "ledger_overflow");
     let retained = task
-        .attention
+        .attention()
         .records
         .values()
         .filter(|record| record.kind != "ledger_overflow")
@@ -146,19 +160,19 @@ fn refresh_overflow(task: &Task, assessment: &mut Assessment, now: Timestamp) {
         .conditions
         .iter()
         .filter_map(|condition| condition.key.as_ref())
-        .filter(|key| !task.attention.records.contains_key(*key))
+        .filter(|key| !task.attention().records.contains_key(*key))
         .collect::<BTreeSet<_>>()
         .len()
         .saturating_sub(available);
     if missing > 0
         && let Some((key, _)) =
-            task.attention.records.iter().find(|(_, record)| {
+            task.attention().records.iter().find(|(_, record)| {
                 record.kind == "ledger_overflow" && record.resolved_at.is_none()
             })
     {
         let anchor = key
             .0
-            .trim_start_matches(&format!("{}/ledger_overflow/", task.id))
+            .trim_start_matches(&format!("{}/ledger_overflow/", task.id()))
             .to_owned();
         let mut overflow = row(
             task,
@@ -184,7 +198,7 @@ fn refresh_overflow(task: &Task, assessment: &mut Assessment, now: Timestamp) {
         ))
     });
     assessment.primary = assessment.conditions.first().cloned();
-    if task.park.is_some() {
+    if task.park().is_some() {
         assessment.primary = assessment
             .conditions
             .iter()
@@ -242,25 +256,42 @@ pub(super) fn board_snapshot(
         tasks: tasks
             .iter()
             .map(|task| {
-                let delivery = if matches!(task.status, Status::Done | Status::Dropped) {
-                    Vec::new()
-                } else {
-                    delivery::conditions_ref(task, &neighborhood, now)?
-                };
+                if matches!(task.status, Status::Done | Status::Dropped) {
+                    return Ok(TaskAssessment {
+                        task: task.id.clone(),
+                        title: task.title.clone(),
+                        project: task.project.clone(),
+                        status: task.status,
+                        blocked: None,
+                        assessment: Assessment::default(),
+                    });
+                }
+                let head = frozen.head(&task.id)?;
+                let delivery = delivery::conditions_ref(&head, &neighborhood, now)?;
                 let runs = if matches!(task.status, Status::Idea | Status::Done | Status::Dropped)
                     || (task.status == Status::Backlog && !task.queued)
                 {
                     Vec::new()
                 } else {
-                    classify::run_conditions_ref(task, now)?
+                    classify::run_conditions_ref(&head, now)?
+                };
+                let fields = &head.task;
+                let phases = if task.status == Status::Idea
+                    || (task.status == Status::Backlog && !task.queued)
+                {
+                    Phases::default()
+                } else {
+                    Phases::head(&head)?
                 };
                 let assessment = assess_with_sources(
-                    task,
+                    &fields,
+                    &phases,
                     &neighborhood,
                     now,
                     |assessment| {
                         classify::conditions_with_runs(
-                            task,
+                            &fields,
+                            &phases,
                             &neighborhood,
                             now,
                             assessment,
@@ -268,6 +299,7 @@ pub(super) fn board_snapshot(
                         )
                     },
                     |out| out.extend(delivery),
+                    |assessment| stopping::conditions(task, &neighborhood, now, assessment),
                 );
                 Ok(TaskAssessment {
                     task: task.id.clone(),
@@ -325,7 +357,13 @@ pub(super) fn row(
     }
 }
 
-fn ready(task: &Task, phases: &Phases, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
+fn ready(
+    task: &TaskHeadFields,
+    phases: &Phases,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) {
     let mut waits = Vec::new();
     if n.config.dispatch.paused || n.policy.paused {
         let mut condition = wait(
@@ -467,7 +505,7 @@ fn ready(task: &Task, phases: &Phases, n: &Neighborhood<'_>, now: Timestamp, a: 
 }
 
 fn plan(
-    task: &Task,
+    task: &TaskHeadFields,
     phases: &Phases,
     n: &Neighborhood<'_>,
     now: Timestamp,
@@ -643,7 +681,7 @@ fn plan(
 }
 
 fn aggregate(
-    task: &Task,
+    task: &TaskHeadFields,
     phases: &Phases,
     n: &Neighborhood<'_>,
     now: Timestamp,

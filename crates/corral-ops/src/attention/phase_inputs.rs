@@ -88,7 +88,7 @@ pub(super) struct AggregatePhase {
     pub current_review: Option<AggregateReview>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default)]
 pub(super) struct Phases {
     pub run: Option<RunPhase>,
     pub planning: Option<PlanningPhase>,
