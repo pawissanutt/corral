@@ -320,8 +320,8 @@ they record, whatever the current directory, `CORRAL_PM` or an explicit `--autho
 record the owner as filer and comment author); the event log carries the assistant
 attribution. A refused command changes nothing and exits 2 with
 `"assistant_refused: corral approve needs the owner; use corral_owner_action or corral pm inbox post"`,
-naming the command it refused. The PM inbox is described [below](#handing-work-to-the-pm-the-pm-inbox);
-the owner action is a separate member of the plan.
+naming the command it refused. The PM inbox is described [below](#handing-work-to-the-pm-the-pm-inbox),
+and the owner action [after it](#owner-actions-on-the-owners-instruction).
 
 The owner-only guards behind `corral automation confirm`, the `corral mode` grants
 (autopilot confirmation, resume and turbo), agent inbox recovery and retry, and
@@ -390,7 +390,73 @@ the output budget is explicitly truncated, with continuation at the next record;
 over the read cap or corrupt JSONL produces a named diagnostic rather than an unbounded read. A range beyond the end returns
 empty text. This reader is read-only, including from an assistant shell.
 
+## Owner actions on the owner's instruction
+
+When the owner clearly asks for an owner-level command in the assistant's pane ("T-5 looks
+good, please land it", or "do it" right after the assistant proposed one exact command),
+that instruction is the authorization. The assistant runs it with its one owner tool,
+`corral_owner_action`, and there is no second authorization step for ordinary actions.
+
+**Owner input.** Before the model sees a message the owner typed into the pane, the host
+journals it on the session's container (`owner_inputs`) as `A-<n>/g<generation>/i<seq>`
+with its SHA-256 and text (up to 16 KiB), and shows the model the message followed by
+`[owner input A-1/g1/i3]`. An owner action cites that ID and nothing else: corral wakes, PM
+inbox outcomes, recovery notices and other programmatic input are never journaled, so citing
+one refuses `not_owner_input`. Corral checks only that the cited input is a real pane-typed
+input of this session, not that its words prove the exact action. The journal keeps the
+newest 64 entries.
+
+**Kinds.** Each kind is one existing command, with the flags that command takes for the
+owner (never `--root`, `--author` or output flags):
+
+| Class | Kinds (command) |
+|---|---|
+| Ordinary: runs on the instruction | `approve`, `verdict`, `review_run` (review-run), `dispatch` (incl. `--plan`), `queue` (queue add), `unqueue` (queue remove), `move` to any status but dropped, `park` and `unpark` (attention park/unpark), `revert`, `plan_accept`, `plan_verdict`, `plan_review`, `plan_member_gate`, `plan_add_member`, `plan_move_member` |
+| Confirm: waits for the owner | `move` to dropped or with `--force`, `discard` (with or without `--keep-branch`), `config_set` (config set), `mode` (autopilot, assist, turbo, pause, resume) |
+
+Anything else refuses `unsupported_action`; the assistant then routes it to the PM. Finishing
+co-work lands with the co-work member and refuses `unsupported_action` until then. Disposing
+of the assistant's own scratch stays a File command (`corral assistant scratch discard`).
+`expected_revision` is passed as `--expected-revision` to the two kinds whose command takes
+one (unpark and plan member-gate).
+
+**Confirm class.** For a confirm-class action the host shows the owner the exact command,
+for example `corral discard T-003` or `corral config set limits.running 3`, and waits. The
+answer is journaled as a confirmation input bound to that command line. y runs the command
+once; N records a committed receipt with outcome `declined` and changes nothing. An answer
+answers one action only.
+
+**Execution.** Corral first probes the task's `autopilot-<id>` lock: when autopilot or
+another approval holds it, the action refuses `conflict_in_flight` naming the lock, and the
+assistant reports it instead of retrying or working around it. Otherwise the call commits a
+reservation and runs the command as its direct child, with `CORRAL_OWNER_ACTION` naming the
+reservation. That child claims the reservation once (`owner_action_unclaimed` on any second
+attempt), then runs the ordinary CLI path with its locks and refusals (stale gate, missing
+review, policy, size). The owner-only guards accept the claimed authority in place of the
+shell check; any process the command starts in turn is the assistant's shell again. Every
+event the command records is attributed to actor `owner` via `assistant:A-<n>` and carries
+`owner_authority`: session, generation, request, kind, input ID, its SHA-256, the verbatim
+owner message and whether it was confirmed. The receipt keeps the command, its outcome
+(`executed`, `refused` with the command's error, or `declined`) and a bounded excerpt of its
+output.
+
+**Replays and crashes.** A replayed call (the same request) returns the first receipt and
+runs nothing again. A call lost before its reservation ran nothing (`not_executed` in the
+next generation's recovery notice). A reservation whose executor died is settled on replay,
+never re-executed: `not_executed` when no command claimed it, `executed` when the event log
+holds an event naming the request, and `outcome_unknown` (state uncertain) when the command
+started but left neither a result nor an event. While the executor or the command still
+runs, a replay returns the reservation unchanged.
+
+Unclear requests ("land whatever is ready") and anything outside the kinds go to the PM: the
+assistant posts a routing item with the owner's words and tells the owner the ID.
+
+```sh
+corral pm inbox post --kind routing --subject "Land whatever is ready" --quote "land whatever is ready" --input A-1/g1/i4
+corral pm inbox show PMI-1
+```
+
 ## Not here yet
 
-Owner-authorized actions and co-work landing are separate members of the
+Co-work landing (finishing a scratch into a task) is a separate member of the
 [reviewed assistant plan](../plans/assistant-sessions.md).
