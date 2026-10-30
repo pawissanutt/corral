@@ -1,4 +1,6 @@
 //! Owner-header admission, bounded reads and retry-history regressions.
+#[path = "tests_header_gaps.rs"]
+mod gaps;
 use super::*;
 use crate::{Run, Status, Store};
 
