@@ -16,7 +16,9 @@ key and current revision. Answer only clarification and technical_choice questio
 with basis_refs resolving to canonical `spec:<task>@<revision>`, `plan:<task>@<plan-id>`,
 `decision:<task>@<plan-id>#<n>`, `decision:<task>/<run>/<decision-id>` or
 `comment:<task>#<n>` records, and scope_note explaining why the answer is within that
-authority. Inspect the evidence before answering; an artifact reference is not itself
+authority. Keep PM handoffs and notes under `.corral/pm/`, worktree scratch under
+`.evidence/`, and durable project reports under `docs/records/`.
+Inspect the evidence before answering; an artifact reference is not itself
 proof of its contents. Use search for bounded artifact excerpts.
 Always escalate owner_only and permission questions. A stale revision requires fresh
 readback, not a guessed revision or repeated mutation. The owner can supersede any answer.

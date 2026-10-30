@@ -42,7 +42,8 @@ This does not authorize an extra gate or a different tier.
    failures it puts outside your scope instead of fixing them. Otherwise follow contract step 2 and
    keep the gate's output in a log file for step 3; if you pipe it through `tee`, set
    `set -o pipefail` first so the gate's exit status is not masked.
-5. **Attach proof** (contract step 3). Give each artifact a title that names what it proves. List the
+5. **Attach proof** (contract step 3). Use gitignored `.evidence/` for scratch and tracked
+   `docs/records/` for durable reports. Give each artifact a title that names what it proves. List the
    refs you attached with `corral artifact list --task <id> --json`; a ref is what
    `corral artifact set-tier <ref> keep` takes when a log that would otherwise be eligible for
    retention is the proof you need to keep.

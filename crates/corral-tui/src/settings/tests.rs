@@ -250,7 +250,7 @@ fn artifacts_section_lists_globs_and_max_bytes() {
     for want in [
         "▸ Artifacts",
         "▸ Glob 1",
-        ".omo/evidence/**",
+        ".evidence/**",
         "↑  ↓  ×",
         "+ add glob",
         "Max bytes",

@@ -299,6 +299,30 @@ fn done_snapshots_diff_summary_and_scanned_report() {
 }
 
 #[test]
+fn done_harvests_ignored_scratch_and_legacy_evidence() {
+    let ws = workspace();
+    let task = running_task(&ws, "Harvest scratch");
+    let wt = worktree(&task);
+    std::fs::write(wt.join(".gitignore"), "/.evidence/\n/.omo/\n").unwrap();
+    for (dir, name) in [
+        (".evidence/nested", "new.log"),
+        (".omo/evidence", "legacy.log"),
+    ] {
+        std::fs::create_dir_all(wt.join(dir)).unwrap();
+        std::fs::write(wt.join(dir).join(name), name).unwrap();
+    }
+    let finished = done(&ws.ctx, &task.id, "Harvested").unwrap();
+    for name in ["new.log", "legacy.log"] {
+        let artifact = finished.artifacts.iter().find(|a| a.title == name).unwrap();
+        assert_eq!(
+            std::fs::read(ws.ctx.store.dir().join(&artifact.path)).unwrap(),
+            name.as_bytes()
+        );
+    }
+    assert!(corral_git::is_clean(&wt).unwrap());
+}
+
+#[test]
 fn done_persists_usage_from_the_run_harness_session() {
     // Given a real worktree and a captured session in an isolated OmO root.
     let mut ws = workspace();

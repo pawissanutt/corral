@@ -1,5 +1,8 @@
 # The PM loop
 
+Keep PM handoffs and notes in workspace machine state under `.corral/pm/`. Use
+`.evidence/` for worktree scratch and tracked `docs/records/` for durable project reports.
+
 ## Running corral with a cheap PM
 
 Use Claude Sonnet as the comparison baseline, then measure cheaper candidates
