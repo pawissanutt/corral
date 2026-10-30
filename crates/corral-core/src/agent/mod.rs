@@ -8,6 +8,7 @@ mod capabilities;
 mod jobs;
 mod live;
 mod local_controls;
+pub(crate) mod native_inputs;
 mod native_record;
 pub mod paths;
 pub mod pm_state;

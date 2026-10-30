@@ -515,6 +515,10 @@ impl TaskRef for Task {
         Ok(inbox_state(self, recipient).map(inbox_head_of))
     }
 
+    fn unfinished_native_containers(&self) -> Result<Vec<ContainerRef>> {
+        Ok(crate::agent::native_inputs::unfinished(self))
+    }
+
     fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>> {
         Ok(crate::agent::container_state(self, container)
             .map(|s| {
