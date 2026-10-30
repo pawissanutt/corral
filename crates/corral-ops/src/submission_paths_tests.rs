@@ -34,6 +34,10 @@ mod action_heads;
 mod aggregate;
 #[path = "../tests/support/submission_path_crashes.rs"]
 mod crashes;
+#[path = "../tests/support/done_budget.rs"]
+mod done_budget;
+#[path = "../tests/support/done_reference.rs"]
+mod done_reference;
 #[path = "../tests/support/launch_resume.rs"]
 mod launch_resume;
 #[path = "../tests/support/submission_refusals.rs"]

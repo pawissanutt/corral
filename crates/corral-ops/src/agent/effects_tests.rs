@@ -425,13 +425,23 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
             gate_ref: None,
             contract_sha256: Some("c0".into()),
         };
-        crate::review::done_request(
+        let _hot = corral_core::work::HotScope::enter();
+        let before = corral_core::work::snapshot();
+        let result = crate::review::done_request(
             ctx,
             o.identity.task.as_deref().unwrap(),
             SUMMARY,
             None,
             &report,
-        )
+        );
+        let delta = corral_core::work::snapshot().since(&before);
+        assert_eq!(
+            delta.total(corral_core::work::Counter::FullTaskHydrations),
+            0,
+            "{:?}",
+            delta.sites
+        );
+        result
     };
     let finished = |_: &Fx, t: &Task| {
         let diffs = t

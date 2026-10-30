@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::bail;
@@ -363,8 +362,7 @@ fn attach(
 }
 
 /// [`attach`] of a registration without a request origin, as a head update: the target run and
-/// its own registrations are read by key, never the task's other artifacts. A revival or a
-/// Diff, which edit earlier rows, returns `None` for the full form.
+/// its own registrations are read by key, never the task's other artifacts.
 #[allow(clippy::too_many_arguments)]
 fn attach_head(
     ctx: &Ctx,
@@ -378,9 +376,6 @@ fn attach_head(
 ) -> Result<Option<Artifact>> {
     use corral_core::TaskRef as _;
     let kind = kind.unwrap_or_else(|| ArtifactKind::guess(file_name));
-    if kind == ArtifactKind::Diff {
-        return Ok(None);
-    }
     let mut result = None;
     ctx.store.try_update_head(id, |t| {
         let current = t.current_run_head()?.map(|r| r.id.clone());
@@ -403,13 +398,24 @@ fn attach_head(
                 .unwrap_or_else(|| "R0".to_string()),
         };
         let mut rows = t.head().artifact_rows_of(&run)?;
-        if let Some((index, existing)) = rows.iter().find(|(_, a)| a.sha256 == sha) {
+        if let Some((index, mut existing)) = rows.iter().find(|(_, a)| a.sha256 == sha).cloned() {
             if existing.purged_at.is_some() {
-                return Ok(false);
+                crate::artifact_storage::mirror(ctx, &existing, bytes)?;
+                existing.compressed_bytes = None;
+                existing.purged_at = None;
+                t.edit_artifact(index, |a| {
+                    *a = existing.clone();
+                    Ok(())
+                })?;
+                ctx.store
+                    .log_event(Some(&t.id), "artifact", artifact_detail(&existing))?;
             }
-            crate::artifact_storage::record_row_keys(ctx, &t.id, existing, *index, false)?;
-            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, *index, false)?;
-            result = Some(existing.clone());
+            rows.iter_mut()
+                .filter(|(i, _)| *i == index)
+                .for_each(|(_, a)| *a = existing.clone());
+            crate::artifact_storage::record_row_keys(ctx, &t.id, &existing, index, false)?;
+            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, false)?;
+            result = Some(existing);
             return Ok(true);
         }
         let index = usize::try_from(t.head().summary.artifacts)?;
@@ -430,6 +436,18 @@ fn attach_head(
             purged_at: None,
         };
         crate::artifact_storage::mirror(ctx, &artifact, bytes)?;
+        if artifact.kind == ArtifactKind::Diff {
+            for (index, earlier) in &mut rows {
+                if earlier.kind == ArtifactKind::Diff && earlier.tier_override.is_none() {
+                    earlier.tier_override = Some(corral_core::ArtifactTier::Transient);
+                    t.edit_artifact(*index, |a| {
+                        *a = earlier.clone();
+                        Ok(())
+                    })?;
+                    crate::artifact_storage::record_row_keys(ctx, &t.id, earlier, *index, false)?;
+                }
+            }
+        }
         t.add_artifact(artifact.clone())?;
         crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
         rows.push((index, artifact.clone()));
@@ -500,11 +518,10 @@ pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
 /// (corral_git changed files incl. untracked) and adds each with `ArtifactKind::guess`. Returns the added ones.
 /// Simple glob support is enough: "**" any dirs, "*" within one path segment.
 pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
-    let task = ctx.store.get(id)?;
-    let Some(run) = task.current_run() else {
+    let task = ctx.store.head(id)?;
+    let Some(run) = task.current_run.as_deref() else {
         return Ok(Vec::new());
     };
-    let known: HashSet<String> = task.artifacts.iter().map(|a| a.path.clone()).collect();
     let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
     let cfg = &ctx.store.config.artifacts;
     let mut added = Vec::new();
@@ -517,8 +534,9 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
             Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
             _ => continue,
         }
+        // Registration returns a content-addressed path; consult the pre-registration view.
         let artifact = add_artifact(ctx, &task.id, &full, None, None)?;
-        if !known.contains(&artifact.path)
+        if task.artifact_by_path(&artifact.path)?.is_none()
             && !added.iter().any(|a: &Artifact| a.path == artifact.path)
         {
             added.push(artifact);

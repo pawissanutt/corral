@@ -16,6 +16,8 @@ use crate::artifacts::{add_artifact, scan_artifacts};
 use crate::cleanup::Cleanup;
 use crate::verification;
 
+mod finish;
+use finish::{finish_task, refuse_open_questions_head, save_finish};
 mod owner;
 pub(crate) use owner::awaiting_owner;
 use owner::review_interrupted;
@@ -111,7 +113,7 @@ pub fn done_request(
     result: Option<&str>,
     report: &effects::Report<'_>,
 ) -> Result<effects::Receipted> {
-    effects::swept(ctx, report.origin, effects::Home::of(report.origin), || {
+    effects::swept_done(ctx, report.origin, || {
         done_inner(ctx, id, summary, result, Some(report)).map(|(_, receipt)| receipt)
     })
 }
@@ -123,7 +125,8 @@ fn done_inner(
     result: Option<&str>,
     report: Option<&effects::Report<'_>>,
 ) -> Result<(Task, Option<corral_core::agent::RequestReceipt>)> {
-    let task = ctx.store.get(id)?;
+    let head = ctx.store.head(id)?;
+    let task = finish_task(&head)?;
     if crate::plan_pilot::handles(&task) {
         bail!("plan runs finish with `corral plan submit`, not `corral done`");
     }
@@ -135,16 +138,16 @@ fn done_inner(
         );
     }
     let run = current_run(&task)?;
-    refuse_open_questions(&task, &run.id)?;
+    refuse_open_questions_head(&head, &run.id)?;
     if let Some(report) = report {
         report.check_gate_ref(ctx, &task)?;
     }
     crate::delivery::owner::done_gate(ctx, &task)?;
-    crate::resume::require_checkpoint(&task, &run)?;
+    crate::resume::require_checkpoint_head(&head, &run.id)?;
     if run.checkpoint_required && !corral_git::is_clean(&run.worktree)? {
         bail!("commit_before_checkpoint: commit work, then save a checkpoint before done");
     }
-    let audit = crate::completion::completion_check_task(ctx, &task, summary)?;
+    let audit = crate::completion::completion_check_task(ctx, &head, summary)?;
     if !audit.passed {
         bail!("completion audit failed: {}", audit.failures.join("; "));
     }
@@ -208,12 +211,14 @@ fn done_inner(
     if report.is_some() {
         effects::failpoint("swept_before_commit");
     }
-    let task = ctx.store.update(&task.id, |t| {
+    let head = ctx.store.update_head(&task.id, |head| {
+        let mut value = finish_task(head.head())?;
+        let t = &mut value;
         if let Some(report) = report {
             let home = effects::Home::of(report.origin);
             effects::recheck(&ctx.store, t, report.origin, &home)?;
         }
-        refuse_open_questions(t, &run.id)?;
+        refuse_open_questions_head(head.head(), &run.id)?;
         if !matches!(t.status, Status::Running | Status::NeedsMe)
             || t.current_run().is_none_or(|r| r.id != run.id)
         {
@@ -224,9 +229,9 @@ fn done_inner(
                 t.status.label()
             );
         }
-        crate::resume::require_checkpoint(t, t.current_run().context("missing_run")?)?;
+        crate::resume::require_checkpoint_head(head.head(), &run.id)?;
         if audit.audited {
-            let current = crate::completion::completion_check_task(ctx, t, summary)?;
+            let current = crate::completion::completion_check_task(ctx, head.head(), summary)?;
             if !current.passed
                 || current.identity != audit.identity
                 || current.manifest_digest != audit.manifest_digest
@@ -274,8 +279,10 @@ fn done_inner(
         } else {
             ctx.store.log_event(Some(&t.id), "done", detail.clone())?;
         }
+        save_finish(head, &value)?;
         Ok(())
     })?;
+    let task = finish_task(&head)?;
     drop(admission);
     if report.is_some() {
         return Ok((task, receipt));
@@ -284,14 +291,6 @@ fn done_inner(
         audit_artifact(ctx, &task.id, &run.id, &audit, false)?;
     }
     Ok((task, None))
-}
-
-fn refuse_open_questions(task: &Task, run: &str) -> Result<()> {
-    let container = corral_core::agent::ContainerRef::Worker {
-        task: task.id.clone(),
-        run: run.into(),
-    };
-    effects::refuse_pending(task, &container, "open_questions")
 }
 
 pub(crate) fn audit_artifact(
