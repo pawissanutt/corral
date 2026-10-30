@@ -207,7 +207,9 @@ export function parseLaunchMessage(text: string): HostConfig {
     throw new LaunchMessageInvalid(error instanceof Error ? error.message : String(error));
   }
   if (capabilities?.enabled.includes("background_shell")) {
-    if (role !== "worker") throw new LaunchMessageInvalid(`background_shell is not available to the ${role} role`);
+    if (role !== "worker" && role !== "pm" && role !== "assistant") {
+      throw new LaunchMessageInvalid(`background_shell is not available to the ${role} role`);
+    }
     if (!JobSettingsSchema.safeParse(guidance?.settings.background_shell).success) {
       throw new LaunchMessageInvalid("background_shell requires its resolved settings");
     }

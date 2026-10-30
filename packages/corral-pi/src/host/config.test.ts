@@ -115,18 +115,20 @@ test("MCP and cached search parse independently without enabling codemode", () =
   }
 });
 
-test("background_shell launches only a worker, with its resolved bounds", () => {
+test("background_shell launches worker and interactive roles with resolved bounds", () => {
   // Given a worker snapshot with background_shell and its resolved settings.
   const capabilities = { catalog: 2, digest: "f".repeat(64), preset: "standard", enabled: ["background_shell"] };
   const bounds = { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 };
   const worker = { ...message, role: "worker", review: undefined, callback: undefined };
   const launch = (role: object, settings: object) =>
     JSON.stringify({ ...role, capabilities: { ...capabilities, settings, project_text: false } });
-  // When parsed, then the worker keeps them; other roles, missing or malformed bounds refuse.
+  // When parsed, eligible roles keep them; other roles, missing or malformed bounds refuse.
   expect(parseLaunchMessage(launch(worker, { background_shell: bounds })).guidance?.settings.background_shell)
     .toEqual(bounds);
+  expect(parseLaunchMessage(launch({ ...message, role: "pm" }, { background_shell: bounds })).guidance?.settings.background_shell)
+    .toEqual(bounds);
   for (const [role, settings] of [
-    [message, { background_shell: bounds }], [{ ...message, role: "pm" }, { background_shell: bounds }],
+    [message, { background_shell: bounds }],
     [worker, {}], [worker, { background_shell: { ...bounds, max_jobs: 0 } }],
     [worker, { background_shell: { ...bounds, shell: "zsh" } }],
   ] as const) {

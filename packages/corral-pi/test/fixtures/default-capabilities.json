@@ -1,0 +1,220 @@
+{
+  "assistant": {
+    "catalog": 8,
+    "digest": "532fa05be6f3e127a1f633df6515aa040600f6b2a82594cfbbcffc571fb7498c",
+    "features": {
+      "background_shell": {
+        "enabled": true,
+        "settings": {
+          "max_jobs": 4,
+          "max_output_bytes": 8388608,
+          "max_runtime_secs": 3600
+        },
+        "source": "preset"
+      },
+      "bash_rules": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "browser": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "budget": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "codemode": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "compaction": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "context_files": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "llama_cpp.enabled": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "lsp": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "mcp.enabled": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "oracle": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "prompt_templates": {
+        "enabled": true,
+        "settings": {
+          "user_dirs": [
+            "~/.agents/prompts"
+          ]
+        },
+        "source": "preset"
+      },
+      "skills": {
+        "enabled": true,
+        "settings": {
+          "user_dirs": [
+            "~/.agents/skills",
+            "~/.corral/skills/pi-native"
+          ]
+        },
+        "source": "preset"
+      },
+      "subagents": {
+        "enabled": true,
+        "settings": {
+          "max_parallel": 3,
+          "max_turns": 12,
+          "model": null,
+          "timeout_secs": 120
+        },
+        "source": "preset"
+      },
+      "todo": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "tool_search": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "web.enabled": {
+        "enabled": true,
+        "source": "preset"
+      }
+    },
+    "mcp": {
+      "servers": {}
+    },
+    "preset": "standard",
+    "role": "assistant",
+    "web": {
+      "hosts": [
+        "*"
+      ],
+      "max_bytes": 1048576,
+      "max_redirects": 5,
+      "timeout_ms": 15000
+    }
+  },
+  "pm": {
+    "catalog": 8,
+    "digest": "9bc9a4f169258efe549f4ceeb3eec1cd29d59f6f857cf17f76676ed8c627b9fb",
+    "features": {
+      "background_shell": {
+        "enabled": true,
+        "settings": {
+          "max_jobs": 4,
+          "max_output_bytes": 8388608,
+          "max_runtime_secs": 3600
+        },
+        "source": "preset"
+      },
+      "bash_rules": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "browser": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "budget": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "codemode": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "compaction": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "context_files": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "llama_cpp.enabled": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "lsp": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "mcp.enabled": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "oracle": {
+        "enabled": false,
+        "source": "preset"
+      },
+      "prompt_templates": {
+        "enabled": true,
+        "settings": {
+          "user_dirs": [
+            "~/.agents/prompts"
+          ]
+        },
+        "source": "preset"
+      },
+      "skills": {
+        "enabled": true,
+        "settings": {
+          "user_dirs": [
+            "~/.agents/skills",
+            "~/.corral/skills/pi-native"
+          ]
+        },
+        "source": "preset"
+      },
+      "subagents": {
+        "enabled": true,
+        "settings": {
+          "max_parallel": 3,
+          "max_turns": 12,
+          "model": null,
+          "timeout_secs": 120
+        },
+        "source": "preset"
+      },
+      "todo": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "tool_search": {
+        "enabled": true,
+        "source": "preset"
+      },
+      "web.enabled": {
+        "enabled": true,
+        "source": "preset"
+      }
+    },
+    "mcp": {
+      "servers": {}
+    },
+    "preset": "standard",
+    "role": "pm",
+    "web": {
+      "hosts": [
+        "*"
+      ],
+      "max_bytes": 1048576,
+      "max_redirects": 5,
+      "timeout_ms": 15000
+    }
+  }
+}

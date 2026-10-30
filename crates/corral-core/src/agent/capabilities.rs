@@ -237,15 +237,11 @@ fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
     }
 }
 
-// Session-owned assistant jobs (killed at session end) are not implemented yet.
+// Interactive PM and assistant jobs are owned by the host session, not a task run.
 fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker => Some([false, true, true]),
-        AgentRole::Reviewer
-        | AgentRole::Pm
-        | AgentRole::Planner
-        | AgentRole::PlanReviewer
-        | AgentRole::Assistant => None,
+        AgentRole::Worker | AgentRole::Pm | AgentRole::Assistant => Some([false, true, true]),
+        AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 
@@ -858,6 +854,22 @@ mod tests {
                 (def.defaults)(AgentRole::Assistant),
                 "{}",
                 def.key
+            );
+        }
+    }
+
+    #[test]
+    fn interactive_host_test_fixtures_are_actual_default_snapshots() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../packages/corral-pi/test/fixtures/default-capabilities.json"
+        ))
+        .unwrap();
+        let defaults = crate::config::agent_capabilities::AgentCapabilities::default();
+        for (name, role) in [("pm", AgentRole::Pm), ("assistant", AgentRole::Assistant)] {
+            assert_eq!(
+                fixture[name],
+                serde_json::to_value(defaults.resolve(role, None)).unwrap(),
+                "refresh default host fixture for {name}"
             );
         }
     }
