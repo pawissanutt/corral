@@ -7,6 +7,8 @@ mod criteria;
 mod delivery;
 #[path = "progress/fixture.rs"]
 mod fixture;
+#[path = "progress/job_checkpoints.rs"]
+mod job_checkpoints;
 #[path = "progress/obligations.rs"]
 #[cfg(unix)]
 mod obligations;

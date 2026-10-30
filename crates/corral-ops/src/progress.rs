@@ -390,6 +390,7 @@ fn checkpoint_inner(
                     .map(|s| s.id.clone()),
                 captured: corral_core::clock::now(),
             };
+            checkpoint.run_obligations.waits.retain(|wait| wait.open());
             let dir = ctx.store.artifacts_dir(&task.id, &run.id);
             if origin.is_some()
                 && let Some(earlier) = materialized(&dir, &checkpoint)?

@@ -47,7 +47,8 @@ pub(crate) fn open_waits(run: &Run) -> impl Iterator<Item = &WaitRecord> {
             .receipt
             .as_ref()
             .is_some_and(|r| r.delivery == ResumeDelivery::Acknowledged);
-        !(w.observation.state == WaitState::Cancelled
+        !(w.settled_job_exit()
+            || w.observation.state == WaitState::Cancelled
             || w.observation.state == WaitState::Ready && delivered)
     })
 }
@@ -87,6 +88,15 @@ pub(crate) fn card_lines(run: &Run, with_decision: bool) -> Vec<Line<'static>> {
                 Span::styled(format!(" {}", d.request.question), Style::new().fg(YELLOW)),
             ]));
         }
+    }
+    let settled_jobs = run
+        .obligations
+        .waits
+        .iter()
+        .filter(|w| w.settled_job_exit())
+        .count();
+    if settled_jobs > 0 {
+        out.push(Line::from(format!("jobs: {settled_jobs} settled")));
     }
     for w in open_waits(run) {
         out.push(Line::from(vec![

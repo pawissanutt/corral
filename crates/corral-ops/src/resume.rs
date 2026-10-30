@@ -214,7 +214,11 @@ pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
     {
         reasons.push("progress_changed".into());
     }
-    if run.obligations != record.checkpoint.run_obligations {
+    let mut current = run.obligations.clone();
+    let mut captured = record.checkpoint.run_obligations.clone();
+    current.waits.retain(|wait| wait.open());
+    captured.waits.retain(|wait| wait.open());
+    if current != captured {
         reasons.push("obligations_changed".into());
     }
     if !reasons.is_empty() {
