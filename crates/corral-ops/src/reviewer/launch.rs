@@ -108,11 +108,20 @@ fn launch_profile<T: TaskRef + ?Sized>(
         child = review.id.clone();
         Ok(())
     })?;
+    let saved = ctx.store.head(task.id())?;
+    let saved_child = saved
+        .current_run
+        .as_deref()
+        .filter(|parent| parent.id == run.id)
+        .and_then(|parent| parent.current_child.as_deref())
+        .filter(|current| current.id == child)
+        .context("review session disappeared before launch")?;
+    let resolved = crate::role_session::command_head(ctx, saved_child, resolved)?;
     let command =
-        match crate::agent::hooks::review::command(ctx, task, run, resolved, &herdr.pane_id) {
+        match crate::agent::hooks::review::command(ctx, task, run, &resolved, &herdr.pane_id) {
             Some(command) => command?,
             None => render_template(
-                resolved,
+                &resolved,
                 &[
                     ("prompt_file", prompt_file.display().to_string()),
                     ("name", title.clone()),
@@ -438,7 +447,20 @@ pub(super) fn review_run_origin(
         Err(e) => return Err(e).context("clearing replaced reviewer notes"),
     }
     // Persist the window and active record before dispatch: the agent can answer immediately.
-    let child = review_child(ctx, &run, &resolved, &reviewer, &review_id, &record)?;
+    let mut child = review_child(ctx, &run, &resolved, &reviewer, &review_id, &record)?;
+    if reviewer != Reviewer::Pm {
+        child.session = Some(crate::role_session::reviewer_head(
+            ctx, &task, &run, &child,
+        )?);
+    }
+    let previous_session = run.current_child.as_deref().and_then(|previous| {
+        let container = corral_core::agent::ContainerRef::Reviewer {
+            task: task.id.clone(),
+            run: run.id.clone(),
+            review: previous.id.clone(),
+        };
+        crate::role_session::capture_head(ctx, &task, previous, &container).ok()
+    });
     ctx.store.submission_effect_barrier("review_child_observed");
     let saved = ctx.store.update_head(&task.id, |t| {
         let r = review_parent_head(t, &run.id)?;
@@ -451,6 +473,9 @@ pub(super) fn review_run_origin(
         r.blocked_excerpt = None;
         if let Some(previous) = r.current_child.as_deref_mut() {
             previous.pending_reply = None;
+            if let Some(session) = &previous_session {
+                previous.session = Some(session.clone());
+            }
         }
         t.push_review_child(&run.id, child)?;
         review_parent_head(t, &run.id)?.review = Some(record.clone());
@@ -510,6 +535,19 @@ pub(super) fn review_run_origin(
         Ok(())
     })?;
     launched?;
+    if let Some(child) = saved
+        .current_run
+        .as_deref()
+        .and_then(|parent| parent.current_child.as_deref())
+    {
+        let container = corral_core::agent::ContainerRef::Reviewer {
+            task: task.id.clone(),
+            run: run.id.clone(),
+            review: child.id.clone(),
+        };
+        crate::role_session::observe_head(ctx, &saved, child, &container);
+        crate::role_session::log(ctx, &saved.id, &child.id)?;
+    }
     let record = saved
         .current_run
         .as_ref()

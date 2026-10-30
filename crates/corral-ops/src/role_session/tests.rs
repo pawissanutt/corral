@@ -1,7 +1,7 @@
 use super::*;
 use corral_core::{ProfileChoice, Status, Store};
 
-fn fixture(harness: &str) -> (tempfile::TempDir, Ctx, Task, Run, ResolvedProfile) {
+pub(super) fn fixture(harness: &str) -> (tempfile::TempDir, Ctx, Task, Run, ResolvedProfile) {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let ctx = Ctx::from_store(store);

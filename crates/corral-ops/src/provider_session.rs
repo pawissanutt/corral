@@ -8,8 +8,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use corral_core::Run;
 use corral_core::records::RecordArea;
+use corral_core::{Run, RunHead};
 use jiff::Timestamp;
 use serde_json::Value;
 
@@ -21,7 +21,7 @@ enum Kind {
     Omp,
 }
 
-fn kind(run: &Run) -> Option<Kind> {
+fn kind(run: &RunHead) -> Option<Kind> {
     match run.harness.as_deref().unwrap_or(&run.agent) {
         "omo" => Some(Kind::Omo),
         "omp" => Some(Kind::Omp),
@@ -50,7 +50,7 @@ fn header(path: &Path) -> Option<Header> {
     None
 }
 
-fn session_dirs(ctx: &Ctx, run: &Run, kind: Kind) -> Vec<PathBuf> {
+fn session_dirs(ctx: &Ctx, run: &RunHead, kind: Kind) -> Vec<PathBuf> {
     let mut dirs = match kind {
         Kind::Omo => {
             let agent = omo::agent_dir(ctx.store.config.sync.omo_agent_dir.as_deref());
@@ -113,15 +113,28 @@ pub(crate) fn record_launch(ctx: &Ctx, task: &str, run_id: &str, at: Timestamp) 
 
 /// Earliest instant a session or error can belong to this run.
 pub(crate) fn boundary(ctx: &Ctx, task: &str, run: &Run) -> Timestamp {
+    boundary_head(ctx, task, &run.id, run.started)
+}
+
+pub(crate) fn boundary_head(ctx: &Ctx, task: &str, run: &str, started: Timestamp) -> Timestamp {
     LAUNCHES
-        .load(&ctx.store, &format!("{task}-{}", run.id))
+        .load(&ctx.store, &format!("{task}-{run}"))
         .ok()
         .flatten()
-        .map_or(run.started, |launch| launch.min(run.started))
+        .map_or(started, |launch| launch.min(started))
 }
 
 /// The newest session this run owns in `scope`, if its harness has a session-log adapter.
 pub(crate) fn discover(ctx: &Ctx, run: &Run, boundary: Timestamp, scope: Scope) -> Option<PathBuf> {
+    discover_head(ctx, &RunHead::of(run).ok()?, boundary, scope)
+}
+
+pub(crate) fn discover_head(
+    ctx: &Ctx,
+    run: &RunHead,
+    boundary: Timestamp,
+    scope: Scope,
+) -> Option<PathBuf> {
     let kind = kind(run)?;
     if let Some(session) = &run.session
         && let Some(path) = &session.transcript
