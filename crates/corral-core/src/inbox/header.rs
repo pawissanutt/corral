@@ -486,6 +486,8 @@ impl Inbox<'_> {
         let (header, handoffs) = self.preview_header(state, now)?;
         for (seq, proof) in handoffs {
             // Handoff proof before pruning. Failure leaves the task's entry intact.
+            #[cfg(test)]
+            checkpoint("handoff_write")?;
             self.save_record(
                 TerminalState::Failed.suffix(),
                 &format!("{seq:020}"),
@@ -791,6 +793,8 @@ impl Inbox<'_> {
             }
         }
         if old != state.owner_header {
+            #[cfg(test)]
+            checkpoint("project_members_write")?;
             self.update_state(|current| {
                 if let Some(header) = &mut current.owner_header {
                     for entry in header

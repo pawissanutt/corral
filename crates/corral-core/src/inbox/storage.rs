@@ -219,6 +219,8 @@ impl<'a> Inbox<'a> {
     }
 
     /// Reserve identity, message binding and caller admission in one task transaction.
+    /// Standalone publication follows that commit and can leave a recorded sequence gap;
+    /// posts inside a caller's existing unit keep state, message and indexes atomic.
     /// The PM has no task admission callback.
     pub fn post_with(
         &self,
@@ -239,11 +241,16 @@ impl<'a> Inbox<'a> {
     ) -> Result<Message> {
         self.check(&post)?;
         let _lock = self.lock()?;
+        let nested = self.store.has_record_unit();
         let message = match &self.recipient {
             Recipient::Pm => self.store.records_transaction(|| {
                 let message = self.update_state(|state| self.build(state, post))?;
                 reserving(&message)?;
-                self.write_message(&message)?;
+                #[cfg(test)]
+                super::header::checkpoint("post_reservation_commit")?;
+                if nested {
+                    self.write_message(&message)?;
+                }
                 Ok(message)
             })?,
             _ => {
@@ -256,8 +263,12 @@ impl<'a> Inbox<'a> {
                         let value = self.build(&mut next, post)?;
                         admit(task, &value)?;
                         reserving(&value)?;
+                        #[cfg(test)]
+                        super::header::checkpoint("post_reservation_commit")?;
                         *state_mut(task, &self.recipient)? = next;
-                        self.write_message(&value)?;
+                        if nested {
+                            self.write_message(&value)?;
+                        }
                         message = Some(value);
                         Ok(())
                     })?;
@@ -266,6 +277,20 @@ impl<'a> Inbox<'a> {
         };
         #[cfg(test)]
         super::header::checkpoint("post_reserved")?;
+        if !nested {
+            let published = self.store.records_transaction(|| {
+                #[cfg(test)]
+                super::header::checkpoint("post_message_write")?;
+                self.write_message(&message)
+            });
+            if let Err(error) = published {
+                self.event(
+                    "message_gap",
+                    json!({"id":message.id,"seq":message.seq,"error":format!("{error:#}")}),
+                )?;
+                return Err(error);
+            }
+        }
         self.announce(&message)?;
         Ok(message)
     }
@@ -375,6 +400,8 @@ impl<'a> Inbox<'a> {
             });
             let key = format!("{seq:020}");
             let record = self.record::<Value>(TerminalState::Failed.suffix(), &key)?;
+            #[cfg(test)]
+            super::header::checkpoint("retry_bar_write")?;
             self.save_record(
                 TerminalState::Failed.suffix(),
                 &key,
@@ -446,7 +473,7 @@ impl<'a> Inbox<'a> {
         self.project_members(&[seq], |entry| {
             entry.retry_evidence.bar(reason, None);
         })?;
-        self.store.records_transaction(|| {
+        let inserted = self.store.records_transaction(|| {
             self.retain_retry_bars(
                 &[seq],
                 &RetryWitness {
@@ -464,8 +491,6 @@ impl<'a> Inbox<'a> {
                 self.save_record(&kind, &key, receipt)?;
                 true
             };
-            #[cfg(test)]
-            super::header::checkpoint("receipt_written")?;
             if level == ReceiptLevel::Observed {
                 for state in [
                     TerminalState::Cancelled,
@@ -503,7 +528,10 @@ impl<'a> Inbox<'a> {
             }
             self.refresh_message_index(seq)?;
             Ok(inserted)
-        })
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("receipt_written")?;
+        Ok(inserted)
     }
 
     pub fn mark_terminal(

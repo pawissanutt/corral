@@ -323,17 +323,24 @@ impl Store {
         if let Some(unit) = self.current_unit() {
             let mut buffered = unit.records.borrow_mut();
             for mut write in writes {
-                if let Some(previous) = buffered
-                    .iter_mut()
-                    .find(|old| old.area == write.area && old.key == write.key)
+                if let Some(index) = buffered
+                    .iter()
+                    .position(|old| old.area == write.area && old.key == write.key)
                 {
+                    let previous = &buffered[index];
                     anyhow::ensure!(
                         write.expected == Some(previous.expected.unwrap_or(0) + 1)
                             || (previous.doc.is_none() && write.expected.is_none()),
                         "staged record version changed"
                     );
                     write.expected = previous.expected;
-                    *previous = write;
+                    // A record created and removed inside this unit never existed in its base
+                    // view: emitting a tombstone would fail the backend's existence guard.
+                    if write.expected.is_none() && write.doc.is_none() {
+                        buffered.remove(index);
+                    } else {
+                        buffered[index] = write;
+                    }
                 } else {
                     buffered.push(write);
                 }

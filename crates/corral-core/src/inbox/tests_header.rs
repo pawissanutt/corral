@@ -169,11 +169,20 @@ fn reserve_in_refuses_capacity_before_file_or_local_state_changes() {
     let before = inbox.state().unwrap();
     let mut task = store.get(recipient.task().unwrap()).unwrap();
     // When an additional reservation is refused.
-    let error = inbox.reserve_in(&mut task, post()).unwrap_err();
+    let error = store
+        .update(recipient.task().unwrap(), |current| {
+            inbox.reserve_in(current, post()).map(drop)
+        })
+        .unwrap_err();
     // Then neither the caller's task nor a file includes that reservation.
     assert!(error.to_string().contains("owner_header_full"));
     assert_eq!(*recipient.state_mut(&mut task).unwrap(), before);
-    assert!(!inbox.message_path(17).exists());
+    assert!(
+        inbox
+            .record::<serde_json::Value>("messages", &format!("{:020}", 17))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -264,12 +273,17 @@ fn committed_publication_gap_survives_and_unsaved_reservation_is_ignored() {
     // Given a reservation whose file was written but task transaction never committed.
     let (_root, store, recipient) = fixture();
     let inbox = Inbox::new(&store, recipient.clone()).unwrap();
-    let mut task = store.get(recipient.task().unwrap()).unwrap();
-    inbox.reserve_in(&mut task, post()).unwrap();
+    let refused = store.update(recipient.task().unwrap(), |task| {
+        inbox.reserve_in(task, post())?;
+        anyhow::bail!("reservation never committed")
+    });
+    assert!(refused.is_err());
     assert!(inbox.messages().unwrap().is_empty());
     // When a committed post loses its file at the task-before-file boundary.
     let message = inbox.post(post()).unwrap();
-    std::fs::remove_file(inbox.message_path(message.seq)).unwrap();
+    inbox
+        .delete_record("messages", &format!("{:020}", message.seq))
+        .unwrap();
     // Then the exact identity remains inspectable without pretending it was safely unsent.
     let entries = inbox.owner_entries(&inbox.state().unwrap()).unwrap();
     assert_eq!(entries[0].message.seq, 1);
@@ -460,7 +474,9 @@ fn interrupted_attempt_and_outcome_projection_require_explicit_inspection() {
         }),
     }];
     envelope.outcome = envelope.attempts[0].outcome.clone();
-    super::storage::write_json(&inbox.envelope_path(1), &envelope).unwrap();
+    inbox
+        .save_record("envelopes", &format!("{:020}", 1), &envelope)
+        .unwrap();
     let before = inbox.state().unwrap();
     assert!(inbox.inspect_retry(1).unwrap().eligible);
     assert_eq!(inbox.state().unwrap(), before);
@@ -742,8 +758,12 @@ fn hot_header_work_is_equal_with_tenfold_message_envelope_attempt_and_stage_hist
             entry.delivery = None;
         }
         for seq in 100..100 + multiplier * 10 {
-            std::fs::write(inbox.message_path(seq), "older body").unwrap();
-            std::fs::write(inbox.envelope_path(seq), "older envelope").unwrap();
+            inbox
+                .save_record("messages", &format!("{seq:020}"), &"older body")
+                .unwrap();
+            inbox
+                .save_record("envelopes", &format!("{seq:020}"), &"older envelope")
+                .unwrap();
         }
         use crate::work::{Work, count};
         let before = Work::ALL.map(count);

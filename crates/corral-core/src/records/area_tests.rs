@@ -38,6 +38,62 @@ fn typed_records_round_trip_across_restart_and_keep_view_identity() {
 }
 
 #[test]
+fn create_then_delete_coalesces_without_a_nonexistent_tombstone() {
+    for parent in 0..3 {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let task = store
+            .create("parent", None, crate::Status::Ready, "")
+            .unwrap();
+        let change = || -> Result<()> {
+            AREA.save(
+                &store,
+                "ephemeral",
+                &State {
+                    pane: "one".into(),
+                    generation: 1,
+                },
+            )?;
+            AREA.delete(&store, "ephemeral")?;
+            assert!(AREA.load(&store, "ephemeral")?.is_none());
+            AREA.save(
+                &store,
+                "recreated",
+                &State {
+                    pane: "old".into(),
+                    generation: 1,
+                },
+            )?;
+            AREA.delete(&store, "recreated")?;
+            AREA.save(
+                &store,
+                "recreated",
+                &State {
+                    pane: "new".into(),
+                    generation: 2,
+                },
+            )?;
+            Ok(())
+        };
+        match parent {
+            0 => store.records_transaction(change),
+            1 => store.update(&task.id, |_| change()).map(drop),
+            _ => store.update_head(&task.id, |_| change()).map(drop),
+        }
+        .unwrap();
+        let reopened = Store::open(root.path()).unwrap();
+        assert!(AREA.load(&reopened, "ephemeral").unwrap().is_none());
+        assert_eq!(
+            AREA.load(&reopened, "recreated").unwrap(),
+            Some(State {
+                pane: "new".into(),
+                generation: 2
+            })
+        );
+    }
+}
+
+#[test]
 fn failed_task_update_discards_typed_record_writes() {
     // Given a task with no application record.
     let root = tempfile::tempdir().unwrap();

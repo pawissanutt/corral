@@ -1,6 +1,4 @@
 //! The bounded owner read finds retry claims through their failed-slot mirror.
-use std::fs;
-
 use serde_json::json;
 
 use super::tests_retry::{post, publication_fixture, refuses, succeeds};
@@ -16,9 +14,10 @@ fn mirrored_retry_claim_is_read_within_five_probes_and_survives_observation() {
     inbox
         .mark_terminal(original.seq, TerminalState::Cancelled, "fixture", "test")
         .unwrap();
-    fs::create_dir(inbox.message_path(2)).unwrap();
-    assert!(inbox.retry(original.seq).is_err());
-    fs::remove_dir(inbox.message_path(2)).unwrap();
+    super::header::CRASH_AT.with(|point| point.set(Some("post_message_write")));
+    let failed = inbox.retry(original.seq);
+    super::header::CRASH_AT.with(|point| point.set(None));
+    assert!(failed.is_err());
     let owner_read = |inbox: &Inbox<'_>| {
         let state = inbox.state().unwrap();
         let reads = crate::work::count(crate::work::Work::InboxRecordRead);
@@ -50,7 +49,12 @@ fn mirrored_retry_claim_is_read_within_five_probes_and_survives_observation() {
     assert_eq!(used, 10);
     assert!(entry.observed.is_some() && entry.terminal.is_none());
     assert!(entry.retry_claimed_at.is_some());
-    assert!(inbox.record_path(original.seq, "retried").exists());
+    assert!(
+        inbox
+            .record::<serde_json::Value>("retried", &format!("{:020}", original.seq))
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -67,9 +71,10 @@ fn premirror_claims_are_backfilled_before_absence_is_trusted_for_primary_and_ove
         inbox
             .mark_terminal(original.seq, TerminalState::Cancelled, "fixture", "test")
             .unwrap();
-        fs::create_dir(inbox.message_path(position + 1)).unwrap();
-        assert!(inbox.retry(original.seq).is_err());
-        fs::remove_dir(inbox.message_path(position + 1)).unwrap();
+        super::header::CRASH_AT.with(|point| point.set(Some("post_message_write")));
+        let failed = inbox.retry(original.seq);
+        super::header::CRASH_AT.with(|point| point.set(None));
+        assert!(failed.is_err());
         {
             let _lock = inbox.lock().unwrap();
             inbox.mirror_retry_claim(original.seq, None).unwrap();
@@ -127,7 +132,12 @@ fn an_interruption_between_claim_mirror_and_marker_stays_visible_and_retryable()
     let entry = inbox.owner_entries(&inbox.state().unwrap()).unwrap()[0].clone();
     assert!(entry.retry_claimed_at.is_some());
     assert!(!entry.retry_eligible());
-    assert!(!inbox.record_path(original.seq, "retried").exists());
+    assert!(
+        inbox
+            .record::<serde_json::Value>("retried", &format!("{:020}", original.seq))
+            .unwrap()
+            .is_none()
+    );
     // And the exact retry still completes, replacing the orphaned mirror with the real claim.
     succeeds(&inbox, &original);
     let entry = inbox.owner_entries(&inbox.state().unwrap()).unwrap()[0].clone();

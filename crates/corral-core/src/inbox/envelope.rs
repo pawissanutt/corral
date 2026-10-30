@@ -200,17 +200,28 @@ impl Inbox<'_> {
             attempts: Vec::new(),
             retry_bar: None,
         };
-        self.update_state(|state| {
+        let next = number
+            .checked_add(1)
+            .context("envelope sequence exhausted")?;
+        // A standalone freeze survives a failed pointer publication. In an existing
+        // record/task unit both phases still join that unit and roll back together.
+        self.store.records_transaction(|| {
+            ensure!(
+                self.record::<Envelope>("envelopes", &format!("{number:020}"))?
+                    .is_none(),
+                "frozen publication requires recovery before reuse"
+            );
             self.save_record("payloads", &format!("{number:020}"), &payload)?;
             self.save_record("envelopes", &format!("{number:020}"), &envelope)?;
             for seq in &envelope.members {
                 self.save_record("message-envelope", &format!("{seq:020}"), &number)?;
             }
-            state.next_envelope = number
-                .checked_add(1)
-                .context("envelope sequence exhausted")?;
-            #[cfg(test)]
-            super::header::checkpoint("envelope_written")?;
+            Ok(())
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("envelope_written")?;
+        self.update_state(|state| {
+            state.next_envelope = next;
             state.open_envelope = Some(number);
             Self::annotate_owner(state, &envelope, false);
             state.replacement_envelope = None;
@@ -251,27 +262,39 @@ impl Inbox<'_> {
             self.repair_owner_annotation(&envelope)?;
             return Ok(());
         }
-        // Publication and its pointer commit together. Only the latest reserved identity
-        // can need reattachment; older envelopes can never become open again.
-        if let Some(envelope) = state
-            .next_envelope
-            .checked_sub(1)
-            .filter(|number| *number > 0)
-            .map(|number| self.record::<Envelope>("envelopes", &format!("{number:020}")))
-            .transpose()?
-            .flatten()
-            && !self.settled(&envelope)?
+        // Only the not-yet-pointed freeze or the latest published identity may need
+        // reattachment. A settled latest identity must never reopen older history.
+        for number in [
+            Some(state.next_envelope),
+            state.next_envelope.checked_sub(1).filter(|n| *n > 0),
+        ]
+        .into_iter()
+        .flatten()
         {
-            self.update_state(|s| {
-                s.open_envelope = Some(envelope.number);
-                Self::annotate_owner(s, &envelope, true);
-                s.replacement_envelope = None;
-                if s.binding.as_ref() != Some(&envelope.binding) {
-                    s.observe_cursor = ObserveCursor::default();
-                }
-                s.binding = Some(envelope.binding.clone());
-                Ok(())
-            })?;
+            let Some(envelope) = self.record::<Envelope>("envelopes", &format!("{number:020}"))?
+            else {
+                continue;
+            };
+            let settled = self.settled(&envelope)?;
+            let next = number
+                .checked_add(1)
+                .context("envelope sequence exhausted")?;
+            if !settled || next > state.next_envelope {
+                self.update_state(|s| {
+                    s.next_envelope = s.next_envelope.max(next);
+                    if !settled {
+                        s.open_envelope = Some(envelope.number);
+                        Self::annotate_owner(s, &envelope, true);
+                        s.replacement_envelope = None;
+                        if s.binding.as_ref() != Some(&envelope.binding) {
+                            s.observe_cursor = ObserveCursor::default();
+                        }
+                        s.binding = Some(envelope.binding.clone());
+                    }
+                    Ok(())
+                })?;
+            }
+            break;
         }
         Ok(())
     }

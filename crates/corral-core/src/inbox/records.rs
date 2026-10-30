@@ -110,6 +110,17 @@ impl Inbox<'_> {
         self.store.save_record(&self.area(kind), key, value)
     }
 
+    /// Retry identity must survive a subsequent standalone reservation failure.
+    pub(super) fn save_record_intent(
+        &self,
+        kind: &str,
+        key: &str,
+        value: &impl Serialize,
+    ) -> Result<()> {
+        self.store
+            .commit_record_intent(&self.area(kind), key, value)
+    }
+
     pub fn delete_record(&self, kind: &str, key: &str) -> Result<()> {
         self.store.delete_record(&self.area(kind), key)
     }
