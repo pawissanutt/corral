@@ -28,7 +28,9 @@ const OWNER_KINDS = new Set(["owner_only", "permission"]);
  * (`[corral <recipient>#<seq> <kind>]`, inbox/storage.rs), then the answer's own header
  * (questions/triage.rs). Only corral's frame counts, never the same words inside other text.
  */
-const ANSWER = /^\[corral \S+#\d+ question_(?:answer|correction)\]\n(?:Corrected answer|Answer) to (\S+) \(revision \d+\) by \w+:/gm;
+const ANSWER = /^\[corral \S+#\d+ question_(?:answer|correction)\]\n(?:Corrected answer|Answer) to (\S+) \(revision (\d+)\) by \w+:/gm;
+/** Corral's pending question states (corral-core `QuestionState::pending`). */
+const PENDING = new Set(["open", "escalated"]);
 const CALL_TIMEOUT_MS = 10_000;
 
 export type HerdrState = "working" | "idle" | "blocked";
@@ -44,6 +46,8 @@ export interface PendingQuestion {
   readonly kind: string;
   readonly blocking: boolean;
   readonly state?: string;
+  /** Corral bumps it on every transition; the projection keeps each key's newest. */
+  readonly revision?: number;
 }
 
 export interface HerdrBinding {
@@ -85,8 +89,8 @@ export function holds(question: PendingQuestion): boolean {
   return question.blocking || OWNER_KINDS.has(question.kind) || question.state === "escalated";
 }
 
-export function answeredKeys(text: string): string[] {
-  return [...text.matchAll(ANSWER)].flatMap((match) => match[1] ? [match[1]] : []);
+export function answeredKeys(text: string): { key: string; revision: number }[] {
+  return [...text.matchAll(ANSWER)].flatMap((match) => match[1] && match[2] ? [{ key: match[1], revision: Number(match[2]) }] : []);
 }
 
 export function pendingQuestions(value: unknown): PendingQuestion[] {
@@ -95,7 +99,8 @@ export function pendingQuestions(value: unknown): PendingQuestion[] {
     const question = item as Partial<PendingQuestion> | null;
     return question && typeof question.key === "string" && typeof question.kind === "string"
       ? [{ key: question.key, kind: question.kind, blocking: question.blocking === true,
-        ...(typeof question.state === "string" ? { state: question.state } : {}) }]
+        ...(typeof question.state === "string" ? { state: question.state } : {}),
+        ...(typeof question.revision === "number" ? { revision: question.revision } : {}) }]
       : [];
   });
 }
@@ -126,6 +131,7 @@ type Call = {
 export class HerdrLifecycle {
   private open = false;
   private readonly questions = new Map<string, PendingQuestion>();
+  private readonly revisions = new Map<string, number>();
   private binding: { readonly sessionId: string; readonly sessionFile: string; readonly base: bigint } | undefined;
   private used = 0n;
   private identityDue = false;
@@ -155,7 +161,7 @@ export class HerdrLifecycle {
       return;
     }
     this.binding = { sessionId: binding.sessionId, sessionFile: binding.sessionFile, base: BigInt(epoch) << SEQ_SHIFT };
-    for (const question of pendingQuestions(binding.questions)) if (holds(question)) this.questions.set(question.key, question);
+    for (const question of pendingQuestions(binding.questions)) this.place(question);
     this.identityDue = true;
     this.kick();
   }
@@ -170,14 +176,45 @@ export class HerdrLifecycle {
     this.kick();
   }
 
+  /** A committed ask receipt: corral opened the question at `revision`. */
   asked(question: PendingQuestion): void {
-    if (!holds(question)) return;
-    this.questions.set(question.key, question);
-    this.kick();
+    if (this.place({ ...question, state: question.state ?? "open", revision: question.revision ?? 1 })) this.kick();
   }
 
-  resolved(key: string): void {
+  /** Answered through the inbox or withdrawn; without a revision, corral holds it as not pending. */
+  resolved(key: string, revision?: number): void {
+    if (!this.newer(key, revision)) return;
     if (this.questions.delete(key)) this.kick();
+  }
+
+  /**
+   * Corral's states of the container's questions (the bridge `questions` command), covering
+   * escalations and cancellations this host did not make. Each key keeps its newest revision, so a
+   * late or repeated update cannot undo a newer fact, and questions left out stay as they are.
+   */
+  apply(updates: readonly PendingQuestion[]): void {
+    let changed = false;
+    for (const update of updates) changed = this.place(update) || changed;
+    if (changed) this.kick();
+  }
+
+  private newer(key: string, revision: number | undefined): boolean {
+    if (revision === undefined) return true;
+    if (revision <= (this.revisions.get(key) ?? 0)) return false;
+    this.revisions.set(key, revision);
+    return true;
+  }
+
+  /** Holds or releases one question at its revision; true when the held set changed. */
+  private place(question: PendingQuestion): boolean {
+    if (!this.newer(question.key, question.revision)) return false;
+    const held = this.questions.has(question.key);
+    if ((question.state === undefined || PENDING.has(question.state)) && holds(question)) {
+      this.questions.set(question.key, question);
+      return true;
+    }
+    this.questions.delete(question.key);
+    return held;
   }
 
   get state(): HerdrState {

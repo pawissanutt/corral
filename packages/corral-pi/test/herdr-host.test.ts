@@ -93,7 +93,7 @@ test("turns, question receipts and an inbox answer drive the herdr projection, a
 
   // When corral delivers the owner's answer through the inbox:
   await submit("[corral envelope T-001_R1@env1]\n\n[corral T-001_R1#1 question_answer]\n"
-    + "Answer to T-001/R1/Q1 (revision 1) by Owner:\nYes.", "answer", "corral-inbox");
+    + "Answer to T-001/R1/Q1 (revision 2) by Owner:\nYes.", "answer", "corral-inbox");
 
   // Then the question no longer blocks: the answer's turn worked and settled idle.
   const answered = states().slice(3);
@@ -105,13 +105,27 @@ test("turns, question receipts and an inbox answer drive the herdr projection, a
   const before = states().length;
   fixtureTransport().script([
     { toolCalls: [{ callId: "ask-2", name: "corral_ask", arguments: { kind: "clarification", text: "Which?", blocking: true } }] },
-    { toolCalls: [{ callId: "withdraw-2", name: "corral_withdraw", arguments: { key: "T-001/R1/Q1", reason: "Found it." } }] },
+    { toolCalls: [{ callId: "withdraw-2", name: "corral_withdraw", arguments: { key: "T-001/R1/Q2", reason: "Found it." } }] },
     { text: "Done." },
   ]);
   await submit("Ask, then withdraw.", "withdraw");
 
   // Then it blocked while the question was pending and ended idle:
   expect(states().slice(before)).toEqual(["working", "blocked", "working", "idle"]);
+
+  // When corral reports that the PM escalated a non-blocking question, then that the owner
+  // cancelled it (bridge `questions`), while the host is idle:
+  const external = states().length;
+  const released = nextEvent(events, (event) => event.kind === "herdr_reported" && event.state === "idle"
+    && states().length > external);
+  expect(host.questionsChanged([{ key: "T-001/R1/Q9", revision: 2, kind: "clarification", blocking: false,
+    state: "escalated" }])).toEqual({ applied: true, blocked_on: ["T-001/R1/Q9"] });
+  host.questionsChanged([{ key: "T-001/R1/Q9", revision: 3, kind: "clarification", blocking: false,
+    state: "cancelled" }]);
+  await released;
+
+  // Then the projection blocked on the escalation and released on the cancellation:
+  expect(states().slice(external)).toEqual(["blocked", "idle"]);
 
   // When the host closes gracefully:
   await host.close();

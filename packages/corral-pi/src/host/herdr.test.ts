@@ -256,6 +256,120 @@ test("only a host inside its bound herdr pane reports, and a headless host never
   expect(events.since(0, 64 * 1024).events.map((event) => [event.kind, event.reason])).toEqual([["herdr_reporting_off", "headless"]]);
 });
 
+test("corral's cancellation and escalation updates move only their own question, newest revision first", async () => {
+  const { herdr, adapter } = lifecycle();
+  bind(adapter);
+  await herdr.drain(2);
+  adapter.asked({ key: "T-7/R2/Q1", kind: "owner_only", blocking: true, revision: 1 });
+  adapter.asked({ key: "T-7/R2/Q2", kind: "clarification", blocking: false, revision: 1 });
+  adapter.asked({ key: "T-7/R2/Q3", kind: "permission", blocking: true, revision: 1 });
+  await herdr.drain(3);
+  expect(adapter.readback().blocked_on).toEqual(["T-7/R2/Q1", "T-7/R2/Q3"]);
+
+  // An owner or PM cancellation of Q1 releases Q1 alone; Q3 still blocks.
+  adapter.apply([
+    { key: "T-7/R2/Q1", kind: "owner_only", blocking: true, state: "cancelled", revision: 2 },
+    { key: "T-7/R2/Q3", kind: "permission", blocking: true, state: "open", revision: 1 },
+  ]);
+  await herdr.drain(4);
+  expect(adapter.readback().blocked_on).toEqual(["T-7/R2/Q3"]);
+
+  // Escalating the non-blocking Q2 makes it block.
+  adapter.apply([{ key: "T-7/R2/Q2", kind: "clarification", blocking: false, state: "escalated", revision: 2 }]);
+  await herdr.drain(5);
+  expect(adapter.readback().blocked_on).toEqual(["T-7/R2/Q3", "T-7/R2/Q2"]);
+
+  // Late or repeated updates, and a replayed ask, never undo a newer fact.
+  adapter.resolved("T-7/R2/Q3", 2);
+  adapter.resolved("T-7/R2/Q2", 3);
+  await herdr.drain(6);
+  adapter.apply([
+    { key: "T-7/R2/Q1", kind: "owner_only", blocking: true, state: "open", revision: 1 },
+    { key: "T-7/R2/Q2", kind: "clarification", blocking: false, state: "escalated", revision: 2 },
+    { key: "T-7/R2/Q3", kind: "permission", blocking: true, state: "open", revision: 2 },
+  ]);
+  adapter.asked({ key: "T-7/R2/Q1", kind: "owner_only", blocking: true, revision: 1 });
+  expect(herdr.calls).toHaveLength(6);
+  expect(herdr.states()).toEqual(["idle", "blocked", "blocked", "blocked", "idle"]);
+  expect(adapter.readback().blocked_on).toEqual([]);
+});
+
+/**
+ * herdr 0.9.5's agent and metadata trackers as observed: per source, a report whose sequence
+ * number is not above the last accepted one is acknowledged and ignored.
+ */
+function modeledHerdr() {
+  const last = new Map<string, bigint>();
+  const pane = { agent: null as string | null, state: null as string | null, display: null as string | null };
+  let calls = 0;
+  let waiters: { count: number; resolve: () => void }[] = [];
+  const run = async (_bin: string, args: readonly string[]) => {
+    const seq = BigInt(args[args.indexOf("--seq") + 1] ?? "0");
+    const tracker = args[1] === "report-metadata" ? "metadata" : "agent";
+    if (seq > (last.get(tracker) ?? -1n)) {
+      last.set(tracker, seq);
+      if (args[1] === "report-agent") Object.assign(pane, { agent: AGENT, state: args[args.indexOf("--state") + 1] });
+      if (args[1] === "release-agent") Object.assign(pane, { agent: null, state: null });
+      if (args[1] === "report-metadata") {
+        pane.display = args.includes("--clear-display-agent") ? null : args[args.indexOf("--display-agent") + 1] ?? null;
+      }
+    }
+    calls++;
+    const ready = waiters.filter((waiter) => calls >= waiter.count);
+    waiters = waiters.filter((waiter) => calls < waiter.count);
+    for (const waiter of ready) waiter.resolve();
+  };
+  const until = (count: number) => calls >= count ? Promise.resolve()
+    : new Promise<void>((resolve) => { waiters.push({ count, resolve }); });
+  const shown = () => [pane.agent, pane.state, pane.display];
+  return { run, until, shown };
+}
+
+function generations(firstEpoch: number, secondEpoch: number) {
+  const model = modeledHerdr();
+  const target = { bin: "/opt/herdr", pane: "w1:p4" };
+  const g1 = new HerdrLifecycle(target, WORKER, () => undefined, model.run);
+  const g2 = new HerdrLifecycle(target, { ...WORKER, generation: 4 }, () => undefined, model.run);
+  const bindAt = (adapter: HerdrLifecycle, epochMs: number) =>
+    adapter.bind({ sessionId: "019a-sess", sessionFile: "/s/019a-sess.jsonl", epochMs, questions: [] });
+  return { model, g1, g2, bindAt };
+}
+
+test("a replacement's allocated epoch fences the old generation's late reports, release and cleanup", async () => {
+  // Given generation 1 working, then generation 2 bound at the epoch corral allocated after it
+  // (one higher even when the wall clock stepped back) and working too:
+  const { model, g1, g2, bindAt } = generations(EPOCH, EPOCH + 1);
+  bindAt(g1, EPOCH);
+  g1.turnStarted();
+  await model.until(2);
+  bindAt(g2, EPOCH + 1);
+  g2.turnStarted();
+  await model.until(4);
+  expect(model.shown()).toEqual([AGENT, "working", "corral-pi worker T-7/R2 g4"]);
+
+  // When generation 1 settles late, then exits and releases and clears the pane:
+  g1.turnEnded();
+  await model.until(5);
+  await g1.close();
+
+  // Then herdr still shows generation 2, working, under its own name:
+  expect(model.shown()).toEqual([AGENT, "working", "corral-pi worker T-7/R2 g4"]);
+});
+
+test("an epoch below the predecessor's, as a raw backward wall clock would give, is ignored by herdr", async () => {
+  // Given generation 1 working, and generation 2 bound 100 ms "earlier" than it:
+  const { model, g1, g2, bindAt } = generations(EPOCH, EPOCH - 100);
+  bindAt(g1, EPOCH);
+  g1.turnStarted();
+  await model.until(2);
+  bindAt(g2, EPOCH - 100);
+  g2.turnStarted();
+  await model.until(4);
+
+  // Then none of generation 2's reports land: the reason corral allocates epochs monotonically.
+  expect(model.shown()).toEqual([AGENT, "working", "corral-pi worker T-7/R2 g3"]);
+});
+
 test("an inbox envelope names every question its answer or correction members settle", () => {
   const envelope = [
     "[corral envelope T-7_R2@env4]",
@@ -263,7 +377,7 @@ test("an inbox envelope names every question its answer or correction members se
     "[corral T-7_R2#10 reply]\nAnswer to T-7/R2/Q5 (revision 1) by Owner:\nquoted in a reply, not an answer",
     "[corral T-7_R2#11 question_correction]\nCorrected answer to T-7/R2/Q2 (revision 3) by Owner:\nNo.\nChosen option: deny",
   ].join("\n\n");
-  expect(answeredKeys(envelope)).toEqual(["T-7/R2/Q1", "T-7/R2/Q2"]);
+  expect(answeredKeys(envelope)).toEqual([{ key: "T-7/R2/Q1", revision: 2 }, { key: "T-7/R2/Q2", revision: 3 }]);
   expect(answeredKeys("Answer to T-7/R2/Q1 (revision 2) by Owner:\nunframed")).toEqual([]);
   expect(answeredKeys("[corral T-7_R2#3 turn_nudge]\nPlease continue.")).toEqual([]);
 });

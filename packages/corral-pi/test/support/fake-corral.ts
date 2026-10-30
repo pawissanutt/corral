@@ -36,6 +36,12 @@ if (reading) {
   process.exit(0);
 }
 const envelope = JSON.parse(stdin);
+let asked = 0;
+if (envelope.op === "ask") {
+  const counter = join(dir, "asks");
+  asked = (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) + 1;
+  writeFileSync(counter, String(asked));
+}
 let progress;
 if (envelope.op === "todo" && existsSync(snapshot)) {
   const state = JSON.parse(readFileSync(snapshot, "utf8"));
@@ -54,7 +60,7 @@ process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_i
   result: { op: envelope.op, ...(progress ? { revision: progress.revision, progress } : {}),
     ...(envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : {}),
     ...(envelope.op === "hello" ? { herdr_seq_epoch_ms: Date.now(), questions: [] } : {}), ...(envelope.op === "ask"
-    ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q1" } : {}) },
+    ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q" + asked, revision: 1 } : {}) },
   at: new Date().toISOString() }) + "\\n");
 `;
 

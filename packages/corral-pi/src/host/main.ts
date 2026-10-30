@@ -118,11 +118,12 @@ async function main(): Promise<void> {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,
         bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown"],
+        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions"],
       }),
       state: () => session.state(),
       submit: (input, requestId) => session.submit(input, requestId),
       cancel: (turn) => session.cancel(turn),
+      questions: (updates) => session.questionsChanged(updates),
       shutdown: () => {
         events.emit("shutdown");
         terminal?.stop();
