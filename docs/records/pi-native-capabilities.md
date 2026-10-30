@@ -198,10 +198,34 @@ wired through `agent/hooks/usage.rs`; PM and planning readback uses
 `agent::usage::collect_container`, without changing implementation totals. Auxiliary references
 are reusable accounting infrastructure; child launch and budget enforcement remain later work.
 
-Dynamic strict/standard inference is pending a finite run-specific owner allowance (Q1).
-No dynamic usage, wall-time or outcome-validity success is inferred from deterministic fixtures
-or these static estimates. T-313 remains a qualified historical non-pass, not a causal savings
-baseline or permission to change the default harness.
+### Authorized subscription smoke
+
+Owner Q1 revision 2 authorized at most four subscription requests (W/R × strict/standard),
+1,024 output tokens each, no paid API and no automatic retries. The smoke used
+`openai-codex/gpt-6.1-sol`, SSE, reasoning effort `none`, the above frozen prompts/schemas,
+and one identical sorted-unique/sum JSON question. No tool was executed. Wire payloads retained
+`max_output_tokens=1024` explicitly because the pinned Codex adapter omits `maxTokens` when
+building its body. This checkpoint does not exercise the host workflow or compare task quality.
+
+| Arm | Input / output | Cache read / write | API-equivalent USD | Wall ms | Outcome |
+|---|---:|---:|---:|---:|---|
+| W strict | 4,173 / 36 | 0 / 0 | 0.008706 | 2,755 | valid smoke JSON |
+| W early standard | 5,539 / 17 | 0 / 0 | 0.011248 | 6,303 | valid smoke JSON |
+| R strict | unknown | unknown | unknown | 1,666 | backend overloaded |
+| R early standard | not run | not run | not measured | — | stopped after backend error |
+
+Three requests were attempted, no retries; the fourth allowance was unused. The raw error's
+SDK-zero usage is **unknown**, not free work. Known-response API equivalents use the exact
+`gpt-6.1-sol` starter price in `crates/corral-core/src/pricing.rs`: input $2, output $10,
+cache-read $0.10, cache-write $2.50 per million. Pi-reported costs remain separately retained.
+PM was static-only; planning roles were not runnable. Raw controls, full request payloads,
+response IDs, usage, outcomes and times are attached to T-570 as the subscription-smoke evidence.
+The runner is `packages/corral-pi/src/host/usage-smoke.ts`; execution needs a fresh output directory
+and its explicit run-authorization flag. Tests exercise its controls without inference.
+
+The worker pair passes only this small arithmetic smoke; the reviewer pair is incomplete.
+There is no cost-saving, completed-standard, workflow-quality or default-harness-switch claim.
+T-313 remains a qualified historical non-pass, not a causal savings baseline.
 
 ## Assistant seam (T-544)
 
