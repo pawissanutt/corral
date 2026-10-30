@@ -1,6 +1,6 @@
 // Additive actual-host prompt/schema profiles, not an inference comparison.
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
@@ -9,7 +9,7 @@ import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import { CorralClient } from "../src/tools/corral.ts";
-import { buildFixtureInstall } from "./support/fixture-install.ts";
+import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import type { Role } from "../src/roles/types.ts";
 
 test("auxiliary static deltas record actual host prompts and tool schemas for all roles", async () => {
@@ -17,6 +17,7 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
   const cwd = mkdtempSync(join(tmpdir(), "corral-aux-static-"));
   const originalFetch = globalThis.fetch;
   try {
+    for (const tree of ["src/roles", "assets"]) cpSync(join(PACKAGE_ROOT, tree), join(assets.dir, tree), { recursive: true });
     for (const role of ["worker", "reviewer", "pm", "planner", "plan_reviewer"] as Role[]) {
       const modules = await loadModules(assets.dir, role);
       const transport = modules.auth.transport?.(authContext());

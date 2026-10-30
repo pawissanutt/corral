@@ -1201,7 +1201,7 @@ select a stronger model there rather than introducing another credential route.
 [agent.capabilities.worker.subagents]
 max_parallel = 3       # 1..16
 max_turns = 12         # 1..64
- timeout_secs = 120    # 1..600, includes queue time
+timeout_secs = 120     # 1..600, includes queue time
 # model = "gpt-6.1-sol" # absent: parent's configured model
 
 [agent.capabilities.worker.oracle]
