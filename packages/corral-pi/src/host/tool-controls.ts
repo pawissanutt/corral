@@ -39,6 +39,8 @@ export function parseControls(
 }
 
 export interface ToolControls {
+  /** The role's fixed shell refusals, applied before and regardless of configured rules. */
+  readonly fixed?: (command: string) => string | undefined;
   readonly hooks?: Hooks;
   readonly rules?: BashRuleSettings;
   readonly permissions?: BashPermissions;
@@ -50,11 +52,22 @@ export interface ToolControls {
 /** Tools whose `command` input runs in a shell: background jobs obey the same bash rules (T-565). */
 const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "job_start"]);
 
+function commandOf(input: unknown): string {
+  const command = (input as Record<string, unknown>).command;
+  return typeof command === "string" ? command : "";
+}
+
 export function installToolControls(pi: ExtensionAPI, controls: ToolControls): void {
   const hooked = new Set<string>();
   pi.on("tool_call", async (event) => {
     const nested = event.parentToolCallId !== undefined;
-    if (controls.rules && SHELL_TOOLS.has(event.toolName)) {
+    const shell = SHELL_TOOLS.has(event.toolName);
+    const fixed = shell ? controls.fixed?.(commandOf(event.input)) : undefined;
+    if (fixed !== undefined) {
+      controls.events.emit("bash_rule_denied", { tool_call_id: event.toolCallId, fixed: true, ...(nested ? { nested: true } : {}) });
+      return { block: true, reason: fixed };
+    }
+    if (controls.rules && shell) {
       const input = event.input as Record<string, unknown>;
       const command = typeof input.command === "string" ? input.command : "";
       const decision = decideBash(command, controls.rules);

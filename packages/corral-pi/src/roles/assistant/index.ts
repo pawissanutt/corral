@@ -4,6 +4,7 @@
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { todoTool } from "../common/todo.ts";
 import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
+import { assistantShellRefusal } from "./guard.ts";
 
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls", "bash"];
@@ -16,6 +17,7 @@ export function assistantRole(root: string): RoleModule {
     corralOps: OPS,
     tools: (context) => context.todo === true ? [todoTool] : [],
     contract: (context) => renderContract(readAsset(root, CONTRACT_ASSET), context.identity),
+    shellRefusal: assistantShellRefusal,
   };
 }
 
