@@ -354,6 +354,64 @@ impl Herdr {
         self.call(&args).map(|_| ())
     }
 
+    /// `pane release-agent`: gives up the lifecycle authority `source` holds as `agent`. Herdr
+    /// ignores a release naming another source or agent, or whose `seq` is not above the last one
+    /// it accepted from `source` for the pane. False when the pane is gone.
+    pub fn pane_release_agent(
+        &self,
+        pane_id: &str,
+        source: &str,
+        agent: &str,
+        seq: u64,
+    ) -> Result<bool> {
+        let seq = seq.to_string();
+        let args = [
+            "pane",
+            "release-agent",
+            pane_id,
+            "--source",
+            source,
+            "--agent",
+            agent,
+            "--seq",
+            &seq,
+        ];
+        self.call_present(&args)
+    }
+
+    /// Clears `source`'s display agent and the named tokens (`pane report-metadata`) at `seq`.
+    /// False when the pane is gone.
+    pub fn pane_clear_metadata(
+        &self,
+        pane_id: &str,
+        source: &str,
+        tokens: &[&str],
+        seq: u64,
+    ) -> Result<bool> {
+        let seq = seq.to_string();
+        let mut args = vec![
+            "pane",
+            "report-metadata",
+            pane_id,
+            "--source",
+            source,
+            "--clear-display-agent",
+        ];
+        for token in tokens {
+            args.extend(["--clear-token", token]);
+        }
+        args.extend(["--seq", &seq]);
+        self.call_present(&args)
+    }
+
+    fn call_present(&self, args: &[&str]) -> Result<bool> {
+        match self.call(args) {
+            Ok(_) => Ok(true),
+            Err(e) if error_code(&e) == Some("pane_not_found") => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Every pane herdr considers an agent, with its status.
     pub fn agent_list(&self) -> Result<Vec<PaneInfo>> {
         let v = self.call(&["agent", "list"])?;
