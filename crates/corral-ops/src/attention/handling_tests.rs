@@ -26,7 +26,7 @@ fn retained_projection_matches_cli_after_legacy_discovery() {
         .create("Legacy owner wait", None, Status::NeedsMe, "")
         .unwrap();
     task.status_since = None;
-    std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+    fx.ctx.store.fixture_put_task(&task).unwrap();
     let before = corral_core::work::count(corral_core::work::Work::AttentionVisit);
     let retained = handling::reconcile_projected(&fx.ctx, at(0), Some(true))
         .unwrap()
@@ -432,7 +432,13 @@ fn idle_reconcile_preserves_files_and_bounded_work_with_tenfold_done_history() {
         .unwrap();
     let grow_inbox = |range: std::ops::Range<u64>| {
         for index in range {
-            std::fs::write(inbox.message_path(index), b"unreachable invalid history").unwrap();
+            inbox
+                .save_record(
+                    "messages",
+                    &format!("{index:020}"),
+                    &"unreachable invalid history",
+                )
+                .unwrap();
         }
     };
     grow_inbox(100..200);
@@ -446,8 +452,8 @@ fn idle_reconcile_preserves_files_and_bounded_work_with_tenfold_done_history() {
     reconcile(&fx.ctx, at(0), Some(true)).unwrap();
     let measure = || {
         let task = fx.ctx.store.get(&task.id).unwrap();
-        let task_bytes = std::fs::read(&task.path).unwrap();
-        let events = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+        let task_bytes = serde_json::to_vec(&task).unwrap();
+        let events = serde_json::to_vec(&fx.ctx.store.events().unwrap()).unwrap();
         let before = [
             count(Work::TaskList),
             count(Work::TaskParse),
@@ -467,9 +473,12 @@ fn idle_reconcile_preserves_files_and_bounded_work_with_tenfold_done_history() {
             count(Work::InboxEnvelopeRead),
             count(Work::InboxList),
         ];
-        assert_eq!(std::fs::read(&task.path).unwrap(), task_bytes);
         assert_eq!(
-            std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+            serde_json::to_vec(&fx.ctx.store.get(&task.id).unwrap()).unwrap(),
+            task_bytes
+        );
+        assert_eq!(
+            serde_json::to_vec(&fx.ctx.store.events().unwrap()).unwrap(),
             events
         );
         std::array::from_fn::<_, 7, _>(|i| after[i] - before[i])

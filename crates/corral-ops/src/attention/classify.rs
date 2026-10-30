@@ -2,14 +2,19 @@ use corral_core::agent::{AgentQuestion, HostHealth, QuestionState};
 use corral_core::attention::*;
 use corral_core::{
     Accept, AutoStage, GateResult, OperatingActionKind as Action, Run, RunOutcome, Status, Task,
-    Verdict,
+    TaskFieldsRef, Verdict,
 };
 use jiff::Timestamp;
 
 use super::{Neighborhood, aggregate, plan, ready, row};
 
-pub(super) fn parked(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
-    let Some(park) = &task.park else { return };
+pub(super) fn parked(
+    task: &(impl TaskFieldsRef + ?Sized),
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) {
+    let Some(park) = task.park() else { return };
     if a.progress.as_ref().is_some_and(|progress| {
         matches!(
             progress.executor.as_str(),
@@ -51,7 +56,8 @@ pub(super) fn parked(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut 
         condition.next_action = NextAction {
             command: Some(format!(
                 "corral attention unpark {} --expected-revision {}",
-                task.id, park.revision
+                task.id(),
+                park.revision
             )),
             description: if park.resume_action.is_empty() {
                 "Review the resume checks before explicitly unparking".into()
@@ -246,38 +252,12 @@ pub(super) fn conditions(
     }
 }
 
-pub(super) fn progress(
-    executor: &str,
-    since: Option<Timestamp>,
-    reason: String,
-    liveness: &str,
-) -> Progress {
-    Progress {
-        executor: executor.into(),
-        since,
-        reason,
-        liveness: liveness.into(),
-    }
-}
-
-pub(super) fn check(
-    kind: &str,
-    target: &str,
-    expected: Option<String>,
-    satisfied: bool,
-) -> ResumeCheck {
-    ResumeCheck {
-        kind: kind.into(),
-        target: Some(target.into()),
-        expected,
-        description: format!("{kind}: {target}"),
-        machine_checkable: true,
-        satisfied: Some(satisfied),
-    }
-}
+#[path = "primitives.rs"]
+mod primitives;
+pub(super) use primitives::{check, progress};
 
 pub(super) fn wait(
-    task: &Task,
+    task: &(impl TaskFieldsRef + ?Sized),
     now: Timestamp,
     kind: &str,
     class: WaitClass,
@@ -290,13 +270,13 @@ pub(super) fn wait(
         kind,
         class,
         by,
-        (None, task.status_since),
+        (None, *task.status_since()),
         reason,
     )
 }
 
 pub(super) fn keyed_status(
-    task: &Task,
+    task: &(impl TaskFieldsRef + ?Sized),
     now: Timestamp,
     kind: &str,
     class: WaitClass,
@@ -314,10 +294,10 @@ pub(super) fn keyed_status(
         },
         (
             Some(
-                task.status_since
+                task.status_since()
                     .map_or_else(|| "legacy".into(), |at| at.to_string()),
             ),
-            task.status_since,
+            *task.status_since(),
         ),
         reason,
     )
@@ -330,7 +310,11 @@ fn lost(run: &Run) -> bool {
         })
 }
 
-fn question(task: &Task, question: &AgentQuestion, now: Timestamp) -> Condition {
+fn question(
+    task: &(impl TaskFieldsRef + ?Sized),
+    question: &AgentQuestion,
+    now: Timestamp,
+) -> Condition {
     let owner = question.state == QuestionState::Escalated || question.unattended_at.is_some();
     let kind = if question.unattended_at.is_some() {
         "question_unattended"
@@ -584,7 +568,7 @@ pub(super) fn escalation(task: &Task, now: Timestamp, out: &mut Vec<Condition>) 
 }
 
 pub(super) fn authority(
-    task: &Task,
+    task: &(impl TaskFieldsRef + ?Sized),
     n: &Neighborhood<'_>,
     now: Timestamp,
     action: Action,
@@ -602,12 +586,12 @@ pub(super) fn authority(
     );
     condition.key = Some(ConditionKey(format!(
         "{}/authority_blocked/{}",
-        task.id,
+        task.id(),
         crate::verification::digest(condition.reason.as_bytes())
     )));
     condition.resume.push(check(
         "authority_granted",
-        &task.id,
+        task.id(),
         Some(format!("{action:?}")),
         false,
     ));
