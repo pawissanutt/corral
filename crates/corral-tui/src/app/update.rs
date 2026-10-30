@@ -19,6 +19,7 @@ impl App {
             }
             WorkerMsg::Synced(Ok((changes, snapshot))) => {
                 self.last_sync_error = None;
+                self.synced_at = self.clock.now();
                 for c in &changes {
                     if let Some(t) = change_toast(c, snapshot.stage_reason(c)) {
                         self.messages.record(Message {

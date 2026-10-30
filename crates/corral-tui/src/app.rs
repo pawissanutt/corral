@@ -95,6 +95,8 @@ mod work_probe;
 
 const SYNC_EVERY: Duration = Duration::from_secs(2);
 const HERDR_CHECK_EVERY: Duration = Duration::from_secs(10);
+/// With work waiting, this long without a completed sync pass is a stall the header reports.
+const SYNC_STALL_AFTER: Duration = Duration::from_secs(5 * 60);
 const TOAST_FOR: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 3;
 
@@ -167,6 +169,8 @@ pub(crate) struct App {
     operating_header: String,
     herdr_online: bool,
     last_sync_error: Option<String>,
+    /// When the last sync pass completed (or the app started), by [`Self::clock`].
+    synced_at: Instant,
     messages: messages::MessageLog,
     message_tx: Sender<Message>,
     message_rx: Receiver<Message>,
@@ -221,6 +225,7 @@ impl App {
             operating_header: String::new(),
             herdr_online: true,
             last_sync_error: None,
+            synced_at: Instant::now(),
             messages: messages::MessageLog::default(),
             message_tx,
             message_rx,
