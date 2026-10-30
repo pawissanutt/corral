@@ -205,21 +205,8 @@ pub(crate) mod tests {
         // Observe the durable ordering at the real adapter boundary, before pane_run returns.
         let bin = fx.root().join("herdr");
         let script = std::fs::read_to_string(&bin).unwrap();
-        let check = r#"if [ "$1 $2" = "pane run" ]; then
-python3 -c '
-import json, pathlib, sqlite3
-root = pathlib.Path(".corral")
-db = sqlite3.connect("file:" + str(root / "db/corral.db") + "?mode=ro", uri=True)
-pm = json.loads(db.execute("SELECT doc FROM records WHERE area=? AND key=?", ("agent-pm", "current")).fetchone()[0])["state"]
-
-assert pm["binding"]["generation"] == 2
-assert pm["generations"][0]["fenced"] is not None
-assert all(r["state"] != "reserved" for r in pm["receipts"])
-assert any(json.loads(row[0])["message"]["kind"] == "recovery_notice" for row in db.execute("SELECT doc FROM records WHERE area=?", ("inbox/pm/messages",)))
-' || exit 1
-fi
-case "$1 $2" in"#;
-        std::fs::write(&bin, script.replace("case \"$1 $2\" in", check)).unwrap();
+        let check = crate::agent::fixture_guard_tests::pane_check(fx.root(), "pm-recovery", "pm");
+        std::fs::write(&bin, script.replace("case \"$1 $2\" in", &check)).unwrap();
         fx
     }
 

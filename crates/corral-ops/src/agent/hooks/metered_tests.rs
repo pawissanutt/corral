@@ -107,17 +107,7 @@ pub(crate) fn fixture() -> (Fx, ResolvedProfile) {
 pub(crate) fn assert_notice_before_pane_run(fx: &Fx, role: &str) {
     let bin = fx.root().join("herdr");
     let source = std::fs::read_to_string(&bin).unwrap();
-    let check = format!(
-        r#"if [ "$1 $2" = "pane run" ]; then
-python3 -c '
-import json, sqlite3
-db = sqlite3.connect("file:.corral/db/corral.db?mode=ro", uri=True)
-notices = [detail for row in db.execute("SELECT detail FROM events WHERE kind=?", ("metered_notice",)) if (detail := json.loads(row[0]))["role"] == "{role}"]
-assert len(notices) == 1, notices
-' || exit 1
-fi
-case "$1 $2" in"#
-    );
+    let check = crate::agent::fixture_guard_tests::pane_check(fx.root(), "metered", role);
     write(&bin, &source.replace("case \"$1 $2\" in", &check));
 }
 

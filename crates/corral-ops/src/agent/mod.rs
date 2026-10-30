@@ -38,6 +38,8 @@ mod receipts;
 pub(crate) use receipts::FAILPOINT;
 #[cfg(test)]
 mod event_known_cost_tests;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) mod fixture_guard_tests;
 #[cfg(test)]
 pub(crate) mod native_test_support;
 #[cfg(test)]
