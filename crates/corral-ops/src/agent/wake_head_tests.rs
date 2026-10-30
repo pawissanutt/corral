@@ -45,28 +45,57 @@ fn wait_and_gate_wakes_post_once_or_cancel_with_constant_history_work() {
             let receipt:RequestReceipt=serde_json::from_value(json!({"version":1,"request_id":"queued","op":"gate","payload_sha256":"hash",
                 "identity":{"store":"fixture","project":"app","role":"worker","task":task.id,"run":run.id,"session_id":"session","generation":999},
                 "state":"committed","at":data::at(0),"effect":{"kind":"gate_attempt","ref":"attempt-fixed"},"result":{"queued":true,"reason":"fixture refusal"}})).unwrap();
+            if case == "gate-refused" {
+                let mut rejected = receipt.clone();
+                rejected.request_id = "active".into();
+                rejected.state = agent::ReceiptState::Rejected;
+                rejected.result = json!({"queued":true, "reason":"fixture refusal"});
+                state.receipts.push(rejected);
+            }
             state.receipts.push(receipt);
+            if case == "gate-pass" {
+                let mut identity = data::identity(&task.id);
+                identity["run"] = json!(run.id);
+                identity["attempt"] = json!("attempt-fixed");
+                run.gate = Some(
+                    serde_json::from_value(json!({"identity":identity,
+                    "result":"pass", "at":data::at(5), "sha":"1".repeat(40)}))
+                    .unwrap(),
+                );
+            }
             run.agent_host = Some(Box::new(state));
             run.obligations
                 .waits
                 .push(serde_json::from_value(data::wait(&run.id, 999, true)).unwrap());
             let expected = due_wait_wakes(&task);
+            let expected_gate = crate::agent::effects::due_gate_wakes(
+                &task,
+                data::at(100_000),
+                std::time::Duration::from_secs(1),
+            );
             store.fixture_put_task(&task).unwrap();
             let ctx = Ctx::from_store(store);
             let hot = HotScope::enter();
             let before = work::snapshot();
             let head = ctx.store.head(&task.id).unwrap();
             let due = if gate {
-                vec![DueWake {
-                    container: container.clone(),
-                    request_id: "active".into(),
-                    reason: if case == "gate-refused" {
+                let actual = crate::review_budget::due_gate_wakes_ref(
+                    &head,
+                    data::at(100_000),
+                    std::time::Duration::from_secs(1),
+                )
+                .unwrap();
+                assert_eq!(actual, expected_gate);
+                assert_eq!(actual.len(), 1);
+                assert_eq!(
+                    actual[0].reason,
+                    if case == "gate-refused" {
                         "not_started"
                     } else {
                         "pass"
                     }
-                    .into(),
-                }]
+                );
+                actual
             } else {
                 let actual = due_wait_wakes_ref(&head).unwrap();
                 assert_eq!(actual, expected);
