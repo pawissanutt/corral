@@ -340,7 +340,7 @@ pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
         replace(&path, &stub(a))?;
         return Ok(path);
     }
-    for task in ctx.store.list()? {
+    for task in ctx.store.artifact_owners()? {
         for sibling in task
             .artifacts
             .iter()
@@ -394,29 +394,20 @@ pub fn set_artifact_tier(ctx: &Ctx, reference: &str, tier: ArtifactTier) -> Resu
     let artifact = resolve_artifact(ctx, reference)?;
     let task = ctx
         .store
-        .list()?
+        .artifact_owners()?
         .into_iter()
         .find(|t| t.artifacts.iter().any(|a| a.path == artifact.path))
         .context("artifact task not found")?;
-    let mut result = None;
-    ctx.store.update(&task.id, |t| {
-        let a = t
-            .artifacts
-            .iter_mut()
-            .rev()
-            .find(|a| a.path == artifact.path)
-            .context("artifact reference not found")?;
+    crate::assistant_artifacts::check_owner(Some(&task.id))?;
+    crate::assistant_artifacts::update(ctx, &task.id, &artifact.path, |a| {
         a.tier_override = Some(tier);
-        result = Some(a.clone());
-        Ok(())
-    })?;
-    result.context("artifact update produced no result")
+    })
 }
 
 /// Resolves a pin number, stable task:run:file reference, or exact stored/absolute snapshot path.
 /// Purged artifacts remain resolvable even though their content file is gone.
 pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
-    let tasks = ctx.store.list()?;
+    let tasks = ctx.store.artifact_owners()?;
     if let Some(a) = tasks
         .iter()
         .flat_map(|t| &t.artifacts)
@@ -473,7 +464,8 @@ pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
     Ok(a.clone())
 }
 
-pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSet<String>> {
+pub(crate) fn protected(ctx: &Ctx, _tasks: &[corral_core::Task]) -> Result<HashSet<String>> {
+    let tasks = ctx.store.artifact_owners()?;
     let mut paths: HashSet<String> = tasks
         .iter()
         .flat_map(|t| &t.artifacts)
@@ -484,7 +476,7 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
         .collect();
     for pin in ctx.store.pins()? {
         if let PinTarget::Artifact { artifact, .. } =
-            corral_core::resolve_pin(&pin, tasks, ctx.store.dir())
+            corral_core::resolve_pin(&pin, &tasks, ctx.store.dir())
         {
             paths.insert(artifact.path);
         }
@@ -494,7 +486,7 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
             ..pin
         };
         if let PinTarget::Artifact { artifact, .. } =
-            corral_core::resolve_pin(&anchor, tasks, ctx.store.dir())
+            corral_core::resolve_pin(&anchor, &tasks, ctx.store.dir())
         {
             paths.insert(artifact.path);
         }
@@ -508,7 +500,7 @@ pub(crate) fn snapshot(
     bytes: &[u8],
     artifact: &Artifact,
 ) -> Result<Option<u64>> {
-    for task in ctx.store.list()? {
+    for task in ctx.store.artifact_owners()? {
         if let Some(a) = task.artifacts.iter().find(|a| {
             a.sha256 == artifact.sha256
                 && a.purged_at.is_none()

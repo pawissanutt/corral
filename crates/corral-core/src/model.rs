@@ -743,7 +743,7 @@ impl ArtifactKind {
     }
 }
 
-/// A snapshotted output of a run. The file lives at `<store dir>/<path>`.
+/// A snapshotted output of a run or assistant session. The file lives at `<store dir>/<path>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -752,7 +752,7 @@ pub struct Artifact {
     pub compressed_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged_at: Option<Timestamp>,
-    /// Run id ("R1").
+    /// Run id ("R1"); empty for a session artifact, which has no coding run.
     pub run: String,
     pub kind: ArtifactKind,
     pub title: String,

@@ -24,7 +24,7 @@ pub struct AssistantSession {
     #[serde(default)]
     pub scratch: Vec<AssistantScratch>,
     #[serde(default)]
-    pub artifacts: Vec<String>,
+    pub artifacts: Vec<crate::Artifact>,
     #[serde(default)]
     pub inbox_items: Vec<String>,
     #[serde(default)]
@@ -74,6 +74,33 @@ pub fn validate_id(id: &str) -> Result<()> {
 }
 
 impl Store {
+    /// Read-only artifact-owner projection for shared pin/search/retention readers.
+    /// These records are never task files and never enter scheduling or the board.
+    pub fn artifact_owners(&self) -> Result<Vec<crate::Task>> {
+        let mut owners = self.list()?;
+        owners.extend(self.assistant_artifact_owners()?);
+        Ok(owners)
+    }
+
+    /// Session contexts only, for readers which already have the task listing.
+    pub fn assistant_artifact_owners(&self) -> Result<Vec<crate::Task>> {
+        let mut owners = Vec::new();
+        // Atomic record replacement makes this safe without taking the board lock.
+        // Indexing also runs inside dispatch, so recursively acquiring it would deadlock.
+        for session in self.read_assistants()? {
+            owners.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": session.id, "title": session.summary,
+                    "status": if session.ended.is_some() { "done" } else { "backlog" },
+                    "created": session.created, "updated": session.ended.unwrap_or(session.created),
+                    "artifacts": session.artifacts,
+                }))
+                .context("building assistant artifact context")?,
+            );
+        }
+        Ok(owners)
+    }
+
     pub fn assistant_path(&self, id: &str) -> Result<PathBuf> {
         validate_id(id)?;
         Ok(self.dir().join("assistants").join(format!("{id}.md")))
@@ -185,6 +212,10 @@ impl Store {
 
     pub fn list_assistants(&self) -> Result<Vec<AssistantSession>> {
         let _board = self.lock("dispatch")?;
+        self.read_assistants()
+    }
+
+    fn read_assistants(&self) -> Result<Vec<AssistantSession>> {
         let dir = self.dir().join("assistants");
         if !dir.exists() {
             return Ok(Vec::new());

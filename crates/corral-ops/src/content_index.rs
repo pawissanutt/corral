@@ -150,9 +150,17 @@ fn runs(task: &Task, run: &Run, key: &str, records: &mut Vec<Record>) {
 }
 
 fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
+    let sessions: Vec<_> = ctx
+        .store
+        .assistant_artifact_owners()?
+        .into_iter()
+        .filter(|t| t.id.starts_with("A-") && !tasks.iter().any(|other| other.id == t.id))
+        .collect();
     let mut records = Vec::new();
-    for task in tasks {
-        records.push(Record::text(task, None, "specs", "spec", task.body.clone()));
+    for task in tasks.iter().chain(&sessions) {
+        if !task.id.starts_with("A-") {
+            records.push(Record::text(task, None, "specs", "spec", task.body.clone()));
+        }
         for (i, comment) in task.comments.iter().enumerate() {
             records.push(Record::text(
                 task,

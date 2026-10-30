@@ -20,7 +20,7 @@ impl ArtifactSearch {
     /// # Errors
     /// Returns an error if tasks, snapshots or the derived cache cannot be read.
     pub fn load(ctx: &Ctx) -> Result<Self> {
-        let tasks = ctx.store.list()?;
+        let tasks = ctx.store.artifact_owners()?;
         let _storage = crate::artifact_storage::storage_lock(ctx)?;
         let mut snapshot = content_index::snapshot(ctx, &tasks, false)?;
         snapshot

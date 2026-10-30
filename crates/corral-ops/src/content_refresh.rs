@@ -141,7 +141,9 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
     let mut hash = Sha256::new();
     // Fixed partitions keep the persisted digest independent of CPU availability.
     // Bump when sources/extraction semantics change, independently of cache format.
-    hash.update(b"content-refresh-v4");
+    hash.update(b"content-refresh-v5");
+    let sessions = ctx.store.assistant_artifact_owners()?;
+    hash.update(task_inputs(&sessions)?.0);
     std::thread::scope(|scope| -> Result<()> {
         let workers: Vec<_> = tasks
             .chunks(tasks.len().div_ceil(8).max(1))

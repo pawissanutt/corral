@@ -101,7 +101,7 @@ fn stored(entries: &[Entry]) -> u64 {
 
 /// Reports original logical bytes and physically shared stored content bytes.
 pub fn storage_stats(ctx: &Ctx) -> Result<StorageStats> {
-    let tasks = ctx.store.list()?;
+    let tasks = ctx.store.artifact_owners()?;
     let entries = entries(ctx, &tasks)?;
     let rows: Vec<_> = tasks
         .iter()
@@ -187,9 +187,11 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     } else {
         Some(storage_lock(ctx)?)
     };
-    let tasks = ctx.store.list()?;
+    crate::assistant_artifacts::check_owner(None)?;
+    let tasks = ctx.store.artifact_owners()?;
     let protected = protected(ctx, &tasks)?;
     let finishes = crate::finishes(&ctx.store, &tasks)?;
+    let sessions = ctx.store.assistant_artifact_owners()?;
     let mut entries = entries(ctx, &tasks)?;
     let before = stored(&entries);
     let mut actions = Vec::new();
@@ -249,7 +251,13 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         if !eligible(
             &e.artifact,
             &rule,
-            finishes.get(&task.id).map(|f| f.at),
+            finishes.get(&task.id).map(|f| f.at).or_else(|| {
+                sessions
+                    .iter()
+                    .find(|s| s.id == task.id)
+                    .filter(|s| s.status == corral_core::Status::Done)
+                    .map(|s| s.updated)
+            }),
             now,
         )? {
             continue;
@@ -358,15 +366,9 @@ fn apply(ctx: &Ctx, entries: &[Entry], operation: Operation, now: Timestamp) -> 
         }
     };
     let e = &entries[index];
-    ctx.store.update(&e.task_id, |task| {
-        let a = task
-            .artifacts
-            .iter_mut()
-            .find(|a| a.path == e.artifact.path)
-            .context("artifact disappeared during retention")?;
+    crate::assistant_artifacts::update(ctx, &e.task_id, &e.artifact.path, |a| {
         a.compressed_bytes = compressed;
         a.purged_at = purged;
-        Ok(())
     })?;
     Ok(())
 }

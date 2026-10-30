@@ -105,7 +105,7 @@ pub fn open(ctx: &Ctx, query: &str) -> Result<()> {
             follow: None,
         },
     };
-    let tasks = ctx.store.list()?;
+    let tasks = ctx.store.artifact_owners()?;
     let path: PathBuf = match resolve_pin(&pin, &tasks, ctx.store.dir()) {
         PinTarget::Task { path, .. } | PinTarget::Artifact { path, .. } => path,
         PinTarget::Broken(reason) => bail!("{} is broken: {reason}", pin.target),
