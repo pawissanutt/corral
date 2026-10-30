@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use corral_core::agent::{AgentRunState, ContainerRef, HostHealth, pm_state};
+use corral_core::TaskRef;
+use corral_core::agent::{AgentBinding, AgentGeneration, ContainerRef, HostHealth, pm_state};
 use corral_core::inbox::{Envelope, Inbox, ObserveCursor, Recipient, SendOutcome, SessionBinding};
 use serde_json::json;
 
@@ -52,7 +53,8 @@ pub fn envelope_key(wire: &str) -> Option<(String, u64)> {
 
 /// What the adapter can see of a recipient: its binding state and whether it is closed.
 struct Target {
-    state: AgentRunState,
+    binding: AgentBinding,
+    generation: Option<AgentGeneration>,
     closed: Option<&'static str>,
 }
 
@@ -89,33 +91,45 @@ fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Result<Target, String>> {
     };
     match container.task() {
         Some(id) => {
-            let task = ctx.store.get(id)?;
+            let task = ctx.store.head(id)?;
             let closed =
-                corral_core::agent::container_closure(&task, &container).map(|r| r.as_str());
-            Ok(corral_core::agent::container_state(&task, &container)
-                .cloned()
-                .map(|state| Target { state, closed })
-                .ok_or_else(|| format!("host_unbound: {} has no agent binding", container.key())))
+                corral_core::agent::container_closure_ref(&task, &container)?.map(|r| r.as_str());
+            let Some(host) = task.agent_head(&container)? else {
+                return Ok(Err(format!(
+                    "host_unbound: {} has no agent binding",
+                    container.key()
+                )));
+            };
+            let generation = task.agent_generation(&container, host.binding.generation)?;
+            Ok(Ok(Target {
+                binding: host.binding,
+                generation,
+                closed,
+            }))
         }
         None => Ok(pm_state::load(&ctx.store)?
-            .map(|pm| Target {
-                state: pm.state,
-                closed: None,
+            .map(|pm| {
+                let generation = pm.state.current_generation().cloned();
+                Target {
+                    binding: pm.state.binding,
+                    generation,
+                    closed: None,
+                }
             })
             .ok_or_else(|| "host_unbound: no Pi-native PM is bound".into())),
     }
 }
 
 /// Why the current generation cannot take input now, or `None` when its binding says it can.
-fn unready(state: &AgentRunState) -> Option<String> {
-    let n = state.binding.generation;
-    match state.binding.health {
+fn unready(target: &Target) -> Option<String> {
+    let n = target.binding.generation;
+    match target.binding.health {
         HostHealth::Healthy => {}
         HostHealth::Unbound => return Some(format!("host_unbound: generation {n}")),
         HostHealth::Lost => return Some(format!("host_lost: generation {n}")),
         HostHealth::Fenced => return Some(format!("host_fenced: generation {n}")),
     }
-    match state.current_generation() {
+    match target.generation.as_ref() {
         None => Some(format!("host_unbound: generation {n} was never opened")),
         Some(g) if g.fenced.is_some() => Some(format!("host_fenced: generation {n}")),
         Some(g) if g.bound.is_none() => Some(format!(
@@ -126,12 +140,8 @@ fn unready(state: &AgentRunState) -> Option<String> {
 }
 
 /// The current generation's session: its Pi session id, its socket and its session file.
-fn session(
-    ctx: &Ctx,
-    recipient: &Recipient,
-    state: &AgentRunState,
-) -> Result<Option<SessionBinding>> {
-    let Some(generation) = state.current_generation() else {
+fn session(ctx: &Ctx, recipient: &Recipient, target: &Target) -> Result<Option<SessionBinding>> {
+    let Some(generation) = target.generation.as_ref() else {
         return Ok(None);
     };
     let Some(bound) = &generation.bound else {
@@ -258,10 +268,10 @@ impl DeliveryAdapter for PiNativeAdapter {
                 reason: format!("recipient_closed: {reason}"),
             });
         }
-        if let Some(reason) = unready(&target.state) {
+        if let Some(reason) = unready(&target) {
             return Ok(Readiness::Unavailable { reason });
         }
-        let generation = target.state.binding.generation;
+        let generation = target.binding.generation;
         let hello = BridgeClient::connect(&ctx.store, recipient, generation)
             .and_then(|mut client| client.hello());
         Ok(match hello {
@@ -287,12 +297,12 @@ impl DeliveryAdapter for PiNativeAdapter {
                 reason: format!("recipient_closed: {reason}"),
             });
         }
-        Ok(match session(ctx, recipient, &target.state)? {
+        Ok(match session(ctx, recipient, &target)? {
             Some(binding) => BindOutcome::Bound(binding),
             None => BindOutcome::Unbound {
                 reason: format!(
                     "host_unbound: generation {} has not completed hello",
-                    target.state.binding.generation
+                    target.binding.generation
                 ),
             },
         })
@@ -353,5 +363,7 @@ impl DeliveryAdapter for PiNativeAdapter {
     }
 }
 
+#[cfg(all(test, unix))]
+mod target_tests;
 #[cfg(all(test, unix))]
 mod tests;
