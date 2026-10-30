@@ -37,7 +37,7 @@ mod receipts;
 #[cfg(test)]
 pub(crate) use receipts::FAILPOINT;
 #[cfg(test)]
-mod native_test_support;
+pub(crate) mod native_test_support;
 #[cfg(test)]
 mod receipts_tests;
 pub mod recovery;
