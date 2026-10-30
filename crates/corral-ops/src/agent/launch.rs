@@ -326,10 +326,24 @@ pub fn prepare_bootstrap(
             .map(|(_, bound)| bound.session_file.clone())
     };
     let (project, recovery) = match target {
-        BindTarget::Pm { project } => (
-            project.clone(),
-            pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state)),
-        ),
+        BindTarget::Pm { project } => {
+            let file = pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state));
+            let file = if let Some(file) = file {
+                if std::fs::metadata(&file).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
+                    Some(file)
+                } else {
+                    session_dir = file
+                        .parent()
+                        .context("the bound Pi session file has no directory")?
+                        .to_path_buf();
+                    fresh_session = true;
+                    None
+                }
+            } else {
+                None
+            };
+            (project.clone(), file)
+        }
         BindTarget::Assistant { session } => {
             let file = super::ops::assistant::continued_session(ctx, session)?;
             fresh_session = file.is_none();
