@@ -78,6 +78,7 @@ pub mod pm_bench;
 mod pm_decisions;
 mod pm_events;
 mod pm_health;
+pub mod pm_inbox;
 mod pm_next;
 mod pm_policy;
 mod pm_questions;

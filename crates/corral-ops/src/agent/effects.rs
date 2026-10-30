@@ -864,6 +864,9 @@ pub fn reconcile_pm(ctx: &Ctx, request: &str) -> Result<RequestReceipt> {
             ),
             None => (ReceiptState::Abandoned, json!({"outcome": "not_started"})),
         }
+    } else if kind == Some("pm_inbox") {
+        let item = receipt.effect.as_ref().map_or("", |e| e.reference.as_str());
+        crate::pm_inbox::reconciled(ctx, request, item)?
     } else {
         let reason = "a legacy pane send leaves no marker";
         (

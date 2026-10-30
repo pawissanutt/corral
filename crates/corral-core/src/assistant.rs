@@ -218,7 +218,7 @@ impl Store {
         Ok(session)
     }
 
-    fn read_assistant(&self, id: &str) -> Result<AssistantSession> {
+    pub(crate) fn read_assistant(&self, id: &str) -> Result<AssistantSession> {
         let path = self.assistant_path(id)?;
         let text =
             fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;

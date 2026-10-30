@@ -10,6 +10,7 @@ pub(crate) mod jobs;
 mod lookup;
 pub(crate) mod planning;
 pub(crate) mod pm;
+mod pm_inbox;
 pub(crate) mod reviewer;
 pub(crate) mod todo;
 pub(crate) mod worker;

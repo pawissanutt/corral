@@ -54,6 +54,8 @@ pub(crate) fn lands(op: AgentOp) -> bool {
             | AgentOp::ReadRoute
             | AgentOp::ReadArtifacts
             | AgentOp::ReadLessons
+            | AgentOp::InboxRead
+            | AgentOp::InboxResolve
     )
 }
 
@@ -226,6 +228,13 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
             let p: Text = super::payload(envelope, "task, text")?;
             text(&p.text)?;
             reply(ctx, &origin, &p)
+        }
+        AgentOp::InboxResolve => {
+            let p: super::pm_inbox::Resolve =
+                super::payload(envelope, super::pm_inbox::RESOLVE_FIELDS)?;
+            two_phase(ctx, &origin, "pm_inbox", &p.id, || {
+                super::pm_inbox::resolve(ctx, &p, &origin.request_id)
+            })
         }
         _ => {
             // Reads require a live PM, but never store a receipt or advance board policy.
@@ -504,7 +513,7 @@ fn summary(task: &Task) -> Value {
         "kind":task.kind,"size":task.size,"difficulty":task.difficulty,"priority":task.priority})
 }
 
-fn page(values: Vec<Value>, offset: usize, limit: usize) -> Result<Value> {
+pub(super) fn page(values: Vec<Value>, offset: usize, limit: usize) -> Result<Value> {
     if limit == 0 || limit > 100 {
         return Err(bad("limit must be between 1 and 100"));
     }
@@ -526,6 +535,9 @@ fn page(values: Vec<Value>, offset: usize, limit: usize) -> Result<Value> {
 
 fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Value> {
     match op {
+        AgentOp::InboxRead => {
+            super::pm_inbox::read(ctx, super::payload(envelope, super::pm_inbox::READ_FIELDS)?)
+        }
         AgentOp::ReadShow => {
             let p: Show = super::payload(envelope, "task, section?, offset?, limit?")?;
             let task = target(ctx, &p.task, project)?;

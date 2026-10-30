@@ -47,7 +47,7 @@ mod receipts_tests;
 pub mod recovery;
 pub mod rewind;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod todo_tests;
 pub mod turns;

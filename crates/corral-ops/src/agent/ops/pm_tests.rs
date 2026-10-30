@@ -37,6 +37,67 @@ fn task(fx: &ts::Fx, project: &str, body: &str) -> Task {
 }
 
 #[test]
+fn inbox_tools_claim_and_resolve_at_revisions_and_refuse_a_stale_claim() {
+    // Given a bound Pi-native PM and owner item PMI-1 at revision 0.
+    let (fx, host) = fixture();
+    fx.ctx
+        .store
+        .pm_inbox_post(corral_core::pm_inbox::NewPmItem {
+            from: "owner".into(),
+            kind: corral_core::pm_inbox::ItemKind::Question,
+            subject: "Which cache?".into(),
+            body: "Context for the PM.".into(),
+            refs: vec![],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let resolve = |id: &str, payload: Value| send(&fx, &host, "inbox_resolve", id, payload);
+    // When it reads the open page, claims at 0 (and replays that call), resolves at 1 and
+    // then claims at revision 0 again.
+    let page = send(&fx, &host, "inbox_read", "page", json!({}));
+    let claim = json!({"id":"PMI-1","expected_revision":0,"action":"claim"});
+    let claimed = resolve("claim", claim.clone());
+    let replayed = resolve("claim", claim.clone());
+    let resolved = resolve(
+        "resolve",
+        json!({"id":"PMI-1","expected_revision":1,"action":"resolve",
+            "outcome":"done","text":"Filed T-9.","refs":["T-9"]}),
+    );
+    let stale = resolve("stale", claim);
+    let shown = send(&fx, &host, "inbox_read", "show", json!({"id":"PMI-1"}));
+    // Then the page lists the item, the claim and resolve commit revisions 1 and 2 once each,
+    // and the stale claim is a rejected stale_revision receipt that changed nothing.
+    assert_eq!(ts::committed(&page).result["items"][0]["id"], "PMI-1");
+    assert_eq!(ts::committed(&claimed).result["revision"], 1);
+    assert_eq!(claimed.receipt(), replayed.receipt());
+    assert_eq!(ts::committed(&resolved).result["revision"], 2);
+    let stale = stale.receipt().unwrap();
+    assert_eq!(stale.state, ReceiptState::Rejected);
+    assert_eq!(stale.result["code"], "stale_revision");
+    let item = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    assert_eq!(item.revision, 2);
+    let requests: Vec<_> = item.history.iter().map(|t| t.request.clone()).collect();
+    assert_eq!(
+        requests,
+        [
+            Some(claimed.receipt().unwrap().request_id.clone()),
+            Some(resolved.receipt().unwrap().request_id.clone())
+        ]
+    );
+    let shown = ts::committed(&shown).result;
+    assert_eq!(shown["item"]["state"], "resolved");
+    assert_eq!(shown["outcome"]["text"], "Filed T-9.");
+    assert!(
+        shown["content_json"]
+            .as_str()
+            .unwrap()
+            .contains("Context for the PM.")
+    );
+}
+
+#[test]
 fn comment_replays_after_fencing_without_a_second_effect() {
     // Given a bound PM and a task in its scope.
     let (fx, host) = fixture();

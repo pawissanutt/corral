@@ -41,6 +41,7 @@ pub mod park;
 pub mod pins;
 pub mod plan;
 pub mod plan_policy;
+pub mod pm_inbox;
 pub mod pricing;
 pub mod profile;
 pub mod profile_catalog;

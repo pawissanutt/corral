@@ -132,7 +132,10 @@ fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn Deliver
             .iter()
             .find(|r| r.id == *run)
             .and_then(|r| r.review_runs.iter().find(|c| c.id == *review)),
-        Recipient::PlanRun { .. } | Recipient::PlanReview { .. } | Recipient::Pm => None,
+        Recipient::PlanRun { .. }
+        | Recipient::PlanReview { .. }
+        | Recipient::Pm
+        | Recipient::Assistant { .. } => None,
     }?;
     super::adapters::pi_native(run)
 }
@@ -365,7 +368,7 @@ pub(crate) fn ended(task: &Task, recipient: &Recipient) -> bool {
             .find(|p| &p.id == plan)
             .and_then(|p| p.reviews.last())
             .is_none_or(|r| &r.id != review || r.verdict.is_some()),
-        Recipient::Pm => true,
+        Recipient::Pm | Recipient::Assistant { .. } => true,
     }
 }
 

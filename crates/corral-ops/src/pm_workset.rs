@@ -62,6 +62,8 @@ pub struct PmWorkset {
     pub actions: Vec<PmExecutable>,
     pub decisions: Vec<PmDecision>,
     pub waits: Vec<PmAction>,
+    /// Open and claimed PM inbox items, oldest first.
+    pub inbox: Vec<PmAction>,
     pub assessments: Vec<crate::attention::TaskAssessment>,
     pub blockers: Vec<String>,
     pub independent_work_continues: bool,
@@ -82,7 +84,8 @@ pub(crate) fn authority(kind: PmActionKind) -> Option<OperatingActionKind> {
         | PmActionKind::Owner
         | PmActionKind::Wait
         | PmActionKind::AgentQuestion
-        | PmActionKind::OwnerQuestion => None,
+        | PmActionKind::OwnerQuestion
+        | PmActionKind::Inbox => None,
     }
 }
 
@@ -117,7 +120,8 @@ fn option_target<'a>(
         | PmActionKind::Owner
         | PmActionKind::Wait
         | PmActionKind::AgentQuestion
-        | PmActionKind::OwnerQuestion => task,
+        | PmActionKind::OwnerQuestion
+        | PmActionKind::Inbox => task,
     }
 }
 
@@ -498,6 +502,7 @@ fn project(
     } else {
         OperatingStatus::Waiting
     };
+    let inbox = crate::pm_next::inbox::cards(ctx, &bin)?;
     let next = actions
         .first()
         .map(|a| a.action.clone())
@@ -507,6 +512,7 @@ fn project(
                 .find(|d| d.presentation.is_none())
                 .map(|d| d.action.clone())
         })
+        .or_else(|| inbox.first().cloned())
         .or_else(|| waits.first().cloned())
         .unwrap_or_else(|| crate::pm_next::pm_select(&[], &bin));
     let mut next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
@@ -537,6 +543,7 @@ fn project(
         actions,
         decisions,
         waits,
+        inbox,
         assessments,
         blockers,
         independent_work_continues,

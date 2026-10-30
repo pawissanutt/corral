@@ -16,6 +16,7 @@ use crate::lessons_cmd::LessonsCmd;
 use crate::mode_cmd::ModeCmd;
 use crate::plan_cmd::PlanCmd;
 use crate::pm_cmd::PmCmd;
+use crate::pm_inbox_cmd::PmInboxCmd;
 use crate::pricing_cmd::PricingCmd;
 use crate::question_cmd::QuestionCmd;
 use crate::queue::QueueCmd;
@@ -201,6 +202,13 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         },
         Cmd::Pm { cmd } => match cmd {
             Some(PmCmd::Bench { .. } | PmCmd::Next { .. } | PmCmd::Brief { .. }) => Read,
+            // Posting and withdrawing (the store checks authorship) route work to the PM;
+            // claiming and resolving are the PM's own.
+            Some(PmCmd::Inbox { cmd }) => match cmd {
+                PmInboxCmd::List { .. } | PmInboxCmd::Show { .. } => Read,
+                PmInboxCmd::Post { .. } | PmInboxCmd::Withdraw { .. } => File,
+                PmInboxCmd::Claim { .. } | PmInboxCmd::Resolve { .. } => Refused,
+            },
             None | Some(PmCmd::Act { .. } | PmCmd::Present { .. } | PmCmd::Resolve { .. }) => {
                 Refused
             }

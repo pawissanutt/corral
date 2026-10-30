@@ -18,7 +18,8 @@ corral pm next --json
 `next` returns one JSON object: `kind`, `task` (null for workspace
 actions), `why`, `command`, `verify`, `evidence`, closed `options`, the
 `recommended` option ID, `requires_owner`, and a shared `workset`. The workset
-separates authorized `actions`, pending `decisions` and automatic `waits`, and
+separates authorized `actions`, pending `decisions`, open PM `inbox` items and
+automatic `waits`, and
 includes the effective policy revision, finite scope counts, blocker identities,
 and whether independent work continues. `brief` adds slot usage and board counts
 separately from its `operating` scope counts. Bare `corral pm` still opens
@@ -58,6 +59,62 @@ questions cannot be reported as Complete.
 Use `corral wait --json --print-cursor` through the harness's event subscription
 and preserve its cursor when re-arming; see [events](events.md).
 After every wake recompute `next`, rather than retaining a procedural plan.
+
+### The PM inbox
+
+Assistants and the owner hand board work to the PM through a durable inbox in
+`.corral/pm-inbox/PMI-<n>.md`, separate from the agent inbox corral uses to reach
+agents. Nothing is typed into the PM pane.
+
+```bash
+corral pm inbox post --kind action_request --subject "Approve T-5" --ref T-5 --action "approve T-5" --quote "T-5 looks good, please land it" --body-file reading.md
+corral pm inbox list --json
+corral pm inbox show PMI-1
+corral pm inbox claim PMI-1 --expected-revision 0
+corral pm inbox resolve PMI-1 --expected-revision 1 --outcome done --text "Landed T-5." --ref T-5
+corral pm inbox withdraw PMI-1 --expected-revision 0 --reason "answered"
+```
+
+An item has a `kind` (`action_request`, `question`, `handoff` or `routing`), a
+one-line subject, refs, an optional requested command (`--action`), the owner's
+verbatim words when an assistant routes an owner request (`--quote`, kept with its
+SHA-256), and a Markdown body with the author's reading. `--key` makes a retried post
+return the author's earlier item. `from` is the poster's attribution: `owner` or
+`assistant:A-<n>`.
+
+Every item starts `open` at revision 0. Every change names the revision it expects
+(`--expected-revision`) and refuses `stale_revision` otherwise:
+
+| From | To | By |
+|---|---|---|
+| open | claimed | the PM (`claim`) |
+| claimed | resolved: `done`, `declined` or `escalated_to_owner` | the PM (`resolve`, with an outcome text) |
+| open or claimed | withdrawn | the author or the owner (`withdraw`) |
+
+Each change adds one revision, records who made it and logs `pm_inbox_posted`,
+`pm_inbox_claimed`, `pm_inbox_resolved` or `pm_inbox_withdrawn`. Claims and resolutions
+are attributed to the PM. Posts and withdrawals are attributed to their caller, so the
+owner's shell records the owner. Another session's withdrawal refuses `not_author`, and
+an item in the wrong state refuses `item_state`.
+
+**Consuming it.** `corral pm next` lists open and claimed items as `inbox` cards in
+`workset.inbox`, oldest first. The first one becomes `next` only when no authorized action
+or unpresented decision is pending. Its `why` names the item, its author and kind, and
+its evidence carries the requested command and quoted owner words. The OmO PM uses these
+cards and the CLI above on its sweep. A Pi-native PM also gets one `pm_inbox_wake` per open
+item, keyed `pmi:<id>:0` and delivered by sync like a question wake. It reads and acts on
+items with `corral_inbox_read` and `corral_inbox_resolve` (claim, then resolve at the
+current revision). Items are workspace-wide, not limited to the PM's project.
+
+Owner words in an item are evidence of intent, not authority. The PM acts inside its own
+policy and escalates owner-only requests through its existing owner decisions, resolving
+the item `escalated_to_owner`.
+
+**Outcomes.** When an assistant's item is resolved, corral publishes one
+`pm_inbox_outcome` message keyed `pmi:<id>:<revision>` into that session's native agent
+inbox and delivers it as a follow-up turn. A host that is down gets the message when sync
+finds it live again; the key and the host's idempotency keep it to one delivery. An ended
+session receives nothing: the outcome stays in the item, which its session record lists.
 The normal board/sync worker still owns automatic transitions.
 
 ### Opt-in Pi-native PM

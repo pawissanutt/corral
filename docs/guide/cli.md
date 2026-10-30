@@ -302,14 +302,6 @@ Options:
 
 ### `corral mode turbo`
 
-Turbo disables autopilot's change-round limit for all tasks, including plan members;
-this is independent of gate tiers and review scope. `corral mode` shows whether it
-is enabled. Autopilot events retain `max_rounds` as the configured review-policy
-budget and report `effective_max_rounds` (null means unlimited) plus
-`round_limit_source`: `automation.turbo` when unlimited, otherwise
-`task_review_policy.max_rounds` (the resolved task/project/workspace policy).
-Turning turbo off restores the cap on the next sync; rounds already spent still count.
-
 ```text
 Land, accept plans and repair without owner stops or round limits until `--off`
 
@@ -621,7 +613,7 @@ Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, job, job_monitor, plan_write, plan_submit, plan_verdict]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -2762,7 +2754,7 @@ Usage: corral artifact [OPTIONS] <COMMAND>
 Commands:
   set-tier  Override an artifact's inferred importance tier
   gc        Deduplicate artifacts and apply the configured retention policy
-  add       Snapshot a file as a task artifact
+  add       Snapshot a file as a task or assistant session artifact
   list      List artifacts, most important first (keep, normal, transient)
   serve     Serve an artifact (or the HTML/Markdown index) from the loopback live server and open it in a browser
   show      Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
@@ -2807,19 +2799,20 @@ Options:
 ### `corral artifact add`
 
 ```text
-Snapshot a file as a task artifact
+Snapshot a file as a task or assistant session artifact
 
-Usage: corral artifact add [OPTIONS] <ID> <PATH>
+Usage: corral artifact add [OPTIONS] <ID> [PATH]
 
 Arguments:
-  <ID>    
-  <PATH>  
+  <ID>    Task ID, or the file path when --session is supplied
+  [PATH]  File path for a task artifact
 
 Options:
-      --kind <KIND>    
-      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --title <TITLE>  
-  -h, --help           Print help
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  
+      --kind <KIND>        
+      --title <TITLE>      
+  -h, --help               Print help
 ```
 
 ### `corral artifact list`
@@ -2830,11 +2823,12 @@ List artifacts, most important first (keep, normal, transient)
 Usage: corral artifact list [OPTIONS]
 
 Options:
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --task <TASK>  
-      --json         
-      --tier <TIER>  Only this importance tier: keep, normal or transient
-  -h, --help         Print help
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>        
+      --session <SESSION>  
+      --json               
+      --tier <TIER>        Only this importance tier: keep, normal or transient
+  -h, --help               Print help
 ```
 
 ### `corral artifact serve`
@@ -3105,6 +3099,7 @@ Commands:
   act      Revalidate a revision-bound action and run the existing authorized executors
   present  Acknowledge presentation, not resolution, of an exact owner decision
   resolve  Record an actual owner answer to a workspace coordination decision
+  inbox    The PM inbox: requests from assistants and the owner, each with a recorded outcome
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -3201,6 +3196,150 @@ Options:
       --answer <ANSWER>  
       --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help             Print help
+```
+
+### `corral pm inbox`
+
+```text
+The PM inbox: requests from assistants and the owner, each with a recorded outcome
+
+Usage: corral pm inbox [OPTIONS] <COMMAND>
+
+Commands:
+  post      File a request for the PM: an action request, question, handoff or routed owner request
+  list      List open and claimed items, oldest first
+  show      Show one item with its body, history and outcome
+  claim     The PM claims an open item at its current revision
+  resolve   The PM resolves its claimed item; an assistant author receives the outcome once
+  withdraw  The author or the owner withdraws an open or claimed item
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm inbox post`
+
+```text
+File a request for the PM: an action request, question, handoff or routed owner request
+
+Usage: corral pm inbox post [OPTIONS] --kind <KIND> --subject <SUBJECT>
+
+Options:
+      --kind <KIND>            action_request, question, handoff or routing
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --subject <SUBJECT>      One line naming the request
+      --body-file <BODY_FILE>  The author's reading and context (Markdown, at most 32 KiB)
+      --ref <REFS>             A task ID or artifact ref the item concerns; repeatable
+      --action <ACTION>        The corral command the item asks for, such as "approve T-5"
+      --quote <QUOTE>          The owner's verbatim words behind the request (evidence of intent, not authority)
+      --input <INPUT>          The owner input the quote comes from
+      --key <KEY>              Retry key: posting again with the same key returns the earlier item
+      --json                   
+  -h, --help                   Print help
+```
+
+#### `corral pm inbox list`
+
+```text
+List open and claimed items, oldest first
+
+Usage: corral pm inbox list [OPTIONS]
+
+Options:
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --state <STATE>  Only items in this state: open, claimed, resolved or withdrawn
+      --all            Include resolved and withdrawn items
+      --json           
+  -h, --help           Print help
+```
+
+#### `corral pm inbox show`
+
+```text
+Show one item with its body, history and outcome
+
+Usage: corral pm inbox show [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm inbox claim`
+
+```text
+The PM claims an open item at its current revision
+
+Usage: corral pm inbox claim [OPTIONS] --expected-revision <EXPECTED_REVISION> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+          
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+          
+  -h, --help
+          Print help
+```
+
+#### `corral pm inbox resolve`
+
+```text
+The PM resolves its claimed item; an assistant author receives the outcome once
+
+Usage: corral pm inbox resolve [OPTIONS] --expected-revision <EXPECTED_REVISION> --outcome <OUTCOME> --text <TEXT> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+          
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --outcome <OUTCOME>
+          done, declined or escalated_to_owner
+      --text <TEXT>
+          The outcome the author reads (at most 4 KiB)
+      --ref <REFS>
+          A task ID or artifact ref the outcome produced; repeatable
+      --json
+          
+  -h, --help
+          Print help
+```
+
+#### `corral pm inbox withdraw`
+
+```text
+The author or the owner withdraws an open or claimed item
+
+Usage: corral pm inbox withdraw [OPTIONS] --expected-revision <EXPECTED_REVISION> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+          
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --reason <REASON>
+          [default: ""]
+      --json
+          
+  -h, --help
+          Print help
 ```
 
 ## `corral focus-board`
