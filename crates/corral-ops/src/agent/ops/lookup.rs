@@ -1,8 +1,8 @@
 //! receipt_lookup: reads one receipt of the requester's own named container, whatever
 //! generation committed it. Authentication only; nothing is written.
 use anyhow::Result;
-use corral_core::Store;
-use corral_core::agent::{self, RequestReceipt};
+use corral_core::agent::RequestReceipt;
+use corral_core::{Store, TaskRef};
 use serde::Deserialize;
 
 use crate::Ctx;
@@ -38,7 +38,7 @@ fn pm_task_receipt(
             "payload.task must be a canonical task ID",
         ));
     }
-    let task = match ctx.store.get(task) {
+    let task = match ctx.store.head(task) {
         Ok(task) => task,
         Err(error) if format!("{error}").ends_with("not found") => return Ok(None),
         Err(error) => return Err(error),
@@ -49,17 +49,10 @@ fn pm_task_receipt(
             "the task is outside the PM's project scope",
         ));
     }
-    if let Some(own) = task
-        .agent_pm_receipts
-        .iter()
-        .find(|r| r.request_id == envelope.request_id)
-    {
-        admission::same_request(own, &envelope.op, &envelope.payload_sha256)?;
+    if let Some(own) = task.pm_receipt(&envelope.request_id)? {
+        admission::same_request(&own, &envelope.op, &envelope.payload_sha256)?;
     }
-    Ok(task
-        .agent_pm_receipts
-        .into_iter()
-        .find(|r| r.request_id == request_id))
+    task.pm_receipt(request_id)
 }
 
 pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
@@ -74,9 +67,7 @@ pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallRespo
     };
     let container = &admitted.origin.binding.container;
     let found = match (&admitted.resolved, payload.task.as_deref()) {
-        (Resolved::Task(task), None) => agent::container_state(task, container)
-            .and_then(|state| state.receipt(&payload.request_id))
-            .cloned(),
+        (Resolved::Task(task), None) => task.agent_receipt(container, &payload.request_id)?,
         (Resolved::Task(_), Some(_)) => {
             return Err(reject(
                 RejectCode::BadRequest,

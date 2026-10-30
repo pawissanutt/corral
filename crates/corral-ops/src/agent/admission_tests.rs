@@ -46,6 +46,97 @@ fn stored(template: &RequestReceipt, request_id: &str, result: Value) -> Request
 }
 
 #[test]
+fn admission_work_is_equal_with_tenfold_settled_native_history() {
+    use corral_core::work::{self, Counter, HotScope};
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = fx();
+        let id = worker_task(&fx, "p1");
+        let host = worker(&fx, &id);
+        let mut task = fx.ctx.store.get(&id).unwrap();
+        let at = "2026-01-01T00:00:00Z".parse().unwrap();
+        task.created = at;
+        task.updated = at;
+        task.status_since = Some(at);
+        let state = task.current_run_mut().unwrap().agent_host.as_mut().unwrap();
+        let template = state.receipts[0].clone();
+        for generation in &mut state.generations {
+            generation.created = at;
+            if let Some(bound) = &mut generation.bound {
+                bound.at = at;
+            }
+        }
+        for receipt in &mut state.receipts {
+            receipt.at = at;
+            receipt.committed_at = receipt.committed_at.map(|_| at);
+        }
+        let generation = state.generations[0].clone();
+        for n in 0..2 * scale {
+            let mut old = generation.clone();
+            old.n = n + 2;
+            old.fenced = Some(corral_core::agent::GenerationFence {
+                reason: "finished".into(),
+                at,
+            });
+            state.generations.push(old);
+            let mut receipt = stored(
+                &template,
+                &format!("older-{n:06}"),
+                json!({"finished":true}),
+            );
+            receipt.at = at;
+            receipt.committed_at = Some(at);
+            state.receipts.push(receipt);
+            state.turns.push(
+                serde_json::from_value(json!({
+                    "generation":n+2,"seq":1,"origin":{"kind":"bridge"},"started":at,"ended":at
+                }))
+                .unwrap(),
+            );
+        }
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        let fresh: super::envelope::Envelope =
+            serde_json::from_slice(&envelope(&host, "artifact", "probe", json!({}), false))
+                .unwrap();
+        let mut replay: super::envelope::Envelope =
+            serde_json::from_slice(&envelope(&host, "artifact", "replay", json!({}), false))
+                .unwrap();
+        replay.request_id = template.request_id;
+        replay.op = template.op;
+        replay.payload_sha256 = template.payload_sha256;
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        assert!(matches!(
+            admission::admit(
+                &fx.ctx,
+                &fresh,
+                admission::Mode::Mutation { settles_turn: None }
+            )
+            .unwrap(),
+            admission::Admission::New(_)
+        ));
+        assert!(matches!(
+            admission::admit(&fx.ctx, &replay, admission::Mode::Lookup).unwrap(),
+            admission::Admission::Replay(_)
+        ));
+        let after = work::snapshot();
+        measured.push(
+            [
+                Counter::TaskHeadDecodes,
+                Counter::NestedRowDecodes,
+                Counter::HistoryRowDecodes,
+                Counter::FullTaskHydrations,
+                Counter::DecodedDocBytes,
+                Counter::ViewsOpened,
+            ]
+            .map(|counter| after.total(counter) - before.total(counter)),
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+    assert_eq!(measured[0][3], 0);
+}
+
+#[test]
 fn a_lookup_reusing_a_committed_request_id_is_rejected_as_a_payload_mismatch() {
     let fx = fx();
     let id = worker_task(&fx, "p1");

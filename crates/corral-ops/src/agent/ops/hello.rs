@@ -3,7 +3,8 @@
 use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result};
-use corral_core::agent::{self, GenerationBound, HostHealth, ReceiptEffect, paths};
+use corral_core::TaskRef;
+use corral_core::agent::{ContainerRef, GenerationBound, HostHealth, ReceiptEffect, paths};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -55,12 +56,17 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         Admission::New(admitted) => admitted,
     };
     let selected = match &admitted.resolved {
-        admission::Resolved::Task(task) => {
-            agent::container_run(task, &container).and_then(|r| r.session.as_ref())
-        }
+        admission::Resolved::Task(task) => match &container {
+            ContainerRef::Worker { run, .. } => task.run_head(run)?.and_then(|r| r.session),
+            ContainerRef::Reviewer { run, review, .. } => {
+                task.review_child(run, review)?.and_then(|r| r.session)
+            }
+            _ => None,
+        },
         admission::Resolved::Pm(_) => None,
     };
     let sessions = selected
+        .as_ref()
         .map(|s| s.directory.clone())
         .unwrap_or_else(|| paths::container_sessions_dir(&ctx.store, &container));
     let session = &payload.session_file;
@@ -73,7 +79,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             "session_file must be an absolute path under the container's sessions directory",
         ));
     }
-    if let Some(selected) = selected
+    if let Some(selected) = selected.as_ref()
         && matches!(
             selected.action,
             corral_core::SessionAction::Reused | corral_core::SessionAction::Resumed
@@ -84,11 +90,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         return Err(bad("hello did not resume the exact recorded role session"));
     }
     let n = envelope.identity.generation;
-    let launched = admitted
-        .resolved
-        .state(&container)
-        .and_then(|state| state.generation(n))
-        .map(|g| g.pane.clone());
+    let launched = admitted.resolved.generation(&container, n)?.map(|g| g.pane);
     if launched.as_deref() != Some(payload.pane.as_str()) {
         return Err(Rejection::new(
             RejectCode::PaneMismatch,

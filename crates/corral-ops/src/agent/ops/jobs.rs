@@ -384,9 +384,8 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
     };
     let generation = admitted
         .resolved
-        .state(&container)
-        .and_then(|state| state.current_generation());
-    if !generation.is_some_and(|g| g.capability(FEATURE)) {
+        .generation(&container, admitted.origin.binding.generation)?;
+    if !generation.as_ref().is_some_and(|g| g.capability(FEATURE)) {
         return Err(Rejection::new(
             RejectCode::OpNotAllowed,
             "background_shell is disabled for this generation",
@@ -394,6 +393,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
         .into());
     }
     let max_jobs = generation
+        .as_ref()
         .and_then(|g| g.capabilities.as_ref())
         .and_then(|snapshot| snapshot.features.get(FEATURE))
         .and_then(|state| state.settings.get("max_jobs"))
