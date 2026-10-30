@@ -24,6 +24,8 @@ mod action_budget_fixture;
 mod action_budget_growth;
 #[path = "../tests/support/action_budget_hot.rs"]
 mod action_budget_hot;
+#[path = "../tests/support/action_budget_nonce.rs"]
+mod action_budget_nonce;
 #[path = "../tests/support/action_budget_prompts.rs"]
 mod action_budget_prompts;
 #[path = "../tests/support/action_budget_trace.rs"]
