@@ -138,6 +138,48 @@ fn a_dead_pm_is_taken_over_with_resume_fencing_and_its_recovery_never_types_into
     assert!(fx.calls("pane run").is_empty());
 }
 
+#[test]
+fn dead_pm_recovery_selects_written_or_fresh_session_for_both_entry_points() {
+    for takeover in [true, false] {
+        for written in [false, true] {
+            let fx = fixture();
+            owner_pane(&fx);
+            let mut host = HostProc::spawn(true);
+            let bound = fx.bind(&pm_target(), "pm-pane", &host);
+            let file = f::session_file(&bound);
+            if written {
+                f::write_session(&bound, "session contents\n");
+            }
+            host.kill();
+            if takeover {
+                adopt(&f::ctx_at(fx.root()), PANE, &Overrides::default()).unwrap();
+            } else {
+                crate::agent::recovery::resume_container(
+                    &f::ctx_at(fx.root()),
+                    &ContainerRef::Pm,
+                    false,
+                )
+                .unwrap();
+            }
+            let path = generation_dir(&fx.ctx.store, &Recipient::Pm, 2)
+                .unwrap()
+                .join(BOOTSTRAP_FILE);
+            let bootstrap: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(bootstrap["fresh_session"], !written, "takeover={takeover}");
+            assert_eq!(
+                bootstrap["session_dir"],
+                file.parent().unwrap().to_str().unwrap()
+            );
+            if written {
+                assert_eq!(bootstrap["resume_session"], file.to_str().unwrap());
+            } else {
+                assert!(bootstrap["resume_session"].is_null(), "{bootstrap}");
+            }
+        }
+    }
+}
+
 fn approve(fx: &Fx, task: &str) {
     let selection = corral_core::OperatingSelection {
         tasks: [task.to_owned()].into(),
