@@ -4,7 +4,7 @@
 
 The records support **missed check coverage and unrelated test failures**, but do not establish that the harness caused the reported 29% versus 19% difference. The failure mix contains many assertions whose ownership cannot be inferred from a log. Retries cluster heavily in a few tasks, and profiles differ in reasoning effort, task mix, timing, and gate tier. The original 42/157 statistics are not a matched experiment. The recommended cheap fixes are:
 
-1. **Make validation match the changed surface:** T-579 ran a resolver-specific formatter yet its gate found formatting in that resolver; T-567 ran targeted capability tests but its all-targets Clippy found items after a test module in a changed file. Add a skill line: “After the final rebase, check formatting and all-targets Clippy for changed Rust packages, including nested manifests, where the run contract permits; record completed exit status.” Never run an extra gate contrary to the contract. These examples are not evidence that this is Pi-specific.
+1. **Make validation match the changed surface:** T-567 ran targeted capability tests but its all-targets Clippy found items after a test module in a changed file. Add a skill line: “After the final rebase, check formatting and all-targets Clippy for changed Rust packages, including nested manifests, where the run contract permits; record completed exit status.” Never run an extra gate contrary to the contract. This example is not evidence that the gap is Pi-specific. T-579 instead exposed a gate selector bug: it ran a nested-manifest formatter, but the gate addressed that nested package as a workspace member.
 2. **Reduce unrelated failures and distinguish them in metrics:** T-491 hit the separately fixed T-616 capture-window failure and twice hit a main-branch pane-inventory regression; T-523 hit the parked-wake case addressed by T-526. Retain exact signature/fix-revision annotations in gate results, not blanket automatic flake labels; report first submission separately from retries. This is a demonstrated source of noise, not an estimate of the gap after all exclusions.
 3. **Make submissions auditable:** record lifecycle purpose (worker submission, member, landing), worker profile and effort, failure signature, candidate and ordered completed check/exit-status events in the gate receipt. This avoids treating `ag-*` as one lifecycle or counting retries as independent runs, and makes interrupted builds observable. Compare matched size/period/tier and effort before changing a host default.
 
@@ -18,14 +18,14 @@ A `policy:review_rounds` receipt is a review-round worker gate, `member-gate:*` 
 
 | Class | pi-sol | gpt-sol |
 |---|---:|---:|
-| Formatting / Clippy | 1 | 3 |
+| Formatting / Clippy | 0 | 3 |
 | Compile, non-Clippy | 0 | 1 |
 | Real test failure on touched code | 1 | 0 |
 | Confirmed unrelated test/regression | 2 | 0 |
-| Gate infrastructure | 0 | 0 |
+| Gate infrastructure | 1 | 0 |
 | Other gate check: size ceiling | 1 | 0 |
-| Unknown assertion, docs or environment cause | 20 | 10 |
-| Excluded specified fixed-flake signature | 3 | 0 |
+| Unknown assertion, docs or environment cause | 21 | 10 |
+| Excluded specified fixed-flake signature | 2 | 0 |
 | **All failed attempts** | **28** | **14** |
 
 Unknown is deliberate: a test assertion or timeout does not alone prove touched-code regression, unrelatedness, or gate infrastructure. In particular no infrastructure classification is inferred from a test timeout. The T-526 test failure is on `crates/corral/tests/dispatch_queue/parked_wake.rs`, changed in its receipt's `git diff integration_base head`; it is a real failed test on touched code, not proof the candidate caused the underlying race. T-491's two unrelated pane failures are documented in its task PM comment as a main regression fixed by `89275b6b`. All other test assertions remain unknown unless separately proved.
@@ -40,7 +40,7 @@ All log basenames are `<task>-<run>-<attempt>.log` in the gate directory; same p
 | pi T-470 | ag-7f1fe5013186ae0c M | unknown: migration transcript retention |
 | pi T-470 | ag-707088157a0dd211 M | unknown: owner-post race |
 | pi T-470 | ag-fa590c7b93ff292e M | **excluded T-624**: operating-launch interrupted stage |
-| pi T-470 | ag-80bb8eebcec3c1ff M | **excluded T-624**: approval-busy readiness |
+| pi T-470 | ag-80bb8eebcec3c1ff M | unknown: approval-busy peer `verdict` subprocess timeout, not established as fixed by T-624 |
 | pi T-483 | 400478 L | unknown: pi-lane assertion |
 | pi T-485 | ag-3da781e05320c222 P | unknown: pi-lane assertion |
 | pi T-491 | ag-17de9a1120eb03e3 P | unknown: shipped-worker-skill consistency |
@@ -56,7 +56,7 @@ All log basenames are `<task>-<run>-<attempt>.log` in the gate directory; same p
 | pi T-523 | 3132137 L | unknown: parked-wake receipt; worker reports unrelated and files T-526 |
 | pi T-526 | ag-41a3bd8b8fab8d22 P | touched test: parked-wake; see diff and session below |
 | pi T-571 | ag-d8b92e2710dd5b4b P | unknown: pi-lane assertion |
-| pi T-579 | ag-8d99e8734a9e5c7e P | formatting: resolver manifest |
+| pi T-579 | ag-8d99e8734a9e5c7e P | gate infrastructure: formatter selects a nested resolver as a workspace member |
 | pi T-583 | ag-31fc30186737d43a, ag-c3121af33186ea1d P | unknown: prompt install assertion, then pi-lane assertion |
 | pi T-591 | ag-846b6e4e9bdd68a5 M | size ceiling |
 | pi T-591 | ag-17c1bc991e54c8da, ag-2dcf3744dcad83ff, ag-9192f8357edefd8d M | unknown: importance, progress and action-budget assertions |
@@ -71,11 +71,11 @@ All log basenames are `<task>-<run>-<attempt>.log` in the gate directory; same p
 | gpt T-567 | 578114 P | Clippy: items after test module in changed `capabilities.rs` |
 | gpt T-568 | 1020007 P | unknown: pi-lane fresh-process capability assertion |
 
-The two member runs T-470 and T-591 contribute eight pi attempts, so excluding member attempts leaves 20 pi and 14 gpt attempts, including the legacy ambiguity. Excluding only the three exact fixed signatures from all sources leaves 25 pi and 14 gpt attempts. These are attempt totals, not adjusted run failure rates.
+The two member runs T-470 and T-591 contribute eight pi attempts, so excluding member attempts leaves 20 pi and 14 gpt attempts, including the legacy ambiguity. Excluding only the two supported fixed signatures from all sources leaves 26 pi and 14 gpt attempts. These are attempt totals, not adjusted run failure rates.
 
 ## Six requested fixed-flake checks
 
-Checked decisive failure names/messages in the ledger against the six task records, not merely task IDs. T-607 is fake-bun `ETXTBSY` (none of the above decisive signatures); T-610 is `decision_answer_replays_its_journaled_receipt_after_a_crash` (none exact; its task reports underlying cause **unverified**, so similar crash tests are not excluded); T-613 is browser navigate/screenshot startup timeout (none exact); T-616 is `plan_aggregate_cli` capture window (`capture_outside_attempt`: T-491 457673); T-621 is partial fake-corral `calls.jsonl` (none exact); T-624 specifically names `operating_launch` interrupted stages and approval-busy fixture (T-470 two receipts above). T-624 is a wider sweep, not a license to exclude every timeout. T-562 logout timeouts and T-552 crash-replay are uncertain, **retained**. Matching is limited to decisive log messages; a hidden secondary failure cannot be ruled out. See task records T-607, T-610, T-613, T-616, T-621 and T-624 in `.corral/tasks` and the receipt logs.
+Checked decisive failure names/messages in the ledger against the six task records, not merely task IDs. T-607 is fake-bun `ETXTBSY` (none of the above decisive signatures); T-610 is `decision_answer_replays_its_journaled_receipt_after_a_crash` (none exact; its task reports underlying cause **unverified**, so similar crash tests are not excluded); T-613 is browser navigate/screenshot startup timeout (none exact); T-616 is `plan_aggregate_cli` capture window (`capture_outside_attempt`: T-491 457673); T-621 is partial fake-corral `calls.jsonl` (none exact); T-624 specifically changes `operating_launch` interrupted-stage barrier observation (T-470 ag-fa590c7b93ff292e); its log reports waiting on that barrier, matching the fixed class. Its sweep explicitly retains approval-busy's bounded subprocess coordination: T-470 ag-80bb8eebcec3c1ff timed out waiting for peer `verdict`, so it is **not** excluded. T-616's `capture_outside_attempt` matches the cross-process capture-window fix; its task notes pre-fix reproduction was not obtained, so this is a supported signature match, not proof of a reproduced root cause. T-624 is a wider sweep, not a license to exclude every timeout. T-562 logout timeouts and T-552 crash-replay are uncertain, **retained**. Matching is limited to decisive log messages; a hidden secondary failure cannot be ruled out. See task records T-607, T-610, T-613, T-616, T-621 and T-624 in `.corral/tasks` and the receipt logs.
 
 ## Pre-submit behavior
 
@@ -92,9 +92,9 @@ Read the worker `session.transcript` JSONL from each run's metadata, ordering as
 | pi T-502 | targeted `autopilot_ops` tests and fmt (131–180). |
 | pi T-519 | focused nextest fixture (22, 26). |
 | pi T-523 | `plan_acceptance::tests::membership` and fmt (59–83). |
-| pi T-526 | sandbox attempt, then targeted `dispatch_queue` parked-wake tests and fmt (29, 33, 43). The failing receipt is the contracted review-round gate, not proof of a separate local quick gate. |
+| pi T-526 | sandbox attempt, then targeted `dispatch_queue` parked-wake tests and fmt (29, 33, 43). The failing receipt is a review-round gate; earlier quick receipt ag-8fec5e51cc287dbd passed its commands, although its wake was labeled fail (see per-attempt notes). |
 | pi T-571 | Rust auxiliary/capabilities and Pi auxiliary tests, fmt (315–380). |
-| pi T-579 | resolver build, Bun capability test, resolver fmt and check (60, 92, 166, 174); gate still caught fmt. |
+| pi T-579 | resolver build, Bun capability test, resolver fmt and check (60, 92, 166, 174); gate could not locate the nested package, rather than finding a formatting difference. |
 | pi T-583 | Pi guidance and Rust skill/config tests and fmt (88–118). |
 | pi T-591 | targeted done/checkpoint tests and fmt (306–364). |
 | gpt T-540 R3 | metered and Bedrock Rust tests, CLI build; authoritative quick gate (187, 281, 340, 429). |
@@ -105,5 +105,27 @@ Read the worker `session.transcript` JSONL from each run's metadata, ordering as
 | gpt T-568 | web Bun tests and authoritative quick gate (90–216). |
 
 These calls demonstrate targeted prechecks on both harnesses. They do **not** establish how many separate local quick-tier gates were run or whether every long build completed: receipt gates are not an additional local precheck, and output/child-session completion has not been exhaustively linked per attempt. T-526's line 29 sandbox command was followed by process inspection and forced container cleanup (31–33); the record alone does not establish a general Pi build-cutoff pattern. T-567's recorded targeted tests did not prevent a Clippy-only failure. Session paths and tool results can be resolved through each worker run's frontmatter; do not infer an unrecorded command did not occur in a delegated session.
+
+### Per-attempt follow-up: candidate checks and later retries
+
+Line references are to the worker transcript named by its run's `session.transcript` in task frontmatter; `G` denotes that attempt's `.log` under `.corral/state/gates`. Observations of a completed test do not imply it covered a later changed tree. Child agent outputs in the parent are identified below; their separate histories were not independently correlated, so their unreported checks and build outcomes remain unavailable for this comparison.
+
+| Attempt | Checks and completion **before this attempt**; quick-tier and long-build evidence |
+|---|---|
+| T-526 ag-41a3bd8b8fab8d22 | Parent's red command returned 101 (34), parked-wake targeted test returned 0 (44), and sandbox test returned 0 (48). First submitted quick ag-8fec5e51cc287dbd had a contradictory fail wake but command receipt exit 0 and 554 passes (51–63); a rebase preceded this new quick attempt (75–78). Initial sandbox command needed forced container removal (29–34); outcome of that initial build was not recorded. No independent local quick gate beyond the earlier receipted quick is established. |
+| T-579 ag-8d99e8734a9e5c7e | Resolver build (60–61) and 46 Bun tests/validation command (174–175) completed; the latter included the explicit resolver-manifest fmt check. The failed quick gate tried `cargo fmt -p pi-profile-resolver` from the root and reported the package was not a workspace member (G:7); no separate local quick tier established. Build was not shown interrupted. |
+| T-540 R3 1332842 | Offline metered test build finished in 2m45s (242); the CLI build completed in 3m10s with exit 0 (352). Initial Bedrock suite failed (322), then corrected tests passed (364). The authoritative quick gate was invoked at 429 and failed Clippy (G); no earlier independent quick tier established. |
+| T-540 R3 1891787 | After 1332842, the worker corrected the Clippy lint, committed and rebased (532–568); the next quick gate failed aggregate-live. No additional independent test/build completion between the receipts is established. |
+| T-540 R3 1048182 | After 1891787, a PM-authorized quick retry completed exit 0 (923); changes-round planner regression tests compiled and ran (1564, 1606, 1627), followed by a later quick gate pass (1879). The legacy macOS cross-check failed at G, after those checks. Its exact submission/landing purpose and any separate child build are unresolved; do not treat the earlier quick pass as an all-targets macOS check. |
+| T-550 3321394 | Parent CLI checks completed (192, 219, 353, 401, 417), attention metrics passed exit 0 (479, 501); a delegated child reported `cargo check -p corral-tui` passed with affected tests pending (261), later child completion (341). The authoritative quick was initially refused (607, 635) and its retry failed fmt (693–695). Separate child command logs and whether every long build completed are not established. |
+| T-550 3483560 | After fmt failure, card regression passed 9 tests (703, 721); next authorized quick failed search assertion (759, 826). No separate local quick or new interrupted build established. |
+| T-550 3814971 | Search-row repair checks completed (839, 857); retry quick failed PM-next assertion (921). No separate quick or new interrupted build established. |
+| T-550 1637173 | Reproduced PM failure (943, 967), then PM fixtures passed 20 tests with exit 0 (1010, 1022); retry quick failed TUI parity (1073). No separate quick or new interrupted build established. |
+| T-550 3434123 | Broader app runs first failed (1113–1115, 1149–1151, 1177–1179); corrected run passed 124 tests (1205) and board checks passed (1219), before retry failed two TUI assertions (1279). No separate quick or new interrupted build established. |
+| T-550 3708642 | After those failures, attention regressions passed 99 tests (1534–1538), and changes-round quick passed on `fec2e18` (1623). This later legacy full receipt failed work-budget; lifecycle is unresolved. Earlier child build completion remains unavailable. |
+| T-550 1848971 | Previous full work-budget failure was followed by another failure of the same test; the parent reproduced doubled attention visits only afterwards (1718–1720), and the repaired work-budget pass at 1808–1810 is **after** both failures. The previously passed changes-round quick is not this full receipt. No intervening completed build or independent quick established. |
+| T-567 578114 | MCP fixture/launch checks exited 0 (332–334), rebased MCP/guidance checks exited 0 (495–503), Rust capability and recovery checks completed after builds of 1m08s and 2m37s (512, 544). Private Pi lane exited 1 (435); a separate summary watcher was killed (425). Authoritative quick was admitted at 579 and failed Clippy at 588; no earlier all-targets Clippy or separate local quick is established. |
+
+For the remaining assertion receipts the table above remains a first-attempt parent-session index, **not** an individual audit of all later retries or delegated child histories. They remain unknown rather than being presented as proven real touched-code regressions. This deliberately limits the causal conclusions.
 
 **Limitations:** source-less legacy lifecycle is unresolved; multiple attempts share candidates and tasks; class counts include member attempts and retain uncertain matches; no complete child-session/build-result audit or matched causal comparison is claimed. These limits prevent explaining the size of the original harness gap, but the ledger and concrete check failures justify the inexpensive instrumentation and validation improvements above. No product code was changed and no load was generated for this investigation.
