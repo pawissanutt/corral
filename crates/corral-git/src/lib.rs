@@ -270,6 +270,29 @@ fn untracked_files(worktree: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Ignored scratch files eligible for artifact harvesting, without changing normal diff semantics.
+pub fn ignored_artifact_scratch(worktree: &Path) -> Result<Vec<String>> {
+    let out = git(
+        worktree,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".evidence",
+            ".omo/evidence",
+            ".omo/plans",
+        ],
+    )?;
+    Ok(out
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 fn count_lines(path: &Path) -> u64 {
     match std::fs::read(path) {
         Ok(bytes) if !bytes.contains(&0) => {

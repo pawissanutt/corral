@@ -318,11 +318,16 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
     let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
     let cfg = &ctx.store.config.artifacts;
     let mut added = Vec::new();
-    for file in &stat.files {
-        if !cfg.globs.iter().any(|g| glob_match(g, &file.path)) {
+    let paths = stat
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .chain(corral_git::ignored_artifact_scratch(&run.worktree)?.into_iter());
+    for path in paths {
+        if !cfg.globs.iter().any(|g| glob_match(g, &path)) {
             continue;
         }
-        let full = run.worktree.join(&file.path);
+        let full = run.worktree.join(&path);
         match std::fs::metadata(&full) {
             Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
             _ => continue,

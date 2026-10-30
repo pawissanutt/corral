@@ -301,6 +301,7 @@ impl Default for ArtifactCfg {
             max_total: default_max_total(),
             max_file: default_max_file(),
             globs: vec![
+                ".evidence/**".into(),
                 ".omo/evidence/**".into(),
                 ".omo/plans/*.md".into(),
                 "docs/**/records/*".into(),

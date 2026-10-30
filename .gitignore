@@ -2,5 +2,6 @@
 /dist/
 __pycache__/
 /.omo/
+/.evidence/
 /.senpi/
 /.worktrees/

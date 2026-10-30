@@ -958,12 +958,14 @@ svg = "system"
 | `max_total` | `"500MB"` | Workspace stored-size warning threshold, shown by storage statistics. |
 | `max_file` | `"20MB"` | Stored artifact-size warning threshold. Does not replace the `max_bytes` admission limit. |
 
-Default globs: `.omo/evidence/**`, `.omo/plans/*.md`, `docs/**/records/*`, `**/*report*.html`,
-`**/*report*.md`.
+Default globs: `.evidence/**`, `docs/**/records/*`, `**/*report*.html`, `**/*report*.md`,
+plus the read-only compatibility fallbacks `.omo/evidence/**` and `.omo/plans/*.md` for
+in-flight runs. These fallbacks will be removed later. Put scratch evidence in the gitignored
+`.evidence/` directory and durable reports in `docs/records/`.
 
 ```toml
 [artifacts]
-globs = [".omo/evidence/**", "reports/**/*.html", "**/*report*.md"]
+globs = [".evidence/**", "reports/**/*.html", "**/*report*.md"]
 max_bytes = 10000000
 ```
 

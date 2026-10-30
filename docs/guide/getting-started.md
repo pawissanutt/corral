@@ -45,6 +45,8 @@ Accept the initialization offer after checking the detected repositories. A **wo
 directory holding `.corral/`; each registered repository is a **project**. Startup applies safe setup
 fixes, installs the agent skill and opens the board inside herdr. You do not need to start herdr
 separately. If the board shows a tour, follow it or press `Esc` to skip.
+For each registered project, add `/.evidence/` to its `.gitignore` for per-worktree scratch;
+`corral init` adds it when initialized directly in a Git repository.
 
 ## 3. Open the PM with an agent you use
 
