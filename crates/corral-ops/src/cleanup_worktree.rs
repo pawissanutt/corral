@@ -412,10 +412,7 @@ pub(crate) fn remove(ctx: &Ctx, task: &Task, repo: &Path, run: &Run, discard: bo
         let pane = pane_marker(&process);
         let pane_owned = pane.as_ref().is_some_and(|p| panes.contains(p));
         if protected_set.contains(&process.pid)
-            || !may_terminate(
-                cfg!(target_os = "linux"),
-                owned(ctx, task, run, &process) || pane_owned,
-            )
+            || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process))
         {
             warnings.push(format!(
                 "protected process {} still uses worktree (HERDR_PANE_ID={}, recorded={})",
