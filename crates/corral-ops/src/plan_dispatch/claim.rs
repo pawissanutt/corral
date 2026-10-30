@@ -2,7 +2,7 @@
 use std::io::Write;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::{HerdrRef, OperatingActionIdentity, OperatingActionKind, Task};
+use corral_core::{HerdrRef, OperatingActionIdentity, OperatingActionKind, TaskRef};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,22 +29,21 @@ impl Claim {
         action
     }
 
-    pub fn check(&self, task: &Task) -> Result<()> {
-        let run = task.plan_runs.last().context("plan run missing")?;
+    pub fn check<T: TaskRef + ?Sized>(&self, task: &T) -> Result<()> {
+        let run = task.last_plan_run_head()?.context("plan run missing")?;
         ensure!(
             run.id == self.run && run.rounds == self.previous_round,
             "prepared planner run or revision round changed"
         );
         if let Some(plan) = &self.plan {
             let current = task
-                .plans
-                .last()
+                .last_plan_head()?
                 .filter(|current| &current.id == plan)
                 .context("prepared planner revision belongs to a different plan")?;
             ensure!(
                 current
-                    .reviews
-                    .last()
+                    .current_review
+                    .as_ref()
                     .is_some_and(|review| Some(&review.id) == self.review.as_ref()
                         && review.verdict == Some(corral_core::Verdict::Changes)
                         && review.notes == self.notes),
@@ -58,10 +57,9 @@ impl Claim {
         Ok(())
     }
 
-    pub fn save(&self, task: &Task) -> Result<()> {
+    pub fn save<T: TaskRef + ?Sized>(&self, task: &T) -> Result<()> {
         let run = task
-            .plan_runs
-            .last()
+            .last_plan_run_head()?
             .filter(|run| run.id == self.run)
             .context("planner claim run replaced")?;
         std::fs::create_dir_all(&run.output_dir).context("creating planner claim directory")?;
@@ -75,8 +73,8 @@ impl Claim {
     }
 }
 
-pub(super) fn load(task: &Task) -> Result<Option<Claim>> {
-    let Some(run) = task.plan_runs.last() else {
+pub(super) fn load<T: TaskRef + ?Sized>(task: &T) -> Result<Option<Claim>> {
+    let Some(run) = task.last_plan_run_head()? else {
         return Ok(None);
     };
     let path = run.output_dir.join("launch.json");

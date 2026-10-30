@@ -62,15 +62,11 @@ fn auth_failed(state: &AgentRunState, container: &ContainerRef) -> Option<String
     })
 }
 
-fn state_path(ctx: &Ctx, key: &str) -> std::path::PathBuf {
-    ctx.store
-        .state_dir()
-        .join("provider-stall")
-        .join(format!("{key}.json"))
-}
+const STALLS: corral_core::records::RecordArea<State> =
+    corral_core::records::RecordArea::new("provider-stall");
 
 fn load(ctx: &Ctx, key: &str) -> Option<State> {
-    serde_json::from_slice(&std::fs::read(state_path(ctx, key)).ok()?).ok()
+    STALLS.load(&ctx.store, key).ok().flatten()
 }
 
 /// Persists the state where provider_stall's `retrying` and `escalated` read it.
@@ -81,16 +77,9 @@ fn store(
     before: Option<&State>,
     after: Option<&State>,
 ) -> Result<()> {
-    let path = state_path(ctx, key);
     match (before, after) {
         (Some(before), None) => {
-            match std::fs::remove_file(&path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(error).with_context(|| format!("removing {}", path.display()));
-                }
-            }
+            STALLS.delete(&ctx.store, key)?;
             let since = before.since.to_string();
             ctx.store.log_event(
                 Some(task),
@@ -99,13 +88,7 @@ fn store(
             )?;
         }
         (_, Some(after)) if before != Some(after) => {
-            let dir = path.parent().context("state path has no parent")?;
-            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-            let staged = path.with_extension("tmp");
-            std::fs::write(&staged, serde_json::to_vec(after)?)
-                .with_context(|| format!("writing {}", staged.display()))?;
-            std::fs::rename(&staged, &path)
-                .with_context(|| format!("replacing {}", path.display()))?;
+            STALLS.save(&ctx.store, key, after)?;
             if before.map(|s| s.since) != Some(after.since) {
                 let detail =
                     json!({"key": key, "since": after.since.to_string(), "message": after.message});

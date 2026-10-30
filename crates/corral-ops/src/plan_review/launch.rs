@@ -197,6 +197,7 @@ pub(super) fn review_with_origin(
             spec_revision: selected.spec_revision.clone(),
             previous_reviews: reviews,
             review: PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 id: attempt.clone(),

@@ -255,9 +255,7 @@ pub(crate) fn adopt_pm<T>(
             .try_lock("dispatch")?
             .context("operating policy is being updated; retry `corral pi`")
     };
-    let state_file = ctx.store.state_dir().join("pm.json");
-    if let Ok(text) = std::fs::read_to_string(&state_file)
-        && let Ok(state) = serde_json::from_str::<PmState>(&text)
+    if let Some(state) = STATE.load(&ctx.store, "state")?
         && state.pane_id != pane
         && !state
             .execution
@@ -290,7 +288,7 @@ pub(crate) fn adopt_pm<T>(
         }),
     };
     crate::pm_policy::begin_startup(ctx, pane, &policy)?;
-    crate::pm_policy::write_atomic(&state_file, &serde_json::to_vec(&state)?)?;
+    STATE.save(&ctx.store, "state", &state)?;
     crate::pm_policy::confirm_startup(ctx, pane)?;
     drop(_board);
     corral_core::inbox::Inbox::new(&ctx.store, corral_core::inbox::Recipient::Pm)?
@@ -335,12 +333,16 @@ pub(crate) fn save_prompt(
     ctx: &Ctx,
     policy: &crate::pm_policy::PolicySnapshot,
 ) -> Result<std::path::PathBuf> {
-    let path = ctx
-        .store
-        .scratch_spool(corral_core::backend::ScratchKind::Prompt, "pm")?
-        .join("pm.md");
+    let path = prompt_file(ctx)?;
     crate::pm_policy::write_atomic(&path, pm_prompt(ctx, policy)?.as_bytes())?;
     Ok(path)
+}
+
+pub(crate) fn prompt_file(ctx: &Ctx) -> Result<std::path::PathBuf> {
+    Ok(ctx
+        .store
+        .scratch_spool(corral_core::backend::ScratchKind::Prompt, "pm")?
+        .join("pm.md"))
 }
 
 fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<String> {

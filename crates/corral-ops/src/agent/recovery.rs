@@ -187,8 +187,8 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
                 task: task.clone(),
                 run: run.clone(),
             },
-            super::hooks::surfaces::prompt_file(ctx, task, run),
-            crate::launch_exit::receipt(ctx, task, run),
+            super::hooks::surfaces::prompt_file(ctx, task, run)?,
+            crate::launch_exit::receipt(ctx, task, run)?,
             run.clone(),
         ),
         ContainerRef::Reviewer { task, run, review } => (
@@ -202,8 +202,8 @@ fn relaunch(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> Resul
                     .clone()
                     .context("the review child's binding has no callback token")?,
             },
-            super::hooks::review::review_prompt_file(ctx, task, run),
-            crate::launch_exit::receipt(ctx, task, &format!("{run}-{review}")),
+            super::hooks::review::review_prompt_file(ctx, task, run)?,
+            crate::launch_exit::receipt(ctx, task, &format!("{run}-{review}"))?,
             run.clone(),
         ),
         ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
@@ -298,7 +298,7 @@ pub(crate) fn recover(
         (None, None) => bail!("the PM relaunch command is missing"),
     };
     let command = match &plan.exit_receipt {
-        Some(receipt) => crate::launch_exit::arm(&prepared.command(), receipt)?,
+        Some(receipt) => crate::launch_exit::arm(ctx, &prepared.command(), receipt)?,
         None => prepared.command(),
     };
     let next = snapshot(ctx, container)?.0.binding.generation;
@@ -607,6 +607,19 @@ fn git(dir: &Path, args: &[&str]) -> String {
     }
 }
 
+/// Recovery evidence stages in registered scratch; PM-only runtime evidence belongs to its
+/// session directory, never a second task or event authority.
+pub(crate) fn evidence_dir(ctx: &Ctx, container: &ContainerRef) -> Result<std::path::PathBuf> {
+    if matches!(container, ContainerRef::Pm) {
+        Ok(
+            corral_core::agent::paths::container_sessions_dir(&ctx.store, container)
+                .join("recovery"),
+        )
+    } else {
+        Ok(ctx.store.scratch_tmp()?.join("agent-recovery"))
+    }
+}
+
 /// `git status --porcelain=v2` and `git diff --stat` of the container's worktree, kept as a run
 /// artifact (the PM's as a file): the evidence for every upstream call reported unknown.
 fn worktree_snapshot(
@@ -615,7 +628,7 @@ fn worktree_snapshot(
     n: u32,
     plan: &Relaunch,
 ) -> Result<String> {
-    let dir = ctx.store.state_dir().join("agent-recovery");
+    let dir = evidence_dir(ctx, container)?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let name = container.key().replace('/', "-");
     let path = dir.join(format!("{name}-g{n}-worktree.txt"));
@@ -641,6 +654,8 @@ fn worktree_snapshot(
         Some(ArtifactKind::Evidence),
         Some(&title),
     )?;
+    std::fs::remove_file(&path)
+        .with_context(|| format!("removing staged recovery evidence {}", path.display()))?;
     Ok(format!("artifact {}", artifact.path))
 }
 

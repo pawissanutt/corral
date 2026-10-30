@@ -107,7 +107,10 @@ pub struct TierReceipt {
 
 /// The contract a tiered run's review is judged against; `None` for legacy and untiered runs.
 pub(crate) fn gate_contract<T: TaskRef + ?Sized>(
-    ctx: &Ctx, task: &T, run: &RunHead, moved: Option<&IdentityChange>,
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    moved: Option<&IdentityChange>,
 ) -> Result<Option<ReviewGateContract>> {
     if run.gate_rules.is_legacy() {
         return Ok(None);

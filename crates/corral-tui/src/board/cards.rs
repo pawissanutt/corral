@@ -261,7 +261,11 @@ fn meta_lines(
                         spans.push(Span::styled(label, Style::new().fg(theme::BLUE)));
                     } else if extra.head.map_or_else(
                         || obligations::waiting(r),
-                        |head| head.current_run.as_ref().is_some_and(|r| r.facts.pending_waits > 0),
+                        |head| {
+                            head.current_run
+                                .as_ref()
+                                .is_some_and(|r| r.facts.pending_waits > 0)
+                        },
                     ) {
                         spans.push(sep());
                         spans.push(Span::styled("⧗ waiting", Style::new().fg(theme::BLUE)));

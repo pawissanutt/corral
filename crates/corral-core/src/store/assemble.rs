@@ -224,7 +224,11 @@ pub fn run_value(rows: &TaskRows<'_>, run_seq: usize, child: usize, doc: &Value)
 fn agent_value(rows: &TaskRows<'_>, owner: &str, doc: &mut Map<String, Value>) {
     if let Some(Value::Object(host)) = doc.get_mut("agent_host") {
         for kind in AGENT_KINDS {
-            set_list(host, kind, docs(rows.under(TaskPart::AgentRecord, &format!("{owner}/{kind}/"))));
+            set_list(
+                host,
+                kind,
+                docs(rows.under(TaskPart::AgentRecord, &format!("{owner}/{kind}/"))),
+            );
         }
     }
 }

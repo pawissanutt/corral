@@ -29,7 +29,6 @@ use corral_core::{TaskMut as _, TaskRef as _};
 /// against a loop bug.
 const MAX_STEPS: usize = 16;
 
-mod handoff;
 mod infra;
 mod output;
 mod repair;
@@ -128,13 +127,6 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
     let head = ctx.store.head(id)?;
     let task = &head;
-    let Some(kind) = crate::automation_status::next_action_head(ctx, task)? else {
-        return Ok(Step::Wait);
-    };
-    // Current authority, holds and unresolved decisions precede executor or repair work.
-    if crate::operating::require(&ctx.store, &head, kind).is_err() {
-        return Ok(Step::Wait);
-    }
     // Only runs finished with `corral done`; a Review task with an open run was moved there by hand.
     let Some(run) = task
         .current_run_head()?
@@ -154,9 +146,6 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
         policy,
         now,
     };
-    if let Err(error) = verification::require_gate(&pilot.policy, task) {
-        return pilot.escalate(&error.to_string());
-    }
     // Main movement can stale an approval, but cannot erase a known defect on this candidate.
     // Handle it before integration preflight or a stale gate can restart verification.
     if !matches!(pilot.stage(), Some(AutoStage::Escalated | AutoStage::Done))
@@ -165,13 +154,13 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
                 && run_head_sha(run).as_deref() == Some(r.sha.as_str())
         })
     {
-        let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
+        let Some(kind) = crate::automation_status::next_action_head(ctx, task)? else {
             return Ok(Step::Wait);
         };
-        if crate::operating::require(&ctx.store, &task, kind).is_err() {
+        if crate::operating::require(&ctx.store, task, kind).is_err() {
             return Ok(Step::Wait);
         }
-        if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+        if let Err(error) = verification::require_gate(&pilot.policy, task) {
             return pilot.escalate(&error.to_string());
         }
         return pilot.reviewer_changes(review);
@@ -185,16 +174,16 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             }
         }
     }
-    let kind = match crate::automation_status::next_action(ctx, &task) {
+    let kind = match crate::automation_status::next_action_head(ctx, task) {
         Ok(Some(kind)) => kind,
         Ok(None) => return Ok(Step::Wait),
         Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
         Err(error) => return Err(error),
     };
-    if crate::operating::require(&ctx.store, &task, kind).is_err() {
+    if crate::operating::require(&ctx.store, task, kind).is_err() {
         return Ok(Step::Wait);
     }
-    if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+    if let Err(error) = verification::require_gate(&pilot.policy, task) {
         return pilot.escalate(&error.to_string());
     }
     if pilot.policy.reviewer == Reviewer::CrossVendor {
@@ -713,7 +702,11 @@ impl Pilot<'_> {
         let switch = crate::escalation::escalation_head(self.config, &task, false)?;
         let reuse = self.config.task_review_policy(&task).worker_session
             == corral_core::SessionPolicy::Reuse;
-        let alive = if switch.is_none() { self.pane_alive(pane)? } else { false };
+        let alive = if switch.is_none() {
+            self.pane_alive(pane)?
+        } else {
+            false
+        };
         let sent: Result<(Status, String)> = if switch.is_none() && (reuse || alive) {
             auto_request_changes(self.ctx, id, &message, round, state, key).map(|_| {
                 (
@@ -790,7 +783,6 @@ impl Pilot<'_> {
         }))
     }
 
-
     fn log(
         &self,
         to: AutoStage,
@@ -799,24 +791,18 @@ impl Pilot<'_> {
         reason: Option<&str>,
         note: &str,
     ) -> Result<()> {
-        let current = self.ctx.store.get(self.id())?;
-        let released_review_runs: Vec<_> = if to == AutoStage::Escalated {
-            self.run
-                .review_runs
-                .iter()
-                .filter(|before| {
-                    before.ended.is_none()
-                        && current.current_run().is_some_and(|run| {
-                            run.review_runs
-                                .iter()
-                                .any(|after| after.id == before.id && after.ended.is_some())
-                        })
-                })
-                .map(|run| &run.id)
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let current = self.ctx.store.head(self.id())?;
+        let mut released_review_runs = Vec::new();
+        if to == AutoStage::Escalated {
+            for before in self.head.open_review_children(&self.run.id)? {
+                if current
+                    .review_child(&self.run.id, &before.id)?
+                    .is_some_and(|after| after.ended.is_some())
+                {
+                    released_review_runs.push(before.id);
+                }
+            }
+        }
         self.ctx.store.log_event(
             Some(self.id()),
             "autopilot",

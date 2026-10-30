@@ -15,7 +15,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use super::consulted;
-use super::surfaces::{GateSection, prompt_file};
+use super::surfaces::GateSection;
 use crate::Ctx;
 use crate::agent::BindTarget;
 use crate::agent::launch::{HostSpec, prepare};
@@ -64,9 +64,14 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
 ) -> Result<String> {
     consulted("review");
     let saved = ctx.store.head(task.id())?;
-    let run = saved.current_run.as_deref().filter(|r| r.id == parent.id)
+    let run = saved
+        .current_run
+        .as_deref()
+        .filter(|r| r.id == parent.id)
         .context("the review's parent run disappeared before launch")?;
-    let child = run.current_child.as_deref()
+    let child = run
+        .current_child
+        .as_deref()
         .context("review child disappeared before launch")?;
     let callback = run
         .review
@@ -84,7 +89,7 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
             .as_deref()
             .and_then(|model| crate::agent::launch::host_provider(child.vendor.as_deref(), model)),
         effort: child.effort.clone(),
-        prompt_file: Some(review_prompt_file(ctx, task.id(), &run.id)),
+        prompt_file: Some(review_prompt_file(ctx, task.id(), &run.id)?),
         adopt: false,
     };
     let target = BindTarget::Reviewer {
@@ -114,14 +119,14 @@ fn pi_command<T: corral_core::TaskRef + ?Sized>(
 }
 
 /// The review prompt review-run wrote for the run's current review.
-pub fn review_prompt_file(ctx: &Ctx, task: &str, run: &str) -> std::path::PathBuf {
-    prompt_file(ctx, task, &format!("{run}-review"))
+pub fn review_prompt_file(ctx: &Ctx, task: &str, run: &str) -> Result<std::path::PathBuf> {
+    Ok(crate::reviewer::review_notes_path(ctx, task, run)?.with_file_name("review.md"))
 }
 
 /// The gate section rendered into the run's review prompt from its GateContract, and the
 /// SHA-256 a verdict records as `contract_sha256`; `None` for an untiered review.
 pub fn gate_section(ctx: &Ctx, task: &str, run: &str) -> Result<Option<GateSection>> {
-    let path = review_prompt_file(ctx, task, run);
+    let path = review_prompt_file(ctx, task, run)?;
     let prompt = match std::fs::read_to_string(&path) {
         Ok(prompt) => prompt,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

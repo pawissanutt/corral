@@ -246,7 +246,7 @@ fn consume_exit(ctx: &Ctx, container: &ContainerRef, state: &AgentRunState) -> R
     let Some(generation) = state.current_generation().filter(|g| g.bound.is_some()) else {
         return Ok(());
     };
-    let receipt = crate::launch_exit::receipt(ctx, task, run);
+    let receipt = crate::launch_exit::receipt(ctx, task, run)?;
     let status = match std::fs::read_to_string(&receipt) {
         Ok(status) => status,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),

@@ -45,7 +45,9 @@ pub(crate) fn with_assessments(
     assessments: &[crate::attention::TaskAssessment],
 ) -> Result<Vec<PmObservation>> {
     let heads = super::heads::inputs(ctx)?;
-    let mut tasks = heads.iter().map(|head| super::heads::observed_task(ctx, head))
+    let mut tasks = heads
+        .iter()
+        .map(|head| super::heads::observed_task(ctx, head))
         .collect::<Result<Vec<_>>>()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let mut out = Vec::new();
@@ -280,12 +282,7 @@ fn project_blocked(
     }
 }
 
-fn review_observation(
-    ctx: &Ctx,
-    task: &Task,
-    run: &Run,
-    tasks: &[Task],
-) -> Result<PmObservation> {
+fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Result<PmObservation> {
     let id = &task.id;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let checked = super::heads::review_task(&ctx.store.head(&task.id)?, task, &head)?;

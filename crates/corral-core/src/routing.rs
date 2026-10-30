@@ -153,7 +153,9 @@ impl RoutingRule {
                     .is_some_and(|value| self.kind.iter().any(|kind| kind.as_str() == value)))
             && (self.size.is_empty() || task.size().is_some_and(|s| self.size.contains(&s)))
             && (self.difficulty.is_empty()
-                || task.difficulty().is_some_and(|d| self.difficulty.contains(&d)))
+                || task
+                    .difficulty()
+                    .is_some_and(|d| self.difficulty.contains(&d)))
             && title.is_none_or(|r| r.is_match(task.title()))
             && body.is_none_or(|r| r.is_match(task.body())))
     }

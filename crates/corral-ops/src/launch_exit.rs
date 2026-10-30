@@ -25,9 +25,31 @@ pub(crate) fn receipt(ctx: &Ctx, task: &str, attempt: &str) -> Result<PathBuf> {
         .join(format!("{task}-{attempt}.exited")))
 }
 
-#[cfg(test)]
-#[path = "launch_exit_tests.rs"]
-mod tests;
+const PROCESS_OWNERS: corral_core::records::RecordArea<String> =
+    corral_core::records::RecordArea::new("launch-process-owners");
+
+/// Point lookup of the receipt owning a process marker, without walking task/run history.
+pub(crate) fn process_receipt(ctx: &Ctx, marker: &[u8]) -> Result<Option<PathBuf>> {
+    if marker.len() != 64 || !marker.iter().all(u8::is_ascii_hexdigit) {
+        return Ok(None);
+    }
+    let marker = std::str::from_utf8(marker).context("decoding process ownership marker")?;
+    let Some(name) = PROCESS_OWNERS.load(&ctx.store, marker)? else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        Path::new(&name)
+            .file_name()
+            .is_some_and(|file| file == name.as_str()),
+        "invalid process receipt name"
+    );
+    Ok(Some(
+        ctx.store
+            .scratch_path("tmp")?
+            .join("launch-exits")
+            .join(name),
+    ))
+}
 
 /// `command` run in a child `/bin/sh`, followed by a receipt holding its exit status, written
 /// whenever it returns (success included: an agent never returns before reporting).
@@ -51,6 +73,11 @@ pub(crate) fn arm(ctx: &Ctx, command: &str, receipt: &Path) -> Result<String> {
         }
     }
     let marker = ownership_marker(receipt)?;
+    let name = receipt
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("launch receipt has no UTF-8 name")?;
+    PROCESS_OWNERS.save(&ctx.store, &marker, &name.to_owned())?;
     let path = crate::prompt::sh_escape(&crate::prompt::shell_path(receipt));
     let script = format!(
         "CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"

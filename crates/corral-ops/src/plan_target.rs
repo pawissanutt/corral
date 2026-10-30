@@ -298,7 +298,7 @@ pub(crate) fn check_dispatch_target(store: &Store, task: &Task) -> Result<()> {
                 })
         })
     {
-        return match validate_run(store, task, run) {
+        return match validate_run(store, task, &corral_core::RunHead::of(run)?) {
             Ok(_) => Ok(()),
             Err(error) if marker_error(&error) => Ok(()),
             Err(error) => Err(error),

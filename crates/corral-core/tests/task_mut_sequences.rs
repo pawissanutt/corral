@@ -487,13 +487,13 @@ fn facts(task: &Task) -> BTreeMap<(TaskPart, String), ContainerFacts> {
         let key = seq(i + 1);
         out.insert(
             (TaskPart::Run, key.clone()),
-            ContainerFacts::of_run(&format!("{key}/000000"), run).unwrap(),
+            ContainerFacts::of_run(&task.id, &format!("{key}/000000"), run).unwrap(),
         );
         for (c, child) in run.review_runs.iter().enumerate() {
             let child_key = format!("{key}/{}", seq(c + 1));
             out.insert(
                 (TaskPart::ReviewRun, child_key.clone()),
-                ContainerFacts::of_run(&child_key, child).unwrap(),
+                ContainerFacts::of_run(&task.id, &child_key, child).unwrap(),
             );
         }
     }

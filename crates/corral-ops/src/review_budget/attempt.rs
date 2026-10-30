@@ -8,7 +8,7 @@ use corral_core::agent::{
     self, AgentRunState, ContainerRef, EVIDENCE_MAX, Executor, ReceiptEvidence, ReceiptState,
     RefusalCode, RequestBinding, RequestReceipt, WakeKind, WakeState,
 };
-use corral_core::{GateResult, Store, SubmissionDisposition, Task};
+use corral_core::{GateResult, Store, SubmissionDisposition, Task, TaskRef};
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -45,16 +45,16 @@ fn missing(error: &anyhow::Error) -> bool {
 /// A refusal counts for `request` when its verbatim reason carries `agent_request=<request>`
 /// (written in the store's locked refusal) or the journal or retained preparation records
 /// `refused_request == request` (the store's policy check runs before the closure).
-pub(crate) fn attempt_state(
+pub(crate) fn attempt_state<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     run: &str,
     kind: Kind,
     attempt: &str,
     request: Option<&str>,
 ) -> Result<AttemptState> {
     let action = submission::action_kind(kind);
-    let authorization = match operating::load(ctx, &task.id, run, action, attempt) {
+    let authorization = match operating::load(ctx, task.id(), run, action, attempt) {
         Ok(authorization) => authorization,
         Err(error) if missing(&error) => return Ok(AttemptState::Absent),
         Err(error) => return Err(error),
@@ -64,13 +64,13 @@ pub(crate) fn attempt_state(
         .authorized_submission(&authorization.id)?
         .disposition;
     let same = |p: &Pending| {
-        p.task == task.id
+        p.task == *task.id()
             && p.run == run
             && p.kind == kind
             && p.authorization.as_ref().map(|a| a.id.as_str()) == Some(authorization.id.as_str())
     };
     let journal = load_pending(ctx)?.filter(same);
-    let retained = submission::load_retained(ctx, &task.id, run, kind)?.filter(same);
+    let retained = submission::load_retained(ctx, task.id(), run, kind)?.filter(same);
     let records = || journal.iter().chain(retained.iter());
     let token = request.map(|r| format!("agent_request={r}"));
     let attributed = |reason: &str| match (request, &token) {
@@ -273,9 +273,9 @@ fn binding_of(receipt: &RequestReceipt) -> RequestBinding {
 
 /// The attempt a gate receipt names and its evidence; the request's own attempt is the
 /// fallback when an adoption target was consumed before the launch bound it.
-fn gate_evidence(
+fn gate_evidence<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     receipt: &RequestReceipt,
 ) -> Result<(String, AttemptState)> {
     let run = receipt
@@ -303,19 +303,19 @@ fn gate_evidence(
 
 /// The gate receipt state, result and wake transition this attempt's evidence supports (F1.a).
 /// An error the executor itself returned (`error`) explains an attempt that never started.
-pub(crate) fn gate_receipt(
+pub(crate) fn gate_receipt<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     receipt: &RequestReceipt,
     error: Option<&str>,
 ) -> Result<(ReceiptState, Value, Option<WakeState>)> {
     let (attempt, evidence) = gate_evidence(ctx, task, receipt)?;
-    let live = agent::check_live(task, &binding_of(receipt));
+    let live = agent::check_live_ref(task, &binding_of(receipt))?;
     let binding = live.as_ref().map_or_else(|r| r.code.as_str(), |()| "live");
     let adopted = attempt != own_attempt(&receipt.request_id);
     let run = receipt.identity.run.as_deref().unwrap_or_default();
     let started = json!({"outcome": "started", "attempt": attempt, "adopted": adopted});
-    let ran = || crate::gate::attempt_started(ctx, &task.id, run, &attempt);
+    let ran = || crate::gate::attempt_started(ctx, task.id(), run, &attempt);
     use ReceiptState::{Abandoned, Committed, Queued, Rejected, Reserved, Uncertain};
     let armed = Some(WakeState::Armed);
     let cancelled = Some(WakeState::Cancelled);
@@ -408,14 +408,6 @@ pub(crate) fn gate_receipt(
     })
 }
 
-fn set_wake(state: &mut AgentRunState, request: &str, to: WakeState) {
-    for wake in state.wakes.iter_mut().filter(|w| w.request_id == request) {
-        if matches!(wake.state, WakeState::PendingStart | WakeState::Armed) {
-            wake.state = to;
-        }
-    }
-}
-
 /// Settles a gate receipt inside one update of its task, from evidence read under the same
 /// locks. `seen` is the executor the caller verified (itself, or gone); a receipt that moved
 /// on since is returned unchanged, and a settled receipt is final.
@@ -437,10 +429,9 @@ pub(crate) fn settle(
         .context("gate receipt names no task")?;
     let request = receipt.request_id.clone();
     let mut out = None;
-    ctx.store.try_update(&task_id, |task| {
-        let current = agent::container_state(task, &container)
-            .and_then(|s| s.receipt(&request))
-            .cloned()
+    ctx.store.try_update_head(&task_id, |task| {
+        let current = task
+            .agent_receipt(&container, &request)?
             .context("gate receipt disappeared")?;
         let open = match current.state {
             ReceiptState::Reserved | ReceiptState::Queued => current.executor.as_ref() == seen,
@@ -454,10 +445,7 @@ pub(crate) fn settle(
             out = Some(current);
             return Ok(false);
         }
-        let agent =
-            agent::container_state_mut(task, &container).context("gate binding disappeared")?;
-        let stored = agent.receipts.iter_mut().find(|r| r.request_id == request);
-        let stored = stored.context("gate receipt disappeared")?;
+        let mut stored = current.clone();
         let now = corral_core::clock::now();
         if stored.result != result {
             let source = if by_executor {
@@ -466,7 +454,7 @@ pub(crate) fn settle(
                 "attempt_state"
             };
             let detail = error.as_deref().map(bounded);
-            evidence(stored, &result, source, detail);
+            evidence(&mut stored, &result, source, detail);
         }
         stored.state = state;
         stored.result = result;
@@ -477,8 +465,13 @@ pub(crate) fn settle(
             stored.committed_at = Some(now);
         }
         let settled = stored.clone();
-        if let Some(wake) = wake {
-            set_wake(agent, &request, wake);
+        task.put_agent_record(&container, agent::NativeRecord::Receipt(stored))?;
+        if let Some(to) = wake
+            && let Some(mut wake) = task.agent_wake(&container, &request)?
+            && matches!(wake.state, WakeState::PendingStart | WakeState::Armed)
+        {
+            wake.state = to;
+            task.put_agent_record(&container, agent::NativeRecord::Wake(wake))?;
         }
         if current.state == ReceiptState::Queued && state != ReceiptState::Queued {
             task.review_wait = None;

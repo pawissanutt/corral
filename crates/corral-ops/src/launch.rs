@@ -33,7 +33,10 @@ fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<TaskHead> {
 
 /// Reclaim a failed launch. Only an explicit owner request may renew owner consent.
 pub(crate) fn resume(
-    ctx: &Ctx, task: &TaskHead, force_resources: bool, owner: bool,
+    ctx: &Ctx,
+    task: &TaskHead,
+    force_resources: bool,
+    owner: bool,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let claim = task.launch.as_ref().context("no launch to resume")?;
     // Submission cannot be replayed safely: IPC may have succeeded before the receipt.
@@ -162,8 +165,11 @@ fn hold_stale_owner(ctx: &Ctx, task: &TaskHead) -> Result<DispatchOutcome<Box<Ta
             .context("launch reservation disappeared")?;
         launch.reserved = false;
         launch.error = Some(message.clone());
-        ctx.store.log_event(Some(&t.id), "owner_consent_stale",
-            json!({"run": task.current_run.as_ref().map(|r| &r.id), "reason": message}))?;
+        ctx.store.log_event(
+            Some(&t.id),
+            "owner_consent_stale",
+            json!({"run": task.current_run.as_ref().map(|r| &r.id), "reason": message}),
+        )?;
         Ok(())
     })?;
     Ok(DispatchOutcome::Queued {
@@ -172,7 +178,11 @@ fn hold_stale_owner(ctx: &Ctx, task: &TaskHead) -> Result<DispatchOutcome<Box<Ta
     })
 }
 
-pub(crate) fn launch(ctx: &Ctx, task: &TaskHead, force_resources: bool) -> Result<DispatchOutcome<Box<TaskHead>>> {
+pub(crate) fn launch(
+    ctx: &Ctx,
+    task: &TaskHead,
+    force_resources: bool,
+) -> Result<DispatchOutcome<Box<TaskHead>>> {
     if let Some(authorization) = task.launch.as_ref().and_then(|l| l.authorization.as_ref())
         && crate::operating::owner_consent_drift(ctx, authorization)?.is_some()
     {
@@ -226,12 +236,22 @@ fn advance(
     let claim = task.launch.as_ref().context("launch missing")?;
     let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
     crate::dispatch::check_plan(ctx, &*task, &plan.route, claim.approved_plan.as_ref())?;
-    if task.current_run.as_ref().is_some_and(|run| run.session.is_none()) {
+    if task
+        .current_run
+        .as_ref()
+        .is_some_and(|run| run.session.is_none())
+    {
         let shell = task.shell_task()?;
-        let session = crate::role_session::fresh(ctx, &shell,
-            shell.current_run().context("launch run missing")?, false)?;
+        let session = crate::role_session::fresh(
+            ctx,
+            &shell,
+            shell.current_run().context("launch run missing")?,
+            false,
+        )?;
         task = Box::new(ctx.store.update_head(&task.id, |head| {
-            head.current_run_mut().context("launch run missing")?.session = Some(session);
+            head.current_run_mut()
+                .context("launch run missing")?
+                .session = Some(session);
             Ok(())
         })?);
     }
@@ -414,9 +434,10 @@ fn advance(
     )?;
     let task = ctx.store.head(&task.id)?;
     crate::provider_session::record_launch(ctx, &task.id, &run_id, launched_at);
-    if let Some(run) = task.current_run() {
-        crate::role_session::observe(ctx, &task, run, false);
-        crate::role_session::log(ctx, &task, run)?;
+    let shell = task.shell_task()?;
+    if let Some(run) = shell.current_run() {
+        crate::role_session::observe(ctx, &shell, run, false);
+        crate::role_session::log(ctx, &shell, run)?;
     }
     finish(ctx, &task, false)
 }

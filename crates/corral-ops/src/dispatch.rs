@@ -2,10 +2,10 @@ mod admission;
 #[cfg(all(test, target_os = "linux"))]
 mod metered_tests;
 mod pane;
-mod worker_session;
 #[cfg(test)]
 mod pending_plan_tests;
 mod planner_reply;
+mod worker_session;
 
 pub(crate) use admission::Admission;
 pub use pane::{jump, live_tail};

@@ -21,11 +21,7 @@ pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
             .as_deref()
             .and_then(|model| host_provider(run.vendor.as_deref(), model)),
         effort: run.effort.clone(),
-        prompt_file: Some(
-            ctx.store
-                .prompts_dir()
-                .join(format!("{}-{}.md", task.id, run.id)),
-        ),
+        prompt_file: Some(crate::prompt::run_prompt_file(ctx, &task.id, &run.id)?),
         adopt: false,
     };
     let target = BindTarget::Worker {

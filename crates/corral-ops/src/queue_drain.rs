@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Error, Result};
-use corral_core::{Status, Task};
+use corral_core::{Status, TaskHead, TaskRef};
 use jiff::Timestamp;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 use crate::dispatch::Admission;
 use crate::{Change, Ctx, DispatchOpts, DispatchOutcome};
 
-const REFUSALS: &str = "queue-refusals.json";
+const REFUSALS: corral_core::records::RecordArea<BTreeMap<String, String>> =
+    corral_core::records::RecordArea::new("queue-refusals");
 
 pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
@@ -27,10 +28,12 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     // attempts a dispatch, so the operating policy is resolved once per drain, not per check
     // (T-547). An attempt may change the board, so the next check reads it again.
     let board = ctx.store.read_only_snapshot()?;
-    let mut queued: Vec<Task> = board
-        .list()?
-        .into_iter()
-        .filter(|t| !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&board, t)))
+    let mut queued: Vec<TaskHead> = crate::pm_next::heads::open(&board)?
+        .iter()
+        .filter(|t| {
+            !t.tracker && (t.launch.is_some() || crate::queue::authorized_ready(&board, *t))
+        })
+        .cloned()
         .collect();
     crate::queue::sort_candidates(&mut queued);
     let mut refusals = Refusals::load(ctx)?;
@@ -66,7 +69,7 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                 if let DispatchOutcome::Started { run_id, .. } = outcome {
                     changes.push(Change {
                         task: task.id.clone(),
-                        from: task.status,
+                        from: task.status.clone(),
                         to: Status::Running,
                         note: format!("dispatched queued task as {run_id}"),
                         stage: None,
@@ -89,7 +92,7 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                 )?;
                 // A reserved launch's failure depends on the terminal engine, which no state
                 // here describes, so its recovery keeps retrying every pass.
-                match ctx.store.get(&task.id) {
+                match ctx.store.head(&task.id) {
                     Ok(current) if current.launch.is_none() => {
                         refusals.record(&task.id, refusal_state(ctx, &current)?);
                     }
@@ -107,14 +110,14 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
 /// the same `queued` reason again. This is the claim's own check, read without locks; the claim
 /// repeats it, so a stale read can only delay a launch by one pass, never admit one.
 /// `store` is the drain's read-only snapshot of the board.
-pub(crate) fn still_blocked(
+pub(crate) fn still_blocked<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     store: &corral_core::Store,
-    task: &Task,
+    task: &T,
     rank: usize,
     at: Timestamp,
 ) -> bool {
-    if !task.queued || task.launch.is_some() || task.dispatch_plan.is_none() {
+    if !*task.queued() || task.launch().is_some() || task.dispatch_plan().is_none() {
         return false;
     }
     let admission = Admission::Queued { rank, at };
@@ -145,10 +148,19 @@ pub(crate) fn contended(error: &Error) -> bool {
 /// its derived attention bookkeeping), its transitive dependency graph, the configuration, the
 /// discovered harness catalog that routes resolve against, and the project repository's refs,
 /// HEAD and registered worktrees that bases, branches and worktrees resolve against.
-fn refusal_state(ctx: &Ctx, task: &Task) -> Result<String> {
+fn refusal_state(ctx: &Ctx, task: &TaskHead) -> Result<String> {
     let mut hash = Sha256::new();
-    let mut record = serde_json::to_value(task).context("encoding task for refusal state")?;
-    if let Some(fields) = record.as_object_mut() {
+    let mut record = json!({
+        "fields": &**task,
+        "run": task.current_run,
+        "plan_run": task.last_plan_run,
+        "plan": task.last_plan,
+        "attempt": task.last_aggregate_attempt,
+    });
+    if let Some(fields) = record
+        .get_mut("fields")
+        .and_then(serde_json::Value::as_object_mut)
+    {
         fields.remove("attention");
         fields.remove("updated");
     }
@@ -159,20 +171,20 @@ fn refusal_state(ctx: &Ctx, task: &Task) -> Result<String> {
         if !seen.insert(id.clone()) {
             continue;
         }
-        match ctx.store.get(&id) {
+        match ctx.store.head(&id) {
             Ok(dep) => {
                 hash.update(format!(
                     "{id}:{}:{:?}\n",
                     dep.status.as_str(),
                     dep.depends_on
                 ));
-                pending.extend(dep.depends_on);
+                pending.extend(dep.depends_on.iter().cloned());
             }
             Err(_) => hash.update(format!("{id}:missing\n")),
         }
     }
     hash.update(serde_json::to_vec(&ctx.store.config).context("encoding configuration")?);
-    let catalog = ctx.store.state_dir().join(crate::HARNESS_CACHE_FILE);
+    let catalog = ctx.store.cache_root()?.join(crate::HARNESS_CACHE_FILE);
     match std::fs::read(&catalog) {
         Ok(bytes) => hash.update(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -211,25 +223,15 @@ struct Refusals {
 }
 
 impl Refusals {
-    fn path(ctx: &Ctx) -> std::path::PathBuf {
-        ctx.store.state_dir().join(REFUSALS)
-    }
-
     fn load(ctx: &Ctx) -> Result<Self> {
-        let path = Self::path(ctx);
-        let states = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
-        };
+        let states = REFUSALS.load(&ctx.store, "state")?.unwrap_or_default();
         Ok(Self {
             states,
             changed: false,
         })
     }
 
-    fn retain(&mut self, candidates: &[Task]) {
+    fn retain(&mut self, candidates: &[TaskHead]) {
         let before = self.states.len();
         self.states
             .retain(|id, _| candidates.iter().any(|task| &task.id == id));
@@ -256,7 +258,6 @@ impl Refusals {
         if !self.changed {
             return Ok(());
         }
-        std::fs::create_dir_all(ctx.store.state_dir()).context("creating state directory")?;
-        crate::artifact_storage::replace(&Self::path(ctx), &serde_json::to_vec(&self.states)?)
+        REFUSALS.save(&ctx.store, "state", &self.states)
     }
 }

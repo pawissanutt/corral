@@ -223,7 +223,15 @@ impl TaskHeadMut {
             self.demoted.push(Demoted::RunChild(s, c, *old));
         }
         let mut rows = Rows::new();
-        split_run(&mut rows, s, n, &child, serde_json::to_value(&child)?, true)?;
+        split_run(
+            &self.head.id,
+            &mut rows,
+            s,
+            n,
+            &child,
+            serde_json::to_value(&child)?,
+            true,
+        )?;
         let own_key = (TaskPart::ReviewRun, child_key(s, n));
         let own = rows
             .0
@@ -284,6 +292,7 @@ impl TaskHeadMut {
         TaskHeadMut::ensure_unchanged_identity(&before, &after)?;
         let mut rows = Rows::new();
         split_run(
+            &self.head.id,
             &mut rows,
             s,
             n,
@@ -429,7 +438,10 @@ impl TaskHeadMut {
     pub fn push_wait(&mut self, run: &str, wait: WaitRecord) -> Result<()> {
         let s = self.current_run_seq(run)?;
         self.ensure_new_obligation(s, &wait.request.id)?;
+        let parking = crate::ContainerFacts::wait_parking(&self.head.id, &wait);
         let (_, facts) = self.current_run_facts(run)?;
+        facts.dependency_waits += parking.0;
+        facts.nondependency_waits += parking.1;
         facts.waits += 1;
         facts.obligations_rev += 1;
         facts.pending_waits += u64::from(wait.observation.state == WaitState::Pending);
@@ -515,7 +527,17 @@ impl TaskHeadMut {
             return Ok(());
         }
         self.history_edit = true;
+        let before_parking = crate::ContainerFacts::wait_parking(&self.head.id, &before);
+        let after_parking = crate::ContainerFacts::wait_parking(&self.head.id, &after);
         let (_, facts) = self.current_run_facts(run)?;
+        facts.dependency_waits = facts
+            .dependency_waits
+            .saturating_sub(before_parking.0)
+            .saturating_add(after_parking.0);
+        facts.nondependency_waits = facts
+            .nondependency_waits
+            .saturating_sub(before_parking.1)
+            .saturating_add(after_parking.1);
         let pending = |w: &WaitRecord| i64::from(w.observation.state == WaitState::Pending);
         let open = |w: &WaitRecord| i64::from(w.receipt.is_none());
         facts.pending_waits = facts

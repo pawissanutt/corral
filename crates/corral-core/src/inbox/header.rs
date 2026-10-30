@@ -3,8 +3,8 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::work::{self, Work};
 use crate::TaskRef;
+use crate::work::{self, Work};
 
 #[derive(Deserialize)]
 struct RetryClaim {
@@ -471,7 +471,9 @@ impl Inbox<'_> {
                 admitted,
                 observed,
                 terminal,
-                publication_gap: self.record::<Value>("messages", &format!("{:020}", entry.seq))?.is_none(),
+                publication_gap: self
+                    .record::<Value>("messages", &format!("{:020}", entry.seq))?
+                    .is_none(),
                 retry_claimed_at: retry.as_ref().map(|claim| claim.at),
                 retry_successor: retry.and_then(|claim| claim.to),
             },
@@ -484,7 +486,11 @@ impl Inbox<'_> {
         let (header, handoffs) = self.preview_header(state, now)?;
         for (seq, proof) in handoffs {
             // Handoff proof before pruning. Failure leaves the task's entry intact.
-            self.save_record(TerminalState::Failed.suffix(), &format!("{seq:020}"), &proof)?;
+            self.save_record(
+                TerminalState::Failed.suffix(),
+                &format!("{seq:020}"),
+                &proof,
+            )?;
         }
         let header = state.owner_header.insert(header);
         // Bounded by owner capacity; never on the hot read.

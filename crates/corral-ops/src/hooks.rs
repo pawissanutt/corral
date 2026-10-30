@@ -414,14 +414,7 @@ fn publish(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
 }
 
 pub(crate) fn notice(ctx: &Ctx, key: &str) -> Result<Option<corral_core::NoticeClaim>> {
-    let path = directory(ctx).join(format!("{key}.json"));
-    match fs::read(&path) {
-        Ok(bytes) => Ok(serde_json::from_slice::<PostLandOperation>(&bytes)
-            .with_context(|| format!("reading {}", path.display()))?
-            .notice),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
+    Ok(OPERATIONS.load(&ctx.store, key)?.and_then(|op| op.notice))
 }
 
 pub(crate) fn update_notice(
@@ -429,10 +422,9 @@ pub(crate) fn update_notice(
     key: &str,
     update: impl FnOnce(&mut corral_core::NoticeClaim) -> Result<()>,
 ) -> Result<()> {
-    let path = directory(ctx).join(format!("{key}.json"));
-    let mut op: PostLandOperation = serde_json::from_slice(
-        &fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
-    )?;
+    let mut op = OPERATIONS
+        .load(&ctx.store, key)?
+        .context("post-land operation missing")?;
     update(op.notice.as_mut().context("post-land claim missing")?)?;
     save(ctx, &op)
 }

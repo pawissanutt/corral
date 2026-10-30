@@ -33,6 +33,8 @@ fn review_child(
         delivery: crate::delivery::owner::review_launch_mode(&resolved.harness),
         inbox: Default::default(),
         completion: Default::default(),
+        changes_round: None,
+        session: None,
         id: review_id.to_owned(),
         progress: None,
         checkpoints: vec![],
@@ -94,18 +96,6 @@ fn launch_profile<T: TaskRef + ?Sized>(
     launch: &mut crate::review_budget::ReviewLaunch<'_>,
 ) -> Result<String> {
     let title = format!("{} review", task.id());
-    let command = match crate::agent::hooks::review::command(ctx, task, run, resolved) {
-        Some(command) => command?,
-        None => render_template(
-            resolved,
-            &[
-                ("prompt_file", prompt_file.display().to_string()),
-                ("name", title.clone()),
-                ("task", task.id().clone()),
-                ("worktree", run.worktree.display().to_string()),
-            ],
-        )?,
-    };
     let herdr = open_run_pane(ctx, task, run, "review")?;
     attach_pane(ctx, task, run, &herdr.pane_id, true, launch)?;
     let mut child = String::new();
@@ -118,6 +108,19 @@ fn launch_profile<T: TaskRef + ?Sized>(
         child = review.id.clone();
         Ok(())
     })?;
+    let command =
+        match crate::agent::hooks::review::command(ctx, task, run, resolved, &herdr.pane_id) {
+            Some(command) => command?,
+            None => render_template(
+                resolved,
+                &[
+                    ("prompt_file", prompt_file.display().to_string()),
+                    ("name", title.clone()),
+                    ("task", task.id().clone()),
+                    ("worktree", run.worktree.display().to_string()),
+                ],
+            )?,
+        };
     let receipt = crate::launch_exit::receipt(ctx, task.id(), &format!("{}-{child}", run.id))?;
     let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
     let pane = herdr.pane_id;
@@ -342,7 +345,7 @@ pub(super) fn review_run_origin(
         resolved =
             crate::availability::bind_review(ctx, &task, &run, resolved, exclude.as_deref())?;
     }
-    policy.check_reviewer_family(vendor.as_deref(), resolved.vendor.as_deref())?;
+    crate::review_contracts::check_family(&policy, &run, vendor.as_deref(), &resolved)?;
     crate::agent::hooks::review::preflight(ctx, &resolved)?;
     instruction_guard::check(
         ctx,

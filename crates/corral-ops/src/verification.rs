@@ -136,8 +136,8 @@ pub(crate) fn identity_with<T: TaskRef + ?Sized>(
     if let Err(error) = crate::plan_target::validate_run(&store, task, run) {
         // Ownership is checked before marker classification. A recorded wait fences
         // stage actions, not receipt collection or a bound reviewer's verdict.
-        if task.status != Status::Review
-            || task.infra_wait.is_none()
+        if *task.status() != Status::Review
+            || task.infra_wait().is_none()
             || !(error.is::<corral_git::GitLockContention>()
                 || error.is::<corral_git::GitOperationOngoing>())
         {

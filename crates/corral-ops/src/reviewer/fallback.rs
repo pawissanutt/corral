@@ -98,8 +98,17 @@ fn escalate(
             at: now,
         });
         t.status = Status::NeedsMe;
-        batch = Some(crate::owner_notice::record_stage_head(ctx, t, "legacy_review_fallback", now)?);
-        ctx.store.log_event(Some(&task.id), "review_escalated", json!({"run": run.id, "reason": note}))?;
+        batch = Some(crate::owner_notice::record_stage_head(
+            ctx,
+            t,
+            "legacy_review_fallback",
+            now,
+        )?);
+        ctx.store.log_event(
+            Some(&task.id),
+            "review_escalated",
+            json!({"run": run.id, "reason": note}),
+        )?;
         Ok(true)
     })?;
     let Some(saved) = saved else {
@@ -107,8 +116,13 @@ fn escalate(
     };
     cleanup_head(ctx, &saved, Cleanup::Round);
     if let Some(batch) = batch {
-        crate::owner_notice::notify(ctx, crate::owner_notice::newly_committed(&saved, batch)?,
-            &format!("{} blocked", task.id), note, true)?;
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&saved, batch)?,
+            &format!("{} blocked", task.id),
+            note,
+            true,
+        )?;
     }
     Ok(Some(Change {
         task: task.id.clone(),

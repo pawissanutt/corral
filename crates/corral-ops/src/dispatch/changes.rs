@@ -54,12 +54,20 @@ pub(crate) fn auto_request_changes(
     expected: &RepairKey,
 ) -> Result<TaskHead> {
     let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Repair);
-    send_changes(ctx, id, text, "autopilot", Some(expected), Some(round), |t| {
-        t.rounds = round;
-        if let Some(run) = t.current_run_mut() {
-            run.autopilot = Some(state);
-        }
-    })
+    send_changes(
+        ctx,
+        id,
+        text,
+        "autopilot",
+        Some(expected),
+        Some(round),
+        |t| {
+            t.rounds = round;
+            if let Some(run) = t.current_run_mut() {
+                run.autopilot = Some(state);
+            }
+        },
+    )
 }
 
 fn send_changes(

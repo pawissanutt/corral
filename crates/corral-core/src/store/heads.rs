@@ -337,15 +337,76 @@ pub struct AttemptHead {
     pub facts: crate::ContainerFacts,
 }
 
+/// Fixed-size append positions and outstanding work for the seven native record families.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NativeRecordCounts {
+    #[serde(with = "crate::container_facts::fixed::array")]
+    pub counts: [u64; 7],
+    #[serde(with = "crate::container_facts::fixed")]
+    pub pending: u64,
+}
+
+impl NativeRecordCounts {
+    pub(crate) fn of(state: &crate::agent::AgentRunState) -> Self {
+        let counts = [
+            state.generations.len(),
+            state.receipts.len(),
+            state.questions.len(),
+            state.turns.len(),
+            state.wakes.len(),
+            state.reports.len(),
+            state.jobs.len(),
+        ]
+        .map(crate::container_facts::len_u64);
+        let pending = state
+            .receipts
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.state,
+                    crate::agent::ReceiptState::Reserved
+                        | crate::agent::ReceiptState::Queued
+                        | crate::agent::ReceiptState::Uncertain
+                ) || !r.post_pending.is_empty()
+            })
+            .count()
+            + state
+                .questions
+                .iter()
+                .filter(|q| q.recorded_pending())
+                .count()
+            + state.jobs.iter().filter(|j| j.needs_reap()).count();
+        Self {
+            counts,
+            pending: crate::container_facts::len_u64(pending),
+        }
+    }
+}
+
 /// Pi-native host state without its accumulated records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHostHead {
+    #[serde(default, rename = "_records")]
+    pub records: NativeRecordCounts,
     pub version: u32,
     pub binding: AgentBinding,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo: Option<crate::RunProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_hold: Option<String>,
+}
+
+impl AgentHostHead {
+    pub fn of(state: &crate::agent::AgentRunState) -> Self {
+        Self {
+            records: NativeRecordCounts::of(state),
+            version: state.version,
+            binding: state.binding.clone(),
+            todo: state.todo.clone(),
+            question_hold: state.question_hold.clone(),
+        }
+    }
 }
 
 impl PlanRunHead {
@@ -490,8 +551,27 @@ pub struct MemberGateHead {
 }
 
 impl RunHead {
+    /// Slot-release predicate from bounded obligation facts and current container state.
+    pub fn releases_slot(&self, own: &str) -> bool {
+        self.outcome.is_none()
+            && (self.obligations.slot_wait.is_some()
+                || (self.facts.owner_task == own
+                    && self.facts.parked_on_dependencies()
+                    && !self
+                        .gate
+                        .as_ref()
+                        .is_some_and(crate::GateRecord::holds_slot)
+                    && !self
+                        .review
+                        .as_ref()
+                        .is_some_and(crate::ReviewRecord::holds_slot)))
+    }
+
     pub fn executed_model(&self) -> Option<&str> {
-        self.execution.as_ref().and_then(|e| e.resolved.model.as_deref()).or(self.model.as_deref())
+        self.execution
+            .as_ref()
+            .and_then(|e| e.resolved.model.as_deref())
+            .or(self.model.as_deref())
     }
 
     pub fn family(&self, vendor: Option<&str>) -> Option<crate::ModelFamily> {
@@ -505,6 +585,7 @@ impl RunHead {
     pub fn of(run: &crate::Run) -> anyhow::Result<RunHead> {
         let mut rows = super::codec::Rows::new();
         super::codec::split_run(
+            "",
             &mut rows,
             1,
             super::codec::SELF,

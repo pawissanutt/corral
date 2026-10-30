@@ -494,7 +494,7 @@ pub(crate) fn plan_route_changes(
 /// reviewer model that starts.
 pub(crate) fn check_family(
     policy: &corral_core::ReviewPolicy,
-    run: &Run,
+    run: &RunHead,
     vendor: Option<&str>,
     reviewer: &ResolvedProfile,
 ) -> Result<()> {

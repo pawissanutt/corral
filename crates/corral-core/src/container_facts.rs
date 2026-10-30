@@ -99,6 +99,32 @@ pub(crate) mod fixed {
         }
     }
 
+    pub mod array {
+        use super::*;
+        pub fn serialize<S: Serializer, const N: usize>(
+            counts: &[u64; N],
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeSeq;
+            let mut out = s.serialize_seq(Some(N))?;
+            for n in counts {
+                out.serialize_element(&format!("{n:020}"))?;
+            }
+            out.end()
+        }
+        pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
+            d: D,
+        ) -> Result<[u64; N], D::Error> {
+            let values: Vec<u64> = Vec::<Count>::deserialize(d)?
+                .into_iter()
+                .map(count)
+                .collect::<Result<_, D::Error>>()?;
+            values
+                .try_into()
+                .map_err(|_| serde::de::Error::custom(format!("expected {N} counts")))
+        }
+    }
+
     pub mod opt {
         use super::*;
 
@@ -361,6 +387,13 @@ pub struct ContainerFacts {
     pub decisions: u64,
     #[serde(with = "fixed")]
     pub pending_waits: u64,
+    /// Identity used when classifying unresolved waits (self-waits never release a slot).
+    pub owner_task: String,
+    /// Unresolved waits naming another task, versus unresolved self/non-task waits.
+    #[serde(with = "fixed")]
+    pub dependency_waits: u64,
+    #[serde(with = "fixed")]
+    pub nondependency_waits: u64,
     /// Waits and decisions without a resume receipt.
     #[serde(with = "fixed")]
     pub open_obligations: u64,
@@ -379,6 +412,24 @@ pub struct ContainerFacts {
 }
 
 impl ContainerFacts {
+    pub(crate) fn wait_parking(task: &str, wait: &crate::WaitRecord) -> (u64, u64) {
+        if !wait.unresolved() {
+            return (0, 0);
+        }
+        if crate::awaited_task(&wait.request.handle).is_some_and(|target| target != task) {
+            (1, 0)
+        } else {
+            (0, 1)
+        }
+    }
+
+    /// The obligations-only predicate; current outcome/gate/reviewer state is checked by RunHead.
+    pub fn parked_on_dependencies(&self) -> bool {
+        self.dependency_waits > 0
+            && self.nondependency_waits == 0
+            && self.pending_decision.is_none()
+    }
+
     /// These facts with both revision counters cleared, for comparing with a derivation.
     pub fn without_revisions(&self) -> ContainerFacts {
         ContainerFacts {
@@ -389,7 +440,7 @@ impl ContainerFacts {
     }
 
     /// The facts of a coding run (or review child) `owner` at `<seq>/<child>`.
-    pub fn of_run(owner: &str, run: &Run) -> serde_json::Result<ContainerFacts> {
+    pub fn of_run(task: &str, owner: &str, run: &Run) -> serde_json::Result<ContainerFacts> {
         let children = &run.review_runs;
         let mut harnesses = BTreeMap::new();
         for harness in std::iter::once(run)
@@ -438,6 +489,19 @@ impl ContainerFacts {
                     .iter()
                     .filter(|w| w.observation.state == WaitState::Pending),
             ),
+            owner_task: task.to_owned(),
+            dependency_waits: count(
+                run.obligations
+                    .waits
+                    .iter()
+                    .filter(|w| Self::wait_parking(task, w).0 != 0),
+            ),
+            nondependency_waits: count(
+                run.obligations
+                    .waits
+                    .iter()
+                    .filter(|w| Self::wait_parking(task, w).1 != 0),
+            ),
             open_obligations: count(run.obligations.waits.iter().filter(|w| w.receipt.is_none()))
                 + count(
                     run.obligations
@@ -465,14 +529,38 @@ impl ContainerFacts {
                         + h.questions.len()
                         + h.turns.len()
                         + h.wakes.len()
-                        + h.reports.len(),
+                        + h.reports.len()
+                        + h.jobs.len(),
                 )
             }),
         })
     }
 
     pub fn of_plan_run(owner: &str, run: &PlanRun) -> ContainerFacts {
+        let host = run.agent_host.as_deref();
         ContainerFacts {
+            agent_records: host.map_or(0, |h| {
+                len_u64(
+                    h.generations.len()
+                        + h.receipts.len()
+                        + h.questions.len()
+                        + h.turns.len()
+                        + h.wakes.len()
+                        + h.reports.len()
+                        + h.jobs.len(),
+                )
+            }),
+            pending_questions: host.map_or(0, |h| {
+                count(h.questions.iter().filter(|q| q.state.pending()))
+            }),
+            armed_wakes: host.map_or(0, |h| {
+                count(h.wakes.iter().filter(|w| {
+                    matches!(
+                        w.state,
+                        crate::agent::WakeState::Armed | crate::agent::WakeState::PendingStart
+                    )
+                }))
+            }),
             pane_refs: count_sockets(plan_run_panes(&format!("plan_run:{owner}"), run)),
             ..ContainerFacts::default()
         }

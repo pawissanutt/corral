@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use corral_core::backend::HeadQuery;
-use corral_core::{AutoStage, Run, RunOutcome, Status, Task, TaskHead};
+use corral_core::{AutoStage, Run, RunOutcome, Status, TaskHead};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -134,7 +134,14 @@ fn hot_passes(
     loop {
         // The change-feed position, never a serialization of board history.
         let before = ctx.store.view()?.seq();
-        let pass = sync_scoped(ctx, now, processes, source, rebuild, attention.as_deref_mut())?;
+        let pass = sync_scoped(
+            ctx,
+            now,
+            processes,
+            source,
+            rebuild,
+            attention.as_deref_mut(),
+        )?;
         let progressed = pass.iter().any(|change| change.to != Status::NeedsMe);
         changes.extend(pass);
         let after = ctx.store.view()?.seq();
@@ -352,13 +359,13 @@ fn sync_scoped(
     drop(storage);
     // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
     crate::hooks::reconcile_post_land(ctx)?;
-    crate::agent::gate_queue::advance_tasks(ctx, &tasks)?;
+    crate::agent::gate_queue::advance_heads(ctx, &open_heads(ctx)?)?;
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::availability::advance_all(ctx, now)?);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(crate::dashboard::advance(ctx, now)?);
-    changes.extend(crate::parked::reacquire_woken(ctx, &tasks)?);
+    changes.extend(crate::parked::reacquire_woken(ctx, &open_heads(ctx)?)?);
     changes.extend(crate::queue_drain::start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
@@ -630,6 +637,7 @@ fn reconcile(
         if r.stuck != run.stuck
             || r.pending_reply != run.pending_reply
             || r.facts.obligations_rev != obligations_rev
+            || r.obligations.slot_wait != run.obligations.slot_wait
             || r.seen_pane != run.seen_pane
         {
             return Ok(false);

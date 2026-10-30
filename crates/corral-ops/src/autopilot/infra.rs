@@ -7,6 +7,7 @@ use corral_core::attention::{NoticeClaim, NoticeCoverage, NoticeFact};
 use corral_core::{InfraWait, InfraWaitClass};
 
 use super::*;
+use crate::cleanup::{Cleanup, cleanup_head};
 use crate::owner_notice;
 
 pub(super) fn classified(error: &anyhow::Error) -> bool {
@@ -71,9 +72,9 @@ fn roots(checkout: &Path) -> Result<(PathBuf, PathBuf)> {
 impl Pilot<'_> {
     pub(super) fn record_infra(&self, error: &anyhow::Error) -> Result<Step> {
         let wait = observation(error, self.now)?;
-        self.ctx.store.try_update(self.id(), |task| {
+        self.ctx.store.try_update_head(self.id(), |task| {
             if task.status != Status::Review
-                || task.current_run() != Some(self.run)
+                || task.head().current_run.as_deref() != Some(self.run)
                 || task.infra_wait.is_some()
             {
                 return Ok(false);
@@ -86,7 +87,7 @@ impl Pilot<'_> {
 
     pub(super) fn infra_guard(&self) -> Result<Option<Step>> {
         let wait = self
-            .task
+            .head
             .infra_wait
             .as_ref()
             .context("missing infra wait")?;
@@ -111,7 +112,7 @@ impl Pilot<'_> {
             }
             Err(error) => Err(error),
             Ok(()) => {
-                let written = self.ctx.store.try_update(self.id(), |task| {
+                let written = self.ctx.store.try_update_head(self.id(), |task| {
                     if task.status != Status::Review || task.infra_wait.as_ref() != Some(wait) {
                         return Ok(false);
                     }
@@ -135,7 +136,7 @@ impl Pilot<'_> {
         let source = format!("{}/infra_hold/{}", self.run.id, wait.first_seen);
         let mut claim = owner_notice::prepare(
             self.ctx,
-            self.task,
+            self.head,
             "infra_hold",
             &source,
             self.now,
@@ -154,9 +155,9 @@ impl Pilot<'_> {
                 "mtime_changed":wait.first_mtime != current.first_mtime}),
             },
         );
-        let committed = owner_notice::commit(self.ctx, self.id(), |_, task| {
+        let committed = owner_notice::commit_head(self.ctx, self.id(), |_, task| {
             if task.status != Status::Review
-                || task.current_run() != Some(self.run)
+                || task.head().current_run.as_deref() != Some(self.run)
                 || task.infra_wait.as_ref() != Some(wait)
             {
                 return Ok(None);
@@ -187,7 +188,7 @@ impl Pilot<'_> {
     fn stage_notice(&self, producer: &str, stage: AutoStage) -> Result<NoticeClaim> {
         owner_notice::prepare(
             self.ctx,
-            self.task,
+            self.head,
             producer,
             &format!("{}/{}/{}", self.run.id, stage.as_str(), self.now),
             self.now,
@@ -204,11 +205,11 @@ impl Pilot<'_> {
         let state = AutopilotState {
             stage: AutoStage::Escalated,
             reason: Some(reason.into()),
-            sha: worktree_head(self.run),
+            sha: crate::gate::run_head_sha(self.run),
             at: self.now,
         };
         let claim = self.stage_notice("autopilot_escalate", AutoStage::Escalated)?;
-        let committed = owner_notice::commit(self.ctx, self.id(), |store, task| {
+        let committed = owner_notice::commit_head(self.ctx, self.id(), |store, task| {
             if !self.transition(store, task, self.stage(), state, Status::NeedsMe)? {
                 return Ok(None);
             }
@@ -217,7 +218,7 @@ impl Pilot<'_> {
         let Some(committed) = committed else {
             return Ok(Step::Wait);
         };
-        cleanup(self.ctx, self.task, Cleanup::Round);
+        cleanup_head(self.ctx, &self.ctx.store.head(self.id())?, Cleanup::Round);
         owner_notice::notify(
             self.ctx,
             committed,
@@ -227,7 +228,7 @@ impl Pilot<'_> {
         )?;
         self.log(
             AutoStage::Escalated,
-            self.task.rounds,
+            self.head.rounds,
             None,
             Some(reason),
             "handed to the owner",
@@ -266,7 +267,7 @@ impl Pilot<'_> {
             at: self.now,
         };
         let claim = self.stage_notice("landing_blocked", AutoStage::Blocked)?;
-        let committed = owner_notice::commit(self.ctx, self.id(), |store, task| {
+        let committed = owner_notice::commit_head(self.ctx, self.id(), |store, task| {
             if !self.transition(store, task, self.stage(), state, Status::Review)? {
                 return Ok(None);
             }
@@ -277,7 +278,7 @@ impl Pilot<'_> {
         };
         self.log(
             AutoStage::Blocked,
-            self.task.rounds,
+            self.head.rounds,
             sha.as_deref(),
             Some(reason),
             "landing blocked; retried on later syncs",
@@ -301,7 +302,7 @@ impl Pilot<'_> {
     fn transition(
         &self,
         store: &corral_core::Store,
-        task: &mut Task,
+        task: &mut corral_core::TaskHeadMut,
         from: Option<AutoStage>,
         state: AutopilotState,
         status: Status,
@@ -310,10 +311,10 @@ impl Pilot<'_> {
             store: store.clone(),
             ..self.ctx.clone()
         };
-        let Some(kind) = crate::automation_status::next_action(&current, task)? else {
+        let Some(kind) = crate::automation_status::next_action_head(&current, task.head())? else {
             return Ok(false);
         };
-        if crate::operating::require(store, task, kind).is_err() {
+        if crate::operating::require(store, &*task, kind).is_err() {
             return Ok(false);
         }
         let Some(run) = task.current_run_mut().filter(|run| {
@@ -334,9 +335,12 @@ impl Pilot<'_> {
         state: AutopilotState,
         status: Status,
     ) -> Result<bool> {
-        let (_, written) = self.ctx.store.dispatch_update(self.id(), |store, task| {
-            self.transition(store, task, from, state, status)
-        })?;
+        let (_, written) = self
+            .ctx
+            .store
+            .dispatch_update_head(self.id(), |store, task| {
+                self.transition(store, task, from, state, status)
+            })?;
         Ok(written)
     }
 }

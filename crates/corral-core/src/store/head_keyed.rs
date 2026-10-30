@@ -133,15 +133,9 @@ impl TaskHead {
         })
     }
 
-    fn agent_rows(
-        &self,
-        container: &ContainerRef,
-        kind: &str,
-        token: Option<String>,
-        open: bool,
-    ) -> Result<Vec<HistoryRow>> {
+    pub(super) fn agent_owner(&self, container: &ContainerRef) -> Result<Option<String>> {
         if container.task().is_none_or(|task| task != self.task.id) {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let owner = match container {
             ContainerRef::Worker { run, .. } => self.owner_key(run, None)?,
@@ -150,21 +144,45 @@ impl TaskHead {
                 let key = if self.last_plan_run.as_ref().is_some_and(|r| r.id == *run) {
                     self.seqs.plan_run.map(super::codec::seq)
                 } else {
-                    self.query(&RowQuery::part(TaskPart::PlanRun).with_index(format!("id:{run}")),
-                        1, Counter::HistoryRowDecodes)?.pop().map(|row| row.key)
+                    self.query(
+                        &RowQuery::part(TaskPart::PlanRun).with_index(format!("id:{run}")),
+                        1,
+                        Counter::HistoryRowDecodes,
+                    )?
+                    .pop()
+                    .map(|row| row.key)
                 };
                 key.map(|key| format!("plan_run:{key}"))
             }
             ContainerRef::PlanReviewer { plan, review, .. } => {
-                let Some(n) = self.plan_seq(plan)? else { return Ok(Vec::new()); };
+                let Some(n) = self.plan_seq(plan)? else {
+                    return Ok(None);
+                };
                 let prefix = format!("{n:06}/");
-                self.query(&RowQuery::under(TaskPart::PlanReview, prefix)
-                    .with_index(format!("id:{review}")), 1, Counter::NestedRowDecodes)?
-                    .pop().map(|row| format!("plan_review:{}", row.key))
+                self.query(
+                    &RowQuery::under(TaskPart::PlanReview, prefix)
+                        .with_index(format!("id:{review}")),
+                    1,
+                    Counter::NestedRowDecodes,
+                )?
+                .pop()
+                .map(|row| format!("plan_review:{}", row.key))
             }
             ContainerRef::Pm => None,
         };
-        let Some(owner) = owner else { return Ok(Vec::new()); };
+        Ok(owner)
+    }
+
+    pub(super) fn agent_rows(
+        &self,
+        container: &ContainerRef,
+        kind: &str,
+        token: Option<String>,
+        open: bool,
+    ) -> Result<Vec<HistoryRow>> {
+        let Some(owner) = self.agent_owner(container)? else {
+            return Ok(Vec::new());
+        };
         let mut q = RowQuery::under(TaskPart::AgentRecord, format!("{owner}/{kind}/"));
         let limit = if token.is_some() { 1 } else { u32::MAX };
         q.index = token;
@@ -199,6 +217,56 @@ impl TaskHead {
                 .into_iter()
                 .map(|row| row.doc)
                 .collect(),
+        )
+    }
+
+    /// Only unfinished receipts, including committed receipts with owed post-effects.
+    pub fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>> {
+        self.agent_page(container, "receipts", true)
+    }
+    pub fn agent_job(
+        &self,
+        container: &ContainerRef,
+        id: &str,
+    ) -> Result<Option<crate::agent::JobRecord>> {
+        self.agent_record(container, "jobs", format!("id:{id}"))
+    }
+    pub fn pending_agent_jobs(
+        &self,
+        container: &ContainerRef,
+    ) -> Result<Vec<crate::agent::JobRecord>> {
+        self.agent_page(container, "jobs", true)
+    }
+    pub fn latest_agent_turn(
+        &self,
+        container: &ContainerRef,
+        generation: u32,
+    ) -> Result<Option<AgentTurn>> {
+        let Some(owner) = self.agent_owner(container)? else {
+            return Ok(None);
+        };
+        let mut q = RowQuery::under(TaskPart::AgentRecord, format!("{owner}/turns/"))
+            .with_index(format!("generation:{generation}"));
+        q.newest_first = true;
+        self.query(&q, 1, Counter::NestedRowDecodes)?
+            .pop()
+            .map(|row| serde_json::from_value(row.doc).map_err(Into::into))
+            .transpose()
+    }
+
+    /// Queued native gates of this task, selected by the receipt index even on older runs.
+    pub fn queued_agent_gates(&self) -> Result<Vec<RequestReceipt>> {
+        decode_all(
+            self.query(
+                &RowQuery::part(TaskPart::AgentRecord)
+                    .with_index("gate:queued")
+                    .open(),
+                u32::MAX,
+                Counter::NestedRowDecodes,
+            )?
+            .into_iter()
+            .map(|row| row.doc)
+            .collect(),
         )
     }
 

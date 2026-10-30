@@ -170,8 +170,12 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         return Ok(Vec::new());
     }
 
-    let mut tasks = ctx.store.heads(&corral_core::backend::HeadQuery::Open { project: None })?
-        .iter().map(|head| head.to_shell_task()).collect::<Result<Vec<_>>>()?;
+    let mut tasks = ctx
+        .store
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
+        .iter()
+        .map(|head| head.to_shell_task())
+        .collect::<Result<Vec<_>>>()?;
     let mut sizes: Vec<_> = tasks
         .iter()
         .flat_map(|task| task.runs.iter().map(move |run| (task, run)))

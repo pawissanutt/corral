@@ -39,7 +39,7 @@ fn containers(task: &Task) -> Vec<Container> {
         out.push((
             TaskPart::Run,
             key.clone(),
-            ContainerFacts::of_run(&key, run).unwrap(),
+            ContainerFacts::of_run(&task.id, &key, run).unwrap(),
             Some((TaskPart::ReviewRun, format!("{key}/"))),
             Some(format!("{key}/000000/")),
         ));
@@ -48,7 +48,7 @@ fn containers(task: &Task) -> Vec<Container> {
             out.push((
                 TaskPart::ReviewRun,
                 child_key.clone(),
-                ContainerFacts::of_run(&child_key, child).unwrap(),
+                ContainerFacts::of_run(&task.id, &child_key, child).unwrap(),
                 None,
                 Some(format!("{child_key}/")),
             ));

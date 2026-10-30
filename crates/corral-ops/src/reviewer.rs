@@ -340,16 +340,28 @@ fn verdict_inner(
             if changes.is_empty()
                 && let Some(route) = s.route.as_deref()
             {
-                changes =
-                    crate::review_packet::route_changes_at(ctx, &task, &run_head, s, route, true, moved.as_ref())?;
+                changes = crate::review_packet::route_changes_at(
+                    ctx,
+                    &task,
+                    &run_head,
+                    s,
+                    route,
+                    true,
+                    moved.as_ref(),
+                )?;
             }
             if !changes.is_empty() {
                 bail!("stale review: {}", serde_json::to_string(&changes)?);
             }
             match s.route.as_deref() {
-                Some(route) => {
-                    crate::review_packet::enforce(ctx, &task, &run_head, route, (verdict, notes), moved.as_ref())?
-                }
+                Some(route) => crate::review_packet::enforce(
+                    ctx,
+                    &task,
+                    &run_head,
+                    route,
+                    (verdict, notes),
+                    moved.as_ref(),
+                )?,
                 None => (verdict, notes.to_string()),
             }
         }
@@ -377,10 +389,14 @@ fn verdict_inner(
         report,
     )?;
     if let Some(base) = moved {
-        ctx.store.log_event(Some(&task.id), "verdict_base_moved", json!({
-            "run": run.id, "verdict": verdict.as_str(),
-            "reviewed_base": base.expected, "current_base": base.actual,
-        }))?;
+        ctx.store.log_event(
+            Some(&task.id),
+            "verdict_base_moved",
+            json!({
+                "run": run.id, "verdict": verdict.as_str(),
+                "reviewed_base": base.expected, "current_base": base.actual,
+            }),
+        )?;
     }
     Ok(recorded)
 }

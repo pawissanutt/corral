@@ -111,9 +111,14 @@ fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn Deliver
     // The recipient's projection is read by key, never by hydrating task history.
     let task = ctx.store.head(recipient.task()?).ok()?;
     let native_plan = match recipient {
-        Recipient::PlanRun { plan_run, .. } => task.plan_run_head(plan_run).ok()?.is_some_and(|r|
-            r.agent_host.is_some() || crate::agent::hooks::is_pi_native(&r.harness)),
-        Recipient::PlanReview { plan, review, .. } => task.plan_review(plan, review).ok()?
+        Recipient::PlanRun { plan_run, .. } => {
+            task.plan_run_head(plan_run).ok()?.is_some_and(|r| {
+                r.agent_host.is_some() || crate::agent::hooks::is_pi_native(&r.harness)
+            })
+        }
+        Recipient::PlanReview { plan, review, .. } => task
+            .plan_review(plan, review)
+            .ok()?
             .is_some_and(|r| r.agent_host.is_some()),
         _ => false,
     };

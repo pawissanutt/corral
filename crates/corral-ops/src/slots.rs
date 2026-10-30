@@ -285,33 +285,12 @@ impl SlotUsage {
         };
         for head in heads {
             let run = head.current_run.as_ref();
-            let planning = head.last_plan_run.as_ref().filter(|p| {
-                p.state != corral_core::PlanRunState::Approved
-                    && run.is_none_or(|r| r.outcome.is_some())
-            });
-            let worker = planning.map_or_else(
-                || {
-                    head.status.holds_slot()
-                        && run.is_none_or(|r| r.outcome != Some(corral_core::RunOutcome::Failed))
-                        && !(run.is_none_or(|r| r.outcome.is_some())
-                            && head.last_plan.as_ref().is_some_and(|p| {
-                                p.approval.is_none()
-                                    && p.current_review.as_ref().is_some_and(|r| {
-                                        r.verdict == Some(corral_core::Verdict::Approve)
-                                    })
-                            }))
-                },
-                |p| {
-                    p.ended.is_none()
-                        && matches!(
-                            p.state,
-                            corral_core::PlanRunState::Planning
-                                | corral_core::PlanRunState::Changes
-                        )
-                },
-            );
             let reserved = head.launch.as_ref().is_some_and(|l| l.reserved);
-            usage.tasks += usize::from(head.status.holds_slot() && (worker || reserved));
+            usage.tasks += usize::from(head.status.holds_slot() && head.holds_dispatch_slot());
+            usage.parked += usize::from(
+                head.status.holds_slot() && run.is_some_and(|r| r.releases_slot(&head.id)),
+            );
+            let sharing = head.status.holds_slot() && head.holds_dispatch_slot() && run.is_some();
             usage.reservations += usize::from(!head.status.holds_slot() && reserved);
             let gate = run
                 .and_then(|r| r.gate.as_ref())
@@ -321,6 +300,7 @@ impl SlotUsage {
                 .is_some_and(corral_core::ReviewRecord::holds_slot);
             usage.gates +=
                 usize::try_from(head.summary.held_gates).unwrap_or(usize::MAX) + usize::from(gate);
+            usage.shared_gates += usize::from(sharing && gate);
             usage.reviews += usize::try_from(
                 head.summary.held_reviews
                     + head.summary.pending_plan_reviews
@@ -333,7 +313,7 @@ impl SlotUsage {
                 + usize::from(review);
             if let Some(work) = head.review_reservation {
                 let (recorded, counted) = match work {
-                    ReviewWork::Gate => (gate, limits.count_gates),
+                    ReviewWork::Gate => (gate, limits.count_gates && !sharing),
                     ReviewWork::Reviewer => (review, limits.count_reviews),
                 };
                 usage.reservations += usize::from(counted && !recorded);

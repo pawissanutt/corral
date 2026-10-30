@@ -1,5 +1,6 @@
 //! Gate receipts are the admission queue. Sync owns retries, never the model.
 use anyhow::{Context, Result};
+use corral_core::TaskRef;
 use corral_core::agent::{
     self, ContainerRef, Executor, ReceiptState, RequestBinding, RequestOrigin, RequestReceipt,
 };
@@ -25,13 +26,9 @@ fn enqueue(
 ) -> Result<RequestReceipt> {
     let id = origin.binding.container.task().context("gate task")?;
     let mut out = None;
-    ctx.store.try_update(id, |task| {
-        let state = agent::container_state_mut(task, &origin.binding.container)
-            .context("gate binding disappeared")?;
-        let receipt = state
-            .receipts
-            .iter_mut()
-            .find(|r| r.request_id == origin.request_id)
+    ctx.store.try_update_head(id, |task| {
+        let mut receipt = task
+            .agent_receipt(&origin.binding.container, &origin.request_id)?
             .context("gate receipt disappeared")?;
         if !matches!(receipt.state, ReceiptState::Reserved | ReceiptState::Queued)
             || receipt.executor.as_ref() != Some(executor)
@@ -47,6 +44,10 @@ fn enqueue(
             "reason": crate::review_budget::bounded(reason),
         });
         out = Some(receipt.clone());
+        task.put_agent_record(
+            &origin.binding.container,
+            agent::NativeRecord::Receipt(receipt),
+        )?;
         task.review_wait = Some(corral_core::ReviewWork::Gate);
         Ok(true)
     })?;
@@ -98,10 +99,10 @@ pub(super) fn execute(
             Some(format!("{error:#}"))
         }
     };
-    let task = ctx.store.get(task_id)?;
-    let current = agent::container_state(&task, &origin.binding.container)
-        .and_then(|s| s.receipt(&origin.request_id))
-        .cloned()
+    let current = ctx
+        .store
+        .head(task_id)?
+        .agent_receipt(&origin.binding.container, &origin.request_id)?
         .context("gate reservation disappeared")?;
     let settled = crate::review_budget::settle(ctx, &current, Some(&me), true, error)?;
     effects::failpoint("gate_receipt_before_ack");
@@ -110,26 +111,16 @@ pub(super) fn execute(
 
 #[cfg(test)]
 pub(crate) fn advance(ctx: &Ctx) -> Result<()> {
-    advance_tasks(ctx, &ctx.store.list()?)
+    advance_heads(ctx, &crate::pm_next::heads::open(&ctx.store)?)
 }
 
 /// Called after sync drops its shared pane-inventory lease, before admitting new work, with the
 /// board the pass already read: every claim below rechecks its task under the store lock, and a
 /// gate queued after that read is admitted on the next pass.
-pub(crate) fn advance_tasks(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<()> {
+pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Result<()> {
     let mut queued = Vec::new();
     for task in tasks {
-        for run in &task.runs {
-            if let Some(state) = run.agent_host.as_deref() {
-                queued.extend(
-                    state
-                        .receipts
-                        .iter()
-                        .filter(|r| r.op == "gate" && r.state == ReceiptState::Queued)
-                        .cloned(),
-                );
-            }
-        }
+        queued.extend(task.queued_agent_gates()?);
     }
     queued.sort_by(|a, b| {
         a.at.cmp(&b.at)
@@ -155,27 +146,28 @@ pub(crate) fn advance_tasks(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<()
             .task()
             .context("queued gate task")?;
         let mut claimed = false;
-        ctx.store.try_update(id, |task| {
-            if agent::check_live(task, &origin.binding).is_err() {
+        ctx.store.try_update_head(id, |task| {
+            if agent::check_live_ref(task, &origin.binding)?.is_err() {
                 return Ok(false);
             }
-            admission::recheck_task(task, &origin.binding)?;
-            let state = agent::container_state_mut(task, &origin.binding.container)
-                .context("queued gate binding disappeared")?;
-            let Some(stored) = state.receipts.iter_mut().find(|r| {
-                r.request_id == receipt.request_id
-                    && r.state == ReceiptState::Queued
-                    && r.executor == receipt.executor
-            }) else {
+            admission::recheck_task_head(task, &origin.binding)?;
+            let Some(mut stored) = task
+                .agent_receipt(&origin.binding.container, &receipt.request_id)?
+                .filter(|r| r.state == ReceiptState::Queued && r.executor == receipt.executor)
+            else {
                 return Ok(false);
             };
             stored.executor = Some(me.clone());
+            task.put_agent_record(
+                &origin.binding.container,
+                agent::NativeRecord::Receipt(stored),
+            )?;
             claimed = true;
             Ok(true)
         })?;
         if !claimed {
             // A fenced/closed request is cancelled by the same evidence-based reconciler.
-            effects::reconcile_task(ctx, id)?;
+            crate::review_budget::settle(ctx, &receipt, receipt.executor.as_ref(), false, None)?;
             continue;
         }
         effects::failpoint("gate_queue_claimed");

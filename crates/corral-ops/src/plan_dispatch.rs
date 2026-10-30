@@ -381,9 +381,9 @@ fn launch(
     Ok((ctx.store.head(&task.id)?, herdr.pane_id))
 }
 
-fn render_command(
+fn render_command<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     run: &PlanRun,
     repo: &Path,
     prompt_file: &Path,
@@ -407,7 +407,7 @@ fn render_command(
             resolved,
         )?;
         let target = crate::agent::BindTarget::Planner {
-            task: task.id.clone(),
+            task: task.id().clone(),
             run: run.id.clone(),
         };
         let pane = &run.herdr.as_ref().context("planner pane missing")?.pane_id;
@@ -424,8 +424,8 @@ fn render_command(
         resolved,
         &[
             ("prompt_file", prompt_file.display().to_string()),
-            ("name", format!("{} plan", task.id)),
-            ("task", task.id.clone()),
+            ("name", format!("{} plan", task.id())),
+            ("task", task.id().clone()),
             ("worktree", repo.display().to_string()),
         ],
     )
@@ -660,13 +660,17 @@ pub(crate) fn revise(
 /// Resume a definitely unsubmitted claim with its original owner or automatic consent.
 /// Whether the current planner has a resumable prepared claim.
 pub(crate) fn may_resume(task: &Task) -> Result<bool> {
-    let cancelled = task.plan_runs.last().is_some_and(|run| run.state == PlanRunState::Cancelled);
+    let cancelled = task
+        .plan_runs
+        .last()
+        .is_some_and(|run| run.state == PlanRunState::Cancelled);
     Ok(task.park.is_none() && !task.dispatch_hold && !cancelled && claim::load(task)?.is_some())
 }
 
 pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
     let task = &head.shell_task()?;
-    if task.park.is_some() || task.dispatch_hold
+    if task.park.is_some()
+        || task.dispatch_hold
         || task
             .plan_runs
             .last()

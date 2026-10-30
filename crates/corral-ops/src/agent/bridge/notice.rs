@@ -266,7 +266,7 @@ pub fn keep_complete(
     artifact_run: Option<&str>,
     text: &str,
 ) -> Result<String> {
-    let dir = ctx.store.state_dir().join("agent-recovery");
+    let dir = crate::agent::recovery::evidence_dir(ctx, container)?;
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let name = container.key().replace('/', "-");
     let path = dir.join(format!("{name}-g{lost}-notice.md"));
@@ -286,5 +286,7 @@ pub fn keep_complete(
         Some(ArtifactKind::Evidence),
         Some(&title),
     )?;
-    Ok(ctx.store.dir().join(&artifact.path).display().to_string())
+    std::fs::remove_file(&path)
+        .with_context(|| format!("removing staged recovery notice {}", path.display()))?;
+    Ok(crate::artifact_path(ctx, &artifact)?.display().to_string())
 }

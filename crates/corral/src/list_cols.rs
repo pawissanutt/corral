@@ -139,13 +139,22 @@ pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String
         .map(|r| r.task().to_owned())
         .collect();
     let now = Timestamp::now();
-    let assessments: BTreeMap<_, _> = if columns.iter().any(|c| matches!(c.as_str(), "status" | "blocked" | "needs_me")) {
-        corral_ops::attention::board(ctx, now)?.tasks.into_iter()
-            .map(|row| (row.task, row.assessment)).collect()
-    } else { BTreeMap::new() };
+    let assessments: BTreeMap<_, _> = if columns
+        .iter()
+        .any(|c| matches!(c.as_str(), "status" | "blocked" | "needs_me"))
+    {
+        corral_ops::attention::board(ctx, now)?
+            .tasks
+            .into_iter()
+            .map(|row| (row.task, row.assessment))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     let mut rows = Vec::new();
     for (head, task) in heads.iter().zip(&tasks) {
-        let blocked = assessments.get(&head.id)
+        let blocked = assessments
+            .get(&head.id)
             .and_then(|assessment| corral_core::attention::blocked(task, assessment));
         rows.push(
             columns

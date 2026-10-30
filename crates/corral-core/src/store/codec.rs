@@ -243,7 +243,15 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
     };
     let runs = vector("runs");
     for (i, (run, doc)) in task.runs.iter().zip(runs).enumerate() {
-        split_run(&mut rows, i + 1, SELF, run, doc, i + 1 == task.runs.len())?;
+        split_run(
+            &task.id,
+            &mut rows,
+            i + 1,
+            SELF,
+            run,
+            doc,
+            i + 1 == task.runs.len(),
+        )?;
     }
     for (i, (run, doc)) in task.plan_runs.iter().zip(vector("plan_runs")).enumerate() {
         plan_run_rows(&mut rows, i + 1, run, doc, i + 1 == task.plan_runs.len())?;
@@ -330,7 +338,12 @@ pub(crate) fn plan_run_rows(
     let key = seq(n);
     let mut doc = object(doc, "plan run")?;
     split_inbox(rows, &format!("plan_run:{key}"), &mut doc)?;
-    split_agent_host(rows, &format!("plan_run:{key}"), run.agent_host.as_deref(), &mut doc)?;
+    split_agent_host(
+        rows,
+        &format!("plan_run:{key}"),
+        run.agent_host.as_deref(),
+        &mut doc,
+    )?;
     doc.insert(
         FACTS.to_owned(),
         serde_json::to_value(ContainerFacts::of_plan_run(&key, run))?,
@@ -372,7 +385,12 @@ pub(crate) fn plan_review_rows(
     let review_key = format!("{plan_key}/{}", seq(r));
     let mut doc = object(doc, "plan review")?;
     split_inbox(rows, &format!("plan_review:{review_key}"), &mut doc)?;
-    split_agent_host(rows, &format!("plan_review:{review_key}"), review.agent_host.as_deref(), &mut doc)?;
+    split_agent_host(
+        rows,
+        &format!("plan_review:{review_key}"),
+        review.agent_host.as_deref(),
+        &mut doc,
+    )?;
     rows.put_indexed(
         row(
             TaskPart::PlanReview,
@@ -543,6 +561,7 @@ pub(crate) fn launch_pane(launch: Option<&crate::LaunchReservation>) -> Option<P
 
 /// The row of one coding run (`child` 0) or review child and all of its nested rows.
 pub(crate) fn split_run(
+    task: &str,
     rows: &mut Rows,
     run_seq: usize,
     child: usize,
@@ -556,13 +575,13 @@ pub(crate) fn split_run(
         let children = take_array(&mut doc, "review_runs");
         for (c, (review, review_doc)) in run.review_runs.iter().zip(children).enumerate() {
             let last = c + 1 == run.review_runs.len();
-            split_run(rows, run_seq, c + 1, review, review_doc, last)?;
+            split_run(task, rows, run_seq, c + 1, review, review_doc, last)?;
         }
     }
     split_nested(rows, &owner, run, &mut doc)?;
     doc.insert(
         FACTS.to_owned(),
-        serde_json::to_value(ContainerFacts::of_run(&owner, run)?)?,
+        serde_json::to_value(ContainerFacts::of_run(task, &owner, run)?)?,
     );
     let (part, key) = if child == SELF {
         (TaskPart::Run, seq(run_seq))
@@ -681,9 +700,14 @@ pub(crate) fn split_agent_host(
     doc: &mut Map<String, Value>,
 ) -> Result<()> {
     if let Some(Value::Object(host)) = doc.get_mut("agent_host") {
+        let counts = typed
+            .map(super::heads::NativeRecordCounts::of)
+            .unwrap_or_default();
+        host.insert("_records".into(), serde_json::to_value(counts)?);
         for kind in AGENT_KINDS {
             for (i, record) in take_array(host, kind).into_iter().enumerate() {
-                let (open, index) = agent_flags(typed, kind, i);
+                let (open, index) =
+                    crate::agent::NativeRecord::from_doc(kind, record.clone())?.metadata();
                 rows.put_indexed(
                     row(
                         TaskPart::AgentRecord,
@@ -698,55 +722,6 @@ pub(crate) fn split_agent_host(
         }
     }
     Ok(())
-}
-
-fn agent_flags(
-    host: Option<&crate::agent::AgentRunState>,
-    kind: &str,
-    i: usize,
-) -> (bool, Vec<String>) {
-    let Some(host) = host else {
-        return (false, Vec::new());
-    };
-    match kind {
-        "generations" => (
-            false,
-            host.generations
-                .get(i)
-                .map(|g| vec![format!("gen:{}", g.n)])
-                .unwrap_or_default(),
-        ),
-        "turns" => (
-            false,
-            host.turns
-                .get(i)
-                .map(|t| vec![format!("turn:{}:{}", t.generation, t.seq)])
-                .unwrap_or_default(),
-        ),
-        "receipts" => (
-            false,
-            host.receipts
-                .get(i)
-                .map(|r| vec![format!("request:{}", r.request_id)])
-                .unwrap_or_default(),
-        ),
-        "questions" => host.questions.get(i).map_or((false, Vec::new()), |q| {
-            (q.state.pending(), vec![format!("key:{}", q.key)])
-        }),
-        "jobs" => host.jobs.get(i).map_or((false, Vec::new()), |job| {
-            (job.needs_reap(), vec![format!("id:{}", job.id)])
-        }),
-        "wakes" => host.wakes.get(i).map_or((false, Vec::new()), |w| {
-            (
-                matches!(
-                    w.state,
-                    crate::agent::WakeState::Armed | crate::agent::WakeState::PendingStart
-                ),
-                vec![format!("request:{}", w.request_id)],
-            )
-        }),
-        _ => (false, Vec::new()),
-    }
 }
 
 /// Moves an inbox's applied effects and scoped cursors out of a container document.
