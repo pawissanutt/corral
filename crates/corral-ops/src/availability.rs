@@ -38,9 +38,24 @@ fn episode_id(task: &str, run: &str, role: ProfileRole) -> String {
 
 /// A continuation inherits its episode, so restarts and new runs never reset the bound.
 pub(crate) fn run_episode(task: &str, run: &Run) -> String {
-    binding(run)
+    episode_from_candidate(task, &run.id, binding(run))
+}
+
+pub(crate) fn run_episode_head(task: &str, run: &corral_core::RunHead) -> String {
+    episode_from_candidate(
+        task,
+        &run.id,
+        run.execution
+            .as_ref()
+            .and_then(|snapshot| snapshot.candidate.as_ref()),
+    )
+}
+
+fn episode_from_candidate(task: &str, run: &str, candidate: Option<&CandidateBinding>) -> String {
+    candidate
+        .filter(|binding| !binding.pinned)
         .and_then(|binding| binding.episode.clone())
-        .unwrap_or_else(|| episode_id(task, &run.id, ProfileRole::Implementation))
+        .unwrap_or_else(|| episode_id(task, run, ProfileRole::Implementation))
 }
 
 fn binding(run: &Run) -> Option<&CandidateBinding> {

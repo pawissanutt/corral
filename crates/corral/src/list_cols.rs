@@ -22,7 +22,7 @@ fn cell(name: &str, t: &Task, all: &[Task], pinned: &BTreeSet<String>, now: Time
 
 pub fn print(ctx: &Ctx, tasks: &[Task], columns: &[String]) -> Result<()> {
     let now = Timestamp::now();
-    let assessments: BTreeMap<_, _> = corral_ops::attention::board(ctx, now)?
+    let assessments: BTreeMap<_, _> = corral_ops::attention::board_hot(ctx, now)?
         .tasks
         .into_iter()
         .map(|row| (row.task, row.assessment))
@@ -143,7 +143,7 @@ pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String
         .iter()
         .any(|c| matches!(c.as_str(), "status" | "blocked" | "needs_me"))
     {
-        corral_ops::attention::board(ctx, now)?
+        corral_ops::attention::board_hot(ctx, now)?
             .tasks
             .into_iter()
             .map(|row| (row.task, row.assessment))

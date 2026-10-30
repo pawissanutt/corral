@@ -74,7 +74,7 @@ pub(crate) fn load_board(
     let (sender, messages) = std::sync::mpsc::channel();
     let result = {
         let _capture = corral_core::capture_messages(sender);
-        corral_ops::attention::board(ctx, now)
+        corral_ops::attention::board_hot(ctx, now)
     };
     let mut unavailable = None;
     for message in messages.try_iter() {
