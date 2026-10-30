@@ -86,6 +86,8 @@ fn after_offset_is_gapless_across_two_processes() {
         &[
             "--after-offset",
             "0",
+            "--for",
+            "done",
             "--json",
             "--print-cursor",
             "--timeout",
@@ -268,7 +270,13 @@ fn outcome_subscription(kind: &str, explicit: bool) {
         args.extend(["--for", kind]);
     }
     let output = invoke(dir.path(), &args);
-    // Then the actual CLI consumes exactly that outcome, using either subscription form.
+    // Routine outcome kinds remain explicitly subscribable, but no longer wake defaults.
+    if !explicit && kind != "wait_transition" {
+        assert_eq!(output.status.code(), Some(124), "{output:?}");
+        assert!(output.stdout.is_empty());
+        return;
+    }
+    // Then the actual CLI consumes the actionable or explicitly requested outcome.
     assert!(
         output.status.success(),
         "{kind} explicit={explicit}: {output:?}"
@@ -334,20 +342,20 @@ fn presentation_and_policy_accounting_cannot_self_wake() {
             )
             .unwrap();
         store
-            .log_event(Some("T-002"), "done", serde_json::json!({}))
+            .log_event(Some("T-002"), "pm_inbox_posted", serde_json::json!({}))
             .unwrap();
         let before = std::fs::read(&path).unwrap();
         // When the real CLI consumes the stream with default and explicit subscriptions.
         for explicit in [false, true] {
             let mut args = vec!["--after-offset", &cursor, "--timeout", "1s", "--json"];
             if explicit {
-                args.extend(["--for", "done"]);
+                args.extend(["--for", "pm_inbox_posted"]);
             }
             let output = invoke(dir.path(), &args);
             // Then accounting is skipped, and consuming the stream creates no new events.
             assert!(output.status.success(), "{kind}: {output:?}");
             let event: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(event["kind"], "done");
+            assert_eq!(event["kind"], "pm_inbox_posted");
             assert_eq!(event["task"], "T-002");
             assert_eq!(std::fs::read(&path).unwrap(), before);
         }

@@ -77,6 +77,12 @@ impl Fx {
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         let mut store = Store::init(tmp.path()).unwrap();
         store.config.pm.push_events = true;
+        // Delivery mechanics tests explicitly subscribe to routine completion events.
+        store
+            .config
+            .pm
+            .push_kinds
+            .extend(["done", "lessons_due", "config_changed"].map(String::from));
         store.save_config().unwrap();
         let store = Store::open(tmp.path()).unwrap();
         // The initial configuration is fixture setup, not an event under delivery test.
@@ -279,6 +285,38 @@ fn offline_sync_observes_config_before_herdr_availability_check() {
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].detail["source"], "file_edit");
     assert_eq!(changes[0].detail["changes"][0]["new"], 9);
+}
+
+#[test]
+fn default_push_uses_the_same_actionable_and_coalesced_watch_policy() {
+    let mut fx = Fx::new();
+    fx.ctx.store.config.pm.push_kinds = corral_core::PM_DEFAULT_KINDS
+        .iter()
+        .map(|k| (*k).into())
+        .collect();
+    fx.ctx.store.save_config().unwrap();
+    fx.pm();
+    for (kind, detail) in [
+        ("question_opened", json!({"key":"T-001/R1/Q1"})),
+        ("needs_me", json!({"question_keys":["T-001/R1/Q1"]})),
+        ("attention_due", json!({})),
+        ("done", json!({})),
+        ("autopilot", json!({"to":"landed"})),
+        ("pm_inbox_posted", json!({})),
+        ("review_escalated", json!({})),
+    ] {
+        fx.ctx.store.log_event(Some("T-001"), kind, detail).unwrap();
+    }
+    fx.sync();
+    fx.sync();
+    assert_eq!(
+        fx.log("prompts"),
+        concat!(
+            "pm:p1|[corral] T-001 question_opened\n",
+            "pm:p1|[corral] T-001 pm_inbox_posted\n",
+            "pm:p1|[corral] T-001 escalated\n"
+        )
+    );
 }
 
 #[test]

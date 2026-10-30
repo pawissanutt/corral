@@ -9,27 +9,12 @@ fn old_configs_keep_push_disabled_and_default_kinds() {
         let cfg = ConfigDoc::parse(text).unwrap().config().unwrap();
         // Then push is opt-in and all actionable kinds are selected.
         assert!(!cfg.pm.push_events);
-        assert_eq!(
-            cfg.pm.push_kinds,
-            [
-                "done",
-                "needs_me",
-                "stuck",
-                "blocked",
-                "escalated",
-                "config_changed",
-                "lessons_due",
-                "run_resumed",
-                "wait_transition",
-                "pm_decision_resolved",
-                "attention_due"
-            ]
-        );
+        assert_eq!(cfg.pm.push_kinds, corral_core::PM_DEFAULT_KINDS);
     }
     let root = tempdir().unwrap();
     let cfg = Config::default_for(root.path());
     assert!(!cfg.pm.push_events);
-    assert_eq!(cfg.pm.push_kinds.len(), 11);
+    assert_eq!(cfg.pm.push_kinds, corral_core::PM_DEFAULT_KINDS);
 }
 
 #[test]

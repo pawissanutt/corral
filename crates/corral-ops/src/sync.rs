@@ -773,7 +773,10 @@ fn reconcile(
     ctx.store.log_event(
         Some(&task.id),
         kind,
-        json!({ "from": from.as_str(), "agent_state": state, "note": note }),
+        json!({ "from": from.as_str(), "agent_state": state, "note": note,
+            "question_keys": if note == "agent is blocked" {
+                crate::questions::pending_keys(&ctx.store.get(&task.id)?)
+            } else { Vec::new() } }),
     )?;
     Ok(Some(Change {
         task: task.id.clone(),

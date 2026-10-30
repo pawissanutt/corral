@@ -2,25 +2,17 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Event, EventCursor, EventReader, PM_ACTIONABLE_KINDS, Store, actionable_kind, format_event_line,
+    Event, EventCursor, EventReader, PM_ACTIONABLE_KINDS, PM_DEFAULT_KINDS, Store, actionable_kind,
+    format_event_line,
 };
 
-/// The PM-actionable kinds plus `config_invalid`, which only a watcher can await.
-const KINDS: [&str; PM_ACTIONABLE_KINDS.len() + 1] = {
-    let mut kinds = ["config_invalid"; PM_ACTIONABLE_KINDS.len() + 1];
-    let mut i = 0;
-    while i < PM_ACTIONABLE_KINDS.len() {
-        kinds[i] = PM_ACTIONABLE_KINDS[i];
-        i += 1;
-    }
-    kinds
-};
+const KINDS: [&str; PM_ACTIONABLE_KINDS.len()] = PM_ACTIONABLE_KINDS;
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(clap::Args, Debug)]
 pub struct WaitArgs {
     /// Task and configuration event kinds to await (comma-separated)
-    #[arg(long = "for", value_delimiter = ',', default_values = KINDS, value_parser = KINDS)]
+    #[arg(long = "for", value_delimiter = ',', default_values = PM_DEFAULT_KINDS, value_parser = KINDS)]
     kinds: Vec<String>,
     #[arg(long)]
     task: Option<String>,
@@ -77,6 +69,17 @@ impl std::error::Error for WaitTimeout {}
 
 impl WaitArgs {
     fn matches(&self, store: &Store, event: &Event) -> Result<bool> {
+        // Correlation is carried by the producer, so it survives cursor-based rearming.
+        // Explicit --for subscriptions can still inspect the mirrored status transition.
+        if self
+            .kinds
+            .iter()
+            .map(String::as_str)
+            .eq(PM_DEFAULT_KINDS.iter().copied())
+            && !corral_core::default_pm_event(event)
+        {
+            return Ok(false);
+        }
         let kind = if matches!(event.kind.as_str(), "config_changed" | "config_invalid") {
             Some(event.kind.as_str())
         } else {

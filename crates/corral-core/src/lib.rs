@@ -85,7 +85,7 @@ pub use config_doc::ConfigDoc;
 pub use config_events::ConfigSource;
 pub use config_layers::{ConfigLayer, ConfigLayers, ConfigSources};
 pub use event_reader::{EventCursor, EventReader};
-pub use event_reader::{actionable_kind, format_event_line};
+pub use event_reader::{actionable_kind, default_pm_event, format_event_line};
 pub use gate_presets::GatePreset;
 pub use gate_presets::detect_gate_presets;
 pub use gate_tier::*;
