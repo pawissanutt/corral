@@ -68,7 +68,7 @@ pub(crate) fn newly_committed(
 }
 
 mod claims;
-pub(crate) use claims::{record_entry, record_entry_head, record_stage, record_stage_head};
+pub(crate) use claims::{record_entry, record_entry_head, record_stage_head};
 
 pub(crate) fn refresh_fact(claim: &mut NoticeClaim) -> Result<()> {
     anyhow::ensure!(

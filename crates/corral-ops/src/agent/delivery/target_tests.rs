@@ -1,34 +1,8 @@
 //! Real delivery facts must not assemble native or surrounding task history.
 use super::*;
-use corral_core::agent::{AgentRole, AgentRunState};
+use crate::agent::native_test_support::{data, host};
+use corral_core::agent::AgentRole;
 use corral_core::work::{self, Counter, HotScope};
-
-#[path = "../../../../corral-core/tests/store_support/mod.rs"]
-mod data;
-
-fn host(role: AgentRole, n: usize) -> AgentRunState {
-    let at = data::at(0);
-    let mut state = AgentRunState::new(AgentBinding {
-        role,
-        store: "fixture".into(),
-        project: "app".into(),
-        generation: 999,
-        health: HostHealth::Healthy,
-        callback: None,
-        closing: false,
-    });
-    let generation = |n| {
-        serde_json::from_value(json!({"n":n,"bind_nonce_sha256":"00".repeat(32),"pane":"p1","created":at,"bound":{
-        "host_cap_sha256":"11".repeat(32),"ctl_cap_sha256":"22".repeat(32),"session_id":"fixed-session","session_file":"/tmp/native-delivery-session.jsonl",
-        "pid":3,"start_time":"1234","request_id":"hello","at":at}})).unwrap()
-    };
-    for i in 1..=n {
-        state.generations.push(generation(i as u32));
-        state.turns.push(serde_json::from_value(json!({"generation":i,"seq":1,"origin":{"kind":"unknown"},"started":at,"ended":at,"class":"completed","provider_error":null})).unwrap());
-    }
-    state.generations.push(generation(999));
-    state
-}
 
 #[test]
 fn native_delivery_binding_and_closure_match_full_state_with_constant_work_for_every_task_role() {
