@@ -469,11 +469,15 @@ fn an_answer_queued_while_the_host_was_lost_is_observed_in_generation_2_after_th
             matches!(status, crate::delivery::DeliveryStatus::Sent { .. }),
             "{status:?}"
         );
+        assert!(
+            !inbox.envelope(1).unwrap().payload_path.exists(),
+            "frozen payload is database-owned, not a legacy file"
+        );
         let sent: Vec<Value> = bridge.commands();
         let submit = sent
             .iter()
             .find(|f| f["command"] == "submit_input")
-            .unwrap();
+            .unwrap_or_else(|| panic!("reviewer={reviewer} status={status:?} commands={sent:?}"));
         let text = submit["args"]["text"].as_str().unwrap().to_owned();
         let notice = text.find(" recovery_notice]").unwrap();
         assert!(

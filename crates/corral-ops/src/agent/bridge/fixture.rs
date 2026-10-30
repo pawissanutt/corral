@@ -141,6 +141,7 @@ pub(crate) fn fixture(gate: bool, drain_secs: u64) -> Fx {
             Ok(())
         })
         .unwrap();
+    crate::prompt::store_run_prompt(&ctx, &task.id, "R1", "Fixture worker prompt.\n").unwrap();
     Fx {
         tmp,
         ctx,

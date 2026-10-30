@@ -207,13 +207,15 @@ pub(crate) mod tests {
         let script = std::fs::read_to_string(&bin).unwrap();
         let check = r#"if [ "$1 $2" = "pane run" ]; then
 python3 -c '
-import json, pathlib
+import json, pathlib, sqlite3
 root = pathlib.Path(".corral")
-pm = json.loads((root / "state/agent-pm.json").read_text())["state"]
+db = sqlite3.connect("file:" + str(root / "db/corral.db") + "?mode=ro", uri=True)
+pm = json.loads(db.execute("SELECT doc FROM records WHERE area=? AND key=?", ("agent-pm", "current")).fetchone()[0])["state"]
+
 assert pm["binding"]["generation"] == 2
 assert pm["generations"][0]["fenced"] is not None
 assert all(r["state"] != "reserved" for r in pm["receipts"])
-assert any("kind: recovery_notice" in p.read_text().splitlines() for p in (root / "inbox/pm").glob("*.md"))
+assert any(json.loads(row[0])["message"]["kind"] == "recovery_notice" for row in db.execute("SELECT doc FROM records WHERE area=?", ("inbox/pm/messages",)))
 ' || exit 1
 fi
 case "$1 $2" in"#;
