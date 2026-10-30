@@ -96,7 +96,6 @@ test("two native review children retain context, assess current candidates and d
         { toolCalls: [{ callId: `read-${round}`, name: "read", arguments: { path: promptFile } }] },
         { toolCalls: [{ callId: `verdict-${round}`, name: "corral_verdict",
           arguments: { verdict: round === 1 ? "changes" : "approve", notes: candidate } }] },
-        { text: "FINISHED" },
       ]);
       let held: Promise<void> | undefined;
       if (round === 2) {

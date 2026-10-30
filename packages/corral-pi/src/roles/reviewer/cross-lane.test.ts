@@ -115,7 +115,6 @@ test("the production reviewer records its verdict in its first turn, and the tur
   // Given the bound production reviewer, whose fresh session starts its first turn with the review prompt:
   transport.script([
     { toolCalls: [{ callId: "verdict-1", name: "corral_verdict", arguments: { verdict: "changes", notes: NOTES } }] },
-    { text: "REVIEWED" },
   ]);
   await host.hello(lane.nonce, pane, sha256Hex(CTL));
   const first = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1, 120_000);
