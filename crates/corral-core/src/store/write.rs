@@ -203,8 +203,9 @@ impl Store {
             }
             self.check_runtime()?;
             let mut t = task.clone();
-            t.updated = self.now();
-            super::normalize::task(&mut t, None, self.now())?;
+            let now = self.now();
+            t.updated = now;
+            super::normalize::task(&mut t, None, now)?;
             self.insert_exact(&t)?;
             return Ok(t);
         };
@@ -226,12 +227,9 @@ impl Store {
         let decision = self.protect_owner_change(&before, task)?;
         let mut t = task.clone();
         t.path = PathBuf::new();
-        super::normalize::task(&mut t, Some(&before), self.now())?;
-        t.updated = if t == before {
-            before.updated
-        } else {
-            self.now()
-        };
+        let now = self.now();
+        super::normalize::task(&mut t, Some(&before), now)?;
+        t.updated = if t == before { before.updated } else { now };
         let record = TaskRecord {
             task: t.clone(),
             recoveries: stored.record.recoveries.clone(),
@@ -339,7 +337,9 @@ impl Store {
         self.check_runtime()?;
         let mut t = task.clone();
         t.path = PathBuf::new();
-        super::normalize::task(&mut t, None, self.now())?;
+        let now = self.now();
+        t.updated = now;
+        super::normalize::task(&mut t, None, now)?;
         let split = split(&TaskRecord {
             task: t.clone(),
             recoveries: Vec::new(),

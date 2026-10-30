@@ -756,7 +756,8 @@ impl Store {
         let (num, rev) = (head.base.num, head.base.rev);
         let preserve_updated = head.preserve_updated;
         let mut normalized = shell_task(&head.head.task)?;
-        super::normalize::task(&mut normalized, Some(&before), self.now())?;
+        let now = self.now();
+        super::normalize::task(&mut normalized, Some(&before), now)?;
         head.head.task = crate::task_head_fields(&normalized);
         let (mut new, rows, history_edit) = head.finish()?;
         let mut after = shell_task(&new.task)?;
@@ -766,7 +767,6 @@ impl Store {
         let summary = serde_json::to_value(&new.summary)?;
         let mut fields = task_fields(&after)?;
         if !preserve_updated && (!rows.is_empty() || doc != base_doc || summary != base_summary) {
-            let now = self.now();
             new.task.updated = now;
             after.updated = now;
             fields.updated = now;
