@@ -150,7 +150,7 @@ fn every_owner_action_kind_is_a_real_command_with_its_flags_and_a_fixed_class() 
     for spec in &KINDS {
         let choices: &[&str] = match spec.target {
             Target::Choice(choices) => choices,
-            Target::Task | Target::Key => &[""],
+            Target::Task | Target::Key | Target::Scratch => &[""],
         };
         let mut help = String::new();
         for choice in choices {
@@ -259,6 +259,13 @@ fn every_owner_action_kind_is_a_real_command_with_its_flags_and_a_fixed_class() 
             &["--attempt", "pa-1"],
             Class::Ordinary,
             "corral plan accept T-007 --attempt pa-1",
+        ),
+        (
+            "finish",
+            "cache-fix",
+            &["--title", "Fix the cache", "--review", "none"],
+            Class::Ordinary,
+            "corral assistant scratch finish cache-fix --title 'Fix the cache' --review none",
         ),
     ] {
         let action = class(kind, target, args);
@@ -517,4 +524,145 @@ fn owner_actions_run_through_the_real_agent_call_and_child_once() {
         (&json!(true), &done["committed_at"])
     );
     assert_eq!(toml(), after);
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", text(&out));
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+#[test]
+fn c9_c10_finish_and_approve_run_on_the_owner_s_words_and_never_from_the_shell() {
+    // Given the workspace is project corral's repository, and A-1 co-worked in scratch cache-fix.
+    let fx = Fixture::new();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.name", "corral test"],
+        &["config", "user.email", "corral@test.invalid"],
+    ] {
+        git(&fx.root, args);
+    }
+    std::fs::write(fx.root.join(".gitignore"), ".corral/\n.worktrees/\n").unwrap();
+    git(&fx.root, &["add", ".gitignore"]);
+    git(&fx.root, &["commit", "-q", "-m", "base"]);
+    let shell = [("CORRAL_ASSISTANT", "A-1")];
+    fx.ok(
+        &[
+            "assistant",
+            "scratch",
+            "new",
+            "-p",
+            "corral",
+            "--slug",
+            "cache-fix",
+        ],
+        &shell,
+    );
+    let scratch = fx.root.join(".worktrees/A-1-cache-fix");
+    std::fs::write(scratch.join("cache.txt"), "fixed\n").unwrap();
+    git(&scratch, &["add", "cache.txt"]);
+    git(&scratch, &["commit", "-q", "-m", "Fix the cache"]);
+    let tasks = || fx.store().list().unwrap();
+    // When the assistant's shell offers the scratch for landing, it is refused and nothing changes.
+    let offered = fx.run(
+        &[
+            "assistant",
+            "scratch",
+            "finish",
+            "cache-fix",
+            "--title",
+            "Fix the cache",
+        ],
+        &shell,
+    );
+    assert_eq!(offered.status.code(), Some(2), "{}", text(&offered));
+    assert!(
+        text(&offered)
+            .contains("assistant_refused: corral assistant scratch finish needs the owner"),
+        "{}",
+        text(&offered)
+    );
+    assert_eq!(tasks().len(), 1);
+    // When the owner only says "ship something like this", a guessed finish names no scratch or title.
+    let mut host = Host::bind(&fx);
+    let vague = host.journal("ship something like this", None);
+    let guess = host.act("rq-guess", json!({"kind": "finish", "input": vague}));
+    assert_eq!(guess["result"]["code"], "bad_request", "{guess}");
+    let untitled = host.act(
+        "rq-untitled",
+        json!({"kind": "finish", "target": "cache-fix", "input": vague}),
+    );
+    assert_eq!(untitled["result"]["outcome"], "refused", "{untitled}");
+    assert_eq!(tasks().len(), 1);
+    // When the owner says to finish it as a fix for the cache with no review, it finishes at once.
+    let words = "finish this as a fix for the cache, no review";
+    let input = host.journal(words, None);
+    let finish = json!({"kind": "finish", "target": "cache-fix",
+        "args": ["--title", "Fix the cache", "--review", "none"], "input": input});
+    let finished = host.act("rq-finish", finish);
+    assert_eq!(
+        (
+            finished["state"].as_str(),
+            finished["result"]["outcome"].as_str()
+        ),
+        (Some("committed"), Some("executed")),
+        "{finished}"
+    );
+    // Then T-002 is a Review task of origin assistant, label cowork, session A-1, run R1 on the scratch.
+    let shown: Value = serde_json::from_str(&fx.ok(&["show", "T-002", "--json"], &[])).unwrap();
+    assert_eq!(shown["status"], "review");
+    assert_eq!(shown["origin"], "assistant");
+    assert_eq!(shown["labels"], json!(["cowork"]));
+    assert_eq!(
+        shown["cowork"],
+        json!({"session": "A-1", "scratch": "cache-fix", "run": "R1", "review": "none"})
+    );
+    assert_eq!(shown["runs"][0]["branch"], "corral/A-1/cache-fix");
+    let task = fx.store().get("T-002").unwrap();
+    assert!(task.body.contains(words), "{}", task.body);
+    let finished_event = fx
+        .events()
+        .into_iter()
+        .find(|event| event["kind"] == "cowork_finished")
+        .unwrap();
+    assert_eq!(
+        (
+            finished_event["actor"].as_str(),
+            finished_event["via"].as_str()
+        ),
+        (Some("owner"), Some("assistant:A-1"))
+    );
+    assert_eq!(
+        finished_event["detail"]["owner_authority"]["owner_message"],
+        words
+    );
+    // When the owner later says "approve T-002", it lands through the normal approve path.
+    let approve = host.journal("approve T-002", None);
+    let landed = host.act(
+        "rq-approve",
+        json!({"kind": "approve", "target": "T-002", "input": approve}),
+    );
+    assert_eq!(landed["result"]["outcome"], "executed", "{landed}");
+    let head = git(&fx.root, &["rev-parse", "main"]);
+    assert_eq!(
+        git(&fx.root, &["log", "-1", "--format=%s", "main"]),
+        "Fix the cache"
+    );
+    let task = fx.store().get("T-002").unwrap();
+    assert_eq!(task.status, corral_core::Status::Done);
+    // And A-1's record lists the landed task and commits.
+    let session = fx.store().get_assistant("A-1").unwrap();
+    assert_eq!(session.landed.len(), 1);
+    assert_eq!(
+        (session.landed[0].task.as_str(), &session.landed[0].commits),
+        ("T-002", &vec![head])
+    );
+    assert!(session.scratch.is_empty());
 }

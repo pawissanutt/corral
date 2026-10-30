@@ -64,7 +64,7 @@ pub struct AssistantSession {
     #[serde(default)]
     pub inbox_items: Vec<String>,
     #[serde(default)]
-    pub landed: Vec<String>,
+    pub landed: Vec<AssistantLanding>,
     #[serde(default)]
     pub summary: String,
     #[serde(default)]
@@ -84,6 +84,18 @@ pub struct AssistantScratch {
     pub kind: String,
     pub bytes: Option<u64>,
     pub measured_at: Option<Timestamp>,
+}
+
+/// A co-work task this session finished that landed: its run, the base it landed on, the
+/// landed head and the commits the landing added to that base, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantLanding {
+    pub task: String,
+    pub run: String,
+    pub base: String,
+    pub sha: String,
+    pub commits: Vec<String>,
+    pub at: Timestamp,
 }
 
 /// The pane is adopted, never owned: ending a session must not close or type into it.

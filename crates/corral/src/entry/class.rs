@@ -62,7 +62,8 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
                 | ScratchCmd::Discard { .. }
                 | ScratchCmd::Promote { .. } => File,
                 ScratchCmd::List { .. } => Read,
-                ScratchCmd::Gc { .. } => Refused,
+                // Finishing is the owner's: it reaches an assistant only as corral_owner_action.
+                ScratchCmd::Gc { .. } | ScratchCmd::Finish { .. } => Refused,
             },
         },
         Cmd::Mode(args) => match &args.cmd {

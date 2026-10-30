@@ -52,6 +52,15 @@ fn text(dir: &Path, args: &[&str]) -> Result<String> {
         .to_owned())
 }
 
+/// Commits in `from..to`, oldest first.
+pub(super) fn range(repo: &Path, from: &str, to: &str) -> Result<Vec<String>> {
+    let range = format!("{from}..{to}");
+    Ok(text(repo, &["rev-list", "--reverse", &range])?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
 pub(super) fn branch_exists(repo: &Path, branch: &str) -> Result<bool> {
     let reference = format!("refs/heads/{branch}");
     Ok(

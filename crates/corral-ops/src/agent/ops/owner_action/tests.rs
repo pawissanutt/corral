@@ -369,6 +369,7 @@ fn ordinary_kinds_run_on_the_instruction_without_a_confirmation() {
         json!({"kind": "plan_accept", "target": task, "args": ["--attempt", "pa-1"]}),
         json!({"kind": "park", "target": task, "args": ["--reason", "waiting"]}),
         json!({"kind": "revert", "target": task}),
+        json!({"kind": "finish", "target": "spike", "args": ["--title", "Spike"]}),
     ];
     for (n, mut payload) in cases.into_iter().enumerate() {
         payload["input"] = json!(s.journal("do it", None));
@@ -376,16 +377,16 @@ fn ordinary_kinds_run_on_the_instruction_without_a_confirmation() {
         assert_eq!(ran.result["outcome"], "executed", "{payload}: {ran:?}");
         assert_eq!(ran.result["class"], "ordinary", "{payload}");
     }
-    assert_eq!(s.runs().len(), 10);
+    assert_eq!(s.runs().len(), 11);
     assert!(s.runs()[5].ends_with(&format!("|verdict {task} approve --notes looks good")));
-    // Finish has not landed, anything outside the closed set is unsupported, a flag the
+    // A finish names a scratch slug, anything outside the closed set is unsupported, a flag the
     // command does not take is refused, and an ordinary kind takes no confirmation.
     let input = s.journal("finish this", None);
     for (call, payload, code) in [
         (
             "finish",
-            json!({"kind": "finish", "target": "spike", "input": input}),
-            "unsupported_action",
+            json!({"kind": "finish", "target": "Not A Slug", "input": input}),
+            "bad_request",
         ),
         (
             "push",
@@ -411,7 +412,7 @@ fn ordinary_kinds_run_on_the_instruction_without_a_confirmation() {
     ] {
         assert_eq!(ts::code(&s.act(call, &payload)), Some(code), "{call}");
     }
-    assert_eq!(s.runs().len(), 10);
+    assert_eq!(s.runs().len(), 11);
 }
 
 #[test]

@@ -548,6 +548,14 @@ impl Config {
             }
             policy.reviewer = Reviewer::parse(&rule.profile);
         }
+        // A co-work finish lands only on the owner's approval, and is reviewed only when the
+        // owner asked for review; neither choice outlives the finished run.
+        if let Some(cowork) = task.cowork_run() {
+            policy.accept = Accept::Owner;
+            if cowork.review == crate::CoworkReview::None {
+                policy.reviewer = Reviewer::None;
+            }
+        }
         policy
     }
 

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use corral_core::{CoworkReview, TaskKind, TaskSize};
 use corral_ops::Ctx;
 
 #[derive(Args)]
@@ -104,6 +105,33 @@ pub enum ScratchCmd {
         project: Option<String>,
         #[arg(long)]
         body_file: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
+    Finish {
+        slug: String,
+        /// Title of the new task
+        #[arg(long, required_unless_present = "into", conflicts_with = "into")]
+        title: Option<String>,
+        /// Project for the task; default the scratch's project
+        #[arg(long, short = 'p')]
+        project: Option<String>,
+        #[arg(long, conflicts_with = "into")]
+        kind: Option<TaskKind>,
+        #[arg(long, conflicts_with = "into")]
+        size: Option<TaskSize>,
+        /// none, or required to run the normal reviewer after a passing gate
+        #[arg(long, default_value = "none", value_parser = ["none", "required"])]
+        review: String,
+        /// Add the run to this existing task instead; refused while it has a live run
+        #[arg(long)]
+        into: Option<String>,
+        /// Context for the run summary and a new task's body
+        #[arg(long)]
+        note: Option<String>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -334,6 +362,51 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 return print_json(&promoted);
             }
             println!("{} (diff {})", promoted.task, promoted.artifact);
+        }
+        ScratchCmd::Finish {
+            slug,
+            title,
+            project,
+            kind,
+            size,
+            review,
+            into,
+            note,
+            session,
+            json,
+        } => {
+            let session = ops::finish_session(session.as_deref())?;
+            let review = if review == "required" {
+                CoworkReview::Required
+            } else {
+                CoworkReview::None
+            };
+            let opts = ops::Finish {
+                title: title.as_deref(),
+                project: project.as_deref(),
+                kind,
+                size,
+                review: Some(review),
+                into: into.as_deref(),
+                note: note.as_deref(),
+            };
+            let done = ops::finish(ctx, &session, &slug, &opts)?;
+            if json {
+                return print_json(&done);
+            }
+            println!(
+                "{} {} from {session}/{slug} ({} at {}): {}; gate {}",
+                done.task,
+                done.run,
+                done.branch,
+                done.head.get(..7).unwrap_or(&done.head),
+                done.status.label(),
+                done.gate
+            );
+            match &done.reviewer {
+                Some(reviewer) => println!("review required: {reviewer}"),
+                None => println!("review none; land it with `corral approve {}`", done.task),
+            }
         }
         ScratchCmd::Gc { dry_run, yes, json } => {
             if !dry_run && !yes {

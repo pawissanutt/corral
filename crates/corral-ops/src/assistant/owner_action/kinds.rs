@@ -29,6 +29,8 @@ pub enum Target {
     Key,
     /// One of a fixed set of subcommands.
     Choice(&'static [&'static str]),
+    /// A scratch slug of the acting assistant session.
+    Scratch,
 }
 
 /// One kind: the command words, its target, further positionals and the owner flags it takes.
@@ -68,7 +70,7 @@ const fn spec(
     }
 }
 
-pub const KINDS: [Spec; 19] = [
+pub const KINDS: [Spec; 20] = [
     spec(
         "approve",
         &["approve"],
@@ -184,6 +186,23 @@ pub const KINDS: [Spec; 19] = [
         ],
     ),
     Spec {
+        target: Target::Scratch,
+        ..spec(
+            "finish",
+            &["assistant", "scratch", "finish"],
+            &[],
+            &[
+                ("--title", true),
+                ("--project", true),
+                ("--kind", true),
+                ("--size", true),
+                ("--review", true),
+                ("--into", true),
+                ("--note", true),
+            ],
+        )
+    },
+    Spec {
         target: Target::Key,
         ..spec(
             "config_set",
@@ -269,6 +288,9 @@ fn target(spec: &Spec, target: Option<&str>) -> Result<String> {
             Ok(target.to_owned())
         }
         Target::Key => Err(bad("a config key is one word")),
+        Target::Scratch => crate::assistant::scratch::validate_slug(target)
+            .map(|()| target.to_owned())
+            .map_err(|error| bad(format!("{error:#}"))),
         Target::Choice(choices) if choices.contains(&target) => Ok(target.to_owned()),
         Target::Choice(choices) => Err(bad(format!(
             "{} takes one of {}",
@@ -287,12 +309,6 @@ pub fn resolve(
     args: &[String],
     expected_revision: Option<u64>,
 ) -> Result<Action> {
-    if kind == "finish" {
-        return Err(unsupported(
-            "finish lands with the cowork-landing member (corral assistant scratch finish); \
-             post the request with corral pm inbox post or tell the owner",
-        ));
-    }
     let spec = KINDS.iter().find(|spec| spec.kind == kind).ok_or_else(|| {
         unsupported(format!(
             "{kind} is not an owner action; route it to the PM with corral pm inbox post"
@@ -303,6 +319,7 @@ pub fn resolve(
     argv.push(target.clone());
     let mut positionals = Vec::new();
     let mut forced = false;
+    let mut into = None;
     let mut tokens = args.iter();
     while let Some(token) = tokens.next() {
         if !token.starts_with('-') {
@@ -327,6 +344,12 @@ pub fn resolve(
             let value = tokens
                 .next()
                 .ok_or_else(|| bad(format!("{token} needs a value")))?;
+            if *flag == "--into" {
+                into = Some(
+                    Store::normalize_id(value)
+                        .map_err(|_| bad(format!("{value} is not a task ID")))?,
+                );
+            }
             argv.push(value.clone());
         }
     }
@@ -364,7 +387,11 @@ pub fn resolve(
         command: render(&argv),
         argv,
         class,
-        task: (spec.target == Target::Task).then(|| target.clone()),
+        task: if spec.target == Target::Task {
+            Some(target.clone())
+        } else {
+            into
+        },
         target,
     })
 }
