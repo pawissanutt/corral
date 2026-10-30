@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use corral_core::ArtifactKind;
 use corral_core::assistant::AssistantScratch;
 use jiff::Timestamp;
 
@@ -144,19 +145,23 @@ pub(super) fn committed_at(repo: &Path, sha: &str) -> Result<Timestamp> {
     Timestamp::from_second(seconds).context("commit time out of range")
 }
 
-/// One file of preserved work: an `mbox` for `git am` or a patch for `git apply`.
+/// One file of preserved work.
 pub(super) struct Saved {
     pub name: String,
     pub title: String,
+    pub kind: ArtifactKind,
     pub bytes: Vec<u8>,
 }
 
-/// Everything removal would lose, as separately restorable files. Each commit beyond the base
-/// keeps its own patch (so content a later commit replaced survives), with a net diff only when
-/// merges or a history below the base would not replay; staged, unstaged and untracked work are
-/// separate patches so none overwrites another. Restore on a checkout of the base in order:
-/// `git am` the mbox, `git apply --index` the staged patch, then `git apply` the unstaged and
-/// untracked patches. Nothing here writes the scratch, its index or its refs.
+/// Everything removal would lose, as separately restorable files, read without writing the
+/// scratch's files, index or refs:
+/// - `commits.bundle`: every commit reachable from the checkout's HEAD and the scratch branch
+///   but not from the base, as exact Git objects (merges and histories below the base included),
+///   verified against the repository before it is trusted;
+/// - `staged.diff`, `unstaged.diff`, `untracked.diff`: the index against HEAD, the working
+///   files against the index, and untracked non-ignored files, kept apart so none overwrites
+///   another;
+/// - `restore.txt`: the exact SHAs and the commands that rebuild HEAD, the index and the files.
 pub(super) fn preservation(
     session: &str,
     repo: &Path,
@@ -165,88 +170,170 @@ pub(super) fn preservation(
 ) -> Result<Vec<Saved>> {
     let stem = format!("{session}-{}", scratch.slug);
     let what = format!("Scratch {session}/{} before removal", scratch.slug);
-    let mut saved = Vec::new();
-    for (label, tip) in tips(work) {
-        let range = format!("{}..{tip}", scratch.base);
-        let mbox = git(
-            repo,
-            &["format-patch", "--stdout", "--binary", "--no-color", &range],
-            None,
-        )?;
-        let merges = text(repo, &["rev-list", "--merges", "--count", &range])? != "0";
-        let tree = |rev: &str| text(repo, &["rev-parse", &format!("{rev}^{{tree}}")]);
-        let moved = tree(&tip)? != tree(&scratch.base)?;
-        let replayable = !mbox.is_empty();
-        if replayable {
-            saved.push(Saved {
-                name: format!("{stem}.{label}.mbox"),
-                title: format!("{what}: {label} beyond base (git am)"),
-                bytes: mbox,
-            });
-        }
-        if moved && (merges || !replayable) {
-            let mut args = vec!["diff"];
-            args.extend(PATCH);
-            args.extend([scratch.base.as_str(), tip.as_str()]);
-            saved.push(Saved {
-                name: format!("{stem}.{label}.diff"),
-                title: format!("{what}: net {label} change from base (git apply)"),
-                bytes: header(
-                    session,
-                    scratch,
-                    &tip,
-                    &format!("net {label} change"),
-                    git(repo, &args, None)?,
-                ),
-            });
-        }
+    let checkout = scratch.path.is_dir();
+    let branch_ref = format!("refs/heads/{}", scratch.branch);
+    let branch = branch_exists(repo, &scratch.branch)?;
+    let (dir, head_ref) = if checkout {
+        (scratch.path.as_path(), "HEAD")
+    } else {
+        (repo, branch_ref.as_str())
+    };
+    // A ref already in the base's history needs no bundle: the base keeps its commits.
+    let beyond = |rev: &str| !contains(dir, &scratch.base, rev);
+    let head_bundled = (checkout || branch) && beyond(head_ref);
+    let branch_bundled = branch && beyond(&branch_ref);
+    let mut refs: Vec<&str> = Vec::new();
+    if head_bundled {
+        refs.push(head_ref);
     }
-    if !(scratch.path.is_dir() && work.dirty) {
-        return Ok(saved);
+    if branch_bundled && head_ref != branch_ref {
+        refs.push(&branch_ref);
     }
-    let head = work.head.as_deref().unwrap_or("HEAD");
-    let mut staged = vec!["diff", "--cached"];
-    staged.extend(PATCH);
-    staged.push("HEAD");
-    let mut unstaged = vec!["diff"];
-    unstaged.extend(PATCH);
-    for (label, args, restore) in [
-        ("staged", staged, "git apply --index"),
-        ("unstaged", unstaged, "git apply"),
-    ] {
-        let patch = git(&scratch.path, &args, None)?;
-        if !patch.is_empty() {
-            saved.push(Saved {
-                name: format!("{stem}.{label}.diff"),
-                title: format!("{what}: {label} changes ({restore})"),
-                bytes: header(session, scratch, head, &format!("{label} changes"), patch),
-            });
+    let bundle = bundle(dir, &refs, &scratch.base)?;
+    let mut diffs = Vec::new();
+    if checkout && work.dirty {
+        let mut staged = vec!["diff", "--cached"];
+        staged.extend(PATCH);
+        staged.push("HEAD");
+        let mut unstaged = vec!["diff"];
+        unstaged.extend(PATCH);
+        for (label, args, restore) in [
+            ("staged", staged, "git apply --index --binary"),
+            ("unstaged", unstaged, "git apply --binary"),
+        ] {
+            let patch = git(&scratch.path, &args, None)?;
+            if !patch.is_empty() {
+                diffs.push((label, restore, patch));
+            }
+        }
+        let untracked = untracked(scratch)?;
+        if !untracked.is_empty() {
+            diffs.push(("untracked", "git apply --binary", untracked));
         }
     }
-    let untracked = untracked(scratch)?;
-    if !untracked.is_empty() {
+    let manifest = manifest(&Manifest {
+        session,
+        scratch,
+        work,
+        stem: &stem,
+        head_ref,
+        branch: branch.then_some(branch_ref.as_str()),
+        head_bundled,
+        branch_bundled,
+        diffs: &diffs,
+    })?;
+    let mut saved = vec![Saved {
+        name: format!("{stem}.restore.txt"),
+        title: format!("{what}: SHAs and restore steps"),
+        kind: ArtifactKind::Other,
+        bytes: manifest,
+    }];
+    if let Some(bytes) = bundle {
         saved.push(Saved {
-            name: format!("{stem}.untracked.diff"),
-            title: format!("{what}: untracked files (git apply)"),
-            bytes: header(session, scratch, head, "untracked files", untracked),
+            name: format!("{stem}.commits.bundle"),
+            title: format!("{what}: committed history beyond base (git fetch)"),
+            kind: ArtifactKind::Other,
+            bytes,
+        });
+    }
+    for (label, restore, patch) in diffs {
+        saved.push(Saved {
+            name: format!("{stem}.{label}.diff"),
+            title: format!("{what}: {label} changes ({restore})"),
+            kind: ArtifactKind::Diff,
+            bytes: patch,
         });
     }
     Ok(saved)
 }
 
-/// HEAD (or the branch tip without a checkout), and a branch tip HEAD does not contain.
-fn tips(work: &Work) -> Vec<(&'static str, String)> {
-    let mut tips: Vec<_> = work
-        .head
-        .iter()
-        .map(|head| ("commits", head.clone()))
-        .collect();
-    tips.extend(
-        work.stranded
+/// A bundle of `refs` (each beyond the base) minus the base's history, verified before use.
+fn bundle(dir: &Path, refs: &[&str], base: &str) -> Result<Option<Vec<u8>>> {
+    if refs.is_empty() {
+        return Ok(None);
+    }
+    let not_base = format!("^{base}");
+    let temp = tempfile::tempdir().context("creating scratch bundle directory")?;
+    let file = temp.path().join("commits.bundle");
+    let file = file
+        .to_str()
+        .context("temporary bundle path is not UTF-8")?;
+    let mut create = vec!["bundle", "create", "--quiet", file];
+    create.extend(refs);
+    create.push(&not_base);
+    git(dir, &create, None)?;
+    git(dir, &["bundle", "verify", "--quiet", file], None)?;
+    Ok(Some(std::fs::read(file).context("reading scratch bundle")?))
+}
+
+struct Manifest<'a> {
+    session: &'a str,
+    scratch: &'a AssistantScratch,
+    work: &'a Work,
+    stem: &'a str,
+    /// The ref naming HEAD in the bundle: `HEAD` with a checkout, else the branch.
+    head_ref: &'a str,
+    branch: Option<&'a str>,
+    head_bundled: bool,
+    branch_bundled: bool,
+    diffs: &'a [(&'static str, &'static str, Vec<u8>)],
+}
+
+fn manifest(m: &Manifest<'_>) -> Result<Vec<u8>> {
+    let (session, scratch, stem) = (m.session, m.scratch, m.stem);
+    let head = m.work.head.as_deref().unwrap_or("none");
+    let branch = match (m.branch, &m.work.stranded) {
+        (None, _) => "already deleted".to_owned(),
+        (Some(_), Some(tip)) => format!("at {tip}, not contained in HEAD"),
+        (Some(_), None) => "contained in HEAD".to_owned(),
+    };
+    let commits = if m.head_bundled || m.branch_bundled {
+        format!("in {stem}.commits.bundle")
+    } else {
+        "none beyond the base's history".to_owned()
+    };
+    let uncommitted = if m.diffs.is_empty() {
+        "none".to_owned()
+    } else {
+        m.diffs
             .iter()
-            .map(|tip| ("branch-commits", tip.clone())),
+            .map(|(label, ..)| *label)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out = format!(
+        "corral assistant scratch {session}/{} (project {}), saved before removal\nbase         {}\nhead         {head}\nbranch       {} ({branch})\ncommits      {commits}\nuncommitted  {uncommitted}\n\nRestore from the project repository's root, with SAVED naming the directory that holds\nthese files:\n",
+        scratch.slug, scratch.project, scratch.base, scratch.branch,
     );
-    tips
+    let restore = format!("restore/{stem}");
+    let dir = format!(".worktrees/restore-{stem}");
+    if m.head_bundled {
+        out.push_str(&format!(
+            "  git fetch \"$SAVED/{stem}.commits.bundle\" {}:refs/heads/{restore}\n  git worktree add {dir} {restore}\n",
+            m.head_ref
+        ));
+    } else {
+        out.push_str(&format!("  git worktree add --detach {dir} {head}\n"));
+    }
+    if let (Some(branch), Some(tip)) = (m.branch, &m.work.stranded) {
+        if m.branch_bundled {
+            out.push_str(&format!(
+                "  git fetch \"$SAVED/{stem}.commits.bundle\" {branch}:refs/heads/{restore}-branch\n"
+            ));
+        } else {
+            out.push_str(&format!("  git branch {restore}-branch {tip}\n"));
+        }
+    }
+    for (label, restore, _) in m.diffs {
+        out.push_str(&format!(
+            "  {} \"$SAVED/{stem}.{label}.diff\"\n",
+            restore.replacen("git ", &format!("git -C {dir} "), 1)
+        ));
+    }
+    out.push_str(
+        "The fetched commits have their original SHAs; the patches rebuild the index and files.\n",
+    );
+    Ok(out.into_bytes())
 }
 
 /// Untracked, non-ignored files as additions, staged in a separate empty index.

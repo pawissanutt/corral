@@ -1,4 +1,5 @@
 //! scratch-worktrees (T-544 C8, C13 and the promote half of C10) through the ops API.
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -78,7 +79,7 @@ impl Fixture {
         git(path, &["commit", "-q", "-m", &format!("add {file}")]);
     }
 
-    fn saved(&self, session: &str, path: &str) -> (corral_core::Artifact, String) {
+    fn saved(&self, session: &str, path: &str) -> (corral_core::Artifact, Vec<u8>) {
         let artifact = self
             .ctx
             .store
@@ -89,7 +90,7 @@ impl Fixture {
             .find(|a| a.path == path)
             .unwrap();
         let bytes = artifact_read(&self.ctx, &artifact).unwrap();
-        (artifact, String::from_utf8(bytes).unwrap())
+        (artifact, bytes)
     }
 
     fn branch_exists(&self, branch: &str) -> bool {
@@ -122,6 +123,7 @@ fn c8_scratch_lifecycle_accounting_and_idle_gc() {
     assert_eq!(made.kind, "spike");
     assert_eq!(made.base, git(&fx.root, &["rev-parse", "main"]));
     fx.commit(&made.path, "cache.rs", "fn cache() {}\n");
+    let head = git(&made.path, &["rev-parse", "HEAD"]);
     std::fs::create_dir_all(made.path.join("node_modules/dep")).unwrap();
     std::fs::write(
         made.path.join("node_modules/dep/index.js"),
@@ -153,12 +155,13 @@ fn c8_scratch_lifecycle_accounting_and_idle_gc() {
     // The real run saves a diff artifact on A-1, then removes the worktree and branch.
     let real = scratch::gc(&fx.ctx, later, false).unwrap();
     assert_eq!(real.items[0].action, "removed", "{real:?}");
-    let saved = real.items[0].artifacts[0].clone();
-    let (artifact, text) = fx.saved("A-1", &saved);
-    assert_eq!(artifact.kind, ArtifactKind::Diff);
-    assert_eq!(artifact.tier_override, Some(ArtifactTier::Keep));
-    assert!(text.contains("+fn cache() {}"), "{text}");
     assert!(!made.path.exists() && !fx.branch_exists(&made.branch));
+    let (files, restored) = restore(&fx, "A-1", "spike-cache", &real.items[0].artifacts);
+    assert_eq!(
+        files.keys().collect::<Vec<_>>(),
+        ["commits.bundle", "restore.txt", "untracked.diff"]
+    );
+    assert_eq!(git(&restored, &["rev-parse", "HEAD"]), head);
     assert!(
         fx.ctx
             .store
@@ -217,58 +220,53 @@ fn gc_skips_a_scratch_with_a_live_process_cwd_or_a_pending_finish() {
     );
 }
 
-/// Every saved file of a removed scratch, by file-name suffix after `A-1-<slug>.`.
+/// Every saved file of a removed scratch by suffix after `A-1-<slug>.`, all keep tier.
 fn saved_files(
     fx: &Fixture,
-    removed: &scratch::Removed,
-) -> std::collections::BTreeMap<String, String> {
-    let stem = format!("{}-{}.", removed.session, removed.slug);
-    removed
-        .artifacts
+    session: &str,
+    slug: &str,
+    paths: &[String],
+) -> BTreeMap<String, Vec<u8>> {
+    let stem = format!("{session}-{slug}.");
+    paths
         .iter()
         .map(|path| {
-            let (artifact, text) = fx.saved(&removed.session, path);
-            assert_eq!(artifact.kind, ArtifactKind::Diff);
-            assert_eq!(artifact.tier_override, Some(ArtifactTier::Keep));
-            let name = path.rsplit_once(&stem).unwrap().1.to_owned();
-            (name, text)
+            let (artifact, bytes) = fx.saved(session, path);
+            assert_eq!(artifact.tier_override, Some(ArtifactTier::Keep), "{path}");
+            (path.rsplit_once(&stem).unwrap().1.to_owned(), bytes)
         })
         .collect()
 }
 
-/// Replays saved files onto a fresh checkout of the base, in the documented order.
+/// Runs `restore.txt`'s commands verbatim from the repository root, with SAVED holding the
+/// saved files, and returns the files and the restored worktree.
 fn restore(
     fx: &Fixture,
-    base: &str,
-    files: &std::collections::BTreeMap<String, String>,
-) -> PathBuf {
-    let target = fx.root.join(".worktrees").join("restored");
-    git(
-        &fx.root,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "--detach",
-            target.to_str().unwrap(),
-            base,
-        ],
-    );
-    for (name, args) in [
-        ("commits.mbox", &["am", "-q"][..]),
-        ("staged.diff", &["apply", "--index", "--binary"][..]),
-        ("unstaged.diff", &["apply", "--binary"][..]),
-        ("untracked.diff", &["apply", "--binary"][..]),
-    ] {
-        if let Some(text) = files.get(name) {
-            let file = fx.root.join(format!("restore-{name}"));
-            std::fs::write(&file, text).unwrap();
-            let mut args = args.to_vec();
-            args.push(file.to_str().unwrap());
-            git(&target, &args);
-        }
+    session: &str,
+    slug: &str,
+    paths: &[String],
+) -> (BTreeMap<String, Vec<u8>>, PathBuf) {
+    let files = saved_files(fx, session, slug, paths);
+    let saved = fx.root.join(format!("saved-{slug}"));
+    std::fs::create_dir_all(&saved).unwrap();
+    for (suffix, bytes) in &files {
+        std::fs::write(saved.join(format!("{session}-{slug}.{suffix}")), bytes).unwrap();
     }
-    target
+    let manifest = String::from_utf8(files["restore.txt"].clone()).unwrap();
+    for line in manifest.lines().filter(|line| line.starts_with("  git ")) {
+        let out = Command::new("sh")
+            .args(["-c", line.trim()])
+            .env("SAVED", &saved)
+            .current_dir(&fx.root)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{line}: {out:?}\n{manifest}");
+    }
+    (
+        files,
+        fx.root.join(format!(".worktrees/restore-{session}-{slug}")),
+    )
 }
 
 #[test]
@@ -286,33 +284,35 @@ fn c13_discard_saves_commits_staged_unstaged_and_untracked_work_restorably() {
     std::fs::write(all.path.join("feature.rs"), "UNIQUE_UNSTAGED_DRAFT\n").unwrap();
     std::fs::write(all.path.join("notes.txt"), "UNIQUE_UNTRACKED_NOTE\n").unwrap();
     std::fs::write(all.path.join("ignored.log"), "ignored\n").unwrap();
-    let head_tree = git(&all.path, &["rev-parse", "HEAD^{tree}"]);
-    let first_tree = git(&all.path, &["rev-parse", "HEAD~1^{tree}"]);
+    let head = git(&all.path, &["rev-parse", "HEAD"]);
     let index_tree = git(&all.path, &["write-tree"]);
     // When A-1 discards it.
     let removed = scratch::discard(&fx.ctx, "A-1", "all").unwrap();
     assert!(!all.path.exists() && !fx.branch_exists(&all.branch));
-    // Then each kind of work is a separate, protected file holding its own content.
-    let files = saved_files(&fx, &removed);
+    // Then each kind of work is a separate file, and running the saved restore steps rebuilds
+    // the same HEAD commit, the same index and the same working files.
+    let (files, restored) = restore(&fx, "A-1", "all", &removed.artifacts);
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         [
-            "commits.mbox",
+            "commits.bundle",
+            "restore.txt",
             "staged.diff",
             "unstaged.diff",
             "untracked.diff"
         ]
     );
-    assert!(files["commits.mbox"].contains("+UNIQUE_FIRST_COMMIT"));
-    assert!(files["staged.diff"].contains("+UNIQUE_STAGED_WORK"));
-    assert!(files["unstaged.diff"].contains("+UNIQUE_UNSTAGED_DRAFT"));
-    assert!(files["untracked.diff"].contains("+UNIQUE_UNTRACKED_NOTE"));
-    assert!(files.values().all(|text| !text.contains("ignored.log")));
-    // And replaying them on the base restores both commits, the index and the working files.
-    let restored = restore(&fx, &all.base, &files);
-    assert_eq!(git(&restored, &["rev-parse", "HEAD^{tree}"]), head_tree);
-    assert_eq!(git(&restored, &["rev-parse", "HEAD~1^{tree}"]), first_tree);
+    assert!(
+        files
+            .values()
+            .all(|bytes| !String::from_utf8_lossy(bytes).contains("ignored.log"))
+    );
+    assert_eq!(git(&restored, &["rev-parse", "HEAD"]), head);
     assert_eq!(git(&restored, &["write-tree"]), index_tree);
+    assert_eq!(
+        git(&restored, &["show", "HEAD~1:feature.rs"]),
+        "UNIQUE_FIRST_COMMIT"
+    );
     for (file, body) in [
         ("README.md", "base\n"),
         ("feature.rs", "UNIQUE_UNSTAGED_DRAFT\n"),
@@ -324,6 +324,90 @@ fn c13_discard_saves_commits_staged_unstaged_and_untracked_work_restorably() {
             "{file}"
         );
     }
+    assert!(!restored.join("ignored.log").exists());
+}
+
+#[test]
+fn c13_discard_restores_merge_only_and_below_base_history_exactly() {
+    // Given a base that advanced past base-only.txt, then three scratch histories: two
+    // non-fast-forward merges where the first merge's content is replaced by the second, new
+    // work committed after resetting below the base, and a reset below the base alone.
+    let fx = Fixture::new();
+    std::fs::write(fx.root.join("base-only.txt"), "in the recorded base\n").unwrap();
+    git(&fx.root, &["add", "base-only.txt"]);
+    git(&fx.root, &["commit", "-q", "-m", "advance base"]);
+    let merges = fx.create("A-1", "merges");
+    for n in [1, 2] {
+        git(
+            &merges.path,
+            &["checkout", "-q", "-b", &format!("side{n}"), &merges.base],
+        );
+        fx.commit(
+            &merges.path,
+            &format!("side{n}.txt"),
+            &format!("side {n}\n"),
+        );
+    }
+    git(&merges.path, &["checkout", "-q", "corral/A-1/merges"]);
+    let mut first_merge = String::new();
+    for (n, body) in [
+        (1, "UNIQUE_MERGE_RESOLUTION\n"),
+        (2, "final merged version\n"),
+    ] {
+        git(
+            &merges.path,
+            &["merge", "-q", "--no-ff", "--no-commit", &format!("side{n}")],
+        );
+        std::fs::write(merges.path.join("resolution.txt"), body).unwrap();
+        git(&merges.path, &["add", "resolution.txt"]);
+        git(&merges.path, &["commit", "-q", "-m", &format!("merge {n}")]);
+        if n == 1 {
+            first_merge = git(&merges.path, &["rev-parse", "HEAD"]);
+        }
+    }
+    git(&fx.root, &["branch", "-q", "-D", "side1", "side2"]);
+    let below = fx.create("A-1", "below");
+    git(&below.path, &["reset", "-q", "--hard", "HEAD~1"]);
+    fx.commit(&below.path, "new.txt", "new work on older history\n");
+    let behind = fx.create("A-1", "behind");
+    git(&behind.path, &["reset", "-q", "--hard", "HEAD~1"]);
+    let heads: Vec<(String, String, String)> = [&merges, &below, &behind]
+        .iter()
+        .map(|s| {
+            let head = git(&s.path, &["rev-parse", "HEAD"]);
+            let tree = git(&s.path, &["rev-parse", "HEAD^{tree}"]);
+            (s.slug.clone(), head, tree)
+        })
+        .collect();
+    // When A-1 discards each, then the saved restore steps rebuild the exact same commits.
+    for (slug, head, tree) in heads {
+        let removed = scratch::discard(&fx.ctx, "A-1", &slug).unwrap();
+        let (files, restored) = restore(&fx, "A-1", &slug, &removed.artifacts);
+        assert_eq!(git(&restored, &["rev-parse", "HEAD"]), head, "{slug}");
+        assert_eq!(
+            git(&restored, &["rev-parse", "HEAD^{tree}"]),
+            tree,
+            "{slug}"
+        );
+        // Only the histories reset below the base lack the base's newest file.
+        let below_base = slug != "merges";
+        assert_eq!(
+            !restored.join("base-only.txt").exists(),
+            below_base,
+            "{slug}"
+        );
+        assert_eq!(
+            files.contains_key("commits.bundle"),
+            slug != "behind",
+            "{slug}"
+        );
+    }
+    let restored = fx.root.join(".worktrees/restore-A-1-merges");
+    let resolution = format!("{first_merge}:resolution.txt");
+    assert_eq!(
+        git(&restored, &["show", &resolution]),
+        "UNIQUE_MERGE_RESOLUTION"
+    );
 }
 
 #[test]
@@ -351,18 +435,27 @@ fn c13_discard_keeps_staged_only_overwritten_cancelled_and_stranded_work() {
         &["checkout", "-q", "--detach", &stranded.base],
     );
     let empty = fx.create("A-1", "empty");
-    for (slug, file, needle) in [
-        ("staged", "staged.diff", "+UNIQUE_STAGED_ONLY"),
-        ("overwritten", "commits.mbox", "+UNIQUE_COMMITTED_WORK"),
-        ("cancelled", "commits.mbox", "+UNIQUE_CANCELLED_WORK"),
-        ("stranded", "branch-commits.mbox", "+UNIQUE_BRANCH_WORK"),
+    // When each is discarded and restored from its saved files, each kind of work is back.
+    for (slug, dir, object, needle) in [
+        ("staged", true, ":README.md", "UNIQUE_STAGED_ONLY"),
+        (
+            "overwritten",
+            true,
+            "HEAD:feature.rs",
+            "UNIQUE_COMMITTED_WORK",
+        ),
+        ("cancelled", true, "HEAD~1:gone.rs", "UNIQUE_CANCELLED_WORK"),
+        (
+            "stranded",
+            false,
+            "restore/A-1-stranded-branch:branch.rs",
+            "UNIQUE_BRANCH_WORK",
+        ),
     ] {
         let removed = scratch::discard(&fx.ctx, "A-1", slug).unwrap();
-        let files = saved_files(&fx, &removed);
-        assert!(
-            files.get(file).is_some_and(|text| text.contains(needle)),
-            "{slug}: {files:?}"
-        );
+        let (_, restored) = restore(&fx, "A-1", slug, &removed.artifacts);
+        let at = if dir { restored } else { fx.root.clone() };
+        assert_eq!(git(&at, &["show", object]), needle, "{slug}");
     }
     assert!(
         scratch::discard(&fx.ctx, "A-1", "empty")

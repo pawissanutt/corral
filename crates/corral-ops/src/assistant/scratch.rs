@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::assistant::{AssistantScratch, validate_id};
-use corral_core::{ArtifactKind, ArtifactTier, Origin, Status, Task};
+use corral_core::{ArtifactTier, Origin, Status, Task};
 use serde::Serialize;
 
 use crate::Ctx;
@@ -351,14 +351,9 @@ fn preserve(
     for item in saved {
         let file = temp.path().join(&item.name);
         std::fs::write(&file, &item.bytes).context("writing scratch patch")?;
-        let artifact = crate::add_session_artifact(
-            ctx,
-            session,
-            &file,
-            Some(ArtifactKind::Diff),
-            Some(&item.title),
-        )
-        .context("saving the scratch's work failed; nothing was removed")?;
+        let artifact =
+            crate::add_session_artifact(ctx, session, &file, Some(item.kind), Some(&item.title))
+                .context("saving the scratch's work failed; nothing was removed")?;
         // A later diff on the session must not demote this one to transient retention.
         crate::assistant_artifacts::update(ctx, session, &artifact.path, |artifact| {
             artifact.tier_override = Some(ArtifactTier::Keep);

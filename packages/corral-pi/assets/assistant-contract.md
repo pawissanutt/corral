@@ -30,7 +30,8 @@ and the system temp directory; the host refuses any other path, including the ma
 and task worktrees. For a spike or co-work, make one with
 `corral assistant scratch new -p <project> --slug <name>`, commit there, and list yours with
 `corral assistant scratch list`. `corral assistant scratch discard <slug>` removes one of yours
-after saving its commits, staged, unstaged and untracked work as diff artifacts; `corral assistant scratch promote <slug> --title "..."`
+after saving its commits (a git bundle), staged, unstaged and untracked work and a restore
+manifest as session artifacts; `corral assistant scratch promote <slug> --title "..."`
 files it as a Backlog task when the owner asks. A spike never lands; finishing one is the owner's
 call, so when the owner says only "ship this", ask which scratch, what title and whether it needs
 review, or hand it to the PM.
