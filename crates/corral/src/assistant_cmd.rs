@@ -304,9 +304,13 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
             if json {
                 return print_json(&removed);
             }
-            match &removed.artifact {
-                Some(path) => println!("{session}/{slug} discarded; work saved as {path}"),
-                None => println!("{session}/{slug} discarded; nothing beyond its base"),
+            if removed.artifacts.is_empty() {
+                println!("{session}/{slug} discarded; nothing beyond its base");
+            } else {
+                println!(
+                    "{session}/{slug} discarded; work saved as {}",
+                    removed.artifacts.join(", ")
+                );
             }
         }
         ScratchCmd::Promote {

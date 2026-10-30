@@ -212,7 +212,8 @@ An assistant makes scratch worktrees from its shell for spikes and co-work. `new
 the project's `base`, else the repository's current branch) and records the path, branch,
 base commit, creation time and `kind: spike` in the session record. The slug defaults to
 `scratch-<k>`. Creation refuses `scratch_cap` when `assistant.scratch_max` (default 8) scratch
-worktrees already exist in the workspace, `disk_low` when the resource probe reports a disk below
+worktrees already exist in the workspace (concurrent creators are serialized, so the cap
+holds), `disk_low` when the resource probe reports a disk below
 `resources.min_disk_free`, and `assistant_ended` for an ended session. A spike never lands
 by itself; promotion files a task instead.
 
@@ -221,13 +222,26 @@ Every scratch command acts for the calling assistant's own session. Naming anoth
 the owner names the session with `--session`; `list` without it shows every session.
 
 **Discard** removes the scratch and its branch with no confirmation. When the scratch has
-work, checked at that moment (a commit beyond its recorded base, a tracked modification or
-an untracked file that is not ignored), corral first saves one `git apply --binary` patch
-from the base to the current content, headed by the commit range, as a `diff` artifact on
-the session (for example `A-1:A-1-spike-cache.diff`, tier keep). If that save fails, for
-example because the patch is larger than `artifacts.max_bytes`, nothing is removed. A
-scratch that another process still uses refuses `scratch_busy`, and one that belongs to a
-task run or a co-work finish refuses `scratch_attached`.
+work, checked at that moment (a commit beyond its recorded base, a staged or unstaged change,
+an untracked file that is not ignored, or a branch tip its checkout no longer contains),
+corral first saves each kind of work as its own `diff` artifact on the session, tier keep:
+
+| File (`A-1:A-1-<slug>.…`) | Holds | Restore with |
+|---|---|---|
+| `commits.mbox` | every commit beyond the base, one patch each (`git format-patch`) | `git am` |
+| `commits.diff` | the net change from the base, only when merges or a history below the base would not replay | `git apply --binary` |
+| `branch-commits.mbox` | commits on the branch that the checkout's HEAD left behind | `git am` |
+| `staged.diff` | the index against HEAD | `git apply --index --binary` |
+| `unstaged.diff` | the working files against the index | `git apply --binary` |
+| `untracked.diff` | untracked, non-ignored files as additions | `git apply --binary` |
+
+Replaying them in that order on a checkout of the base restores the commits, the index and
+the working files; content a later commit or edit replaced survives in its own file. If any
+save fails, for example because a file is larger than `artifacts.max_bytes`, nothing is
+removed. Saving reads the scratch without changing its files, index or refs. The calling
+shell may discard from inside its own scratch; a scratch that any other process uses refuses
+`scratch_busy`, and one that belongs to a task run or a co-work finish refuses
+`scratch_attached`.
 
 **Promote** files a Backlog task through the `corral new` path (default project: the
 scratch's; `--body-file` adds context) with the spike diff attached as an artifact. The
@@ -236,12 +250,13 @@ refuses `scratch_empty`.
 
 **GC** is an owner command, refused from an assistant shell. A scratch is eligible once its
 session has ended and it has been idle for `assistant.scratch_idle_days` (default 7) days
-since the later of the session end and its newest commit. Corral saves its work as for discard before removing the worktree and branch.
-It skips, with the reason, any scratch that a task run or co-work finish holds, that a
-process or herdr pane uses as its current directory, or whose repository is landing.
-`--dry-run` measures and lists without changing anything; `--yes` collects and records the
-measured size of each scratch it keeps. A run where some scratch could not be collected
-exits non-zero.
+since the later of the session end and its newest commit. Corral saves its work as for
+discard before removing the worktree and branch. It skips, with the reason, any scratch that
+a task run or co-work finish holds, that any live process uses as its current directory
+(including the shell that runs GC and its parents), that a herdr pane has open, or whose
+repository is landing. `--dry-run` measures and lists without changing anything; `--yes`
+collects and records the measured size of each scratch it keeps. A run where some scratch
+could not be collected exits non-zero.
 
 **Accounting.** `corral stats --storage` adds a row per scratch, measured by a bounded walk
 that never follows symlinks (a linked shared Cargo target is not counted) and reports

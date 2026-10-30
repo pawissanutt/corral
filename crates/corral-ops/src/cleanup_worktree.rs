@@ -347,25 +347,42 @@ pub(crate) fn discard_branch(repo: &Path, run: &Run) -> Result<()> {
     Ok(())
 }
 
-/// Processes using a scratch worktree, other than this command and its ancestors. Corral
-/// launched none of them, so scratch residents are reported and never signalled.
-pub(crate) fn scratch_residents(path: &Path) -> Result<Vec<u32>> {
+/// Whether this command and its ancestors count as occupying a scratch worktree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Callers {
+    /// An assistant disposing of its own scratch may run from inside it.
+    Exempt,
+    /// GC keeps a scratch that the shell or process running it still uses.
+    Occupy,
+}
+
+/// Processes using a scratch worktree. Corral launched none of them, so scratch residents
+/// are reported and never signalled.
+pub(crate) fn scratch_residents(path: &Path, callers: Callers) -> Result<Vec<u32>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
     let path = path.canonicalize().context("resolving scratch worktree")?;
-    let protected_set = protected_pids()?;
+    let exempt = match callers {
+        Callers::Exempt => protected_pids()?,
+        Callers::Occupy => BTreeSet::new(),
+    };
     Ok(residents(&path)?
         .into_iter()
         .map(|process| process.pid)
-        .filter(|pid| !protected_set.contains(pid))
+        .filter(|pid| !exempt.contains(pid))
         .collect())
 }
 
 /// Removes an assistant scratch worktree and force-deletes its branch, after the caller has
 /// preserved its work. Only a recorded `<repo>/.worktrees/A-<n>-<slug>` on a `corral/A-<n>/`
-/// branch is accepted, and a scratch any other process still uses is refused.
-pub(crate) fn remove_scratch(repo: &Path, path: &Path, branch: &str) -> Result<()> {
+/// branch is accepted, and a scratch a resident process still uses is refused.
+pub(crate) fn remove_scratch(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    callers: Callers,
+) -> Result<()> {
     let repo = repo
         .canonicalize()
         .context("resolving scratch repository")?;
@@ -388,7 +405,7 @@ pub(crate) fn remove_scratch(repo: &Path, path: &Path, branch: &str) -> Result<(
     if path.exists() && path.canonicalize().context("resolving scratch worktree")? != path {
         bail!("refusing aliased scratch worktree {}", path.display());
     }
-    let busy = scratch_residents(path)?;
+    let busy = scratch_residents(path, callers)?;
     if !busy.is_empty() {
         bail!(
             "scratch_busy: processes {busy:?} still use {}; leave the directory and retry",

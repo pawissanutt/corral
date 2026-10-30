@@ -11,6 +11,7 @@ use corral_core::{ArtifactKind, ArtifactTier, Origin, Status, Task};
 use serde::Serialize;
 
 use crate::Ctx;
+use crate::cleanup_worktree::Callers;
 
 mod gc;
 mod git;
@@ -51,8 +52,8 @@ pub struct Removed {
     pub head: Option<String>,
     pub commits: usize,
     pub uncommitted: bool,
-    /// The session artifact holding the saved work; none when nothing went beyond the base.
-    pub artifact: Option<String>,
+    /// Session artifacts holding the saved work; empty when nothing went beyond the base.
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,6 +134,8 @@ pub fn create(
     slug: Option<&str>,
     base: Option<&str>,
 ) -> Result<AssistantScratch> {
+    // Held from the workspace count through recording, so concurrent creators respect the cap.
+    let _creating = lock(ctx, "scratch-create")?;
     let current = ctx.store.get_assistant(session)?;
     if current.ended.is_some() {
         bail!("assistant_ended: {session} has ended; scratch worktrees belong to open sessions");
@@ -223,9 +226,12 @@ pub fn create(
     });
     if let Err(error) = recorded {
         // The new worktree holds nothing yet, so removing it loses no work.
-        if let Err(cleanup) =
-            crate::cleanup_worktree::remove_scratch(&repo, &scratch.path, &scratch.branch)
-        {
+        if let Err(cleanup) = crate::cleanup_worktree::remove_scratch(
+            &repo,
+            &scratch.path,
+            &scratch.branch,
+            Callers::Exempt,
+        ) {
             return Err(error.context(format!(
                 "removing the unrecorded scratch also failed: {cleanup:#}"
             )));
@@ -311,11 +317,11 @@ fn holder(tasks: &[Task], scratch: &AssistantScratch) -> Option<String> {
     })
 }
 
-/// Serializes removals of one scratch across processes.
-fn lock(ctx: &Ctx, session: &str, slug: &str) -> Result<std::fs::File> {
+/// A cross-process lock under `.corral/lock/`: scratch creation, or removal of one scratch.
+fn lock(ctx: &Ctx, name: &str) -> Result<std::fs::File> {
     let dir = ctx.store.dir().join("lock");
     std::fs::create_dir_all(&dir).context("creating lock directory")?;
-    let path = dir.join(format!("scratch-{session}-{slug}.lock"));
+    let path = dir.join(format!("{name}.lock"));
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -332,36 +338,46 @@ fn preserve(
     scratch: &AssistantScratch,
     repo: &Path,
     work: &git::Work,
-) -> Result<String> {
-    let patch = git::patch(session, repo, scratch, work)?;
+) -> Result<Vec<String>> {
+    let saved = git::preservation(session, repo, scratch, work)?;
+    if saved.is_empty() {
+        bail!(
+            "{session}/{} has work git could not export; nothing was removed",
+            scratch.slug
+        );
+    }
     let temp = tempfile::tempdir().context("creating scratch patch directory")?;
-    let file = temp.path().join(format!("{session}-{}.diff", scratch.slug));
-    std::fs::write(&file, patch).context("writing scratch patch")?;
-    let title = format!(
-        "Scratch {session}/{} before removal: {} commit(s) beyond base{}",
-        scratch.slug,
-        work.commits.len(),
-        if work.dirty {
-            " plus uncommitted changes"
-        } else {
-            ""
-        }
-    );
-    let saved =
-        crate::add_session_artifact(ctx, session, &file, Some(ArtifactKind::Diff), Some(&title))
-            .context("saving the scratch's work failed; nothing was removed")?;
-    // A later diff on the session must not demote this one to transient retention.
-    crate::assistant_artifacts::update(ctx, session, &saved.path, |artifact| {
-        artifact.tier_override = Some(ArtifactTier::Keep);
-    })
-    .context("protecting the saved scratch work failed; nothing was removed")?;
-    Ok(saved.path)
+    let mut paths = Vec::new();
+    for item in saved {
+        let file = temp.path().join(&item.name);
+        std::fs::write(&file, &item.bytes).context("writing scratch patch")?;
+        let artifact = crate::add_session_artifact(
+            ctx,
+            session,
+            &file,
+            Some(ArtifactKind::Diff),
+            Some(&item.title),
+        )
+        .context("saving the scratch's work failed; nothing was removed")?;
+        // A later diff on the session must not demote this one to transient retention.
+        crate::assistant_artifacts::update(ctx, session, &artifact.path, |artifact| {
+            artifact.tier_override = Some(ArtifactTier::Keep);
+        })
+        .context("protecting the saved scratch work failed; nothing was removed")?;
+        paths.push(artifact.path);
+    }
+    Ok(paths)
 }
 
 /// Preserve, remove the worktree and branch, then forget the record (discard and GC).
-fn remove(ctx: &Ctx, session: &str, scratch: &AssistantScratch) -> Result<Removed> {
+fn remove(
+    ctx: &Ctx,
+    session: &str,
+    scratch: &AssistantScratch,
+    callers: Callers,
+) -> Result<Removed> {
     let repo = repo_of(scratch)?;
-    let busy = crate::cleanup_worktree::scratch_residents(&scratch.path)?;
+    let busy = crate::cleanup_worktree::scratch_residents(&scratch.path, callers)?;
     if !busy.is_empty() {
         bail!(
             "scratch_busy: processes {busy:?} use {}; leave the directory and retry; nothing was removed",
@@ -369,12 +385,12 @@ fn remove(ctx: &Ctx, session: &str, scratch: &AssistantScratch) -> Result<Remove
         );
     }
     let work = git::work(&repo, scratch)?;
-    let artifact = if work.any() {
-        Some(preserve(ctx, session, scratch, &repo, &work)?)
+    let artifacts = if work.any() {
+        preserve(ctx, session, scratch, &repo, &work)?
     } else {
-        None
+        Vec::new()
     };
-    crate::cleanup_worktree::remove_scratch(&repo, &scratch.path, &scratch.branch)?;
+    crate::cleanup_worktree::remove_scratch(&repo, &scratch.path, &scratch.branch, callers)?;
     ctx.store.update_assistant(session, |s| {
         s.scratch.retain(|x| x.slug != scratch.slug);
         Ok(())
@@ -385,28 +401,29 @@ fn remove(ctx: &Ctx, session: &str, scratch: &AssistantScratch) -> Result<Remove
         head: work.head,
         commits: work.commits.len(),
         uncommitted: work.dirty,
-        artifact,
+        artifacts,
     })
 }
 
-/// The session's own disposal: no confirmation, work saved first.
+/// The session's own disposal: no confirmation, work saved first. Its own shell and this
+/// command may run from inside the scratch.
 pub fn discard(ctx: &Ctx, session: &str, slug: &str) -> Result<Removed> {
     validate_id(session)?;
     validate_slug(slug)?;
-    let _guard = lock(ctx, session, slug)?;
+    let _guard = lock(ctx, &format!("scratch-{session}-{slug}"))?;
     let scratch = find(ctx, session, slug)?;
     if let Some(holder) = holder(&ctx.store.list()?, &scratch) {
         bail!(
             "scratch_attached: {session}/{slug} belongs to {holder}; it is removed with that task's run"
         );
     }
-    let removed = remove(ctx, session, &scratch)?;
+    let removed = remove(ctx, session, &scratch, Callers::Exempt)?;
     ctx.store.log_event(
         None,
         "assistant_scratch_discarded",
         serde_json::json!({
             "session": session, "slug": slug, "project": scratch.project,
-            "branch": scratch.branch, "head": removed.head, "artifact": removed.artifact,
+            "branch": scratch.branch, "head": removed.head, "artifacts": removed.artifacts,
         }),
     )?;
     Ok(removed)
@@ -430,7 +447,7 @@ pub fn promote(
             "scratch_empty: {session}/{slug} has no commits or changes beyond its base; nothing was filed"
         );
     }
-    let patch = git::patch(session, &repo, &scratch, &work)?;
+    let patch = git::net_patch(session, &repo, &scratch, &work)?;
     let max = ctx.store.config.artifacts.max_bytes;
     if patch.len() as u64 > max {
         bail!(

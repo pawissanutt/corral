@@ -68,6 +68,10 @@ impl Fixture {
     }
 
     fn run(&self, assistant: Option<&str>, args: &[&str]) -> Output {
+        self.command(assistant, args).output().unwrap()
+    }
+
+    fn command(&self, assistant: Option<&str>, args: &[&str]) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_corral"));
         for name in [
             "CORRAL_ASSISTANT",
@@ -95,9 +99,8 @@ impl Fixture {
             .arg(&self.root)
             .args(args)
             .current_dir(&self.root)
-            .stdin(Stdio::null())
-            .output()
-            .unwrap()
+            .stdin(Stdio::null());
+        cmd
     }
 
     fn ok(&self, assistant: Option<&str>, args: &[&str]) -> String {
@@ -248,14 +251,19 @@ fn assistant_shell_creates_promotes_and_discards_only_its_own_scratch() {
         &["assistant", "scratch", "discard", "spike-cache", "--json"],
     );
     // Then its work was saved on A-1 first and the worktree and branch are gone.
-    let artifact = removed["artifact"].as_str().unwrap();
+    let artifact = removed["artifacts"][0].as_str().unwrap();
     assert!(
         artifact.starts_with("artifacts/assistant/A-1/"),
         "{removed}"
     );
     let saved = fx.ok(
         None,
-        &["artifact", "show", "A-1:A-1-spike-cache.diff", "--raw"],
+        &[
+            "artifact",
+            "show",
+            "A-1:A-1-spike-cache.commits.mbox",
+            "--raw",
+        ],
     );
     assert!(saved.contains("+fn cache() {}"), "{saved}");
     let event = fx.event("assistant_scratch_discarded");
@@ -315,7 +323,12 @@ fn owner_gc_collects_an_ended_sessions_idle_scratch_after_a_dry_run() {
     assert_eq!(real["items"][0]["action"], "removed", "{real}");
     let saved = fx.ok(
         None,
-        &["artifact", "show", "A-1:A-1-spike-cache.diff", "--raw"],
+        &[
+            "artifact",
+            "show",
+            "A-1:A-1-spike-cache.commits.mbox",
+            "--raw",
+        ],
     );
     assert!(saved.contains("+fn cache() {}"));
     assert!(!path.exists() && !fx.branches().contains("corral/A-1/spike-cache"));
@@ -332,4 +345,248 @@ fn owner_gc_collects_an_ended_sessions_idle_scratch_after_a_dry_run() {
         .unwrap();
     assert_eq!(check["ok"], false);
     assert!(check["message"].as_str().unwrap().contains("A-7-lost"));
+}
+
+#[test]
+fn owner_gc_keeps_a_scratch_its_own_calling_shell_still_uses() {
+    // Given an ended session's idle scratch, and a shell whose cwd is inside it.
+    let fx = Fixture::new();
+    fx.ok(
+        Some("A-1"),
+        &[
+            "assistant",
+            "scratch",
+            "new",
+            "-p",
+            "corral",
+            "--slug",
+            "resident",
+        ],
+    );
+    let path = fx.root.join(".worktrees/A-1-resident");
+    fx.ok(None, &["config", "set", "assistant.scratch_idle_days", "0"]);
+    fx.ok(None, &["assistant", "end", "A-1"]);
+    // When that shell runs owner GC from a subshell that has left the scratch, so only an
+    // ancestor of the GC process remains there.
+    let script = r#"(cd "$WS" && exec "$CORRAL" --root "$WS" assistant scratch gc --yes --json)"#;
+    let mut cmd = Command::new("sh");
+    for name in [
+        "CORRAL_ASSISTANT",
+        "CORRAL_PM",
+        "AI_AGENT",
+        "PI_CODING_AGENT",
+    ] {
+        cmd.env_remove(name);
+    }
+    let out = cmd
+        .args(["-c", script])
+        .env("WS", &fx.root)
+        .env("CORRAL", env!("CARGO_BIN_EXE_corral"))
+        .env("HOME", &fx.home)
+        .env("HERDR_BIN_PATH", "/nonexistent/herdr")
+        .current_dir(&path)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    // Then GC keeps it because a live process (the calling shell) uses it.
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["items"][0]["action"], "skip", "{report}");
+    let reason = report["items"][0]["reason"].as_str().unwrap();
+    assert!(reason.starts_with("live process cwd"), "{report}");
+    assert!(path.is_dir() && fx.branches().contains("corral/A-1/resident"));
+    // And once no process uses it, the same GC removes it.
+    let later = fx.json(None, &["assistant", "scratch", "gc", "--yes", "--json"]);
+    assert_eq!(later["items"][0]["action"], "removed", "{later}");
+    assert!(!path.exists());
+}
+
+#[cfg(target_os = "linux")]
+mod race {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::mpsc::Receiver;
+    use std::time::{Duration, Instant};
+
+    use super::Fixture;
+
+    /// Kills a spawned process group, wrappers included, if the test ends early.
+    struct Group(Child);
+
+    impl Drop for Group {
+        fn drop(&mut self) {
+            // Already-exited groups make kill fail; nothing is left to clean up then.
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", self.0.id())])
+                .stderr(Stdio::null())
+                .status();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// A child's stderr, read on a thread and awaited with bounded deadlines, without polling.
+    struct Stream {
+        rx: Receiver<Vec<u8>>,
+        seen: Vec<u8>,
+    }
+
+    impl Stream {
+        fn of(child: &mut Child) -> Self {
+            use std::io::Read;
+            let mut stderr = child.stderr.take().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut chunk = [0; 4096];
+                while let Ok(n) = stderr.read(&mut chunk) {
+                    if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+            });
+            Self {
+                rx,
+                seen: Vec::new(),
+            }
+        }
+
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.seen).into_owned()
+        }
+
+        fn until(&mut self, reached: impl Fn(&str) -> bool) -> String {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !reached(&self.text()) {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .unwrap_or_else(|| panic!("never matched: {}", self.text()));
+                self.seen.extend(self.rx.recv_timeout(remaining).unwrap());
+            }
+            self.text()
+        }
+
+        /// Everything until the writer closes stderr (the process and its children exited).
+        fn rest(mut self) -> String {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .unwrap_or_else(|| panic!("never exited: {}", self.text()));
+                match self.rx.recv_timeout(remaining) {
+                    Ok(chunk) => self.seen.extend(chunk),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return self.text(),
+                    Err(error) => panic!("{error}: {}", self.text()),
+                }
+            }
+        }
+    }
+
+    fn spawn(mut cmd: Command) -> (Group, Stream) {
+        let mut child = cmd
+            .process_group(0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stream = Stream::of(&mut child);
+        (Group(child), stream)
+    }
+
+    #[test]
+    fn concurrent_creators_never_exceed_the_last_scratch_slot() {
+        // Given one free slot, and a git wrapper that parks each corral process's first branch
+        // probe for slug `race` until the test releases it.
+        let fx = Fixture::new();
+        fx.ok(None, &["config", "set", "assistant.scratch_max", "1"]);
+        let barrier = fx.home.join("barrier");
+        std::fs::create_dir_all(barrier.join("bin")).unwrap();
+        let release = barrier.join("release");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&release)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let found = Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        let real = String::from_utf8(found.stdout).unwrap().trim().to_owned();
+        let wrapper = barrier.join("bin/git");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nfor last in \"$@\"; do :; done\ncase \"$last\" in\n  refs/heads/corral/A-*/race)\n    if mkdir \"{dir}/held.$PPID\" 2>/dev/null; then\n      echo \"barrier-arrived $PPID\" >&2\n      read _ < \"{dir}/release\"\n    fi ;;\nesac\nexec \"{real}\" \"$@\"\n",
+                dir = barrier.display()
+            ),
+        )
+        .unwrap();
+        assert!(
+            Command::new("chmod")
+                .arg("+x")
+                .arg(&wrapper)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let path = format!(
+            "{}:{}",
+            barrier.join("bin").display(),
+            std::env::var("PATH").unwrap()
+        );
+        let create = |session: &str| {
+            let mut cmd = fx.command(
+                Some(session),
+                &[
+                    "assistant",
+                    "scratch",
+                    "new",
+                    "-p",
+                    "corral",
+                    "--slug",
+                    "race",
+                ],
+            );
+            cmd.env("PATH", &path);
+            cmd
+        };
+        // When A-1 is parked inside its creation, holding the last slot,
+        let (mut first, mut first_err) = spawn(create("A-1"));
+        first_err.until(|text| text.contains("barrier-arrived"));
+        // and A-2 starts its own creation under strace,
+        let plain = create("A-2");
+        let mut traced = Command::new("strace");
+        traced
+            .args(["-yy", "-e", "trace=flock", "--"])
+            .arg(plain.get_program())
+            .args(plain.get_args())
+            .current_dir(&fx.root)
+            .stdin(Stdio::null());
+        for (key, value) in plain.get_envs() {
+            match value {
+                Some(value) => traced.env(key, value),
+                None => traced.env_remove(key),
+            };
+        }
+        let (mut second, mut second_err) = spawn(traced);
+        // then A-2 blocks on the workspace creation lock instead of reaching its branch probe.
+        let seen = second_err.until(|text| {
+            text.contains("scratch-create.lock>, LOCK_EX") || text.contains("barrier-arrived")
+        });
+        assert!(
+            !seen.contains("barrier-arrived"),
+            "A-2 passed the cap check: {seen}"
+        );
+        // When A-1 is released, it completes, and A-2 then refuses the full workspace.
+        std::fs::write(&release, "go\n").unwrap();
+        let first_text = first_err.rest();
+        assert!(first.0.wait().unwrap().success(), "{first_text}");
+        let second_text = second_err.rest();
+        assert!(!second.0.wait().unwrap().success(), "{second_text}");
+        assert!(second_text.contains("scratch_cap"), "{second_text}");
+        let listed = fx.json(None, &["assistant", "scratch", "list", "--json"]);
+        assert_eq!(listed.as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed[0]["session"], "A-1");
+        assert!(!fx.root.join(".worktrees/A-2-race").exists());
+    }
 }

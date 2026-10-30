@@ -153,7 +153,7 @@ fn c8_scratch_lifecycle_accounting_and_idle_gc() {
     // The real run saves a diff artifact on A-1, then removes the worktree and branch.
     let real = scratch::gc(&fx.ctx, later, false).unwrap();
     assert_eq!(real.items[0].action, "removed", "{real:?}");
-    let saved = real.items[0].artifact.clone().unwrap();
+    let saved = real.items[0].artifacts[0].clone();
     let (artifact, text) = fx.saved("A-1", &saved);
     assert_eq!(artifact.kind, ArtifactKind::Diff);
     assert_eq!(artifact.tier_override, Some(ArtifactTier::Keep));
@@ -217,37 +217,160 @@ fn gc_skips_a_scratch_with_a_live_process_cwd_or_a_pending_finish() {
     );
 }
 
-#[test]
-fn c13_discard_saves_committed_tracked_and_untracked_work_first() {
-    // Given A-1 scratch with a commit beyond base, with only uncommitted edits, and empty.
-    let mut fx = Fixture::new();
-    let committed = fx.create("A-1", "committed");
-    fx.commit(&committed.path, "feature.rs", "fn feature() {}\n");
-    let dirty = fx.create("A-1", "dirty");
-    std::fs::write(dirty.path.join("README.md"), "base\ntracked edit\n").unwrap();
-    std::fs::write(dirty.path.join("notes.txt"), "untracked note\n").unwrap();
-    std::fs::write(dirty.path.join("ignored.log"), "ignored\n").unwrap();
-    let empty = fx.create("A-1", "empty");
-    // When A-1 discards each, then every one is removed with its branch.
-    let first = scratch::discard(&fx.ctx, "A-1", "committed").unwrap();
-    assert_eq!(first.commits, 1);
-    let (_, text) = fx.saved("A-1", first.artifact.as_deref().unwrap());
-    assert!(text.contains("+fn feature() {}") && text.contains("add feature.rs"));
-    let second = scratch::discard(&fx.ctx, "A-1", "dirty").unwrap();
-    assert!(second.uncommitted && second.commits == 0);
-    let (artifact, text) = fx.saved("A-1", second.artifact.as_deref().unwrap());
-    assert!(text.contains("+tracked edit") && text.contains("+untracked note"));
-    assert!(!text.contains("ignored.log"), "{text}");
-    // The saved patch restores the work onto the base.
-    let patch = fx.root.join("restore.diff");
-    std::fs::write(&patch, &text).unwrap();
+/// Every saved file of a removed scratch, by file-name suffix after `A-1-<slug>.`.
+fn saved_files(
+    fx: &Fixture,
+    removed: &scratch::Removed,
+) -> std::collections::BTreeMap<String, String> {
+    let stem = format!("{}-{}.", removed.session, removed.slug);
+    removed
+        .artifacts
+        .iter()
+        .map(|path| {
+            let (artifact, text) = fx.saved(&removed.session, path);
+            assert_eq!(artifact.kind, ArtifactKind::Diff);
+            assert_eq!(artifact.tier_override, Some(ArtifactTier::Keep));
+            let name = path.rsplit_once(&stem).unwrap().1.to_owned();
+            (name, text)
+        })
+        .collect()
+}
+
+/// Replays saved files onto a fresh checkout of the base, in the documented order.
+fn restore(
+    fx: &Fixture,
+    base: &str,
+    files: &std::collections::BTreeMap<String, String>,
+) -> PathBuf {
+    let target = fx.root.join(".worktrees").join("restored");
     git(
         &fx.root,
-        &["apply", "--check", "--binary", patch.to_str().unwrap()],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            target.to_str().unwrap(),
+            base,
+        ],
     );
-    let third = scratch::discard(&fx.ctx, "A-1", "empty").unwrap();
-    assert_eq!(third.artifact, None);
-    for gone in [&committed, &dirty, &empty] {
+    for (name, args) in [
+        ("commits.mbox", &["am", "-q"][..]),
+        ("staged.diff", &["apply", "--index", "--binary"][..]),
+        ("unstaged.diff", &["apply", "--binary"][..]),
+        ("untracked.diff", &["apply", "--binary"][..]),
+    ] {
+        if let Some(text) = files.get(name) {
+            let file = fx.root.join(format!("restore-{name}"));
+            std::fs::write(&file, text).unwrap();
+            let mut args = args.to_vec();
+            args.push(file.to_str().unwrap());
+            git(&target, &args);
+        }
+    }
+    target
+}
+
+#[test]
+fn c13_discard_saves_commits_staged_unstaged_and_untracked_work_restorably() {
+    // Given one scratch holding every kind of work: two commits (the second replacing the
+    // first's content), a staged edit restored in the working copy, an unstaged edit, an
+    // untracked file and an ignored file.
+    let fx = Fixture::new();
+    let all = fx.create("A-1", "all");
+    fx.commit(&all.path, "feature.rs", "UNIQUE_FIRST_COMMIT\n");
+    fx.commit(&all.path, "feature.rs", "second commit\n");
+    std::fs::write(all.path.join("README.md"), "UNIQUE_STAGED_WORK\n").unwrap();
+    git(&all.path, &["add", "README.md"]);
+    std::fs::write(all.path.join("README.md"), "base\n").unwrap();
+    std::fs::write(all.path.join("feature.rs"), "UNIQUE_UNSTAGED_DRAFT\n").unwrap();
+    std::fs::write(all.path.join("notes.txt"), "UNIQUE_UNTRACKED_NOTE\n").unwrap();
+    std::fs::write(all.path.join("ignored.log"), "ignored\n").unwrap();
+    let head_tree = git(&all.path, &["rev-parse", "HEAD^{tree}"]);
+    let first_tree = git(&all.path, &["rev-parse", "HEAD~1^{tree}"]);
+    let index_tree = git(&all.path, &["write-tree"]);
+    // When A-1 discards it.
+    let removed = scratch::discard(&fx.ctx, "A-1", "all").unwrap();
+    assert!(!all.path.exists() && !fx.branch_exists(&all.branch));
+    // Then each kind of work is a separate, protected file holding its own content.
+    let files = saved_files(&fx, &removed);
+    assert_eq!(
+        files.keys().collect::<Vec<_>>(),
+        [
+            "commits.mbox",
+            "staged.diff",
+            "unstaged.diff",
+            "untracked.diff"
+        ]
+    );
+    assert!(files["commits.mbox"].contains("+UNIQUE_FIRST_COMMIT"));
+    assert!(files["staged.diff"].contains("+UNIQUE_STAGED_WORK"));
+    assert!(files["unstaged.diff"].contains("+UNIQUE_UNSTAGED_DRAFT"));
+    assert!(files["untracked.diff"].contains("+UNIQUE_UNTRACKED_NOTE"));
+    assert!(files.values().all(|text| !text.contains("ignored.log")));
+    // And replaying them on the base restores both commits, the index and the working files.
+    let restored = restore(&fx, &all.base, &files);
+    assert_eq!(git(&restored, &["rev-parse", "HEAD^{tree}"]), head_tree);
+    assert_eq!(git(&restored, &["rev-parse", "HEAD~1^{tree}"]), first_tree);
+    assert_eq!(git(&restored, &["write-tree"]), index_tree);
+    for (file, body) in [
+        ("README.md", "base\n"),
+        ("feature.rs", "UNIQUE_UNSTAGED_DRAFT\n"),
+        ("notes.txt", "UNIQUE_UNTRACKED_NOTE\n"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(restored.join(file)).unwrap(),
+            body,
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn c13_discard_keeps_staged_only_overwritten_cancelled_and_stranded_work() {
+    let fx = Fixture::new();
+    // Staged content whose working copy was restored to the base.
+    let staged = fx.create("A-1", "staged");
+    std::fs::write(staged.path.join("README.md"), "UNIQUE_STAGED_ONLY\n").unwrap();
+    git(&staged.path, &["add", "README.md"]);
+    std::fs::write(staged.path.join("README.md"), "base\n").unwrap();
+    // A commit overwritten by an uncommitted draft.
+    let overwritten = fx.create("A-1", "overwritten");
+    fx.commit(&overwritten.path, "feature.rs", "UNIQUE_COMMITTED_WORK\n");
+    std::fs::write(overwritten.path.join("feature.rs"), "draft\n").unwrap();
+    // A commit cancelled by the next one: no net change from the base.
+    let cancelled = fx.create("A-1", "cancelled");
+    fx.commit(&cancelled.path, "gone.rs", "UNIQUE_CANCELLED_WORK\n");
+    git(&cancelled.path, &["rm", "-q", "gone.rs"]);
+    git(&cancelled.path, &["commit", "-q", "-m", "drop gone.rs"]);
+    // Commits left on the branch after the checkout moved back to the base.
+    let stranded = fx.create("A-1", "stranded");
+    fx.commit(&stranded.path, "branch.rs", "UNIQUE_BRANCH_WORK\n");
+    git(
+        &stranded.path,
+        &["checkout", "-q", "--detach", &stranded.base],
+    );
+    let empty = fx.create("A-1", "empty");
+    for (slug, file, needle) in [
+        ("staged", "staged.diff", "+UNIQUE_STAGED_ONLY"),
+        ("overwritten", "commits.mbox", "+UNIQUE_COMMITTED_WORK"),
+        ("cancelled", "commits.mbox", "+UNIQUE_CANCELLED_WORK"),
+        ("stranded", "branch-commits.mbox", "+UNIQUE_BRANCH_WORK"),
+    ] {
+        let removed = scratch::discard(&fx.ctx, "A-1", slug).unwrap();
+        let files = saved_files(&fx, &removed);
+        assert!(
+            files.get(file).is_some_and(|text| text.contains(needle)),
+            "{slug}: {files:?}"
+        );
+    }
+    assert!(
+        scratch::discard(&fx.ctx, "A-1", "empty")
+            .unwrap()
+            .artifacts
+            .is_empty()
+    );
+    for gone in [&staged, &overwritten, &cancelled, &stranded, &empty] {
         assert!(!gone.path.exists() && !fx.branch_exists(&gone.branch));
     }
     assert!(
@@ -258,16 +381,11 @@ fn c13_discard_saves_committed_tracked_and_untracked_work_first() {
             .scratch
             .is_empty()
     );
-    // Both saved diffs stay protected after the later one was added.
-    let artifacts = fx.ctx.store.get_assistant("A-1").unwrap().artifacts;
-    assert_eq!(artifacts.len(), 2);
-    assert!(
-        artifacts
-            .iter()
-            .all(|a| a.tier_override == Some(ArtifactTier::Keep))
-    );
-    assert_eq!(artifact.kind, ArtifactKind::Diff);
-    // When saving fails, then nothing is removed.
+}
+
+#[test]
+fn c13_a_failed_save_removes_nothing() {
+    let mut fx = Fixture::new();
     let kept = fx.create("A-1", "kept");
     std::fs::write(kept.path.join("big.txt"), "x".repeat(4096)).unwrap();
     fx.ctx.store.config.artifacts.max_bytes = 64;
