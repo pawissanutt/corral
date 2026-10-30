@@ -25,6 +25,11 @@ include the owner preview and confirmation commands.
 - `cargo test -p corral-ops --lib agent::pm_wake:: -- --nocapture`: passed.
 - In `packages/corral-pi`, `bun run typecheck`: passed;
   `bun test src/host/config.test.ts src/roles/pm/pm.test.ts`: 53 passed.
+- `cargo test -p corral-ops --lib agent::pi::tests:: -- --nocapture`:
+  11 passed, 1 subprocess entry point ignored. The first quick gate exposed a fixture
+  that reused the legacy project identity after migration and an obsolete scope-change
+  refusal expectation. The fixture now reads the new bootstrap identity; the pane-safety
+  refusal test uses a missing role asset instead, preserving its adoption assertions.
 - `git diff --check`: passed.
 
 The red log was obtained by temporarily restoring the old single-project refusal,
