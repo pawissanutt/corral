@@ -127,6 +127,21 @@ impl Fixture {
             .unwrap_or_else(|| panic!("no {kind} event"))
     }
 
+    /// Fetches HEAD from a saved bundle read back through `artifact show --raw`, then shows a file.
+    fn fetched(&self, artifact: &str, file: &str) -> String {
+        let out = self.run(None, &["artifact", "show", artifact, "--raw"]);
+        assert!(out.status.success(), "{out:?}");
+        let bundle = self.home.join("fetched.bundle");
+        std::fs::write(&bundle, &out.stdout).unwrap();
+        let source = bundle.to_str().unwrap();
+        git(
+            &self.root,
+            &["fetch", "-q", source, "+HEAD:refs/heads/fetched"],
+            None,
+        );
+        git(&self.root, &["show", &format!("fetched:{file}")], None)
+    }
+
     fn branches(&self) -> String {
         git(&self.root, &["branch", "--list"], None)
     }
@@ -256,16 +271,23 @@ fn assistant_shell_creates_promotes_and_discards_only_its_own_scratch() {
         artifact.starts_with("artifacts/assistant/A-1/"),
         "{removed}"
     );
-    let saved = fx.ok(
+    let manifest = fx.ok(
         None,
         &[
             "artifact",
             "show",
-            "A-1:A-1-spike-cache.commits.mbox",
+            "A-1:A-1-spike-cache.restore.txt",
             "--raw",
         ],
     );
-    assert!(saved.contains("+fn cache() {}"), "{saved}");
+    assert!(
+        manifest.contains("commits      in A-1-spike-cache.commits.bundle"),
+        "{manifest}"
+    );
+    assert_eq!(
+        fx.fetched("A-1:A-1-spike-cache.commits.bundle", "cache.rs"),
+        "fn cache() {}"
+    );
     let event = fx.event("assistant_scratch_discarded");
     assert_eq!(event["via"], "assistant:A-1");
     assert!(!path.exists() && !fx.branches().contains("corral/A-1/spike-cache"));
@@ -321,16 +343,23 @@ fn owner_gc_collects_an_ended_sessions_idle_scratch_after_a_dry_run() {
     // When the owner collects, then the diff is saved on A-1 and the worktree and branch go.
     let real = fx.json(None, &["assistant", "scratch", "gc", "--yes", "--json"]);
     assert_eq!(real["items"][0]["action"], "removed", "{real}");
-    let saved = fx.ok(
+    let manifest = fx.ok(
         None,
         &[
             "artifact",
             "show",
-            "A-1:A-1-spike-cache.commits.mbox",
+            "A-1:A-1-spike-cache.restore.txt",
             "--raw",
         ],
     );
-    assert!(saved.contains("+fn cache() {}"));
+    assert!(
+        manifest.contains("commits      in A-1-spike-cache.commits.bundle"),
+        "{manifest}"
+    );
+    assert_eq!(
+        fx.fetched("A-1:A-1-spike-cache.commits.bundle", "cache.rs"),
+        "fn cache() {}"
+    );
     assert!(!path.exists() && !fx.branches().contains("corral/A-1/spike-cache"));
     assert_eq!(fx.event("assistant_scratch_collected")["actor"], "owner");
     // And doctor reports a scratch directory no session records.

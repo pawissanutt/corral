@@ -224,19 +224,30 @@ the owner names the session with `--session`; `list` without it shows every sess
 **Discard** removes the scratch and its branch with no confirmation. When the scratch has
 work, checked at that moment (a commit beyond its recorded base, a staged or unstaged change,
 an untracked file that is not ignored, or a branch tip its checkout no longer contains),
-corral first saves each kind of work as its own `diff` artifact on the session, tier keep:
+corral first saves each kind of work as its own session artifact, tier keep:
 
-| File (`A-1:A-1-<slug>.…`) | Holds | Restore with |
-|---|---|---|
-| `commits.mbox` | every commit beyond the base, one patch each (`git format-patch`) | `git am` |
-| `commits.diff` | the net change from the base, only when merges or a history below the base would not replay | `git apply --binary` |
-| `branch-commits.mbox` | commits on the branch that the checkout's HEAD left behind | `git am` |
-| `staged.diff` | the index against HEAD | `git apply --index --binary` |
-| `unstaged.diff` | the working files against the index | `git apply --binary` |
-| `untracked.diff` | untracked, non-ignored files as additions | `git apply --binary` |
+| File (`A-1:A-1-<slug>.…`) | Holds |
+|---|---|
+| `restore.txt` | the base, HEAD and branch SHAs, and the exact commands that restore them |
+| `commits.bundle` | every commit reachable from HEAD or the branch but not from the base, as the original Git objects (merges and histories reset below the base included), verified before it is saved |
+| `staged.diff` | the index against HEAD |
+| `unstaged.diff` | the working files against the index |
+| `untracked.diff` | untracked, non-ignored files as additions |
 
-Replaying them in that order on a checkout of the base restores the commits, the index and
-the working files; content a later commit or edit replaced survives in its own file. If any
+To restore, put the files in a directory `$SAVED` and run the commands listed in
+`restore.txt` from the project repository's root. They follow this shape:
+
+```sh
+git fetch "$SAVED/A-1-spike.commits.bundle" HEAD:refs/heads/restore/A-1-spike
+git worktree add .worktrees/restore-A-1-spike restore/A-1-spike
+git -C .worktrees/restore-A-1-spike apply --index --binary "$SAVED/A-1-spike.staged.diff"
+git -C .worktrees/restore-A-1-spike apply --binary "$SAVED/A-1-spike.unstaged.diff"
+git -C .worktrees/restore-A-1-spike apply --binary "$SAVED/A-1-spike.untracked.diff"
+```
+
+The fetched commits keep their original SHAs, and the patches rebuild the index and working
+files. A HEAD still inside the base's history is restored with `git worktree add --detach`
+at its SHA instead, and a branch tip that HEAD left behind gets its own fetch line. If any
 save fails, for example because a file is larger than `artifacts.max_bytes`, nothing is
 removed. Saving reads the scratch without changing its files, index or refs. The calling
 shell may discard from inside its own scratch; a scratch that any other process uses refuses
