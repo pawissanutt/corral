@@ -39,6 +39,7 @@ mod head_obligations;
 mod head_overlay;
 mod head_reviews;
 mod head_run;
+mod head_wait;
 mod heads;
 mod member_gate;
 pub(crate) mod migrate_rows;

@@ -401,7 +401,7 @@ impl TaskHeadMut {
         Ok(())
     }
 
-    fn obligation_row(
+    pub(super) fn obligation_row(
         s: usize,
         kind: &str,
         n: usize,
@@ -529,26 +529,9 @@ impl TaskHeadMut {
             return Ok(());
         }
         self.history_edit = true;
-        let before_parking = crate::ContainerFacts::wait_parking(&self.head.id, &before);
-        let after_parking = crate::ContainerFacts::wait_parking(&self.head.id, &after);
+        let task_id = self.head.id.clone();
         let (_, facts) = self.current_run_facts(run)?;
-        facts.dependency_waits = facts
-            .dependency_waits
-            .saturating_sub(before_parking.0)
-            .saturating_add(after_parking.0);
-        facts.nondependency_waits = facts
-            .nondependency_waits
-            .saturating_sub(before_parking.1)
-            .saturating_add(after_parking.1);
-        let pending = |w: &WaitRecord| i64::from(w.observation.state == WaitState::Pending);
-        let open = |w: &WaitRecord| i64::from(w.receipt.is_none());
-        facts.pending_waits = facts
-            .pending_waits
-            .saturating_add_signed(pending(&after) - pending(&before));
-        facts.open_obligations = facts
-            .open_obligations
-            .saturating_add_signed(open(&after) - open(&before));
-        facts.obligations_rev += 1;
+        super::head_wait::adjust_facts(&task_id, facts, &before, &after);
         self.put(new);
         Ok(())
     }

@@ -495,6 +495,33 @@ impl TaskMut for Task {
         Ok(())
     }
 
+    fn edit_run_wait(
+        &mut self,
+        run: &str,
+        id: &str,
+        edit: impl FnOnce(&mut WaitRecord) -> Result<()>,
+    ) -> Result<()> {
+        let target = self
+            .runs
+            .iter_mut()
+            .find(|target| target.id == run)
+            .with_context(|| format!("run {run} not found"))?;
+        let wait = target
+            .obligations
+            .waits
+            .iter_mut()
+            .find(|wait| wait.request.id == id)
+            .with_context(|| format!("wait {id} not found"))?;
+        let mut after = wait.clone();
+        edit(&mut after)?;
+        ensure!(
+            after.request.id == wait.request.id,
+            "a wait edit may not change its id"
+        );
+        *wait = after;
+        Ok(())
+    }
+
     fn edit_wait(
         &mut self,
         run: &str,
