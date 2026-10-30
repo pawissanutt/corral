@@ -9,6 +9,7 @@ mod artifact_search;
 mod artifact_server;
 mod artifact_storage;
 mod artifacts;
+pub mod assistant;
 mod assistant_artifacts;
 pub use assistant_artifacts::add_session_artifact;
 pub mod attention;

@@ -191,6 +191,61 @@ keep-tier artifacts, screenshots and pinned snapshots have the same protection a
 artifacts. GC is an owner operation, not an assistant shell operation. `--dry-run` previews;
 `--yes` applies. Purged metadata remains resolvable; re-adding identical content revives it.
 
+## Scratch worktrees
+
+```sh
+corral assistant scratch new -p corral --slug spike-cache
+corral assistant scratch list
+corral assistant scratch promote spike-cache --title "Cache layer"
+corral assistant scratch discard spike-cache
+corral assistant scratch gc --dry-run
+corral assistant scratch gc --yes
+corral stats --storage
+```
+
+An assistant makes scratch worktrees from its shell for spikes and co-work. `new` creates
+`<repo>/.worktrees/A-<n>-<slug>` on branch `corral/A-<n>/<slug>` from `--base` (default:
+the project's `base`, else the repository's current branch) and records the path, branch,
+base commit, creation time and `kind: spike` in the session record. The slug defaults to
+`scratch-<k>`. Creation refuses `scratch_cap` when 8 scratch worktrees already exist in the
+workspace, `disk_low` when the resource probe reports a disk below
+`resources.min_disk_free`, and `assistant_ended` for an ended session. A spike never lands
+by itself; promotion files a task instead.
+
+Every scratch command acts for the calling assistant's own session. Naming another one with
+`--session A-<n>` refuses `not_own_scratch` and changes nothing. Outside an assistant shell
+the owner names the session with `--session`; `list` without it shows every session.
+
+**Discard** removes the scratch and its branch with no confirmation. When the scratch has
+work, checked at that moment (a commit beyond its recorded base, a tracked modification or
+an untracked file that is not ignored), corral first saves one `git apply --binary` patch
+from the base to the current content, headed by the commit range, as a `diff` artifact on
+the session (for example `A-1:A-1-spike-cache.diff`, tier keep). If that save fails, for
+example because the patch is larger than `artifacts.max_bytes`, nothing is removed. A
+scratch that another process still uses refuses `scratch_busy`, and one that belongs to a
+task run or a co-work finish refuses `scratch_attached`.
+
+**Promote** files a Backlog task through the `corral new` path (default project: the
+scratch's; `--body-file` adds context) with the spike diff attached as an artifact. The
+scratch, its branch and its record stay unchanged. A scratch with nothing beyond its base
+refuses `scratch_empty`.
+
+**GC** is an owner command, refused from an assistant shell. A scratch is eligible once its
+session has ended and it has been idle for 7 days since the later of the session end and its
+newest commit. Corral saves its work as for discard before removing the worktree and branch.
+It skips, with the reason, any scratch that a task run or co-work finish holds, that a
+process or herdr pane uses as its current directory, or whose repository is landing.
+`--dry-run` measures and lists without changing anything; `--yes` collects and records the
+measured size of each scratch it keeps. A run where some scratch could not be collected
+exits non-zero.
+
+**Accounting.** `corral stats --storage` adds a row per scratch, measured by a bounded walk
+that never follows symlinks (a linked shared Cargo target is not counted) and reports
+dependency and build trees such as `node_modules`, `target` and `.venv` separately. A `+`
+marks a lower bound when the walk reached its entry limit. Measuring runs in stats and GC,
+never in sync. `corral doctor` warns about `.worktrees/A-<n>-*` directories that no
+session record lists; corral never removes those itself.
+
 ## Shell entry: reads, filing and refusals
 
 An assistant's host exports `CORRAL_ASSISTANT=A-<n>` into the session's shell. Every
@@ -207,13 +262,15 @@ class; nothing reaches an assistant by default.
   `corral doctor` without `--fix`, `corral agent rewind --list`, and `corral run progress`
   or `corral run checkpoint` without `--file`.
 - **File**: `corral new` for an Idea or Backlog task, `corral comment`,
-  `corral assistant summary` for the calling session, and `corral artifact add --session`
-  for the calling session only (never a task run or another session). `corral agent call`,
+  `corral assistant summary` for the calling session, `corral artifact add --session`
+  for the calling session only (never a task run or another session), and
+  `corral assistant scratch new`, `discard` and `promote` (the operation refuses another
+  session's scratch with `not_own_scratch`). `corral assistant scratch list` is a Read. `corral agent call`,
   the host's authenticated channel, is admitted too; its operation table decides what the
   assistant role may do there.
 - **Refused**: everything else, including `corral approve`, `corral move`,
-  `corral dispatch`, `corral config set`, `corral pi`, `corral artifact gc` (even with
-  `--dry-run`), the board, capture and settings screens, and every owner-only command. Filing stops short of authority:
+  `corral dispatch`, `corral config set`, `corral pi`, `corral artifact gc` and
+  `corral assistant scratch gc` (even with `--dry-run`), the board, capture and settings screens, and every owner-only command. Filing stops short of authority:
   `corral new --ready`, `corral new --origin pm`, `corral comment --send`,
   `corral comment --author pm` and owner approvals written as `owner-ok:` comments are
   refused as well.
@@ -237,6 +294,6 @@ command they run inherits the variable and is classified.
 
 ## Not here yet
 
-The PM inbox and native inbox delivery to assistants, owner-authorized actions, scratch
-worktrees, co-work landing and task focus (`--task`) are separate members of the
+The PM inbox and native inbox delivery to assistants, owner-authorized actions, co-work
+landing and task focus (`--task`) are separate members of the
 [reviewed assistant plan](../plans/assistant-sessions.md).
