@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 use super::{AgentPm, AgentRunState};
 use crate::{Run, RunOutcome, Status, Task};
 
+#[path = "live_closure_ref.rs"]
+mod closure_ref;
+pub use closure_ref::container_closure_ref;
+
 /// The named container of a request. Lookup resolves it even when it is historical.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

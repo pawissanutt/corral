@@ -494,6 +494,9 @@ pub trait TaskRef: TaskFieldsRef {
 
     fn open_review_children(&self, run: &str) -> Result<Vec<RunHead>>;
     fn pending_plan_reviews(&self, plan: &str) -> Result<Vec<PlanReviewHead>>;
+    /// The last review of every plan still awaiting a verdict, including older plans.
+    /// Earlier pending reviews superseded by a later review of that plan are excluded.
+    fn pending_plan_reviewers(&self) -> Result<Vec<(String, PlanReviewHead)>>;
     fn pending_aggregate_reviews(&self, attempt: &str) -> Result<Vec<AggregateReview>>;
     fn open_obligations(&self, run: &str) -> Result<RunObligations>;
     /// Checkpoint metadata of `run`, newest first, read as the caller consumes it.

@@ -37,6 +37,37 @@ fn rows(
     ]
 }
 
+#[cfg(unix)]
+#[test]
+fn delivery_recipients_match_full_facade_without_settled_history_reads() {
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = handling_tests::fixture::Fx::new();
+        let mut task = fx.questions(0);
+        let mut old = task.runs[0].clone();
+        old.outcome = Some(corral_core::RunOutcome::Done);
+        old.ended = Some(handling_tests::fixture::at(1));
+        for n in 0..2 * scale {
+            old.id = format!("old-{n:06}");
+            task.runs.insert(0, old.clone());
+        }
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        let expected = recipients(&task).unwrap();
+        assert_eq!(expected.len(), 1);
+        let head = fx.ctx.store.head(&task.id).unwrap();
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        assert_eq!(recipients(&head).unwrap(), expected);
+        let after = work::snapshot();
+        measured.push(Counter::ALL.map(|counter| after.total(counter) - before.total(counter)));
+        assert_eq!(
+            after.total(Counter::FullTaskHydrations) - before.total(Counter::FullTaskHydrations),
+            0
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+}
+
 #[test]
 fn scalar_attention_helpers_match_full_facade_without_history_reads() {
     let at = "2026-01-01T00:00:00Z".parse().unwrap();

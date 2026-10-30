@@ -6,7 +6,7 @@ use classify::{authority, check, keyed_status, progress, wait};
 use corral_core::attention::{
     Assessment, Condition, ConditionKey, NextAction, Responsible, SinceSource, WaitClass,
 };
-use corral_core::inbox::{Inbox, InboxState, OwnerEntry, Recipient};
+use corral_core::inbox::{Inbox, OwnerEntry};
 use corral_core::{
     AvailabilityEpisode, Config, EffectivePolicy, OperatingActionKind as Action, PlanRunState,
     Status, Task, TaskFieldsRef, Verdict,
@@ -30,6 +30,8 @@ mod handling;
 mod heads_tests;
 pub mod metrics;
 mod outbox;
+mod recipients;
+use recipients::recipients;
 mod stopping;
 pub use handling::{attend, guard};
 pub(crate) use handling::{reconcile, reconcile_projected};
@@ -291,12 +293,12 @@ pub(super) fn board_snapshot(
         .iter()
         .filter(|task| !matches!(task.status, Status::Done | Status::Dropped))
     {
-        for (recipient, state) in recipients(task) {
+        for (recipient, state) in recipients(task)? {
             let inbox = Inbox::new(&ctx.store, recipient)?;
-            if !inbox.recipient_ended(task) {
+            if !inbox.recipient_ended_ref(task)? {
                 neighborhood
                     .deliveries
-                    .insert(inbox.key().into(), inbox.owner_entries(state)?);
+                    .insert(inbox.key().into(), inbox.owner_entries(&state.scalars())?);
             }
         }
         if let Some(run) = task.current_run().filter(|run| run.outcome.is_none())
@@ -324,57 +326,6 @@ pub(super) fn board_snapshot(
             .collect(),
     };
     Ok((tasks, board))
-}
-
-pub(super) fn recipients(task: &Task) -> Vec<(Recipient, &InboxState)> {
-    let mut recipients = Vec::new();
-    if let Some(run) = task.current_run() {
-        recipients.push((
-            Recipient::Run {
-                task: task.id.clone(),
-                run: run.id.clone(),
-            },
-            &run.inbox,
-        ));
-        for review in &run.review_runs {
-            if review.outcome.is_none() && review.ended.is_none() {
-                recipients.push((
-                    Recipient::ReviewRun {
-                        task: task.id.clone(),
-                        run: run.id.clone(),
-                        review: review.id.clone(),
-                    },
-                    &review.inbox,
-                ));
-            }
-        }
-    }
-    if let Some(run) = task.plan_runs.last().filter(|run| run.holds_slot()) {
-        recipients.push((
-            Recipient::PlanRun {
-                task: task.id.clone(),
-                plan_run: run.id.clone(),
-            },
-            &run.inbox,
-        ));
-    }
-    for plan in &task.plans {
-        if let Some(review) = plan
-            .reviews
-            .last()
-            .filter(|review| review.verdict.is_none())
-        {
-            recipients.push((
-                Recipient::PlanReview {
-                    task: task.id.clone(),
-                    plan: plan.id.clone(),
-                    review: review.id.clone(),
-                },
-                &review.inbox,
-            ));
-        }
-    }
-    recipients
 }
 
 pub(super) fn row(
