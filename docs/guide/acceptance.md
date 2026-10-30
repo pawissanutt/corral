@@ -410,9 +410,11 @@ corral plan verify T-010                                        # attempt A2 run
 corral plan accept T-010 --attempt A2
 ```
 
-`plan add-member` is owner-only, with the same entry rules as `plan member-gate`.
-The new member must be unstarted (Idea, Backlog or Ready with no runs), in the
-Plan's project, and not already in a Plan. The Plan must not be Done, Dropped or
+The PM or the owner can run `plan add-member`. The new member may be started, but
+none of its runs may have landed and none may be live, gating or under review; it
+must be in the Plan's project and not already in a Plan. A started member's next
+run starts from the Plan's delivery branch: a dispatch it had queued is dropped
+and its retry no longer carries the old base. The Plan must not be Done, Dropped or
 accepted. No existing member may be Running, Blocked or in Review, because
 that run is bound to the current membership. A decomposed Plan's design gets
 the same member, so member-gate and scope amendments keep working. The
@@ -428,7 +430,7 @@ member required. Neither tier is lowered.
 ### Moving a held member to another Plan
 
 A member that is deliberately held, for example in Backlog until other work
-lands, keeps its Plan from verifying. The owner can move it to another tracker
+lands, keeps its Plan from verifying. It can be moved to another tracker
 Plan in the same project, so the first Plan delivers without it:
 
 ```bash
@@ -436,9 +438,9 @@ corral plan move-member T-010 T-021 --to T-030
 corral plan verify T-010
 ```
 
-`plan move-member` is owner-only, with the same entry rules as
-`plan add-member`. The member must be unstarted (Idea, Backlog or Ready with no
-runs), and it cannot be the source Plan's last member. Neither Plan may be Done,
+The PM or the owner can run `plan move-member`. The member must be unstarted
+(Idea, Backlog or Ready with no runs) or held in Backlog and dequeued with no
+landed or live run, and it cannot be the source Plan's last member. Neither Plan may be Done,
 Dropped or accepted, and no member of either Plan may be Running, Blocked or in
 Review. The task keeps its ID, holds, dependencies and criteria, and the owner's
 member gate for it moves to the target Plan. A decomposed Plan's design follows

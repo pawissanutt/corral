@@ -534,9 +534,9 @@ pub(super) fn answer_body(question: &AgentQuestion, answer: &QuestionAnswer, kin
     body
 }
 
-/// OD7: the PM answers only clarification and technical_choice questions that are still open,
-/// citing at least one resolvable basis ref and a scope note. The owner answers any pending
-/// question and may supersede an answer, which queues a `question_correction`.
+/// The PM answers any pending question of any kind, citing at least one resolvable basis ref and a
+/// scope note. The owner answers without them and may supersede an answer, which queues a
+/// `question_correction`.
 pub fn answer(
     ctx: &Ctx,
     key: &str,
@@ -560,29 +560,11 @@ pub fn answer(
                 QuestionState::Answered | QuestionState::Expired
             );
             if pm {
-                if !matches!(
-                    current.kind,
-                    QuestionKind::Clarification | QuestionKind::TechnicalChoice
-                ) {
-                    return Err(rule(format!(
-                        "{} is {:?}: owner_only and permission questions always escalate",
-                        current.key, current.kind
-                    )));
-                }
-                match current.state {
-                    QuestionState::Open => {}
-                    QuestionState::Escalated => {
-                        return Err(rule(format!(
-                            "{} is escalated; only the owner answers it",
-                            current.key
-                        )));
-                    }
-                    _ => {
-                        return Err(state_error(
-                            current,
-                            "the PM answers open questions; only the owner supersedes",
-                        ));
-                    }
+                if !current.state.pending() {
+                    return Err(state_error(
+                        current,
+                        "the PM answers pending questions; only the owner supersedes",
+                    ));
                 }
                 if input.basis_refs.is_empty() {
                     return Err(rule("a PM answer cites at least one basis ref"));

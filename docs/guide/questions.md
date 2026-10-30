@@ -79,7 +79,8 @@ must cite at least one basis ref, and every ref must resolve to a canonical obje
 | `decision:<task>/<run>/<decision-id>` | a registered run decision |
 | `comment:<task>#<n>` | the n-th task comment |
 
-The PM must also state a `--scope-note`. `owner_only` and `permission` questions always escalate.
+The PM must also state a `--scope-note`. The PM may answer a pending question of any kind,
+including `owner_only` and `permission` and escalated ones; only the owner supersedes an answer.
 The PM may reclassify a question upward when it escalates, never downward. A Pi-native PM uses
 the `question_answer`, `question_escalate` and `question_cancel` ops. Each one commits in the
 target task's transaction with a receipt in `Task.agent_pm_receipts`, after its liveness, fence

@@ -102,7 +102,7 @@ fn exact_owner_decision_survives_idle_working_and_sync_restart() {
 }
 
 #[test]
-fn answered_decision_keeps_answer_and_does_not_send_or_launch() {
+fn answered_decision_keeps_answer_and_wakes_the_worker_once_without_launching() {
     // Given a decision and an answer from a generic worker/owner channel.
     let fx = Fx::new("fake");
     register_decision(&fx.ctx, "T-001", decision(), fx.at(0)).unwrap();
@@ -126,8 +126,9 @@ fn answered_decision_keeps_answer_and_does_not_send_or_launch() {
         fx.at(30),
     )
     .unwrap();
-    // Then one terminal answer is available for resume with no process input.
+    // Then one terminal answer is available and the worker is prompted once, with no new run.
     assert_eq!(task.status, Status::Running);
+    assert_eq!(task.runs.len(), 1);
     assert_eq!(
         task.current_run().unwrap().obligations.decisions[0].receipt,
         Some(answer)
@@ -136,7 +137,53 @@ fn answered_decision_keeps_answer_and_does_not_send_or_launch() {
     let resumed = fx.ctx.store.events().unwrap();
     let resumed = resumed.iter().find(|e| e.kind == "run_resumed").unwrap();
     assert_eq!(resumed.detail["decision"], "ship");
+    let replies = std::fs::read_to_string(fx.bin_dir.join("replies.log")).unwrap();
+    assert_eq!(replies.lines().count(), 1, "{replies}");
+    assert!(
+        replies.contains("decision `ship` answered: Migration B"),
+        "{replies}"
+    );
+}
+
+#[test]
+fn a_receipt_for_a_parked_idle_worker_delivers_a_prompt() {
+    // Given an idle worker that released its slot to wait for another task to land.
+    let fx = Fx::new("fake");
+    let mut landing = wait(&fx);
+    landing.id = "landing".into();
+    landing.handle = WaitHandle::Channel {
+        channel_id: "task:T-999:landed".into(),
+        capability: Some("wait_v1".into()),
+    };
+    register_wait(&fx.ctx, "T-001", landing, fx.at(0)).unwrap();
+    fx.herdr_says("idle");
+    let task = fx.ctx.store.get("T-001").unwrap();
+    assert_eq!(
+        task.current_run().unwrap().obligations.parked_on("T-001"),
+        ["T-999"]
+    );
     assert!(!fx.bin_dir.join("replies.log").exists());
+
+    // When the landing receipt is recorded.
+    let mut landed = receipt(&fx, ResumeDelivery::Acknowledged);
+    landed.id = "landed".into();
+    let task = resume_run(
+        &fx.ctx,
+        "T-001",
+        ResumeTarget::Wait("landing"),
+        landed,
+        fx.at(20),
+    )
+    .unwrap();
+
+    // Then the worker's session gets one prompt to continue, without anyone typing into it.
+    assert_eq!(task.status, Status::Running);
+    let replies = std::fs::read_to_string(fx.bin_dir.join("replies.log")).unwrap();
+    assert_eq!(replies.lines().count(), 1, "{replies}");
+    assert!(
+        replies.contains("wait `landing` resolved: Ready") && replies.contains("Continue the run."),
+        "{replies}"
+    );
 }
 
 #[test]
@@ -203,10 +250,11 @@ fn delivery_unknown_is_not_acknowledged_by_terminal_activity_or_restart() {
     .unwrap();
     // When normal sync resumes with a working terminal.
     let task = fx.sync(700);
-    // Then uncertainty is durable and no command is resent.
+    // Then uncertainty is durable and the recording's one wake prompt is never resent.
     assert_eq!(state(&task), WaitState::DeliveryUnknown);
     assert_eq!(task.runs[0].obligations.waits[0].receipt, Some(unknown));
-    assert!(!fx.bin_dir.join("replies.log").exists());
+    let replies = std::fs::read_to_string(fx.bin_dir.join("replies.log")).unwrap();
+    assert_eq!(replies.lines().count(), 1, "{replies}");
     assert_eq!(fx.events("run_resumed"), 1);
 }
 

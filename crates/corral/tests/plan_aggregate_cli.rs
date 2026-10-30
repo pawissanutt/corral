@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use corral_core::{AgentCmd, Origin, Status, Store};
+use corral_core::{Actor, AgentCmd, Origin, Status, Store};
 use serde_json::{Value, json};
 
 /// Extracts the exact verdict command from its prompt, writes notes and approves.
@@ -38,6 +38,18 @@ fn commit(repo: &Path, message: &str) -> String {
 }
 
 fn cli(root: &Path, args: &[&str]) -> Output {
+    command(root, args).output().unwrap()
+}
+
+/// The PM's shell in an agent pane: PM and agent markers, working inside a run worktree.
+fn from_agent_pane(root: &Path, cwd: &Path, args: &[&str]) -> Output {
+    let mut command = command(root, args);
+    command.current_dir(cwd).env("CORRAL_PM", "1");
+    command.env("AI_AGENT", "1").env("PI_CODING_AGENT", "1");
+    command.output().unwrap()
+}
+
+fn command(root: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
     for (name, _) in std::env::vars_os() {
         let name = name.to_string_lossy().into_owned();
@@ -53,9 +65,13 @@ fn cli(root: &Path, args: &[&str]) -> Output {
         .arg("--root")
         .arg(root)
         .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
+        .stdin(Stdio::null());
+    command
+}
+
+fn actor(store: &Store, kind: &str) -> Option<Actor> {
+    let events = store.events().unwrap();
+    events.iter().rev().find(|e| e.kind == kind).unwrap().actor
 }
 
 fn json_ok(root: &Path, args: &[&str]) -> Value {
@@ -235,4 +251,66 @@ fn cli_owner_acceptance_requires_a_launched_aggregate_review() {
     assert_eq!(acceptance["state"], "landed", "{acceptance}");
     assert_eq!(store.get(&plan).unwrap().status, Status::Done);
     assert_eq!(git(&root.join("app"), &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn the_pm_adds_a_started_member_from_an_agent_pane() {
+    // Given a Plan and a started task whose run never landed, with a PM shell in its worktree.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (store, plan) = fixture(&root);
+    let pane = root.join("app/.worktrees/started");
+    std::fs::create_dir_all(&pane).unwrap();
+    let fix = store.create("Started fix", Some("app"), Status::Backlog, "");
+    let fix = fix.unwrap().id;
+    let run = json!({
+        "id":"R1", "agent":"fixture", "worktree":pane, "branch":"corral/started", "base":"main",
+        "base_sha":git(&root.join("app"), &["rev-parse", "main"]),
+        "started":"2026-10-29T00:00:00Z", "outcome":"failed",
+    });
+    let run = serde_json::from_value(run).unwrap();
+    let started = |task: &mut corral_core::Task| {
+        task.runs = vec![run];
+        Ok(())
+    };
+    store.update(&fix, started).unwrap();
+
+    // When the PM adds it from the agent pane.
+    let added = from_agent_pane(&root, &pane, &["plan", "add-member", &plan, &fix, "--json"]);
+
+    // Then it is a required member and the event records the PM as its actor.
+    assert!(added.status.success(), "{added:?}");
+    assert!(store.get(&plan).unwrap().children.contains(&fix));
+    assert_eq!(actor(&store, "plan_member_added"), Some(Actor::Pm));
+}
+
+#[test]
+fn the_pm_accepts_a_reviewed_plan_from_an_agent_pane() {
+    // Given a verified Plan whose configured aggregate reviewer approved.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (store, plan) = fixture(&root);
+    let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
+    let attempt = attempt["id"].as_str().unwrap().to_owned();
+    observe(&root, &plan, &attempt, "C1", "pass");
+    observe(&root, &plan, &attempt, "C2", "pass together");
+    let args = [
+        "plan",
+        "aggregate-review",
+        &plan,
+        "--attempt",
+        &attempt,
+        "--json",
+    ];
+    let review = json_ok(&root, &args);
+    assert_eq!(review["verdict"], "approve", "{review}");
+
+    // When the PM accepts it from an agent pane.
+    let args = ["plan", "accept", &plan, "--attempt", &attempt, "--json"];
+    let accepted = from_agent_pane(&root, &root, &args);
+
+    // Then it lands, and the event records the PM as its actor.
+    assert!(accepted.status.success(), "{accepted:?}");
+    assert_eq!(store.get(&plan).unwrap().status, Status::Done);
+    assert_eq!(actor(&store, "plan_accepted"), Some(Actor::Pm));
 }

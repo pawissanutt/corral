@@ -74,12 +74,7 @@ fn an_added_member_joins_the_published_design_and_its_tracker_together() {
     let fix = ctx.store.create("Fix", project, Status::Backlog, "");
     let fix = fix.unwrap().id;
     // When the owner adds the fix to the Plan.
-    let owner = crate::OwnerEntry {
-        agent: false,
-        pm: false,
-        cwd: ctx.store.root().to_path_buf(),
-    };
-    crate::plan_add_member_from(&ctx, &tracker.id, &fix, &owner).unwrap();
+    crate::plan_add_member(&ctx, &tracker.id, &fix).unwrap();
     // Then the design and the tracker list the same members, ending with the fix.
     let design = ctx.store.get(&id).unwrap();
     let tracker = ctx.store.get(&tracker.id).unwrap();

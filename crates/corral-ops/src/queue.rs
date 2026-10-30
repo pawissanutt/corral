@@ -519,8 +519,8 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         base: opts
             .base
             .clone()
-            .or_else(|| previous.filter(|_| retry.is_some()).map(|r| r.base.clone()))
             .or(crate::plan_target::branch(&ctx.store, task)?)
+            .or_else(|| previous.filter(|_| retry.is_some()).map(|r| r.base.clone()))
             .or_else(|| config.base.clone()),
         mode: previous
             .filter(|_| retry.is_some())

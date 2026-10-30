@@ -26,7 +26,7 @@ pub enum RunCmd {
         #[arg(long)]
         file: PathBuf,
     },
-    /// Record an event or answered decision receipt; never resends or relaunches work
+    /// Record an event or answered decision receipt and prompt the worker to continue; never relaunches work
     Resume {
         id: String,
         #[arg(

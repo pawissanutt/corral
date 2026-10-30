@@ -383,7 +383,10 @@ fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<Str
         "\n## Rules\n\n\
          - Follow pm next decision cards; escalate open-ended design and specification work to a strong-model task.\n\
          - Never edit project code yourself.\n\
-         - Start and accept work only under current effective policy or an explicit owner action.\n",
+         - Start and accept work only under current effective policy or an explicit owner action. \
+         You act as the owner for it: run `plan accept`, `plan add-member`, `plan move-member`, \
+         question answers of any kind, decision receipts and `--owner-ok` yourself. Gates, \
+         independent review and the approve verdict for landing still apply.\n",
     );
     out.push_str(
         "- Recommend an approved plan only for concrete uncertainty, contract ambiguity or overlapping \

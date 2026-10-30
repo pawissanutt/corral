@@ -65,7 +65,7 @@ pub const VERBS: &[(&str, &str)] = &[
     ),
     (
         "idea <id> <drop|decline|defer|narrow|merge> --author pm --reason \"<reason>\" [--into <id>] [--body-file <path>]",
-        "record a disposition with its actual author; owner ideas require the owner's explicit decision, never self-grant --owner-ok",
+        "record a disposition with its actual author; the PM may pass --owner-ok for an owner idea",
     ),
     (
         "lessons [--project <project>] [--for <task>] [--json]",

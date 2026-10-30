@@ -1,4 +1,4 @@
-//! `corral plan move-member`: the owner moves an unstarted or safely held member, for example one deliberately
+//! `corral plan move-member`: moves an unstarted or safely held member, for example one deliberately
 //! held in Backlog, out of a tracker Plan into another, so the source can verify and deliver
 //! without it. The task keeps its ID, holds, dependencies and criteria; only its Plan changes.
 //! Both Plans' operating contracts change, so earlier aggregate attempts and grants go stale.
@@ -9,7 +9,7 @@ use corral_core::{FULL_TIER, GateResult, PlanDeliveryTarget, ScopeGate, Status, 
 use serde::Serialize;
 
 use super::member_add::check_open_plan;
-use super::member_gate::{OwnerEntry, read_gate};
+use super::member_gate::read_gate;
 use crate::Ctx;
 
 /// The owner's gate for the moved member in the target Plan, recorded as its member gate.
@@ -29,10 +29,13 @@ pub struct PlanMemberMoved {
     pub member_gate: Option<String>,
 }
 
-/// Moves `member` from tracker `from` to tracker `to` as the owner of this OS session.
+/// Moves `member` from tracker `from` to tracker `to`.
 ///
 /// # Errors
-/// Refuses PM, agent and run-worktree entries, and every move [`plan_move_member_from`] refuses.
+/// Refuses a finished or accepted source or target, a member with landed or live runs,
+/// not owned by the source or already owned by the target, any member of either Plan with a run
+/// in flight, because that run is bound to the current membership, and a move that would leave
+/// the member without a resolvable gate in a designed integration target.
 pub fn plan_move_member(
     ctx: &Ctx,
     from: &str,
@@ -40,27 +43,6 @@ pub fn plan_move_member(
     to: &str,
     gate: Option<&MoveGate>,
 ) -> Result<PlanMemberMoved> {
-    plan_move_member_from(ctx, from, member, to, gate, &OwnerEntry::from_env()?)
-}
-
-/// [`plan_move_member`] with an explicit entry, for tests that run under an agent's environment.
-///
-/// # Errors
-/// Refuses a non-owner entry, a finished or accepted source or target, a member with landed or live runs,
-/// not owned by the source or already owned by the target, any member of either Plan with a run
-/// in flight, because that run is bound to the current membership, and a move that would leave
-/// the member without a resolvable gate in a designed integration target.
-#[doc(hidden)]
-pub fn plan_move_member_from(
-    ctx: &Ctx,
-    from: &str,
-    member: &str,
-    to: &str,
-    gate: Option<&MoveGate>,
-    entry: &OwnerEntry,
-) -> Result<PlanMemberMoved> {
-    crate::automation_controls::require_owner_entry(&ctx.store, &entry.cwd, entry.agent, entry.pm)
-        .context("corral plan move-member is owner-only")?;
     let owner_gate = match gate {
         Some(gate) => {
             ensure!(
@@ -99,8 +81,23 @@ pub fn plan_move_member_from(
 }
 
 /// Existing unstarted tasks remain movable; a task with history must be held and dequeued.
-/// Run outcome alone does not prove landing: done runs may have only entered Review.
 fn check_movable(store: &Store, task: &Task) -> Result<()> {
+    check_unlanded(store, task)?;
+    ensure!(
+        if task.runs.is_empty() {
+            matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
+        } else {
+            task.status == Status::Backlog && !task.queued
+        },
+        "{} must be unstarted or held in Backlog and dequeued",
+        task.id
+    );
+    Ok(())
+}
+
+/// No run landed and none is live, gating or under review.
+/// Run outcome alone does not prove landing: done runs may have only entered Review.
+pub(super) fn check_unlanded(store: &Store, task: &Task) -> Result<()> {
     if let Some(landed) = &task.landed {
         anyhow::bail!("{}: run {} landed at {}", task.id, landed.run, landed.sha);
     }
@@ -153,15 +150,11 @@ fn check_movable(store: &Store, task: &Task) -> Result<()> {
             .unwrap_or("(pending)"),
         task.status.label()
     );
-    ensure!(task.status != Status::Done, "{} is Done", task.id);
     ensure!(
-        if task.runs.is_empty() {
-            matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
-        } else {
-            task.status == Status::Backlog && !task.queued
-        },
-        "{} must be unstarted or held in Backlog and dequeued",
-        task.id
+        !matches!(task.status, Status::Done | Status::Dropped),
+        "{} is {}",
+        task.id,
+        task.status.label()
     );
     Ok(())
 }

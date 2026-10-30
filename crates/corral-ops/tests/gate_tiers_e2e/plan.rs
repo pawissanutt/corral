@@ -412,12 +412,7 @@ fn one_plan_recovers_from_a_failed_full_verify_by_adding_and_landing_a_fixing_me
             Ok(())
         })
         .unwrap();
-    let owner = corral_ops::OwnerEntry {
-        agent: false,
-        pm: false,
-        cwd: p.fx.tmp.path().to_path_buf(),
-    };
-    let added = corral_ops::plan_add_member_from(&p.fx.ctx, &p.tracker, &c, &owner).unwrap();
+    let added = corral_ops::plan_add_member(&p.fx.ctx, &p.tracker, &c).unwrap();
     assert_eq!(added.children, [p.a.clone(), p.b.clone(), c.clone()]);
     declare_gate(&p.fx, &p.tracker, &c, &["core", "other"], &[]);
     let tracker = p.tracker.clone();

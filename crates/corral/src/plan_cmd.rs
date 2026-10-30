@@ -131,14 +131,14 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
+    /// Add a task whose runs never landed to a tracker Plan's required members, e.g. a fix after a failed verify
     AddMember {
         tracker: String,
         member: String,
         #[arg(long)]
         json: bool,
     },
-    /// Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+    /// Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another
     MoveMember {
         tracker: String,
         member: String,

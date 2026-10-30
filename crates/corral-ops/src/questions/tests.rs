@@ -179,7 +179,7 @@ fn pi_pm_answer_commits_state_receipt_and_message_in_the_target_task() {
 }
 
 #[test]
-fn pm_answer_authority_follows_od7_and_reclassification_goes_upward_only() {
+fn pm_answers_any_kind_with_a_basis_and_reclassification_goes_upward_only() {
     let fx = fx();
     let (id, worker) = worker(&fx);
     let key = ask_ok(&fx, &worker, "c1", false);
@@ -197,8 +197,6 @@ fn pm_answer_authority_follows_od7_and_reclassification_goes_upward_only() {
 
     for kind in ["owner_only", "permission"] {
         let key = ask_kind(&fx, &worker, kind, kind, false);
-        let error = super::answer(&fx.ctx, &key, 1, Actor::Pm(None), pm_input(&fx, &id, "y"));
-        assert_eq!(refusal(&error.unwrap_err()), "question_rule", "{kind}");
         let down = super::escalate(
             &fx.ctx,
             &key,
@@ -208,6 +206,10 @@ fn pm_answer_authority_follows_od7_and_reclassification_goes_upward_only() {
             Some(QuestionKind::Clarification),
         );
         assert_eq!(refusal(&down.unwrap_err()), "question_rule", "{kind}");
+        super::answer(&fx.ctx, &key, 1, Actor::Pm(None), pm_input(&fx, &id, "y")).unwrap();
+        let answered = question(&fx, &key);
+        assert_eq!(answered.state, QuestionState::Answered, "{kind}");
+        assert_eq!(answered.answer.unwrap().by, AnswerBy::Pm, "{kind}");
     }
     let choice = ask_kind(&fx, &worker, "choice", "technical_choice", false);
     super::escalate(
@@ -224,19 +226,30 @@ fn pm_answer_authority_follows_od7_and_reclassification_goes_upward_only() {
         (q.kind, q.state, q.revision),
         (QuestionKind::OwnerOnly, QuestionState::Escalated, 2)
     );
-    let pm = super::answer(
+    super::answer(
         &fx.ctx,
         &choice,
         2,
         Actor::Pm(None),
         pm_input(&fx, &id, "y"),
+    )
+    .unwrap();
+    let answered = question(&fx, &choice);
+    assert_eq!(answered.answer.as_ref().unwrap().by, AnswerBy::Pm);
+    let rev = answered.revision;
+    let again = super::answer(
+        &fx.ctx,
+        &choice,
+        rev,
+        Actor::Pm(None),
+        pm_input(&fx, &id, "n"),
     );
-    assert_eq!(refusal(&pm.unwrap_err()), "question_rule");
+    assert!(again.is_err(), "only the owner supersedes an answer");
     let owner = AnswerInput {
         text: "do it".into(),
         ..AnswerInput::default()
     };
-    super::answer(&fx.ctx, &choice, 2, Actor::Owner, owner).unwrap();
+    super::answer(&fx.ctx, &choice, rev, Actor::Owner, owner).unwrap();
     assert_eq!(question(&fx, &choice).answer.unwrap().by, AnswerBy::Owner);
 }
 
