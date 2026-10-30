@@ -47,6 +47,8 @@ fn state(role: AgentRole, callback: Option<&str>) -> Box<AgentRunState> {
         ended: None,
         class: None,
         provider_error: None,
+        provider: None,
+        model: None,
     });
     Box::new(state)
 }

@@ -26,6 +26,7 @@ import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { exportAssistantSession } from "../roles/assistant/env.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
+import { subscriptionRoutes } from "./subscriptions.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
+  const subscriptions = await subscriptionRoutes(modules.auth, provider, config.identity.role);
   const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined;
@@ -66,7 +68,7 @@ async function main(): Promise<void> {
     rules = hostRules(provider, bedrockRoute(config.aws, model, await resolver.profile()));
     aws = { binding: config.aws, resolver };
   }
-  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider, rules,
+  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), subscriptions.providers, rules,
     config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined,
     config.capabilities?.mcp ? {
       origins: Object.values(config.capabilities.mcp.servers)

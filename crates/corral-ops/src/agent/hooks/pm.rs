@@ -122,13 +122,48 @@ pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile>
 
 /// Applies `corral pi`'s one-launch model, provider and effort overrides to a resolved profile.
 pub(crate) fn apply(resolved: &mut ResolvedProfile, overrides: &Overrides) -> Result<()> {
-    if let Some(model) = &overrides.model {
-        resolved.model = Some(model.clone());
-    }
     if let Some(id) = &overrides.provider {
         let provider = super::super::credentials::provider(id)
             .with_context(|| format!("usage_error: unknown provider {id}"))?;
+        if overrides.model.is_none()
+            && resolved
+                .model
+                .as_deref()
+                .and_then(corral_core::infer_vendor)
+                .or_else(|| resolved.vendor.clone())
+                .as_deref()
+                != Some(provider.vendor)
+        {
+            resolved.model = Some(match id.as_str() {
+                "anthropic" => "claude-opus-5-5".into(),
+                "openai-codex" => "gpt-6.1-sol".into(),
+                _ => anyhow::bail!(
+                    "usage_error: provider {id} needs an explicit model; run `corral pi --provider {id} --model <model-id>`"
+                ),
+            });
+        }
         resolved.vendor = Some(provider.vendor.into());
+    }
+    if let Some(model) = &overrides.model {
+        if let Some(vendor) = corral_core::infer_vendor(model) {
+            if let Some(id) = &overrides.provider {
+                let provider = super::super::credentials::provider(id)
+                    .with_context(|| format!("usage_error: unknown provider {id}"))?;
+                if vendor != provider.vendor {
+                    let fix = match provider.vendor {
+                        "anthropic" => format!("corral pi --provider {id} --model claude-opus-5-5"),
+                        "openai" => format!("corral pi --provider {id} --model gpt-6.1-sol"),
+                        _ => format!("corral pi --model {model}"),
+                    };
+                    anyhow::bail!(
+                        "usage_error: model {model} is incompatible with provider {id}; run `{fix}`"
+                    );
+                }
+            } else {
+                resolved.vendor = Some(vendor);
+            }
+        }
+        resolved.model = Some(model.clone());
     }
     if let Some(effort) = &overrides.effort {
         resolved.effort = Some(effort.trim().to_ascii_lowercase());

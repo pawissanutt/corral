@@ -92,6 +92,10 @@ export function installChrome(
   events.on((event) => {
     if (countAlert(alerts, event) || event.kind === "bound") refresh();
   });
+  pi.on("model_select", (event) => {
+    info = { ...info, provider: event.model.provider, model: event.model.id };
+    refresh();
+  });
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;
     ui = ctx.ui;

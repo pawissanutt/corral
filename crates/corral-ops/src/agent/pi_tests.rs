@@ -79,6 +79,54 @@ fn bound_mode_refuses_profile_and_scope_failures_before_any_state() {
 }
 
 #[test]
+fn provider_only_anthropic_launch_writes_an_anthropic_model() {
+    let fx = fixture();
+    owner_pane(&fx);
+    std::fs::write(
+        fx.root().join("assets/compat.json"),
+        r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
+    )
+    .unwrap();
+    let prepared = adopt(
+        &f::ctx_at(fx.root()),
+        PANE,
+        &Overrides {
+            provider: Some("anthropic".into()),
+            ..Overrides::default()
+        },
+    )
+    .unwrap();
+    let bootstrap: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(prepared.bootstrap).unwrap()).unwrap();
+    assert_eq!(bootstrap["provider"], "anthropic");
+    assert_eq!(bootstrap["model"], "claude-opus-5-5");
+}
+
+#[test]
+fn incompatible_cli_pair_refuses_before_opening_a_generation() {
+    let fx = fixture();
+    owner_pane(&fx);
+    let error = adopt(
+        &f::ctx_at(fx.root()),
+        PANE,
+        &Overrides {
+            provider: Some("anthropic".into()),
+            model: Some("gpt-6.1-sol".into()),
+            ..Overrides::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("corral pi --provider anthropic --model claude-opus-5-5"),
+        "{error}"
+    );
+    assert!(pm_state::load(&fx.ctx.store).unwrap().is_none());
+    assert!(fx.calls("pane run").is_empty());
+}
+
+#[test]
 fn a_fresh_store_adopts_the_owner_pane_as_generation_one() {
     let fx = fixture();
     owner_pane(&fx);

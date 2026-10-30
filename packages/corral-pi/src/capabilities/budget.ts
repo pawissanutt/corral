@@ -61,7 +61,7 @@ export class RunBudget {
     this.last = await this.options.record({ kind: "budget", action: "state", request: randomUUID() });
     if (this.last.exhausted) this.stop();
   }
-  wrap(stream: StreamFunction): StreamFunction {
+  wrap(stream: StreamFunction, unbounded = this.options.unbounded === true): StreamFunction {
     return (model, context, options) => lazyStream(model, async () => {
       if (this.stopped) throw new Error("budget_exhausted: explicit resume with increased configured limits is required");
       options?.signal?.throwIfAborted();
@@ -72,7 +72,7 @@ export class RunBudget {
       this.active.add(controller);
       let admitted = false;
       try {
-        this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound, unbounded: this.options.unbounded === true });
+        this.last = await this.options.record({ kind: "budget", action: "reserve", request, ...bound, unbounded });
         if (this.last.admitted !== true) {
           if (this.limited()) {
             this.stop();

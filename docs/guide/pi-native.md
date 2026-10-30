@@ -741,6 +741,20 @@ after a `/logout` or a removed credential the provider has no auth rather than a
 any Anthropic request without the subscription OAuth token is refused before it is sent. corral
 never reads or writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
 
+Assistant and PM sessions launched on a subscription provider also discover the other usable
+subscription login at startup. `/model` lists both OpenAI Codex and Anthropic models when both
+are logged in; selecting a model infers its provider without replacing the session, history or
+corral identity. Model switches refresh credentials and check compatibility before committing;
+a missing login or incompatible model leaves the current selection unchanged. Each route keeps
+its own guarded transport (Claude model traffic still belongs only to its subprocess lane).
+Workers, reviewers, Bedrock and local-inference sessions keep their launch provider.
+Corral records the active provider and model on each turn, not just on the initial launch.
+
+For assistant/PM launches, `corral pi --provider anthropic` retains an already-compatible profile
+model or defaults to `claude-opus-5-5`; `corral pi --provider openai-codex` similarly uses
+`gpt-6.1-sol`. An explicitly incompatible `--provider`/`--model` pair is refused before launch,
+with a corrected command. A model-only override infers the provider for known model families.
+
 Anthropic profiles run on your Claude Pro/Max subscription through the official Claude Agent SDK
 (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json` and `compat.json`). Pi keeps the
 conversation and runs every tool; each model call starts one SDK `query()`, which spawns the real

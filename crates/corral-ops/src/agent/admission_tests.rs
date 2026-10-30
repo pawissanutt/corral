@@ -42,6 +42,39 @@ fn stored(template: &RequestReceipt, request_id: &str, result: Value) -> Request
 }
 
 #[test]
+fn active_model_is_recorded_per_turn_across_provider_switches() {
+    let fx = fx();
+    let host = pm(&fx);
+    for (seq, provider, model) in [
+        (1, "openai-codex", "gpt-6.1-sol"),
+        (2, "anthropic", "claude-opus-5-5"),
+        (3, "openai-codex", "gpt-6.1-sol"),
+    ] {
+        let input = envelope(
+            &host,
+            "event",
+            &format!("ev-1-{seq}"),
+            json!({"kind":"turn_started", "turn":seq, "provider":provider, "model":model}),
+            false,
+        );
+        committed(&send(&fx, &input, "event"));
+    }
+    let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    assert_eq!(
+        pm.state
+            .turns
+            .iter()
+            .map(|t| (t.provider.as_deref(), t.model.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("openai-codex"), Some("gpt-6.1-sol")),
+            (Some("anthropic"), Some("claude-opus-5-5")),
+            (Some("openai-codex"), Some("gpt-6.1-sol"))
+        ]
+    );
+}
+
+#[test]
 fn a_lookup_reusing_a_committed_request_id_is_rejected_as_a_payload_mismatch() {
     let fx = fx();
     let id = worker_task(&fx, "p1");

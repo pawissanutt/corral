@@ -39,8 +39,9 @@ import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
-import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
+import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
+import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
@@ -429,23 +430,30 @@ export class HostSession {
       throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const models = localModels?.models ?? await createModelCatalog(options.modules.auth.credentials(authContext(route.id)), {
-      providers: [route.id],
+    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id, options.identity.role);
+    const models = localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
+      providers: subscriptions.providers,
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    if (!localModels) {
-      restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
-        { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
-    }
-    const restricted = models.getProvider(route.id);
-    if (!restricted) throw new Error("budget: bound provider is unavailable");
-    if ((options.capabilities?.catalog ?? 0) >= 7) {
-      models.registerNativeProvider({ ...restricted,
-        stream: host.budget.wrap(restricted.stream.bind(restricted)),
-        streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted)),
-      });
+    for (const id of subscriptions.providers) {
+      if (!localModels) {
+        const fetch = PROVIDERS[id].auth === "oauth"
+          ? guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch
+          : options.network.fetch;
+        restrictProvider(models, id, fetch as typeof globalThis.fetch,
+          { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+      }
+      const restricted = models.getProvider(id);
+      if (!restricted) throw new Error("budget: approved provider is unavailable");
+      if ((options.capabilities?.catalog ?? 0) >= 7) {
+        const unbounded = PROVIDERS[id].lane !== undefined;
+        models.registerNativeProvider({ ...restricted,
+          stream: host.budget.wrap(restricted.stream.bind(restricted), unbounded),
+          streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted), unbounded),
+        });
+      }
     }
     host.auxiliaryModels = models;
     const thinkingLevel = options.effort && THINKING.has(options.effort)
@@ -470,8 +478,9 @@ export class HostSession {
       const result = await sdk.createAgentSessionFromServices({
         services, sessionManager, model, tools: [...host.baseLoadout, ...host.mcp?.authorizedNames() ?? []],
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
-        ...(thinkingLevel ? { thinkingLevel, scopedModels: [{ model, thinkingLevel }] } : { scopedModels: [{ model }] }),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
       });
+      if (!localModels) installModelSelection(result.session, models, subscriptions.providers);
       result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
       host.sessionsCreated++;
@@ -682,7 +691,7 @@ export class HostSession {
     this.ownerInput = false;
     // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
     if (this.bound) this.checkpoint("start");
-    this.report("turn_started", { origin });
+    this.report("turn_started", { origin, provider: this.session.model?.provider, model: this.session.model?.id });
     if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
     this.options.herdr?.turnStarted();
   }
@@ -739,7 +748,11 @@ export class HostSession {
     const event = this.options.events.emit(kind, { turn, ...data });
     if (!this.bound) return;
     const payload: Record<string, unknown> = { kind, turn };
-    if (kind === "turn_started") payload.origin = data.origin;
+    if (kind === "turn_started") {
+      payload.origin = data.origin;
+      payload.provider = data.provider;
+      payload.model = data.model;
+    }
     if (kind === "provider_error") payload.class = data.class;
     if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;

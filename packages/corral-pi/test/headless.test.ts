@@ -122,7 +122,7 @@ test("a headless worker asks, resumes in the same session and completes through 
     expect(submitted).toEqual({ disposition: "started", turn: 1 });
     const started = ops().filter(({ op, identity }) => op === "event" && identity.generation === 2)
       .map(({ payload }) => payload);
-    expect(started[0]).toEqual({ kind: "turn_started", turn: 1, origin: { kind: "bridge", idempotency_key: "answer-1" } });
+    expect(started[0]).toEqual({ kind: "turn_started", turn: 1, origin: { kind: "bridge", idempotency_key: "answer-1" }, provider: "openai-codex", model: "gpt-6.1-sol" });
     const done = ops().filter(({ op }) => op === "done");
     expect(done.map(({ identity }) => identity.generation)).toEqual([2]);
     expect(second.host.state().mode).toBe("headless");
