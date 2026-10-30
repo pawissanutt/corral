@@ -200,6 +200,6 @@ impl Continuation {
         )?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
         crate::role_session::observe(ctx, &saved, active, false);
-        crate::role_session::log(ctx, &saved, active)
+        crate::role_session::log(ctx, &saved.id, &active.id)
     }
 }

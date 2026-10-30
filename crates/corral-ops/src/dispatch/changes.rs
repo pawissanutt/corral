@@ -306,9 +306,8 @@ fn send_changes(
         })?;
         cleanup_head(ctx, &task, Cleanup::Round);
         continuation.start(ctx, &task.id)?;
-        let shell = task.shell_task()?;
-        if let Some(run) = shell.current_run() {
-            crate::role_session::log(ctx, &shell, run)?;
+        if let Some(run) = task.current_run.as_deref() {
+            crate::role_session::log(ctx, &task.id, &run.id)?;
         }
         let status = crate::delivery::owner::kick(ctx, recipient);
         let observed = crate::delivery::owner::is_observed(ctx, recipient, message.seq)?;
@@ -345,9 +344,8 @@ fn send_changes(
         Ok(())
     })?;
     cleanup_head(ctx, &task, Cleanup::Round);
-    let shell = task.shell_task()?;
-    if let Some(run) = shell.current_run() {
-        crate::role_session::log(ctx, &shell, run)?;
+    if let Some(run) = task.current_run.as_deref() {
+        crate::role_session::log(ctx, &task.id, &run.id)?;
     }
     ctx.store.head(&task.id)
 }

@@ -437,7 +437,7 @@ fn advance(
     let shell = task.shell_task()?;
     if let Some(run) = shell.current_run() {
         crate::role_session::observe(ctx, &shell, run, false);
-        crate::role_session::log(ctx, &shell, run)?;
+        crate::role_session::log(ctx, &shell.id, &run.id)?;
     }
     finish(ctx, &task, false)
 }

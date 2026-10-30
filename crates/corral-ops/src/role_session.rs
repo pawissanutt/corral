@@ -406,25 +406,32 @@ pub fn refresh_role_sessions(ctx: &Ctx, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn log(ctx: &Ctx, task: &Task, run: &Run) -> Result<()> {
-    let current = ctx.store.get(&task.id)?;
-    let saved = current.current_run().and_then(|parent| {
-        if parent.id == run.id {
-            Some(parent)
-        } else {
-            parent.review_runs.iter().find(|child| child.id == run.id)
-        }
-    });
-    if let Some(session) = saved.and_then(|run| run.session.as_ref()) {
+pub(crate) fn log(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
+    let current = ctx.store.head(task)?;
+    let saved = match current.current_run.as_deref() {
+        Some(parent) if parent.id == run => parent.session.clone(),
+        Some(parent) => match parent
+            .current_child
+            .as_deref()
+            .filter(|child| child.id == run)
+        {
+            Some(child) => child.session.clone(),
+            None => current
+                .review_child(&parent.id, run)?
+                .and_then(|child| child.session),
+        },
+        None => None,
+    };
+    if let Some(session) = saved {
         ctx.store.log_event(
-            Some(&task.id),
+            Some(task),
             "role_session",
             json!({
-                "run":run.id, "session":session
+                "run":run, "session":session
             }),
         )?;
         if let Some(reason) = &session.diagnostic {
-            crate::messages::report(Some(&task.id), "session", reason.clone());
+            crate::messages::report(Some(task), "session", reason.clone());
         }
     }
     Ok(())
