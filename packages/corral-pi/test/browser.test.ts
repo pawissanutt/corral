@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-import { findBrowser } from "../src/extensions/browser/chrome.ts";
+import { Browser, findBrowser } from "../src/extensions/browser/chrome.ts";
 import { browserSettings, browserTools } from "../src/extensions/browser/index.ts";
 import { browserTarget, checkLanded } from "../src/extensions/browser/target.ts";
 import { within } from "./support/wait.ts";
@@ -34,6 +34,18 @@ const chrome = (() => {
   }
 })();
 if (!chrome) console.log("browser.test: no Chrome/Chromium on PATH; live browser checks skipped");
+
+// A host's first browser launch pages the binary, libraries and resources in from disk. Under load
+// that one-time cold start alone outlasted a call's whole timeout_ms (T-613), so pay it here, outside
+// every timed call: launch a throwaway browser and wait for its first DevTools reply.
+if (chrome) {
+  const browser = Browser.launch({ executable: chrome, signal: new AbortController().signal, tmpRoot: mkdtempSync(join(work, "warm-")) });
+  try {
+    await within(browser.send("Browser.getVersion"), 120_000, "the browser's first DevTools reply");
+  } finally {
+    await browser.close();
+  }
+}
 
 const cookies: (string | undefined)[] = [];
 let hung: () => void = () => {};
