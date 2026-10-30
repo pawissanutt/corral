@@ -36,15 +36,11 @@ fn refuse_by_policy_change(
     let engine = tmp.join("engine");
     std::fs::copy(engine.join("base"), engine.join("herdr")).unwrap();
     assert!(!engine.join("launch-command").exists());
-    let prepared: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(
-            ctx.store
-                .state_dir()
-                .join(format!("plan-review-{id}-P1.json")),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let prepared =
+        corral_core::records::RecordArea::<serde_json::Value>::new("plan-review-prepared")
+            .load(&ctx.store, &format!("{id}-P1"))
+            .unwrap()
+            .unwrap();
     let refused: ActionAuthorization =
         serde_json::from_value(prepared["authorization"].clone()).unwrap();
     assert!(matches!(
@@ -110,7 +106,7 @@ fn automatic_plan_review_after_a_policy_change_re_prepares_and_launches() {
     });
     assert!(crate::operating::is_automatic(&refused));
     // When autopilot advances the plan again under the changed policy.
-    advance(&ctx, &ctx.store.get(&id).unwrap(), Timestamp::now()).unwrap();
+    advance(&ctx, &id, Timestamp::now()).unwrap();
     // Then it re-prepares the same attempt under current policy and launches it.
     let task = ctx.store.get(&id).unwrap();
     let review = task.plans[0].reviews.last().unwrap();

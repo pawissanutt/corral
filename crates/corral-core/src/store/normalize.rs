@@ -189,7 +189,7 @@ mod tests {
         let store = Store::init(root.path()).unwrap();
         let mut legacy = store.create("Legacy", None, Status::Review, "").unwrap();
         legacy.status_since = None;
-        super::super::atomic_write(&legacy.path, &super::super::render_task(&legacy)).unwrap();
+        store.fixture_put_task(&legacy).unwrap();
         let loaded = store.get(&legacy.id).unwrap();
         assert_eq!(loaded.status_since, None);
         let saved = store

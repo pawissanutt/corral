@@ -270,11 +270,10 @@ fn standalone_episode_registration_and_source_clear_survive_terminal_tasks() {
                 exhausted: None,
                 notice: Some(claim.clone()),
             };
-            let dir = fx.ctx.store.state_dir().join("availability");
-            std::fs::create_dir_all(&dir)?;
-            std::fs::write(
-                dir.join(format!("{key}.json")),
-                serde_json::to_vec(&episode)?,
+            corral_core::records::RecordArea::new("availability").save(
+                &fx.ctx.store,
+                &key,
+                &episode,
             )?;
             notify(
                 &fx.ctx,

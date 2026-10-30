@@ -71,7 +71,7 @@ fn a_host_killed_inside_a_turn_leaves_it_open_and_generation_2_is_still_nudged_a
     f::write_session(&bound, &f::session(&[], &[]));
     started(&fx, &bound, 1, 1);
     host.kill();
-    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1");
+    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1").unwrap();
     std::fs::create_dir_all(exit.parent().unwrap()).unwrap();
     std::fs::write(&exit, "137\n").unwrap();
     sync(&fx);

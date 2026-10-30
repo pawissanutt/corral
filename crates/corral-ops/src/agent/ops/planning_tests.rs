@@ -22,7 +22,12 @@ dependencies: []\nverification: [cargo test -p widget]\nowner_decisions: []\n---
 fn planning_task(fx: &ts::Fx) -> String {
     let id = ts::worker_task(fx, "p1");
     let socket = fx.ctx.herdr.socket_path().unwrap();
-    let output = fx.ctx.store.state_dir().join("plans").join(&id).join("D1");
+    let output = crate::scratch_reclaim::Attempt::Planner {
+        task: &id,
+        run: "D1",
+    }
+    .dir(&fx.ctx)
+    .unwrap();
     std::fs::create_dir_all(&output).unwrap();
     fx.ctx
         .store
@@ -100,13 +105,7 @@ fn planner_writes_only_its_bound_plan_file_and_submits_it_once() {
     let fx = ts::fx();
     let id = planning_task(&fx);
     let host = planner(&fx, &id, "s-plan");
-    let path = fx
-        .ctx
-        .store
-        .state_dir()
-        .join("plans")
-        .join(&id)
-        .join("D1/plan.md");
+    let path = plan_file(&fx, &id);
     let (head, tail) = PLAN.split_at(200);
     // When it writes the plan in two bounded chunks and retries the first.
     let first = committed(&op(
@@ -227,12 +226,27 @@ fn plan_reviewer_verdicts_use_the_bound_attempt_and_never_approve_for_the_owner(
     }
 }
 
-fn recorded_notes(fx: &ts::Fx, id: &str) -> std::path::PathBuf {
+fn plan_file(fx: &ts::Fx, id: &str) -> std::path::PathBuf {
     fx.ctx
         .store
-        .state_dir()
-        .join("reviews")
-        .join(format!("{id}-P1-PR1-plan-notes.md"))
+        .head(id)
+        .unwrap()
+        .last_plan_run
+        .as_ref()
+        .unwrap()
+        .output_dir
+        .join("plan.md")
+}
+
+fn recorded_notes(fx: &ts::Fx, id: &str) -> std::path::PathBuf {
+    crate::scratch_reclaim::Attempt::PlanReview {
+        task: id,
+        plan: "P1",
+        review: "PR1",
+    }
+    .dir(&fx.ctx)
+    .unwrap()
+    .join("notes.md")
 }
 
 #[test]
@@ -321,13 +335,7 @@ fn a_reservation_whose_executor_died_settles_from_the_plan_record() {
         let host = planner(&fx, &id, "s-plan");
         committed(&op(&fx, &host, "plan_write", "w", json!({"content": PLAN})));
         if submitted {
-            let path = fx
-                .ctx
-                .store
-                .state_dir()
-                .join("plans")
-                .join(&id)
-                .join("D1/plan.md");
+            let path = plan_file(&fx, &id);
             crate::plan::plan_submit(&fx.ctx, &id, &path).unwrap();
         }
         let container = ContainerRef::Planner {
@@ -541,13 +549,7 @@ fn normal_sync_settles_planning_reservations_and_closes_their_questions() {
     let question = json!({"kind": "clarification", "text": "Which widget?"});
     let asked = committed(&op(&fx, &host, "ask", "q", question));
     committed(&op(&fx, &host, "plan_write", "w", json!({"content": PLAN})));
-    let path = fx
-        .ctx
-        .store
-        .state_dir()
-        .join("plans")
-        .join(&id)
-        .join("D1/plan.md");
+    let path = plan_file(&fx, &id);
     crate::plan::plan_submit(&fx.ctx, &id, &path).unwrap();
     let planner = ContainerRef::Planner {
         task: id.clone(),

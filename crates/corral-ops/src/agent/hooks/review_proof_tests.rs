@@ -72,7 +72,11 @@ fn assert_reviewer_side(review: &Review, receipt: &corral_core::agent::RequestRe
     let path = receipt.result["path"].as_str().unwrap();
     let artifact = task.artifacts.iter().find(|a| a.path == path).unwrap();
     assert_eq!(artifact.run, "R1");
-    let watch = review.ctx().store.state_dir().join("review-watch");
+    let watch = review
+        .ctx()
+        .store
+        .scratch_path(crate::watch::REVIEW_WATCH)
+        .unwrap();
     assert!(
         Path::new(&artifact.source).starts_with(&watch),
         "{}",

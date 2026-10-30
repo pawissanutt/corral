@@ -353,7 +353,13 @@ impl<'a> ReviewLaunch<'a> {
         let task = ctx.store.head(id)?;
         let run = task.current_run.as_deref().context("task has no run")?;
         crate::operating::require_origin(&ctx.store, &task, submission::action_kind(kind), origin)?;
-        let retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
+        let mut retained = submission::load_retained(ctx, &task.id, &run.id, kind)?;
+        if let Some(pending) = &retained
+            && recovery::stale(ctx, pending)?
+        {
+            recovery::supersede(ctx, pending)?;
+            retained = None;
+        }
         let pending = if let Some(pending) = retained {
             recovery::prepare(ctx, pending, origin)?
         } else {
