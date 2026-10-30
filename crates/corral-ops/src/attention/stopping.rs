@@ -24,10 +24,11 @@ pub(super) fn load(ctx: &Ctx, n: &mut Neighborhood<'_>) -> Result<()> {
     for task in n
         .tasks
         .iter()
-        .filter(|task| !matches!(task.status, Status::Done | Status::Dropped))
+        .copied()
+        .filter(|task| !matches!(task.status(), Status::Done | Status::Dropped))
     {
         if let Some(refusal) = crate::plan_review::prepared::blocker(ctx, task)? {
-            n.prepared_refusals.insert(task.id.clone(), refusal);
+            n.prepared_refusals.insert(task.id().clone(), refusal);
         }
     }
     Ok(())
@@ -157,10 +158,10 @@ fn native_waits(task: &Task, n: &Neighborhood<'_>, a: &mut Assessment) {
         let completed = if let Some(dependency) = awaited_task(&wait.request.handle) {
             let status = n
                 .task(dependency)
-                .map_or("missing", |task| task.status.as_str());
+                .map_or("missing", |task| task.status().as_str());
             let done = n
                 .task(dependency)
-                .is_some_and(|task| task.status == Status::Done);
+                .is_some_and(|task| *task.status() == Status::Done);
             condition.next_action.recipient = Some(format!("{dependency} ({status})"));
             condition
                 .resume

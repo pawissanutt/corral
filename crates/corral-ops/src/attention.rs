@@ -1,15 +1,18 @@
 //! Read-only attention projection. Canonical records, not notifications, define outstanding work.
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use anyhow::Result;
 use classify::{authority, check, keyed_status, progress, wait};
 use corral_core::attention::{
     Assessment, Condition, ConditionKey, NextAction, Responsible, SinceSource, WaitClass,
 };
-use corral_core::inbox::{Inbox, OwnerEntry};
+use corral_core::inbox::Inbox;
+#[cfg(test)]
+use corral_core::{Config, EffectivePolicy};
 use corral_core::{
-    AvailabilityEpisode, Config, EffectivePolicy, OperatingActionKind as Action, PlanRunState,
-    Status, Task, TaskFieldsRef, Verdict,
+    OperatingActionKind as Action, PlanRunState, Status, Task, TaskFieldsRef, Verdict,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -38,102 +41,10 @@ pub(crate) use handling::{reconcile, reconcile_projected};
 #[cfg(test)]
 pub(crate) mod handling_tests;
 
-/// Everything assessment may inspect. Building this view never probes Git or pane inventory.
-pub struct Neighborhood<'a> {
-    pub tasks: &'a [Task],
-    pub config: &'a Config,
-    pub policy: &'a EffectivePolicy,
-    pub deliveries: BTreeMap<String, Vec<OwnerEntry>>,
-    /// False means inventory is unknown, never evidence that a pane disappeared.
-    pub inventory_known: bool,
-    pub resource_wait: Option<String>,
-    pub availability: BTreeMap<String, AvailabilityEpisode>,
-    pub missing_reviewers: BTreeMap<String, Timestamp>,
-    pub prepared_refusals: BTreeMap<String, (Timestamp, String)>,
-    by_id: BTreeMap<&'a str, &'a Task>,
-    slots: usize,
-    review_slots: usize,
-    project_slots: BTreeMap<Option<&'a str>, usize>,
-}
-
-impl<'a> Neighborhood<'a> {
-    pub fn new(tasks: &'a [Task], config: &'a Config, policy: &'a EffectivePolicy) -> Self {
-        let mut slots = 0;
-        let mut review_slots = 0;
-        let mut project_slots = BTreeMap::new();
-        for task in tasks {
-            let usage =
-                crate::slots::SlotUsage::from_tasks(std::slice::from_ref(task), &config.limits);
-            slots += usage.total();
-            review_slots += usage.reviews + usage.gates;
-            *project_slots.entry(task.project.as_deref()).or_default() += usage.total();
-        }
-        Self {
-            tasks,
-            config,
-            policy,
-            deliveries: BTreeMap::new(),
-            inventory_known: false,
-            resource_wait: None,
-            availability: BTreeMap::new(),
-            missing_reviewers: BTreeMap::new(),
-            prepared_refusals: BTreeMap::new(),
-            by_id: tasks.iter().map(|task| (task.id.as_str(), task)).collect(),
-            slots,
-            review_slots,
-            project_slots,
-        }
-    }
-
-    pub fn task(&self, id: &str) -> Option<&Task> {
-        self.by_id.get(id).copied()
-    }
-
-    pub fn allows(
-        &self,
-        task: &(impl TaskFieldsRef + ?Sized),
-        action: corral_core::OperatingActionKind,
-    ) -> bool {
-        self.policy.allows(task.id(), action)
-            || task.park().as_ref().is_some_and(|park| {
-                self.policy
-                    .tasks
-                    .get(task.id())
-                    .and_then(|policy| policy.refusals.get(&action))
-                    .is_some_and(|reasons| {
-                        reasons
-                            .iter()
-                            .all(|reason| *reason == park.refusal(task.id()))
-                    })
-            })
-    }
-
-    fn authority_reason(&self, task: &(impl TaskFieldsRef + ?Sized), action: Action) -> String {
-        self.policy
-            .tasks
-            .get(task.id())
-            .and_then(|policy| policy.refusals.get(&action))
-            .map(|reasons| {
-                let Some(park) = task.park() else {
-                    return reasons.join("; ");
-                };
-                let refusal = park.refusal(task.id());
-                reasons
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|reason| *reason != refusal)
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            })
-            .unwrap_or_else(|| {
-                if self.policy.reasons.is_empty() {
-                    "Task is outside the confirmed operating grant".into()
-                } else {
-                    self.policy.reasons.join("; ")
-                }
-            })
-    }
-}
+mod neighborhood;
+pub use neighborhood::Neighborhood;
+#[cfg(test)]
+mod neighborhood_tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TaskAssessment {
@@ -461,7 +372,7 @@ fn ready(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) 
     }
     for dependency in &task.depends_on {
         if n.task(dependency)
-            .is_none_or(|task| task.status != Status::Done)
+            .is_none_or(|task| *task.status() != Status::Done)
         {
             let label = dependency_labels::label(n, dependency);
             let mut condition = wait(
@@ -730,7 +641,10 @@ fn aggregate(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessme
     let pending = task
         .children
         .iter()
-        .filter(|child| n.task(child).is_none_or(|task| task.status != Status::Done))
+        .filter(|child| {
+            n.task(child)
+                .is_none_or(|task| *task.status() != Status::Done)
+        })
         .collect::<Vec<_>>();
     if !pending.is_empty() {
         let labels = pending
