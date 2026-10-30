@@ -704,6 +704,64 @@ fn a_controller_lost_after_submitting_the_launch_never_replays_an_applied_cursor
     assert!(done.applied.is_some());
 }
 
+#[test]
+fn a_restore_interrupted_after_moving_a_path_aside_finishes_on_retry_or_abort() {
+    let cases = [
+        (false, false, false),
+        (false, true, false),
+        (false, false, true),
+        (false, true, true),
+        (true, false, true),
+    ];
+    for (removal, abort, nested) in cases {
+        let case = format!("removal={removal} abort={abort} nested={nested}");
+        // Given a checkpoint where a is "prior turn" (or absent), and the agent's saved edit:
+        let tmp = repo(&[]);
+        let dir = tmp.path().to_path_buf();
+        if !removal {
+            write(&dir, "a", "prior turn\n");
+        }
+        let (target, _) = snapshot(&dir, "checkpoint").unwrap();
+        if nested {
+            // Removals run first, so the interrupted path is then this removal, not a's write.
+            write(&dir, "nested/a", "agent nested\n");
+        }
+        write(&dir, "a", "agent edit\n");
+        let (saved, _) = snapshot(&dir, "saved").unwrap();
+
+        // When the controller stops right after the first path was moved aside:
+        let hook = |point: &str| {
+            if point == "rewind_displaced" {
+                panic!("controller interrupted after displacement");
+            }
+        };
+        crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+        let stopped = catch_unwind(AssertUnwindSafe(|| {
+            restore_snapshots(&dir, &target, &saved)
+        }));
+        crate::agent::receipts::FAILPOINT.with(|h| *h.borrow_mut() = None);
+        assert!(stopped.is_err(), "{case}");
+
+        // Then the same restore finishes it, or an abort puts the agent's edit back, with no
+        // path mistaken for an owner edit and nothing left beside it:
+        let done = if abort {
+            restore_snapshots(&dir, &saved, &target)
+        } else {
+            restore_snapshots(&dir, &target, &saved)
+        };
+        assert!(done.kept.is_empty(), "{case}: {:?}", done.kept);
+        let expected = match (abort, removal) {
+            (true, _) => Some("agent edit\n"),
+            (false, true) => None,
+            (false, false) => Some("prior turn\n"),
+        };
+        assert_eq!(read(&dir, "a").as_deref(), expected, "{case}");
+        assert_eq!(dir.join("nested").exists(), abort && nested, "{case}");
+        let status = run_git(&dir, &["status", "--porcelain", "--untracked-files=all"]);
+        assert!(!status.contains("corral-rewind"), "{case}: {status}");
+    }
+}
+
 fn point(id: &str, phase: CheckpointPhase, generation: u32) -> Checkpoint {
     let entry = CheckpointEntry {
         id: id.into(),

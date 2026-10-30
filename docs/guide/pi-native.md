@@ -589,7 +589,11 @@ worktree and the Pi session back to the start of that turn:
    replacement linked in, and never over a file that appeared meanwhile (a removal also removes
    the parent directories it leaves empty). A path edited at that moment is put back and listed
    `kept`, and every displaced byte is kept under the worktree's git directory
-   (`corral-rewind/`), so nothing an owner saved is lost. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
+   (`corral-rewind/`), so nothing an owner saved is lost. The moved-aside copy uses a fixed
+   hidden sibling name (`.<name>.corral-rewind-displaced`): if a restore stops between moving a
+   path aside and replacing it, the next attempt (continuing or aborting) first puts that copy
+   back when the path is empty, or keeps it when something is there, and then judges the path
+   afresh, so the restore finishes instead of reporting its own displacement as an edit. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
    restored paths' index entries are reset to it. `restored`: the next generation's launch
    continues the same Pi session file from the checkpoint's entry (Pi branches there; the
    abandoned turns stay in the file); the generation it opens is recorded on the rewind before its
