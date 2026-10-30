@@ -29,7 +29,7 @@ export type CorralOp =
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
   | "read_route" | "read_artifacts" | "read_lessons" | "inbox_read" | "inbox_resolve"
   | "job" | "job_monitor"
-  | "plan_write" | "plan_submit" | "plan_verdict";
+  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
@@ -37,7 +37,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
   "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "inbox_read", "inbox_resolve",
   "todo", "job", "job_monitor",
-  "plan_write", "plan_submit", "plan_verdict",
+  "plan_write", "plan_submit", "plan_verdict", "owner_action",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
@@ -95,6 +95,8 @@ export interface CorralToolSpec<P = Record<string, unknown>> {
   readonly parameters: TSchema;
   /** The canonical payload sent for validated tool parameters. */
   payload(params: P): Record<string, unknown>;
+  /** A deadline longer than the client's default, for an op that runs a whole corral command. */
+  readonly timeoutMs?: number;
 }
 
 export interface RoleModule {
