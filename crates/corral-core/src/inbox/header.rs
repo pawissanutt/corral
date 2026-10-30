@@ -722,9 +722,11 @@ impl Inbox<'_> {
                     }
                 }
                 work::record(Work::InboxIndexRead, 1);
-                let message = self.message(debt.next_seq)?;
+                // Standalone reservation commits its sequence before publication.
+                // Index missing slots as gaps, but never suppress malformed present rows.
+                let message = self.message_optional(debt.next_seq)?;
                 read += 1;
-                if message.owner_kind() {
+                if let Some(message) = message.filter(|message| message.owner_kind()) {
                     let observed = self.receipt(message.seq, ReceiptLevel::Observed)?.is_some();
                     match debt.phase {
                         IndexPhase::Watermark => {

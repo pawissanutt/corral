@@ -304,10 +304,19 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn message(&self, seq: u64) -> Result<Message> {
+        self.message_optional(seq)?
+            .context("inbox message not found")
+    }
+
+    /// Missing rows can be legitimate reserve-before-publication sequence gaps.
+    /// A present row still receives the complete identity validation.
+    pub(super) fn message_optional(&self, seq: u64) -> Result<Option<Message>> {
         crate::work::record(crate::work::Work::InboxMessageRead, 1);
-        let row: super::records::MessageRecord = self
-            .record("messages", &format!("{seq:020}"))?
-            .context("inbox message not found")?;
+        let Some(row): Option<super::records::MessageRecord> =
+            self.record("messages", &format!("{seq:020}"))?
+        else {
+            return Ok(None);
+        };
         let mut message = row.message;
         ensure!(
             message.seq == seq
@@ -316,7 +325,7 @@ impl<'a> Inbox<'a> {
             "message identity mismatch"
         );
         message.body = row.body;
-        Ok(message)
+        Ok(Some(message))
     }
 
     /// Output-sized committed message history for this recipient.
