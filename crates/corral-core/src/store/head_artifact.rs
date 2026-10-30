@@ -1,5 +1,5 @@
 //! Keyed edits of artifact registrations, without hydrating the owning task.
-use super::codec::seq;
+use super::codec::ordinal_key;
 use super::head_mut::TaskHeadMut;
 use crate::backend::{RowQuery, TaskPart};
 use crate::work::Counter;
@@ -12,7 +12,7 @@ impl TaskHeadMut {
         index: usize,
         edit: impl FnOnce(&mut crate::Artifact) -> Result<()>,
     ) -> Result<()> {
-        let key = seq(index + 1);
+        let key = ordinal_key(index + 1);
         let mut row = self
             .rows_now(
                 &RowQuery::key(TaskPart::Artifact, key),
