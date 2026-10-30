@@ -53,6 +53,67 @@ fn bound(fx: &Fx, pane: &str, host: &HostProc) -> (String, ts::Host) {
 }
 
 #[test]
+fn assistant_profile_refusals_give_actionable_fixes() {
+    let mut fx = assistant_fixture();
+    let pi = fx.ctx.store.config.profiles["pm-pi"].clone();
+    let mut omo = pi.clone();
+    omo.harness = "omo".into();
+    fx.ctx.store.config.profiles.insert("opus-med".into(), omo);
+    fx.ctx
+        .store
+        .config
+        .profiles
+        .insert("pi-sol".into(), pi.clone());
+    fx.ctx.store.config.pm.agent = "opus-med".into();
+    fx.ctx.store.config.assistant.agent = None;
+    fx.ctx.store.save_config().unwrap();
+    let ctx = f::ctx_at(fx.root());
+    let text = profile(&ctx, None, &Overrides::default())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        text.contains("corral config set assistant.agent pi-sol"),
+        "{text}"
+    );
+    assert!(text.contains("Pi-native profiles: pi-sol, pm-pi"), "{text}");
+
+    fx.ctx
+        .store
+        .config
+        .profiles
+        .retain(|_, p| p.harness != pi.harness);
+    fx.ctx.store.save_config().unwrap();
+    let ctx = f::ctx_at(fx.root());
+    let text = profile(&ctx, None, &Overrides::default())
+        .unwrap_err()
+        .to_string();
+    assert!(text.contains("no Pi-native profile exists"), "{text}");
+    assert!(
+        text.contains("corral config set profiles.<name> ..."),
+        "{text}"
+    );
+
+    let mut no_model = pi;
+    no_model.model = None;
+    fx.ctx
+        .store
+        .config
+        .profiles
+        .insert("empty-pi".into(), no_model);
+    fx.ctx.store.config.assistant.agent = Some("empty-pi".into());
+    fx.ctx.store.save_config().unwrap();
+    let ctx = f::ctx_at(fx.root());
+    let text = profile(&ctx, None, &Overrides::default())
+        .unwrap_err()
+        .to_string();
+    assert!(text.contains("--model <model>"), "{text}");
+    assert!(
+        text.contains("corral config set profiles.empty-pi.model <model>"),
+        "{text}"
+    );
+}
+
+#[test]
 fn two_launches_open_separate_assistant_sessions_without_a_task_or_slot() {
     // Given a workspace with one Running task and two owner panes.
     let fx = assistant_fixture();
