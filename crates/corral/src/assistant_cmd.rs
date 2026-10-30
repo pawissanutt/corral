@@ -325,8 +325,7 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 })
                 .transpose()?
                 .unwrap_or_default();
-            let promoted =
-                ops::promote(ctx, &session, &slug, &title, project.as_deref(), &body)?;
+            let promoted = ops::promote(ctx, &session, &slug, &title, project.as_deref(), &body)?;
             if json {
                 return print_json(&promoted);
             }
@@ -361,7 +360,10 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 }
             }
             if report.failed() > 0 {
-                anyhow::bail!("{} scratch worktree(s) could not be collected", report.failed());
+                anyhow::bail!(
+                    "{} scratch worktree(s) could not be collected",
+                    report.failed()
+                );
             }
         }
     }
