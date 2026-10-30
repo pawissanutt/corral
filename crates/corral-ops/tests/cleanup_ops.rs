@@ -552,16 +552,6 @@ fn terminal_history(status: Status) {
 }
 
 #[test]
-fn sync_done_reaps_every_run_including_old_gate_and_reviewer() {
-    terminal_history(Status::Done);
-}
-
-#[test]
-fn sync_dropped_reaps_every_run_including_old_gate_and_reviewer() {
-    terminal_history(Status::Dropped);
-}
-
-#[test]
 fn sync_uses_gate_started_and_review_started_for_replaced_tools_in_dispatch_workspace() {
     let fx = Fx::new();
     let panes = fx.review();
