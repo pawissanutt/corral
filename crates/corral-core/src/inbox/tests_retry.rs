@@ -1,5 +1,4 @@
 //! Design 4 retry eligibility over a message's complete envelope and attempt evidence.
-use std::fs;
 
 use serde_json::json;
 
@@ -70,11 +69,7 @@ fn fail(inbox: &Inbox<'_>, envelope: &Envelope) {
 }
 
 fn events(store: &Store, kind: &str) -> usize {
-    fs::read_to_string(store.dir().join("events.jsonl"))
-        .unwrap()
-        .lines()
-        .filter(|line| line.contains(&format!("\"kind\":\"{kind}\"")))
-        .count()
+    store.events_of(None, &[kind]).unwrap().len()
 }
 
 /// Refuses with `code` and changes nothing: no sequence, message or retried event.
@@ -103,14 +98,14 @@ pub(super) fn succeeds(inbox: &Inbox<'_>, original: &Message) {
         original.body.split_once('\n').unwrap().1
     );
     assert_eq!(inbox.terminal(retried.seq).unwrap(), None);
-    let log = fs::read_to_string(inbox.store.dir().join("events.jsonl")).unwrap();
-    let event: Value = log
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .rfind(|event| event["kind"] == "message_retried")
+    let event = inbox
+        .store
+        .events_of(None, &["message_retried"])
+        .unwrap()
+        .pop()
         .unwrap();
-    assert_eq!(event["detail"]["from"], original.id.as_str());
-    assert_eq!(event["detail"]["to"], retried.id.as_str());
+    assert_eq!(event.detail["from"], original.id.as_str());
+    assert_eq!(event.detail["to"], retried.id.as_str());
 }
 
 #[test]
@@ -272,7 +267,9 @@ fn pending_observed_admitted_question_bound_and_unknown_evidence_refuse() {
     let lost = post(&inbox, "lost history");
     let envelope = attempts(&inbox, &[rejected(true)]);
     fail(&inbox, &envelope);
-    fs::remove_file(inbox.envelope_path(envelope.number)).unwrap();
+    inbox
+        .delete_record("envelopes", &format!("{:020}", envelope.number))
+        .unwrap();
     refuses(&inbox, lost.seq, "evidence_incomplete");
 }
 
@@ -290,7 +287,7 @@ fn unavailable_terminal_recovery_refuses_before_any_repair_or_write() {
             })],
         );
         let state = inbox.state().unwrap();
-        let log = fs::read(store.dir().join("events.jsonl")).unwrap();
+        let log = serde_json::to_value(store.events().unwrap()).unwrap();
 
         // When requesting the uninstalled terminal adapter's recovery.
         let error = inbox.recover(recovery).unwrap_err().to_string();
@@ -301,8 +298,13 @@ fn unavailable_terminal_recovery_refuses_before_any_repair_or_write() {
             "{error}"
         );
         assert_eq!(inbox.state().unwrap(), state);
-        assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), log);
-        assert!(!inbox.dir().join("envelopes/000001.settled.json").exists());
+        assert_eq!(serde_json::to_value(store.events().unwrap()).unwrap(), log);
+        assert!(
+            inbox
+                .record::<serde_json::Value>("settled", &format!("{:020}", 1))
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -345,9 +347,7 @@ fn retry_retains_exact_replacement_when_publication_announcement_fails() {
         inbox
             .mark_terminal(original.seq, TerminalState::Failed, "fixture", "test")
             .unwrap();
-        let sink = store.dir().join("events.jsonl");
-        fs::remove_file(&sink).unwrap();
-        fs::create_dir(&sink).unwrap();
+        store.fixture_break_events().unwrap();
 
         // When the replacement commits but its announcement fails, then retain its claim.
         assert!(inbox.retry(original.seq).is_err());
@@ -357,16 +357,15 @@ fn retry_retains_exact_replacement_when_publication_announcement_fails() {
         assert_eq!(inbox.messages().unwrap().len(), 2);
         assert_eq!(inbox.state().unwrap().next_seq, 3);
         assert_eq!(inbox.terminal(2).unwrap(), None);
-        let claim: Value =
-            super::storage::read_optional(&inbox.record_path(original.seq, "retried"))
-                .unwrap()
-                .expect("retry claim must survive publication failure");
+        let claim: Value = inbox
+            .record("retried", &format!("{:020}", original.seq))
+            .unwrap()
+            .expect("retry claim must survive publication failure");
         assert_eq!(claim["from"], original.id);
         assert_eq!(claim["to"], replacement.id);
 
         // Restoring announcements must not permit a second pending replacement.
-        fs::remove_dir(&sink).unwrap();
-        fs::write(&sink, "").unwrap();
+        store.fixture_restore_events().unwrap();
         refuses(&inbox, original.seq, "already_retried");
         assert_eq!(inbox.messages().unwrap(), vec![original, replacement]);
     }
@@ -382,7 +381,7 @@ fn retry_releases_claim_after_definitive_admission_refusal() {
         .mark_terminal(original.seq, TerminalState::Failed, "fixture", "test")
         .unwrap();
     let state = inbox.state().unwrap();
-    let log = fs::read(store.dir().join("events.jsonl")).unwrap();
+    let log = store.events().unwrap();
 
     // When admission definitively refuses before publication.
     let error = inbox
@@ -391,7 +390,12 @@ fn retry_releases_claim_after_definitive_admission_refusal() {
 
     // Then no delivery evidence is lost, and a later corrected admission can retry.
     assert_eq!(error.to_string(), "fixture admission refusal");
-    assert!(!inbox.record_path(original.seq, "retried").exists());
+    assert!(
+        inbox
+            .record::<Value>("retried", &format!("{:020}", original.seq))
+            .unwrap()
+            .is_none()
+    );
     assert!(
         inbox.owner_entries(&state).unwrap()[0]
             .retry_claimed_at
@@ -399,7 +403,7 @@ fn retry_releases_claim_after_definitive_admission_refusal() {
     );
     assert_eq!(inbox.state().unwrap(), state);
     assert_eq!(inbox.messages().unwrap(), vec![original.clone()]);
-    assert_eq!(fs::read(store.dir().join("events.jsonl")).unwrap(), log);
+    assert_eq!(store.events().unwrap(), log);
     succeeds(&inbox, &original);
 }
 
@@ -413,26 +417,19 @@ fn retry_retains_identity_when_reservation_persistence_fails() {
         inbox
             .mark_terminal(original.seq, TerminalState::Failed, "fixture", "test")
             .unwrap();
-        let state_path = match recipient.task() {
-            Some(task) => store.get(task).unwrap().path,
-            None => store.state_dir().join("pm-inbox.json"),
-        };
-        let mut temporary = state_path.as_os_str().to_owned();
-        temporary.push(".tmp");
-        let temporary = std::path::PathBuf::from(temporary);
-        fs::create_dir(&temporary).unwrap();
-
-        // When persistence fails, then the conservative claim retains the reserved identity.
-        assert!(inbox.retry(original.seq).is_err());
-        let claim: Value =
-            super::storage::read_optional(&inbox.record_path(original.seq, "retried"))
-                .unwrap()
-                .unwrap();
+        // Fail the reservation unit after its durable retry intent but before it commits.
+        super::header::CRASH_AT.with(|point| point.set(Some("post_reservation_commit")));
+        let failed = inbox.retry(original.seq);
+        super::header::CRASH_AT.with(|point| point.set(None));
+        assert!(failed.is_err());
+        let claim: Value = inbox
+            .record("retried", &format!("{:020}", original.seq))
+            .unwrap()
+            .unwrap();
         assert_eq!(claim["from"], original.id);
         assert_eq!(claim["to"], format!("{}#2", inbox.key()));
         assert_eq!(inbox.messages().unwrap(), vec![original.clone()]);
         assert_eq!(inbox.state().unwrap().next_seq, 2);
-        fs::remove_dir(&temporary).unwrap();
         refuses(&inbox, original.seq, "already_retried");
     }
 }
@@ -440,26 +437,26 @@ fn retry_retains_identity_when_reservation_persistence_fails() {
 #[test]
 fn retry_retains_identity_when_message_body_cannot_be_written() {
     for task_recipient in [false, true] {
-        // Given an eligible original and a directory blocking the replacement body.
+        // Given an eligible original and a failing message-record publication.
         let (_root, store, recipient) = publication_fixture(task_recipient);
         let inbox = Inbox::new(&store, recipient).unwrap();
         let original = post(&inbox, "reserved gap");
         inbox
             .mark_terminal(original.seq, TerminalState::Failed, "fixture", "test")
             .unwrap();
-        fs::create_dir(inbox.message_path(2)).unwrap();
-
-        // When reservation commits but writing its body fails, then keep identity and gap evidence.
-        assert!(inbox.retry(original.seq).is_err());
-        let claim: Value =
-            super::storage::read_optional(&inbox.record_path(original.seq, "retried"))
-                .unwrap()
-                .unwrap();
+        super::header::CRASH_AT.with(|point| point.set(Some("post_message_write")));
+        let failed = inbox.retry(original.seq);
+        super::header::CRASH_AT.with(|point| point.set(None));
+        // Reservation committed before the publication failure: keep identity and gap evidence.
+        assert!(failed.is_err());
+        let claim: Value = inbox
+            .record("retried", &format!("{:020}", original.seq))
+            .unwrap()
+            .unwrap();
         assert_eq!(claim["from"], original.id);
         assert_eq!(claim["to"], format!("{}#2", inbox.key()));
         assert_eq!(inbox.state().unwrap().next_seq, 3);
         assert_eq!(events(&store, "message_gap"), 1);
-        fs::remove_dir(inbox.message_path(2)).unwrap();
         assert_eq!(inbox.messages().unwrap(), vec![original.clone()]);
         refuses(&inbox, original.seq, "already_retried");
     }
@@ -510,8 +507,10 @@ fn inspection_never_offers_another_retry_after_a_retained_publication_claim() {
     inbox
         .mark_terminal(original.seq, TerminalState::Failed, "fixture", "test")
         .unwrap();
-    fs::create_dir(inbox.message_path(2)).unwrap();
-    assert!(inbox.retry(original.seq).is_err());
+    super::header::CRASH_AT.with(|point| point.set(Some("post_message_write")));
+    let failed = inbox.retry(original.seq);
+    super::header::CRASH_AT.with(|point| point.set(None));
+    assert!(failed.is_err());
     let state = inbox.state().unwrap();
     // When explicit inspection examines that original and its missing replacement.
     let original_inspection = inbox.inspect_retry(original.seq).unwrap();
@@ -584,21 +583,11 @@ fn stale_adverse_finishes_keep_the_first_witness_and_current_fence_across_restar
                     super::header::CRASH_AT
                         .with(|point| point.set(Some("stale_attempt_bar_written")));
                 }
-                let mut temporary = store
-                    .get(recipient.task().unwrap())
-                    .unwrap()
-                    .path
-                    .into_os_string();
-                temporary.push(".tmp");
-                let temporary = std::path::PathBuf::from(temporary);
                 if interruption == "task_write" {
-                    fs::create_dir(&temporary).unwrap();
+                    super::header::CRASH_AT.with(|point| point.set(Some("project_members_write")));
                 }
                 let result = inbox.finish_attempt(&mut stale, outcome.clone());
                 super::header::CRASH_AT.with(|point| point.set(None));
-                if interruption == "task_write" {
-                    fs::remove_dir(&temporary).unwrap();
-                }
                 assert_eq!(result.is_err(), interruption != "none", "{result:?}");
                 let after = inbox.state().unwrap().owner_header.unwrap().entries[0].clone();
                 assert_eq!(after.retry_evidence.pending, before.retry_evidence.pending);
@@ -651,8 +640,7 @@ fn failed_pruning_handoff_retains_the_header_until_keyed_proof_can_commit() {
     let inbox = Inbox::new(&store, recipient).unwrap();
     let message = post(&inbox, "late admission");
     let envelope = attempts(&inbox, &[rejected(true)]);
-    let path = inbox.record_path(message.seq, TerminalState::Failed.suffix());
-    fs::create_dir(&path).unwrap();
+    super::header::CRASH_AT.with(|point| point.set(Some("retry_bar_write")));
     let receipt = Receipt {
         envelope: Some(envelope.number),
         binding: Some(envelope.binding),
@@ -665,7 +653,7 @@ fn failed_pruning_handoff_retains_the_header_until_keyed_proof_can_commit() {
             .record_receipt(message.seq, ReceiptLevel::Admitted, &receipt)
             .is_err()
     );
-    fs::remove_dir(&path).unwrap();
+    super::header::CRASH_AT.with(|point| point.set(None));
     inbox
         .mark_terminal(message.seq, TerminalState::Failed, "fixture", "test")
         .unwrap();
@@ -674,14 +662,11 @@ fn failed_pruning_handoff_retains_the_header_until_keyed_proof_can_commit() {
         .record_receipt(later.seq, ReceiptLevel::Observed, &receipt)
         .unwrap();
     let before = inbox.state().unwrap();
-    let mut temporary = path.into_os_string();
-    temporary.push(".tmp");
-    let temporary = std::path::PathBuf::from(temporary);
-    fs::create_dir(&temporary).unwrap();
+    super::header::CRASH_AT.with(|point| point.set(Some("handoff_write")));
     // When the proof handoff itself cannot commit, pruning must fail without losing the entry.
     assert!(inbox.maintain_owner_header(receipt.observed_at).is_err());
     assert_eq!(inbox.state().unwrap(), before);
-    fs::remove_dir(&temporary).unwrap();
+    super::header::CRASH_AT.with(|point| point.set(None));
     inbox.maintain_owner_header(receipt.observed_at).unwrap();
     // Then a successful handoff permits bounded pruning, never a retry of the old message.
     assert!(

@@ -8,6 +8,8 @@ use crate::Store;
 
 #[path = "tests_envelopes.rs"]
 mod envelopes;
+#[path = "tests_publication_units.rs"]
+mod publication_units;
 
 #[path = "tests_process.rs"]
 mod process;
@@ -27,6 +29,38 @@ fn post(body: &str, urgency: Urgency) -> Post<'_> {
         binding: MessageBinding::default(),
         subject: None,
         max_payload: MAX_PAYLOAD,
+    }
+}
+
+#[test]
+fn nested_pm_posts_roll_back_with_full_and_head_parent_task_units() {
+    for head_form in [false, true] {
+        let (_root, store) = fixture();
+        let task = store
+            .create("Parent", None, crate::Status::Ready, "")
+            .unwrap();
+        let inbox = Inbox::new(&store, Recipient::Pm).unwrap();
+        let before = inbox.state().unwrap();
+        let events = store.events().unwrap();
+        let result = if head_form {
+            store
+                .update_head(&task.id, |_| {
+                    inbox.post(post("must roll back", Urgency::Info))?;
+                    anyhow::bail!("parent refused")
+                })
+                .map(drop)
+        } else {
+            store
+                .update(&task.id, |_| {
+                    inbox.post(post("must roll back", Urgency::Info))?;
+                    anyhow::bail!("parent refused")
+                })
+                .map(drop)
+        };
+        assert!(result.unwrap_err().to_string().contains("parent refused"));
+        assert_eq!(inbox.state().unwrap(), before);
+        assert!(inbox.messages().unwrap().is_empty());
+        assert_eq!(store.events().unwrap(), events);
     }
 }
 

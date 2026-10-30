@@ -230,6 +230,7 @@ impl Inbox<'_> {
             }
             self.save_record("retried", &marker, &claim)?;
         }
+        let standalone = !self.store.has_record_unit();
         let mut reserving = false;
         let posted = self.post_with_reservation(
             Post {
@@ -258,7 +259,11 @@ impl Inbox<'_> {
                 let claim =
                     json!({"at": Timestamp::now(), "from": original.id, "to": replacement.id});
                 self.mirror_retry_claim(seq, Some(&claim))?;
-                self.save_record("retried", &marker, &claim)?;
+                if standalone {
+                    self.save_record_intent("retried", &marker, &claim)?;
+                } else {
+                    self.save_record("retried", &marker, &claim)?;
+                }
                 reserving = true;
                 Ok(())
             },
