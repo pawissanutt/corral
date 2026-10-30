@@ -37,6 +37,8 @@ mod receipts;
 #[cfg(test)]
 pub(crate) use receipts::FAILPOINT;
 #[cfg(test)]
+mod event_known_cost_tests;
+#[cfg(test)]
 pub(crate) mod native_test_support;
 #[cfg(test)]
 mod receipts_tests;

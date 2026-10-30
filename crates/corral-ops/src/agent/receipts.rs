@@ -172,12 +172,47 @@ pub(crate) fn commit_with_task(
     admitted: &Admitted,
     apply: impl FnOnce(&mut corral_core::Task) -> Result<Commit>,
 ) -> Result<CallResponse> {
+    commit_with_task_scope(ctx, admitted, apply, false)
+}
+
+/// T-626's retained-vector mutation only; bounded post-commit work stays unattributed.
+pub(crate) fn commit_native_event(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    apply: impl FnOnce(&mut AgentRunState, Option<ClosureReason>) -> Result<Commit>,
+) -> Result<CallResponse> {
+    let container = &admitted.origin.binding.container;
+    if container.task().is_none() {
+        // The distinct root document operations already carry T-625, not T-626.
+        return commit(ctx, admitted, apply);
+    }
+    failpoint("agent_admitted_before_commit");
+    commit_with_task_scope(
+        ctx,
+        admitted,
+        |task| {
+            let closure = agent::container_closure(task, container);
+            let state = agent::container_state_mut(task, container)
+                .context("the agent binding disappeared")?;
+            apply(state, closure)
+        },
+        true,
+    )
+}
+
+fn commit_with_task_scope(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    apply: impl FnOnce(&mut corral_core::Task) -> Result<Commit>,
+    retention: bool,
+) -> Result<CallResponse> {
     let origin = &admitted.origin;
     let container = &origin.binding.container;
     let task_id = container
         .task()
         .context("a task commit names a worker run or review child")?;
     let mut outcome: Option<(RequestReceipt, bool)> = None;
+    let known = retention.then(|| corral_core::work::followup("T-626", "native_event_retention"));
     ctx.store.try_update(task_id, |task| {
         let state = agent::container_state(task, container).ok_or_else(|| {
             Rejection::new(
@@ -197,6 +232,7 @@ pub(crate) fn commit_with_task(
         outcome = Some((append(state, origin, commit)?, false));
         Ok(true)
     })?;
+    drop(known);
     let (receipt, replayed) = outcome.context("the commit produced no receipt")?;
     respond(ctx, container, receipt, replayed)
 }
