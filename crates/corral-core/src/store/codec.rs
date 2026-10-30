@@ -136,13 +136,38 @@ impl Rows {
         Rows(BTreeMap::new())
     }
 
-    pub(crate) fn put(&mut self, row: HistoryRow) {
+    pub(crate) fn put(&mut self, mut row: HistoryRow) {
+        decorate_native(&mut row);
         self.0.insert((row.part, row.key.clone()), row);
     }
 
     fn put_indexed(&mut self, mut row: HistoryRow, index: Vec<String>) {
         row.index = index;
         self.put(row);
+    }
+}
+
+/// Cross-task unfinished-container index, kept with the canonical container row.
+pub(super) fn decorate_native(row: &mut HistoryRow) {
+    if !matches!(
+        row.part,
+        TaskPart::Run | TaskPart::ReviewRun | TaskPart::PlanRun | TaskPart::PlanReview
+    ) {
+        return;
+    }
+    let native = row
+        .doc
+        .get("agent_host")
+        .is_some_and(|host| !host.is_null())
+        || row
+            .doc
+            .get("harness")
+            .and_then(Value::as_str)
+            .is_some_and(crate::is_pi_native);
+    let unsettled = native && row.doc.pointer("/inbox/settled").is_none_or(Value::is_null);
+    row.index.retain(|token| token != "native:unsettled");
+    if unsettled {
+        row.index.push("native:unsettled".into());
     }
 }
 
@@ -704,6 +729,18 @@ pub(crate) fn split_agent_host(
             .map(super::heads::NativeRecordCounts::of)
             .unwrap_or_default();
         host.insert("_records".into(), serde_json::to_value(counts)?);
+        if let Some(typed) = typed {
+            let mut latest = BTreeMap::<u32, u64>::new();
+            for turn in &typed.turns {
+                latest
+                    .entry(turn.generation)
+                    .and_modify(|seq| *seq = (*seq).max(turn.seq))
+                    .or_insert(turn.seq);
+            }
+            for (generation, turn) in latest {
+                rows.put(latest_turn_row(owner, generation, turn));
+            }
+        }
         for kind in AGENT_KINDS {
             for (i, record) in take_array(host, kind).into_iter().enumerate() {
                 let (open, index) =
@@ -722,6 +759,25 @@ pub(crate) fn split_agent_host(
         }
     }
     Ok(())
+}
+
+pub(super) fn latest_turn_seq(doc: &Value) -> Result<u64> {
+    doc["seq"]
+        .as_str()
+        .context("native latest-turn pointer has no sequence")?
+        .parse()
+        .context("native latest-turn pointer sequence is malformed")
+}
+
+/// Derived max-sequence pointer. Turn storage order remains append order for full facades.
+pub(super) fn latest_turn_row(owner: &str, generation: u32, turn: u64) -> HistoryRow {
+    row(
+        TaskPart::AgentRecord,
+        format!("{owner}/latest_turn/{generation:010}"),
+        false,
+        false,
+        json!({"seq": format!("{turn:020}")}),
+    )
 }
 
 /// Moves an inbox's applied effects and scoped cursors out of a container document.

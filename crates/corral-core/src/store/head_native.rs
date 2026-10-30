@@ -78,6 +78,40 @@ fn facts(record: &NativeRecord) -> (u64, u64) {
 }
 
 impl TaskHeadMut {
+    /// Edit one existing PM receipt without loading its task's receipt history.
+    pub fn edit_pm_receipt(
+        &mut self,
+        request_id: &str,
+        edit: impl FnOnce(&mut crate::agent::RequestReceipt) -> Result<()>,
+    ) -> Result<bool> {
+        let Some(mut row) = self
+            .overlaid()?
+            .query(
+                &RowQuery::part(TaskPart::PmReceipt).with_index(format!("request:{request_id}")),
+                1,
+                Counter::HistoryRowDecodes,
+            )?
+            .pop()
+        else {
+            return Ok(false);
+        };
+        let mut receipt: crate::agent::RequestReceipt =
+            serde_json::from_value(row.doc.clone()).context("decoding PM receipt")?;
+        edit(&mut receipt)?;
+        ensure!(
+            receipt.request_id == request_id,
+            "PM receipt identity cannot change"
+        );
+        let doc = serde_json::to_value(receipt).context("encoding PM receipt")?;
+        if doc == row.doc {
+            return Ok(false);
+        }
+        row.doc = doc;
+        self.history_edit = true;
+        self.put(row);
+        Ok(true)
+    }
+
     fn native_row(&self, part: TaskPart, key: &str) -> Result<HistoryRow> {
         let mut q = RowQuery::part(part);
         q.key = Some(key.into());
@@ -264,6 +298,20 @@ impl TaskHeadMut {
             doc,
             index,
         });
+        if let NativeRecord::Turn(turn) = &record {
+            let pointer = super::codec::latest_turn_row(&owner, turn.generation, turn.seq);
+            let mut q = RowQuery::part(TaskPart::AgentRecord);
+            q.key = Some(pointer.key.clone());
+            let previous = self.rows_now(&q, Counter::NestedRowDecodes)?.pop();
+            let previous_seq = previous
+                .as_ref()
+                .map(|row| super::codec::latest_turn_seq(&row.doc))
+                .transpose()?;
+            if previous_seq.is_none_or(|seq| seq < turn.seq) {
+                self.history_edit |= previous.is_some();
+                self.put(pointer);
+            }
+        }
         Ok(true)
     }
 }
