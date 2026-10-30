@@ -213,13 +213,20 @@ test("live private-pane owner authority: landing, synthetic inputs, do it, confi
 
     // C6: an unclear request becomes a quoted PM inbox item, and the owner is told how to follow it.
     const unclear = "land whatever is ready";
-    const post = `${cli} pm inbox post --kind routing --subject ${quote("Land whatever is ready")} --quote ${quote(unclear)} --input ${input(12)}`;
+    const reading = "The owner asks to land unspecified ready work. Which tasks count as ready, and whether "
+      + "each has passed its gate and review, is not stated, so the target and scope are ambiguous; "
+      + "routed to the PM instead of guessing which approvals to run.";
+    const body = join(workspace, "reading.md");
+    const post = `printf '%s\\n' ${quote(reading)} > ${quote(body)} && ${cli} pm inbox post --kind routing `
+      + `--subject ${quote("Land whatever is ready")} --quote ${quote(unclear)} --input ${input(12)} --body-file ${quote(body)}`;
     await turn(unclear, [{ toolCalls: [{ callId: "route", name: "bash", arguments: { command: post } }] },
       { text: "routed to the PM as PMI-1; follow with corral pm inbox show PMI-1" }]);
     const item = JSON.parse(ok([corral, "pm", "inbox", "show", "PMI-1", "--json"], { cwd: workspace }));
-    expect(JSON.stringify(item)).toContain(unclear);
-    expect(JSON.stringify(item)).toContain(`assistant:${fixture.session}`);
-    expect(JSON.stringify(item)).toContain(input(12));
+    expect(item.owner_words.quote).toBe(unclear);
+    expect(item.owner_words.input).toBe(input(12));
+    expect(item.from).toBe(`assistant:${fixture.session}`);
+    expect(item.body.trim()).toBe(reading);
+    expect(item.body).not.toContain(unclear);
     const reply = live.session.messages.filter((m) => m.role === "assistant").at(-1);
     expect(JSON.stringify(reply)).toContain("corral pm inbox show PMI-1");
 
