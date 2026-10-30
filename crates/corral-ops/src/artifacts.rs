@@ -322,7 +322,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
         .files
         .iter()
         .map(|file| file.path.clone())
-        .chain(corral_git::ignored_artifact_scratch(&run.worktree)?.into_iter());
+        .chain(corral_git::ignored_artifact_scratch(&run.worktree)?);
     for path in paths {
         if !cfg.globs.iter().any(|g| glob_match(g, &path)) {
             continue;
