@@ -18,10 +18,7 @@ use crate::backend::{
 };
 use crate::inbox::{Recipient, SessionCursor};
 use crate::work::{self, Counter, Subject};
-use crate::{
-    AggregateReview, CheckpointMeta, ContainerFacts, DecisionRecord, HistorySummary, ResumeReceipt,
-    RunObligations, UsageEntry, WaitRecord,
-};
+use crate::{AggregateReview, CheckpointMeta, ContainerFacts, HistorySummary, UsageEntry};
 
 /// The view a head was read on, shared by its keyed reads.
 pub(crate) type PinnedView = Arc<Mutex<Box<dyn ReadView + Send>>>;
@@ -656,80 +653,6 @@ impl TaskHead {
             }
         };
         Ok(seq.map(|seq| format!("{}/", child_key(seq, SELF))))
-    }
-
-    fn obligation_rows(
-        &self,
-        run: &str,
-        kind: &str,
-        token: Option<String>,
-        open: bool,
-    ) -> Result<Vec<HistoryRow>> {
-        let Some(owner) = self.run_owner(run)? else {
-            return Ok(Vec::new());
-        };
-        self.owner_obligation_rows(&owner, kind, token, open)
-    }
-
-    fn owner_obligation_rows(
-        &self,
-        owner: &str,
-        kind: &str,
-        token: Option<String>,
-        open: bool,
-    ) -> Result<Vec<HistoryRow>> {
-        let mut q = RowQuery::under(TaskPart::RunObligation, format!("{owner}{kind}"));
-        q.index = token;
-        q.open_only = open;
-        self.query(
-            &q,
-            if q.index.is_some() { 1 } else { u32::MAX },
-            Counter::NestedRowDecodes,
-        )
-    }
-
-    pub fn wait(&self, run: &str, id: &str) -> Result<Option<WaitRecord>> {
-        Ok(
-            Self::decode(self.obligation_rows(run, "wait/", Some(format!("id:{id}")), false)?)?
-                .into_iter()
-                .next(),
-        )
-    }
-
-    pub fn decision(&self, run: &str, id: &str) -> Result<Option<DecisionRecord>> {
-        Ok(Self::decode(self.obligation_rows(
-            run,
-            "decision/",
-            Some(format!("id:{id}")),
-            false,
-        )?)?
-        .into_iter()
-        .next())
-    }
-
-    /// The resume receipt `id` of a wait or decision of `run`.
-    pub fn receipt(&self, run: &str, id: &str) -> Result<Option<ResumeReceipt>> {
-        let rows = self.obligation_rows(run, "", Some(format!("receipt:{id}")), false)?;
-        Ok(rows.into_iter().find_map(|row| {
-            serde_json::from_value::<ResumeReceipt>(row.doc.get("receipt")?.clone()).ok()
-        }))
-    }
-
-    /// Waits and decisions of `run` whose observation can still change, in order.
-    pub fn open_obligations(&self, run: &str) -> Result<RunObligations> {
-        let Some(owner) = self.run_owner(run)? else {
-            return Ok(RunObligations::default());
-        };
-        Ok(RunObligations {
-            slot_wait: crate::TaskRef::run_head(self, run)?.and_then(|r| r.obligations.slot_wait),
-            waits: Self::decode(self.owner_obligation_rows(&owner, "wait/", None, true)?)?,
-            decisions: Self::decode(self.owner_obligation_rows(
-                &owner,
-                "decision/",
-                None,
-                true,
-            )?)?,
-        })
     }
 
     /// The task's operating-contract revision, as its summary keeps it: no history is read.

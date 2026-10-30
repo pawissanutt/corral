@@ -211,6 +211,9 @@ macro_rules! keyed_reads {
         fn open_obligations(&self, run: &str) -> Result<RunObligations> {
             self.$reads()?.open_obligations(run)
         }
+        fn open_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations> {
+            self.$reads()?.open_review_obligations(run, review)
+        }
         fn checkpoint_payload(&self, run: &str, ordinal: u64) -> Result<Option<Checkpoint>> {
             self.$reads()?.checkpoint_payload(run, ordinal)
         }
