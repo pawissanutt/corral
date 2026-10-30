@@ -226,6 +226,9 @@ macro_rules! keyed_reads {
         fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
             self.$reads()?.pm_receipt(request_id)
         }
+        fn pending_pm_receipts(&self) -> Result<Vec<RequestReceipt>> {
+            self.$reads()?.pending_pm_receipts()
+        }
         fn member_gate(&self, member: &str) -> Result<Option<crate::MemberGateHead>> {
             Ok(self.$reads()?.task.member_gates.get(member).cloned())
         }

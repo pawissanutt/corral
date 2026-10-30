@@ -728,6 +728,15 @@ impl TaskRef for Task {
             .unwrap_or_default())
     }
 
+    fn pending_pm_receipts(&self) -> Result<Vec<RequestReceipt>> {
+        Ok(self
+            .agent_pm_receipts
+            .iter()
+            .filter(|receipt| crate::agent::NativeRecord::Receipt((*receipt).clone()).pending())
+            .cloned()
+            .collect())
+    }
+
     fn pm_receipt(&self, request_id: &str) -> Result<Option<RequestReceipt>> {
         Ok(self
             .agent_pm_receipts
