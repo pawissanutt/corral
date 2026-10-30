@@ -1,7 +1,14 @@
 //! Complete stopping evidence using only the already-frozen neighborhood.
 use super::*;
+#[cfg(test)]
+use corral_core::Run;
 use corral_core::agent::HostHealth;
-use corral_core::{GateResult, Run, WaitHandle, awaited_task};
+use corral_core::{GateResult, WaitHandle, awaited_task};
+
+#[path = "stopping_inputs.rs"]
+mod input;
+pub(super) use input::Inputs;
+use input::RunStop;
 
 #[cfg(test)]
 #[path = "stopping_tests.rs"]
@@ -39,7 +46,28 @@ pub(super) fn conditions(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &
     if matches!(task.status, Status::Idea | Status::Done | Status::Dropped) {
         return;
     }
-    native_waits(task, n, a);
+    project(
+        &corral_core::task_head_fields(task),
+        &Phases::full(task),
+        &Inputs::full(task),
+        n,
+        now,
+        a,
+    );
+}
+
+pub(super) fn project(
+    task: &TaskHeadFields,
+    phases: &Phases,
+    inputs: &Inputs,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) {
+    if matches!(task.status, Status::Idea | Status::Done | Status::Dropped) {
+        return;
+    }
+    native_waits(inputs, n, a);
     if let Some((at, reason)) = n.prepared_refusals.get(&task.id) {
         let mut condition = row(
             task,
@@ -62,60 +90,40 @@ pub(super) fn conditions(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &
         a.conditions.push(condition);
         a.progress = None;
     }
-    reviewers(task, n, now, a);
+    reviewers(task, phases, n, now, a);
     if task.status != Status::NeedsMe {
-        classify::escalation(
-            &corral_core::task_head_fields(task),
-            Phases::full(task).run.as_ref(),
-            now,
-            &mut a.conditions,
-        );
+        classify::escalation(task, phases.run.as_ref(), now, &mut a.conditions);
     }
     // An old working observation is not evidence of progress past a native suspension.
-    if let Some(parent) = task.current_run() {
-        for run in std::iter::once(parent)
-            .filter(|run| run.outcome.is_none())
-            .chain(
-                parent
-                    .review_runs
-                    .iter()
-                    .filter(|run| run.outcome.is_none() && run.ended.is_none()),
-            )
-        {
-            let question = run.agent_host.as_ref().is_some_and(|host| {
-                host.questions
-                    .iter()
-                    .any(|question| question.blocking && question.recorded_pending())
-            });
-            let lost = unavailable(run, n);
-            if question || lost {
-                a.progress = None;
-            }
-            if lost && !a.conditions.iter().any(|row| row.kind == "agent_lost") {
-                let since = run
-                    .herdr
-                    .as_ref()
-                    .and_then(|herdr| {
-                        n.missing_reviewers
-                            .get(&format!("{}@{}", herdr.pane_id, run.started))
-                    })
-                    .copied()
-                    .or(task.status_since)
-                    .or(run.idle_since);
-                let mut condition = row(
-                    task,
-                    now,
-                    "agent_lost",
-                    WaitClass::PmAction,
-                    Responsible::Pm,
-                    (Some(run.id.clone()), since),
-                    format!("Run {} has recorded lost host or pane evidence", run.id),
-                );
-                condition
-                    .resume
-                    .push(check("run_recovered", &run.id, None, false));
-                a.conditions.push(condition);
-            }
+    for run in &inputs.runs {
+        let lost = unavailable(run, n);
+        if run.blocking_question || lost {
+            a.progress = None;
+        }
+        if lost && !a.conditions.iter().any(|row| row.kind == "agent_lost") {
+            let since = run
+                .herdr
+                .as_ref()
+                .and_then(|herdr| {
+                    n.missing_reviewers
+                        .get(&format!("{}@{}", herdr.pane_id, run.started))
+                })
+                .copied()
+                .or(task.status_since)
+                .or(run.idle_since);
+            let mut condition = row(
+                task,
+                now,
+                "agent_lost",
+                WaitClass::PmAction,
+                Responsible::Pm,
+                (Some(run.id.clone()), since),
+                format!("Run {} has recorded lost host or pane evidence", run.id),
+            );
+            condition
+                .resume
+                .push(check("run_recovered", &run.id, None, false));
+            a.conditions.push(condition);
         }
     }
     if a.conditions
@@ -126,10 +134,9 @@ pub(super) fn conditions(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &
     }
 }
 
-fn unavailable(run: &Run, n: &Neighborhood<'_>) -> bool {
-    run.agent_host
-        .as_ref()
-        .is_some_and(|host| matches!(host.binding.health, HostHealth::Lost | HostHealth::Fenced))
+fn unavailable(run: &RunStop, n: &Neighborhood<'_>) -> bool {
+    run.host_health
+        .is_some_and(|health| matches!(health, HostHealth::Lost | HostHealth::Fenced))
         || (n.inventory_known && run.agent_state.as_deref() == Some("gone"))
         || run.herdr.as_ref().is_some_and(|herdr| {
             n.missing_reviewers
@@ -137,24 +144,11 @@ fn unavailable(run: &Run, n: &Neighborhood<'_>) -> bool {
         })
 }
 
-fn native_waits(task: &Task, n: &Neighborhood<'_>, a: &mut Assessment) {
-    let Some(run) = task.current_run() else {
-        return;
-    };
-    let waits = std::iter::once(run)
-        .filter(|run| run.outcome.is_none())
-        .chain(
-            run.review_runs
-                .iter()
-                .filter(|run| run.outcome.is_none() && run.ended.is_none()),
-        )
-        .flat_map(|run| {
-            run.obligations
-                .waits
-                .iter()
-                .filter(|wait| wait.receipt.is_none())
-                .map(move |wait| (run, wait))
-        });
+fn native_waits(inputs: &Inputs, n: &Neighborhood<'_>, a: &mut Assessment) {
+    let waits = inputs
+        .runs
+        .iter()
+        .flat_map(|run| run.waits.iter().map(move |wait| (run, wait)));
     for (condition, (waiting_run, wait)) in a
         .conditions
         .iter_mut()
@@ -217,7 +211,7 @@ fn native_waits(task: &Task, n: &Neighborhood<'_>, a: &mut Assessment) {
 }
 
 fn missing(
-    task: &Task,
+    task: &TaskHeadFields,
     now: Timestamp,
     kind: &str,
     id: &str,
@@ -242,12 +236,18 @@ fn missing(
     condition
 }
 
-fn reviewers(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
-    if task.current_run().is_none_or(|run| run.outcome.is_some())
-        && let Some(plan) = task.plans.last().filter(|plan| plan.approval.is_none())
+fn reviewers(
+    task: &TaskHeadFields,
+    phases: &Phases,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) {
+    if phases.run.as_ref().is_none_or(|run| run.outcome.is_some())
+        && let Some(plan) = phases.plan.as_ref().filter(|plan| plan.approval.is_none())
         && let Some(review) = plan
-            .reviews
-            .last()
+            .current_review
+            .as_ref()
             .filter(|review| review.verdict.is_none())
         && (review.herdr.is_none()
             || review.herdr.as_ref().is_some_and(|herdr| {
@@ -283,11 +283,11 @@ fn reviewers(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessme
         ));
     }
     if task.tracker
-        && let Some(attempt) = task.aggregate_attempts.last()
+        && let Some(attempt) = phases.aggregate.as_ref()
         && !attempt.gate.as_ref().is_some_and(|gate| gate.holds_slot())
         && let Some(review) = attempt
-            .reviews
-            .last()
+            .current_review
+            .as_ref()
             .filter(|review| review.verdict.is_none())
         && (review.herdr.is_none()
             || review.abandoned.is_some()

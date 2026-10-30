@@ -12,8 +12,8 @@ use corral_core::inbox::Inbox;
 #[cfg(test)]
 use corral_core::{Config, EffectivePolicy};
 use corral_core::{
-    OperatingActionKind as Action, PlanRunState, Status, Task, TaskFieldsRef, TaskHeadFields,
-    Verdict,
+    OperatingActionKind as Action, PlanRunState, Status, Task, TaskFieldsRef, TaskHead,
+    TaskHeadFields, Verdict,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -82,6 +82,50 @@ pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> A
         |out| delivery::conditions(task, neighborhood, now, out),
         |assessment| stopping::conditions(task, neighborhood, now, assessment),
     )
+}
+
+/// Bounded assessment from current metadata and active/keyed rows. The neighborhood must
+/// be constructed from the same pinned view, with named dependencies/owed sources included.
+pub fn assess_head(
+    task: &TaskHead,
+    neighborhood: &Neighborhood<'_>,
+    now: Timestamp,
+) -> Result<Assessment> {
+    if matches!(task.status, Status::Done | Status::Dropped) {
+        return Ok(Assessment::default());
+    }
+    let unscheduled =
+        task.status == Status::Idea || (task.status == Status::Backlog && !task.queued);
+    let phases = if unscheduled {
+        Phases::default()
+    } else {
+        Phases::head(task)?
+    };
+    let runs = if unscheduled {
+        Vec::new()
+    } else {
+        classify::run_conditions_ref(task, now)?
+    };
+    let delivery = delivery::conditions_ref(task, neighborhood, now)?;
+    let stops = stopping::Inputs::head(task)?;
+    Ok(assess_with_sources(
+        &task.task,
+        &phases,
+        neighborhood,
+        now,
+        |assessment| {
+            classify::conditions_with_runs(
+                &task.task,
+                &phases,
+                neighborhood,
+                now,
+                assessment,
+                |out| out.extend(runs),
+            )
+        },
+        |out| out.extend(delivery),
+        |assessment| stopping::project(&task.task, &phases, &stops, neighborhood, now, assessment),
+    ))
 }
 
 fn assess_with_sources(
@@ -267,40 +311,7 @@ pub(super) fn board_snapshot(
                     });
                 }
                 let head = frozen.head(&task.id)?;
-                let delivery = delivery::conditions_ref(&head, &neighborhood, now)?;
-                let runs = if matches!(task.status, Status::Idea | Status::Done | Status::Dropped)
-                    || (task.status == Status::Backlog && !task.queued)
-                {
-                    Vec::new()
-                } else {
-                    classify::run_conditions_ref(&head, now)?
-                };
-                let fields = &head.task;
-                let phases = if task.status == Status::Idea
-                    || (task.status == Status::Backlog && !task.queued)
-                {
-                    Phases::default()
-                } else {
-                    Phases::head(&head)?
-                };
-                let assessment = assess_with_sources(
-                    &fields,
-                    &phases,
-                    &neighborhood,
-                    now,
-                    |assessment| {
-                        classify::conditions_with_runs(
-                            &fields,
-                            &phases,
-                            &neighborhood,
-                            now,
-                            assessment,
-                            |out| out.extend(runs),
-                        )
-                    },
-                    |out| out.extend(delivery),
-                    |assessment| stopping::conditions(task, &neighborhood, now, assessment),
-                );
+                let assessment = assess_head(&head, &neighborhood, now)?;
                 Ok(TaskAssessment {
                     task: task.id.clone(),
                     title: task.title.clone(),

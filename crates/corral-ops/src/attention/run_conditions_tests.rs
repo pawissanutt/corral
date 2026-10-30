@@ -40,6 +40,7 @@ fn grow(run: &mut Run, scale: usize) {
 fn active_run_condition_rows_match_full_facade_without_settled_history_reads() {
     for case in 0..7 {
         let mut measured = Vec::new();
+        let mut assessed_work = Vec::new();
         for scale in [1, 10] {
             let fx = Fx::new();
             let mut task = fx.questions(1);
@@ -139,16 +140,45 @@ fn active_run_condition_rows_match_full_facade_without_settled_history_reads() {
                         .any(|condition| condition.kind == "stuck_process")
                 );
             }
-            let head = fx.ctx.store.head(&task.id).unwrap();
+            let tasks = vec![task.clone()];
+            let policy = fx.ctx.store.effective_operating_policy().unwrap();
+            let cold = super::super::Neighborhood::new(&tasks, &fx.ctx.store.config, &policy);
+            let expected_assessment = super::super::assess(&task, &cold, now);
+            let view = fx.ctx.store.read_only_snapshot().unwrap();
+            let heads = vec![view.head(&task.id).unwrap()];
+            let head = &heads[0];
             let _hot = HotScope::enter();
             let before = work::snapshot();
             assert_eq!(
-                run_conditions_ref(&head, now).unwrap(),
+                run_conditions_ref(head, now).unwrap(),
                 expected,
                 "case={case} scale={scale}"
             );
             let after = work::snapshot();
             measured.push(Counter::ALL.map(|counter| after.total(counter) - before.total(counter)));
+            let before_assess = work::snapshot();
+            let neighborhood =
+                super::super::Neighborhood::new_heads(&heads, &fx.ctx.store.config, &policy)
+                    .unwrap();
+            let actual = super::super::assess_head(head, &neighborhood, now).unwrap();
+            assert_eq!(
+                actual, expected_assessment,
+                "assessment case={case} scale={scale}"
+            );
+            assert_eq!(
+                corral_core::attention::blocked_ref(head, &actual).unwrap(),
+                corral_core::attention::blocked(&task, &expected_assessment)
+            );
+            let after_assess = work::snapshot();
+            assessed_work.push(
+                Counter::ALL
+                    .map(|counter| after_assess.total(counter) - before_assess.total(counter)),
+            );
+            assert_eq!(
+                after_assess.total(Counter::FullTaskHydrations)
+                    - before_assess.total(Counter::FullTaskHydrations),
+                0
+            );
             assert_eq!(
                 after.total(Counter::FullTaskHydrations)
                     - before.total(Counter::FullTaskHydrations),
@@ -156,5 +186,6 @@ fn active_run_condition_rows_match_full_facade_without_settled_history_reads() {
             );
         }
         assert_eq!(measured[0], measured[1], "case={case}");
+        assert_eq!(assessed_work[0], assessed_work[1], "assessment case={case}");
     }
 }
