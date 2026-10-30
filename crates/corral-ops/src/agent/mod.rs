@@ -13,6 +13,10 @@ mod admission_tests;
 mod auxiliary_tests;
 pub mod aws_profile;
 pub mod bridge;
+#[cfg(test)]
+mod budget_gap_tests;
+#[cfg(test)]
+mod budget_tests;
 mod call;
 #[cfg(all(test, unix))]
 mod capabilities_tests;

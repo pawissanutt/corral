@@ -92,6 +92,7 @@ interface Started {
 }
 
 interface Layout {
+  readonly catalog?: number;
   readonly cwd?: string;
   readonly home?: string;
 }
@@ -112,7 +113,7 @@ async function start(role: Role, enabled: readonly string[], guidance?: Capabili
   });
   host = await HostSession.create({
     sdk, identity: identity(role), cwd: layout.cwd ?? cwd, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
-    capabilities: snapshot(enabled), ...(guidance ? { guidance } : {}), root, home: layout.home ?? home,
+    capabilities: { ...snapshot(enabled), catalog: layout.catalog ?? 1 }, ...(guidance ? { guidance } : {}), root, home: layout.home ?? home,
     exportDir: join(dir, "sessions", "exports"),
     modules, client, events, network, sessionManager: sdk.SessionManager.create(layout.cwd ?? cwd, join(dir, "sessions")),
   });
@@ -320,7 +321,7 @@ test("compaction and branch-summary settings reach upstream and a summary record
   const configured = await start("worker", STANDARD, {
     settings: { compaction: { reserve_tokens: 8192, keep_recent_tokens: 1, branch_summary: { reserve_tokens: 2048, skip_prompt: true } } },
     projectText: false,
-  });
+  }, { catalog: 7 });
   const disabled = await start("worker", ["skills"], { settings: {}, projectText: false });
   const older = await start("worker", ["todo"]);
   try {
@@ -347,6 +348,12 @@ test("compaction and branch-summary settings reach upstream and a summary record
     expect(compaction?.summary).toContain("SUMMARY");
     expect(compaction?.usage?.input).toBeGreaterThan(0);
     expect(compaction?.usage?.output).toBeGreaterThan(0);
+    const budget = configured.corral.calls().filter((c) => c.envelope.payload.kind === "budget");
+    // Compaction may make separate summary/preparation requests: every actual request reserves.
+    const reserved = budget.filter((c) => c.envelope.payload.action === "reserve");
+    const settled = budget.filter((c) => c.envelope.payload.action === "settle");
+    expect(reserved.length).toBeGreaterThanOrEqual(3);
+    expect(settled.length).toBe(reserved.length);
   } finally {
     for (const { host } of [configured, disabled, older]) host.session.dispose();
   }

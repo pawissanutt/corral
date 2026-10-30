@@ -93,6 +93,9 @@ pub struct AgentRunState {
     /// Recovery-critical references for billable auxiliary sessions, retained across resumes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub usage_sessions: Vec<super::UsageSession>,
+    /// Cumulative reservations and settled usage; never rewind with a session cursor.
+    #[serde(default)]
+    pub budget: super::BudgetLedger,
 }
 
 impl AgentRunState {
@@ -111,6 +114,7 @@ impl AgentRunState {
             question_hold: None,
             rewinds: Vec::new(),
             usage_sessions: Vec::new(),
+            budget: super::BudgetLedger::default(),
         }
     }
 

@@ -17,7 +17,7 @@ import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts"
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
-  "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
+  "budget", "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
   "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled", "checkpoints", "subagents", "oracle",
 ];

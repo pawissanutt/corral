@@ -50,6 +50,7 @@
     "llama.cpp"
   ],
   "capabilities": [
+    "budget",
     "todo",
     "web.enabled",
     "context_files",

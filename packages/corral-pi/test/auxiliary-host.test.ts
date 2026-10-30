@@ -41,7 +41,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
         session_file: join(dir, envelope.payload.request + ".jsonl"), generation: 1 } : {}),`));
     const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules: { ...modules, role: workerRole(PACKAGE_ROOT) },
-      client, events, network, capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled: ["subagents", "oracle"] },
+      client, events, network, capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["subagents", "oracle"] },
       guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 },
         oracle: { model: "gpt-6.1-sol", timeout_secs: 30 } } },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
@@ -89,6 +89,9 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 }, oracle: { running: 0, queued: 0 }, stopped: true });
     const terminal = corral.calls().filter((c) => c.envelope.payload.kind === "auxiliary" && c.envelope.payload.action === "finish");
     expect(terminal.at(-1)?.envelope.payload.outcome).toBe("uncertain");
+    const budget = corral.calls().filter((c) => c.envelope.payload.kind === "budget");
+    expect(budget.filter((c) => c.envelope.payload.action === "reserve")).toHaveLength(requestCount);
+    expect(budget.filter((c) => c.envelope.payload.action === "settle")).toHaveLength(requestCount - 1);
     host = undefined;
     console.log("host: explore/oracle and read-only child guard survive reload; parent stop cancels streaming child without follow-up; generation-linked terminal records");
   } finally {

@@ -15,6 +15,7 @@ import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
+import { RunBudget } from "../capabilities/budget.ts";
 import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
 import { codemode } from "../capabilities/codemode.ts";
@@ -251,11 +252,26 @@ export class HostSession {
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private auxiliaryModels: Models | undefined;
+  private readonly budget: RunBudget;
 
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.budget = new RunBudget({
+      unbounded: PROVIDERS[this.provider].lane !== undefined,
+      record: async (payload) => {
+        if (!this.bound) throw new Error("host_not_bound");
+        await this.drained();
+        const event = options.events.emit("budget", payload);
+        const receipt = await options.client.call("event", {
+          requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+        });
+        if (receipt.state !== "committed") throw new Error(`budget record refused: ${JSON.stringify(receipt.result)}`);
+        return (receipt.result ?? {}) as Record<string, unknown>;
+      },
+      cancel: () => { void this.cancel(this.currentTurn()); void this.auxiliary?.cancelAll(); },
+    });
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, model: options.model,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
@@ -411,6 +427,14 @@ export class HostSession {
     if (!localModels) {
       restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
         { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+    }
+    const restricted = models.getProvider(route.id);
+    if (!restricted) throw new Error("budget: bound provider is unavailable");
+    if ((options.capabilities?.catalog ?? 0) >= 7) {
+      models.registerNativeProvider({ ...restricted,
+        stream: host.budget.wrap(restricted.stream.bind(restricted)),
+        streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted)),
+      });
     }
     host.auxiliaryModels = models;
     const thinkingLevel = options.effort && THINKING.has(options.effort)
@@ -699,6 +723,7 @@ export class HostSession {
       bind_nonce_sha256: sha256Hex(bindNonce),
     });
     this.boundSessionId = sessionId;
+    if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     return receipt;
   }
@@ -790,6 +815,7 @@ export class HostSession {
       jobs: this.jobs?.state() ?? null,
       checkpoints: this.checkpoints !== undefined,
       auxiliary: this.auxiliary?.state() ?? null,
+      budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : { unavailable: "legacy generation predates budget accounting" },
       guidance: {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],

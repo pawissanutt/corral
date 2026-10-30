@@ -2,6 +2,7 @@
 //! modules integration-seams declares for the rest: `worker` (worker-role), `reviewer`
 //! (reviewer-role) and `pm` (pm-role). `call.rs` routes every op to one of them.
 mod auxiliary;
+mod budget;
 mod event;
 mod hello;
 pub(crate) mod jobs;

@@ -5,6 +5,7 @@
 
 mod auxiliary;
 mod browser;
+mod budget;
 mod capabilities;
 mod jobs;
 mod live;
@@ -23,6 +24,7 @@ mod usage;
 
 pub use auxiliary::{ExploreSettings, OracleSettings};
 pub use browser::canonical_origin;
+pub use budget::*;
 pub use capabilities::*;
 pub use jobs::*;
 pub use live::*;
