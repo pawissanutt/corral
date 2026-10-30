@@ -305,7 +305,13 @@ fn record_receipt(
     identity(receipt.version, &receipt.id)?;
     let written = ctx.store.try_update(id, |t| {
         let own = t.id.clone();
-        let run = live_run(t, &receipt.run)?;
+        let finished_decision = matches!(target, ResumeTarget::Decision(_))
+            && t.current_run().is_some_and(|r| r.id == receipt.run && r.outcome.is_some());
+        let run = if finished_decision {
+            t.current_run_mut().context("run disappeared")?
+        } else {
+            live_run(t, &receipt.run)?
+        };
         let parked = run.parked_on(&own);
         let existing = run.obligations.waits.iter().filter_map(|w| w.receipt.as_ref())
             .chain(run.obligations.decisions.iter().filter_map(|d| d.receipt.as_ref()))
@@ -336,12 +342,16 @@ fn record_receipt(
         *observation = receipt_observation(receipt, now);
         *slot = Some(receipt.clone());
         run.obligations.settle_parking(&parked, &own, now);
-        if let Some(pending) = run.obligations.pending_decision() {
-            run.blocked_excerpt = Some(format!("{}\nAction: {}", pending.request.question, pending.request.requested_action));
-            t.status = Status::NeedsMe;
-        } else if t.status == Status::NeedsMe {
-            t.status = Status::Running;
-            let run = t.current_run_mut().context("run disappeared")?;
+        if !finished_decision {
+            if let Some(pending) = run.obligations.pending_decision() {
+                run.blocked_excerpt = Some(format!("{}\nAction: {}", pending.request.question, pending.request.requested_action));
+                t.status = Status::NeedsMe;
+            } else if t.status == Status::NeedsMe {
+                t.status = Status::Running;
+                let run = t.current_run_mut().context("run disappeared")?;
+                run.blocked_excerpt = None;
+            }
+        } else if run.obligations.pending_decision().is_none() {
             run.blocked_excerpt = None;
         }
         Ok(true)
@@ -355,7 +365,9 @@ fn record_receipt(
             json!({"run":receipt.run,"receipt":receipt.id,"outcome":receipt.outcome,"delivery":receipt.delivery,
                 "decision":match target { ResumeTarget::Decision(decision) => Some(decision), ResumeTarget::Wait(_) => None }}),
         )?;
-        crate::parked::reacquire(ctx, &task.id)?;
+        if task.current_run().is_some_and(|run| run.outcome.is_none()) {
+            crate::parked::reacquire(ctx, &task.id)?;
+        }
     }
     Ok((ctx.store.get(id)?, recorded))
 }

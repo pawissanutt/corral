@@ -71,6 +71,93 @@ fn fixture() -> (tempfile::TempDir, Ctx, String) {
 }
 
 #[test]
+fn finished_run_answer_clears_question_and_allows_gate() {
+    use corral_core::{ReceiptOutcome, ResumeDelivery, ResumeReceipt, RunOutcome};
+    use corral_ops::{ResumeTarget, resume_run};
+    let (_tmp, mut ctx, id) = fixture();
+    ctx.store.config.review.gate = Some(vec!["cargo test".into()]);
+    ctx.store.config.projects.insert(
+        "app".into(),
+        serde_json::from_value(json!({"path":"."})).unwrap(),
+    );
+    ctx.store.save_config().unwrap();
+    ctx.store
+        .update(&id, |task| {
+            task.project = Some("app".into());
+            Ok(())
+        })
+        .unwrap();
+    let preview = ctx
+        .store
+        .preview_operating_policy(&corral_core::OperatingSelection {
+            tasks: [id.clone()].into(),
+            authority: corral_core::OperatingAuthority {
+                dispatch: true,
+                accept: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+    ctx.store.config = ctx
+        .store
+        .confirm_operating_policy(
+            &preview,
+            "fixture owner",
+            "2026-10-29T08:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+    let at = "2026-10-15T12:00:00Z".parse().unwrap();
+    ctx.store
+        .update(&id, |t| {
+            let run = t.current_run_mut().unwrap();
+            run.outcome = Some(RunOutcome::Done);
+            run.obligations.decisions.push(DecisionRecord {
+                request: DecisionRequest {
+                    version: 1,
+                    id: "Q1".into(),
+                    run: "R1".into(),
+                    question: "A or B?".into(),
+                    requested_action: "Choose".into(),
+                    owner: "owner".into(),
+                    source: ObligationSource::Worker,
+                    deadline: None,
+                },
+                registered_at: at,
+                observation: WaitObservation {
+                    at,
+                    state: WaitState::Pending,
+                    detail: String::new(),
+                },
+                receipt: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(pm_next(&ctx).unwrap().kind, PmActionKind::Question);
+    let answer = ResumeReceipt {
+        version: 1,
+        id: "answer-1".into(),
+        run: "R1".into(),
+        outcome: ReceiptOutcome::Answered,
+        delivery: ResumeDelivery::Acknowledged,
+        observed_at: at,
+        answer: Some("A".into()),
+        data: json!({}),
+    };
+    let task = resume_run(&ctx, &id, ResumeTarget::Decision("Q1"), answer.clone(), at).unwrap();
+    assert_eq!(task.status, Status::Review);
+    assert_eq!(task.runs.len(), 1);
+    assert_eq!(
+        task.current_run().unwrap().obligations.decisions[0].receipt,
+        Some(answer.clone())
+    );
+    resume_run(&ctx, &id, ResumeTarget::Decision("Q1"), answer, at).unwrap();
+    let card = pm_next(&ctx).unwrap();
+    assert_eq!(card.kind, PmActionKind::Gate, "{card:#?}");
+}
+
+#[test]
 fn pending_question_outranks_working_and_readback_is_side_effect_free() {
     // Given a working run with an exact pending harness decision.
     let (tmp, ctx, id) = fixture();
