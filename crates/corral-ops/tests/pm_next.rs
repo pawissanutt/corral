@@ -29,7 +29,7 @@ fn git(root: &Path, args: &[&str]) -> String {
 fn fixture() -> (tempfile::TempDir, Ctx, String) {
     let tmp = tempfile::tempdir().unwrap();
     git(tmp.path(), &["init", "-q", "-b", "main"]);
-    std::fs::write(tmp.path().join(".gitignore"), ".corral/\n").unwrap();
+    std::fs::write(tmp.path().join(".gitignore"), ".corral/\n/.evidence/\n").unwrap();
     git(tmp.path(), &["add", ".gitignore"]);
     git(
         tmp.path(),
