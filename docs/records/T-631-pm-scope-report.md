@@ -35,6 +35,13 @@ include the owner preview and confirmation commands.
   assertions in PM-policy integration tests. These now assert workspace binding,
   authenticate with its empty project identity, and prove an actual PM launch with
   three approved projects succeeds; missing assets and missing approval still refuse.
+- Private-server `bun test test/cross-lane.test.ts` and `bun run typecheck`: passed.
+  The third gate passed 344 Rust tests but found the worker-interactive startup race
+  also reported on T-627's landing gate. Q1 authorized a separate deterministic fix:
+  the disposable fixture host writes a readiness file immediately after its actual
+  `markAttached("interactive")`; the test uses a bounded fs.watch barrier before its
+  single state probe. Hello remains before terminal attachment, as documented. No
+  production startup changes, sleeps, assertion retries or weakened assertions.
 - `git diff --check`: passed.
 
 The red log was obtained by temporarily restoring the old single-project refusal,
