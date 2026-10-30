@@ -4,6 +4,7 @@
 pub mod agent;
 mod aggregate;
 pub mod artifact;
+pub mod assistant;
 pub mod attention;
 pub mod attribution;
 pub mod availability;

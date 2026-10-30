@@ -86,7 +86,10 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             state.todo = Some(progress);
             Ok(commit)
         }),
-        AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => {
+        AgentRole::Reviewer
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => {
             Err(Rejection::new(RejectCode::OpNotAllowed, "todo belongs to worker and PM").into())
         }
     }

@@ -141,6 +141,7 @@ impl Bootstrap {
                     .context("the bootstrap names no review")?,
             },
             AgentRole::Pm => Recipient::Pm,
+            AgentRole::Assistant => anyhow::bail!("assistant launch is not available yet"),
         })
     }
 }

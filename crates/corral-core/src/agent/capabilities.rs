@@ -92,7 +92,9 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "lessons",
         summary: "project lessons in the dispatch prompt",
-        defaults: |role| (role != AgentRole::Pm).then_some([true, true, true]),
+        defaults: |role| {
+            (!matches!(role, AgentRole::Pm | AgentRole::Assistant)).then_some([true, true, true])
+        },
         host: false,
         settings: None,
     },
@@ -177,9 +179,10 @@ pub const CATALOG: &[CapabilityDef] = &[
         key: "subagents",
         summary: "bounded read-only explore children",
         defaults: |role| match role {
-            AgentRole::Worker | AgentRole::Planner | AgentRole::PlanReviewer => {
-                Some([false, true, true])
-            }
+            AgentRole::Worker
+            | AgentRole::Assistant
+            | AgentRole::Planner
+            | AgentRole::PlanReviewer => Some([false, true, true]),
             AgentRole::Reviewer => Some([false, false, true]),
             AgentRole::Pm => None,
         },
@@ -196,7 +199,9 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "checkpoints",
         summary: "worker turn checkpoints for owner rewinds",
-        defaults: |role| (role == AgentRole::Worker).then_some([false, false, true]),
+        defaults: |role| {
+            matches!(role, AgentRole::Worker | AgentRole::Assistant).then_some([false, false, true])
+        },
         host: true,
         settings: None,
     },
@@ -204,21 +209,23 @@ pub const CATALOG: &[CapabilityDef] = &[
 
 fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker => Some([false, false, true]),
+        AgentRole::Worker | AgentRole::Assistant => Some([false, false, true]),
         AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 
 fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Reviewer => Some([false, false, true]),
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Assistant => {
+            Some([false, false, true])
+        }
         AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 
 fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker => Some([false, true, true]),
+        AgentRole::Worker | AgentRole::Assistant => Some([false, true, true]),
         AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
@@ -233,7 +240,8 @@ fn mcp_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::Reviewer
         | AgentRole::Pm
         | AgentRole::Planner
-        | AgentRole::PlanReviewer => Some([false, true, true]),
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => Some([false, true, true]),
     }
 }
 
@@ -243,7 +251,8 @@ fn llama_cpp_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::Reviewer
         | AgentRole::Pm
         | AgentRole::Planner
-        | AgentRole::PlanReviewer => Some([false; 3]),
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => Some([false; 3]),
     }
 }
 
@@ -273,9 +282,11 @@ impl Default for LlamaCppSettings {
 
 fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => {
-            Some([false, true, true])
-        }
+        AgentRole::Worker
+        | AgentRole::Reviewer
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => Some([false, true, true]),
         AgentRole::Pm => None,
     }
 }
@@ -339,7 +350,7 @@ pub enum McpToolAccess {
 // The exhaustive match is the role seam: a new role (T-544's assistant) must decide each entry.
 fn todo_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Pm => Some([false, true, true]),
+        AgentRole::Worker | AgentRole::Pm | AgentRole::Assistant => Some([false, true, true]),
         AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
@@ -348,7 +359,7 @@ fn todo_defaults(role: AgentRole) -> Option<[bool; 3]> {
 fn plan_role_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm => None,
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm | AgentRole::Assistant => None,
     }
 }
 

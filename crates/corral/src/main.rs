@@ -1,6 +1,7 @@
 mod agent_cmd;
 mod artifact_cmd;
 mod artifact_show;
+mod assistant_cmd;
 mod attention_cmd;
 mod automation_cmd;
 mod cmds;
@@ -68,6 +69,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Inspect and manage durable assistant sessions (no coding slot)
+    Assistant(assistant_cmd::AssistantArgs),
     /// Select Assist or explicitly confirm scoped Autopilot for this workspace
     Mode(mode_cmd::ModeArgs),
     /// Inspect and durably manage agent inbox messages without delivering them

@@ -247,6 +247,8 @@ pub struct RawCapabilities {
     pub planner: RoleCapabilities,
     #[serde(skip_serializing_if = "RoleCapabilities::is_empty")]
     pub plan_reviewer: RoleCapabilities,
+    #[serde(skip_serializing_if = "RoleCapabilities::is_empty")]
+    pub assistant: RoleCapabilities,
 }
 
 impl Default for RawCapabilities {
@@ -259,6 +261,7 @@ impl Default for RawCapabilities {
             pm: RoleCapabilities::default(),
             planner: RoleCapabilities::default(),
             plan_reviewer: RoleCapabilities::default(),
+            assistant: RoleCapabilities::default(),
         }
     }
 }
@@ -375,12 +378,13 @@ impl From<AgentCapabilities> for RawCapabilities {
     }
 }
 
-const ROLES: [AgentRole; 5] = [
+const ROLES: [AgentRole; 6] = [
     AgentRole::Worker,
     AgentRole::Reviewer,
     AgentRole::Pm,
     AgentRole::Planner,
     AgentRole::PlanReviewer,
+    AgentRole::Assistant,
 ];
 
 impl AgentCapabilities {
@@ -399,6 +403,7 @@ impl AgentCapabilities {
             AgentRole::Pm => &self.0.pm,
             AgentRole::Planner => &self.0.planner,
             AgentRole::PlanReviewer => &self.0.plan_reviewer,
+            AgentRole::Assistant => &self.0.assistant,
         }
     }
 
@@ -426,6 +431,7 @@ impl AgentCapabilities {
             AgentRole::Pm => &mut raw.pm,
             AgentRole::Planner => &mut raw.planner,
             AgentRole::PlanReviewer => &mut raw.plan_reviewer,
+            AgentRole::Assistant => &mut raw.assistant,
         });
         *self = Self::try_from(raw)?;
         Ok(())

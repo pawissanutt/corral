@@ -25,6 +25,7 @@ pub enum AgentRole {
     Planner,
     PlanReviewer,
     Pm,
+    Assistant,
 }
 
 impl AgentRole {
@@ -35,6 +36,7 @@ impl AgentRole {
             AgentRole::Planner => "planner",
             AgentRole::PlanReviewer => "plan_reviewer",
             AgentRole::Pm => "pm",
+            AgentRole::Assistant => "assistant",
         }
     }
 

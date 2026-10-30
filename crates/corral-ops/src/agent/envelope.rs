@@ -206,6 +206,8 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
             task.is_some() && run.is_some() && review.is_some() && callback.is_none()
         }
         AgentRole::Pm => task.is_none() && run.is_none() && review.is_none() && callback.is_none(),
+        // The assistant-launch member supplies its session-addressed envelope and admission.
+        AgentRole::Assistant => false,
     };
     if !shaped {
         return Err(bad(format!(
@@ -216,6 +218,7 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
                 AgentRole::Reviewer => "task, run, review and callback",
                 AgentRole::PlanReviewer => "task, plan in run, and review only",
                 AgentRole::Pm => "no task, run, review or callback",
+                AgentRole::Assistant => "assistant session admission (not available yet)",
             }
         )));
     }
@@ -229,7 +232,7 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
     let prefix = match identity.role {
         AgentRole::Planner => 'D',
         AgentRole::PlanReviewer => 'P',
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm => 'R',
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm | AgentRole::Assistant => 'R',
     };
     if let Some(run) = run
         && !run

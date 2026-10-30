@@ -356,6 +356,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         }
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),
         Cmd::Pi(args) => crate::pi_cmd::run(&start_dir(&root)?, args, &entry),
+        Cmd::Assistant(args) => crate::assistant_cmd::run(&open(&root)?, args),
         Cmd::Question(args) => crate::question_cmd::run(&open(&root)?, args),
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
         Cmd::Selection(args) => crate::selection_cmd::run(&start_dir(&root)?, args),

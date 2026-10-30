@@ -24,6 +24,20 @@ fn usage_events(store: &Store) -> Result<std::sync::Arc<Vec<Event>>> {
     store.events_shared()
 }
 
+/// Usage belongs to the assistant, never an implementation run. Reuse the shared collector
+/// over its durable generation references; no transcript or collector evidence means unknown.
+pub fn assistant_usage(
+    store: &Store,
+    session: &corral_core::assistant::AssistantSession,
+) -> Result<Option<Usage>> {
+    let container = store.get_assistant_container(&session.id)?;
+    Ok(
+        crate::agent::usage::collect_state(&container.state, None, store)
+            .ok()
+            .or_else(|| session.usage.clone()),
+    )
+}
+
 /// Refresh unfinished runs and backfill older runs. Store updates preserve concurrent edits.
 pub(crate) fn collect_missing(store: &Store, since: Option<Timestamp>) -> Result<()> {
     let events = usage_events(store)?;

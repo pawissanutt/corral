@@ -111,6 +111,7 @@ fn whatwg_ipv6(ip: std::net::Ipv6Addr) -> String {
 pub(super) fn browser_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker => Some([false, true, true]),
+        AgentRole::Assistant => Some([false, false, true]),
         AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }

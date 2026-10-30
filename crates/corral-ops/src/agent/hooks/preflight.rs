@@ -41,6 +41,7 @@ pub fn role_owner(role: AgentRole) -> &'static str {
         AgentRole::Reviewer => "reviewer-role",
         AgentRole::Planner | AgentRole::PlanReviewer => "plan-roles",
         AgentRole::Pm => "pm-role",
+        AgentRole::Assistant => "assistant-role",
     }
 }
 

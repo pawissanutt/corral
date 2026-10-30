@@ -17,6 +17,7 @@ pub enum Actor {
     Owner,
     Pm,
     Agent,
+    Assistant,
     Autopilot,
     Reviewer,
     System,

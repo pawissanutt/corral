@@ -78,6 +78,7 @@ impl Entry {
             Actor::Owner => "owner",
             Actor::Pm => "pm",
             Actor::Agent => "agent",
+            Actor::Assistant => "assistant",
             Actor::Autopilot => "autopilot",
             Actor::Reviewer => "reviewer",
             Actor::System => "system",
