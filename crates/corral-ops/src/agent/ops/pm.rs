@@ -25,7 +25,11 @@ pub(crate) fn recovery_session(
     session_dir: &mut std::path::PathBuf,
     fresh_session: &mut bool,
 ) -> Result<Option<std::path::PathBuf>> {
-    let Some(file) = file else { return Ok(None) };
+    let Some(file) = file else {
+        // No generation ever bound a file (e.g. launches that failed before hello).
+        *fresh_session = true;
+        return Ok(None);
+    };
     if std::fs::metadata(&file).is_ok_and(|meta| meta.is_file() && meta.len() > 0) {
         return Ok(Some(file));
     }
