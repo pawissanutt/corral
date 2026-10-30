@@ -186,8 +186,10 @@ provider token counts; a skill body is loaded on demand, not all charged at star
 | Planner | not runnable | not runnable |
 | Plan reviewer | not runnable | not runnable |
 
-PL/PR have no installed native role module in this checkpoint; absent costs are null, not
-zero-cost successes. Actual owner home skills and configured resources would change these
+This historical capture used source commit `90ab4219` on base `d0ea9d24`, before native
+PL/PR modules landed. Absent planning costs are null, not zero-cost successes. The candidate
+was subsequently rebased onto newer main, preserving its planning/question-hold changes;
+that does not retroactively expand the measured cohort or authorize new inference. Actual owner home skills and configured resources would change these
 numbers. The role matrix resolves settings in Rust; this fixed early subset is a test control,
 not a second production default resolver.
 
