@@ -361,7 +361,9 @@ gets no message; the outcome stays in the item. The
 
 `corral pi --task T-42` opens a new assistant with a preloaded task brief of at most
 24 KiB: spec, latest plan summary, runs and their results and recorded costs, latest
-review notes, questions and artifact refs. Each section has a budget; omitted text is
+review notes, effective pending questions from worker, reviewer and planning containers,
+run obligations and artifact refs. Answered, withdrawn, expired and closed-container questions
+are omitted. Each section has a budget; omitted text is
 marked `[truncated]`. Use `corral show`, plan and artifact readbacks for the rest.
 The session records its task focus; resume refreshes the brief. `--task` cannot be
 combined with `--bare`, `--pm` or `--resume`. Focus grants no task authority and consumes
