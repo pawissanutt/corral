@@ -26,6 +26,8 @@ mod action_budget_growth;
 mod action_budget_hot;
 #[path = "../tests/support/action_budget_prompts.rs"]
 mod action_budget_prompts;
+#[path = "../tests/support/action_budget_trace.rs"]
+mod action_budget_trace;
 #[path = "../tests/support/action_heads.rs"]
 mod action_heads;
 #[path = "../tests/support/submission_aggregate.rs"]
