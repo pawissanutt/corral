@@ -6,7 +6,7 @@ use corral_core::{
 };
 use jiff::Timestamp;
 
-use super::{Neighborhood, aggregate, plan, ready, row};
+use super::{Neighborhood, Phases, aggregate, plan, ready, row};
 
 pub(super) fn parked(
     task: &(impl TaskFieldsRef + ?Sized),
@@ -113,6 +113,7 @@ pub(super) fn conditions_with_runs(
         return;
     }
     runs(out);
+    let phases = Phases::full(task);
     if let Some(infra) = &task.infra_wait {
         let held = infra.held_at.is_some();
         let mut condition = row(
@@ -176,15 +177,15 @@ pub(super) fn conditions_with_runs(
             out.push(condition);
         }
     }
-    if plan(task, n, now, assessment) {
+    if plan(task, &phases, n, now, assessment) {
         return;
     }
-    if aggregate(task, n, now, assessment) {
+    if aggregate(task, &phases, n, now, assessment) {
         return;
     }
     if let Some(launch) = &task.launch {
         if let Some(error) = &launch.error {
-            let run = task.current_run();
+            let run = phases.run.as_ref();
             let mut condition = row(
                 task,
                 now,
@@ -210,7 +211,9 @@ pub(super) fn conditions_with_runs(
         if launch.reserved {
             assessment.progress = Some(progress(
                 "launcher",
-                task.current_run()
+                phases
+                    .run
+                    .as_ref()
                     .map(|run| run.started)
                     .or(task.status_since),
                 format!("Launch reservation {:?}", launch.stage),
@@ -220,10 +223,10 @@ pub(super) fn conditions_with_runs(
         }
     }
     match task.status {
-        Status::Ready | Status::Backlog => ready(task, n, now, assessment),
+        Status::Ready | Status::Backlog => ready(task, &phases, n, now, assessment),
         Status::Running | Status::NeedsMe => {
-            if let Some(run) = task.current_run().filter(|run| run.outcome.is_none())
-                && !(lost(run) && (n.inventory_known || task.status == Status::NeedsMe))
+            if let Some(run) = phases.run.as_ref().filter(|run| run.outcome.is_none())
+                && !(run.lost && (n.inventory_known || task.status == Status::NeedsMe))
                 && !run.idle_no_report
             {
                 assessment.progress = Some(progress(
@@ -259,7 +262,7 @@ pub(super) fn conditions_with_runs(
                 }
             }
         }
-        Status::Review => review(task, n, now, assessment),
+        Status::Review => review(task, &phases, n, now, assessment),
         Status::Idea | Status::Done | Status::Dropped => {}
     }
 }
@@ -471,8 +474,8 @@ pub(super) fn authority(
     Some(condition)
 }
 
-fn review(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
-    let Some(run) = task.current_run() else {
+fn review(task: &Task, phases: &Phases, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
+    let Some(run) = phases.run.as_ref() else {
         return;
     };
     if run.outcome.is_none() {
@@ -529,17 +532,11 @@ fn review(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment)
         ));
         return;
     }
-    if let Some(reviewer) = run
-        .review_runs
-        .iter()
-        .rev()
-        .find(|reviewer| reviewer.outcome.is_none() && reviewer.ended.is_none())
-        .filter(|_| {
-            run.review
-                .as_ref()
-                .is_some_and(|review| review.verdict.is_none() && !review.process_lost)
-        })
-    {
+    if let Some(reviewer) = run.latest_reviewer.as_ref().filter(|_| {
+        run.review
+            .as_ref()
+            .is_some_and(|review| review.verdict.is_none() && !review.process_lost)
+    }) {
         a.progress = Some(progress(
             "reviewer",
             Some(reviewer.started),

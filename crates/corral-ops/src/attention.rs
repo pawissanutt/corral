@@ -33,6 +33,8 @@ mod handling;
 mod heads_tests;
 pub mod metrics;
 mod outbox;
+mod phase_inputs;
+use phase_inputs::Phases;
 mod recipients;
 use recipients::recipients;
 mod stopping;
@@ -323,7 +325,7 @@ pub(super) fn row(
     }
 }
 
-fn ready(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
+fn ready(task: &Task, phases: &Phases, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) {
     let mut waits = Vec::new();
     if n.config.dispatch.paused || n.policy.paused {
         let mut condition = wait(
@@ -419,7 +421,7 @@ fn ready(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) 
         ));
         waits.push(condition);
     }
-    let credit = usize::from(task.holds_dispatch_slot());
+    let credit = usize::from(phases.dispatch_credit);
     let usage = n.slots.saturating_sub(credit);
     let project_usage = n
         .project_slots
@@ -464,12 +466,18 @@ fn ready(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) 
     a.conditions.extend(waits);
 }
 
-fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -> bool {
-    if task.current_run().is_some_and(|run| run.outcome.is_none()) {
+fn plan(
+    task: &Task,
+    phases: &Phases,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) -> bool {
+    if phases.run.as_ref().is_some_and(|run| run.outcome.is_none()) {
         return false;
     }
-    let run = task.plan_runs.last();
-    if let Some(run) = run.filter(|run| run.holds_slot()) {
+    let run = phases.planning.as_ref();
+    if let Some(run) = run.filter(|run| run.holds_slot) {
         a.progress = Some(progress(
             "planner",
             Some(run.started),
@@ -485,13 +493,13 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
                 | PlanRunState::Escalated
                 | PlanRunState::Cancelled
                 | PlanRunState::AwaitingOwner
-        ) && stopping::planner_owns_stop(task, run)
+        ) && stopping::planner_owns_stop(phases.plan.as_ref(), run)
     }) {
         let awaiting = run.state == PlanRunState::AwaitingOwner;
-        let since = task
-            .plans
-            .last()
-            .and_then(|plan| plan.reviews.last())
+        let since = phases
+            .plan
+            .as_ref()
+            .and_then(|plan| plan.current_review.as_ref())
             .map(|review| review.at)
             .or(run.ended);
         let mut condition = row(
@@ -514,7 +522,7 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
         a.conditions.push(condition);
         return true;
     }
-    let Some(plan) = task.plans.last() else {
+    let Some(plan) = phases.plan.as_ref() else {
         return false;
     };
     if let Some(approval) = &plan.approval {
@@ -534,8 +542,8 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
         return false;
     }
     if plan
-        .reviews
-        .last()
+        .current_review
+        .as_ref()
         .is_none_or(|review| review.verdict.is_none() && review.herdr.is_none())
         && n.review_slots >= n.config.limits.review
     {
@@ -548,9 +556,9 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
             (
                 None,
                 Some(
-                    plan.reviews
-                        .last()
-                        .map_or(plan.artifact.added, |review| review.at),
+                    plan.current_review
+                        .as_ref()
+                        .map_or(plan.added, |review| review.at),
                 ),
             ),
             "Waiting for a plan-review slot".into(),
@@ -561,7 +569,7 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
         a.conditions.push(condition);
         return true;
     }
-    if let Some(review) = plan.reviews.last() {
+    if let Some(review) = plan.current_review.as_ref() {
         match review.verdict {
             None if review.herdr.is_some() => {
                 a.progress = Some(progress(
@@ -626,7 +634,7 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
     } else {
         a.progress = Some(progress(
             "plan_pilot",
-            Some(plan.artifact.added),
+            Some(plan.added),
             "Independent plan review is pending".into(),
             "recorded",
         ));
@@ -634,7 +642,13 @@ fn plan(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -
     true
 }
 
-fn aggregate(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessment) -> bool {
+fn aggregate(
+    task: &Task,
+    phases: &Phases,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    a: &mut Assessment,
+) -> bool {
     if !task.tracker {
         return false;
     }
@@ -669,7 +683,7 @@ fn aggregate(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessme
         a.conditions.push(condition);
         return true;
     }
-    if let Some(attempt) = task.aggregate_attempts.last() {
+    if let Some(attempt) = phases.aggregate.as_ref() {
         if let Some(gate) = attempt.gate.as_ref().filter(|gate| gate.holds_slot()) {
             a.progress = Some(progress(
                 "aggregate_gate",
@@ -677,7 +691,11 @@ fn aggregate(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessme
                 "Aggregate gate is running".into(),
                 "recorded",
             ));
-        } else if let Some(review) = attempt.reviews.last().filter(|review| review.pending()) {
+        } else if let Some(review) = attempt
+            .current_review
+            .as_ref()
+            .filter(|review| review.pending())
+        {
             a.progress = Some(progress(
                 "aggregate_reviewer",
                 Some(review.requested),
@@ -686,8 +704,8 @@ fn aggregate(task: &Task, n: &Neighborhood<'_>, now: Timestamp, a: &mut Assessme
             ));
         } else {
             let since = attempt
-                .reviews
-                .last()
+                .current_review
+                .as_ref()
                 .and_then(|review| review.at)
                 .unwrap_or(attempt.started);
             let mut condition = row(
