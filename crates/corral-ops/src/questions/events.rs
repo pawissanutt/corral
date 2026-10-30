@@ -148,6 +148,8 @@ pub(super) fn drain(
     question: &AgentQuestion,
     entries: &[QuestionTriage],
 ) -> Result<()> {
+    // PM Q8: preserve post-commit/eviction replay; the persistent bounded redesign is T-623.
+    let _known_exception = corral_core::work::followup("T-623", "question_event_eviction");
     let parsed = QuestionKey::parse(&question.key)?;
     let logged = logged(store, parsed.task())?;
     let owed = entries.iter().filter_map(owed_entry);
@@ -156,11 +158,13 @@ pub(super) fn drain(
 
 /// Recovers every owed question event of one task; the sync hook calls it with the sweeps.
 pub fn reconcile_events(store: &Store, task_id: &str) -> Result<usize> {
+    let _known_exception = corral_core::work::followup("T-623", "question_event_replay");
     reconcile_task(store, &store.get(task_id)?, None)
 }
 
 /// Recovers the owed events of one question, after its commit or on replay.
 pub fn reconcile_question(store: &Store, key: &str) -> Result<usize> {
+    let _known_exception = corral_core::work::followup("T-623", "question_event_by_key");
     let parsed = QuestionKey::parse(key)?;
     let task = store.get(parsed.task())?;
     reconcile_task(store, &task, Some(&[key.to_string()]))

@@ -9,6 +9,8 @@ mod basis;
 mod events;
 #[cfg(test)]
 mod heads_tests;
+#[cfg(test)]
+mod known_hot_tests;
 mod lifecycle;
 #[cfg(test)]
 mod tests;
@@ -214,6 +216,21 @@ pub fn containers(task: &Task) -> Vec<ContainerRef> {
 /// questions, events and messages are final, so no sweep visits it again.
 pub(crate) fn settled(task: &Task, container: &ContainerRef) -> bool {
     agent::container_run(task, container).is_some_and(|run| run.inbox.settled.is_some())
+}
+
+pub(crate) fn settled_ref<T: TaskRef + ?Sized>(task: &T, container: &ContainerRef) -> Result<bool> {
+    if !matches!(
+        container,
+        ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. }
+    ) {
+        return Ok(false);
+    }
+    let Some(recipient) = recipient(container) else {
+        return Ok(false);
+    };
+    Ok(task
+        .inbox_head(&recipient)?
+        .is_some_and(|inbox| inbox.settled.is_some()))
 }
 
 /// Pending for readers: recorded open or escalated, not terminalized, and its container open.

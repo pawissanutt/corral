@@ -6,7 +6,7 @@ use corral_core::work::{self, Counter, HotScope};
 use corral_core::{PlanRunState, Status};
 use serde_json::json;
 
-fn questions(container: &ContainerRef, role: AgentRole, n: usize) -> Box<AgentRunState> {
+pub(super) fn questions(container: &ContainerRef, role: AgentRole, n: usize) -> Box<AgentRunState> {
     let mut state = host(role, n);
     for i in 1..=n + 1 {
         state.questions.push(serde_json::from_value(json!({"version":1,"key":format!("{}/Q{}",container.key(),if i==n+1 {9999}else {i}),"revision":1,"kind":"clarification",
