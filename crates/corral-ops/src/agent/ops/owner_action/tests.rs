@@ -15,16 +15,16 @@ use crate::assistant::owner_action::claim;
 const PANE: &str = "w1:p7";
 
 /// A-1 bound by a live stand-in host, with a stand-in corral that logs each command it runs.
-struct Session {
-    fx: Fx,
+pub(super) struct Session {
+    pub(super) fx: Fx,
     _host: HostProc,
-    bound: ts::Host,
-    id: String,
+    pub(super) bound: ts::Host,
+    pub(super) id: String,
     seq: u64,
     log: PathBuf,
 }
 
-fn session() -> Session {
+pub(super) fn session() -> Session {
     let fx = f::fixture(false, 1);
     let host = HostProc::spawn(true);
     let session = fx
@@ -75,27 +75,29 @@ impl Session {
         ts::send(&self.ts(), &input, "event")
     }
 
-    /// The host's journal entry for owner text typed into the pane, or a confirmation answer.
-    fn journal(&mut self, text: &str, command: Option<&str>) -> String {
-        let source = if command.is_some() {
+    /// The host's journal entry for owner text typed into the pane, or the owner's answer to
+    /// a confirmation of `command` shown for the tool call `call`.
+    pub(super) fn journal(&mut self, text: &str, answer: Option<(&str, &str)>) -> String {
+        let source = if answer.is_some() {
             "confirmation"
         } else {
             "pane"
         };
         let mut payload = json!({"kind": "owner_input", "source": source, "text": text,
             "sha256": paths::sha256_hex(text.as_bytes())});
-        if let Some(command) = command {
+        if let Some((command, call)) = answer {
             payload["command"] = json!(command);
+            payload["answers"] = json!(self.request(call));
         }
         let receipt = ts::committed(&self.journal_raw(payload));
         receipt.result["input"].as_str().unwrap().to_owned()
     }
 
-    fn request(&self, call: &str) -> String {
+    pub(super) fn request(&self, call: &str) -> String {
         tool_request_id(f::SESSION, call)
     }
 
-    fn act(&self, call: &str, payload: &Value) -> CallResponse {
+    pub(super) fn act(&self, call: &str, payload: &Value) -> CallResponse {
         let input = ts::envelope(
             &self.bound,
             "owner_action",
@@ -107,7 +109,7 @@ impl Session {
     }
 
     /// Every command the stand-in corral ran: `<CORRAL_OWNER_ACTION>|<argv>`.
-    fn runs(&self) -> Vec<String> {
+    pub(super) fn runs(&self) -> Vec<String> {
         std::fs::read_to_string(&self.log)
             .unwrap_or_default()
             .lines()
@@ -115,7 +117,7 @@ impl Session {
             .collect()
     }
 
-    fn task(&self, status: Status) -> String {
+    pub(super) fn task(&self, status: Status) -> String {
         self.fx
             .ctx
             .store
@@ -124,7 +126,7 @@ impl Session {
             .id
     }
 
-    fn stored(&self, call: &str) -> Option<RequestReceipt> {
+    pub(super) fn stored(&self, call: &str) -> Option<RequestReceipt> {
         let state = self
             .fx
             .ctx
@@ -160,21 +162,21 @@ impl Session {
     }
 }
 
-fn executor_of(process: &HostProc) -> Executor {
+pub(super) fn executor_of(process: &HostProc) -> Executor {
     Executor {
         pid: process.pid(),
         start_time: process.start_time(),
     }
 }
 
-fn dead_process() -> Executor {
+pub(super) fn dead_process() -> Executor {
     let mut process = HostProc::spawn(false);
     let executor = executor_of(&process);
     process.kill();
     executor
 }
 
-fn receipt(response: &CallResponse) -> (RequestReceipt, bool) {
+pub(super) fn receipt(response: &CallResponse) -> (RequestReceipt, bool) {
     match response {
         CallResponse::Receipt { receipt, replayed } => (receipt.clone(), *replayed),
         other => panic!("expected a receipt, got {other:?}"),
@@ -224,7 +226,7 @@ fn synthetic_inputs_never_authorize_an_owner_action() {
     let mut s = session();
     let task = s.task(Status::Review);
     s.journal("hello", None);
-    let answer = s.journal("y", Some(&format!("corral discard {task}")));
+    let answer = s.journal("y", Some((&format!("corral discard {task}"), "x")));
     // When the model cites a corral wake, a PM outcome notice, a recovery notice, an input the
     // host never journaled, or the confirmation itself as the owner's instruction.
     for (call, cited) in [
@@ -241,7 +243,8 @@ fn synthetic_inputs_never_authorize_an_owner_action() {
         assert!(s.stored(call).is_none(), "{call}");
     }
     assert!(s.runs().is_empty());
-    // And a journal entry must carry the digest of its text; a confirmation names its command.
+    // And a journal entry must carry the digest of its text; a confirmation names its command
+    // and the request it answers.
     let forged = s.journal_raw(
         json!({"kind": "owner_input", "source": "pane", "text": "do it",
         "sha256": "0".repeat(64)}),
@@ -252,6 +255,11 @@ fn synthetic_inputs_never_authorize_an_owner_action() {
         "sha256": paths::sha256_hex(b"y")}),
     );
     assert_eq!(ts::code(&bare), Some("bad_request"));
+    let unbound = s.journal_raw(
+        json!({"kind": "owner_input", "source": "confirmation", "text": "y",
+        "sha256": paths::sha256_hex(b"y"), "command": "corral mode assist"}),
+    );
+    assert_eq!(ts::code(&unbound), Some("bad_request"));
 }
 
 #[test]
@@ -295,43 +303,54 @@ fn every_confirm_class_kind_waits_for_the_owner_and_runs_only_on_yes() {
         payload["input"] = json!(s.journal(&format!("please {name}"), None));
         // When the model calls it without the owner's answer, it waits: the refusal names the
         // command the host shows, and nothing runs or is stored.
-        let asked = s.act(&format!("{name}-ask"), &payload);
+        let no = format!("{name}-no");
+        let asked = s.act(&no, &payload);
         assert_eq!(ts::code(&asked), Some("confirmation_required"), "{name}");
         assert_eq!(rejected_detail(&asked)["command"], command, "{name}");
-        assert!(s.stored(&format!("{name}-ask")).is_none());
-        // When the owner answers N, a declined receipt is recorded and nothing runs.
-        let mut no = payload.clone();
-        no["confirmation"] = json!(s.journal("n", Some(&command)));
-        let (declined, _) = receipt(&s.act(&format!("{name}-no"), &no));
+        assert!(s.stored(&no).is_none());
+        let before = s.runs().len();
+        // When the owner answers N for this call and the host resends the identical call, a
+        // declined receipt is recorded, nothing runs, and replaying the call returns it.
+        s.journal("n", Some((&command, &no)));
+        let (declined, _) = receipt(&s.act(&no, &payload));
         assert_eq!(declined.state, ReceiptState::Committed, "{name}");
         assert_eq!(declined.result["outcome"], "declined", "{name}");
-        assert!(
-            s.runs()
-                .iter()
-                .all(|run| !run.contains(&format!("{name}-yes")))
+        let (again, replayed) = receipt(&s.act(&no, &payload));
+        assert!(replayed && again == declined, "{name}");
+        assert_eq!(s.runs().len(), before, "{name}");
+        // When the owner answers y, the command runs exactly once, and a replay of the identical
+        // call returns that receipt without another question or effect.
+        let yes = format!("{name}-yes");
+        assert_eq!(
+            ts::code(&s.act(&yes, &payload)),
+            Some("confirmation_required")
         );
-        let before = s.runs().len();
-        // When the owner answers y, the command runs exactly once, and a replay runs nothing.
-        let mut yes = payload.clone();
-        yes["confirmation"] = json!(s.journal("y", Some(&command)));
-        let (ran, _) = receipt(&s.act(&format!("{name}-yes"), &yes));
+        s.journal("y", Some((&command, &yes)));
+        let (ran, _) = receipt(&s.act(&yes, &payload));
         assert_eq!(ran.result["outcome"], "executed", "{name}: {ran:?}");
         assert_eq!(ran.result["confirmed"], true, "{name}");
         assert_eq!(ran.result["command"], command, "{name}");
-        receipt(&s.act(&format!("{name}-yes"), &yes));
+        let (replay, replayed) = receipt(&s.act(&yes, &payload));
+        assert!(replayed && replay == ran, "{name}");
         let runs = s.runs();
         assert_eq!(runs.len(), before + 1, "{name}");
         assert!(
             runs[before].ends_with(&command.replacen("corral ", "|", 1)),
             "{name}: {runs:?}"
         );
-        // And an answer cannot be reused or shown for another command.
-        let reused = s.act(&format!("{name}-again"), &yes);
-        assert_eq!(ts::code(&reused), Some("bad_request"), "{name}");
-        let mut other = payload.clone();
-        other["confirmation"] = json!(s.journal("y", Some("corral config set x 1")));
-        let mismatch = s.act(&format!("{name}-other"), &other);
-        assert_eq!(ts::code(&mismatch), Some("not_owner_input"), "{name}");
+        // And an answer binds one call and one command: another call, or an answer shown for
+        // another command, still waits for the owner.
+        let other = format!("{name}-other");
+        assert_eq!(
+            ts::code(&s.act(&other, &payload)),
+            Some("confirmation_required")
+        );
+        s.journal("y", Some(("corral config set x 1", &other)));
+        assert_eq!(
+            ts::code(&s.act(&other, &payload)),
+            Some("confirmation_required")
+        );
+        assert_eq!(s.runs().len(), before + 1, "{name}");
     }
 }
 
@@ -429,53 +448,23 @@ fn a_target_held_by_autopilot_refuses_conflict_in_flight_naming_the_lock() {
     assert_eq!(s.runs().len(), 1);
 }
 
-#[test]
-fn crashes_leave_each_receipt_executed_or_not_executed_never_guessed() {
-    let mut s = session();
-    let task = s.task(Status::Review);
-    let input = s.journal("drop it", None);
-    let command = format!("corral discard {task}");
-    // A crash between the owner's confirmation and the call: no reservation, so nothing ran.
-    s.journal("y", Some(&command));
-    assert!(s.stored("lost").is_none());
-    assert_eq!(
-        classify_corral("owner_action", None, false).0,
-        corral_core::agent::ResumeClass::NotExecuted
-    );
-    // An executor that died after its reservation and before any command: replay settles it
-    // not executed and runs nothing.
-    let approve = json!({"kind": "approve", "target": task, "input": input});
-    s.reserve("early", &approve, &dead_process());
-    let (early, replayed) = receipt(&s.act("early", &approve));
-    assert!(replayed);
-    assert_eq!(early.state, ReceiptState::Abandoned, "{early:?}");
-    assert_eq!(early.result["outcome"], "not_executed");
-    // While an executor still runs, a replay reports the reservation and runs nothing.
-    let live = HostProc::spawn(false);
-    s.reserve("running", &approve, &executor_of(&live));
-    let (running, _) = receipt(&s.act("running", &approve));
-    assert_eq!(running.state, ReceiptState::Reserved);
-    // A command child that claimed its reservation, then died with its executor: the event log
-    // decides. Its approved event names the request, so the receipt settles executed.
+/// A claimed reservation whose executor and command child both died: `finish` (when given)
+/// ran first, as the child would after its command returned.
+fn claimed_then_dead(
+    s: &Session,
+    call: &str,
+    payload: &Value,
+    argv: &[String],
+    finish: Option<Option<&str>>,
+) -> String {
     let mut executor = HostProc::spawn(false);
-    let request = s.reserve("late", &approve, &executor_of(&executor));
+    let request = s.reserve(call, payload, &executor_of(&executor));
     let value = format!("{}:{request}", s.id);
-    let argv = ["approve".to_owned(), task.clone()];
     let store = &s.fx.ctx.store;
-    assert!(claim(store, &value, &["approve".into()], executor.pid()).is_err());
-    assert!(
-        claim(store, &value, &argv, std::process::id())
-            .unwrap()
-            .is_none()
-    );
-    let via = claim(store, &value, &argv, executor.pid())
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        (via.input.as_str(), via.owner_message.as_str()),
-        (input.as_str(), "drop it")
-    );
-    assert!(claim(store, &value, &argv, executor.pid()).is_err());
+    let via = claim(store, &value, argv, executor.pid()).unwrap().unwrap();
+    if let Some(error) = finish {
+        crate::assistant::owner_action::finish_in(store, &via, error).unwrap();
+    }
     let dead = dead_process();
     store
         .settle_assistant_container(&s.id, |assistant, _| {
@@ -490,6 +479,101 @@ fn crashes_leave_each_receipt_executed_or_not_executed_never_guessed() {
         })
         .unwrap();
     executor.kill();
+    request
+}
+
+#[test]
+fn crashes_settle_from_completion_records_or_target_state_never_from_events() {
+    let mut s = session();
+    let task = s.task(Status::Review);
+    let input = s.journal("land it", None);
+    let approve = json!({"kind": "approve", "target": task, "input": input});
+    let argv = ["approve".to_owned(), task.clone()];
+    // A crash between the owner's answer and the call: no reservation, so nothing ran.
+    assert!(s.stored("lost").is_none());
+    assert_eq!(
+        classify_corral("owner_action", None, false).0,
+        corral_core::agent::ResumeClass::NotExecuted
+    );
+    // An executor that died after its reservation and before any command: not executed.
+    s.reserve("early", &approve, &dead_process());
+    let (early, replayed) = receipt(&s.act("early", &approve));
+    assert!(replayed);
+    assert_eq!(early.state, ReceiptState::Abandoned, "{early:?}");
+    assert_eq!(early.result["outcome"], "not_executed");
+    // While an executor still runs, a replay reports the reservation and runs nothing.
+    let live = HostProc::spawn(false);
+    s.reserve("running", &approve, &executor_of(&live));
+    let (running, _) = receipt(&s.act("running", &approve));
+    assert_eq!(running.state, ReceiptState::Reserved);
+    // The claim refuses a different command, ignores another parent and runs once.
+    let mut executor = HostProc::spawn(false);
+    let request = s.reserve("claim", &approve, &executor_of(&executor));
+    let value = format!("{}:{request}", s.id);
+    let store = &s.fx.ctx.store;
+    assert!(claim(store, &value, &["approve".into()], executor.pid()).is_err());
+    assert!(
+        claim(store, &value, &argv, std::process::id())
+            .unwrap()
+            .is_none()
+    );
+    let via = claim(store, &value, &argv, executor.pid())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (via.input.as_str(), via.owner_message.as_str()),
+        (input.as_str(), "land it")
+    );
+    assert!(claim(store, &value, &argv, executor.pid()).is_err());
+    executor.kill();
+    // A child that died after preparation and failure events naming its request, with no
+    // completion record: those events prove nothing, so the receipt is uncertain, not success.
+    let request = claimed_then_dead(&s, "prepared", &approve, &argv, None);
+    for kind in [
+        "candidate_rebased",
+        "verdict_carried",
+        "landing_stale",
+        "approved",
+    ] {
+        store
+            .log_event(
+                Some(&task),
+                kind,
+                json!({"owner_authority": {"request": request}}),
+            )
+            .unwrap();
+    }
+    let (prepared, _) = receipt(&s.act("prepared", &approve));
+    assert_eq!(prepared.state, ReceiptState::Uncertain, "{prepared:?}");
+    assert_eq!(prepared.result["outcome"], "outcome_unknown");
+    // A child that recorded its command's success, or its failure, settles from that record.
+    claimed_then_dead(&s, "recorded", &approve, &argv, Some(None));
+    let (recorded, _) = receipt(&s.act("recorded", &approve));
+    assert_eq!(recorded.state, ReceiptState::Committed, "{recorded:?}");
+    assert_eq!(
+        (&recorded.result["outcome"], &recorded.result["reconciled"]),
+        (&json!("executed"), &json!("completion_record"))
+    );
+    let failure = "landing_stale: the base moved; rebase and run the gate once";
+    claimed_then_dead(&s, "failed", &approve, &argv, Some(Some(failure)));
+    let (failed, _) = receipt(&s.act("failed", &approve));
+    assert_eq!(failed.state, ReceiptState::Rejected, "{failed:?}");
+    assert_eq!(
+        (
+            failed.result["outcome"].as_str(),
+            failed.result["reason"].as_str()
+        ),
+        (Some("refused"), Some(failure))
+    );
+    // Without a record, only a verified terminal state counts: the task Done and its approved
+    // event carrying this request.
+    let request = claimed_then_dead(&s, "landed", &approve, &argv, None);
+    store
+        .update(&task, |task| {
+            task.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
     store
         .log_event(
             Some(&task),
@@ -497,37 +581,8 @@ fn crashes_leave_each_receipt_executed_or_not_executed_never_guessed() {
             json!({"owner_authority": {"request": request}}),
         )
         .unwrap();
-    let (late, _) = receipt(&s.act("late", &approve));
-    assert_eq!(late.state, ReceiptState::Committed, "{late:?}");
-    assert_eq!(
-        (
-            late.result["outcome"].clone(),
-            late.result["events"].clone()
-        ),
-        (json!("executed"), json!(["approved"]))
-    );
-    // The same crash with no event names no outcome: uncertain, reported, never re-executed.
-    let mut executor = HostProc::spawn(false);
-    let request = s.reserve("unknown", &approve, &executor_of(&executor));
-    let value = format!("{}:{request}", s.id);
-    claim(store, &value, &argv, executor.pid())
-        .unwrap()
-        .unwrap();
-    store
-        .settle_assistant_container(&s.id, |assistant, _| {
-            let stored = assistant
-                .state
-                .receipts
-                .iter_mut()
-                .find(|r| r.request_id == request)
-                .unwrap();
-            stored.evidence[0].detail = Some(format!("{} {}", dead.pid, dead.start_time));
-            Ok(())
-        })
-        .unwrap();
-    executor.kill();
-    let (unknown, _) = receipt(&s.act("unknown", &approve));
-    assert_eq!(unknown.state, ReceiptState::Uncertain, "{unknown:?}");
-    assert_eq!(unknown.result["outcome"], "outcome_unknown");
+    let (landed, _) = receipt(&s.act("landed", &approve));
+    assert_eq!(landed.state, ReceiptState::Committed, "{landed:?}");
+    assert_eq!(landed.result["reconciled"], "target_state");
     assert!(s.runs().is_empty(), "nothing re-executed: {:?}", s.runs());
 }

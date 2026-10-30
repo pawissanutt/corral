@@ -128,6 +128,9 @@ pub struct OwnerInput {
     /// Confirmations only: the exact command line the host showed the owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Confirmations only: the owner-action request (tool request ID) the answer answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers: Option<String>,
     /// The host's `event` request that journaled it.
     pub request: String,
     pub at: Timestamp,
@@ -143,12 +146,22 @@ pub struct NewOwnerInput {
     pub text: String,
     pub truncated: bool,
     pub command: Option<String>,
+    pub answers: Option<String>,
     pub request: String,
 }
 
 impl AssistantContainer {
     pub fn owner_input(&self, id: &str) -> Option<&OwnerInput> {
         self.owner_inputs.iter().find(|input| input.id == id)
+    }
+
+    /// The owner's latest journaled answer to a confirmation of `command` for `request`.
+    pub fn confirmation(&self, request: &str, command: &str) -> Option<&OwnerInput> {
+        self.owner_inputs.iter().rev().find(|input| {
+            input.source == OwnerInputSource::Confirmation
+                && input.answers.as_deref() == Some(request)
+                && input.command.as_deref() == Some(command)
+        })
     }
 
     /// Journals `input` as session `session`'s next `i<seq>` of its generation, dropping the
@@ -173,6 +186,7 @@ impl AssistantContainer {
             text: input.text,
             truncated: input.truncated,
             command: input.command,
+            answers: input.answers,
             request: input.request,
             at: Timestamp::now(),
         };

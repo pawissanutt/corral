@@ -14,7 +14,7 @@ import { GENERATION_ENV, SESSION_ENV, exportAssistantSession } from "./env.ts";
 import assistant, { UPSTREAM, assistantRole } from "./index.ts";
 import { OWNER_ACTION_TIMEOUT_MS, ownerActionTool, ownerInputText, utf8Prefix } from "./owner-action.ts";
 import { confirmationCommand, defineCorralTool } from "../../tools/define.ts";
-import type { CorralCall, CorralReceipt } from "../../tools/corral.ts";
+import { type CorralCall, type CorralReceipt, canonicalJson, sha256Hex } from "../../tools/corral.ts";
 
 const identity: HostIdentity = { store: "st-0123456789abcdef", project: "", role: "assistant", assistant: "A-3", generation: 2 };
 const context = { identity, cwd: "/work", model: "m" };
@@ -128,29 +128,75 @@ test("the contract tells the model to cite the tagged owner input and route uncl
   expect(contract).toContain("corral pm inbox show PMI-<n>");
 });
 
-test("a confirmation_required refusal is answered once in the pane, then sent with the answer", async () => {
-  const sent: { payload: Record<string, unknown>; timeoutMs?: number }[] = [];
-  const replies: CorralReceipt[] = [
-    { version: 1, request_id: "rq", op: "owner_action", state: "rejected",
-      result: { code: "confirmation_required", command: "corral discard T-3" } },
-    { version: 1, request_id: "rq", op: "owner_action", state: "committed", result: { outcome: "declined" } },
-  ];
-  const client = { call: async (_op: string, call: CorralCall) => {
-    sent.push({ payload: call.payload, ...(call.timeoutMs !== undefined ? { timeoutMs: call.timeoutMs } : {}) });
-    return replies[sent.length - 1];
-  } } as never;
-  const asked: string[] = [];
+/**
+ * A receipt client with Rust's rules for one request ID: an exact-payload replay returns the
+ * stored receipt, any other payload is payload_mismatch, and a confirm-class call waits until an
+ * answer is journaled for that request ID.
+ */
+function receiptStandIn(failNextSend = false) {
+  const stored = new Map<string, { sha: string; receipt: CorralReceipt }>();
+  const answers = new Map<string, string>();
+  const state = { effects: 0, sends: 0, failNextSend };
+  const client = { call: async (_op: string, call: CorralCall): Promise<CorralReceipt> => {
+    state.sends++;
+    const sha = sha256Hex(canonicalJson(call.payload));
+    const seen = stored.get(call.requestId);
+    if (seen) {
+      return seen.sha === sha ? { ...seen.receipt, replayed: true }
+        : { version: 1, request_id: call.requestId, op: "owner_action", state: "rejected", result: { code: "payload_mismatch" } };
+    }
+    const answer = answers.get(call.requestId);
+    if (answer === undefined) {
+      return { version: 1, request_id: call.requestId, op: "owner_action", state: "rejected",
+        result: { code: "confirmation_required", command: "corral discard T-003" } };
+    }
+    if (state.failNextSend) {
+      state.failNextSend = false;
+      throw new Error("call_timeout: the host lost the resend");
+    }
+    if (answer === "y") state.effects++;
+    const receipt: CorralReceipt = { version: 1, request_id: call.requestId, op: "owner_action", state: "committed",
+      result: { outcome: answer === "y" ? "executed" : "declined" } };
+    stored.set(call.requestId, { sha, receipt });
+    return receipt;
+  } } as never as CorralClient;
+  return { client, answers, state };
+}
+
+for (const answer of ["y", "n"] as const) {
+  test(`a confirmed call (${answer}) is answered once, resent unchanged, and its replay returns the first receipt`, async () => {
+    const { client, answers, state } = receiptStandIn();
+    const asked: string[] = [];
+    const tool = defineCorralTool(ownerActionTool as never, {
+      client, allowedOps: ["owner_action"], sessionId: () => "s", currentTurn: () => 1,
+      confirm: async (command, _context, requestId) => { asked.push(command); answers.set(requestId, answer); return true; },
+    });
+    const context = { hasUI: true, ui: { confirm: async () => answer === "y" } } as never;
+    const params = { kind: "discard", target: "T-003", input: "A-1/g1/i1" };
+    const first = await tool.execute("call-1", params, undefined, undefined, context);
+    const replay = await tool.execute("call-1", params, undefined, undefined, context);
+    expect((first.details as CorralReceipt).state).toBe("committed");
+    expect((replay.details as CorralReceipt).state).toBe("committed");
+    expect((replay.details as CorralReceipt).replayed).toBe(true);
+    expect((replay.details as CorralReceipt).result).toEqual((first.details as CorralReceipt).result);
+    expect(asked).toEqual(["corral discard T-003"]);
+    expect(state.effects).toBe(answer === "y" ? 1 : 0);
+  });
+}
+
+test("an answer journaled before the resend was lost still settles the replay without a second question", async () => {
+  const { client, answers, state } = receiptStandIn(true);
+  let prompts = 0;
   const tool = defineCorralTool(ownerActionTool as never, {
     client, allowedOps: ["owner_action"], sessionId: () => "s", currentTurn: () => 1,
-    confirm: async (command) => { asked.push(command); return "A-1/g1/i2"; },
+    confirm: async (_command, _context, requestId) => { prompts++; answers.set(requestId, "y"); return true; },
   });
-  const context = { hasUI: true, ui: { confirm: async () => false } } as never;
-  const result = await tool.execute("call-1", { kind: "discard", target: "T-3", input: "A-1/g1/i1" }, undefined, undefined, context);
-  expect(asked).toEqual(["corral discard T-3"]);
-  expect(sent).toEqual([
-    { payload: { kind: "discard", target: "T-3", input: "A-1/g1/i1" }, timeoutMs: OWNER_ACTION_TIMEOUT_MS },
-    { payload: { kind: "discard", target: "T-3", input: "A-1/g1/i1", confirmation: "A-1/g1/i2" }, timeoutMs: OWNER_ACTION_TIMEOUT_MS },
-  ]);
-  expect((result.details as CorralReceipt).state).toBe("committed");
-  expect(confirmationCommand(replies[1] as CorralReceipt)).toBeUndefined();
+  const context = { hasUI: true, ui: { confirm: async () => true } } as never;
+  const params = { kind: "discard", target: "T-003", input: "A-1/g1/i1" };
+  await expect(tool.execute("call-1", params, undefined, undefined, context)).rejects.toThrow(/lost the resend/);
+  const replay = await tool.execute("call-1", params, undefined, undefined, context);
+  expect((replay.details as CorralReceipt).state).toBe("committed");
+  expect((replay.details as CorralReceipt).result).toEqual({ outcome: "executed" });
+  expect([prompts, state.effects]).toEqual([1, 1]);
+  expect(confirmationCommand(replay.details as CorralReceipt)).toBeUndefined();
 });

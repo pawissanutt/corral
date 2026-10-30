@@ -349,3 +349,7 @@ mod tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "assistant_c11_tests.rs"]
 mod c11_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "assistant_owner_live_tests.rs"]
+mod owner_live_tests;

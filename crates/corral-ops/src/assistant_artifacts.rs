@@ -8,7 +8,13 @@ use sha2::{Digest, Sha256};
 use crate::Ctx;
 
 pub(crate) fn check_owner(session: Option<&str>) -> Result<()> {
-    if let Some(caller) = std::env::var_os("CORRAL_ASSISTANT")
+    // A claimed owner action is the owner's command: its run artifacts are the owner's.
+    let owner_action = matches!(
+        crate::assistant::owner_action::authority(),
+        crate::assistant::owner_action::OwnerAuthority::ViaAssistant(_)
+    );
+    if !owner_action
+        && let Some(caller) = std::env::var_os("CORRAL_ASSISTANT")
         && session.is_none_or(|id| caller != id)
     {
         bail!(

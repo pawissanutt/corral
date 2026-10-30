@@ -523,7 +523,8 @@ export class HostSession {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
         sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
         ...(this.options.identity.role === "assistant"
-          ? { confirm: (command: string, context: ConfirmUi) => this.confirmOwnerAction(command, context) } : {}),
+          ? { confirm: (command: string, context: ConfirmUi, requestId: string) =>
+            this.confirmOwnerAction(command, context, requestId) } : {}),
       });
       pi.registerTool(rich ? { ...tool, ...corralRenderers(tool.name) } : tool);
     }
@@ -624,7 +625,9 @@ export class HostSession {
    * session's owner-input journal and returns its ID; undefined when it was not journaled,
    * so an owner action cannot cite it.
    */
-  private async journalOwnerInput(source: "pane" | "confirmation", text: string, command?: string): Promise<string | undefined> {
+  private async journalOwnerInput(
+    source: "pane" | "confirmation", text: string, command?: string, answers?: string,
+  ): Promise<string | undefined> {
     if (!this.bound) return undefined;
     const sha256 = sha256Hex(text);
     const kept = utf8Prefix(text, OWNER_INPUT_TEXT_MAX);
@@ -632,6 +635,7 @@ export class HostSession {
     const payload = {
       kind: "owner_input", source, text: kept, sha256,
       ...(kept !== text ? { truncated: true } : {}), ...(command !== undefined ? { command } : {}),
+      ...(answers !== undefined ? { answers } : {}),
     };
     try {
       const receipt = await this.options.client.call("event", {
@@ -646,11 +650,11 @@ export class HostSession {
     return undefined;
   }
 
-  /** Shows the owner a confirm-class command in the pane and journals the answer. */
-  private async confirmOwnerAction(command: string, context: ConfirmUi): Promise<string | undefined> {
-    if (!context.hasUI) return undefined;
+  /** Shows the owner a confirm-class command in the pane and journals the answer for the request. */
+  private async confirmOwnerAction(command: string, context: ConfirmUi, requestId: string): Promise<boolean> {
+    if (!context.hasUI) return false;
     const yes = await context.ui.confirm("corral: confirm owner action", command);
-    return this.journalOwnerInput("confirmation", yes ? "y" : "n", command);
+    return await this.journalOwnerInput("confirmation", yes ? "y" : "n", command, requestId) !== undefined;
   }
 
   private watch(session: AgentSession): void {
