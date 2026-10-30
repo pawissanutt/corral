@@ -77,6 +77,29 @@ pub(super) fn conditions(
     now: Timestamp,
     assessment: &mut Assessment,
 ) {
+    conditions_with_runs(task, n, now, assessment, |out| {
+        if let Some(run) = task.current_run() {
+            if run.outcome.is_none() {
+                run_conditions(task, run, now, out, false);
+            }
+            for reviewer in run
+                .review_runs
+                .iter()
+                .filter(|reviewer| reviewer.ended.is_none() && reviewer.outcome.is_none())
+            {
+                run_conditions(task, reviewer, now, out, true);
+            }
+        }
+    });
+}
+
+pub(super) fn conditions_with_runs(
+    task: &Task,
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+    assessment: &mut Assessment,
+    runs: impl FnOnce(&mut Vec<Condition>),
+) {
     let out = &mut assessment.conditions;
     if task.status == Status::Idea || (task.status == Status::Backlog && !task.queued) {
         out.push(wait(
@@ -89,18 +112,7 @@ pub(super) fn conditions(
         ));
         return;
     }
-    if let Some(run) = task.current_run() {
-        if run.outcome.is_none() {
-            run_conditions(task, run, now, out, false);
-        }
-        for reviewer in run
-            .review_runs
-            .iter()
-            .filter(|reviewer| reviewer.ended.is_none() && reviewer.outcome.is_none())
-        {
-            run_conditions(task, reviewer, now, out, true);
-        }
-    }
+    runs(out);
     if let Some(infra) = &task.infra_wait {
         let held = infra.held_at.is_some();
         let mut condition = row(
@@ -372,152 +384,13 @@ fn question(
     condition
 }
 
-fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Condition>, review: bool) {
-    if let Some(host) = &run.agent_host {
-        out.extend(
-            host.questions
-                .iter()
-                .filter(|question| question.recorded_pending())
-                .map(|pending| question(task, pending, now)),
-        );
-    }
-    for decision in run
-        .obligations
-        .decisions
-        .iter()
-        .filter(|decision| decision.pending())
-    {
-        let mut condition = row(
-            task,
-            now,
-            "decision_pending",
-            WaitClass::OwnerDecision,
-            Responsible::Owner,
-            (
-                Some(format!("{}/{}", run.id, decision.request.id)),
-                Some(decision.registered_at),
-            ),
-            decision.request.question.clone(),
-        );
-        condition.resume.push(check(
-            "decision_answered",
-            &decision.request.id,
-            None,
-            false,
-        ));
-        condition.next_action.description = decision.request.requested_action.clone();
-        out.push(condition);
-    }
-    for obligation in run
-        .obligations
-        .waits
-        .iter()
-        .filter(|wait| wait.receipt.is_none())
-    {
-        let mut condition = row(
-            task,
-            now,
-            "obligation_wait",
-            WaitClass::ExternalOperation,
-            Responsible::Executor,
-            (None, Some(obligation.registered_at)),
-            obligation.request.condition.clone(),
-        );
-        condition.reason_code = format!("wait_{}", obligation.observation.state.as_str());
-        condition
-            .resume
-            .push(check("wait_receipt", &obligation.request.id, None, false));
-        out.push(condition);
-    }
-    if task.status == Status::NeedsMe && lost(run) {
-        let since = task.status_since.or(run.idle_since);
-        let mut condition = row(
-            task,
-            now,
-            "agent_lost",
-            WaitClass::PmAction,
-            Responsible::Pm,
-            (
-                Some(format!(
-                    "{}:{}",
-                    run.id,
-                    since.map_or_else(|| "legacy".into(), |at| at.to_string())
-                )),
-                since,
-            ),
-            format!("Run {} has recorded lost host or pane evidence", run.id),
-        );
-        condition
-            .resume
-            .push(check("run_recovered", &run.id, None, false));
-        out.push(condition);
-    }
-    if run.idle_no_report {
-        let since = run.idle_since.or(task.status_since);
-        let (kind, reason) = if review {
-            (
-                "review_turn_without_verdict",
-                crate::round_notice::review_silent_reason(run),
-            )
-        } else {
-            (
-                "silent_turn",
-                crate::round_notice::worker_silent_reason(run)
-                    .unwrap_or_else(|| format!("Run {} ended a turn without a report", run.id)),
-            )
-        };
-        let mut condition = row(
-            task,
-            now,
-            kind,
-            WaitClass::PmAction,
-            Responsible::Pm,
-            (
-                Some(format!(
-                    "{}:{}",
-                    run.id,
-                    since.map_or_else(|| "legacy".into(), |at| at.to_string())
-                )),
-                since,
-            ),
-            reason,
-        );
-        condition
-            .resume
-            .push(check("run_reported", &run.id, None, false));
-        out.push(condition);
-    }
-    // Parking can be recorded before sync clears an earlier stuck observation.
-    if let Some(stuck) = &run.stuck
-        && run.parked_on(&task.id).is_empty()
-    {
-        // Linux start ticks identify the process but are not a wall-clock timestamp.
-        let mut condition = row(
-            task,
-            now,
-            "stuck_process",
-            WaitClass::PmAction,
-            Responsible::Pm,
-            (
-                Some(format!("{}:{}:{}", run.id, stuck.pid, stuck.started)),
-                None,
-            ),
-            format!(
-                "Run {} is blocked by process {} ({})",
-                run.id,
-                stuck.pid,
-                stuck.argv.join(" ")
-            ),
-        );
-        condition.resume.push(check(
-            "process_exited",
-            &format!("{}:{}", stuck.pid, stuck.started),
-            None,
-            false,
-        ));
-        out.push(condition);
-    }
-}
+#[path = "run_conditions.rs"]
+mod run_input;
+#[cfg(test)]
+#[path = "run_conditions_tests.rs"]
+mod run_tests;
+pub(super) use run_input::conditions_ref as run_conditions_ref;
+use run_input::run_conditions;
 
 pub(super) fn escalation(task: &Task, now: Timestamp, out: &mut Vec<Condition>) {
     let Some(stage) = task

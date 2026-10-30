@@ -154,15 +154,20 @@ pub struct AttentionBoard {
 
 /// Assess all conditions, independently of progress and display precedence.
 pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> Assessment {
-    assess_with_delivery(task, neighborhood, now, |out| {
-        delivery::conditions(task, neighborhood, now, out)
-    })
+    assess_with_sources(
+        task,
+        neighborhood,
+        now,
+        |assessment| classify::conditions(task, neighborhood, now, assessment),
+        |out| delivery::conditions(task, neighborhood, now, out),
+    )
 }
 
-fn assess_with_delivery(
+fn assess_with_sources(
     task: &Task,
     neighborhood: &Neighborhood<'_>,
     now: Timestamp,
+    classify: impl FnOnce(&mut Assessment),
     delivery: impl FnOnce(&mut Vec<Condition>),
 ) -> Assessment {
     if matches!(task.status, Status::Done | Status::Dropped) {
@@ -170,7 +175,7 @@ fn assess_with_delivery(
     }
     corral_core::work::record(corral_core::work::Work::AttentionVisit, 1);
     let mut assessment = Assessment::default();
-    classify::conditions(task, neighborhood, now, &mut assessment);
+    classify(&mut assessment);
     delivery(&mut assessment.conditions);
     stopping::conditions(task, neighborhood, now, &mut assessment);
     if assessment.progress.is_none() && assessment.conditions.is_empty() {
@@ -329,8 +334,28 @@ pub(super) fn board_snapshot(
                 } else {
                     delivery::conditions_ref(task, &neighborhood, now)?
                 };
-                let assessment =
-                    assess_with_delivery(task, &neighborhood, now, |out| out.extend(delivery));
+                let runs = if matches!(task.status, Status::Idea | Status::Done | Status::Dropped)
+                    || (task.status == Status::Backlog && !task.queued)
+                {
+                    Vec::new()
+                } else {
+                    classify::run_conditions_ref(task, now)?
+                };
+                let assessment = assess_with_sources(
+                    task,
+                    &neighborhood,
+                    now,
+                    |assessment| {
+                        classify::conditions_with_runs(
+                            task,
+                            &neighborhood,
+                            now,
+                            assessment,
+                            |out| out.extend(runs),
+                        )
+                    },
+                    |out| out.extend(delivery),
+                );
                 Ok(TaskAssessment {
                     task: task.id.clone(),
                     title: task.title.clone(),
