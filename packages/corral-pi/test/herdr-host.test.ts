@@ -127,8 +127,14 @@ test("turns, question receipts and an inbox answer drive the herdr projection, a
   // Then the projection blocked on the escalation and released on the cancellation:
   expect(states().slice(external)).toEqual(["blocked", "idle"]);
 
-  // When the host closes gracefully:
-  await host.close();
+  // Reload also emits session_shutdown, but must keep the bound pane's projection alive.
+  await host.session.reload();
+  expect(calls.some((c) => c[1] === "release-agent")).toBeFalse();
+  expect(herdr.readback().closed).toBeFalse();
+
+  // InteractiveMode quits by disposing the runtime, then process.exit(), without returning
+  // to main's finally block. Exercise that shutdown path without calling host.close().
+  await host.runtime.dispose();
 
   // Then its last herdr calls release the pane and clear its metadata, in sequence order:
   expect(calls.at(-2)?.slice(0, 2)).toEqual(["pane", "release-agent"]);
@@ -136,4 +142,9 @@ test("turns, question receipts and an inbox answer drive the herdr projection, a
   const seqs = calls.map((c) => BigInt(c[c.indexOf("--seq") + 1] ?? "0"));
   expect(seqs[0]).toBe((BigInt(EPOCH) << SEQ_SHIFT) + 1n);
   expect(seqs.every((seq, i) => i === 0 || seq > (seqs[i - 1] ?? 0n))).toBeTrue();
+
+  // A later outer cleanup must not release twice.
+  const closedCalls = calls.length;
+  await host.close();
+  expect(calls).toHaveLength(closedCalls);
 }, 60_000);

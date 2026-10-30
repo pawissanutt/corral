@@ -624,6 +624,9 @@ export class HostSession {
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
     pi.on("session_shutdown", async (event) => {
+      // InteractiveMode exits the process after runtime disposal; main's finally never runs.
+      // Await the release here, but keep reporting through extension reloads.
+      if (event.reason === "quit") await this.options.herdr?.close();
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
       await this.jobs?.shutdown();
     });
