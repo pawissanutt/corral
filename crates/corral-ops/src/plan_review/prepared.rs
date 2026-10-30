@@ -30,10 +30,13 @@ impl Prepared {
     pub fn bind_native(
         &mut self,
         ctx: &Ctx,
-        task: &Task,
+        task: &corral_core::TaskHead,
         resolved: &ResolvedProfile,
         herdr: &HerdrRef,
     ) -> Result<()> {
+        // T-626: preserve main's native bind/resume and complete prepared-review journal
+        // until native mutation/retention storage can be redesigned independently.
+        let _known = corral_core::work::followup("T-626", "plan_reviewer_native_binding");
         let target = crate::agent::BindTarget::PlanReviewer {
             task: task.id.clone(),
             plan: self.plan.clone(),

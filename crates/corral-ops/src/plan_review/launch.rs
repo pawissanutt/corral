@@ -175,15 +175,8 @@ pub(super) fn review_with_origin(
     text.push_str(&crate::scratch_reclaim::prompt_section(ctx, &dir));
     // The renderer sizes the prompt to decide how `{prompt_file}` may reach the reviewer.
     std::fs::write(&prompt_file, &text).context("writing plan review prompt")?;
-    let command = prompt::render_template(
-        &resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", format!("{} plan review", task.id)),
-            ("task", task.id.clone()),
-            ("worktree", ctx.store.root().display().to_string()),
-        ],
-    )?;
+    let native = crate::agent::hooks::is_pi_native(&resolved.harness) && name != "pm";
+    let command = prepared::command(ctx, &resolved, &task, &prompt_file, native)?;
     let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{plan_id}-{attempt}"))?;
     let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
     let mut preparation = match retained {
@@ -198,7 +191,11 @@ pub(super) fn review_with_origin(
             previous_reviews: reviews,
             review: PlanReview {
                 agent_host: None,
-                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                delivery: if native {
+                    crate::agent::hooks::delivery::launch_mode()
+                } else {
+                    corral_core::inbox::DeliveryMode::Legacy
+                },
                 inbox: Default::default(),
                 id: attempt.clone(),
                 reviewer: name.clone(),
@@ -274,16 +271,8 @@ pub(super) fn review_with_origin(
     preparation.save(ctx, &task.id)?;
     close_plan_review(ctx, &previous)?;
     let mut launch = || -> Result<HerdrRef> {
-        let herdr = if let Some(herdr) = &preparation.review.herdr {
-            ensure!(
-                herdr.socket.as_ref() == Some(&ctx.herdr.socket_path()?),
-                "prepared reviewer belongs to another session"
-            );
-            ensure!(
-                ctx.herdr.pane_get(&herdr.pane_id)?.is_some(),
-                "prepared reviewer pane disappeared"
-            );
-            herdr.clone()
+        let herdr = if let Some(herdr) = preparation.live_pane(ctx)? {
+            herdr
         } else if name == "pm" {
             let pane_id = match crate::pm::live_pm_pane(ctx)? {
                 Some(pane) => pane,
@@ -327,8 +316,21 @@ pub(super) fn review_with_origin(
             }
             return Err(error);
         }
+        if native {
+            preparation.bind_native(ctx, &head, &resolved, &herdr)?;
+        }
         let pressure = crate::resources::read_admission(ctx)?;
         let prepare = |store: &corral_core::Store, task: &mut corral_core::TaskHeadMut| {
+            let saved_review = task
+                .head()
+                .last_plan
+                .as_ref()
+                .and_then(|plan| plan.current_review.as_ref());
+            ensure!(
+                saved_review == Some(&PlanReviewHead::of(&preparation.review))
+                    && preparation.review.verdict.is_none(),
+                "prepared plan review attempt changed"
+            );
             let task = &task.shell_task()?;
             crate::session_scope::check_launch_in(ctx, store)?;
             ensure!(
@@ -344,10 +346,6 @@ pub(super) fn review_with_origin(
             preparation.check(plan)?;
             plan::fresh(ctx, task, plan)?;
             let review = plan.reviews.last().context("plan review missing")?;
-            ensure!(
-                review == &preparation.review && review.verdict.is_none(),
-                "prepared plan review attempt changed"
-            );
             ensure!(
                 review.policy_digest == plan::policy_digest(&store.config, task)?
                     && review.route.as_deref().is_none_or(|route| {
@@ -410,6 +408,17 @@ pub(super) fn review_with_origin(
             let p = saved.plans.last().context("plan disappeared")?;
             if p.reviews.last().is_some_and(|r| r.verdict.is_some()) {
                 close_plan_review(ctx, p)?;
+            }
+            if native {
+                let _known = corral_core::work::followup("T-626", "plan_reviewer_complete_result");
+                return ctx
+                    .store
+                    .get(&task.id)?
+                    .plans
+                    .into_iter()
+                    .find(|plan| plan.id == plan_id)
+                    .and_then(|plan| plan.reviews.into_iter().find(|review| review.id == attempt))
+                    .context("plan review disappeared");
             }
             p.reviews.last().cloned().context("plan review disappeared")
         }
