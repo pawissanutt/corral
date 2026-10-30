@@ -260,6 +260,11 @@ impl TaskHead {
         self.artifact_index(&format!("path:{path}"), false)
     }
 
+    /// Last registration of a path, matching the content snapshot's last-document wins rule.
+    pub fn latest_artifact_by_path(&self, path: &str) -> Result<Option<crate::Artifact>> {
+        self.artifact_index(&format!("path:{path}"), true)
+    }
+
     /// All records of a stored path, including repeated registrations of the same snapshot.
     pub fn artifacts_by_path(&self, path: &str) -> Result<Vec<crate::Artifact>> {
         self.query(
