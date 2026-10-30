@@ -394,7 +394,7 @@ impl TaskHead {
             .collect()
     }
 
-    fn run_children(
+    pub(super) fn run_children(
         &self,
         run: &str,
         q: impl FnOnce(String) -> RowQuery,
@@ -472,18 +472,6 @@ impl TaskHead {
             |p| RowQuery::under(TaskPart::ReviewRun, p).open(),
             u32::MAX,
         )
-    }
-
-    /// The newest review child of `run`, using a bounded row query.
-    pub fn latest_review_child(&self, run: &str) -> Result<Option<RunHead>> {
-        Ok(self
-            .run_children(
-                run,
-                |p| RowQuery::under(TaskPart::ReviewRun, p).newest_first(),
-                1,
-            )?
-            .into_iter()
-            .next())
     }
 
     /// Every review child of `run` (output-sized; outside hot scopes only).
