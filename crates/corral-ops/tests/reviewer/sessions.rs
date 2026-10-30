@@ -196,7 +196,8 @@ fn exited_worker_resumes_the_recorded_session_instead_of_starting_empty() {
     let session = before.current_run().unwrap().session.clone().unwrap();
     let receipt = ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{id}-R1.exited"));
     std::fs::write(receipt, "0\n").unwrap();
@@ -279,7 +280,8 @@ fn missing_worker_transcript_refuses_recovery_without_changing_the_run() {
     std::fs::remove_file(run.session.as_ref().unwrap().transcript.as_ref().unwrap()).unwrap();
     std::fs::write(
         ctx.store
-            .state_dir()
+            .scratch_path("tmp")
+            .unwrap()
             .join("launch-exits")
             .join(format!("{id}-R1.exited")),
         "0\n",
@@ -361,7 +363,18 @@ fn reused_reviewer_message_names_the_round_attempt_and_candidate_and_retires_ear
         delivered.contains("Every earlier review round is finished"),
         "{delivered}"
     );
-    let prompt = ctx.store.prompts_dir().join(format!("{id}-R1-review.md"));
+    let prompt = ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == "review_started" && event.task.as_deref() == Some(id.as_str()))
+        .unwrap()
+        .detail["prompt"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(
         std::fs::read_to_string(prompt)
             .unwrap()
@@ -540,7 +553,8 @@ fn restarted_worker_pointer_message_carries_the_changes_round_identity() {
     let record = review_with_changes(&ctx, &id);
     let receipt = ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{id}-R1.exited"));
     std::fs::write(receipt, "0\n").unwrap();
@@ -608,7 +622,8 @@ fn silent_worker_round_is_flagged_in_the_first_eligible_sync(restart: bool, work
     if restart {
         let receipt = ctx
             .store
-            .state_dir()
+            .scratch_path("tmp")
+            .unwrap()
             .join("launch-exits")
             .join(format!("{id}-R1.exited"));
         std::fs::write(receipt, "0\n").unwrap();

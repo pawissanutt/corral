@@ -120,15 +120,18 @@ fn launch_profile<T: TaskRef + ?Sized>(
     let command =
         match crate::agent::hooks::review::command(ctx, task, run, &resolved, &herdr.pane_id) {
             Some(command) => command?,
-            None => render_template(
-                &resolved,
-                &[
+            None => {
+                let mut values = vec![
                     ("prompt_file", prompt_file.display().to_string()),
                     ("name", title.clone()),
                     ("task", task.id().clone()),
                     ("worktree", run.worktree.display().to_string()),
-                ],
-            )?,
+                ];
+                if let Some(notice) = crate::round_notice::latest_review(&saved)? {
+                    values.push((crate::prompt::NOTICE_KEY, notice));
+                }
+                render_template(&resolved, &values)?
+            }
         };
     let receipt = crate::launch_exit::receipt(ctx, task.id(), &format!("{}-{child}", run.id))?;
     let command = crate::launch_exit::arm(ctx, &command, &receipt)?;
@@ -488,13 +491,14 @@ pub(super) fn review_run_origin(
         .context("review snapshot was not saved")?;
     let review_id = saved_child.id.clone();
     crate::watch::start_review(ctx, &saved, saved_child)?;
-    std::fs::write(
-        &prompt_file,
-        review_prompt(ctx, &saved, &saved_run)?
-            + &packet_section
-            + &crate::scratch_reclaim::prompt_section(ctx, &dir),
-    )
-    .with_context(|| format!("writing {}", prompt_file.display()))?;
+    let mut text = review_prompt(ctx, &saved, &saved_run)?
+        + &packet_section
+        + &crate::scratch_reclaim::prompt_section(ctx, &dir);
+    if let Some(notice) = crate::round_notice::latest_review(&saved)? {
+        text = format!("{notice}\n\n{text}");
+    }
+    std::fs::write(&prompt_file, text)
+        .with_context(|| format!("writing {}", prompt_file.display()))?;
     let launched = match &reviewer {
         Reviewer::Profile(_) | Reviewer::CrossVendor | Reviewer::Auto => {
             launch_profile(ctx, &task, &run, &resolved, &prompt_file, &mut launch)

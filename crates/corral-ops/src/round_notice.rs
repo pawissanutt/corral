@@ -35,23 +35,37 @@ pub(crate) fn review_silent_reason_of(
 
 /// The notice for the newest review attempt of `task`'s current run, when that reviewer's
 /// conversation is reused.
-pub(crate) fn latest_review(task: &Task) -> Option<String> {
-    let parent = task.current_run()?;
-    let child = parent.review_runs.last().filter(|child| reused(child))?;
-    let record = parent.review.as_ref()?;
-    let attempt = crate::reviewer::review_callback_token(record)?;
-    Some(format!(
+pub(crate) fn latest_review<T: corral_core::TaskRef + ?Sized>(
+    task: &T,
+) -> anyhow::Result<Option<String>> {
+    let Some(parent) = task.current_run_head()? else {
+        return Ok(None);
+    };
+    let Some(child) = parent
+        .current_child
+        .as_deref()
+        .filter(|child| child.session.as_ref().is_some_and(reused_session))
+    else {
+        return Ok(None);
+    };
+    let Some(record) = parent.review.as_ref() else {
+        return Ok(None);
+    };
+    let Some(attempt) = crate::reviewer::review_callback_token(record) else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
         "NEW REVIEW ROUND {round}: review attempt {child_id} (attempt/callback ID {attempt}) of \
          {task_id} run {run_id} reviews candidate {sha}. Every earlier review round is finished; \
          its todo list, verdict and \"already complete\" state are superseded and this request is \
          not a repeat. Review this candidate and record a verdict for attempt {attempt} before \
          you end your turn.",
-        round = parent.review_runs.len(),
+        round = parent.facts.children,
         child_id = child.id,
-        task_id = task.id,
+        task_id = task.id(),
         run_id = parent.id,
         sha = record.sha,
-    ))
+    )))
 }
 
 /// The round a changes request reopens: one past the run's previous round, bound to the review
