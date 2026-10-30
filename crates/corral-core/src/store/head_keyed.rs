@@ -237,6 +237,18 @@ impl TaskHead {
     ) -> Result<Vec<crate::agent::JobRecord>> {
         self.agent_page(container, "jobs", true)
     }
+    /// Existence of a current-generation open turn, including a non-last turn.
+    pub fn has_open_agent_turn(&self, container: &ContainerRef, generation: u32) -> Result<bool> {
+        Ok(!self
+            .agent_rows(
+                container,
+                "turns",
+                Some(format!("generation:{generation}")),
+                true,
+            )?
+            .is_empty())
+    }
+
     pub fn latest_agent_turn(
         &self,
         container: &ContainerRef,
