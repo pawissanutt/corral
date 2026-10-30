@@ -506,8 +506,78 @@ pub fn check_pm_live(pm: &AgentPm, generation: u32) -> Result<(), AgentRefusal> 
     generation_live(&pm.state, generation)
 }
 
-/// [`check_live`] over a [`crate::TaskRef`]: the same refusals, read from the current run's
-/// projection, the named review child and the agent's generation and turn by key. The outer
+fn planning_live_ref<T: crate::TaskRef + ?Sized>(
+    task: &T,
+    binding: &RequestBinding,
+) -> anyhow::Result<Result<(), AgentRefusal>> {
+    let refused = |reason: ClosureReason| {
+        Ok(Err(AgentRefusal::new(
+            if reason == ClosureReason::RunEnded {
+                RefusalCode::RunEnded
+            } else {
+                RefusalCode::ReviewClosed
+            },
+            reason.as_str(),
+        )))
+    };
+    if binding.container.task() != Some(task.id()) || *task.status() == Status::Dropped {
+        return refused(ClosureReason::RunEnded);
+    }
+    let state = match &binding.container {
+        ContainerRef::Planner { run, .. } => {
+            let Some(run) = task
+                .last_plan_run_head()?
+                .filter(|r| r.id == *run && r.holds_slot())
+            else {
+                return refused(ClosureReason::RunEnded);
+            };
+            run.agent_host.clone()
+        }
+        ContainerRef::PlanReviewer { plan, review, .. } => {
+            let Some(parent) = task.last_plan_head()?.filter(|p| p.id == *plan) else {
+                return refused(ClosureReason::ReviewSuperseded);
+            };
+            let latest = task.last_plan_run_head()?;
+            if !crate::plan_contract_revision(task).is_ok_and(|r| r == parent.spec_revision)
+                || parent
+                    .run
+                    .as_ref()
+                    .is_some_and(|run| latest.as_ref().is_none_or(|r| r.id != *run))
+            {
+                return refused(ClosureReason::ReviewSuperseded);
+            }
+            let Some(child) = parent.current_review.as_ref().filter(|r| r.id == *review) else {
+                return refused(ClosureReason::ReviewSuperseded);
+            };
+            let settling = match (binding.settles_turn, child.agent_host.as_deref()) {
+                (Some(seq), Some(_)) => task
+                    .agent_turn(&binding.container, binding.generation, seq)?
+                    .is_some_and(|turn| turn.started.is_some() && turn.ended.is_none()),
+                _ => false,
+            };
+            if child.verdict.is_some() && !settling {
+                return refused(ClosureReason::ReviewClosed);
+            }
+            child.agent_host.clone()
+        }
+        _ => return refused(ClosureReason::RunEnded),
+    };
+    let Some(state) = state else {
+        return generation_live_ref(task, binding, None);
+    };
+    if matches!(binding.container, ContainerRef::PlanReviewer { .. })
+        && state.binding.callback != binding.callback
+    {
+        return Ok(Err(AgentRefusal::new(
+            RefusalCode::ReviewClosed,
+            "the callback token does not match the bound attempt",
+        )));
+    }
+    generation_live_ref(task, binding, Some(&state))
+}
+
+/// [`check_live`] over a [`crate::TaskRef`]: the same refusals for all four task roles,
+/// from current-container projections and the agent's generation and turn by key. The outer
 /// result carries read errors, the inner one the refusal.
 ///
 /// # Errors
@@ -516,6 +586,12 @@ pub fn check_live_ref<T: crate::TaskRef + ?Sized>(
     task: &T,
     binding: &RequestBinding,
 ) -> anyhow::Result<Result<(), AgentRefusal>> {
+    if matches!(
+        binding.container,
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+    ) {
+        return planning_live_ref(task, binding);
+    }
     let ended = |detail: &str| Ok(Err(AgentRefusal::new(RefusalCode::RunEnded, detail)));
     let closed = |detail: String| Ok(Err(AgentRefusal::new(RefusalCode::ReviewClosed, detail)));
     let (run_id, review) = match &binding.container {
@@ -608,6 +684,14 @@ pub fn check_live_ref<T: crate::TaskRef + ?Sized>(
             state
         }
     };
+    generation_live_ref(task, binding, state.as_deref())
+}
+
+fn generation_live_ref<T: crate::TaskRef + ?Sized>(
+    task: &T,
+    binding: &RequestBinding,
+    state: Option<&crate::AgentHostHead>,
+) -> anyhow::Result<Result<(), AgentRefusal>> {
     let Some(state) = state else {
         return Ok(Err(AgentRefusal::new(
             RefusalCode::AgentFenced,
