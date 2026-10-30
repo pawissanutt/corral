@@ -20,8 +20,9 @@ fn expected_samples(path: &str) -> u64 {
     match path {
         "pm_next" => 3,
         "automation_status" => 4,
-        // A sync tick: resources::observe, then the admission reads of dispatch_policy.
-        super::sync_budget::PATH => 3,
+        // A sync tick: resources::observe, two dispatch_policy admission reads, and
+        // main's owning attention reconciliation (each is a real sampled evaluation).
+        super::sync_budget::PATH => 4,
         _ => 1,
     }
 }

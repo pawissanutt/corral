@@ -16,6 +16,11 @@ use corral_ops::resources::{PinnedReadingsProbe, ResourceProbe};
 
 use super::hot_budget_rows::{T0, grow};
 
+// Evaluate after every synthetic run/review/checkpoint, not during startup or before a run.
+fn fixture_now() -> jiff::Timestamp {
+    super::hot_budget_rows::at(86_400)
+}
+
 /// One variant of the fixture: terminal tasks, history per active task and nested history
 /// inside the current containers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,7 +280,8 @@ pub(crate) fn fixture(shape: Shape) -> Fixture {
 /// inventory and reconciles them.
 pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
     let root = tempfile::tempdir().unwrap();
-    let mut store = Store::init_with(root.path(), |store| store.fixture_pin_now(T0)).unwrap();
+    let mut store =
+        Store::init_with(root.path(), |store| store.fixture_pin_now(fixture_now())).unwrap();
     std::fs::create_dir_all(root.path().join("app").join(".git")).unwrap();
     store.config.projects.insert(
         "app".into(),
@@ -290,7 +296,7 @@ pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
     let mut store = store.reopen().unwrap();
     assert_eq!(
         store.now(),
-        T0,
+        fixture_now(),
         "configuration reload must retain the fixture clock"
     );
     store
@@ -358,6 +364,17 @@ pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
         inner: PinnedReadingsProbe::admitting(),
         seen: Mutex::default(),
     });
+    assert!(
+        store
+            .heads(&corral_core::backend::HeadQuery::Open { project: None })
+            .unwrap()
+            .iter()
+            .all(|head| head
+                .current_run
+                .as_ref()
+                .is_none_or(|run| run.started <= store.now())),
+        "measured current runs must predate the fixed evaluation clock"
+    );
     let ctx = Ctx {
         store,
         herdr,
@@ -375,7 +392,7 @@ pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
 /// The fixture another process built at `root`, opened afresh: a cold process on a settled
 /// store. `running` names the Running task the mutation step edits.
 pub(crate) fn reopen(root: &Path, running: &str) -> Fixture {
-    let store = Store::open_with(root, |store| store.fixture_pin_now(T0)).unwrap();
+    let store = Store::open_with(root, |store| store.fixture_pin_now(fixture_now())).unwrap();
     let herdr = Herdr::with_bin(root.join("herdr"), Some("corral-test".into()));
     let mut checkouts: Vec<PathBuf> = std::fs::read_dir(root.join("checkouts"))
         .unwrap()
