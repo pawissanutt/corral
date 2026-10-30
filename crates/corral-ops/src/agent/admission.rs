@@ -9,7 +9,7 @@ use corral_core::agent::{
     ContainerRef, GENERATIONS_MAX, GenerationFence, HostHealth, RequestBinding, RequestIdentity,
     RequestOrigin, RequestReceipt, paths, pm_state,
 };
-use corral_core::{Store, Task};
+use corral_core::{Store, Task, TaskHead, TaskRef};
 use serde_json::json;
 
 use super::call::{RejectCode, Rejection};
@@ -29,15 +29,33 @@ pub(crate) enum Mode {
 /// The snapshot admission resolved; the final transaction rereads it under its locks.
 #[derive(Debug)]
 pub(crate) enum Resolved {
-    Task(Box<Task>),
+    Task(Box<TaskHead>),
     Pm(Box<AgentPm>),
 }
 
 impl Resolved {
-    pub(crate) fn state(&self, container: &ContainerRef) -> Option<&AgentRunState> {
+    fn binding(&self, container: &ContainerRef) -> Result<Option<AgentBinding>> {
         match self {
-            Resolved::Task(task) => agent::container_state(task, container),
-            Resolved::Pm(pm) => Some(&pm.state),
+            Resolved::Task(task) => Ok(task.agent_head(container)?.map(|head| head.binding)),
+            Resolved::Pm(pm) => Ok(Some(pm.state.binding.clone())),
+        }
+    }
+
+    pub(crate) fn generation(
+        &self,
+        container: &ContainerRef,
+        n: u32,
+    ) -> Result<Option<AgentGeneration>> {
+        match self {
+            Resolved::Task(task) => task.agent_generation(container, n),
+            Resolved::Pm(pm) => Ok(pm.state.generation(n).cloned()),
+        }
+    }
+
+    fn receipt(&self, container: &ContainerRef, id: &str) -> Result<Option<RequestReceipt>> {
+        match self {
+            Resolved::Task(task) => task.agent_receipt(container, id),
+            Resolved::Pm(pm) => Ok(pm.state.receipt(id).cloned()),
         }
     }
 }
@@ -84,7 +102,7 @@ fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
             .map(|pm| Resolved::Pm(Box::new(pm)))
             .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"));
     };
-    let task = match store.get(id) {
+    let task = match store.head(id) {
         Ok(task) => task,
         Err(error) if format!("{error}").ends_with("not found") => {
             return Err(reject(
@@ -94,7 +112,7 @@ fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
         }
         Err(error) => return Err(error),
     };
-    if agent::container_state(&task, container).is_none() {
+    if task.agent_head(container)?.is_none() {
         return Err(reject(
             RejectCode::ContainerNotFound,
             format!("{} has no Pi-native binding", container.key()),
@@ -117,11 +135,11 @@ fn digest_eq(secret: &str, expected: &str) -> bool {
 fn authenticate(
     store: &Store,
     envelope: &Envelope,
-    state: &AgentRunState,
+    binding: &AgentBinding,
+    generation: Option<&AgentGeneration>,
     mode: Mode,
 ) -> Result<()> {
     let identity = &envelope.identity;
-    let binding = &state.binding;
     if identity.store != paths::store_id(store) {
         return Err(reject(
             RejectCode::ForeignStore,
@@ -147,8 +165,7 @@ fn authenticate(
         ));
     }
     let n = identity.generation;
-    let generation = state
-        .generation(n)
+    let generation = generation
         .ok_or_else(|| reject(RejectCode::AuthFailed, format!("generation {n} is unknown")))?;
     let nonce_matches = || {
         envelope
@@ -257,16 +274,16 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
     let identity = &envelope.identity;
     let container = container_of(identity);
     let resolved = resolve(&ctx.store, &container)?;
-    let state = resolved
-        .state(&container)
+    let bound = resolved
+        .binding(&container)?
         .context("resolved container has no agent state")?;
-    authenticate(&ctx.store, envelope, state, mode)?;
-    if let Some(stored) = state.receipt(&envelope.request_id) {
-        same_request(stored, &envelope.op, &envelope.payload_sha256)?;
-        return Ok(Admission::Replay(Box::new(stored.clone())));
+    let generation = resolved.generation(&container, identity.generation)?;
+    authenticate(&ctx.store, envelope, &bound, generation.as_ref(), mode)?;
+    if let Some(stored) = resolved.receipt(&container, &envelope.request_id)? {
+        same_request(&stored, &envelope.op, &envelope.payload_sha256)?;
+        return Ok(Admission::Replay(Box::new(stored)));
     }
-    let generation = state.generation(identity.generation);
-    if mode == Mode::Hello && generation.is_some_and(|g| g.bound.is_some()) {
+    if mode == Mode::Hello && generation.as_ref().is_some_and(|g| g.bound.is_some()) {
         return Err(reject(
             RejectCode::NonceConsumed,
             "the bind nonce was already consumed",
@@ -283,7 +300,7 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
     };
     if mode != Mode::Lookup {
         match &resolved {
-            Resolved::Task(task) => recheck_task(task, &binding)?,
+            Resolved::Task(task) => recheck_task_head(task.as_ref(), &binding)?,
             Resolved::Pm(pm) => recheck_pm(pm, identity.generation)?,
         }
     }
