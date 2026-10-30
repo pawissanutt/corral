@@ -83,8 +83,8 @@ mod tests {
                 AgentRole::PlanReviewer,
             ] {
                 let snapshot = config.resolve(role, None);
-                let explore = role != AgentRole::Pm
-                    && (preset == "full" || (preset == "standard" && role != AgentRole::Reviewer));
+                let explore =
+                    preset == "full" || (preset == "standard" && role != AgentRole::Reviewer);
                 assert_eq!(snapshot.enabled("subagents"), explore, "{preset}/{role:?}");
                 assert_eq!(
                     snapshot.enabled("oracle"),
@@ -108,7 +108,7 @@ mod tests {
                 .enabled("subagents")
         );
         assert!(!disabled.resolve(AgentRole::Worker, None).enabled("oracle"));
-        assert!(toml::from_str::<AgentCapabilities>("[pm.subagents]\nenabled = true").is_err());
+        assert!(toml::from_str::<AgentCapabilities>("[pm.subagents]\nenabled = true").is_ok());
     }
     #[test]
     fn bounded_auxiliary_settings() {
