@@ -843,6 +843,63 @@ container's binding: harness, role, mode (`interactive` or `headless`), host hea
 generation, generation, receipt and turn counts, open question keys, and the same installation
 summary.
 
+## herdr status
+
+Every bound host, whatever its role, reports itself to the herdr server of its pane as the agent
+`corral-pi`, so herdr's sidebar, `herdr agent list` and `herdr agent wait` show it without reading
+the screen. One adapter in the host does this for all six roles. It reports only from inside herdr
+and only for the pane corral bound it to (`HERDR_ENV=1` and `HERDR_PANE_ID` equal to the bound
+pane), by running `$HERDR_BIN_PATH` with arguments, never a shell. A headless host and plain
+`corral pi --bare` report nothing.
+
+| herdr field | What the host reports |
+|---|---|
+| `agent` | `corral-pi`, from the reporting source `custom:corral-pi` |
+| `display_agent` | `corral-pi <role> <identity> g<generation>`, for example `corral-pi worker T-12/R1 g2`, `corral-pi reviewer T-12/R1 review1 g1`, `corral-pi pm app g1` or `corral-pi assistant A-3 g1` |
+| `tokens` | `corral_role`, `corral_generation`, `corral_session` (the bound Pi session ID) and whichever of `corral_project`, `corral_task`, `corral_run`, `corral_review` and `corral_assistant` the binding has |
+| `agent_status` | `working`, `idle` or `blocked`, below |
+
+Each state report also gives herdr the bound session's ID and file as the agent's session
+reference, never a session guessed from the provider. herdr 0.9.5 keeps but does not
+display a custom source's session reference, so the `corral_session` token is the readable one.
+The host reports no resume command: after a herdr restart, recovery stays with
+`corral agent resume`.
+
+| State | When |
+|---|---|
+| `working` | A turn is running. |
+| `idle` | The turn settled and no question holds the host. herdr shows `done` until the pane is looked at. |
+| `blocked` | The host has a pending question that is blocking or goes to the owner (`owner_only`, `permission`, or escalated). The report's message names it. |
+
+Only corral decides when a question opens or settles: a committed `corral_ask` receipt opens it,
+and the inbox delivering its answer or correction, or a committed `corral_withdraw` receipt,
+settles it. A turn that ends, fails at the provider or is cancelled, and a nested tool call, never
+clear `blocked`, and a settled turn never stays `working`. A resumed host starts from the pending
+questions its hello receipt names. A question the PM or owner cancels sends the host no message,
+so its pane stays `blocked` until the host closes or its next generation binds.
+
+One report is in flight at a time, and changes that arrive meanwhile are sent once, as the latest
+state; an unchanged state sends nothing. Sequence numbers fence generations: a generation numbers
+its reports from its hello time in milliseconds shifted left 20 bits (the hello receipt's
+`herdr_seq_epoch_ms`), and herdr ignores a report that is not above the last one it accepted from
+`custom:corral-pi` for the pane.
+
+- **Graceful exit.** When the owner quits or corral shuts the host down over the bridge, the host
+  releases the pane (`pane release-agent`) and clears its display name and tokens, so the shell
+  that returns is not shown as `corral-pi`.
+- **Host loss.** When sync records `agent_lost`, corral releases that generation's report and
+  clears its metadata with the last number of the generation's range, so no stale `working` or
+  `blocked` state stays. herdr itself also drops an agent whose pane is back at its shell prompt.
+- **Resume and replacement.** The next generation names itself and its state as soon as hello
+  binds it, with numbers above every number of the generation before. A late report or cleanup
+  from the older generation is ignored and cannot overwrite or clear it.
+
+Neither path closes the pane or types into it. herdr status is display only: corral never takes it
+as evidence that a gate passed, a question was answered or a run completed. A report herdr refuses
+is recorded as a `herdr_report_failed` host event and in the `herdr` section of the host's bridge
+`get_state` result, and changes nothing else; `herdr_reporting_off` names why a host does not
+report at all.
+
 ## What is checked before a run starts
 
 Dispatch, `corral review-run` and opening the PM check a pi-native profile before any worktree,

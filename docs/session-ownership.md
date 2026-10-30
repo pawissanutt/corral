@@ -107,3 +107,20 @@ While a pane is adopted:
 An assistant session (`corral pi`, `corral pi --resume A-<n>`) adopts the owner's pane the same
 way: its container records the pane with each generation, corral never closes it or types into
 it, and ending the session asks only the session's own host to stop over its bridge.
+
+## herdr agent status of a bound host
+
+A bound Pi-native host, in its own run pane or an adopted one, holds herdr's lifecycle authority
+for that pane as source `custom:corral-pi` while it runs (see the guide's "herdr status"). The
+host reports with sequence numbers from its generation's own range; the range starts at the
+generation's hello time, so a later generation always reports above an earlier one. Ownership
+ends in one of two ways, and neither closes the pane or types into it:
+
+- the host's graceful exit releases the authority and clears its display name and tokens, so the
+  owner's shell is not shown as `corral-pi`;
+- when sync records the host lost, corral releases that generation with the last number of its
+  range, which herdr ignores once a later generation has reported.
+
+The release runs on the server sync already owns (the guard above), against the pane the
+generation recorded at launch. herdr status is a projection of the host's state, never an input to
+ownership, recovery or a run's outcome.
