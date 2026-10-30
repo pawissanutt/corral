@@ -678,10 +678,14 @@ pub enum ArtifactCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Snapshot a file as a task artifact
+    /// Snapshot a file as a task or assistant session artifact
     Add {
+        /// Task ID, or the file path when --session is supplied
         id: String,
-        path: PathBuf,
+        /// File path for a task artifact
+        path: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
         #[arg(long)]
         kind: Option<String>,
         #[arg(long)]
@@ -689,8 +693,10 @@ pub enum ArtifactCmd {
     },
     /// List artifacts, most important first (keep, normal, transient)
     List {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "session")]
         task: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
         #[arg(long)]
         json: bool,
         /// Only this importance tier: keep, normal or transient

@@ -118,6 +118,7 @@ fn add_artifact_inner(
     title: Option<&str>,
     origin: Option<&RequestOrigin>,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
+    crate::assistant_artifacts::check_owner(None)?;
     let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
@@ -324,7 +325,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
 pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
     let mut rows: Vec<ArtifactRow> = ctx
         .store
-        .list()?
+        .artifact_owners()?
         .into_iter()
         .flat_map(|t| {
             let (id, title, project) = (t.id, t.title, t.project);

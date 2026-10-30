@@ -51,6 +51,36 @@ session usage). Ending does not discard that evidence. A role total with missing
 usage is labeled partial, never presented as a known zero. Reported cost and API-equivalent
 estimates retain their existing meanings.
 
-This surface does not yet provide Pi assistant launch, shell entry guards, session
-artifacts, PM inbox operations, scratch management or owner-authorized actions. Those are
-separate members of the [reviewed assistant plan](../plans/assistant-sessions.md).
+## Session artifacts
+
+```sh
+corral artifact add --session A-1 report.md --kind report
+corral artifact list --session A-1 --json
+corral artifact show A-1:report.md
+corral pin A-1:report.md --follow-latest
+corral artifact show 1 --raw
+corral artifact set-tier A-1:report.md keep
+corral search "finding" --in artifacts --json
+corral artifact gc --dry-run
+```
+
+Snapshots live under `.corral/artifacts/assistant/A-1/`, with SHA-prefixed names;
+metadata lives in the session's `artifacts` entries. `A-1:report.md` resolves the newest
+matching snapshot; the full SHA-prefixed filename selects one version. Pin numbers,
+follow-latest pins, decoded reads, tiers, search and storage accounting work as for run
+artifacts. Artifact listings include sessions unless filtered with `--task` or `--session`.
+JSON rows identify session artifacts with `session` rather than a task ID.
+
+An assistant shell (`CORRAL_ASSISTANT=A-1`) may add only to its own session, never another
+session or a task run. The owner may add to any existing session, including an ended one
+(for example, to preserve scratch work). Session artifacts do not allocate tasks or runs.
+
+GC uses workspace retention policy for sessions, with age measured from session end;
+open sessions are not age-eligible, though size-based rules still apply. Reports and
+keep-tier artifacts, screenshots and pinned snapshots have the same protection as task
+artifacts. GC is an owner operation, not an assistant shell operation. `--dry-run` previews;
+`--yes` applies. Purged metadata remains resolvable; re-adding identical content revives it.
+
+This surface does not yet provide Pi assistant launch, general shell entry guards,
+PM inbox operations, scratch management or owner-authorized actions. Those are separate
+members of the [reviewed assistant plan](../plans/assistant-sessions.md).
