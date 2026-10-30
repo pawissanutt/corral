@@ -209,7 +209,7 @@ fn worker_launch_packet_with_emitted_obligations_equals_the_reference() {
 }
 
 /// A launched worker R1 with `n` waits and `n` decisions frozen into its newest checkpoint.
-fn obligated(n: usize, finished: bool) -> (Fx, String) {
+pub(super) fn obligated(n: usize, finished: bool) -> (Fx, String) {
     corral_core::clock::pin_thread(Some(fixture::now()));
     let (mut fx, id) = Path::Worker.setup();
     fx.start(&id);
@@ -308,7 +308,7 @@ enum Entry {
 }
 
 /// Moves R1's worktree past its checkpoint: a commit the checkpoint does not record.
-fn stale(fx: &Fx, id: &str) {
+pub(super) fn stale(fx: &Fx, id: &str) {
     let task: Task = fx.ctx.store.get(id).unwrap();
     let worktree = task.current_run().unwrap().worktree.clone();
     std::fs::write(worktree.join("after-checkpoint.txt"), "later work\n").unwrap();
@@ -415,9 +415,12 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                     }
                 }
                 delta.check_identity().unwrap();
-                if entry != Entry::Approve {
-                    assert_eq!(delta.unattributed_hydrations(), 0, "{what} x{n}");
-                }
+                assert_eq!(
+                    delta.unattributed_hydrations(),
+                    0,
+                    "{what} x{n}: {:?}",
+                    delta.sites
+                );
                 sizes.push((delta, expected, outcome));
             }
             let [
@@ -425,11 +428,6 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                 (large, large_rows, large_out),
             ] = sizes.try_into().unwrap();
             assert_eq!(small_out, large_out, "{what}: outcome");
-            if entry == Entry::Approve {
-                // `corral done` still reads the full task: its cells are T-528's (PM decision
-                // 2026-10-28). Here it is held to the reference's outcome and refusal.
-                continue;
-            }
             // A proceeding entry checks the checkpoint before its lock and again under it; a
             // refused one stops at the first check.
             let times = if is_stale { 1 } else { 2 };
