@@ -154,13 +154,24 @@ pub struct AttentionBoard {
 
 /// Assess all conditions, independently of progress and display precedence.
 pub fn assess(task: &Task, neighborhood: &Neighborhood<'_>, now: Timestamp) -> Assessment {
+    assess_with_delivery(task, neighborhood, now, |out| {
+        delivery::conditions(task, neighborhood, now, out)
+    })
+}
+
+fn assess_with_delivery(
+    task: &Task,
+    neighborhood: &Neighborhood<'_>,
+    now: Timestamp,
+    delivery: impl FnOnce(&mut Vec<Condition>),
+) -> Assessment {
     if matches!(task.status, Status::Done | Status::Dropped) {
         return Assessment::default();
     }
     corral_core::work::record(corral_core::work::Work::AttentionVisit, 1);
     let mut assessment = Assessment::default();
     classify::conditions(task, neighborhood, now, &mut assessment);
-    delivery::conditions(task, neighborhood, now, &mut assessment.conditions);
+    delivery(&mut assessment.conditions);
     stopping::conditions(task, neighborhood, now, &mut assessment);
     if assessment.progress.is_none() && assessment.conditions.is_empty() {
         let run = task.current_run();
@@ -313,17 +324,23 @@ pub(super) fn board_snapshot(
         tasks: tasks
             .iter()
             .map(|task| {
-                let assessment = assess(task, &neighborhood, now);
-                TaskAssessment {
+                let delivery = if matches!(task.status, Status::Done | Status::Dropped) {
+                    Vec::new()
+                } else {
+                    delivery::conditions_ref(task, &neighborhood, now)?
+                };
+                let assessment =
+                    assess_with_delivery(task, &neighborhood, now, |out| out.extend(delivery));
+                Ok(TaskAssessment {
                     task: task.id.clone(),
                     title: task.title.clone(),
                     project: task.project.clone(),
                     status: task.status,
                     blocked: corral_core::attention::blocked(task, &assessment).cloned(),
                     assessment,
-                }
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
     };
     Ok((tasks, board))
 }
