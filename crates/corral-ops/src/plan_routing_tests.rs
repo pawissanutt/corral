@@ -1,5 +1,7 @@
 use super::*;
 use corral_core::ProfileChoice;
+#[path = "plan_native_review_tests.rs"]
+mod native_reviews;
 
 fn preview_fixture() -> (tempfile::TempDir, Ctx, String) {
     let (tmp, mut ctx, id, _) = fixture();

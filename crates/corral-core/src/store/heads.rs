@@ -314,6 +314,30 @@ pub struct PlanReviewHead {
     pub route: Option<Box<crate::ReviewRoute>>,
 }
 
+impl PlanReviewHead {
+    /// Project the actual review's scalars and native/inbox facts, without history.
+    pub fn of(review: &crate::PlanReview) -> Self {
+        Self {
+            agent_host: review
+                .agent_host
+                .as_deref()
+                .map(AgentHostHead::of)
+                .map(Box::new),
+            delivery: review.delivery,
+            inbox: InboxHead::of(&review.inbox),
+            id: review.id.clone(),
+            reviewer: review.reviewer.clone(),
+            policy_digest: review.policy_digest.clone(),
+            verdict: review.verdict,
+            notes: review.notes.clone(),
+            at: review.at,
+            herdr: review.herdr.clone(),
+            pending_reply: review.pending_reply.clone(),
+            route: review.route.clone(),
+        }
+    }
+}
+
 /// An aggregate attempt without its review history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
