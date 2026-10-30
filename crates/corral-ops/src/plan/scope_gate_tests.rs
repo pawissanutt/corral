@@ -49,9 +49,28 @@ fn scopes() -> Vec<PlanScope> {
 /// Accepts and publishes an owner-approved design `T-001@P1` with the given delivery target.
 fn published(target: PlanDeliveryTarget) -> (tempfile::TempDir, Ctx, String) {
     let dir = tempfile::tempdir().unwrap();
-    let store = Store::init(dir.path()).unwrap();
+    std::fs::create_dir(dir.path().join("app")).unwrap();
+    let mut store = Store::init(dir.path()).unwrap();
+    store.config.projects.insert(
+        "app".into(),
+        corral_core::Project {
+            path: "app".into(),
+            dispatch: Default::default(),
+            default_profile: None,
+            base: None,
+            review: Default::default(),
+            artifact_retention: None,
+            post_land: vec![],
+        },
+    );
+    store.save_config().unwrap();
     let task = store
-        .create("Design feature", None, Status::Backlog, "Original spec\n")
+        .create(
+            "Design feature",
+            Some("app"),
+            Status::Backlog,
+            "Original spec\n",
+        )
         .unwrap();
     let now = jiff::Timestamp::now();
     store
@@ -103,9 +122,54 @@ fn published(target: PlanDeliveryTarget) -> (tempfile::TempDir, Ctx, String) {
             Ok(())
         })
         .unwrap();
-    let ctx = Ctx::from_store(store);
+    let ctx = crate::resources::FixedResourceProbe::ctx(store);
     crate::plan_decompose::apply(&ctx, &task.id, "P1").unwrap();
     (dir, ctx, task.id)
+}
+
+#[test]
+fn added_member_gets_quick_gate_on_published_plan() {
+    let (_dir, ctx, design) = published(integration());
+    let existing = members(&ctx, &design).into_values().next().unwrap();
+    let tracker = ctx
+        .store
+        .execution_plan(&ctx.store.get(&existing).unwrap())
+        .unwrap()
+        .unwrap()
+        .id;
+    let id = ctx
+        .store
+        .create("Fix", Some("app"), Status::Backlog, "")
+        .unwrap()
+        .id;
+    crate::plan_add_member(&ctx, &tracker, &id).unwrap();
+    let gate = resolved(&ctx, &id).unwrap().unwrap();
+    assert_eq!(gate.gate.tier, "quick");
+    assert!(gate.gate.tests.is_empty());
+    assert!(gate.gate.expected_failures.is_empty());
+}
+
+#[test]
+fn queue_reports_unresolved_publication_binding() {
+    let (_dir, ctx, design) = published(integration());
+    let id = members(&ctx, &design)["api"].clone();
+    ctx.store
+        .update(&id, |task| {
+            task.status = Status::Ready;
+            task.queued = true;
+            Ok(())
+        })
+        .unwrap();
+    edit_journal(&ctx, &design, |journal| {
+        journal["scopes"] = serde_json::json!({});
+    });
+    let entries = crate::dispatch_queue(&ctx).unwrap();
+    let entry = entries.iter().find(|entry| entry.id == id).unwrap();
+    assert!(
+        entry.reason.contains("member gate unresolved"),
+        "{}",
+        entry.reason
+    );
 }
 
 fn integration() -> PlanDeliveryTarget {
@@ -367,7 +431,7 @@ fn a_member_moved_into_a_designed_integration_plan_needs_the_owners_gate() {
     let source = dir.path().join("source.md");
     std::fs::write(
         &source,
-        "---\ntitle: Source\napproved_scope:\n  goal: Held work\n  acceptance:\n    - {scenario: held works, expected: pass}\ntasks:\n  - {key: ready, title: Ready}\n  - {key: held, title: Held}\n---\n",
+        "---\ntitle: Source\nproject: app\napproved_scope:\n  goal: Held work\n  acceptance:\n    - {scenario: held works, expected: pass}\ntasks:\n  - {key: ready, title: Ready}\n  - {key: held, title: Held}\n---\n",
     )
     .unwrap();
     let imported = crate::import_plan(&ctx, &source, false, corral_core::Origin::Agent).unwrap();

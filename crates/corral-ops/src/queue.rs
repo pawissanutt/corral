@@ -727,13 +727,22 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
                 reason.clone()
             } else if task.launch.as_ref().is_some_and(|l| l.reserved) {
                 "launch reservation held".into()
+            } else if task.launch.is_none()
+                && let Err(error) = crate::plan::scope_gate::resolve(&store, &task)
+                && error
+                    .downcast_ref::<crate::plan::scope_gate::ScopeGateError>()
+                    .is_some()
+            {
+                format!("{error:#}")
             } else if let Some(reason) = ready_reason(&store, &task) {
                 reason
             } else {
                 let validation = if task.launch.is_some() {
                     Ok(())
                 } else {
-                    resolve_plan(&fresh, &task, &DispatchOpts::default()).map(|_| ())
+                    crate::plan::scope_gate::resolve(&store, &task).and_then(|_| {
+                        resolve_plan(&fresh, &task, &DispatchOpts::default()).map(|_| ())
+                    })
                 };
                 match validation.and_then(|_| {
                     let planning =
