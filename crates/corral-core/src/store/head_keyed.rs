@@ -2,6 +2,7 @@
 //! T-253 section 4, "`TaskRef` and `TaskMut`"): each read decodes at most the rows it returns.
 
 use anyhow::{Context, Result};
+use jiff::Timestamp;
 use serde::de::DeserializeOwned;
 
 use super::codec::seq;
@@ -247,6 +248,16 @@ impl TaskHead {
                 true,
             )?
             .is_empty())
+    }
+
+    /// First matching append, not the maximum sequence, preserving causal OD11 identity.
+    pub fn agent_turn_ended_at(
+        &self,
+        container: &ContainerRef,
+        generation: u32,
+        ended: Timestamp,
+    ) -> Result<Option<AgentTurn>> {
+        self.agent_record(container, "turns", format!("ended:{generation}:{ended}"))
     }
 
     pub fn latest_agent_turn(

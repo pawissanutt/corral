@@ -42,6 +42,8 @@ fn current_generation_open_turn_is_not_inferred_from_the_latest_turn_or_older_ge
                 for n in 0..2 * scale {
                     host.turns.push(turn(1, n as u64, false));
                 }
+                host.turns.push(turn(1, 999, true));
+                host.turns.push(turn(2, 7, true));
                 host.turns.push(turn(2, 3, !open));
                 host.turns.push(turn(2, 9, true));
                 let container = match role {
@@ -94,6 +96,24 @@ fn current_generation_open_turn_is_not_inferred_from_the_latest_turn_or_older_ge
                 let before = work::snapshot();
                 assert_eq!(head.has_open_agent_turn(&container, 2).unwrap(), open);
                 assert!(!head.has_open_agent_turn(&container, 999).unwrap());
+                let ended = head
+                    .agent_turn_ended_at(&container, 2, store_support::at(1))
+                    .unwrap();
+                assert_eq!(
+                    ended,
+                    task.agent_turn_ended_at(&container, 2, store_support::at(1))
+                        .unwrap()
+                );
+                assert_eq!(
+                    ended.unwrap().seq,
+                    7,
+                    "first append, neither maximum nor minimum sequence"
+                );
+                assert!(
+                    head.agent_turn_ended_at(&container, 2, store_support::at(2))
+                        .unwrap()
+                        .is_none()
+                );
                 let after = work::snapshot();
                 measured.push(Counter::ALL.map(|c| after.total(c) - before.total(c)));
                 assert_eq!(
@@ -109,6 +129,31 @@ fn current_generation_open_turn_is_not_inferred_from_the_latest_turn_or_older_ge
                             changed.ended = Some(store_support::at(1));
                             head.put_agent_record(&container, NativeRecord::Turn(changed))?;
                             assert!(!TaskRef::has_open_agent_turn(head, &container, 2)?);
+                            let mut moved = TaskRef::agent_turn(head, &container, 2, 7)?.unwrap();
+                            moved.ended = Some(store_support::at(2));
+                            head.put_agent_record(&container, NativeRecord::Turn(moved))?;
+                            assert_eq!(
+                                TaskRef::agent_turn_ended_at(
+                                    head,
+                                    &container,
+                                    2,
+                                    store_support::at(1)
+                                )?
+                                .unwrap()
+                                .seq,
+                                3
+                            );
+                            assert_eq!(
+                                TaskRef::agent_turn_ended_at(
+                                    head,
+                                    &container,
+                                    2,
+                                    store_support::at(2)
+                                )?
+                                .unwrap()
+                                .seq,
+                                7
+                            );
                             Ok(())
                         })
                         .unwrap();

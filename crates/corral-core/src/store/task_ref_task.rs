@@ -566,6 +566,22 @@ impl TaskRef for Task {
         )
     }
 
+    fn agent_turn_ended_at(
+        &self,
+        container: &ContainerRef,
+        generation: u32,
+        ended: Timestamp,
+    ) -> Result<Option<AgentTurn>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|state| {
+                state
+                    .turns
+                    .iter()
+                    .find(|turn| turn.generation == generation && turn.ended == Some(ended))
+            })
+            .cloned())
+    }
+
     fn agent_generation(
         &self,
         container: &ContainerRef,

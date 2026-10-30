@@ -463,6 +463,14 @@ pub trait TaskRef: TaskFieldsRef {
     /// Whether this generation has any open turn; older lost generations do not count.
     fn has_open_agent_turn(&self, container: &ContainerRef, generation: u32) -> Result<bool>;
 
+    /// First turn in append order ending at this instant in this generation (OD11 nudge identity).
+    fn agent_turn_ended_at(
+        &self,
+        container: &ContainerRef,
+        generation: u32,
+        ended: Timestamp,
+    ) -> Result<Option<AgentTurn>>;
+
     /// Generation `n` of the agent bound to `container` on this task.
     fn agent_generation(&self, container: &ContainerRef, n: u32)
     -> Result<Option<AgentGeneration>>;
