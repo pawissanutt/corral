@@ -617,6 +617,25 @@ impl TaskRef for Task {
             .collect())
     }
 
+    fn pending_plan_reviewers(&self) -> Result<Vec<(String, PlanReviewHead)>> {
+        self.plans
+            .iter()
+            .enumerate()
+            .filter_map(|(i, plan)| {
+                plan.reviews
+                    .last()
+                    .filter(|review| review.verdict.is_none())
+                    .map(|_| (i, plan))
+            })
+            .map(|(i, plan)| {
+                Ok((
+                    plan.id.clone(),
+                    plan_review_projection(self, i, plan.reviews.len() - 1)?,
+                ))
+            })
+            .collect()
+    }
+
     fn pending_aggregate_reviews(&self, attempt: &str) -> Result<Vec<AggregateReview>> {
         Ok(self
             .aggregate_attempts

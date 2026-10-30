@@ -326,6 +326,41 @@ impl TaskHead {
         .map(|found: Vec<RequestReceipt>| found.into_iter().next())
     }
 
+    /// Last reviewers awaiting verdicts across current and historical plans. Both selectors
+    /// are indexed; a closed replacement hides an earlier still-pending review of its plan.
+    pub fn pending_plan_reviewers(&self) -> Result<Vec<(String, crate::PlanReviewHead)>> {
+        let rows = self.query(
+            &RowQuery::part(TaskPart::PlanReview).current().open(),
+            u32::MAX,
+            Counter::NestedRowDecodes,
+        )?;
+        rows.into_iter()
+            .map(|row| {
+                let (parent, _) = row
+                    .key
+                    .split_once('/')
+                    .context("plan review has no parent ordinal")?;
+                let plan = self
+                    .query(
+                        &RowQuery::key(TaskPart::Plan, parent),
+                        1,
+                        Counter::HistoryRowDecodes,
+                    )?
+                    .pop()
+                    .context("pending reviewer has no plan")?;
+                let id = plan
+                    .doc
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .context("pending review's plan has no identity")?
+                    .to_owned();
+                let review =
+                    serde_json::from_value(row.doc).context("decoding pending plan reviewer")?;
+                Ok((id, review))
+            })
+            .collect()
+    }
+
     /// The superseded revisions of `member`'s gate, oldest first.
     pub fn member_gate_history(&self, member: &str) -> Result<Vec<crate::MemberGateRecord>> {
         decode_all(

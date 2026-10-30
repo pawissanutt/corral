@@ -17,6 +17,7 @@ pub use header::{
 };
 mod owner;
 pub use owner::{Recovery, RetryInspection};
+mod recipient_ref;
 mod records;
 mod storage;
 pub use storage::Inbox;

@@ -215,6 +215,28 @@ fn planning_liveness_matches_full_facades_at_one_and_tenfold_history() {
                     expected,
                     "full ref: {role:?} {case:?}"
                 );
+                let closure = agent::container_closure(&task, &binding.container);
+                assert_eq!(
+                    agent::container_closure_ref(&task, &binding.container).unwrap(),
+                    closure
+                );
+                let recipient = match &binding.container {
+                    ContainerRef::Planner { task, run } => corral_core::inbox::Recipient::PlanRun {
+                        task: task.clone(),
+                        plan_run: run.clone(),
+                    },
+                    ContainerRef::PlanReviewer { task, plan, review } => {
+                        corral_core::inbox::Recipient::PlanReview {
+                            task: task.clone(),
+                            plan: plan.clone(),
+                            review: review.clone(),
+                        }
+                    }
+                    _ => unreachable!(),
+                };
+                let inbox = corral_core::inbox::Inbox::new(&store, recipient).unwrap();
+                let ended = inbox.recipient_ended(&task);
+                assert_eq!(inbox.recipient_ended_ref(&task).unwrap(), ended);
                 store.fixture_put_task(&task).unwrap();
                 let _hot = HotScope::enter();
                 let before = work::snapshot();
@@ -223,6 +245,16 @@ fn planning_liveness_matches_full_facades_at_one_and_tenfold_history() {
                     agent::check_live_ref(&head, &binding).unwrap(),
                     expected,
                     "head ref: {role:?} {case:?}"
+                );
+                assert_eq!(
+                    agent::container_closure_ref(&head, &binding.container).unwrap(),
+                    closure,
+                    "closure: {role:?} {case:?}"
+                );
+                assert_eq!(
+                    inbox.recipient_ended_ref(&head).unwrap(),
+                    ended,
+                    "recipient: {role:?} {case:?}"
                 );
                 let after = work::snapshot();
                 measured.push(

@@ -202,6 +202,9 @@ macro_rules! keyed_reads {
         fn pending_plan_reviews(&self, plan: &str) -> Result<Vec<PlanReviewHead>> {
             self.$reads()?.pending_plan_reviews(plan)
         }
+        fn pending_plan_reviewers(&self) -> Result<Vec<(String, PlanReviewHead)>> {
+            self.$reads()?.pending_plan_reviewers()
+        }
         fn pending_aggregate_reviews(&self, attempt: &str) -> Result<Vec<AggregateReview>> {
             self.$reads()?.pending_aggregate_reviews(attempt)
         }
