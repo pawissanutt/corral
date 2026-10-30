@@ -144,7 +144,11 @@ fn delivery_entry(path: &Path, key: &str, number: u64, sha256: &str) -> Result<O
 /// The notice body budget: its envelope header and its own header line, with the widest
 /// sequence numbers, leave this much of the adapter's input cap.
 fn budget(key: &str) -> usize {
-    let envelope = format!("[corral envelope {key}@env{}]\n\n", u64::MAX).len();
+    let envelope = format!(
+        "[corral envelope {key}@env{}]\n[corral framing escaped-v1]\n\n",
+        u64::MAX
+    )
+    .len();
     let header = format!("[corral {key}#{} {NOTICE_KIND}]\n", u64::MAX).len();
     INPUT_MAX_BYTES.saturating_sub(envelope + header)
 }
@@ -228,6 +232,10 @@ fn render(parts: &Parts, kept: usize, complete: Option<&str>) -> String {
     body
 }
 
+fn framed_len(body: &str) -> usize {
+    body.len() + body.matches("\n\n[corral ").count()
+}
+
 /// The notice body for `key`'s inbox. A body over the budget keeps as many leading lines as
 /// fit and names the evidence file `keep` wrote with the complete notice.
 pub fn body(
@@ -241,17 +249,17 @@ pub fn body(
     let parts = parts(lost, next, scan, unconfirmed);
     let full = render(&parts, parts.lines.len(), None);
     let budget = budget(key);
-    if full.len() <= budget {
+    if framed_len(&full) <= budget {
         return Ok(full);
     }
     let path = keep(&full)?;
     let mut kept = parts.lines.len();
-    while kept > 0 && render(&parts, kept, Some(&path)).len() > budget {
+    while kept > 0 && framed_len(&render(&parts, kept, Some(&path))) > budget {
         kept -= 1;
     }
     let body = render(&parts, kept, Some(&path));
     anyhow::ensure!(
-        body.len() <= budget,
+        framed_len(&body) <= budget,
         "the recovery notice cannot fit {budget} bytes even without its call lines"
     );
     Ok(body)

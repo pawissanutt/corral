@@ -111,7 +111,7 @@ impl<'a> Inbox<'a> {
         let cap = post.max_payload.min(MAX_PAYLOAD);
         // Reserve worst-case u64 header space, so every future envelope still fits.
         let overhead = format!(
-            "[corral envelope {}@env{}]\n\n[corral {}#{} {}]\n",
+            "[corral envelope {}@env{}]\n[corral framing escaped-v1]\n\n[corral {}#{} {}]\n",
             self.key,
             u64::MAX,
             self.key,
@@ -122,7 +122,8 @@ impl<'a> Inbox<'a> {
         ensure!(
             post.body
                 .len()
-                .checked_add(overhead)
+                .checked_add(post.body.matches("\n\n[corral ").count())
+                .and_then(|n| n.checked_add(overhead))
                 .is_some_and(|n| n <= cap),
             "message size {} bytes plus {} header bytes exceeds payload cap {} bytes",
             post.body.len(),

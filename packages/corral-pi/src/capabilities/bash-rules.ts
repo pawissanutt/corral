@@ -140,7 +140,7 @@ export class BashPermissions {
   }
 
   observeAnswer(text: string): "granted" | "revoked" | undefined {
-    const envelope = /^\[corral envelope (\S+)@env\d+\]\n\n/.exec(text);
+    const envelope = /^\[corral envelope (\S+)@env\d+\]\n\[corral framing escaped-v1\]\n\n/.exec(text);
     if (envelope) {
       const marker = `\n\n[corral ${envelope[1]}#`;
       const members = (`\n\n${text.slice(envelope[0].length)}`).split(marker).slice(1);
@@ -152,6 +152,8 @@ export class BashPermissions {
       }
       return result;
     }
+    // Frozen envelopes from older versions lack unambiguous member boundaries.
+    if (text.startsWith("[corral envelope ")) return undefined;
     return this.observeAnswerBody(text);
   }
 

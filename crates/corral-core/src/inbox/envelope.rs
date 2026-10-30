@@ -143,11 +143,17 @@ impl Inbox<'_> {
             return Ok(None);
         }
         let number = state.next_envelope;
-        let mut payload = format!("[corral envelope {}@env{number}]", self.key());
+        // Escape member-looking lines in stored bodies, including messages posted by older
+        // versions. The framing marker lets consumers reject ambiguous legacy payloads.
+        let mut payload = format!(
+            "[corral envelope {}@env{number}]\n[corral framing escaped-v1]",
+            self.key()
+        );
         let mut members = Vec::new();
         let mut owner = false;
         for message in unread {
-            if payload.len() + 2 + message.body.len() > max_payload.min(MAX_PAYLOAD) {
+            let body = message.body.replace("\n\n[corral ", "\n\n\\[corral ");
+            if payload.len() + 2 + body.len() > max_payload.min(MAX_PAYLOAD) {
                 ensure!(
                     !members.is_empty(),
                     "stored message exceeds adapter payload cap"
@@ -155,7 +161,7 @@ impl Inbox<'_> {
                 break;
             }
             payload.push_str("\n\n");
-            payload.push_str(&message.body);
+            payload.push_str(&body);
             owner |= message.owner_kind();
             members.push(message.seq);
         }
