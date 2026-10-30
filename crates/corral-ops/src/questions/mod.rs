@@ -7,6 +7,8 @@
 mod ask;
 mod basis;
 mod events;
+#[cfg(test)]
+mod heads_tests;
 mod lifecycle;
 #[cfg(test)]
 mod tests;
@@ -19,12 +21,12 @@ mod tests_support;
 mod triage;
 
 use anyhow::Result;
-use corral_core::Task;
 use corral_core::agent::{
     self, AgentQuestion, AgentRunState, ClosureReason, ContainerRef, QUESTION_TRIAGE_MAX,
     QuestionActor, QuestionState, QuestionTriage,
 };
 use corral_core::inbox::Recipient;
+use corral_core::{Task, TaskRef};
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -243,6 +245,54 @@ pub struct QuestionView {
     pub question: AgentQuestion,
 }
 
+fn question_view(
+    task: &str,
+    container: &ContainerRef,
+    closure: Option<ClosureReason>,
+    question: AgentQuestion,
+) -> QuestionView {
+    let pending = question.recorded_pending() && closure.is_none();
+    let effective_state = if question.recorded_pending() && closure.is_some() {
+        QuestionState::Cancelled
+    } else {
+        question.state
+    };
+    let closure = closure.filter(|_| question.recorded_pending() || question.terminal.is_some());
+    QuestionView {
+        task: task.into(),
+        container: container.key(),
+        effective_state,
+        pending,
+        closure,
+        question,
+    }
+}
+
+/// Recorded-pending rows only; semantic closure may make a returned view effectively cancelled.
+pub(crate) fn recorded_pending_views_ref<T: TaskRef + ?Sized>(
+    task: &T,
+) -> Result<Vec<QuestionView>> {
+    let mut containers = task.unfinished_native_containers()?;
+    // The public full views API visits planning before coding, preserving its observable order.
+    containers.sort_by_key(|container| {
+        !matches!(
+            container,
+            ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+        )
+    });
+    let mut out = Vec::new();
+    for container in containers {
+        if task.agent_head(&container)?.is_none() {
+            continue;
+        }
+        let closure = agent::container_closure_ref(task, &container)?;
+        for question in task.pending_agent_questions(&container)? {
+            out.push(question_view(task.id(), &container, closure, question));
+        }
+    }
+    Ok(out)
+}
+
 pub fn views(task: &Task) -> Vec<QuestionView> {
     let mut out = Vec::new();
     for container in containers(task) {
@@ -251,21 +301,12 @@ pub fn views(task: &Task) -> Vec<QuestionView> {
             continue;
         };
         for question in &state.questions {
-            let pending = question.recorded_pending() && closure.is_none();
-            let effective_state = if question.recorded_pending() && closure.is_some() {
-                QuestionState::Cancelled
-            } else {
-                question.state
-            };
-            out.push(QuestionView {
-                task: task.id.clone(),
-                container: container.key(),
-                effective_state,
-                pending,
-                closure: closure
-                    .filter(|_| question.recorded_pending() || question.terminal.is_some()),
-                question: question.clone(),
-            });
+            out.push(question_view(
+                &task.id,
+                &container,
+                closure,
+                question.clone(),
+            ));
         }
     }
     out
@@ -273,6 +314,22 @@ pub fn views(task: &Task) -> Vec<QuestionView> {
 
 /// Questions of one task or every task; `all` includes non-pending ones.
 pub fn list(ctx: &Ctx, task: Option<&str>, all: bool) -> Result<Vec<QuestionView>> {
+    if !all {
+        let store = ctx.store.read_only_snapshot()?;
+        let tasks = match task {
+            Some(id) => vec![store.head(id)?],
+            None => store.unfinished_native_heads()?,
+        };
+        let mut out = Vec::new();
+        for task in tasks {
+            out.extend(
+                recorded_pending_views_ref(&task)?
+                    .into_iter()
+                    .filter(|view| view.pending),
+            );
+        }
+        return Ok(out);
+    }
     let tasks = match task {
         Some(id) => vec![ctx.store.get(id)?],
         None => ctx.store.list()?,
