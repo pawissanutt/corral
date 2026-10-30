@@ -460,6 +460,9 @@ pub trait TaskRef: TaskFieldsRef {
         generation: u32,
     ) -> Result<Option<AgentTurn>>;
 
+    /// Whether this generation has any open turn; older lost generations do not count.
+    fn has_open_agent_turn(&self, container: &ContainerRef, generation: u32) -> Result<bool>;
+
     /// Generation `n` of the agent bound to `container` on this task.
     fn agent_generation(&self, container: &ContainerRef, n: u32)
     -> Result<Option<AgentGeneration>>;

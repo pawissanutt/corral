@@ -555,6 +555,17 @@ impl TaskRef for Task {
             .cloned())
     }
 
+    fn has_open_agent_turn(&self, container: &ContainerRef, generation: u32) -> Result<bool> {
+        Ok(
+            crate::agent::container_state(self, container).is_some_and(|state| {
+                state
+                    .turns
+                    .iter()
+                    .any(|turn| turn.generation == generation && turn.ended.is_none())
+            }),
+        )
+    }
+
     fn agent_generation(
         &self,
         container: &ContainerRef,

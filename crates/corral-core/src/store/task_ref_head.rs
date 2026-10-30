@@ -145,6 +145,9 @@ macro_rules! keyed_reads {
         ) -> Result<Option<AgentTurn>> {
             self.$reads()?.latest_agent_turn(container, generation)
         }
+        fn has_open_agent_turn(&self, container: &ContainerRef, generation: u32) -> Result<bool> {
+            self.$reads()?.has_open_agent_turn(container, generation)
+        }
         fn agent_generation(
             &self,
             container: &ContainerRef,
