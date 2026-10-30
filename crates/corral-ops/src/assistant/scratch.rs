@@ -19,9 +19,6 @@ mod measure;
 pub use gc::{GcItem, GcReport, gc, orphans};
 pub use measure::{Measured, measure};
 
-/// OD6 defaults for the workspace-wide scratch cap and the idle period before GC.
-pub const SCRATCH_MAX: usize = 8;
-pub const SCRATCH_IDLE_DAYS: i64 = 7;
 pub const SPIKE: &str = "spike";
 /// Set by an owner-instructed finish; such a scratch belongs to its task from then on.
 pub const COWORK: &str = "cowork";
@@ -31,10 +28,11 @@ struct Limits {
     idle_days: i64,
 }
 
-fn limits(_ctx: &Ctx) -> Limits {
+fn limits(ctx: &Ctx) -> Limits {
+    let config = &ctx.store.config.assistant;
     Limits {
-        max: SCRATCH_MAX,
-        idle_days: SCRATCH_IDLE_DAYS,
+        max: config.scratch_max as usize,
+        idle_days: i64::from(config.scratch_idle_days),
     }
 }
 

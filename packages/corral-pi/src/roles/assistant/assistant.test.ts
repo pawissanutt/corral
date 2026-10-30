@@ -19,11 +19,12 @@ const message = {
   assets: "/assets", runtime_dir: "/runtime", session_dir: "/sessions", model: "gpt-6.1-sol",
 };
 
-test("the assistant loadout reads and shells, writes nothing, and offers todo only when enabled", () => {
+test("the assistant loadout reads, shells and writes behind its path guard, and offers todo only when enabled", () => {
   expect(assistant.role).toBe("assistant");
   expect(assistant.upstreamTools).toEqual(UPSTREAM);
-  expect(assistant.upstreamTools).not.toContain("edit");
-  expect(assistant.upstreamTools).not.toContain("write");
+  expect(assistant.upstreamTools).toContain("edit");
+  expect(assistant.upstreamTools).toContain("write");
+  expect(typeof assistant.extend).toBe("function");
   expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo"]);
   expect(assistant.tools(context)).toEqual([]);
   expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_todo"]);
