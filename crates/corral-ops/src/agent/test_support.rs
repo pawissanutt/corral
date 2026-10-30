@@ -186,7 +186,11 @@ pub(crate) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> H
     Host {
         identity: RequestIdentity {
             store: paths::store_id(&fx.ctx.store),
-            project: if assistant.is_some() { "" } else { "corral" }.into(),
+            project: match target {
+                BindTarget::Pm { project } => project.clone(),
+                _ if assistant.is_some() => String::new(),
+                _ => "corral".into(),
+            },
             role,
             task: task.cloned(),
             run: run.cloned(),

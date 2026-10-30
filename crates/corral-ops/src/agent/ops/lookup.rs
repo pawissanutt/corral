@@ -43,7 +43,7 @@ fn pm_task_receipt(
         Err(error) if format!("{error}").ends_with("not found") => return Ok(None),
         Err(error) => return Err(error),
     };
-    if task.project.as_deref() != Some(scope) {
+    if !super::super::hooks::pm::contains(&ctx.store, scope, task.project.as_deref())? {
         return Err(reject(
             RejectCode::OutOfScope,
             "the task is outside the PM's project scope",

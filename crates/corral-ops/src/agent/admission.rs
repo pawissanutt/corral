@@ -476,16 +476,29 @@ pub fn open_generation_with(
     // before any record changes, while an unavailable default is only reported. The
     // project's text trust is recorded with them.
     let project = match (target, target.container().task()) {
-        (BindTarget::Pm { project }, _) => Some(project.clone()),
+        (BindTarget::Pm { project }, _) => (!project.is_empty()).then(|| project.clone()),
         (_, Some(task)) => store.get(task)?.project,
         (_, None) => None,
     };
-    let capabilities =
+    let mut capabilities =
         store
             .config
             .agent
             .capabilities
             .resolve_for(target.role(), project.as_deref(), supported);
+    if matches!(target, BindTarget::Pm { project } if project.is_empty()) {
+        // The workspace's own guidance is owner-controlled, not a project's text.
+        // Rebuild so this trust decision is included in the durable snapshot digest.
+        capabilities = corral_core::agent::CapabilitySnapshot::with_settings(
+            capabilities.role,
+            capabilities.preset,
+            capabilities.features,
+            capabilities.web,
+            capabilities.mcp,
+            Some(true),
+            capabilities.llama_cpp,
+        );
+    }
     if let Some((key, reason)) = capabilities.explicit_unavailable() {
         bail!(
             "capability_unavailable: [agent.capabilities.{}] {key} = true, but {reason}, or \

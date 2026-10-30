@@ -270,10 +270,7 @@ pub(crate) fn recover_with(
     let pm_profile = if matches!(container, ContainerRef::Pm) {
         let resolved =
             adopt.map_or_else(|| super::hooks::pm::profile(ctx), |(_, r)| Ok(r.clone()))?;
-        ensure!(
-            super::hooks::pm::project(ctx)? == state.binding.project,
-            "out_of_scope: the approved PM project differs from the existing binding"
-        );
+        super::hooks::pm::project(ctx)?;
         Some(resolved)
     } else {
         None

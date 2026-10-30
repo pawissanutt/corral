@@ -134,8 +134,8 @@ fn bad(reason: &str) -> anyhow::Error {
     Rejection::new(RejectCode::BadRequest, reason).into()
 }
 
-fn scope(task: &Task, project: &str) -> Result<()> {
-    if task.project.as_deref() != Some(project) {
+fn scope(ctx: &Ctx, task: &Task, project: &str) -> Result<()> {
+    if !super::super::hooks::pm::contains(&ctx.store, project, task.project.as_deref())? {
         return Err(
             Rejection::new(RejectCode::OutOfScope, "target is outside the PM project").into(),
         );
@@ -145,7 +145,7 @@ fn scope(task: &Task, project: &str) -> Result<()> {
 
 fn target(ctx: &Ctx, id: &str, project: &str) -> Result<Task> {
     let task = ctx.store.get(&Store::normalize_id(id)?)?;
-    scope(&task, project)?;
+    scope(ctx, &task, project)?;
     Ok(task)
 }
 
@@ -188,7 +188,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
             if !matches!(status, Status::Idea | Status::Backlog) {
                 return Err(bad("capture may file only idea or backlog tasks"));
             }
-            if p.project != project {
+            if !super::super::hooks::pm::contains(&ctx.store, project, Some(&p.project))? {
                 return Err(Rejection::new(
                     RejectCode::OutOfScope,
                     "capture names another project",
@@ -534,6 +534,12 @@ pub(super) fn page(values: Vec<Value>, offset: usize, limit: usize) -> Result<Va
 }
 
 fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Value> {
+    let projects = if project == super::super::hooks::pm::WORKSPACE {
+        super::super::hooks::pm::projects(&ctx.store)?
+    } else {
+        [project.to_owned()].into()
+    };
+    let includes = |task: &Task| task.project.as_ref().is_some_and(|p| projects.contains(p));
     match op {
         AgentOp::InboxRead => {
             super::pm_inbox::read(ctx, super::payload(envelope, super::pm_inbox::READ_FIELDS)?)
@@ -591,12 +597,17 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
         AgentOp::ReadSearch => {
             let p: Search = super::payload(envelope, "query, limit?")?;
             let limit = p.limit.unwrap_or(20);
-            let options = crate::content_search::ContentSearch {
-                project: Some(project.into()),
-                limit,
-                ..Default::default()
-            };
-            let hits = crate::content_search::search_content(ctx, &p.query, &options)?;
+            let mut hits = Vec::new();
+            for project in &projects {
+                let options = crate::content_search::ContentSearch {
+                    project: Some(project.clone()),
+                    limit,
+                    ..Default::default()
+                };
+                hits.extend(crate::content_search::search_content(
+                    ctx, &p.query, &options,
+                )?);
+            }
             page(
                 hits.iter()
                     .map(serde_json::to_value)
@@ -611,9 +622,7 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                 .store
                 .list()?
                 .iter()
-                .filter(|t| {
-                    t.project.as_deref() == Some(project) && p.status.is_none_or(|s| t.status == s)
-                })
+                .filter(|t| includes(t) && p.status.is_none_or(|s| t.status == s))
                 .map(summary)
                 .collect();
             page(tasks, p.offset, p.limit.unwrap_or(20))
@@ -621,22 +630,19 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
         AgentOp::ReadBrief | AgentOp::ReadNext | AgentOp::ReadLessons => {
             let _: Empty = super::payload(envelope, "no fields")?;
             if op == AgentOp::ReadLessons {
-                return page(
-                    ctx.store
-                        .lessons(project)?
-                        .iter()
-                        .map(serde_json::to_value)
-                        .collect::<std::result::Result<Vec<_>, _>>()?,
-                    0,
-                    100,
-                );
+                let mut lessons = Vec::new();
+                for project in &projects {
+                    lessons.extend(
+                        ctx.store
+                            .lessons(project)?
+                            .iter()
+                            .map(serde_json::to_value)
+                            .collect::<std::result::Result<Vec<_>, _>>()?,
+                    );
+                }
+                return page(lessons, 0, 100);
             }
-            let tasks: Vec<_> = ctx
-                .store
-                .list()?
-                .into_iter()
-                .filter(|t| t.project.as_deref() == Some(project))
-                .collect();
+            let tasks: Vec<_> = ctx.store.list()?.into_iter().filter(includes).collect();
             // Existing read-only observations/policy, never pm_next's workset/action executor.
             let observations = crate::pm_next::observe::observations(ctx)?
                 .into_iter()
