@@ -4,9 +4,9 @@
 //! `get_state` and continues `events_since` from the saved sequence. A loss is a binding fact
 //! recorded once per generation as `agent_lost`; nothing is inferred from an idle pane.
 use anyhow::Result;
-use corral_core::Store;
 use corral_core::agent::{self, AgentRunState, ContainerRef, Executor, HostHealth, pm_state};
 use corral_core::inbox::Recipient;
+use corral_core::{Store, TaskRef};
 use serde_json::{Value, json};
 
 use super::{BridgeClient, BridgeError, events_since_recorded};
@@ -15,6 +15,10 @@ use crate::agent::launch::{SOCKET_FILE, generation_dir};
 
 /// At most this many `events_since` pages per probe; a longer backlog continues next pass.
 const PAGES_MAX: usize = 16;
+
+#[cfg(test)]
+#[path = "liveness_heads_tests.rs"]
+mod head_tests;
 
 #[cfg(test)]
 thread_local! {
@@ -121,7 +125,45 @@ pub fn probe(
     let Some(generation) = state.current_generation() else {
         return Ok(Probe::Skip);
     };
-    let healthy = state.binding.health == HostHealth::Healthy && generation.fenced.is_none();
+    probe_generation(
+        store,
+        recipient,
+        container,
+        state.binding.health,
+        generation,
+    )
+}
+
+/// A hot probe reads the actual binding and one generation, never native history.
+pub(crate) fn probe_ref<T: TaskRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    recipient: &Recipient,
+    container: &ContainerRef,
+) -> Result<Probe> {
+    let Some(host) = task.agent_head(container)? else {
+        return Ok(Probe::Skip);
+    };
+    let Some(generation) = task.agent_generation(container, host.binding.generation)? else {
+        return Ok(Probe::Skip);
+    };
+    probe_generation(
+        store,
+        recipient,
+        container,
+        host.binding.health,
+        &generation,
+    )
+}
+
+fn probe_generation(
+    store: &Store,
+    recipient: &Recipient,
+    container: &ContainerRef,
+    health: HostHealth,
+    generation: &agent::AgentGeneration,
+) -> Result<Probe> {
+    let healthy = health == HostHealth::Healthy && generation.fenced.is_none();
     let Some(bound) = generation.bound.as_ref().filter(|_| healthy) else {
         return Ok(Probe::Skip);
     };
@@ -223,8 +265,34 @@ fn apply(state: &mut AgentRunState, probe: &Probe) -> bool {
 pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<bool> {
     let changed = match container.task() {
         Some(id) => store
-            .try_update(id, |task| {
-                Ok(agent::container_state_mut(task, container).is_some_and(|s| apply(s, probe)))
+            .try_update_head(id, |task| match probe {
+                Probe::Lost { generation, .. } => {
+                    let Some(host) = task.agent_head(container)? else {
+                        return Ok(false);
+                    };
+                    if host.binding.generation != *generation
+                        || host.binding.health != HostHealth::Healthy
+                    {
+                        return Ok(false);
+                    }
+                    task.edit_agent_head(container, |host| {
+                        host.binding.health = HostHealth::Lost;
+                        Ok(())
+                    })?;
+                    Ok(true)
+                }
+                Probe::Healthy { generation, seq } => {
+                    let Some(mut stored) = task.agent_generation(container, *generation)? else {
+                        return Ok(false);
+                    };
+                    if *seq <= stored.event_seq {
+                        return Ok(false);
+                    }
+                    stored.event_seq = *seq;
+                    task.put_agent_record(container, agent::NativeRecord::Generation(stored))?;
+                    Ok(true)
+                }
+                Probe::Busy | Probe::Skip => Ok(false),
             })?
             .is_some(),
         None => pm_state::update(store, |pm| {
