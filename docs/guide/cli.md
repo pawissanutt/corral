@@ -11,11 +11,12 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  assistant       Inspect and manage durable assistant sessions (no coding slot)
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox           Inspect and durably manage agent inbox messages without delivering them
   attention       Inspect current task conditions and progress without changing state
   agent           Pi-native agent host: authenticated host calls, launch, install and recovery
-  pi              Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+  pi              Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
   question        Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
@@ -88,6 +89,105 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral assistant`
+
+```text
+Inspect and manage durable assistant sessions (no coding slot)
+
+Usage: corral assistant [OPTIONS] <COMMAND>
+
+Commands:
+  create   Allocate a session record and unbound container, without a task or coding slot
+  list     List assistant sessions: live (host running), open (resumable) or ended
+  show     Show a session, its durable container and usage
+  end      End a session (stopping a running host), keeping its record and transcript references
+  summary  Replace a session's Markdown summary from a UTF-8 file
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant create`
+
+```text
+Allocate a session record and unbound container, without a task or coding slot
+
+Usage: corral assistant create [OPTIONS]
+
+Options:
+      --profile <PROFILE>            [default: pi]
+      --root <ROOT>                  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --focus <FOCUS>                
+      --pane <PANE>                  
+      --herdr-socket <HERDR_SOCKET>  
+      --json                         
+  -h, --help                         Print help
+```
+
+### `corral assistant list`
+
+```text
+List assistant sessions: live (host running), open (resumable) or ended
+
+Usage: corral assistant list [OPTIONS]
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant show`
+
+```text
+Show a session, its durable container and usage
+
+Usage: corral assistant show [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant end`
+
+```text
+End a session (stopping a running host), keeping its record and transcript references
+
+Usage: corral assistant end [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant summary`
+
+```text
+Replace a session's Markdown summary from a UTF-8 file
+
+Usage: corral assistant summary [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --file <FILE>  
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
 ```
 
 ## `corral mode`
@@ -521,7 +621,7 @@ Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, job, job_monitor, plan_write, plan_submit, plan_verdict]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -662,16 +762,19 @@ Options:
 ## `corral pi`
 
 ```text
-Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
 
 Usage: corral pi [OPTIONS]
 
 Options:
       --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --model <MODEL>        Model to run instead of the PM profile's (bare: Pi's default for the provider)
+      --pm                   Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
+      --resume <A-N>         Resume assistant session A-<n> in this pane, fencing its previous generation
+      --over-cap             Open an assistant even when assistant.max_live assistants are already live
+      --model <MODEL>        Model to run instead of the profile's (bare: Pi's default for the provider)
       --provider <PROVIDER>  Provider whose `corral agent login` runs the session (bare default: openai-codex) [possible values: openai-codex, anthropic]
-      --effort <EFFORT>      Reasoning effort instead of the PM profile's
+      --effort <EFFORT>      Reasoning effort instead of the profile's
   -h, --help                 Print help
 ```
 
@@ -2169,18 +2272,18 @@ Arguments:
 Options:
       --origin <ORIGIN>          Who filed this task; PMs and agents should pass their own origin [default: owner]
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -p, --project <PROJECT>      
-      --idea                   
-      --ready                  
-      --body <BODY>            
-      --body-file <BODY_FILE>  
+  -p, --project <PROJECT>        
+      --idea                     
+      --ready                    
+      --body <BODY>              
+      --body-file <BODY_FILE>    
       --profile <PROFILE>        Preferred profile for dispatch [alias: --agent]
-      --depends <DEPENDS>      
-      --priority <PRIORITY>    
+      --depends <DEPENDS>        
+      --priority <PRIORITY>      
       --kind <KIND>              Task category used by routing rules
       --size <SIZE>              Estimated work volume, independent of reasoning difficulty
       --difficulty <DIFFICULTY>  Reasoning difficulty, independent of task size: routine, standard or hard
-      --design                  Route the idea or task through design planning before implementation [alias: --plan-required]
+      --design                   Route the idea or task through design planning before implementation [alias: --plan-required]
       --label <LABELS>           Task labels; owner-only excludes Ideas from automatic promotion
   -h, --help                     Print help
 ```
@@ -3248,7 +3351,7 @@ Write or refresh every corral role skill in agent skill dirs (default: every har
 Usage: corral skill install [OPTIONS]
 
 Options:
-      --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents]
+      --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents, pi-native]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --dir <DIR>          Install into this skills directory instead
       --force              Replace role skill files that corral did not write

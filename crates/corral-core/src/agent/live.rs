@@ -27,6 +27,10 @@ pub enum ContainerRef {
         review: String,
     },
     Pm,
+    /// A workspace-scoped assistant session (T-544); it names no task or project.
+    Assistant {
+        session: String,
+    },
 }
 
 impl ContainerRef {
@@ -40,6 +44,7 @@ impl ContainerRef {
                 format!("{task}/plan-{plan}/{review}")
             }
             ContainerRef::Pm => "pm".into(),
+            ContainerRef::Assistant { session } => format!("assistant/{session}"),
         }
     }
 
@@ -49,7 +54,15 @@ impl ContainerRef {
             | ContainerRef::Reviewer { task, .. }
             | ContainerRef::Planner { task, .. }
             | ContainerRef::PlanReviewer { task, .. } => Some(task),
-            ContainerRef::Pm => None,
+            ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
+        }
+    }
+
+    /// The assistant session a container names; `None` for task containers and the PM.
+    pub fn assistant(&self) -> Option<&str> {
+        match self {
+            ContainerRef::Assistant { session } => Some(session),
+            _ => None,
         }
     }
 }
@@ -160,7 +173,10 @@ pub fn container_run<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'a
             .review_runs
             .iter()
             .find(|c| c.id == *review),
-        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => None,
+        ContainerRef::Planner { .. }
+        | ContainerRef::PlanReviewer { .. }
+        | ContainerRef::Pm
+        | ContainerRef::Assistant { .. } => None,
     }
 }
 
@@ -187,7 +203,10 @@ pub fn container_run_mut<'a>(task: &'a mut Task, container: &ContainerRef) -> Op
                 .iter_mut()
                 .find(|c| c.id == *review)
         }
-        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => None,
+        ContainerRef::Planner { .. }
+        | ContainerRef::PlanReviewer { .. }
+        | ContainerRef::Pm
+        | ContainerRef::Assistant { .. } => None,
     }
 }
 
@@ -214,7 +233,7 @@ pub fn container_state<'a>(task: &'a Task, container: &ContainerRef) -> Option<&
         ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } => {
             container_run(task, container)?.agent_host.as_deref()
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     }
 }
 
@@ -250,7 +269,7 @@ pub fn container_host_mut<'a>(
         ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } => {
             Some(&mut container_run_mut(task, container)?.agent_host)
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     }
 }
 
@@ -275,7 +294,7 @@ pub fn container_pane<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'
         ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } => {
             container_run(task, container)?.herdr.as_ref()
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     }
 }
 
@@ -374,7 +393,7 @@ fn closure(task: &Task, container: &ContainerRef, verdict_closes: bool) -> Optio
                 None
             }
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     }
 }
 
@@ -504,4 +523,19 @@ pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefu
 /// The PM's liveness and fence predicate over the AgentPm record.
 pub fn check_pm_live(pm: &AgentPm, generation: u32) -> Result<(), AgentRefusal> {
     generation_live(&pm.state, generation)
+}
+
+/// An assistant session's predicate: an ended session is closed, else its generation decides.
+pub fn check_assistant_live(
+    state: &AgentRunState,
+    ended: bool,
+    generation: u32,
+) -> Result<(), AgentRefusal> {
+    if ended {
+        return Err(AgentRefusal::new(
+            RefusalCode::RunEnded,
+            "the assistant session has ended",
+        ));
+    }
+    generation_live(state, generation)
 }

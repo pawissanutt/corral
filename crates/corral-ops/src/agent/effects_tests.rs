@@ -137,9 +137,6 @@ fn origin(
     op: &str,
 ) -> RequestOrigin {
     let (role, task, run, review, callback) = match &container {
-        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
-            panic!("planning containers do not execute implementation effects")
-        }
         ContainerRef::Worker { task, run } => {
             (AgentRole::Worker, Some(task), Some(run), None, None)
         }
@@ -151,6 +148,7 @@ fn origin(
             Some("g1:c1"),
         ),
         ContainerRef::Pm => (AgentRole::Pm, None, None, None, None),
+        _ => panic!("planning and assistant containers do not execute implementation effects"),
     };
     let callback = callback.map(String::from);
     RequestOrigin {
@@ -165,6 +163,7 @@ fn origin(
             run: run.cloned(),
             review: review.cloned(),
             callback: callback.clone(),
+            assistant: None,
             session_id: "s1".into(),
             generation,
             turn: None,

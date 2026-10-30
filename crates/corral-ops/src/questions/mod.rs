@@ -366,7 +366,7 @@ pub(crate) fn recipient(container: &ContainerRef) -> Option<Recipient> {
             run: run.clone(),
             review: review.clone(),
         }),
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     }
 }
 

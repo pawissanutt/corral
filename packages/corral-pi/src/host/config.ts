@@ -223,15 +223,24 @@ export function parseLaunchMessage(text: string): HostConfig {
   }
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
+  // An assistant is bound to its session `A-<n>` and to no project; no other role names a session.
+  const assistant = optional(message, "assistant", /^A-[1-9][0-9]{0,18}$/);
+  if ((role === "assistant") !== (assistant !== undefined)) {
+    throw new LaunchMessageInvalid("assistant names the session of the assistant role only, and that role needs it");
+  }
+  if (role === "assistant" && message.project !== "" && message.project != null) {
+    throw new LaunchMessageInvalid("an assistant names no project");
+  }
   return {
     identity: {
       store: field(message, "store", TOKEN, 64),
-      project: field(message, "project", TOKEN, 128),
+      project: role === "assistant" ? "" : field(message, "project", TOKEN, 128),
       role: role as Role,
       task: optional(message, "task", TOKEN),
       run: optional(message, "run", TOKEN),
       review: optional(message, "review", TOKEN),
       callback: optional(message, "callback", TOKEN),
+      ...(assistant ? { assistant } : {}),
       generation,
     },
     secrets: parsed,

@@ -7,9 +7,9 @@ import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
 
-export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer";
+export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer" | "assistant";
 
-export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer"];
+export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer", "assistant"];
 
 /** The native planning roles: each runs only while its `role_enabled` capability is on. */
 export const PLANNING_ROLES: readonly Role[] = ["planner", "plan_reviewer"];
@@ -47,6 +47,8 @@ export interface HostIdentity {
   readonly run?: string;
   readonly review?: string;
   readonly callback?: string;
+  /** Assistant only: the session `A-<n>`; an assistant names no project (`project` is empty). */
+  readonly assistant?: string;
   readonly generation: number;
 }
 
@@ -74,7 +76,7 @@ export interface RoleContext {
   readonly capabilities?: CapabilitySet;
   /** LSP server settings resolved for this generation. */
   readonly lspSettings?: Readonly<Record<string, unknown>>;
-  /** The worktree (worker, reviewer) or workspace root (pm) Pi works in. */
+  /** The worktree (worker, reviewer) or workspace root (pm, assistant) Pi works in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */
   readonly promptFile?: string;

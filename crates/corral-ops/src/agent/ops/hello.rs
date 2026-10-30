@@ -59,7 +59,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         admission::Resolved::Task(task) => {
             agent::container_run(task, &container).and_then(|r| r.session.as_ref())
         }
-        admission::Resolved::Pm(_) => None,
+        admission::Resolved::Pm(_) | admission::Resolved::Assistant(..) => None,
     };
     let sessions = selected
         .map(|s| s.directory.clone())

@@ -13,6 +13,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import compat from "../../compat.json" with { type: "json" };
+import assistantContract from "../../assets/assistant-contract.md" with { type: "text" };
 import pmContext from "../../assets/pm-context.md" with { type: "text" };
 import reviewerContract from "../../assets/reviewer-contract.md" with { type: "text" };
 import workerContract from "../../assets/worker-contract.md" with { type: "text" };
@@ -27,6 +28,7 @@ setEmbeddedQuickJSWasmPath(quickjsWasmPath);
 
 export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "compat.json": `${JSON.stringify(compat, null, 2)}\n`,
+  "assets/assistant-contract.md": assistantContract,
   "assets/pm-context.md": pmContext,
   "assets/reviewer-contract.md": reviewerContract,
   "assets/worker-contract.md": workerContract,
@@ -42,14 +44,15 @@ function writeInstall(dir: string): void {
 }
 
 async function installBundle(): Promise<void> {
-  const [{ setBundle }, worker, reviewer, pm, planner, planReviewer, delivery, auth] = await Promise.all([
+  const [{ setBundle }, worker, reviewer, pm, planner, planReviewer, assistant, delivery, auth] = await Promise.all([
     import("./bundle.ts"), import("../roles/worker/index.ts"), import("../roles/reviewer/index.ts"),
     import("../roles/pm/index.ts"), import("../roles/planner/index.ts"), import("../roles/plan-reviewer/index.ts"),
-    import("../delivery/index.ts"), import("../auth/index.ts"),
+    import("../roles/assistant/index.ts"), import("../delivery/index.ts"), import("../auth/index.ts"),
   ]);
   setBundle({
     roles: { worker: (root) => worker.workerRole(root), reviewer: (root) => reviewer.reviewerRole(root),
-      pm: (root) => pm.pmRole(root), planner: () => planner.default, plan_reviewer: () => planReviewer.default },
+      pm: (root) => pm.pmRole(root), planner: () => planner.default, plan_reviewer: () => planReviewer.default,
+      assistant: (root) => assistant.assistantRole(root) },
     delivery: delivery.default, auth: auth.default,
   });
 }

@@ -9,6 +9,7 @@ use corral_core::agent::{
     ContainerRef, GENERATIONS_MAX, GenerationFence, HostHealth, RequestBinding, RequestIdentity,
     RequestOrigin, RequestReceipt, paths, pm_state,
 };
+use corral_core::assistant::AssistantContainer;
 use corral_core::{Store, Task};
 use jiff::Timestamp;
 use serde_json::json;
@@ -32,6 +33,8 @@ pub(crate) enum Mode {
 pub(crate) enum Resolved {
     Task(Box<Task>),
     Pm(Box<AgentPm>),
+    /// An assistant session's container and whether its session record has ended.
+    Assistant(Box<AssistantContainer>, bool),
 }
 
 impl Resolved {
@@ -39,6 +42,7 @@ impl Resolved {
         match self {
             Resolved::Task(task) => agent::container_state(task, container),
             Resolved::Pm(pm) => Some(&pm.state),
+            Resolved::Assistant(assistant, _) => Some(&assistant.state),
         }
     }
 }
@@ -64,6 +68,9 @@ pub(crate) fn container_of(identity: &RequestIdentity) -> ContainerRef {
     let run = identity.run.clone().unwrap_or_default();
     match (identity.role, &identity.review) {
         (AgentRole::Pm, _) => ContainerRef::Pm,
+        (AgentRole::Assistant, _) => ContainerRef::Assistant {
+            session: identity.assistant.clone().unwrap_or_default(),
+        },
         (AgentRole::Reviewer, Some(review)) => ContainerRef::Reviewer {
             task,
             run,
@@ -80,6 +87,17 @@ pub(crate) fn container_of(identity: &RequestIdentity) -> ContainerRef {
 }
 
 fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
+    if let Some(id) = container.assistant() {
+        if !store.assistant_path(id)?.exists() {
+            return Err(reject(
+                RejectCode::ContainerNotFound,
+                format!("assistant session {id} not found"),
+            ));
+        }
+        let ended = store.get_assistant(id)?.ended.is_some();
+        let state = store.get_assistant_container(id)?;
+        return Ok(Resolved::Assistant(Box::new(state), ended));
+    }
     let Some(id) = container.task() else {
         return pm_state::load(store)?
             .map(|pm| Resolved::Pm(Box::new(pm)))
@@ -223,6 +241,15 @@ pub(crate) fn recheck_pm(pm: &AgentPm, generation: u32) -> Result<()> {
     saved_pane(&pm.state, generation, Some(&pm.pane))
 }
 
+pub(crate) fn recheck_assistant(
+    assistant: &AssistantContainer,
+    ended: bool,
+    generation: u32,
+) -> Result<()> {
+    agent::check_assistant_live(&assistant.state, ended, generation)?;
+    saved_pane(&assistant.state, generation, assistant.pane.as_deref())
+}
+
 pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admission> {
     let identity = &envelope.identity;
     let container = container_of(identity);
@@ -255,6 +282,9 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
         match &resolved {
             Resolved::Task(task) => recheck_task(task, &binding)?,
             Resolved::Pm(pm) => recheck_pm(pm, identity.generation)?,
+            Resolved::Assistant(assistant, ended) => {
+                recheck_assistant(assistant, *ended, identity.generation)?
+            }
         }
     }
     Ok(Admission::New(Box::new(Admitted {
@@ -294,6 +324,9 @@ pub enum BindTarget {
     Pm {
         project: String,
     },
+    Assistant {
+        session: String,
+    },
 }
 
 impl BindTarget {
@@ -320,6 +353,9 @@ impl BindTarget {
                 review: review.clone(),
             },
             BindTarget::Pm { .. } => ContainerRef::Pm,
+            BindTarget::Assistant { session } => ContainerRef::Assistant {
+                session: session.clone(),
+            },
         }
     }
 }
@@ -422,6 +458,7 @@ impl BindTarget {
             BindTarget::Planner { .. } => AgentRole::Planner,
             BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
             BindTarget::Pm { .. } => AgentRole::Pm,
+            BindTarget::Assistant { .. } => AgentRole::Assistant,
         }
     }
 }
@@ -498,6 +535,13 @@ pub fn open_generation_with(
                 true,
             ))
         })?,
+        // The owner's pane moves with the generation, so a refused launch changes nothing.
+        (BindTarget::Assistant { session }, _) => {
+            store.update_assistant_container(session, |assistant| {
+                assistant.pane = Some(pane.into());
+                next_generation(&mut assistant.state, &digest, pane, &capabilities)
+            })?
+        }
         (_, Some(task_id)) => {
             let (role, callback) = match target {
                 BindTarget::Planner { .. } => (AgentRole::Planner, None),
@@ -583,13 +627,16 @@ pub fn fence_generation(
     generation: u32,
     reason: &str,
 ) -> Result<bool> {
-    let changed = match container.task() {
-        None => pm_state::update(store, |pm| {
+    let changed = match (container.assistant(), container.task()) {
+        (Some(id), _) => store.update_assistant_container(id, |assistant| {
+            fence(&mut assistant.state, generation, reason)
+        })?,
+        (None, None) => pm_state::update(store, |pm| {
             let pm = pm.as_mut().context("no Pi-native PM is bound")?;
             let changed = fence(&mut pm.state, generation, reason)?;
             Ok((changed, changed))
         })?,
-        Some(task_id) => {
+        (None, Some(task_id)) => {
             let mut changed = false;
             store.try_update(task_id, |task| {
                 let state = agent::container_state_mut(task, container)

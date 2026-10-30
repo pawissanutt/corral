@@ -43,7 +43,8 @@ pub fn usage_session_file(store: &Store, container: &ContainerRef, request: &str
         .join(format!("{}.jsonl", sha256_hex(request.as_bytes())))
 }
 
-/// `sessions/<task>/<run>[/<review>]`, `<task>/plan-<D>`, `<task>/plan-<P>/<PR>`, or `pm`.
+/// `sessions/<task>/<run>[/<review>]`, `<task>/plan-<D>`, `<task>/plan-<P>/<PR>`, `pm` or
+/// `assistant/<A-n>`.
 pub fn container_sessions_dir(store: &Store, container: &ContainerRef) -> PathBuf {
     let base = sessions_dir(store);
     match container {
@@ -54,5 +55,6 @@ pub fn container_sessions_dir(store: &Store, container: &ContainerRef) -> PathBu
             base.join(task).join(format!("plan-{plan}")).join(review)
         }
         ContainerRef::Pm => base.join("pm"),
+        ContainerRef::Assistant { session } => base.join("assistant").join(session),
     }
 }

@@ -77,6 +77,12 @@ pub struct Config {
     pub herdr: HerdrCfg,
     #[serde(default)]
     pub pm: PmCfg,
+    /// `[assistant]`: assistant session launch defaults (T-544).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::assistant::AssistantCfg::is_default"
+    )]
+    pub assistant: crate::assistant::AssistantCfg,
     /// `[agent]`: Pi-native host settings; they apply only to pi-native runs.
     #[serde(default, skip_serializing_if = "AgentCfg::is_default")]
     pub agent: AgentCfg,
@@ -590,6 +596,7 @@ impl Config {
             artifacts: ArtifactCfg::default(),
             herdr: HerdrCfg::default(),
             pm: PmCfg::default(),
+            assistant: crate::assistant::AssistantCfg::default(),
             agent: AgentCfg::default(),
             lessons: LessonsCfg::default(),
             digest: DigestCfg::default(),

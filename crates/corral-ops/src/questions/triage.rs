@@ -160,7 +160,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
     let resting = match container {
         ContainerRef::Worker { .. } | ContainerRef::Planner { .. } => Status::Running,
         ContainerRef::Reviewer { .. } | ContainerRef::PlanReviewer { .. } => Status::Review,
-        ContainerRef::Pm => return false,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return false,
     };
     let waiting = agent::container_state(task, container).and_then(|state| {
         state
@@ -184,7 +184,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
             };
             (&mut state.question_hold, false)
         }
-        ContainerRef::Pm => return false,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return false,
     };
     let held = slot
         .as_deref()
@@ -394,7 +394,7 @@ pub(super) fn transact(
                                 | ContainerRef::Planner { run, .. } => Some(run.clone()),
                                 ContainerRef::Reviewer { review, .. }
                                 | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
-                                ContainerRef::Pm => None,
+                                ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
                             },
                             // Not question-bound: that convention marks an OmO native answer
                             // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
@@ -466,7 +466,10 @@ pub(super) fn transact(
 fn container_run(container: &ContainerRef) -> Option<&str> {
     match container {
         ContainerRef::Worker { run, .. } | ContainerRef::Reviewer { run, .. } => Some(run),
-        ContainerRef::Pm | ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => None,
+        ContainerRef::Pm
+        | ContainerRef::Assistant { .. }
+        | ContainerRef::Planner { .. }
+        | ContainerRef::PlanReviewer { .. } => None,
     }
 }
 

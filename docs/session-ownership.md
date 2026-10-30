@@ -86,9 +86,9 @@ dispatch and local-only gate collection still work.
 
 ## Panes adopted by `corral pi`
 
-`corral pi` (bound mode) makes the herdr pane it runs in, the owner's own pane, the Pi-native
+`corral pi --pm` (bound mode) makes the herdr pane it runs in, the owner's own pane, the Pi-native
 PM pane. The adoption is recorded in `.corral/state/agent-pm.json` as `adopted_pane`, in the
-same commit that opens the generation moving the PM there. A refused or failed `corral pi`
+same commit that opens the generation moving the PM there. A refused or failed `corral pi --pm`
 therefore leaves the previous pane's adoption untouched. Relaunching the PM in the same pane keeps
 the adoption, and opening it in any other pane drops it.
 The record is launch provenance, not inferred from the current shell or configuration.
@@ -101,5 +101,9 @@ While a pane is adopted:
   while its bound host is verifiably running (the recorded pid and start time).
 - Recovery types into it only after the existing liveness checks verify its live host and
   `corral agent resume --pm --replace` stops it. Once that host is gone, resume refuses
-  `pane_adopted` instead of typing into a shell the owner may be using; `corral pi` in that pane
-  takes the PM over in-process.
+  `pane_adopted` instead of typing into a shell the owner may be using; `corral pi --pm` in that
+  pane takes the PM over in-process.
+
+An assistant session (`corral pi`, `corral pi --resume A-<n>`) adopts the owner's pane the same
+way: its container records the pane with each generation, corral never closes it or types into
+it, and ending the session asks only the session's own host to stop over its bridge.

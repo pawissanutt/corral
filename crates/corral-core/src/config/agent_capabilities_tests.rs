@@ -318,18 +318,17 @@ fn guidance_and_session_keys_follow_the_role_matrix() {
             // When the role resolves its snapshot.
             let snapshot = config.resolve(role, None);
             // Then optional text is off only in strict, compaction keeps upstream's default
-            // on, lessons stay on, and PM has neither lessons nor export.
+            // on, lessons stay on, and neither PM nor assistant has lessons or export.
             let optional = index > 0;
             for key in ["context_files", "skills", "prompt_templates"] {
                 assert_eq!(snapshot.enabled(key), optional, "{role:?} {key}");
             }
             assert!(snapshot.enabled("compaction"));
-            let pm = role == AgentRole::Pm;
-            let lessons = !matches!(role, AgentRole::Pm | AgentRole::Assistant);
-            assert_eq!(snapshot.features.contains_key("lessons"), lessons);
-            assert_eq!(snapshot.enabled("lessons"), lessons);
-            assert_eq!(snapshot.enabled("session_export"), optional && !pm);
-            assert_eq!(snapshot.features.contains_key("session_export"), !pm);
+            let unbound = matches!(role, AgentRole::Pm | AgentRole::Assistant);
+            assert_eq!(snapshot.features.contains_key("lessons"), !unbound);
+            assert_eq!(snapshot.enabled("lessons"), !unbound);
+            assert_eq!(snapshot.enabled("session_export"), optional && !unbound);
+            assert_eq!(snapshot.features.contains_key("session_export"), !unbound);
         }
     }
     // And a ceiling-disallowed override is a configuration error.
@@ -579,8 +578,9 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
 }
 
 #[test]
-fn background_shell_is_worker_or_assistant_with_recorded_bounds() {
-    // Given each preset, then workers and assistants resolve background_shell, off in strict.
+fn background_shell_is_worker_only_with_recorded_bounds() {
+    // Given each preset, then only workers resolve background_shell, off in strict; assistant
+    // jobs wait for session-owned job semantics.
     for (index, preset) in [Preset::Strict, Preset::Standard, Preset::Full]
         .into_iter()
         .enumerate()
@@ -589,7 +589,7 @@ fn background_shell_is_worker_or_assistant_with_recorded_bounds() {
         config.set_preset(preset);
         for role in ALL {
             let snapshot = config.resolve(role, None);
-            let worker = matches!(role, AgentRole::Worker | AgentRole::Assistant);
+            let worker = role == AgentRole::Worker;
             assert_eq!(snapshot.features.contains_key("background_shell"), worker);
             assert_eq!(snapshot.enabled("background_shell"), worker && index > 0);
         }

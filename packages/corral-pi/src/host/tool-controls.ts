@@ -19,7 +19,7 @@ export interface HostControls {
 /** Roles each control may serve; the Rust catalog applies the same ceilings. */
 const CONTROL_ROLES: Readonly<Record<"hooks" | "bash_rules", readonly Role[]>> = {
   hooks: ["worker"],
-  bash_rules: ["worker", "reviewer"],
+  bash_rules: ["worker", "reviewer", "assistant"],
 };
 
 /** The enabled controls of a generation, from its snapshot's resolved settings; throws when malformed. */

@@ -13,9 +13,13 @@ const WorkerSnapshot = z.object({
   runs: z.array(z.object({ id: z.string(), progress: ProgressSchema.nullable().optional() })),
 });
 const PmSnapshot = z.object({ container: z.object({ todo: ProgressSchema.nullable() }) });
+const AssistantSnapshot = z.object({
+  container: z.object({ state: z.object({ todo: ProgressSchema.nullable().optional() }) }),
+});
 
 export function snapshotProgress(value: unknown, identity: HostIdentity): TodoProgress | null {
   if (identity.role === "pm") return PmSnapshot.parse(value).container.todo;
+  if (identity.role === "assistant") return AssistantSnapshot.parse(value).container.state.todo ?? null;
   const run = WorkerSnapshot.parse(value).runs.find((run) => run.id === identity.run);
   if (!run) throw new Error(`todo_read: missing bound run ${identity.run}`);
   return run.progress ?? null;

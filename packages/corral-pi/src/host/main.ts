@@ -20,6 +20,8 @@ import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
+import { serverVisible } from "./mcp-settings.ts";
+import { exportAssistantSession } from "../roles/assistant/env.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
 
 function launchFd(argv: readonly string[]): number {
@@ -35,6 +37,7 @@ async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
   const provider = config.provider ?? "openai-codex";
   restrictEnvironment(process.env, provider);
+  exportAssistantSession(process.env, config.identity);
   const compat = readCompat(config.assets);
   if (compiledBundle()) checkCompiledRuntime(compat);
   else checkRuntime(config.assets, compat);
@@ -64,7 +67,8 @@ async function main(): Promise<void> {
     config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined,
     config.capabilities?.mcp ? {
       origins: Object.values(config.capabilities.mcp.servers)
-        .flatMap((server) => server.projects.includes(config.identity.project) && server.url ? [new URL(server.url).origin] : []),
+        .flatMap((server) => serverVisible(server, config.identity.role, config.identity.project) && server.url
+          ? [new URL(server.url).origin] : []),
       send: rawFetch,
     } : undefined);
   if (aws) {

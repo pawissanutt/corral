@@ -1125,11 +1125,23 @@ hosts relaunch through the plan pipeline, not `corral agent resume`.
 
 ## Starting Pi yourself: `corral pi`
 
-`corral pi` starts the Pi-native host from your own shell, the way `pi` starts plain Pi. It has
-two modes.
+`corral pi` starts the Pi-native host from your own shell, the way `pi` starts plain Pi. Which
+host it starts depends on where it runs and its flags:
 
-**Bound PM in this pane.** `corral pi [--model M] [--provider P] [--effort E]`, run in a herdr
-pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
+| Command | Opens |
+|---|---|
+| `corral pi` in a herdr pane inside a workspace | a new [assistant session](assistants.md) in this pane |
+| `corral pi --resume A-<n>` | that assistant's next generation in this pane |
+| `corral pi --pm` | the PM in this pane (below) |
+| `corral pi` outside a workspace, or `corral pi --bare` | plain Pi; outside a workspace with a one-line notice |
+
+The launch line names what opened (`assistant A-1 (role assistant) in pane ...`). `--pm`,
+`--resume` and `--over-cap` outside a workspace refuse `not_in_workspace`; `--bare`, `--pm`
+and `--resume` exclude one another. Assistants, their soft cap and their resume are described
+in [assistant sessions](assistants.md).
+
+**Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
+herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
 the same checks as `corral pm` and `corral agent resume --pm` (a pi-native profile, an
 approved scope with exactly one project, the asset installation, the provider's login); the
 flags replace the profile's model, provider (`openai-codex` or `anthropic`) and effort for this
@@ -1149,7 +1161,7 @@ It refuses, before writing anything, with:
 | `unsupported_platform` | Not Unix. |
 
 The launch itself then refuses exactly as `corral agent launch` does. When the bound PM is dead,
-`corral pi` does not open a rival generation: it takes the PM over with `corral agent resume
+`corral pi --pm` does not open a rival generation: it takes the PM over with `corral agent resume
 --pm` semantics (the lost generation is fenced, its calls drained and reconciled, one
 `recovery_notice` posted), and generation n+1 opens in this pane. A changed approved project is
 refused `out_of_scope`, as resume refuses it.
@@ -1157,12 +1169,13 @@ refused `out_of_scope`, as resume refuses it.
 The pane stays yours: see [session ownership](../session-ownership.md). corral never closes it,
 treats it as the PM pane only while its bound host is verifiably running, and never types into
 it once that host is gone, so `corral agent resume --pm` refuses `pane_adopted` then; run
-`corral pi` there again, or `corral pm` for a corral-owned pane. `--replace` still replaces
+`corral pi --pm` there again, or `corral pm` for a corral-owned pane. `--replace` still replaces
 a live host after verifying its pid, start time and command. Opening the PM in another pane
 (`corral pm` after the pane is gone) ends the adoption.
 
 **Plain Pi: `corral pi --bare`.** This starts unbound Pi in the current directory, inside or
-outside herdr and a corral workspace. There is no bootstrap, generation, nonce, bridge socket,
+outside herdr and a corral workspace. Plain `corral pi` outside any workspace does the same
+after printing a one-line notice that no corral workspace was found. There is no bootstrap, generation, nonce, bridge socket,
 hello, role or delivery module, and no `corral_*` tool: only Pi's own read, edit, write, bash,
 grep, find and ls. It runs the installed assets' pinned Pi SDK: a release installation's compiled
 host runs its own bare mode (`corral-pi-host bare`) with its embedded Bun and bundled auth module,

@@ -97,6 +97,13 @@ pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile>
         is_pi_native(&resolved.harness),
         "the PM resume profile must be pi-native"
     );
+    apply(&mut resolved, overrides)?;
+    preflight(ctx, Some(&resolved))?;
+    Ok(resolved)
+}
+
+/// Applies `corral pi`'s one-launch model, provider and effort overrides to a resolved profile.
+pub(crate) fn apply(resolved: &mut ResolvedProfile, overrides: &Overrides) -> Result<()> {
     if let Some(model) = &overrides.model {
         resolved.model = Some(model.clone());
     }
@@ -108,8 +115,7 @@ pub fn profile_with(ctx: &Ctx, overrides: &Overrides) -> Result<ResolvedProfile>
     if let Some(effort) = &overrides.effort {
         resolved.effort = Some(effort.trim().to_ascii_lowercase());
     }
-    preflight(ctx, Some(&resolved))?;
-    Ok(resolved)
+    Ok(())
 }
 
 pub fn command(ctx: &Ctx, pane: &str, resolved: &ResolvedProfile) -> Result<String> {

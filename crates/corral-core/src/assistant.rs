@@ -12,6 +12,32 @@ use crate::{Store, Usage, store::atomic_write};
 
 pub const ASSISTANT_VERSION: u32 = 1;
 
+/// `[assistant]`: launch defaults. `max_live` is soft: `corral pi --over-cap` opens one more.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AssistantCfg {
+    /// The pi-native profile assistants run; unset means the PM's profile (`pm.agent`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Live assistant hosts a plain `corral pi` may reach before it needs `--over-cap`.
+    pub max_live: u32,
+}
+
+impl Default for AssistantCfg {
+    fn default() -> Self {
+        Self {
+            agent: None,
+            max_live: 4,
+        }
+    }
+}
+
+impl AssistantCfg {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantSession {
     pub version: u32,
@@ -278,13 +304,32 @@ impl Store {
         id: &str,
         f: impl FnOnce(&mut AssistantContainer) -> Result<R>,
     ) -> Result<R> {
+        self.change_assistant_container(id, false, |container, _| f(container))
+    }
+
+    /// `update_assistant_container` that also reaches an ended session, telling `f` whether it
+    /// ended: post-commit bookkeeping and an ended session's fenced receipts stay settleable.
+    pub fn settle_assistant_container<R>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut AssistantContainer, bool) -> Result<R>,
+    ) -> Result<R> {
+        self.change_assistant_container(id, true, f)
+    }
+
+    fn change_assistant_container<R>(
+        &self,
+        id: &str,
+        allow_ended: bool,
+        f: impl FnOnce(&mut AssistantContainer, bool) -> Result<R>,
+    ) -> Result<R> {
         let _board = self.lock("dispatch")?;
-        let session = self.read_assistant(id)?;
-        if session.ended.is_some() {
+        let ended = self.read_assistant(id)?.ended.is_some();
+        if ended && !allow_ended {
             bail!("assistant_ended: {id}");
         }
         let mut container = self.read_assistant_container(id)?;
-        let result = f(&mut container)?;
+        let result = f(&mut container, ended)?;
         self.write_assistant_container(id, &container)?;
         Ok(result)
     }

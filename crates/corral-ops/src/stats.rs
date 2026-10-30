@@ -94,6 +94,8 @@ pub struct AssistantStats {
     pub focus: String,
     pub profile: String,
     pub pane: Option<String>,
+    /// Open with a verifiably running host in its pane.
+    pub live: bool,
     pub scratch: usize,
     pub inbox_items: usize,
     pub usage: Option<corral_core::Usage>,
@@ -117,6 +119,7 @@ pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<As
         .map(|session| {
             let container = store.get_assistant_container(&session.id)?;
             let usage = crate::usage::assistant_usage(store, &session)?;
+            let live = session.ended.is_none() && crate::agent::pi::host_alive(&container.state)?;
             let cost = usage
                 .as_ref()
                 .map(|u| u.summary())
@@ -128,6 +131,7 @@ pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<As
                 focus: session.focus,
                 profile: session.profile,
                 pane: container.pane,
+                live,
                 scratch: session.scratch.len(),
                 inbox_items: session.inbox_items.len(),
                 usage,

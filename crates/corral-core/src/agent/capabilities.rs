@@ -108,7 +108,10 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "session_export",
         summary: "/corral-export offline HTML session artifact",
-        defaults: |role| (role != AgentRole::Pm).then_some([false, true, true]),
+        // Assistant exports need session artifacts (assistant-artifacts member).
+        defaults: |role| {
+            (!matches!(role, AgentRole::Pm | AgentRole::Assistant)).then_some([false, true, true])
+        },
         host: true,
         settings: None,
     },
@@ -199,18 +202,22 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "checkpoints",
         summary: "worker turn checkpoints for owner rewinds",
-        defaults: |role| {
-            matches!(role, AgentRole::Worker | AgentRole::Assistant).then_some([false, false, true])
-        },
+        // Assistant checkpoints are scratch-worktree only (scratch-worktrees member).
+        defaults: |role| (role == AgentRole::Worker).then_some([false, false, true]),
         host: true,
         settings: None,
     },
 ];
 
+// Assistant hooks run in scratch roots only, which the scratch-worktrees member adds.
 fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Assistant => Some([false, false, true]),
-        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+        AgentRole::Worker => Some([false, false, true]),
+        AgentRole::Reviewer
+        | AgentRole::Pm
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => None,
     }
 }
 
@@ -223,10 +230,15 @@ fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
     }
 }
 
+// Session-owned assistant jobs (killed at session end) are not implemented yet.
 fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Assistant => Some([false, true, true]),
-        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+        AgentRole::Worker => Some([false, true, true]),
+        AgentRole::Reviewer
+        | AgentRole::Pm
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => None,
     }
 }
 
