@@ -15,7 +15,12 @@ fn headless_is_an_explicit_worker_or_reviewer_choice_in_every_preset() {
                 CapabilitySource::Preset
             );
         }
-        for role in [AgentRole::Pm, AgentRole::Planner, AgentRole::PlanReviewer] {
+        for role in [
+            AgentRole::Pm,
+            AgentRole::Planner,
+            AgentRole::PlanReviewer,
+            AgentRole::Assistant,
+        ] {
             assert!(!config.resolve(role, None).features.contains_key("headless"));
         }
     }
