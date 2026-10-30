@@ -346,3 +346,78 @@ pub(crate) fn discard_branch(repo: &Path, run: &Run) -> Result<()> {
     git(repo, &["branch", "-D", "--", &run.branch])?;
     Ok(())
 }
+
+/// Processes using a scratch worktree, other than this command and its ancestors. Corral
+/// launched none of them, so scratch residents are reported and never signalled.
+pub(crate) fn scratch_residents(path: &Path) -> Result<Vec<u32>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let path = path.canonicalize().context("resolving scratch worktree")?;
+    let protected_set = protected_pids()?;
+    Ok(residents(&path)?
+        .into_iter()
+        .map(|process| process.pid)
+        .filter(|pid| !protected_set.contains(pid))
+        .collect())
+}
+
+/// Removes an assistant scratch worktree and force-deletes its branch, after the caller has
+/// preserved its work. Only a recorded `<repo>/.worktrees/A-<n>-<slug>` on a `corral/A-<n>/`
+/// branch is accepted, and a scratch any other process still uses is refused.
+pub(crate) fn remove_scratch(repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    let repo = repo
+        .canonicalize()
+        .context("resolving scratch repository")?;
+    let expected = repo.join(".worktrees");
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("A-"));
+    if path.parent() != Some(expected.as_path())
+        || !named
+        || !branch.starts_with("corral/A-")
+        || std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        bail!(
+            "refusing scratch cleanup outside {}: {} ({branch})",
+            expected.display(),
+            path.display()
+        );
+    }
+    if path.exists() && path.canonicalize().context("resolving scratch worktree")? != path {
+        bail!("refusing aliased scratch worktree {}", path.display());
+    }
+    let busy = scratch_residents(path)?;
+    if !busy.is_empty() {
+        bail!(
+            "scratch_busy: processes {busy:?} still use {}; leave the directory and retry",
+            path.display()
+        );
+    }
+    if registered(&repo, path)? {
+        match corral_git::worktree_remove(&repo, path, true) {
+            Ok(()) => {}
+            Err(error) if registered(&repo, path)? => return Err(error),
+            // Git can unregister successfully before failing to unlink the directory.
+            Err(_) => {}
+        }
+    }
+    if path.exists() {
+        std::fs::remove_dir_all(path)
+            .with_context(|| format!("removing leftover {}", path.display()))?;
+    }
+    let reference = format!("refs/heads/{branch}");
+    let exists = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["show-ref", "--verify", "--quiet", &reference])
+        .stdin(Stdio::null())
+        .status()
+        .context("checking scratch branch")?
+        .success();
+    if exists {
+        git(&repo, &["branch", "-D", "--", branch])?;
+    }
+    Ok(())
+}

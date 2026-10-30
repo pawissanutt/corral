@@ -222,8 +222,20 @@ fn print_gc(report: &corral_ops::GcReport) {
 
 pub fn storage(ctx: &Ctx, json: bool) -> Result<()> {
     let stats = corral_ops::storage_stats(ctx)?;
+    let scratch = corral_ops::assistant::scratch::storage(ctx)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            #[serde(flatten)]
+            artifacts: &'a corral_ops::StorageStats,
+            #[serde(skip_serializing_if = "<[_]>::is_empty")]
+            scratch: &'a [corral_ops::assistant::scratch::ScratchStorage],
+        }
+        let report = Report {
+            artifacts: &stats,
+            scratch: &scratch,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
             "{:<12} {:>16} {:>16}",
@@ -242,6 +254,24 @@ pub fn storage(ctx: &Ctx, json: bool) -> Result<()> {
         println!("Workspace stored totals count shared content once.");
         for warning in &stats.warnings {
             println!("warning: {warning}");
+        }
+        if !scratch.is_empty() {
+            println!();
+            println!(
+                "{:<24} {:>16} {:>16}  PATH",
+                "SCRATCH", "BYTES", "DEPENDENCY BYTES"
+            );
+            for row in &scratch {
+                let bound = if row.measured.truncated { "+" } else { "" };
+                println!(
+                    "{:<24} {:>16} {:>16}  {}{}",
+                    format!("{}/{}", row.session, row.slug),
+                    format!("{}{bound}", row.measured.bytes),
+                    format!("{}{bound}", row.measured.dependency_bytes),
+                    row.path.display(),
+                    if row.missing { " (missing)" } else { "" }
+                );
+            }
         }
     }
     Ok(())
