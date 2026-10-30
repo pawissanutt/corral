@@ -21,6 +21,7 @@ import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
 import { attachHeadless, headlessEnabled } from "./headless.ts";
+import { herdrLifecycle } from "./herdr.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { exportAssistantSession } from "../roles/assistant/env.ts";
@@ -100,6 +101,7 @@ async function main(): Promise<void> {
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
+    ...herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)),
     sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
       config.resumeLeaf),
   });

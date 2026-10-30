@@ -52,7 +52,8 @@ if (envelope.op === "todo" && existsSync(snapshot)) {
 process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_id, op: envelope.op,
   payload_sha256: envelope.payload_sha256, identity: envelope.identity, state: "committed",
   result: { op: envelope.op, ...(progress ? { revision: progress.revision, progress } : {}),
-    ...(envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : {}), ...(envelope.op === "ask"
+    ...(envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : {}),
+    ...(envelope.op === "hello" ? { herdr_seq_epoch_ms: Date.now(), questions: [] } : {}), ...(envelope.op === "ask"
     ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q1" } : {}) },
   at: new Date().toISOString() }) + "\\n");
 `;
