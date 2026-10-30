@@ -5,8 +5,8 @@
 //! `contract_sha256` the worker's AgentReport carries for audit.
 //! Owner: T-252 child worker-role.
 use anyhow::Result;
-use corral_core::Task;
 use corral_core::agent::paths::sha256_hex;
+use corral_core::{Task, TaskRef};
 
 use crate::Ctx;
 
@@ -46,10 +46,17 @@ pub fn prompt_gate_section(prompt: &str) -> Option<GateSection> {
 /// The gate section rendered into the current run's prompt; `None` for a run whose prompt has
 /// none (a legacy or untiered run) or has not been written.
 pub fn worker_gate_section(ctx: &Ctx, task: &Task) -> Result<Option<GateSection>> {
-    let Some(run) = task.current_run() else {
+    worker_gate_section_ref(ctx, task)
+}
+
+pub(crate) fn worker_gate_section_ref<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+) -> Result<Option<GateSection>> {
+    let Some(run) = task.current_run_head()? else {
         return Ok(None);
     };
-    Ok(crate::prompt::run_prompt(ctx, &task.id, &run.id)?
+    Ok(crate::prompt::run_prompt(ctx, task.id(), &run.id)?
         .as_deref()
         .and_then(prompt_gate_section))
 }

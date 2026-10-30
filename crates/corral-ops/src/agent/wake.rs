@@ -5,8 +5,7 @@
 use anyhow::{Context, Result};
 use corral_core::agent::{self, ContainerRef, WakeKind, WakeState};
 use corral_core::inbox::{Inbox, MessageBinding, Post, Urgency};
-use corral_core::{Task, WaitState};
-use jiff::Timestamp;
+use corral_core::{Task, TaskRef, WaitState};
 use serde_json::json;
 
 use super::effects::DueWake;
@@ -52,20 +51,47 @@ pub fn due_wait_wakes(task: &Task) -> Vec<DueWake> {
     due
 }
 
-fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<String> {
-    if reason == "not_started" {
-        let receipt = task
-            .runs
-            .iter()
-            .filter_map(|r| r.agent_host.as_deref())
-            .flat_map(|s| &s.receipts)
-            .find(|r| {
-                r.effect.as_ref().is_some_and(|e| e.reference == attempt)
-                    && r.result["queued"] == true
+pub(crate) fn due_wait_wakes_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<DueWake>> {
+    let mut due = Vec::new();
+    for (container, wake) in task.active_worker_wakes()? {
+        if wake.kind != WakeKind::Wait || wake.state != WakeState::Armed {
+            continue;
+        }
+        let ContainerRef::Worker { run, .. } = &container else {
+            continue;
+        };
+        if task
+            .run_head(run)?
+            .is_some_and(|run| run.releases_slot(task.id()))
+        {
+            continue;
+        }
+        if let Some(wait) = task
+            .wait(run, &wake.target)?
+            .filter(|wait| wait.observation.state != WaitState::Pending)
+        {
+            due.push(DueWake {
+                container,
+                request_id: wake.request_id,
+                reason: wait.observation.state.as_str().to_owned(),
             });
+        }
+    }
+    Ok(due)
+}
+
+fn gate_body<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    attempt: &str,
+    reason: &str,
+) -> Result<String> {
+    if reason == "not_started" {
+        let receipt = task.worker_queued_effect_receipt(attempt)?;
         return Ok(format!(
             "Queued gate attempt {attempt} did not start: {}. Resolve the cause and call corral_gate again.",
             receipt
+                .as_ref()
                 .and_then(|r| r.result["reason"].as_str())
                 .unwrap_or("admission refused")
         ));
@@ -74,12 +100,12 @@ fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<Stri
         return Ok(format!(
             "corral could not confirm that gate attempt {attempt} started. Read `corral show {} \
              --json`; when no gate is running, call corral_gate again, which adopts the attempt.",
-            task.id
+            task.id()
         ));
     }
-    let readback = crate::gate_tier::gate_readback(ctx, task)?;
+    let readback = crate::gate_tier::gate_readback_ref(ctx, task)?;
     let gate_ref = readback.gate_ref.filter(|r| r.attempt == attempt);
-    let section = super::hooks::surfaces::worker_gate_section(ctx, task)?;
+    let section = super::hooks::surfaces::worker_gate_section_ref(ctx, task)?;
     let contract = section.map(|s| s.contract_sha256);
     let mut body = format!("Gate attempt {attempt} finished: {reason}.\n");
     if let Some(gate_ref) = &gate_ref {
@@ -89,10 +115,11 @@ fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<Stri
         body.push_str(&format!("contract_sha256: {contract}\n"));
     }
     if reason == "stale" {
-        let detail = task
-            .current_run()
-            .and_then(|r| r.gate.as_ref())
-            .and_then(|g| g.failed_cmd.as_deref())
+        let current = task.current_run_head()?;
+        let detail = current
+            .as_ref()
+            .and_then(|run| run.gate.as_ref())
+            .and_then(|gate| gate.failed_cmd.as_deref())
             .unwrap_or("verification inputs changed");
         body.push_str(&format!("Commands passed, but the receipt is stale: {detail}. This is not a command failure and cannot authorize done or approve. Rebase onto current main, then call corral_gate once on the new base."));
         return Ok(body);
@@ -105,19 +132,15 @@ fn gate_body(ctx: &Ctx, task: &Task, attempt: &str, reason: &str) -> Result<Stri
     Ok(body)
 }
 
-fn wait_body(task: &Task, run: &str, wait: &str, reason: &str) -> String {
-    let record = task
-        .runs
-        .iter()
-        .find(|r| r.id == run)
-        .and_then(|r| r.obligations.waits.iter().find(|w| w.request.id == wait));
-    match record {
+fn wait_body<T: TaskRef + ?Sized>(task: &T, run: &str, wait: &str, reason: &str) -> Result<String> {
+    let record = task.wait(run, wait)?;
+    Ok(match record {
         Some(record) => format!(
             "Wait {wait} ({}) reached {reason}: {}",
             record.request.condition, record.observation.detail
         ),
         None => format!("Wait {wait} reached {reason}."),
-    }
+    })
 }
 
 /// Posts the wakes sync found due and returns how many were posted. A wake posts at most once:
@@ -132,20 +155,16 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
         let recipient = crate::questions::recipient(&wake.container).context("worker recipient")?;
         let inbox = Inbox::new(&ctx.store, recipient)?;
         let _posting = inbox.lock()?;
-        let snapshot = ctx.store.get(task_id)?;
-        let Some(subscription) = agent::container_state(&snapshot, &wake.container)
-            .and_then(|s| {
-                s.wakes
-                    .iter()
-                    .find(|w| w.request_id == wake.request_id && w.state == WakeState::Armed)
-            })
-            .cloned()
+        let snapshot = ctx.store.head(task_id)?;
+        let Some(subscription) = snapshot
+            .agent_wake(&wake.container, &wake.request_id)?
+            .filter(|wake| wake.state == WakeState::Armed)
         else {
             continue;
         };
         let body = match subscription.kind {
             WakeKind::Gate => gate_body(ctx, &snapshot, &subscription.target, &wake.reason)?,
-            WakeKind::Wait => wait_body(&snapshot, run, &subscription.target, &wake.reason),
+            WakeKind::Wait => wait_body(&snapshot, run, &subscription.target, &wake.reason)?,
         };
         let key = format!(
             "wake:{}/{}/{}",
@@ -154,24 +173,24 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
             wake.reason
         );
         let mut message = None;
-        ctx.store.try_update(task_id, |task| {
-            let closed = agent::container_closure(task, &wake.container).is_some();
-            let armed = agent::container_state(task, &wake.container).is_some_and(|s| {
-                s.wakes
-                    .iter()
-                    .any(|w| w.request_id == wake.request_id && w.state == WakeState::Armed)
-            });
+        ctx.store.try_update_head(task_id, |task| {
+            let closed = agent::container_closure_ref(task, &wake.container)?.is_some();
+            let Some(mut stored) = task
+                .agent_wake(&wake.container, &wake.request_id)?
+                .filter(|wake| wake.state == WakeState::Armed)
+            else {
+                return Ok(false);
+            };
             let queued = task
-                .runs
-                .iter()
-                .any(|r| &r.id == run && r.releases_slot(&task.id));
-            if !armed || (queued && !closed) {
+                .run_head(run)?
+                .is_some_and(|current| current.releases_slot(&task.id));
+            if queued && !closed {
                 return Ok(false);
             }
             let reserved = if closed {
                 None
             } else {
-                Some(inbox.reserve_in(
+                Some(inbox.reserve_in_head(
                     task,
                     Post {
                         kind: WAKE_KIND,
@@ -190,22 +209,16 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
                     },
                 )?)
             };
-            let state = agent::container_state_mut(task, &wake.container)
-                .context("the agent binding disappeared")?;
-            let stored = state
-                .wakes
-                .iter_mut()
-                .find(|w| w.request_id == wake.request_id && w.state == WakeState::Armed)
-                .context("the wake subscription disappeared")?;
             match &reserved {
                 Some(m) => {
                     stored.key = key.clone();
                     stored.state = WakeState::Fired;
-                    stored.fired_at = Some(Timestamp::now());
+                    stored.fired_at = Some(ctx.store.now());
                     stored.message_id = Some(m.id.clone());
                 }
                 None => stored.state = WakeState::Cancelled,
             }
+            task.put_agent_record(&wake.container, agent::NativeRecord::Wake(stored))?;
             message = reserved;
             Ok(true)
         })?;
@@ -221,6 +234,10 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
     }
     Ok(posted)
 }
+
+#[cfg(all(test, unix))]
+#[path = "wake_head_tests.rs"]
+mod head_tests;
 
 #[cfg(all(test, unix))]
 #[path = "worker_lane_tests.rs"]

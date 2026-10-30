@@ -375,6 +375,6 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
 }
 
 pub(crate) fn post_wakes(ctx: &Ctx, task_id: &str) -> Result<usize> {
-    let task = ctx.store.get(task_id)?;
-    super::wake::post_due(ctx, &super::wake::due_wait_wakes(&task))
+    let task = ctx.store.head(task_id)?;
+    super::wake::post_due(ctx, &super::wake::due_wait_wakes_ref(&task)?)
 }

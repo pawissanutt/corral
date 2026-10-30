@@ -257,10 +257,14 @@ pub(crate) fn origin_step(run: &RunHead, contract: &GateContract) -> OriginStep 
 /// # Errors
 /// Only store errors; a contract that cannot be resolved is reported in `gate_contract_error`.
 pub fn gate_readback(ctx: &Ctx, task: &Task) -> Result<GateReadback> {
-    let Some(run) = task.current_run() else {
+    gate_readback_ref(ctx, task)
+}
+
+pub(crate) fn gate_readback_ref<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<GateReadback> {
+    let Some(run) = task.current_run_head()? else {
         return Ok(GateReadback::default());
     };
-    let run = &RunHead::of(run)?;
+    let run = &*run;
     let (gate_contract, gate_contract_error) = match select(ctx, task, run, current_phase(run)) {
         Ok(contract) => (Some(contract), None),
         Err(error) => (None, Some(format!("{error:#}"))),
