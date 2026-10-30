@@ -78,6 +78,77 @@ fn facts(record: &NativeRecord) -> (u64, u64) {
 }
 
 impl TaskHeadMut {
+    /// Settle one explicitly named native inbox, including historical parents/children.
+    /// Unlike the current-only `inbox_state_mut`, this API never guesses a current owner.
+    pub fn settle_native_inbox(
+        &mut self,
+        container: &ContainerRef,
+        at: jiff::Timestamp,
+    ) -> Result<bool> {
+        ensure!(
+            container.task() == Some(self.head.id.as_str()),
+            "native container belongs to another task"
+        );
+        self.adjust_projections()?;
+        let inbox = match container {
+            ContainerRef::Worker { run, .. } => self
+                .head
+                .current_run
+                .as_deref_mut()
+                .filter(|current| current.id == *run)
+                .map(|run| &mut run.inbox),
+            ContainerRef::Reviewer { run, review, .. } => self
+                .head
+                .current_run
+                .as_deref_mut()
+                .filter(|current| current.id == *run)
+                .and_then(|run| run.current_child.as_deref_mut())
+                .filter(|child| child.id == *review)
+                .map(|child| &mut child.inbox),
+            ContainerRef::Planner { run, .. } => self
+                .head
+                .last_plan_run
+                .as_deref_mut()
+                .filter(|current| current.id == *run)
+                .map(|run| &mut run.inbox),
+            ContainerRef::PlanReviewer { plan, review, .. } => self
+                .head
+                .last_plan
+                .as_deref_mut()
+                .filter(|current| current.id == *plan)
+                .and_then(|plan| plan.current_review.as_mut())
+                .filter(|child| child.id == *review)
+                .map(|child| &mut child.inbox),
+            ContainerRef::Pm => None,
+        };
+        if let Some(inbox) = inbox {
+            if inbox.settled.is_some() {
+                return Ok(false);
+            }
+            inbox.settled = Some(at);
+            return Ok(true);
+        }
+        let owner = self
+            .overlaid()?
+            .agent_owner(container)?
+            .context("native container missing")?;
+        let (part, key) = coordinates(container, &owner)?;
+        let mut row = self.native_row(part, &key)?;
+        let inbox = row
+            .doc
+            .get_mut("inbox")
+            .and_then(serde_json::Value::as_object_mut)
+            .context("native inbox metadata missing")?;
+        if inbox.get("settled").is_some_and(|value| !value.is_null()) {
+            return Ok(false);
+        }
+        inbox.insert("settled".into(), serde_json::to_value(at)?);
+        self.history_edit = true;
+        self.put(row);
+        self.bump_native_parent(part, &key)?;
+        Ok(true)
+    }
+
     /// Edit one existing PM receipt without loading its task's receipt history.
     pub fn edit_pm_receipt(
         &mut self,
