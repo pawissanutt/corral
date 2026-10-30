@@ -38,6 +38,9 @@ impl AgentPm {
 /// Reads the area without a lock. Inside a task's `Store::update` this is the consistent read:
 /// every AgentPm writer holds the dispatch lock that the task update already holds.
 pub fn load(store: &Store) -> Result<Option<AgentPm>> {
+    // T-625: PM-authorized known cost. Keep the canonical AgentPm document intact;
+    // normalization is a separate persistent design, not part of T-337 integration.
+    let _known = crate::work::followup("T-625", "root_pm_load");
     store.record("agent-pm", "current")
 }
 
@@ -55,7 +58,10 @@ pub fn update<R>(
         let (result, write) = f(&mut pm)?;
         if write {
             match pm {
-                Some(pm) => store.save_record("agent-pm", "current", &pm)?,
+                Some(pm) => {
+                    let _known = crate::work::followup("T-625", "root_pm_save");
+                    store.save_record("agent-pm", "current", &pm)?;
+                }
                 None => store.delete_record("agent-pm", "current")?,
             }
         }
