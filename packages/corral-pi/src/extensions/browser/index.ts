@@ -40,18 +40,25 @@ async function visit<T>(
 ): Promise<T> {
   const target = browserTarget(url, settings.origins, options.cwd);
   const executable = findBrowser(settings.executable);
-  const timeout = AbortSignal.timeout(settings.timeout_ms);
+  // Start-up and the page get separate timeout_ms bounds (T-613): the page budget starts at the
+  // browser's first DevTools reply, so a slow launch on a loaded host cannot consume it.
+  let started = false;
   const reason = () => signal?.aborted
     ? new BrowserError("browser_interrupted", "the call was cancelled; the browser was stopped")
-    : new BrowserError("browser_timeout", `no result within ${settings.timeout_ms} ms; the browser was stopped`);
+    : started
+      ? new BrowserError("browser_timeout", `no result within ${settings.timeout_ms} ms of the browser starting; the browser was stopped`)
+      : new BrowserError("browser_timeout", `the browser did not start within ${settings.timeout_ms} ms; the browser was stopped`);
   const stop = new AbortController();
   const abort = () => stop.abort(reason());
-  for (const source of [signal, timeout]) {
-    if (source?.aborted) abort();
-    else source?.addEventListener("abort", abort, { once: true });
-  }
+  let deadline = setTimeout(abort, settings.timeout_ms);
+  if (signal?.aborted) abort();
+  else signal?.addEventListener("abort", abort, { once: true });
   const browser = Browser.launch({ executable, signal: stop.signal, ...(options.tmpRoot ? { tmpRoot: options.tmpRoot } : {}) });
   try {
+    await browser.send("Browser.getVersion");
+    clearTimeout(deadline);
+    started = true;
+    deadline = setTimeout(abort, settings.timeout_ms);
     const { targetId } = await browser.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await browser.send("Target.attachToTarget", { targetId, flatten: true });
     const session = String(sessionId);
@@ -72,7 +79,7 @@ async function visit<T>(
     return await act({ browser, session, url: landed, title: String((title.result as { value?: unknown })?.value ?? "") });
   } finally {
     signal?.removeEventListener("abort", abort);
-    timeout.removeEventListener("abort", abort);
+    clearTimeout(deadline);
     await browser.close();
   }
 }

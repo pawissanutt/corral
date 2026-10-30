@@ -470,13 +470,16 @@ before any browser starts:
 ```toml
 [agent.capabilities.worker.browser]
 origins = ["http://127.0.0.1:5173"]   # default []: worktree HTML only; scheme://host[:port], no path
-timeout_ms = 30000                    # default; per call, 1..600000
+timeout_ms = 30000                    # default; bounds start-up, then the page, 1..600000
 # executable = "/usr/bin/chromium"    # default: google-chrome, chromium or chrome on PATH
 ```
 
 Each call starts one headless Chrome or Chromium with a fresh temporary profile and HOME, so
 no owner cookies, logins or extensions are visible and nothing carries over between calls.
-It waits for the page's load event, then checks the URL it landed on: a redirect or scripted
+Start-up and the page are bounded separately by `timeout_ms`: the browser must answer its first
+DevTools command within it, and the page's budget starts only then, so a slow launch on a
+loaded host does not use up the page's time. It waits for the page's load event, then checks
+the URL it landed on: a redirect or scripted
 navigation to a target outside the allowed set fails the call without returning the page.
 `browser_navigate` returns the final URL, title and visible text (64 KiB, with `truncated`).
 `browser_screenshot` returns a PNG inline (optional `width`, `height`, `full_page`); with

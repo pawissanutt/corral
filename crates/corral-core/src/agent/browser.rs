@@ -4,7 +4,8 @@ use super::{AgentRole, CapabilitySettings};
 use crate::config::agent_capabilities::validate_http_endpoint;
 
 /// Browser: exact `http(s)://host[:port]` dev `origins` (default none: worktree HTML only), a
-/// per-call `timeout_ms` (default 30000) and an optional absolute Chrome/Chromium `executable`.
+/// `timeout_ms` (default 30000) bounding browser start-up and then the page separately, and an
+/// optional absolute Chrome/Chromium `executable`.
 pub(crate) fn browser_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
     let mut effective = CapabilitySettings::new();
     let mut origins = Vec::new();

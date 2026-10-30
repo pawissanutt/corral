@@ -36,8 +36,8 @@ const chrome = (() => {
 if (!chrome) console.log("browser.test: no Chrome/Chromium on PATH; live browser checks skipped");
 
 // A host's first browser launch pages the binary, libraries and resources in from disk. Under load
-// that one-time cold start alone outlasted a call's whole timeout_ms (T-613), so pay it here, outside
-// every timed call: launch a throwaway browser and wait for its first DevTools reply.
+// that one-time cold start alone outlasted a whole timeout_ms (T-613), so pay it here, outside every
+// timed call: launch a throwaway browser and wait for its first DevTools reply.
 if (chrome) {
   const browser = Browser.launch({ executable: chrome, signal: new AbortController().signal, tmpRoot: mkdtempSync(join(work, "warm-")) });
   try {
@@ -174,6 +174,38 @@ test("browser settings are worker-only and must be resolved by corral", () => {
   expect(() => browserSettings("worker", ["browser"], { browser: { origins: ["ftp://x"], timeout_ms: 1 } })).toThrow(/malformed/);
   expect(() => browserSettings("worker", ["browser"], undefined)).toThrow(/malformed/);
 });
+
+const fakeBrowser = fileURLToPath(new URL("./support/fake-browser.ts", import.meta.url));
+const navigateWith = (timeout_ms: number, tmpRoot: string) =>
+  (browserTools({ origins: [origin], timeout_ms, executable: fakeBrowser }, { cwd, tmpRoot })
+    .find((entry) => entry.name === "browser_navigate") as ToolDefinition)
+    .execute("call-1", { url: `${origin}/` } as never, undefined, undefined, undefined as never);
+
+test("a slow browser start-up does not consume the page's timeout_ms", async () => {
+  // Given a browser whose start-up and page load each take most of a 4 s timeout_ms, together more
+  // than all of it (time is the behavior under test).
+  const root = mkdtempSync(join(work, "slow-start-"));
+  const call = navigateWith(4_000, root);
+  const elapse = () => new Promise((resolve) => setTimeout(resolve, 2_500));
+  // When start-up ends after 2.5 s and the page's load event fires 2.5 s later.
+  await elapse();
+  writeFileSync(join(root, "started"), "");
+  await elapse();
+  writeFileSync(join(root, "loaded"), "");
+  // Then each phase stayed within its own bound and the call succeeds.
+  const page = text(await call);
+  expect([page.url, page.title, page.text]).toEqual([`${origin}/`, "Fake Page", "fake body"]);
+  for (const gate of ["started", "loaded"]) rmSync(join(root, gate));
+  await cleanedUp(root, root);
+}, 30_000);
+
+test("a browser that never starts is stopped after timeout_ms", async () => {
+  // Given a browser that never gives its first DevTools reply.
+  const root = mkdtempSync(join(work, "no-start-"));
+  // When a call uses it, then start-up is bounded by timeout_ms and nothing is left behind.
+  await expect(navigateWith(300, root)).rejects.toThrow(/browser_timeout: the browser did not start within 300 ms/);
+  await cleanedUp(root, root);
+}, 30_000);
 
 test("navigate and screenshot use fresh profiles and attach screenshots locally", async () => {
   if (!chrome) return;
