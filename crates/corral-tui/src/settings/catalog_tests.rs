@@ -125,7 +125,8 @@ fn pi_native_model_picker_lists_the_installed_hosts_models() {
     let cache = fx
         .ctx
         .store
-        .state_dir()
+        .cache_root()
+        .unwrap()
         .join(corral_ops::HARNESS_CACHE_FILE);
     let mut report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&cache).unwrap()).unwrap();
