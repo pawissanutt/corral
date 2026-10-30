@@ -15,7 +15,7 @@ fn planning_recipients_use_native_delivery_for_owner_kick_and_sync() {
                 task.plan_runs.push(serde_json::from_value(json!({
                     "id":"D1", "profile":"pi", "harness":"pi-native", "delivery":"inbox",
                     "spec_revision":revision, "started":"2026-10-29T00:00:00Z",
-                    "output_dir":fx.ctx.store.state_dir().join("plans"),
+                    "output_dir":crate::scratch_reclaim::Attempt::Planner { task:&id, run:"D1" }.dir(&fx.ctx).unwrap(),
                     "rounds":0, "state":if review { "submitted" } else { "planning" },
                     "herdr":{"workspace_id":"w1","pane_id":"p1","socket":socket}
                 }))?);

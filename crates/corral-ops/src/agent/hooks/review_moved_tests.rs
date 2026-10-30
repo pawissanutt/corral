@@ -51,7 +51,7 @@ fn land_on_main(review: &Review) -> String {
 /// What autopilot's clean preflight records for the moved main (`autopilot/repair.rs`).
 fn attach_integration_packet(review: &Review) {
     let task = review.task();
-    let run = &task.runs[0];
+    let run = &corral_core::RunHead::of(&task.runs[0]).unwrap();
     let policy = review
         .ctx()
         .store

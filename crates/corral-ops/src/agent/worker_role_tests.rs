@@ -204,7 +204,7 @@ impl Worker {
         let of_kind = messages.into_iter().filter(|m| m.kind == kind);
         of_kind
             .map(|m| {
-                let text = std::fs::read_to_string(inbox.message_path(m.seq)).unwrap();
+                let text = m.body.clone();
                 (m, text)
             })
             .collect()
@@ -212,12 +212,10 @@ impl Worker {
 
     /// A run prompt as dispatch writes it for a tiered run, with its gate section between others.
     fn write_prompt(&self) -> crate::agent::hooks::surfaces::GateSection {
-        let path = crate::agent::hooks::surfaces::prompt_file(self.ctx(), &self.id, "R1");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let gate = "## Gate contract (authoritative)\n\n- Tier: quick\n\nRules:\n\n- If the gate is \
                     refused for capacity, retry it, and ask in this pane.\n";
         let prompt = format!("# Task\n\nDo it.\n{gate}\n## Approved design plan\n\nPlan.\n");
-        std::fs::write(&path, prompt).unwrap();
+        crate::prompt::store_run_prompt(self.ctx(), &self.id, "R1", &prompt).unwrap();
         crate::agent::hooks::surfaces::prompt_gate_section(&format!("\n{gate}")).unwrap()
     }
 

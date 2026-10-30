@@ -637,7 +637,7 @@ fn parked_ready_task_refuses_all_admission_origins_and_shared_mutations() {
             .reason,
         expected
     );
-    let events = std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap();
+    let events = serde_json::to_value(ctx.store.events().unwrap()).unwrap();
     assert_eq!(
         crate::enqueue(&ctx, &task.id, &opts)
             .unwrap_err()
@@ -645,14 +645,19 @@ fn parked_ready_task_refuses_all_admission_origins_and_shared_mutations() {
         expected
     );
     assert_eq!(
-        crate::plan_dispatch::dispatch(&ctx, &task, &opts, &crate::dispatch::Admission::Manual)
-            .unwrap_err()
-            .to_string(),
+        crate::plan_dispatch::dispatch(
+            &ctx,
+            &ctx.store.head(&task.id).unwrap(),
+            &opts,
+            &crate::dispatch::Admission::Manual
+        )
+        .unwrap_err()
+        .to_string(),
         expected
     );
     assert_eq!(ctx.store.get(&task.id).unwrap(), task);
     assert_eq!(
-        std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap(),
+        serde_json::to_value(ctx.store.events().unwrap()).unwrap(),
         events
     );
 }
@@ -661,7 +666,7 @@ fn parked_ready_task_refuses_all_admission_origins_and_shared_mutations() {
 fn parked_planner_skips_preparation_recovery_and_refuses_explicit_revision() {
     // Given a parked submitted planner and a retained claim with no authorization.
     let (tmp, ctx, id, _) = fixture();
-    let stale = ctx.store.get(&id).unwrap();
+    let stale = ctx.store.head(&id).unwrap();
     let task = park(&ctx, &id);
     let path = task.plan_runs[0].output_dir.join("launch.json");
     let bytes = serde_json::to_vec(&json!({
@@ -670,9 +675,9 @@ fn parked_planner_skips_preparation_recovery_and_refuses_explicit_revision() {
     }))
     .unwrap();
     std::fs::write(&path, &bytes).unwrap();
-    let events = std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap();
+    let events = serde_json::to_value(ctx.store.events().unwrap()).unwrap();
     // When stale callers try automatic progression, recovery, and an owner revision.
-    advance(&ctx, &stale, "2026-10-26T00:00:00Z".parse().unwrap()).unwrap();
+    advance(&ctx, &stale.id, "2026-10-26T00:00:00Z".parse().unwrap()).unwrap();
     assert!(!crate::plan_dispatch::resume_prepared(&ctx, &stale).unwrap());
     let error = crate::plan_dispatch::revise_owner(&ctx, &stale, "Revise").unwrap_err();
     // Then the park wins before reading provenance, preparing a round, or launching.
@@ -680,7 +685,7 @@ fn parked_planner_skips_preparation_recovery_and_refuses_explicit_revision() {
     assert_eq!(ctx.store.get(&id).unwrap(), task);
     assert_eq!(std::fs::read(path).unwrap(), bytes);
     assert_eq!(
-        std::fs::read(ctx.store.dir().join("events.jsonl")).unwrap(),
+        serde_json::to_value(ctx.store.events().unwrap()).unwrap(),
         events
     );
     assert!(!tmp.path().join("engine/launch-command").exists());
@@ -703,7 +708,7 @@ fn parked_owner_approved_plan_is_not_decomposed() {
         .unwrap();
     let task = park(&ctx, &id);
     // When the pilot runs.
-    advance(&ctx, &task, "2026-10-26T00:00:00Z".parse().unwrap()).unwrap();
+    advance(&ctx, &task.id, "2026-10-26T00:00:00Z".parse().unwrap()).unwrap();
     // Then no plan attachment, child tasks, or other task mutation occurs.
     assert_eq!(ctx.store.get(&id).unwrap(), task);
     assert_eq!(ctx.store.list().unwrap().len(), 1);

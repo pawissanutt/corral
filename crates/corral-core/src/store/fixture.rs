@@ -59,6 +59,12 @@ impl Store {
             .map_err(|_| anyhow::anyhow!("the fixture clock is already pinned"))
     }
 
+    /// Writes a fixture authorization through its normal backend transition checks.
+    #[doc(hidden)]
+    pub fn fixture_save_submission(&self, record: &crate::AuthorizedSubmission) -> Result<()> {
+        self.save_submission_record(record)
+    }
+
     /// Stores exactly this task: no timestamp, scope check or event, unlike [`Store::save`].
     #[doc(hidden)]
     pub fn fixture_put_task(&self, task: &Task) -> Result<()> {

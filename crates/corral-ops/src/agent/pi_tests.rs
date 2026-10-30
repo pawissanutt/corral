@@ -55,7 +55,12 @@ fn bound_mode_refuses_a_live_bound_pm_naming_its_pane_and_changes_nothing() {
     let text = error.to_string();
     assert!(text.contains("pm-pane") && text.contains("corral agent resume --pm --replace"));
     assert_eq!(pm_state::load(&fx.ctx.store).unwrap().unwrap(), before);
-    assert!(!fx.ctx.store.state_dir().join("pm.json").exists());
+    assert!(
+        corral_core::records::RecordArea::<serde_json::Value>::new("pm")
+            .load(&fx.ctx.store, "state")
+            .unwrap()
+            .is_none()
+    );
     assert!(fx.calls("pane run").is_empty());
 }
 
@@ -90,11 +95,12 @@ fn a_fresh_store_adopts_the_owner_pane_as_generation_one() {
     assert_eq!(pm.state.generation(1).unwrap().pane, PANE);
     let dir = generation_dir(&fx.ctx.store, &Recipient::Pm, 1).unwrap();
     assert_eq!(prepared.bootstrap, dir.join(BOOTSTRAP_FILE));
-    let saved: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(fx.ctx.store.state_dir().join("pm.json")).unwrap())
-            .unwrap();
+    let saved = corral_core::records::RecordArea::<serde_json::Value>::new("pm")
+        .load(&fx.ctx.store, "state")
+        .unwrap()
+        .unwrap();
     assert_eq!(saved["pane_id"], PANE);
-    assert!(fx.ctx.store.prompts_dir().join("pm.md").is_file());
+    assert!(crate::pm::prompt_file(&fx.ctx).unwrap().is_file());
     assert!(fx.calls("pane run").is_empty());
     // An adopted pane whose host is not running is never the PM's, and never closed.
     let ctx = f::ctx_at(fx.root());

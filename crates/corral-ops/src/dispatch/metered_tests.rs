@@ -117,13 +117,12 @@ fn prepared_planner_launch_child() {
             None,
         )
         .unwrap();
-    let output = fx
-        .ctx
-        .store
-        .state_dir()
-        .join("plans")
-        .join(&task.id)
-        .join("D1");
+    let output = crate::scratch_reclaim::Attempt::Planner {
+        task: &task.id,
+        run: "D1",
+    }
+    .dir(&fx.ctx)
+    .unwrap();
     let run = serde_json::from_value(json!({
         "id":"D1", "profile":"bedrock", "harness":"pi-native", "model":MODEL, "delivery":"inbox",
         "vendor":"amazon-bedrock", "effort":null,
@@ -168,7 +167,10 @@ fn prepared_planner_launch_child() {
     let _capture = corral_core::messages::capture_messages(send);
     assert_notice_before_pane_run(&fx, "planner");
     // When resume_prepared reuses the durable identity and submits its native command.
-    assert!(crate::plan_dispatch::resume_prepared(&fx.ctx, &task).unwrap());
+    assert!(
+        crate::plan_dispatch::resume_prepared(&fx.ctx, &fx.ctx.store.head(&task.id).unwrap())
+            .unwrap()
+    );
     assert_planner_host(&fx, &task.id);
     // Then one D1 host receives the original model, prompt and binding, after one notice.
     assert_eq!(fx.ctx.store.get(&task.id).unwrap().plan_runs.len(), 1);
@@ -266,10 +268,13 @@ fn assert_planner_host(fx: &Fx, task: &str) {
     let prompt = fx
         .ctx
         .store
-        .state_dir()
-        .join("plans")
-        .join(task)
-        .join("D1/prompt.md");
+        .head(task)
+        .unwrap()
+        .last_plan_run
+        .as_ref()
+        .unwrap()
+        .output_dir
+        .join("prompt.md");
     assert_eq!(
         captured,
         json!({

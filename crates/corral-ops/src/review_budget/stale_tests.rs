@@ -50,7 +50,7 @@ fn automatic_preparation_rebinds_only_the_moved_integration_base() {
         let candidate = crate::verification::identity(
             &fx.ctx,
             &task,
-            task.current_run().unwrap(),
+            &corral_core::RunHead::of(task.current_run().unwrap()).unwrap(),
             old.action.candidate.as_ref().unwrap(),
         )
         .unwrap();
@@ -197,7 +197,7 @@ fn rebase_supersedes_preparation_and_next_automatic_gate_launches() {
     );
     assert!(gate.holds_slot());
     assert_eq!(fx.created(), 1);
-    assert!(!submission::retained_path(&fx.ctx, &id, "R1", Kind::Gate).exists());
+    assert!(!submission::has_retained(&fx.ctx.store, &id, "R1", Kind::Gate).unwrap());
     let artifact = task
         .artifacts
         .iter()
@@ -259,16 +259,17 @@ fn uncertain_preparations_are_not_disposed_on_candidate_change() {
         grant(&mut fx, std::slice::from_ref(&id));
         candidate_branch(&fx, &id);
         drop(prepared(&fx, &id, Kind::Gate));
-        let path = submission::retained_path(&fx.ctx, &id, "R1", Kind::Gate);
         let mut pending = retained(&fx, &id, Kind::Gate);
         pending.submitted = submitted;
-        std::fs::write(&path, serde_json::to_vec(&pending).unwrap()).unwrap();
+        corral_core::records::RecordArea::new("review-prepared")
+            .save(&fx.ctx.store, &format!("{id}-R1-gate"), &pending)
+            .unwrap();
         rebase_candidate(&fx);
         assert!(
             ReviewLaunch::reserve_origin(&fx.ctx, &id, Kind::Gate, false, Origin::Automatic)
                 .is_err()
         );
-        assert!(path.exists());
+        assert!(submission::has_retained(&fx.ctx.store, &id, "R1", Kind::Gate).unwrap());
         assert!(fx.ctx.store.get(&id).unwrap().artifacts.is_empty());
     }
 }

@@ -208,6 +208,8 @@ fn the_worker_launch_seam_prepares_the_current_run_with_its_model_and_prompt() {
         })
         .unwrap();
     let task = fx.ctx.store.get(&fx.task).unwrap();
+    let prompt =
+        crate::prompt::store_run_prompt(&fx.ctx, &fx.task, "R1", "Fixture worker prompt").unwrap();
     let command =
         crate::agent::hooks::launch::worker_command(&fx.ctx, &task, &task.runs[0]).unwrap();
     assert!(command.contains(" agent launch --bootstrap "));
@@ -215,15 +217,7 @@ fn the_worker_launch_seam_prepares_the_current_run_with_its_model_and_prompt() {
         serde_json::from_slice(&std::fs::read(fx.generation_dir().join(BOOTSTRAP_FILE)).unwrap())
             .unwrap();
     assert_eq!(bootstrap.model, "gpt-6.1-sol");
-    assert_eq!(
-        bootstrap.prompt_file,
-        Some(
-            fx.ctx
-                .store
-                .prompts_dir()
-                .join(format!("{}-R1.md", fx.task))
-        )
-    );
+    assert_eq!(bootstrap.prompt_file, Some(prompt));
     assert_eq!(bootstrap.cwd, task.runs[0].worktree);
 }
 

@@ -41,14 +41,10 @@ fn panes() -> HashMap<String, PaneInfo> {
     )])
 }
 
-fn write_state(fx: &Fx, area: &str, key: &str, value: serde_json::Value) {
-    let dir = fx.ctx.store.state_dir().join(area);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join(format!("{key}.json")),
-        serde_json::to_vec(&value).unwrap(),
-    )
-    .unwrap();
+fn write_state(fx: &Fx, area: &'static str, key: &str, value: serde_json::Value) {
+    corral_core::records::RecordArea::new(area)
+        .save(&fx.ctx.store, key, &value)
+        .unwrap();
 }
 
 fn legacy_worker(fx: &Fx, id: &str) {
@@ -371,7 +367,12 @@ fn invoke(fx: &Fx, id: &str, producer: &str) -> Result<()> {
             )?;
         }
         "provider_exhausted" => {
-            crate::provider_stall::advance_agent(&ctx, &task, &panes(), at(1000))?;
+            crate::provider_stall::advance_agent(
+                &ctx,
+                &ctx.store.head(&task.id)?,
+                &panes(),
+                at(1000),
+            )?;
         }
         "autopilot_escalate" | "landing_blocked" => {
             crate::autopilot::advance_all(&ctx, at(1000))?;

@@ -15,7 +15,7 @@ fn continued_reviewer_hello_keeps_the_session_but_not_old_callback_authority() {
     let fx = fx();
     let (id, target) = reviewer_task(&fx);
     let mut host = bind(&fx, &target, "p2", "continued-session");
-    let selected = fx.ctx.store.state_dir().join("prior-review-session");
+    let selected = paths::sessions_dir(&fx.ctx.store).join("prior-review-session");
     host.sessions = selected.clone();
     fx.ctx.store.update(&id, |task| {
         task.runs[0].review_runs[0].session = Some(serde_json::from_value(json!({

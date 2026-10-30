@@ -56,10 +56,14 @@ fn worker_cross_lane_setup() {
             Ok(())
         })
         .unwrap();
-    let prompt = crate::agent::hooks::surfaces::prompt_file(&ctx, &task.id, "R1");
-    std::fs::create_dir_all(prompt.parent().unwrap()).unwrap();
     let gate = "## Gate contract (authoritative)\n\n- Tier: full\n- Gate: call corral_gate once.\n";
-    std::fs::write(&prompt, format!("# Task\n\nShip it.\n\n{gate}\n## Done\n")).unwrap();
+    let prompt = crate::prompt::store_run_prompt(
+        &ctx,
+        &task.id,
+        "R1",
+        &format!("# Task\n\nShip it.\n\n{gate}\n## Done\n"),
+    )
+    .unwrap();
     let section =
         crate::agent::hooks::surfaces::worker_gate_section(&ctx, &ctx.store.get(&task.id).unwrap())
             .unwrap()

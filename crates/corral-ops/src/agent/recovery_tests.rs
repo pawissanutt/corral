@@ -118,7 +118,7 @@ fn a_killed_host_is_lost_once_and_its_run_question_and_queued_answer_stay() {
 
     // When the host process is killed while its pane stays, its pane wrapper records the exit:
     host.kill();
-    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1");
+    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1").unwrap();
     std::fs::create_dir_all(exit.parent().unwrap()).unwrap();
     std::fs::write(&exit, "137\n").unwrap();
     let synced = sync(&fx);

@@ -262,9 +262,14 @@ mod tests {
             command: "never executed".into(),
         };
         prepared.save(&ctx, &task.id).unwrap();
-        let directory = ctx.store.state_dir().join("action-authorizations");
-        std::fs::create_dir_all(&directory).unwrap();
-        let journal = directory.join(format!("{}.json", prepared.authorization.id));
+        ctx.store
+            .fixture_save_submission(&AuthorizedSubmission {
+                version: 1,
+                authorization: prepared.authorization.clone(),
+                disposition: SubmissionDisposition::Prepared,
+                authorization_history: vec![],
+            })
+            .unwrap();
         for (disposition, stopped) in [
             (
                 SubmissionDisposition::AuthorizationRefused {
@@ -281,8 +286,12 @@ mod tests {
                 disposition,
                 authorization_history: vec![],
             };
-            let bytes = serde_json::to_vec(&record).unwrap();
-            std::fs::write(&journal, &bytes).unwrap();
+            if record.disposition == SubmissionDisposition::Submitted {
+                let mut submitting = record.clone();
+                submitting.disposition = SubmissionDisposition::Submitting;
+                ctx.store.fixture_save_submission(&submitting).unwrap();
+            }
+            ctx.store.fixture_save_submission(&record).unwrap();
             // When the read-only blocker projection reads the retained preparation.
             let result = blocker(&ctx, &task).unwrap();
             // Then only a refused, unsubmitted action is blocked, anchored to this attempt.
@@ -290,7 +299,12 @@ mod tests {
             if let Some((since, _)) = result {
                 assert_eq!(since, at);
             }
-            assert_eq!(std::fs::read(&journal).unwrap(), bytes);
+            assert_eq!(
+                ctx.store
+                    .authorized_submission(&prepared.authorization.id)
+                    .unwrap(),
+                record
+            );
             assert_eq!(ctx.store.get(&task.id).unwrap(), task);
         }
     }

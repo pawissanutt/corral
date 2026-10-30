@@ -380,7 +380,8 @@ fn state_hello(review: &Review) -> Value {
 #[test]
 fn a_verdict_whose_ack_was_lost_replays_its_receipt_and_the_turn_end_fences_the_binding() {
     let mut review = review();
-    let prompt = crate::agent::hooks::review::review_prompt_file(review.ctx(), &review.id, "R1");
+    let prompt =
+        crate::agent::hooks::review::review_prompt_file(review.ctx(), &review.id, "R1").unwrap();
     let gate = "## Gate contract (review, authoritative)\n\n- Tier: quick\n";
     let text = std::fs::read_to_string(&prompt).unwrap();
     std::fs::write(&prompt, format!("{text}\n{gate}\n## Review packet\n\nx\n")).unwrap();
@@ -728,7 +729,7 @@ fn reviewer_cross_lane_setup() {
             Ok(())
         })
         .unwrap();
-    let run = &saved.runs[0];
+    let run = &corral_core::RunHead::of(&saved.runs[0]).unwrap();
     let record = corral_core::ReviewRecord {
         evidence_digest: Some(crate::verification::evidence_digest(run).unwrap()),
         identity: Some(
@@ -753,7 +754,7 @@ fn reviewer_cross_lane_setup() {
             Ok(())
         })
         .unwrap();
-    let prompt = crate::agent::hooks::review::review_prompt_file(&ctx, &task.id, "R1");
+    let prompt = crate::agent::hooks::review::review_prompt_file(&ctx, &task.id, "R1").unwrap();
     std::fs::create_dir_all(prompt.parent().unwrap()).unwrap();
     let gate = "## Gate contract (review, authoritative)\n\n- Tier: quick\n";
     std::fs::write(

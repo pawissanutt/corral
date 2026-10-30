@@ -121,6 +121,7 @@ fn availability_record_survives_restart_and_keeps_semantic_validation() {
     let tmp = tempfile::tempdir().unwrap();
     let ctx = crate::resources::FixedResourceProbe::ctx(Store::init(tmp.path()).unwrap());
     let mut episode = AvailabilityEpisode {
+        notice: None,
         version: 1,
         id: "T-001-R1-implementation".into(),
         task: "T-001".into(),

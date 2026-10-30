@@ -54,7 +54,7 @@ fn post_land_hooks_run_without_artifact_storage_or_the_inventory_lease() {
     let app = fx.tmp.path().join("app");
     let head = git(&app, &["rev-parse", "HEAD"]);
     let before = "0".repeat(40);
-    let run = task.current_run().unwrap();
+    let run = &corral_core::RunHead::of(task.current_run().unwrap()).unwrap();
     let mut op = crate::hooks::prepare(&fx.ctx, &task, run, &app, &before, &head)
         .unwrap()
         .unwrap();
