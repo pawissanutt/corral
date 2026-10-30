@@ -140,6 +140,22 @@ export class BashPermissions {
   }
 
   observeAnswer(text: string): "granted" | "revoked" | undefined {
+    const envelope = /^\[corral envelope (\S+)@env\d+\]\n\n/.exec(text);
+    if (envelope) {
+      const marker = `\n\n[corral ${envelope[1]}#`;
+      const members = (`\n\n${text.slice(envelope[0].length)}`).split(marker).slice(1);
+      let result: "granted" | "revoked" | undefined;
+      for (const member of members) {
+        const frame = /^\d+ (question_answer|question_correction)\]\n/.exec(member);
+        if (!frame) continue;
+        result = this.observeAnswerBody(member.slice(frame[0].length)) ?? result;
+      }
+      return result;
+    }
+    return this.observeAnswerBody(text);
+  }
+
+  private observeAnswerBody(text: string): "granted" | "revoked" | undefined {
     const header = ANSWER.exec(text);
     const digest = header ? this.questions.get(header[1] ?? "") : undefined;
     if (!header || digest === undefined) return undefined;
