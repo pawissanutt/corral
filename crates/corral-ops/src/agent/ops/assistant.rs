@@ -345,3 +345,7 @@ pub fn run_host(_prepared: &Prepared) -> Result<std::process::ExitStatus> {
 #[cfg(all(test, target_os = "linux"))]
 #[path = "assistant_tests.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "assistant_c11_tests.rs"]
+mod c11_tests;

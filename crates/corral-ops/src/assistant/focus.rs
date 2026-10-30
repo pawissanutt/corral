@@ -5,6 +5,9 @@ use corral_core::Store;
 pub const BRIEF_BYTES: usize = 24 * 1024;
 
 #[cfg(test)]
+#[path = "focus_questions_tests.rs"]
+mod questions_tests;
+#[cfg(test)]
 #[path = "focus_tests.rs"]
 mod tests;
 
@@ -63,17 +66,37 @@ pub fn task_brief(store: &Store, id: &str) -> Result<String> {
         &serde_json::to_string_pretty(&reviews)?,
         3000,
     );
-    let questions: Vec<_> = task
-        .runs
-        .iter()
-        .rev()
-        .map(|r| serde_json::json!({"run": r.id, "obligations": r.obligations}))
+    // Apply the shared effective-state readback, not just recorded question state:
+    // questions on closed worker/reviewer/planning containers are no longer pending.
+    let questions: Vec<_> = crate::questions::views(&task)
+        .into_iter()
+        .filter(|view| view.pending)
+        .map(|view| {
+            serde_json::json!({
+                "container": view.container, "key": view.question.key,
+                "kind": view.question.kind, "blocking": view.question.blocking,
+                "text": view.question.text, "options": view.question.options,
+            })
+        })
         .collect();
     section(
         &mut out,
         "Open questions",
         &serde_json::to_string_pretty(&questions)?,
         2000,
+    );
+    let obligations: Vec<_> = task
+        .runs
+        .iter()
+        .rev()
+        .filter(|run| !run.obligations.is_empty())
+        .map(|run| serde_json::json!({"run": run.id, "obligations": run.obligations}))
+        .collect();
+    section(
+        &mut out,
+        "Run obligations",
+        &serde_json::to_string_pretty(&obligations)?,
+        700,
     );
     let artifacts: Vec<_> = task
         .artifacts
