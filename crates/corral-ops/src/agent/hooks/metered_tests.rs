@@ -110,9 +110,9 @@ pub(crate) fn assert_notice_before_pane_run(fx: &Fx, role: &str) {
     let check = format!(
         r#"if [ "$1 $2" = "pane run" ]; then
 python3 -c '
-import json, pathlib
-events = [json.loads(line) for line in pathlib.Path(".corral/events.jsonl").read_text().splitlines()]
-notices = [e for e in events if e["kind"] == "metered_notice" and e["detail"]["role"] == "{role}"]
+import json, sqlite3
+db = sqlite3.connect("file:.corral/db/corral.db?mode=ro", uri=True)
+notices = [detail for row in db.execute("SELECT detail FROM events WHERE kind=?", ("metered_notice",)) if (detail := json.loads(row[0]))["role"] == "{role}"]
 assert len(notices) == 1, notices
 ' || exit 1
 fi
