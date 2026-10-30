@@ -85,12 +85,10 @@ fn owes(task: &Task, container: &ContainerRef, run: &Run) -> bool {
         || container_state(task, container).is_some_and(|state| {
             state.questions.iter().any(|q| q.recorded_pending())
                 || state.jobs.iter().any(|job| job.needs_reap())
-                || state.receipts.iter().any(|r| {
-                    matches!(
-                        r.state,
-                        ReceiptState::Reserved | ReceiptState::Queued | ReceiptState::Uncertain
-                    )
-                })
+                || state
+                    .receipts
+                    .iter()
+                    .any(|r| r.effects_pending() || r.recovery_update_due())
         })
 }
 
