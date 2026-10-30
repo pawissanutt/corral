@@ -25,7 +25,15 @@ pub use corral_core::{PI_NATIVE_HARNESS, is_pi_native};
 /// A worker run or review child the Pi-native host owns: launched with the pi-native harness,
 /// or carrying a host binding.
 pub fn run_is_pi_native(run: &Run) -> bool {
-    run.agent_host.is_some() || run.harness.as_deref().is_some_and(is_pi_native)
+    native_ownership(run.harness.as_deref(), run.agent_host.is_some())
+}
+
+pub(crate) fn run_head_is_pi_native(run: &corral_core::RunHead) -> bool {
+    native_ownership(run.harness.as_deref(), run.agent_host.is_some())
+}
+
+fn native_ownership(harness: Option<&str>, bound: bool) -> bool {
+    bound || harness.is_some_and(is_pi_native)
 }
 
 /// Whether any run or review child of the task is pi-native.

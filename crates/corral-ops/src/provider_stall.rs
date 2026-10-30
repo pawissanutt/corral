@@ -530,6 +530,14 @@ pub(crate) fn advance_agent(
     panes: &HashMap<String, PaneInfo>,
     now: Timestamp,
 ) -> Result<Option<Change>> {
+    if let Some(run) = head
+        .current_run
+        .as_deref()
+        .filter(|run| run.outcome.is_none())
+        && crate::agent::hooks::run_head_is_pi_native(run)
+    {
+        return crate::agent::hooks::stall::advance_agent(ctx, head, run, now);
+    }
     let shell = head.to_shell_task()?;
     let task = &shell;
     let (Some(run), Some(facts)) = (
@@ -538,9 +546,6 @@ pub(crate) fn advance_agent(
     ) else {
         return Ok(None);
     };
-    if crate::agent::hooks::run_is_pi_native(run) {
-        return crate::agent::hooks::stall::advance_agent(ctx, task, run, now);
-    }
     let Some(pane_id) = run.herdr.as_ref().map(|h| h.pane_id.as_str()) else {
         return Ok(None);
     };
@@ -622,7 +627,7 @@ pub(crate) fn advance_agent(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn advance_reviewer(
     ctx: &Ctx,
-    id: &str,
+    head: &corral_core::TaskHead,
     child: &Run,
     reused_session: bool,
     pane_id: &str,
@@ -631,8 +636,17 @@ pub(crate) fn advance_reviewer(
     exclude_provider: Option<String>,
     now: Timestamp,
 ) -> Result<Drive> {
+    let id = &head.id;
     if crate::agent::hooks::run_is_pi_native(child) {
-        return crate::agent::hooks::stall::advance_reviewer(ctx, id, child);
+        let Some(parent) = head.current_run.as_deref() else {
+            return Ok(Drive::Quiet);
+        };
+        let container = corral_core::agent::ContainerRef::Reviewer {
+            task: id.clone(),
+            run: parent.id.clone(),
+            review: child.id.clone(),
+        };
+        return crate::agent::hooks::stall::advance_reviewer(ctx, head, &container, now);
     }
     let key = agent_key(id, child);
     let target = Target {

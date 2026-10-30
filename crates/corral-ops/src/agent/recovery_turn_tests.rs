@@ -46,8 +46,14 @@ fn end_of(fx: &Fx, generation: u32, seq: u64) -> Timestamp {
 }
 
 fn advance(fx: &Fx, at: Timestamp) -> Option<crate::Change> {
-    let task = fx.task();
-    crate::agent::hooks::stall::advance_agent(&fx.ctx, &task, &task.runs[0], at).unwrap()
+    let task = fx.ctx.store.head(&fx.id).unwrap();
+    crate::agent::hooks::stall::advance_agent(
+        &fx.ctx,
+        &task,
+        task.current_run.as_deref().unwrap(),
+        at,
+    )
+    .unwrap()
 }
 
 fn retries(fx: &Fx) -> usize {

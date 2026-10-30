@@ -60,22 +60,9 @@ pub(super) fn ask(fx: &Fx, container: &ContainerRef) -> String {
     key
 }
 
-pub(super) fn messages(fx: &Fx, recipient: &Recipient, kind: &str) -> Vec<Message> {
-    let inbox = Inbox::new(&fx.ctx.store, recipient.clone()).unwrap();
-    let all = inbox.messages().unwrap();
-    all.into_iter().filter(|m| m.kind == kind).collect()
-}
-
-pub(super) fn classes(calls: &Value) -> Vec<(String, String)> {
-    let calls = calls.as_array().unwrap();
-    let pair = |c: &Value| {
-        (
-            c["tool"].as_str().unwrap().into(),
-            c["class"].as_str().unwrap().into(),
-        )
-    };
-    calls.iter().map(pair).collect()
-}
+#[path = "recovery_test_helpers.rs"]
+mod helpers;
+pub(super) use helpers::{classes, messages};
 
 pub(super) fn resume(fx: &Fx, container: &ContainerRef, replace: bool) -> Result<Value> {
     resume_container(&f::ctx_at(fx.root()), container, replace)
@@ -732,9 +719,15 @@ fn a_transient_provider_failure_retries_on_provider_stall_backoff_then_escalates
     let ended = state(&fx, &fx.worker()).turns[0].ended.unwrap();
     let key = crate::provider_stall::agent_key(&fx.id, &fx.task().runs[0]);
     let tick = |secs: i64| {
-        let task = fx.task();
+        let task = fx.ctx.store.head(&fx.id).unwrap();
         let at = ended + jiff::SignedDuration::from_secs(secs);
-        crate::agent::hooks::stall::advance_agent(&fx.ctx, &task, &task.runs[0], at).unwrap()
+        crate::agent::hooks::stall::advance_agent(
+            &fx.ctx,
+            &task,
+            task.current_run.as_deref().unwrap(),
+            at,
+        )
+        .unwrap()
     };
     let nudges = || messages(&fx, &run_recipient(&fx), "turn_nudge");
 
