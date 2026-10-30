@@ -151,7 +151,14 @@ fn fixture(root: &Path) -> (Store, String) {
     (store, imported.tracker.id)
 }
 
-fn observe(root: &Path, plan: &str, attempt: &str, criterion: &str, expected: &str) {
+fn observe(
+    root: &Path,
+    plan: &str,
+    attempt: &str,
+    captured: &Value,
+    criterion: &str,
+    expected: &str,
+) {
     let file: PathBuf = root.join(format!("{criterion}.json"));
     std::fs::write(
         &file,
@@ -160,7 +167,7 @@ fn observe(root: &Path, plan: &str, attempt: &str, criterion: &str, expected: &s
             "run":"aggregate", "attempt":attempt, "status":"pass",
             "action":"run the combined scenario", "environment":"fixture",
             "expected":expected, "observed":"observed", "artifacts":[],
-            "captured":jiff::Timestamp::now(), "producer":"test", "live":false,
+            "captured":captured, "producer":"test", "live":false,
         }))
         .unwrap(),
     )
@@ -186,9 +193,12 @@ fn cli_owner_acceptance_requires_a_launched_aggregate_review() {
     let (store, plan) = fixture(&root);
     let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
     assert_eq!(attempt["gate"]["result"], "pass", "{attempt}");
+    // Use the gate's own timestamp as the capture boundary, not another process's clock.
+    let captured = attempt["gate"]["at"].clone();
+    assert!(captured.is_string(), "{attempt}");
     let attempt = attempt["id"].as_str().unwrap().to_owned();
-    observe(&root, &plan, &attempt, "C1", "pass");
-    observe(&root, &plan, &attempt, "C2", "pass together");
+    observe(&root, &plan, &attempt, &captured, "C1", "pass");
+    observe(&root, &plan, &attempt, &captured, "C2", "pass together");
     let head = git(&root.join("app"), &["rev-parse", "HEAD"]);
 
     // When the owner accepts before any aggregate review, the CLI refuses.
@@ -291,9 +301,11 @@ fn the_pm_accepts_a_reviewed_plan_from_an_agent_pane() {
     let root = tmp.path().canonicalize().unwrap();
     let (store, plan) = fixture(&root);
     let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
+    let captured = attempt["gate"]["at"].clone();
+    assert!(captured.is_string(), "{attempt}");
     let attempt = attempt["id"].as_str().unwrap().to_owned();
-    observe(&root, &plan, &attempt, "C1", "pass");
-    observe(&root, &plan, &attempt, "C2", "pass together");
+    observe(&root, &plan, &attempt, &captured, "C1", "pass");
+    observe(&root, &plan, &attempt, &captured, "C2", "pass together");
     let args = [
         "plan",
         "aggregate-review",
