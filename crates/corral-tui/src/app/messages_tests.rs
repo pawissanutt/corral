@@ -290,9 +290,17 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
         assert_eq!(cards, expected_cards, "unaffected cards remain intact");
         let before: Vec<_> = before.lines().collect();
         let after: Vec<_> = after.lines().collect();
-        assert_eq!(after[..4].iter().map(|line| digitless(line)).collect::<Vec<_>>(),
-            before[..4].iter().map(|line| digitless(line)).collect::<Vec<_>>(),
-            "app header remains intact");
+        assert_eq!(
+            after[..4]
+                .iter()
+                .map(|line| digitless(line))
+                .collect::<Vec<_>>(),
+            before[..4]
+                .iter()
+                .map(|line| digitless(line))
+                .collect::<Vec<_>>(),
+            "app header remains intact"
+        );
         assert_eq!(
             &after[after.len() - 2..],
             &before[before.len() - 2..],

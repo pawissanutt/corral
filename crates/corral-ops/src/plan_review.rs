@@ -116,24 +116,37 @@ pub fn plan_verdict_with_evidence(
     verdict_report_inner(ctx, id, input, evidence, &|_| Ok(())).map(|(review, _)| review)
 }
 
-pub fn plan_verdict_report(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<(PlanReview, Vec<String>)> {
+pub fn plan_verdict_report(
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+) -> Result<(PlanReview, Vec<String>)> {
     verdict_report_checked(ctx, id, input, &|_| Ok(()))
 }
 
 pub fn plan_verdict_report_with_evidence(
-    ctx: &Ctx, id: &str, input: &PlanVerdict<'_>, evidence: &[std::path::PathBuf],
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+    evidence: &[std::path::PathBuf],
 ) -> Result<(PlanReview, Vec<String>)> {
     verdict_report_inner(ctx, id, input, evidence, &|_| Ok(()))
 }
 
 pub(crate) fn verdict_report_checked(
-    ctx: &Ctx, id: &str, input: &PlanVerdict<'_>, check: &dyn Fn(&Task) -> Result<()>,
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+    check: &dyn Fn(&Task) -> Result<()>,
 ) -> Result<(PlanReview, Vec<String>)> {
     verdict_report_inner(ctx, id, input, &[], check)
 }
 
 fn verdict_report_inner(
-    ctx: &Ctx, id: &str, input: &PlanVerdict<'_>, evidence: &[std::path::PathBuf],
+    ctx: &Ctx,
+    id: &str,
+    input: &PlanVerdict<'_>,
+    evidence: &[std::path::PathBuf],
     check: &dyn Fn(&Task) -> Result<()>,
 ) -> Result<(PlanReview, Vec<String>)> {
     let _attribution = input
@@ -462,7 +475,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 })?;
             }
             task.queued = false;
-            if run_id.is_some() && !plan::published_design(task) {
+            if run_id.is_some() && !plan::published_design(&task.shell_task()?) {
                 task.status = corral_core::Status::Ready;
             }
             Ok(())

@@ -139,7 +139,7 @@ pub(crate) struct Staged<'a> {
     files: &'a [File],
     created: Vec<String>,
     task: String,
-    _lock: Option<std::fs::File>,
+    _lock: Option<crate::artifact_storage::StorageGuard>,
 }
 
 /// The run a verdict's evidence attaches to: the open plan run, else the current run, else R0,

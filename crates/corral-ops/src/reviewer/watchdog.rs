@@ -80,7 +80,9 @@ fn base_moved_refusal(run: &Run, review: &ReviewRecord, failure: Option<&str>) -
     else {
         return Ok(false);
     };
-    if crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str()) {
+    if crate::gate::run_head_sha(&corral_core::RunHead::of(run)?).as_deref()
+        != Some(review.sha.as_str())
+    {
         return Ok(false);
     }
     let base = corral_git::rev_sha(&run.worktree, &run.base)?;
@@ -123,7 +125,7 @@ fn relaunch(
         json!({
             "run": run.id, "reviewer": review.reviewer,
             "reason": "main moved during review; the candidate is unchanged",
-            "notes": super::review_notes_path(ctx, id, &run.id),
+            "notes": super::review_notes_path(ctx, id, &run.id)?,
         }),
     )?;
     Ok(None)
@@ -334,7 +336,9 @@ pub(crate) fn reconcile_review_sampled_at(
         if let Some(reason) = &reason {
             if let Some(child) = parent.current_child.as_deref_mut() {
                 finish_review_child(review, child, now);
-                if stalled.is_some() { child.outcome = Some(RunOutcome::Interrupted); }
+                if stalled.is_some() {
+                    child.outcome = Some(RunOutcome::Interrupted);
+                }
             }
             parent.blocked_excerpt = Some(reason.clone());
             parent.autopilot = Some(AutopilotState {

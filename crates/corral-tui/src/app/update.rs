@@ -104,10 +104,18 @@ impl App {
         let Ok(store) = self.ctx.store.read_only_snapshot() else {
             return;
         };
-        let Ok(board) = store.board(None) else { return; };
+        let Ok(board) = store.board(None) else {
+            return;
+        };
         self.counts = Counts::from_heads(&board.heads, &board.status_counts, &store.config);
-        let Ok(tasks) = board.heads.iter().map(|head| head.to_shell_task())
-            .collect::<anyhow::Result<Vec<_>>>() else { return; };
+        let Ok(tasks) = board
+            .heads
+            .iter()
+            .map(|head| head.to_shell_task())
+            .collect::<anyhow::Result<Vec<_>>>()
+        else {
+            return;
+        };
         if let Some(columns) = self.stack.first().and_then(|view| view.column_counts()) {
             for (status, count) in Status::COLUMNS.into_iter().zip(columns) {
                 match status {
@@ -118,7 +126,10 @@ impl App {
                 }
             }
         } else {
-            let ctx = corral_ops::Ctx { store: store.clone(), ..self.ctx.clone() };
+            let ctx = corral_ops::Ctx {
+                store: store.clone(),
+                ..self.ctx.clone()
+            };
             let attention = crate::attention::load(&ctx, jiff::Timestamp::now());
             self.counts = self.counts.with_attention(&tasks, &attention);
         }
@@ -153,9 +164,17 @@ impl App {
 }
 
 impl Counts {
-    fn with_attention(mut self, tasks: &[corral_core::Task], attention: &crate::attention::Snapshot) -> Self {
-        let count = |status| tasks.iter()
-            .filter(|task| crate::attention::column(task, attention) == Some(status)).count();
+    fn with_attention(
+        mut self,
+        tasks: &[corral_core::Task],
+        attention: &crate::attention::Snapshot,
+    ) -> Self {
+        let count = |status| {
+            tasks
+                .iter()
+                .filter(|task| crate::attention::column(task, attention) == Some(status))
+                .count()
+        };
         self.needs = count(Status::NeedsMe);
         self.review = count(Status::Review);
         self.ready = count(Status::Ready);

@@ -33,6 +33,7 @@ mod head_findings;
 mod head_finish;
 mod head_keyed;
 mod head_mut;
+mod head_native;
 mod head_overlay;
 mod head_reviews;
 mod head_run;
@@ -360,6 +361,16 @@ impl Store {
             bail!("{}", crate::UPDATE_NOTICE);
         }
         Ok(())
+    }
+
+    /// Whether executable/schema skew has permanently fenced this process.
+    pub fn runtime_latched(&self) -> bool {
+        self.skew_reported.load(Ordering::Relaxed)
+    }
+
+    /// The installed executable watched by the long-running board process.
+    pub fn installed_executable(&self) -> &Path {
+        self.executable.path()
     }
 
     fn check_schema(&self) -> Result<()> {

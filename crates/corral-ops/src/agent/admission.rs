@@ -217,6 +217,37 @@ pub(crate) fn recheck_task(task: &Task, binding: &RequestBinding) -> Result<()> 
     saved_pane(state, binding.generation, pane)
 }
 
+/// Head counterpart of the final liveness and saved-pane fence.
+pub(crate) fn recheck_task_head<T: corral_core::TaskRef + ?Sized>(
+    task: &T,
+    binding: &RequestBinding,
+) -> Result<()> {
+    agent::check_live_ref(task, binding)??;
+    let saved = match &binding.container {
+        ContainerRef::Worker { run, .. } => task.run_head(run)?.and_then(|r| r.herdr),
+        ContainerRef::Reviewer { run, review, .. } => {
+            task.review_child(run, review)?.and_then(|r| r.herdr)
+        }
+        ContainerRef::Planner { run, .. } => task.plan_run_head(run)?.and_then(|r| r.herdr),
+        ContainerRef::PlanReviewer { plan, review, .. } => {
+            task.plan_review(plan, review)?.and_then(|r| r.herdr)
+        }
+        ContainerRef::Pm => None,
+    }
+    .map(|h| h.pane_id);
+    let launched = task
+        .agent_generation(&binding.container, binding.generation)?
+        .map(|g| g.pane);
+    if launched.is_some() && launched == saved {
+        Ok(())
+    } else {
+        Err(reject(
+            RejectCode::PaneMismatch,
+            "the generation's pane is not the container's saved pane",
+        ))
+    }
+}
+
 pub(crate) fn recheck_pm(pm: &AgentPm, generation: u32) -> Result<()> {
     agent::check_pm_live(pm, generation)?;
     saved_pane(&pm.state, generation, Some(&pm.pane))

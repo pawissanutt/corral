@@ -2,7 +2,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::{Run, RunObligations, Task, WaitHandle, WaitRecord, WaitState};
+use crate::{Run, RunObligations, WaitHandle, WaitRecord, WaitState};
 
 /// Label that marks a task fixing failing tests on the integration base.
 pub const RED_MAIN_LABEL: &str = "red_main";
@@ -16,8 +16,8 @@ pub struct SlotWait {
 }
 
 /// True for a Ready or running task whose purpose is fixing a red integration base.
-pub fn red_main(task: &Task) -> bool {
-    task.labels
+pub fn red_main<T: crate::TaskFieldsRef + ?Sized>(task: &T) -> bool {
+    task.labels()
         .iter()
         .any(|l| l == RED_MAIN_LABEL || l == "red-main")
 }

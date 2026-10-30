@@ -16,6 +16,13 @@ fn available_heads(store: &Store, credit: usize, cap: usize) -> Result<usize> {
     let heads = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
     let usage = SlotUsage::from_heads(&heads, limits);
+    let shared: std::collections::BTreeSet<_> = heads
+        .iter()
+        .filter(|head| {
+            head.status.holds_slot() && head.holds_dispatch_slot() && head.current_run.is_some()
+        })
+        .map(|head| head.id.clone())
+        .collect();
     let finishing = usize::from(limits.count_gates) * usage.slot_gates()
         + usize::from(limits.count_reviews) * usage.reviews
         + heads
@@ -24,7 +31,7 @@ fn available_heads(store: &Store, credit: usize, cap: usize) -> Result<usize> {
                 head.review_reservation.is_some_and(|work| match work {
                     corral_core::ReviewWork::Gate => {
                         limits.count_gates
-                            && !(head.status.holds_slot() && head.holds_dispatch_slot())
+                            && !shared.contains(&head.id)
                             && !head.current_run.as_ref().is_some_and(|run| {
                                 run.gate.as_ref().is_some_and(|gate| gate.holds_slot())
                             })
@@ -40,7 +47,8 @@ fn available_heads(store: &Store, credit: usize, cap: usize) -> Result<usize> {
                 })
             })
             .count();
-    Ok(cap.saturating_sub(usage.total().saturating_sub(credit))
+    Ok(cap
+        .saturating_sub(usage.total().saturating_sub(credit))
         .saturating_sub(limits.review.saturating_sub(finishing)))
 }
 

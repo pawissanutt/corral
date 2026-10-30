@@ -88,7 +88,10 @@ pub(crate) fn check<T: TaskRef + ?Sized>(
         .as_ref()
         .context("review receipt lacks its review contract")?;
     if let Some(subject) = subject {
-        let vendor = run.vendor.clone().or_else(|| config.run_vendor_head(run).ok());
+        let vendor = run
+            .vendor
+            .clone()
+            .or_else(|| config.run_vendor_head(run).ok());
         let family = run.family(vendor.as_deref());
         review.validate_implementation(
             config,

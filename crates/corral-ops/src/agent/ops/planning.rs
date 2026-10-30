@@ -106,11 +106,11 @@ pub(crate) fn output_path(ctx: &Ctx, task: &Task, container: &ContainerRef) -> R
             .find(|r| r.id == *run)
             .map(|r| r.output_dir.join("plan.md"))
             .ok_or_else(|| bad(format!("planner run {run} has no output directory"))),
-        ContainerRef::PlanReviewer { task, plan, review } => Ok(ctx
-            .store
-            .state_dir()
-            .join("reviews")
-            .join(format!("{task}-{plan}-{review}-plan-notes.md"))),
+        ContainerRef::PlanReviewer { task, plan, review } => Ok(
+            crate::scratch_reclaim::Attempt::PlanReview { task, plan, review }
+                .dir(ctx)?
+                .join("notes.md"),
+        ),
         ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } | ContainerRef::Pm => {
             Err(bad("only a planning container writes plan output"))
         }

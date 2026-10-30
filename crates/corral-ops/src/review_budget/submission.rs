@@ -31,7 +31,9 @@ fn retained_key(task: &str, run: &str, kind: Kind) -> String {
 }
 
 pub(super) fn has_retained(store: &Store, task: &str, run: &str, kind: Kind) -> Result<bool> {
-    Ok(PREPARED.load(store, &retained_key(task, run, kind))?.is_some())
+    Ok(PREPARED
+        .load(store, &retained_key(task, run, kind))?
+        .is_some())
 }
 
 pub(super) fn load_retained(

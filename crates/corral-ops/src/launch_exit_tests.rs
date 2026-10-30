@@ -38,6 +38,53 @@ fn shell_receipts_are_scratch_notifications_that_survive_reopen() {
 }
 
 #[test]
+fn process_marker_lookup_is_one_record_despite_historical_launches() {
+    use corral_core::work::{self, Counter, HotScope};
+    let mut work = Vec::new();
+    for scale in [1, 10] {
+        let (_root, ctx) = fixture();
+        let path = receipt(&ctx, "T-001", "R1").unwrap();
+        arm(&ctx, "true", &path).unwrap();
+        let marker = ownership_marker(&path).unwrap();
+        for n in 2..=scale {
+            arm(
+                &ctx,
+                "true",
+                &receipt(&ctx, "T-001", &format!("R{n}")).unwrap(),
+            )
+            .unwrap();
+        }
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        assert_eq!(
+            process_receipt(&ctx, marker.as_bytes()).unwrap(),
+            Some(path)
+        );
+        let after = work::snapshot();
+        work.push((
+            after.total(Counter::RecordDecodes) - before.total(Counter::RecordDecodes),
+            after.total(Counter::DecodedDocBytes) - before.total(Counter::DecodedDocBytes),
+            after.full_task_hydrations() - before.full_task_hydrations(),
+        ));
+    }
+    assert_eq!(work[0], work[1]);
+    assert_eq!(work[0].0, 1);
+    assert_eq!(work[0].2, 0);
+}
+
+#[test]
+fn process_marker_lookup_refuses_unknown_invalid_and_escaping_receipts() {
+    let (_root, ctx) = fixture();
+    assert!(process_receipt(&ctx, b"not-a-marker").unwrap().is_none());
+    let marker = "a".repeat(64);
+    assert!(process_receipt(&ctx, marker.as_bytes()).unwrap().is_none());
+    PROCESS_OWNERS
+        .save(&ctx.store, &marker, &"../escape.exited".to_owned())
+        .unwrap();
+    assert!(process_receipt(&ctx, marker.as_bytes()).is_err());
+}
+
+#[test]
 fn rearming_clears_the_previous_scratch_receipt_only() {
     let (_root, ctx) = fixture();
     let path = receipt(&ctx, "T-001", "R1").unwrap();

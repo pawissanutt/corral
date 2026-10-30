@@ -119,6 +119,29 @@ macro_rules! keyed_reads {
         fn inbox_head(&self, recipient: &Recipient) -> Result<Option<InboxHead>> {
             self.$reads()?.inbox_head(recipient)
         }
+        fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>> {
+            self.$reads()?.pending_agent_receipts(container)
+        }
+        fn agent_job(
+            &self,
+            container: &ContainerRef,
+            id: &str,
+        ) -> Result<Option<crate::agent::JobRecord>> {
+            self.$reads()?.agent_job(container, id)
+        }
+        fn pending_agent_jobs(
+            &self,
+            container: &ContainerRef,
+        ) -> Result<Vec<crate::agent::JobRecord>> {
+            self.$reads()?.pending_agent_jobs(container)
+        }
+        fn latest_agent_turn(
+            &self,
+            container: &ContainerRef,
+            generation: u32,
+        ) -> Result<Option<AgentTurn>> {
+            self.$reads()?.latest_agent_turn(container, generation)
+        }
         fn agent_generation(
             &self,
             container: &ContainerRef,

@@ -272,7 +272,6 @@ impl Inbox<'_> {
                 s.binding = Some(envelope.binding.clone());
                 Ok(())
             })?;
-
         }
         Ok(())
     }

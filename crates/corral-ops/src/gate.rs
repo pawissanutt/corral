@@ -372,10 +372,12 @@ fn gate_start_origin(
     {
         bail!("cannot start a nested gate from inside a gate attempt");
     }
-    let lock = ctx
-        .store
-        .try_lock(&format!("gate-{id}"))?
-        .ok_or(crate::review_budget::LaunchBusy("another gate start is in progress"))?;
+    let lock =
+        ctx.store
+            .try_lock(&format!("gate-{id}"))?
+            .ok_or(crate::review_budget::LaunchBusy(
+                "another gate start is in progress",
+            ))?;
     let mut fresh = ctx.clone();
     fresh.store.reload_config_if_changed()?;
     let ctx = &fresh;
@@ -486,7 +488,7 @@ fn gate_start_origin(
                     let paths = attempt_paths(ctx, &task.id, &run.id, Some(&previous.attempt));
                     evidence::put_result(ctx, &task.id, &run.id, &previous.attempt, &stem, &paths)?
                 }
-                GateResult::Pass | GateResult::Fail => None,
+                GateResult::Pass | GateResult::Fail | GateResult::Stale => None,
             };
             superseded = Some((stem, lost));
         }
@@ -673,7 +675,11 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
         {
             let old = record.clone();
             let log_passed = stale::log_passed(ctx, &task, &run, &record)?;
-            record.result = if log_passed { GateResult::Stale } else { GateResult::Fail };
+            record.result = if log_passed {
+                GateResult::Stale
+            } else {
+                GateResult::Fail
+            };
             record.failed_cmd = Some(if log_passed {
                 stale::reason(ctx, &task, &run, &record, None)?
             } else {
@@ -747,7 +753,13 @@ fn gate_collect_at(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<GateRec
     {
         (
             GateResult::Stale,
-            Some(stale::reason(ctx, &task, &run, &record, Some(&parsed.identity))?),
+            Some(stale::reason(
+                ctx,
+                &task,
+                &run,
+                &record,
+                Some(&parsed.identity),
+            )?),
         )
     } else if !receipts_valid
         || (parsed.result == "pass"

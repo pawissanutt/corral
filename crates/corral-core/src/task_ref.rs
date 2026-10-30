@@ -419,6 +419,41 @@ pub trait TaskRef: TaskFieldsRef {
     ) -> Result<Option<SessionCursor>>;
     /// The inbox scalars of `recipient`'s container on this task.
     fn inbox_head(&self, recipient: &Recipient) -> Result<Option<InboxHead>>;
+    /// The native container's bounded binding, controls and append positions.
+    fn agent_head(&self, container: &ContainerRef) -> Result<Option<crate::AgentHostHead>> {
+        if container.task().is_none_or(|id| id != self.id()) {
+            return Ok(None);
+        }
+        Ok(match container {
+            ContainerRef::Worker { run, .. } => {
+                self.run_head(run)?.and_then(|r| r.agent_host.map(|h| *h))
+            }
+            ContainerRef::Reviewer { run, review, .. } => self
+                .review_child(run, review)?
+                .and_then(|r| r.agent_host.map(|h| *h)),
+            ContainerRef::Planner { run, .. } => self
+                .plan_run_head(run)?
+                .and_then(|r| r.agent_host.map(|h| *h)),
+            ContainerRef::PlanReviewer { plan, review, .. } => self
+                .plan_review(plan, review)?
+                .and_then(|r| r.agent_host.map(|h| *h)),
+            ContainerRef::Pm => None,
+        })
+    }
+
+    fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>>;
+    fn agent_job(
+        &self,
+        container: &ContainerRef,
+        id: &str,
+    ) -> Result<Option<crate::agent::JobRecord>>;
+    fn pending_agent_jobs(&self, container: &ContainerRef) -> Result<Vec<crate::agent::JobRecord>>;
+    fn latest_agent_turn(
+        &self,
+        container: &ContainerRef,
+        generation: u32,
+    ) -> Result<Option<AgentTurn>>;
+
     /// Generation `n` of the agent bound to `container` on this task.
     fn agent_generation(&self, container: &ContainerRef, n: u32)
     -> Result<Option<AgentGeneration>>;
@@ -488,6 +523,22 @@ pub trait TaskRef: TaskFieldsRef {
 /// refuses a change of the row's id or ordering fields (`started`, `ended`), and of fields that
 /// only their own mutation keeps consistent (usage, nested children, agent records, inbox).
 pub trait TaskMut: TaskRef {
+    fn init_agent_head(
+        &mut self,
+        container: &ContainerRef,
+        head: crate::AgentHostHead,
+    ) -> Result<()>;
+    fn edit_agent_head(
+        &mut self,
+        container: &ContainerRef,
+        edit: impl FnOnce(&mut crate::AgentHostHead) -> Result<()>,
+    ) -> Result<()>;
+    fn put_agent_record(
+        &mut self,
+        container: &ContainerRef,
+        record: crate::agent::NativeRecord,
+    ) -> Result<bool>;
+
     fn edit_head_fields(
         &mut self,
         edit: impl FnOnce(&mut TaskHeadFields) -> Result<()>,

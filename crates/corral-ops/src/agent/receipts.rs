@@ -3,12 +3,12 @@
 //! and saved-pane check. A refusal there writes nothing, so after a fence commits a missing
 //! single-phase receipt is final. No wrapper holds a lock around a public operation.
 use anyhow::{Context, Result};
-use corral_core::Store;
 use corral_core::agent::{
     self, AGENT_RECORD_VERSION, AgentRunState, ClosureReason, ContainerRef, RECEIPTS_MAX,
     RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths, pm_state,
     rejections,
 };
+use corral_core::{Store, TaskRef};
 use serde_json::{Value, json};
 
 use super::admission::{self, Admitted};
@@ -216,8 +216,17 @@ fn complete_post_pending(
             Ok(((), changed))
         })?,
         Some(task_id) => {
-            store.try_update(task_id, |task| {
-                Ok(agent::container_state_mut(task, container).is_some_and(clear))
+            store.try_update_head(task_id, |task| {
+                let Some(mut stored) = task.agent_receipt(container, &receipt.request_id)? else {
+                    return Ok(false);
+                };
+                let before = stored.post_pending.len();
+                stored.post_pending.retain(|entry| !events.contains(entry));
+                if stored.post_pending.len() == before {
+                    return Ok(false);
+                }
+                task.put_agent_record(container, agent::NativeRecord::Receipt(stored))?;
+                Ok(true)
             })?;
         }
     }

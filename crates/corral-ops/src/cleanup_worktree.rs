@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 use corral_core::{Run, RunHead, StuckProcess, TaskRef};
 
 use crate::Ctx;
-use crate::watchdog::{ProcessControl, SystemProcesses};
+use crate::watchdog::{ProcessControl, SystemProcesses, protected};
 
 #[cfg(test)]
 #[path = "cleanup_worktree_tests.rs"]
@@ -197,27 +197,41 @@ fn may_terminate(linux: bool, owned: bool) -> bool {
     linux && owned
 }
 
-fn owned(ctx: &Ctx, task: &Task, run: &Run, process: &StuckProcess) -> bool {
+fn owned<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    process: &StuckProcess,
+) -> Result<bool> {
     let Some(marker) = process_marker(process) else {
-        return false;
+        return Ok(false);
     };
-    task.runs
-        .iter()
-        .chain(std::iter::once(run))
-        .filter(|candidate| candidate.worktree == run.worktree)
-        .any(|candidate| {
-            let receipts = std::iter::once(candidate.id.clone()).chain(
-                candidate
-                    .review_runs
-                    .iter()
-                    .map(|child| format!("{}-{}", candidate.id, child.id)),
-            );
-            receipts.into_iter().any(|attempt| {
-                let path =
-                    crate::launch_exit::receipt(ctx, &task.id, &attempt).with_extension("owner");
-                std::fs::read(path).is_ok_and(|saved| saved.len() == 64 && saved == marker)
-            })
-        })
+    let Some(receipt) = crate::launch_exit::process_receipt(ctx, &marker)? else {
+        return Ok(false);
+    };
+    let Some(stem) = receipt.file_stem().and_then(|name| name.to_str()) else {
+        return Ok(false);
+    };
+    let prefix = format!("{}-", task.id());
+    let Some(attempt) = stem.strip_prefix(&prefix) else {
+        return Ok(false);
+    };
+    let (parent, child) = attempt
+        .split_once('-')
+        .map_or((attempt, None), |(parent, child)| (parent, Some(child)));
+    let Some(candidate) = task.run_head(parent)? else {
+        return Ok(false);
+    };
+    if candidate.worktree != run.worktree {
+        return Ok(false);
+    }
+    if let Some(child) = child
+        && task.review_child(parent, child)?.is_none()
+    {
+        return Ok(false);
+    }
+    Ok(std::fs::read(receipt.with_extension("owner"))
+        .is_ok_and(|saved| saved.len() == 64 && saved == marker))
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -256,7 +270,7 @@ fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
 
 pub(crate) fn remove<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    _task: &T,
+    task: &T,
     repo: &Path,
     run: &RunHead,
     discard: bool,
@@ -324,7 +338,7 @@ pub(crate) fn remove<T: TaskRef + ?Sized>(
     let mut warnings = Vec::new();
     for process in residents(&path)? {
         if protected_set.contains(&process.pid)
-            || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process))
+            || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process)?)
             || {
                 let runs = match &mut runs {
                     Some(runs) => runs,

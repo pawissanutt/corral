@@ -124,6 +124,7 @@ impl TaskHeadMut {
         TaskHeadMut::ensure_unchanged_identity(&before, &after)?;
         let mut rows = Rows::new();
         split_run(
+            &self.head.id,
             &mut rows,
             s,
             SELF,

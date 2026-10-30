@@ -49,15 +49,16 @@ pub(crate) struct SourceRegistration {
 }
 
 /// Constructed only in the invocation whose source transaction returned a new claim.
-pub(crate) fn newly_committed(task: &(impl corral_core::TaskRef + ?Sized), pending: PendingNotice) -> Result<NewlyCommittedClaim> {
-    let shell = task.shell_task()?;
-    let task = &shell;
+pub(crate) fn newly_committed(
+    task: &(impl corral_core::TaskRef + ?Sized),
+    pending: PendingNotice,
+) -> Result<NewlyCommittedClaim> {
     Ok(NewlyCommittedClaim {
-        task: task.id.clone(),
+        task: task.id().clone(),
         source: None,
         lease: Some(pending.lease),
         claim: task
-            .attention
+            .attention()
             .notice_outbox
             .iter()
             .find(|claim| claim.batch_id == pending.batch_id)
@@ -125,7 +126,10 @@ pub(crate) fn record_entry(
 }
 
 pub(crate) fn record_stage_head(
-    ctx: &Ctx, head: &mut corral_core::TaskHeadMut, producer: &str, now: Timestamp,
+    ctx: &Ctx,
+    head: &mut corral_core::TaskHeadMut,
+    producer: &str,
+    now: Timestamp,
 ) -> Result<PendingNotice> {
     use corral_core::TaskRef;
     let mut shell = head.shell_task()?;
@@ -324,20 +328,28 @@ pub(crate) fn commit(
 
 /// Head-form source transition: claims and scalar changes share one task operation.
 pub(crate) fn commit_head(
-    ctx: &Ctx, id: &str,
+    ctx: &Ctx,
+    id: &str,
     change: impl FnOnce(&Store, &mut corral_core::TaskHeadMut) -> Result<Option<NoticeClaim>>,
 ) -> Result<Option<NewlyCommittedClaim>> {
-    let lease = ctx.store.try_lock(&format!("owner-notice-{id}"))?
+    let lease = ctx
+        .store
+        .try_lock(&format!("owner-notice-{id}"))?
         .context("notification_accounting_backpressure: task notice publication is in flight")?;
     let (_, claim) = ctx.store.dispatch_update_head(id, |store, task| {
-        let Some(claim) = change(store, task)? else { return Ok(None); };
+        let Some(claim) = change(store, task)? else {
+            return Ok(None);
+        };
         task.attention.push_notice(claim.clone())?;
         Ok(Some(claim))
     })?;
     #[cfg(test)]
     crash_at(CrashPoint::AfterClaim)?;
     Ok(claim.map(|claim| NewlyCommittedClaim {
-        task: id.into(), claim, source: None, lease: Some(std::sync::Arc::new(lease)),
+        task: id.into(),
+        claim,
+        source: None,
+        lease: Some(std::sync::Arc::new(lease)),
     }))
 }
 

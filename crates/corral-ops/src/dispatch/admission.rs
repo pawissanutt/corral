@@ -42,7 +42,7 @@ impl Admission {
         task: &T,
         opts: &DispatchOpts,
     ) -> Result<Option<String>> {
-        corral_core::Park::require_unparked(task)?;
+        corral_core::Park::require_unparked_ref(task)?;
         let origin = self.origin(store, task)?;
         crate::operating::require_origin(
             store,

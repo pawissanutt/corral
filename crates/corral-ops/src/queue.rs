@@ -160,7 +160,9 @@ pub(crate) fn authorized_ready<T: TaskRef + ?Sized>(store: &Store, task: &T) -> 
         && task.park().is_none()
         && *task.status() == Status::Ready
         && !*task.dispatch_hold()
-        && store.config.ready_project_allowed(task.project().as_deref())
+        && store
+            .config
+            .ready_project_allowed(task.project().as_deref())
         && crate::operating::queued_origin(store, task).is_ok()
 }
 
@@ -572,7 +574,10 @@ pub(crate) fn validate_plan(ctx: &Ctx, plan: &DispatchPlan) -> Result<()> {
 }
 
 /// Reject malformed graphs before ordinary dependency waiting; Done alone satisfies a dependency.
-pub(crate) fn dependency_check(store: &Store, task: &Task) -> Result<Option<String>> {
+pub(crate) fn dependency_check<T: corral_core::TaskFieldsRef + ?Sized>(
+    store: &Store,
+    task: &T,
+) -> Result<Option<String>> {
     fn visit(
         store: &Store,
         id: &str,
@@ -600,12 +605,12 @@ pub(crate) fn dependency_check(store: &Store, task: &Task) -> Result<Option<Stri
     }
     visit(
         store,
-        &task.id,
-        &task.depends_on,
+        task.id(),
+        task.depends_on(),
         &mut Vec::new(),
         &mut Vec::new(),
     )?;
-    for id in &task.depends_on {
+    for id in task.depends_on() {
         let dep = store.head(id)?.task;
         if dep.status != Status::Done {
             return Ok(Some(format!(
@@ -685,7 +690,7 @@ pub(crate) fn capacity_reason(
     crate::slots::finishing_first(store, &task.id)
 }
 
-pub(crate) fn sort_candidates(tasks: &mut [Task]) {
+pub(crate) fn sort_candidates<T: TaskRef>(tasks: &mut [T]) {
     tasks.sort_by(|a, b| {
         fn rank(priority: &str) -> u8 {
             match priority {
@@ -696,8 +701,8 @@ pub(crate) fn sort_candidates(tasks: &mut [Task]) {
                 _ => 4,
             }
         }
-        let key = |t: &Task| (!corral_core::red_main(t), rank(&t.priority), t.created);
-        (key(a), &a.id).cmp(&(key(b), &b.id))
+        let key = |t: &T| (!corral_core::red_main(t), rank(t.priority()), *t.created());
+        (key(a), a.id()).cmp(&(key(b), b.id()))
     });
 }
 
@@ -730,9 +735,11 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
         board.push(task);
     }
     let (woken, parked) = crate::parked::queue_entries(&board);
-    let mut tasks: Vec<_> = board.iter()
+    let mut tasks: Vec<_> = board
+        .iter()
         .filter(|t| t.status == Status::Ready || t.launch.is_some() || t.review_wait.is_some())
-        .cloned().collect();
+        .cloned()
+        .collect();
     sort_candidates(&mut tasks);
     let queued: Vec<QueueEntry> = tasks
         .into_iter()

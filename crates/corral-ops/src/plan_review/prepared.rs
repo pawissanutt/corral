@@ -1,6 +1,5 @@
 //! A refused review keeps its exact attempt without reserving a live process slot.
 use corral_core::records::RecordArea;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -55,8 +54,8 @@ impl Prepared {
             ctx,
             &task.id,
             &format!("{}-{}", self.plan, self.review.id),
-        );
-        self.command = crate::launch_exit::arm(&command, &receipt)?;
+        )?;
+        self.command = crate::launch_exit::arm(ctx, &command, &receipt)?;
         self.review = ctx
             .store
             .get(&task.id)?

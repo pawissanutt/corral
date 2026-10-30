@@ -186,7 +186,9 @@ fn render_prompt(
     }
     if lessons_included(ctx, task, run) {
         prompt.push_str(&crate::lessons::lessons_prompt(
-            ctx, task, &corral_core::RunHead::of(run)?,
+            ctx,
+            task,
+            &corral_core::RunHead::of(run)?,
         )?);
     }
     prompt.push_str(comments);

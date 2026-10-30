@@ -5,7 +5,7 @@
 //! was appended twice after a crash, or that is both appended and still pending, counts once.
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_core::attention::NoticeClaim;
 use corral_core::{Event, Task};
 use jiff::{SignedDuration, Timestamp};
@@ -185,20 +185,12 @@ pub fn stats(ctx: &Ctx, window: Window) -> Result<Stats> {
     let tasks = ctx.store.list_shared()?;
     // The PM push reader's cursors identify each receipt's source event exactly.
     let (mut events, mut cursors) = (Vec::new(), Vec::new());
-    let path = ctx.store.dir().join("events.jsonl");
-    if path.exists() {
-        let mut reader = corral_core::EventReader::from_offset(&path, 0)?;
-        loop {
-            let before = reader.read_position();
-            match reader.next_event()? {
-                Some((event, cursor)) => {
-                    events.push(event);
-                    cursors.push(cursor.offset);
-                }
-                None if reader.read_position() == before => break,
-                None => {}
-            }
-        }
+    let mut reader = ctx
+        .store
+        .events_since(Some(corral_core::EventCursor::default()))?;
+    while let Some((event, cursor)) = reader.next_event()? {
+        events.push(event);
+        cursors.push(cursor.offset);
     }
     let mut claims: Vec<NoticeClaim> = tasks
         .iter()
@@ -210,23 +202,11 @@ pub fn stats(ctx: &Ctx, window: Window) -> Result<Stats> {
             .into_iter()
             .filter_map(|op| op.notice),
     );
-    let dir = ctx.store.state_dir().join("availability");
-    let mut ids = Vec::new();
-    match std::fs::read_dir(&dir) {
-        Ok(entries) => {
-            for entry in entries {
-                let path = entry.context("reading availability entry")?.path();
-                if path.extension().is_some_and(|ext| ext == "json") {
-                    ids.extend(path.file_stem().and_then(|s| s.to_str()).map(String::from));
-                }
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("listing {}", dir.display())),
-    }
-    ids.sort();
-    for id in ids {
-        claims.extend(crate::availability::notice(ctx, &id)?);
+    for (_, episode) in
+        corral_core::records::RecordArea::<corral_core::AvailabilityEpisode>::new("availability")
+            .list(&ctx.store)?
+    {
+        claims.extend(episode.notice);
     }
     Ok(compute_logged(&tasks, &events, &cursors, &claims, window))
 }

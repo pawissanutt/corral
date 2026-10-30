@@ -1,14 +1,20 @@
 //! Diagnostics for command-success receipts that no longer bind to the candidate.
 use crate::{Ctx, verification};
 use anyhow::Result;
-use corral_core::{CandidateIdentity, GateRecord, Run, Task};
+use corral_core::{CandidateIdentity, GateRecord, RunHead, TaskRef};
 
-pub(super) fn log_passed(ctx: &Ctx, task: &Task, run: &Run, record: &GateRecord) -> Result<bool> {
-    let path = super::gate_paths(ctx, &task.id, &run.id).log;
-    let log = match std::fs::read(path) {
-        Ok(log) => log,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e.into()),
+pub(super) fn log_passed<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    record: &GateRecord,
+) -> Result<bool> {
+    let Some(identity) = &record.identity else {
+        return Ok(false);
+    };
+    let Some(log) = super::evidence::attempt_log(ctx, task.id(), &run.id, &identity.attempt)?
+    else {
+        return Ok(false);
     };
     let commands: Vec<_> = record.commands.iter().map(|r| r.command.clone()).collect();
     Ok(
@@ -22,10 +28,10 @@ pub(super) fn log_passed(ctx: &Ctx, task: &Task, run: &Run, record: &GateRecord)
     )
 }
 
-pub(super) fn reason(
+pub(super) fn reason<T: TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
-    run: &Run,
+    task: &T,
+    run: &RunHead,
     record: &GateRecord,
     reported: Option<&CandidateIdentity>,
 ) -> Result<String> {

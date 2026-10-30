@@ -4,7 +4,7 @@
 //! section dispatch rendered into its run prompt from the run's GateContract; its SHA-256 is the
 //! `contract_sha256` the worker's AgentReport carries for audit.
 //! Owner: T-252 child worker-role.
-use anyhow::{Context, Result};
+use anyhow::Result;
 use corral_core::Task;
 use corral_core::agent::paths::sha256_hex;
 
@@ -23,8 +23,8 @@ pub struct GateSection {
 }
 
 /// The run prompt dispatch wrote, the file the host's bootstrap names.
-pub fn prompt_file(ctx: &Ctx, task: &str, run: &str) -> std::path::PathBuf {
-    ctx.store.prompts_dir().join(format!("{task}-{run}.md"))
+pub fn prompt_file(ctx: &Ctx, task: &str, run: &str) -> Result<std::path::PathBuf> {
+    crate::prompt::run_prompt_file(ctx, task, run)
 }
 
 /// The gate section of `prompt`: from its heading line up to the next second-level heading,
@@ -49,10 +49,7 @@ pub fn worker_gate_section(ctx: &Ctx, task: &Task) -> Result<Option<GateSection>
     let Some(run) = task.current_run() else {
         return Ok(None);
     };
-    let path = prompt_file(ctx, &task.id, &run.id);
-    match std::fs::read_to_string(&path) {
-        Ok(prompt) => Ok(prompt_gate_section(&prompt)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
+    Ok(crate::prompt::run_prompt(ctx, &task.id, &run.id)?
+        .as_deref()
+        .and_then(prompt_gate_section))
 }

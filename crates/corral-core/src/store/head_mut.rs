@@ -357,8 +357,17 @@ impl TaskHeadMut {
             self.head.summary.fold_run_head(&old);
             self.demoted.push(Demoted::Run(old_seq, *old));
         }
-        let rows =
-            split_rows(|rows| split_run(rows, n, SELF, &run, serde_json::to_value(&run)?, true))?;
+        let rows = split_rows(|rows| {
+            split_run(
+                &self.head.id,
+                rows,
+                n,
+                SELF,
+                &run,
+                serde_json::to_value(&run)?,
+                true,
+            )
+        })?;
         let own = rows
             .get(&(TaskPart::Run, seq(n)))
             .context("the started run has no row")?

@@ -4,7 +4,6 @@ use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::agent::{self, GenerationBound, HostHealth, ReceiptEffect, paths};
-use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::json;
 

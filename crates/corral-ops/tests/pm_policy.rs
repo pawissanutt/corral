@@ -684,7 +684,11 @@ fn pi_pm_preflight_refuses_missing_assets_unapproved_and_ambiguous_scopes() {
         assert!(error.contains(code), "{variant}: {error}");
         assert!(fx.calls(&["workspace", "create"]).is_empty());
         assert!(fx.calls(&["pane", "run"]).is_empty());
-        assert!(corral_core::agent::pm_state::load(&fx.ctx.store).unwrap().is_none());
+        assert!(
+            corral_core::agent::pm_state::load(&fx.ctx.store)
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -782,10 +786,7 @@ fn omo_rollback_preserves_pi_pm_records_and_current_policy() {
     );
     let refused = agent::call(&fx.fresh(), "comment", &comment).unwrap();
     assert_eq!(refused.rejection().unwrap().code.as_str(), "agent_fenced");
-    assert_eq!(
-        fx.ctx.store.get(&task).unwrap(),
-        task_before
-    );
+    assert_eq!(fx.ctx.store.get(&task).unwrap(), task_before);
     assert_eq!(fx.receipt("pm:p1")["current"], true);
     assert_eq!(fx.calls(&["pane", "run"]).len(), 2);
     std::fs::remove_dir_all(dir.parent().unwrap()).unwrap();

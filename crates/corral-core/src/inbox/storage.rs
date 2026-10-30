@@ -349,7 +349,8 @@ impl<'a> Inbox<'a> {
             TerminalState::Failed,
             TerminalState::Abandoned,
         ] {
-            if self.record::<Value>(state.suffix(), &format!("{seq:020}"))?
+            if self
+                .record::<Value>(state.suffix(), &format!("{seq:020}"))?
                 .is_some_and(|record| !proof_only(&record))
             {
                 return Ok(Some(state));
@@ -374,8 +375,11 @@ impl<'a> Inbox<'a> {
             });
             let key = format!("{seq:020}");
             let record = self.record::<Value>(TerminalState::Failed.suffix(), &key)?;
-            self.save_record(TerminalState::Failed.suffix(), &key,
-                &retry_bar_record(record, prior.unwrap_or(first))?)?;
+            self.save_record(
+                TerminalState::Failed.suffix(),
+                &key,
+                &retry_bar_record(record, prior.unwrap_or(first))?,
+            )?;
         }
         Ok(())
     }
@@ -443,7 +447,13 @@ impl<'a> Inbox<'a> {
             entry.retry_evidence.bar(reason, None);
         })?;
         self.store.records_transaction(|| {
-            self.retain_retry_bars(&[seq], &RetryWitness { reason, attempt: None })?;
+            self.retain_retry_bars(
+                &[seq],
+                &RetryWitness {
+                    reason,
+                    attempt: None,
+                },
+            )?;
             #[cfg(test)]
             super::header::checkpoint("receipt_barred")?;
             let kind = format!("receipt.{}", level.suffix());
@@ -514,7 +524,9 @@ impl<'a> Inbox<'a> {
         }
         self.store.records_transaction(|| {
             if !self.write_terminal_record(
-                seq, state, json!({"reason":reason,"via":via,"at":self.store.now()}),
+                seq,
+                state,
+                json!({"reason":reason,"via":via,"at":self.store.now()}),
             )? {
                 return Ok(false);
             }
@@ -627,6 +639,5 @@ fn current_inbox<'h>(
             .filter(|r| &r.id == review)
             .map(|r| &mut r.inbox),
         Recipient::Pm => None,
-
     }
 }

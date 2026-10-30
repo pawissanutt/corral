@@ -52,7 +52,15 @@ pub(crate) fn run_projection(task: &Task, i: usize, with_child: bool) -> Result<
     let run = task.runs.get(i).context("no such run")?;
     let n = i + 1;
     let mut rows = Rows::new();
-    split_run(&mut rows, n, SELF, run, serde_json::to_value(run)?, true)?;
+    split_run(
+        &task.id,
+        &mut rows,
+        n,
+        SELF,
+        run,
+        serde_json::to_value(run)?,
+        true,
+    )?;
     let mut head: RunHead = decode(&rows, TaskPart::Run, &seq(n))?;
     if with_child && !run.review_runs.is_empty() {
         let child = decode(
@@ -80,6 +88,7 @@ fn child_projections(task: &Task, i: usize) -> Result<Vec<RunHead>> {
     let run = &task.runs[i];
     let mut rows = Rows::new();
     split_run(
+        &task.id,
         &mut rows,
         i + 1,
         SELF,
@@ -336,8 +345,10 @@ impl TaskRef for Task {
         Ok(children_where(self, run, |c| c.id == id, 1)?.pop())
     }
     fn review_child_at(&self, run: &str, n: usize) -> Result<Option<RunHead>> {
-        find_run(self, run).and_then(|r| n.checked_sub(1).and_then(|n| r.review_runs.get(n)))
-            .map(RunHead::of).transpose()
+        find_run(self, run)
+            .and_then(|r| n.checked_sub(1).and_then(|n| r.review_runs.get(n)))
+            .map(RunHead::of)
+            .transpose()
     }
 
     fn review_child_by_review_at(&self, run: &str, at: Timestamp) -> Result<Option<RunHead>> {
@@ -451,6 +462,46 @@ impl TaskRef for Task {
 
     fn inbox_head(&self, recipient: &Recipient) -> Result<Option<InboxHead>> {
         Ok(inbox_state(self, recipient).map(inbox_head_of))
+    }
+
+    fn pending_agent_receipts(&self, container: &ContainerRef) -> Result<Vec<RequestReceipt>> {
+        Ok(crate::agent::container_state(self, container)
+            .map(|s| {
+                s.receipts
+                    .iter()
+                    .filter(|r| crate::agent::NativeRecord::Receipt((*r).clone()).pending())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+    fn agent_job(
+        &self,
+        container: &ContainerRef,
+        id: &str,
+    ) -> Result<Option<crate::agent::JobRecord>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|s| s.jobs.iter().find(|j| j.id == id))
+            .cloned())
+    }
+    fn pending_agent_jobs(&self, container: &ContainerRef) -> Result<Vec<crate::agent::JobRecord>> {
+        Ok(crate::agent::container_state(self, container)
+            .map(|s| s.jobs.iter().filter(|j| j.needs_reap()).cloned().collect())
+            .unwrap_or_default())
+    }
+    fn latest_agent_turn(
+        &self,
+        container: &ContainerRef,
+        generation: u32,
+    ) -> Result<Option<AgentTurn>> {
+        Ok(crate::agent::container_state(self, container)
+            .and_then(|s| {
+                s.turns
+                    .iter()
+                    .filter(|t| t.generation == generation)
+                    .max_by_key(|t| t.seq)
+            })
+            .cloned())
     }
 
     fn agent_generation(

@@ -44,12 +44,15 @@ fn bad(reason: impl Into<String>) -> anyhow::Error {
 /// Where one request stages a review child's own proof before it is attached. The review packet
 /// treats an artifact whose source lies under `review-watch` as reviewer-side, so a reviewer's
 /// proof never changes the candidate packet or evidence its own verdict is bound to.
-fn proof_dir(ctx: &Ctx, (task, review): (&str, &str), origin: &RequestOrigin) -> PathBuf {
-    let watch = ctx.store.state_dir().join("review-watch");
-    watch
+fn proof_dir(ctx: &Ctx, (task, review): (&str, &str), origin: &RequestOrigin) -> Result<PathBuf> {
+    let watch = ctx.store.scratch_spool(
+        corral_core::backend::ScratchKind::ReviewWatchLog,
+        crate::watch::REVIEW_WATCH,
+    )?;
+    Ok(watch
         .join(task)
         .join(format!("{review}-proof"))
-        .join(&origin.request_id)
+        .join(&origin.request_id))
 }
 
 /// Attaches the staged file as reviewer-side proof of the parent run, then removes the staging
@@ -94,7 +97,7 @@ fn artifact(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .ok_or_else(|| bad(format!("artifact {} has no file name", path.display())))?;
-    let staged = proof_dir(ctx, (task, review), origin).join(&name);
+    let staged = proof_dir(ctx, (task, review), origin)?.join(&name);
     let title = input.title.unwrap_or_else(|| name.clone());
     if replay {
         return attach_proof(ctx, task, &staged, (kind, &title), origin);
@@ -130,7 +133,7 @@ fn evidence(
     observation: &EvidenceObservation,
     (origin, replay): (&RequestOrigin, bool),
 ) -> Result<Receipted> {
-    let staged = proof_dir(ctx, (task, review), origin).join("evidence.json");
+    let staged = proof_dir(ctx, (task, review), origin)?.join("evidence.json");
     let title = format!(
         "Reviewer evidence {} ({})",
         observation.criterion, observation.key

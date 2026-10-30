@@ -104,6 +104,28 @@ macro_rules! synced {
 }
 
 impl TaskMut for TaskHeadMut {
+    fn init_agent_head(
+        &mut self,
+        container: &crate::agent::ContainerRef,
+        head: crate::AgentHostHead,
+    ) -> Result<()> {
+        TaskHeadMut::init_agent_head(self, container, head)
+    }
+    fn edit_agent_head(
+        &mut self,
+        container: &crate::agent::ContainerRef,
+        edit: impl FnOnce(&mut crate::AgentHostHead) -> Result<()>,
+    ) -> Result<()> {
+        TaskHeadMut::edit_agent_head(self, container, edit)
+    }
+    fn put_agent_record(
+        &mut self,
+        container: &crate::agent::ContainerRef,
+        record: crate::agent::NativeRecord,
+    ) -> Result<bool> {
+        TaskHeadMut::put_agent_record(self, container, record)
+    }
+
     fn edit_head_fields(
         &mut self,
         edit: impl FnOnce(&mut TaskHeadFields) -> Result<()>,

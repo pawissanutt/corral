@@ -24,8 +24,8 @@ pub(super) fn stale(ctx: &Ctx, pending: &Pending) -> Result<bool> {
     ) {
         return Ok(false);
     }
-    let task = ctx.store.get(&pending.task)?;
-    let Some(run) = task.current_run().filter(|r| r.id == pending.run) else {
+    let task = ctx.store.head(&pending.task)?;
+    let Some(run) = task.current_run.as_deref().filter(|r| r.id == pending.run) else {
         return Ok(true);
     };
     let candidate = authorization
@@ -42,7 +42,17 @@ pub(super) fn stale(ctx: &Ctx, pending: &Pending) -> Result<bool> {
 /// Persist the full preparation as immutable task evidence before removing the replay
 /// pointer. Artifact deduplication makes recovery safe if interrupted before removal.
 pub(super) fn supersede(ctx: &Ctx, pending: &Pending) -> Result<()> {
-    let path = submission::retained_path(ctx, &pending.task, &pending.run, pending.kind);
+    let retained = submission::load_retained(ctx, &pending.task, &pending.run, pending.kind)?
+        .context("retained preparation missing")?;
+    let dir = ctx.store.scratch_tmp()?.join("review-prepared");
+    std::fs::create_dir_all(&dir).context("creating superseded preparation staging directory")?;
+    let kind = match pending.kind {
+        Kind::Gate => "gate",
+        Kind::Reviewer => "review",
+    };
+    let path = dir.join(format!("{}-{}-{kind}.json", pending.task, pending.run));
+    std::fs::write(&path, serde_json::to_vec_pretty(&retained)?)
+        .context("materializing retained preparation evidence")?;
     let artifact = crate::artifacts::add_artifact_to_run(
         ctx,
         &pending.task,
@@ -51,6 +61,7 @@ pub(super) fn supersede(ctx: &Ctx, pending: &Pending) -> Result<()> {
         Some(corral_core::ArtifactKind::Evidence),
         Some("Superseded unsubmitted auxiliary preparation: candidate changed"),
     )?;
+    std::fs::remove_file(&path).context("removing staged superseded preparation")?;
     ctx.store.log_event(
         Some(&pending.task),
         "review_preparation_superseded",

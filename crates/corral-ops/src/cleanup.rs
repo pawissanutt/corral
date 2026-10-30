@@ -236,7 +236,10 @@ fn clean_listed(
         }
         for pane in rows {
             if scope == Cleanup::Round
-                && head.current_run.as_ref().and_then(|run| run.herdr.as_ref())
+                && head
+                    .current_run
+                    .as_ref()
+                    .and_then(|run| run.herdr.as_ref())
                     .is_some_and(|worker| worker.pane_id == pane.pane)
             {
                 continue;
@@ -260,7 +263,6 @@ fn clean_listed(
                 .1
                 .push(pane);
         }
-
     }
     if owned.is_empty() && workspaces.is_empty() && debts.is_empty() {
         return Ok(warnings);

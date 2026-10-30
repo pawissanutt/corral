@@ -83,7 +83,11 @@ impl Inbox<'_> {
             Ok(refusal) => refusal,
             Err(error) => Some(format!("evidence_incomplete: {error:#}")),
         };
-        if refusal.is_none() && self.record::<Value>("retried", &format!("{seq:020}"))?.is_some() {
+        if refusal.is_none()
+            && self
+                .record::<Value>("retried", &format!("{seq:020}"))?
+                .is_some()
+        {
             refusal = Some(format!(
                 "already_retried: {id} already has a retry claim; publication may be incomplete"
             ));
@@ -272,12 +276,7 @@ impl Inbox<'_> {
     }
 
     /// Drop a claim whose post was definitively refused; a failed release keeps it (conservative).
-    fn release_retry_claim(
-        &self,
-        seq: u64,
-        marker: &str,
-        error: anyhow::Error,
-    ) -> anyhow::Error {
+    fn release_retry_claim(&self, seq: u64, marker: &str, error: anyhow::Error) -> anyhow::Error {
         // Marker first: an interruption leaves a visible mirror, never a hidden marker.
         let released = (|| -> Result<()> {
             let _inbox = self.lock()?;
@@ -495,7 +494,9 @@ impl Inbox<'_> {
         }
         self.store.records_transaction(|| {
             if !self.write_terminal_record(
-                seq, state, json!({"reason":reason,"via":via,"at":self.store.now()}),
+                seq,
+                state,
+                json!({"reason":reason,"via":via,"at":self.store.now()}),
             )? {
                 return Ok(false);
             }

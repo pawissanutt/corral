@@ -1,6 +1,6 @@
 //! Woken parked runs re-acquire a coding slot before resuming; red-main fixes take capacity first.
 use anyhow::Result;
-use corral_core::{ReviewWork, SlotWait, Status, Store, Task, red_main};
+use corral_core::{ReviewWork, SlotWait, Status, Store, Task, TaskHead, TaskRef, red_main};
 use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::json;
@@ -44,9 +44,16 @@ fn parked(task: &Task) -> Option<ParkedRun> {
     })
 }
 
+fn woken_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Option<SlotWait>> {
+    Ok(task
+        .current_run_head()?
+        .filter(|r| task.status().holds_slot() && r.outcome.is_none())
+        .and_then(|r| r.obligations.slot_wait.clone()))
+}
+
 /// Precedence key: red-main fixes first, then woken runs oldest first; other work has none.
 /// A claimant that cannot take a slot now (its project is saturated) reserves nothing.
-fn key(store: &Store, task: &Task) -> Result<Option<(u8, Timestamp)>> {
+fn key<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<Option<(u8, Timestamp)>> {
     let key = claim(store, task)?;
     if key.is_some() && crate::slots::capacity_reason(store, task, 0)?.is_some() {
         return Ok(None);
@@ -54,27 +61,33 @@ fn key(store: &Store, task: &Task) -> Result<Option<(u8, Timestamp)>> {
     Ok(key)
 }
 
-fn claim(store: &Store, task: &Task) -> Result<Option<(u8, Timestamp)>> {
-    if let Some(slot) = woken(task) {
+fn claim<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<Option<(u8, Timestamp)>> {
+    if let Some(slot) = woken_ref(task)? {
         return Ok(Some((u8::from(!red_main(task)), slot.since)));
     }
     let waiting = red_main(task)
-        && task.status == Status::Ready
-        && task.park.is_none()
-        && !task.tracker
-        && !task.dispatch_hold
-        && store.config.ready_project_allowed(task.project.as_deref())
+        && *task.status() == Status::Ready
+        && task.park().is_none()
+        && !*task.tracker()
+        && !*task.dispatch_hold()
+        && store
+            .config
+            .ready_project_allowed(task.project().as_deref())
         && crate::queue::dependency_check(store, task)?.is_none();
-    Ok(waiting.then_some((0, task.created)))
+    Ok(waiting.then_some((0, *task.created())))
 }
 
 /// Tasks that take the next coding slot before `task`.
-fn ahead_of(store: &Store, tasks: &[Task], task: &Task) -> Result<Vec<String>> {
+fn ahead_of<T: TaskRef + ?Sized>(
+    store: &Store,
+    tasks: &[TaskHead],
+    task: &T,
+) -> Result<Vec<String>> {
     let mine = key(store, task)?;
     let mut ahead = Vec::new();
-    for other in tasks.iter().filter(|o| o.id != task.id) {
+    for other in tasks.iter().filter(|o| o.id != *task.id()) {
         if let Some(theirs) = key(store, other)?
-            && mine.is_none_or(|mine| (theirs, &other.id) < (mine, &task.id))
+            && mine.is_none_or(|mine| (theirs, &other.id) < (mine, task.id()))
         {
             ahead.push(other.id.clone());
         }
@@ -83,15 +96,15 @@ fn ahead_of(store: &Store, tasks: &[Task], task: &Task) -> Result<Vec<String>> {
 }
 
 /// Refuses a coding slot that a red-main fix or an earlier woken run should take first.
-pub(crate) fn precedence_reason(
+pub(crate) fn precedence_reason<T: TaskRef + ?Sized>(
     store: &Store,
-    task: &Task,
+    task: &T,
     credit: usize,
 ) -> Result<Option<String>> {
-    let tasks = store.list_shared()?;
+    let tasks = crate::pm_next::heads::open(store)?;
     let ahead = ahead_of(store, &tasks, task)?;
     let limits = &store.config.limits;
-    let used = SlotUsage::from_tasks(&tasks, limits)
+    let used = SlotUsage::from_heads(&tasks, limits)
         .total()
         .saturating_sub(credit);
     Ok(
@@ -105,14 +118,17 @@ pub(crate) fn precedence_reason(
 }
 
 /// Refuses a gate slot while a red-main fix waits for gate admission.
-pub(crate) fn gate_precedence(store: &Store, task: &Task, active: usize) -> Result<Option<String>> {
+pub(crate) fn gate_precedence<T: corral_core::TaskFieldsRef + ?Sized>(
+    store: &Store,
+    task: &T,
+    active: usize,
+) -> Result<Option<String>> {
     if red_main(task) {
         return Ok(None);
     }
-    let waiting: Vec<_> = store
-        .list_shared()?
+    let waiting: Vec<_> = crate::pm_next::heads::open(store)?
         .iter()
-        .filter(|o| o.id != task.id && red_main(o) && o.review_wait == Some(ReviewWork::Gate))
+        .filter(|o| o.id != *task.id() && red_main(*o) && o.review_wait == Some(ReviewWork::Gate))
         .map(|o| o.id.clone())
         .collect();
     Ok(
@@ -127,15 +143,15 @@ pub(crate) fn gate_precedence(store: &Store, task: &Task, active: usize) -> Resu
 
 /// Grants a woken run a coding slot when one is free; true once it holds a slot again.
 pub(crate) fn reacquire(ctx: &Ctx, id: &str) -> Result<bool> {
-    let free = |store: &Store, task: &Task| -> Result<bool> {
-        Ok(woken(task).is_some()
+    fn free<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<bool> {
+        Ok(woken_ref(task)?.is_some()
             && crate::slots::capacity_reason(store, task, 0)?.is_none()
             && precedence_reason(store, task, 0)?.is_none())
-    };
-    if !free(&ctx.store, &ctx.store.get(id)?)? {
+    }
+    if !free(&ctx.store, &ctx.store.head(id)?)? {
         return Ok(false);
     }
-    let (task, granted) = ctx.store.dispatch_update(id, |store, task| {
+    let (task, granted) = ctx.store.dispatch_update_head(id, |store, task| {
         if !free(store, task)? {
             return Ok(None);
         }
@@ -157,22 +173,21 @@ pub(crate) fn reacquire(ctx: &Ctx, id: &str) -> Result<bool> {
 /// Sync pass: woken runs re-acquire free slots in precedence order, before queued dispatch.
 /// Candidates come from the pass's task snapshot; each grant re-reads its task under the board
 /// lock, and runs woken later in the pass already tried to re-acquire where they woke.
-pub(crate) fn reacquire_woken(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Change>> {
-    let mut woken: Vec<_> = tasks
-        .iter()
-        .filter_map(|t| {
-            let key = woken(t).map(|s| (u8::from(!red_main(t)), s.since))?;
-            Some((key, t))
-        })
-        .collect();
+pub(crate) fn reacquire_woken(ctx: &Ctx, tasks: &[TaskHead]) -> Result<Vec<Change>> {
+    let mut woken = Vec::new();
+    for task in tasks {
+        if let Some(slot) = woken_ref(task)? {
+            woken.push(((u8::from(!red_main(task)), slot.since), task));
+        }
+    }
     woken.sort_by(|a, b| (a.0, &a.1.id).cmp(&(b.0, &b.1.id)));
     let mut changes = Vec::new();
     for (_, task) in woken {
         if reacquire(ctx, &task.id)? {
             changes.push(Change {
                 task: task.id.clone(),
-                from: task.status,
-                to: task.status,
+                from: task.status.clone(),
+                to: task.status.clone(),
                 note: "woken parked run re-acquired a coding slot".into(),
                 stage: None,
             });
@@ -187,7 +202,7 @@ pub(crate) fn queue_entries(tasks: &[Task]) -> (Vec<QueueEntry>, Vec<QueueEntry>
         .iter()
         .filter_map(|t| parked(t).map(|p| (t, p)))
         .collect();
-    entries.sort_by_key(|(t, p)| (p.woken_since.is_none(), !red_main(t), p.woken_since));
+    entries.sort_by_key(|(t, p)| (p.woken_since.is_none(), !red_main(*t), p.woken_since));
     let (woken, parked): (Vec<_>, Vec<_>) = entries
         .into_iter()
         .map(|(t, p)| QueueEntry {

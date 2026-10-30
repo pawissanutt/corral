@@ -69,6 +69,31 @@ pub(crate) fn artifact_indexes(artifact: &crate::Artifact) -> Vec<String> {
 }
 
 impl TaskHead {
+    /// The full Task slot predicate, without reading waits or historical containers.
+    pub fn holds_dispatch_slot(&self) -> bool {
+        let run = self.current_run.as_deref();
+        let planning = self.last_plan_run.as_deref().filter(|p| {
+            p.state != crate::PlanRunState::Approved && run.is_none_or(|r| r.outcome.is_some())
+        });
+        let worker = planning.map_or_else(
+            || {
+                self.status.holds_slot()
+                    && run.is_none_or(|r| {
+                        r.outcome != Some(crate::RunOutcome::Failed) && !r.releases_slot(&self.id)
+                    })
+                    && !(run.is_none_or(|r| r.outcome.is_some())
+                        && self.last_plan.as_deref().is_some_and(|p| {
+                            p.approval.is_none()
+                                && p.current_review
+                                    .as_ref()
+                                    .is_some_and(|r| r.verdict == Some(crate::Verdict::Approve))
+                        }))
+            },
+            crate::PlanRunHead::holds_slot,
+        );
+        worker || self.launch.as_ref().is_some_and(|l| l.reserved)
+    }
+
     /// Number of this task's Keep registrations marked reviewed, on this pinned view.
     pub fn reviewed_keep_artifacts(&self) -> Result<u64> {
         let view = self

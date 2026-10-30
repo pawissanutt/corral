@@ -80,7 +80,8 @@ impl Store {
             head.preserve_updated = true;
             update(&mut head.attention)?;
             head.attention.validate()
-        }).map(|(head, ())| head)
+        })
+        .map(|(head, ())| head)
     }
 }
 

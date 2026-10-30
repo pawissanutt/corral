@@ -585,10 +585,15 @@ pub(crate) fn advance_agent(
         t.status = Status::NeedsMe;
         if from != Status::NeedsMe {
             batch = Some(crate::owner_notice::record_entry_head(
-                ctx, t, "provider_exhausted", now, Vec::new(),
+                ctx,
+                t,
+                "provider_exhausted",
+                now,
+                Vec::new(),
             )?);
             ctx.store.log_event(
-                Some(&t.id), "needs_me",
+                Some(&t.id),
+                "needs_me",
                 json!({"from": from.as_str(), "agent_state": pane.status.as_str(), "note": reason}),
             )?;
         }
@@ -598,8 +603,11 @@ pub(crate) fn advance_agent(
         return Ok(None);
     };
     crate::owner_notice::notify(
-        ctx, crate::owner_notice::newly_committed(&saved, batch)?,
-        &format!("{} needs you", task.id), &reason, true,
+        ctx,
+        crate::owner_notice::newly_committed(&saved, batch)?,
+        &format!("{} needs you", task.id),
+        &reason,
+        true,
     )?;
     Ok(Some(Change {
         task: task.id.clone(),

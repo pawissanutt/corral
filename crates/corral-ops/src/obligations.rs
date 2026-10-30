@@ -347,12 +347,12 @@ pub(crate) fn transition_with_notice(
     let committed =
         if let Some(pending) = pending {
             Some(crate::owner_notice::newly_committed(
-                &ctx.store.get(id)?,
+                &ctx.store.head(id)?,
                 pending,
             )?)
         } else {
             let source = crate::verification::digest(&serde_json::to_vec(&(kind, &detail))?);
-            crate::owner_notice::commit(ctx, id, |_, task| {
+            crate::owner_notice::commit_head(ctx, id, |_, task| {
                 if task.attention.notice_outbox.iter().any(|claim| {
                     claim.producer == "obligation_transition" && claim.source == source
                 }) {

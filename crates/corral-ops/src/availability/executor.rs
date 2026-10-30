@@ -206,19 +206,29 @@ fn needs_me(ctx: &Ctx, task: &Task, run: &Run, note: &str) -> Result<Option<Chan
         t.status = Status::NeedsMe;
         if entering {
             batch = Some(crate::owner_notice::record_entry_head(
-                ctx, t, "availability_exhausted", Timestamp::now(), Vec::new(),
+                ctx,
+                t,
+                "availability_exhausted",
+                Timestamp::now(),
+                Vec::new(),
             )?);
-            ctx.store.log_event(Some(&t.id), "needs_me",
-                json!({"from": from.as_str(), "note": note}))?;
+            ctx.store.log_event(
+                Some(&t.id),
+                "needs_me",
+                json!({"from": from.as_str(), "note": note}),
+            )?;
         }
         Ok(true)
     })?;
     let (Some(saved), Some(batch)) = (saved, batch) else {
         return Ok(None);
     };
-    crate::owner_notice::notify(ctx,
+    crate::owner_notice::notify(
+        ctx,
         crate::owner_notice::newly_committed(&saved, batch)?,
-        &format!("{} blocked", task.id), note, true,
+        &format!("{} blocked", task.id),
+        note,
+        true,
     )?;
     Ok(Some(Change {
         task: task.id.clone(),

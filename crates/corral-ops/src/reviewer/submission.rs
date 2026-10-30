@@ -56,7 +56,12 @@ pub(crate) fn current_assessment(
             .iter()
             .rev()
             .find(|child| child.review.as_ref().is_some_and(|r| r.at == at))
-            .and_then(|child| child.vendor.as_deref().map(|vendor| child.family(Some(vendor)))))
+            .and_then(|child| {
+                child
+                    .vendor
+                    .as_deref()
+                    .map(|vendor| child.family(Some(vendor)))
+            }))
     })
 }
 
@@ -75,7 +80,12 @@ pub(crate) fn current_assessment_ref<T: TaskRef + ?Sized>(
     assess(ctx, store, task, &run, |at| {
         Ok(task
             .review_child_by_review_at(parent, at)?
-            .and_then(|child| child.vendor.as_deref().map(|vendor| child.family(Some(vendor)))))
+            .and_then(|child| {
+                child
+                    .vendor
+                    .as_deref()
+                    .map(|vendor| child.family(Some(vendor)))
+            }))
     })
 }
 
@@ -84,7 +94,7 @@ fn assess<T: TaskRef + ?Sized>(
     store: &Store,
     task: &T,
     parent: &RunHead,
-    family_at: impl FnOnce(jiff::Timestamp) -> Result<Option<Option<corral_core::ModelFamily>>>, 
+    family_at: impl FnOnce(jiff::Timestamp) -> Result<Option<Option<corral_core::ModelFamily>>>,
 ) -> Result<()> {
     let record = parent
         .review

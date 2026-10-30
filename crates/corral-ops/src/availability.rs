@@ -3,7 +3,7 @@
 //! `retry_with` creates linked continuations from run checkpoints, reviewers get a new review
 //! attempt, and blocked or exhausted lists become explicit Waiting or Needs-me states.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::records::RecordArea;
 use corral_core::{
     AttemptFailure, AvailabilityClass, AvailabilityEpisode, CandidateBinding, Config,

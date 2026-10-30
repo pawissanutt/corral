@@ -412,10 +412,17 @@ impl TaskHead {
     }
 
     pub fn review_child_at(&self, run: &str, n: usize) -> Result<Option<RunHead>> {
-        if n == 0 { return Ok(None); }
-        let Some(s) = self.run_seq(run)? else { return Ok(None); };
-        let rows = self.query(&RowQuery::key(TaskPart::ReviewRun, child_key(s, n)),
-            1, Counter::NestedRowDecodes)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        let Some(s) = self.run_seq(run)? else {
+            return Ok(None);
+        };
+        let rows = self.query(
+            &RowQuery::key(TaskPart::ReviewRun, child_key(s, n)),
+            1,
+            Counter::NestedRowDecodes,
+        )?;
         Ok(self.child_heads(rows)?.pop())
     }
 

@@ -23,7 +23,7 @@ impl Prepared {
         {
             ctx.herdr.pane_close(old)?;
         }
-        let command = crate::launch_exit::arm(&self.command, &self.receipt)?;
+        let command = crate::launch_exit::arm(ctx, &self.command, &self.receipt)?;
         self.submitted.set(true);
         ctx.herdr.pane_run(&self.herdr.pane_id, &command)
     }
@@ -51,8 +51,7 @@ impl Continuation {
             Some(pane) => ctx.herdr.pane_get(pane)?.is_none(),
             None => true,
         };
-        let exited =
-            crate::launch_exit::exited(&crate::launch_exit::receipt(ctx, &task.id, &run.id));
+        let exited = crate::launch_exit::exited_for(ctx, &task.id, &run.id);
         let restart = missing || exited || fresh.policy == SessionPolicy::Fresh;
         let session = if fresh.policy == SessionPolicy::Fresh {
             fresh
@@ -97,18 +96,22 @@ impl Continuation {
         }
         let mut selected = run.clone();
         selected.session = Some(self.session.clone());
-        let prompt = ctx
-            .store
-            .prompts_dir()
-            .join(format!("{}-{}-changes.md", task.id, run.id));
-        std::fs::write(
-            &prompt,
-            format!(
+        let head = ctx.store.head(&task.id)?;
+        let prompt = crate::prompt::store_run_prompt(
+            ctx,
+            &task.id,
+            &run.id,
+            &format!(
                 "{}\n\n## Current changes requested\n\n{text}\n",
-                crate::task_prompt(ctx, task, &selected)?
+                crate::prompt::task_prompt_head(
+                    ctx,
+                    &head,
+                    task,
+                    head.current_run.as_deref(),
+                    &selected
+                )?
             ),
-        )
-        .context("writing continued worker prompt")?;
+        )?;
         let command = crate::prompt::render_command_noticed(
             ctx,
             &selected.agent,
@@ -127,12 +130,13 @@ impl Continuation {
                 error
             }
         })?;
-        let herdr = crate::gate::open_run_pane(ctx, task, run, "worker")?;
+        let herdr =
+            crate::gate::open_run_pane(ctx, task, &corral_core::RunHead::of(run)?, "worker")?;
         Ok(Some(Prepared {
             herdr,
             command,
             old_pane: run.herdr.as_ref().map(|old| old.pane_id.clone()),
-            receipt: crate::launch_exit::receipt(ctx, &task.id, &run.id),
+            receipt: crate::launch_exit::receipt(ctx, &task.id, &run.id)?,
             ctx: ctx.clone(),
             submitted: std::cell::Cell::new(false),
         }))
@@ -144,29 +148,33 @@ impl Continuation {
             return Ok(());
         }
         crate::session_scope::check_launch(ctx)?;
-        let task = ctx.store.get(id)?;
+        let head = ctx.store.head(id)?;
+        let task = head.shell_task()?;
         let run = task.current_run().context("worker run disappeared")?;
         anyhow::ensure!(
             task.status == Status::Running && run.session.as_ref() == Some(&self.session),
             "worker continuation changed before submission"
         );
-        let prompt = ctx
-            .store
-            .prompts_dir()
-            .join(if crate::agent::hooks::run_is_pi_native(run) {
-                format!("{id}-{}.md", run.id)
-            } else {
-                format!("{id}-{}-changes.md", run.id)
-            });
-        std::fs::write(&prompt, crate::task_prompt(ctx, &task, run)?)
-            .context("writing continued worker prompt")?;
+        let prompt = crate::prompt::store_run_prompt(
+            ctx,
+            id,
+            &run.id,
+            &crate::prompt::task_prompt_head(ctx, &head, &task, head.current_run.as_deref(), run)?,
+        )?;
         if let Some(old) = &run.herdr
             && ctx.herdr.pane_get(&old.pane_id)?.is_some()
         {
             ctx.herdr.pane_close(&old.pane_id)?;
         }
-        let herdr = crate::gate::open_run_pane(ctx, &task, run, "worker")?;
-        let saved = ctx.store.update(id, |current| {
+        let herdr = crate::gate::open_run_pane(
+            ctx,
+            &head,
+            head.current_run
+                .as_deref()
+                .context("worker run disappeared")?,
+            "worker",
+        )?;
+        let saved = ctx.store.update_head(id, |current| {
             let active = current
                 .current_run_mut()
                 .filter(|r| r.id == run.id)
@@ -176,6 +184,7 @@ impl Continuation {
             active.inbox.observe_cursor = Default::default();
             Ok(())
         })?;
+        let saved = saved.shell_task()?;
         let active = saved
             .current_run()
             .context("worker disappeared after pane creation")?;
@@ -184,8 +193,11 @@ impl Continuation {
         } else {
             crate::render_command(ctx, &active.agent, &saved, active, &prompt)?
         };
-        let command =
-            crate::launch_exit::arm(&command, &crate::launch_exit::receipt(ctx, id, &active.id))?;
+        let command = crate::launch_exit::arm(
+            ctx,
+            &command,
+            &crate::launch_exit::receipt(ctx, id, &active.id)?,
+        )?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
         crate::role_session::observe(ctx, &saved, active, false);
         crate::role_session::log(ctx, &saved, active)

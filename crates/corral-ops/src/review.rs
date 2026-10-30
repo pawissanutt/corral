@@ -18,7 +18,6 @@ use crate::verification;
 
 mod owner;
 pub(crate) use owner::awaiting_owner;
-use owner::review_interrupted;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproveStrategy {
@@ -415,7 +414,10 @@ pub(crate) fn landing_gate_passed<T: TaskRef + ?Sized>(
 
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.
 fn quick_approval_on_full_fail(run: &RunHead) -> Option<&str> {
-    let gate = run.gate.as_ref().filter(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))?;
+    let gate = run
+        .gate
+        .as_ref()
+        .filter(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))?;
     gate.identity.as_ref().filter(|i| i.gate_tier.is_none())?;
     let review = run.review.as_ref()?;
     let binding = review.identity.as_ref()?.gate_tier.as_deref()?;
@@ -503,7 +505,6 @@ pub fn approve(
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
-
 
 /// `approve`, also returning the sha the base (or kept branch) ended at.
 pub(crate) fn approve_landed(
@@ -671,7 +672,7 @@ pub(crate) fn approve_landed(
         }
     };
         if strategy != ApproveStrategy::KeepBranch {
-            t.landed = Some(corral_core::LandingReceipt {
+            head.landed = Some(corral_core::LandingReceipt {
                 run: run.id.clone(),
                 sha: sha.clone(),
             });

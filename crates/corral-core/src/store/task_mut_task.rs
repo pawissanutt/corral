@@ -173,6 +173,53 @@ fn inbox_state_mut<'a>(task: &'a mut Task, recipient: &Recipient) -> Result<&'a 
 }
 
 impl TaskMut for Task {
+    fn init_agent_head(
+        &mut self,
+        container: &crate::agent::ContainerRef,
+        head: crate::AgentHostHead,
+    ) -> Result<()> {
+        ensure!(
+            head.records == Default::default(),
+            "a new native head cannot claim existing records"
+        );
+        let slot = crate::agent::container_host_mut(self, container)
+            .context("native container missing")?;
+        ensure!(slot.is_none(), "native host already initialized");
+        *slot = Some(Box::new(serde_json::from_value(serde_json::to_value(
+            head,
+        )?)?));
+        Ok(())
+    }
+    fn edit_agent_head(
+        &mut self,
+        container: &crate::agent::ContainerRef,
+        edit: impl FnOnce(&mut crate::AgentHostHead) -> Result<()>,
+    ) -> Result<()> {
+        let state =
+            crate::agent::container_state_mut(self, container).context("native host missing")?;
+        let mut head = crate::AgentHostHead::of(state);
+        let counts = head.records.clone();
+        edit(&mut head)?;
+        ensure!(
+            head.records == counts,
+            "native append positions are store-owned"
+        );
+        state.version = head.version;
+        state.binding = head.binding;
+        state.todo = head.todo;
+        state.question_hold = head.question_hold;
+        Ok(())
+    }
+    fn put_agent_record(
+        &mut self,
+        container: &crate::agent::ContainerRef,
+        record: crate::agent::NativeRecord,
+    ) -> Result<bool> {
+        Ok(record.put(
+            crate::agent::container_state_mut(self, container).context("native host missing")?,
+        ))
+    }
+
     fn edit_head_fields(
         &mut self,
         edit: impl FnOnce(&mut TaskHeadFields) -> Result<()>,

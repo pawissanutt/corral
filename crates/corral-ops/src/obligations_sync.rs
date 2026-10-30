@@ -97,7 +97,10 @@ pub(crate) fn reconcile_head(
             return Ok(false);
         };
         // obligations_rev stands in for the whole obligations: stricter only on A->B->A.
-        if fresh.facts.obligations_rev != rev || fresh.gate != run.gate {
+        if fresh.facts.obligations_rev != rev
+            || fresh.obligations.slot_wait != open.slot_wait
+            || fresh.gate != run.gate
+        {
             return Ok(false);
         }
         fresh.obligations.slot_wait = next.slot_wait.clone();

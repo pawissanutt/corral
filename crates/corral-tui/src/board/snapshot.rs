@@ -34,11 +34,18 @@ impl BoardSnapshot {
         Self::load_refresh(ctx, now, None)
     }
 
-    pub(crate) fn load_with_attention(ctx: &Ctx, attention: crate::attention::Snapshot) -> Result<Self> {
+    pub(crate) fn load_with_attention(
+        ctx: &Ctx,
+        attention: crate::attention::Snapshot,
+    ) -> Result<Self> {
         Self::load_refresh(ctx, Timestamp::now(), Some(attention))
     }
 
-    fn load_refresh(ctx: &Ctx, now: Timestamp, attention: Option<crate::attention::Snapshot>) -> Result<Self> {
+    fn load_refresh(
+        ctx: &Ctx,
+        now: Timestamp,
+        attention: Option<crate::attention::Snapshot>,
+    ) -> Result<Self> {
         let live_ctx = ctx.clone();
         // Count the frame's view, but leave cold derivation preparation outside HotScope.
         let store = {
@@ -73,7 +80,8 @@ impl BoardSnapshot {
                 .collect::<Vec<_>>(),
         )?;
         let resource_ctx = crate::attention::refresh_context(ctx);
-        let (resources, waits) = crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
+        let (resources, waits) =
+            crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
         let pinned = pins
             .iter()
             .filter_map(|entry| PinRef::parse(&entry.pin.target).ok())
@@ -165,9 +173,9 @@ impl BoardView {
         self.plan_review_waits = snapshot.plan_review_waits;
         self.unreviewed = snapshot.unreviewed;
         self.plan_progress = snapshot.plan_progress;
-        self.index = index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned, &self.attention);
+        self.index =
+            index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned, &self.attention);
         self.index.done_ids.extend(snapshot.done_ids);
-        self.index.usage(&self.tasks, &snapshot.ctx.store.config.limits);
         if let Some(cursor) = &mut self.shelf_cursor {
             *cursor = (*cursor).min(self.pins.len().saturating_sub(1));
         }

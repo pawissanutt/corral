@@ -60,13 +60,10 @@ pub(crate) fn fresh(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result
         },
         id: None,
         transcript: None,
-        directory: ctx
-            .store
-            .state_dir()
-            .join("role-sessions")
+        directory: corral_core::agent::paths::sessions_dir(&ctx.store)
             .join(&task.id)
             .join(&run.id)
-            .join(nonce),
+            .join(format!("role-{nonce}")),
         harness: harness.into(),
         adapter: Some(selected_adapter.into()),
         model: run.model.clone(),

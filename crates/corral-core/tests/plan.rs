@@ -1,7 +1,6 @@
 use corral_core::{
     Artifact, ArtifactKind, ConfigDoc, HerdrRef, PlanDocument, PlanOverview, PlanRecord,
     PlanReview, PolicySource, Status, Store, Verdict,
-
 };
 use serde_yaml_ng::Value;
 

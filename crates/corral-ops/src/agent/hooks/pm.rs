@@ -139,7 +139,7 @@ pub fn prepared(
             super::super::launch::host_provider(resolved.vendor.as_deref(), model)
         }),
         effort: resolved.effort.clone(),
-        prompt_file: Some(ctx.store.prompts_dir().join("pm.md")),
+        prompt_file: Some(crate::pm::prompt_file(ctx)?),
         adopt,
     };
     let prepared = super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)?;

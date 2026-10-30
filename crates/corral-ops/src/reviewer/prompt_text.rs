@@ -85,7 +85,8 @@ pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) ->
     prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
     prompt.push_str(&crate::comments::owner_comments_ref(task)?);
     if run.facts.children > 1 {
-        let previous = task.review_child_at(&run.id, usize::try_from(run.facts.children - 1)?)?
+        let previous = task
+            .review_child_at(&run.id, usize::try_from(run.facts.children - 1)?)?
             .and_then(|child| child.review);
         prompt.push_str(&format!(
             "\n## Continued review\n\nThis is a new assessment of the current candidate and callback attempt above. \
