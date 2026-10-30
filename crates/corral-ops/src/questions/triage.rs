@@ -23,6 +23,9 @@ use crate::Ctx;
 #[path = "triage_heads.rs"]
 mod heads;
 pub(super) use heads::{apply_needs_me_ref, record_entry_notice_ref};
+#[path = "triage_system.rs"]
+mod system;
+pub(super) use system::transact_system;
 
 /// A Pi-native PM request: its admitted origin and the PM liveness, fence and project-scope
 /// check that the commit transaction repeats on the target task.
@@ -266,9 +269,16 @@ fn record_entry_notice(
 }
 
 fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion) -> Result<()> {
+    refuse_closed_reason(agent::container_closure(task, container), question)
+}
+
+pub(super) fn refuse_closed_reason(
+    closure: Option<agent::ClosureReason>,
+    question: &AgentQuestion,
+) -> Result<()> {
     // Container closure governs every new action, even on an already withdrawn question.
     // Committed PM receipt replays are handled by transact before reaching this check.
-    if let Some(reason) = agent::container_closure(task, container) {
+    if let Some(reason) = closure {
         return Err(refuse(
             RefusalKind::Closed,
             format!(
@@ -314,10 +324,8 @@ fn pm_replay(ctx: &Ctx, task: &Task, origin: &RequestOrigin) -> Result<Option<Re
         .is_some_and(|pm| pm.state.receipts.iter().any(|r| same(&r)));
     let in_task = ctx
         .store
-        .list_shared()?
-        .iter()
-        .filter(|t| t.id != task.id)
-        .any(|t| t.agent_pm_receipts.iter().any(|r| same(&r)));
+        .pm_request_receipt(&origin.request_id)?
+        .is_some_and(|(id, _)| id != task.id);
     if in_pm || in_task {
         return Err(mismatch());
     }

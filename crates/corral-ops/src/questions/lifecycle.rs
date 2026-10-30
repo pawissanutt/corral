@@ -1,7 +1,7 @@
 //! Sweeps over one task that the sync hook (integration-seams) calls per live Pi-native
 //! container: F4 terminalization, owner deadlines and the unattended rule. Each is idempotent.
 use anyhow::Result;
-use corral_core::Task;
+use corral_core::TaskRef;
 use corral_core::agent::{
     self, AgentQuestion, AnswerBy, ContainerRef, QuestionActor, QuestionAnswer, QuestionState,
     QuestionTerminal, TurnClass,
@@ -9,33 +9,40 @@ use corral_core::agent::{
 use corral_core::inbox::{Inbox, ReceiptLevel, TerminalState};
 use jiff::Timestamp;
 
-use super::triage::{Actor, Change, NeedsMe, answer_body, transact};
-use super::{PI_NATIVE_MESSAGE_KINDS, QuestionKey, QuestionRefusal, transition, triage, views};
+use super::triage::{Change, NeedsMe, answer_body, transact_system};
+use super::{
+    PI_NATIVE_MESSAGE_KINDS, QuestionKey, QuestionRefusal, recorded_pending_views_ref, transition,
+    triage,
+};
 use crate::Ctx;
 
 /// Persists F4 closure once: every recorded-pending question of a closed worker run or review
 /// child becomes cancelled with the closure reason, and the container's undelivered Pi-native
 /// messages are cancelled `recipient_closed`. Returns the keys cancelled by this call.
 pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
-    let now = corral_core::clock::now();
+    let now = ctx.store.now();
     let mut cancelled = Vec::new();
     let mut closed = Vec::new();
-    ctx.store.try_update(task_id, |task| {
+    ctx.store.try_update_head(task_id, |task| {
         let mut held = false;
-        for container in super::containers(task) {
-            if super::settled(task, &container) {
+        let mut containers = task.unfinished_native_containers()?;
+        containers.sort_by_key(|container| {
+            !matches!(
+                container,
+                ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+            )
+        });
+        for container in containers {
+            if task.agent_head(&container)?.is_none() || super::settled_ref(task, &container)? {
                 continue;
             }
-            let Some(reason) = agent::container_closure(task, &container) else {
+            let Some(reason) = agent::container_closure_ref(task, &container)? else {
                 continue;
             };
             crate::agent::hooks::visited("terminalize", container.key());
-            let Some(state) = agent::container_state_mut(task, &container) else {
-                continue;
-            };
-            for question in state.questions.iter_mut().filter(|q| q.recorded_pending()) {
+            for mut question in task.pending_agent_questions(&container)? {
                 transition(
-                    question,
+                    &mut question,
                     QuestionState::Cancelled,
                     "terminalize",
                     QuestionActor::System,
@@ -47,14 +54,15 @@ pub fn terminalize(ctx: &Ctx, task_id: &str) -> Result<Vec<String>> {
                     reason: reason.as_str().into(),
                     at: now,
                 });
-                super::bound_triage(&ctx.store, question)?;
+                super::bound_triage(&ctx.store, &mut question)?;
                 cancelled.push(question.key.clone());
+                task.put_agent_record(&container, agent::NativeRecord::Question(question))?;
             }
             // A closed review child no longer holds its task in Needs me. A worker's own closing
             // operation already moved its task.
             if matches!(container, ContainerRef::Reviewer { .. }) {
                 let before = task.status;
-                super::settle_needs_me(task, &container);
+                super::triage::apply_needs_me_ref(task, &container, &NeedsMe::Settle)?;
                 held |= task.status != before;
             }
             closed.push(container);
@@ -73,7 +81,7 @@ fn cancel_messages(ctx: &Ctx, container: &ContainerRef) -> Result<()> {
         return Ok(());
     };
     let inbox = Inbox::new(&ctx.store, recipient)?;
-    for message in inbox.messages()? {
+    for message in inbox.unfinished_messages()? {
         if !PI_NATIVE_MESSAGE_KINDS.contains(&message.kind.as_str())
             || inbox.terminal(message.seq)?.is_some()
             || inbox
@@ -119,19 +127,18 @@ fn deadline_due(question: &AgentQuestion, now: Timestamp) -> bool {
 /// them `owner_deadline` with the owner's instruction, delivered like any answer. Without an
 /// owner deadline nothing ever expires.
 pub fn expire_deadlines(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<String>> {
-    let task = ctx.store.get(task_id)?;
-    let due: Vec<String> = views(&task)
+    let task = ctx.store.head(task_id)?;
+    let due: Vec<String> = recorded_pending_views_ref(&task)?
         .into_iter()
         .filter(|view| view.pending && deadline_due(&view.question, now))
         .map(|view| view.question.key)
         .collect();
     let mut expired = Vec::new();
     for key in due {
-        let applied = transact(
+        let applied = transact_system(
             ctx,
             &key,
             None,
-            &Actor::Owner,
             QuestionActor::System,
             now,
             |_, _, current, at| {
@@ -177,15 +184,20 @@ pub fn expire_deadlines(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<
     Ok(expired)
 }
 
-fn last_turn_awaiting(task: &Task, container: &ContainerRef) -> bool {
-    agent::container_state(task, container)
-        .and_then(|state| state.turns.iter().max_by_key(|t| (t.generation, t.seq)))
-        .is_some_and(|turn| turn.class == Some(TurnClass::AwaitingAnswer))
+fn last_turn_awaiting<T: TaskRef + ?Sized>(task: &T, container: &ContainerRef) -> Result<bool> {
+    Ok(task
+        .latest_agent_turn_any_generation(container)?
+        .is_some_and(|turn| turn.class == Some(TurnClass::AwaitingAnswer)))
 }
 
-fn unattended_due(task: &Task, question: &AgentQuestion, now: Timestamp, secs: u64) -> bool {
+fn unattended_due<T: TaskRef + ?Sized>(
+    task: &T,
+    question: &AgentQuestion,
+    now: Timestamp,
+    secs: u64,
+) -> Result<bool> {
     let Ok(parsed) = QuestionKey::parse(&question.key) else {
-        return false;
+        return Ok(false);
     };
     let since = question
         .triage
@@ -194,11 +206,11 @@ fn unattended_due(task: &Task, question: &AgentQuestion, now: Timestamp, secs: u
         .max()
         .map_or(question.asked.at, |at| at.max(question.asked.at));
     let waited = now.as_second().saturating_sub(since.as_second());
-    question.recorded_pending()
+    Ok(question.recorded_pending()
         && question.state == QuestionState::Open
         && !super::unattended_marked(question)
-        && (question.blocking || last_turn_awaiting(task, &parsed.container))
-        && u64::try_from(waited).is_ok_and(|waited| waited >= secs)
+        && (question.blocking || last_turn_awaiting(task, &parsed.container)?)
+        && u64::try_from(waited).is_ok_and(|waited| waited >= secs))
 }
 
 /// The unattended rule: a blocking question, or one whose asking container's last turn ended
@@ -206,23 +218,23 @@ fn unattended_due(task: &Task, question: &AgentQuestion, now: Timestamp, secs: u
 /// revision and raises Needs me `question_unattended`.
 pub fn unattended(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<Vec<String>> {
     let secs = ctx.store.config.agent.question_unattended_secs;
-    let task = ctx.store.get(task_id)?;
-    let due: Vec<String> = views(&task)
-        .into_iter()
-        .filter(|view| view.pending && unattended_due(&task, &view.question, now, secs))
-        .map(|view| view.question.key)
-        .collect();
+    let task = ctx.store.head(task_id)?;
+    let mut due = Vec::new();
+    for view in recorded_pending_views_ref(&task)? {
+        if view.pending && unattended_due(&task, &view.question, now, secs)? {
+            due.push(view.question.key);
+        }
+    }
     let mut marked = Vec::new();
     for key in due {
-        let applied = transact(
+        let applied = transact_system(
             ctx,
             &key,
             None,
-            &Actor::Owner,
             QuestionActor::System,
             now,
             |_, task, current, at| {
-                if !unattended_due(task, current, now, secs) {
+                if !unattended_due(task, current, now, secs)? {
                     return Ok(None);
                 }
                 let mut question = current.clone();
