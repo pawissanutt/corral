@@ -20,6 +20,10 @@ use super::{
 };
 use crate::Ctx;
 
+#[path = "triage_heads.rs"]
+mod heads;
+pub(super) use heads::{apply_needs_me_ref, record_entry_notice_ref};
+
 /// A Pi-native PM request: its admitted origin and the PM liveness, fence and project-scope
 /// check that the commit transaction repeats on the target task.
 pub struct PmRequest<'a> {
@@ -125,16 +129,25 @@ pub fn settle_needs_me(task: &mut Task, container: &ContainerRef) {
 /// unraised. Returns whether the task changed.
 pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
     let mut notice = None;
-    let held = ctx.store.try_update(task_id, |task| {
+    let held = ctx.store.try_update_head(task_id, |task| {
         let mut changed = false;
-        for container in super::containers(task) {
-            if agent::container_closure(task, &container).is_some() {
+        let mut containers = corral_core::TaskRef::unfinished_native_containers(task)?;
+        containers.sort_by_key(|container| {
+            !matches!(
+                container,
+                ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+            )
+        });
+        for container in containers {
+            if corral_core::TaskRef::agent_head(task, &container)?.is_none()
+                || agent::container_closure_ref(task, &container)?.is_some()
+            {
                 continue;
             }
-            changed |= apply_needs_me(task, &container, &NeedsMe::Raise("question_attention"));
+            changed |= apply_needs_me_ref(task, &container, &NeedsMe::Raise("question_attention"))?;
         }
         if changed {
-            notice = Some(record_entry_notice(ctx, task, Timestamp::now())?);
+            notice = Some(record_entry_notice_ref(ctx, task, ctx.store.now())?);
         }
         Ok(changed)
     })?;
@@ -186,10 +199,26 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
         }
         ContainerRef::Pm => return false,
     };
+    let (raised, next) =
+        slot_transition(status, resting, slot, decision_pending, needs_me, waiting);
+    if let Some(next) = next {
+        task.status = next;
+    }
+    raised
+}
+
+pub(super) fn slot_transition(
+    status: Status,
+    resting: Status,
+    slot: &mut Option<String>,
+    decision_pending: bool,
+    needs_me: &NeedsMe,
+    waiting: Option<String>,
+) -> (bool, Option<Status>) {
     let held = slot
         .as_deref()
         .is_some_and(|e| e.starts_with(EXCERPT_PREFIX));
-    let (raised, next) = match needs_me {
+    match needs_me {
         NeedsMe::Raise(_) if status == resting && waiting.is_some() => {
             *slot = waiting;
             (true, Some(Status::NeedsMe))
@@ -206,11 +235,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
             None => (false, None),
         },
         _ => (false, None),
-    };
-    if let Some(next) = next {
-        task.status = next;
     }
-    raised
 }
 
 fn record_entry_notice(
