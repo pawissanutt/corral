@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, ensure};
-use corral_core::Task;
+use corral_core::TaskHead;
 use corral_core::attention::{
     AttentionHandling, AttentionLedger, AttentionRecord, Condition, ConditionKey,
     MAX_ATTENTION_NOTE_BYTES, NoticeCoverage, Responsible, SinceSource,
@@ -35,8 +35,8 @@ fn reconcile_inner(
     let Some(_lock) = ctx.store.try_lock("attention-reconcile")? else {
         return Ok(None);
     };
-    let (tasks, mut board) = super::board_snapshot(ctx, now, true)?;
-    owner_notice::drain_snapshot(ctx, &tasks)?;
+    let (tasks, mut board) = super::snapshot_heads::reconcile_snapshot(ctx, now)?;
+    owner_notice::drain_heads(ctx, &tasks)?;
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();
     for (snapshot, assessment) in tasks.iter().zip(&mut board.tasks) {
@@ -48,15 +48,15 @@ fn reconcile_inner(
         {
             snapshot.clone()
         } else {
-            ctx.store.get(&snapshot.id)?
+            ctx.store.head(&snapshot.id)?
         };
-        if !crate::session_scope::owns_task(ctx, &task)? {
+        if !crate::session_scope::owns_head(ctx, &task)? {
             continue;
         }
         // Retained facts publish even if the condition or task is already terminal.
         if !task.attention.outbox.is_empty() {
             outbox::publish(ctx, &task.id, &mut wakes)?;
-            task = ctx.store.get(&task.id)?;
+            task = ctx.store.head(&task.id)?;
             super::refresh_overflow(&task, &mut assessment.assessment, now);
         }
         let mut ledger = task.attention.clone();
@@ -84,7 +84,7 @@ fn reconcile_inner(
             .collect();
         if ledger != task.attention {
             let expected = task.attention.clone();
-            ctx.store.update_attention(&task.id, |current| {
+            ctx.store.update_attention_head(&task.id, |current| {
                 ensure!(
                     *current == expected,
                     "attention_changed: retry on a fresh snapshot"
@@ -106,7 +106,7 @@ fn reconcile_inner(
         if let Some(pending) = pending {
             owner_notice::notify(
                 ctx,
-                owner_notice::newly_committed(&ctx.store.get(&task.id)?, pending)?,
+                owner_notice::newly_committed(&ctx.store.head(&task.id)?, pending)?,
                 &format!("{} attention overdue", task.id),
                 &format!("Inspect corral attention --json for {}", task.id),
                 true,
@@ -121,7 +121,7 @@ fn reconcile_inner(
         if !published.contains_key(&row.task) {
             continue;
         }
-        let task = ctx.store.get(&row.task)?;
+        let task = ctx.store.head(&row.task)?;
         // Publication changes only ledger-derived ages and overflow. Reuse the
         // conditions already classified above rather than visiting the task again.
         for condition in &mut row.assessment.conditions {
@@ -137,7 +137,7 @@ fn reconcile_inner(
             }
         }
         super::refresh_overflow(&task, &mut row.assessment, now);
-        row.blocked = corral_core::attention::blocked(&task, &row.assessment).cloned();
+        row.blocked = corral_core::attention::blocked_ref(&task, &row.assessment)?.cloned();
     }
     Ok(Some(board))
 }
@@ -145,7 +145,7 @@ fn reconcile_inner(
 fn publish_new(ctx: &Ctx, id: &str, old: &[String], wakes: &mut Wakes) -> Result<()> {
     // Publishing the complete outbox is safe: deterministic IDs make the old facts replayable.
     // Avoid a second append of old facts in the ordinary path by selecting their complement.
-    let task = ctx.store.get(id)?;
+    let task = ctx.store.head(id)?;
     for fact in task
         .attention
         .outbox
@@ -174,7 +174,7 @@ fn publish_new(ctx: &Ctx, id: &str, old: &[String], wakes: &mut Wakes) -> Result
 
 fn transition(
     ctx: &Ctx,
-    task: &Task,
+    task: &TaskHead,
     ledger: &mut AttentionLedger,
     conditions: &[Condition],
     now: Timestamp,
@@ -260,7 +260,7 @@ fn transition(
             .records
             .get_mut(key)
             .context("new attention record missing")?;
-        if let Some(batch) = owner_notice::covering_claim(task, condition) {
+        if let Some(batch) = owner_notice::covering_claim_ref(task, condition)? {
             record.levels.owner_claim = Some(batch.clone());
             if opening
                 && let Some(fact) = ledger

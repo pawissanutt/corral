@@ -7,6 +7,100 @@ use corral_core::{ResumeCheck, RunOutcome, WaitRecord};
 use serde_json::json;
 
 #[test]
+fn indexed_reconcile_publishes_and_retires_terminal_debt_without_hydration_or_history_work() {
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = Fx::new();
+        fx.ctx.store.fixture_pin_now(at(0)).unwrap();
+        let mut worker = fx.questions(1);
+        let host = worker.runs.last_mut().unwrap().agent_host.as_mut().unwrap();
+        let template = host.questions[0].clone();
+        for n in 0..2 * scale {
+            let mut old = template.clone();
+            old.key = format!("{}/R1/Q{:06}", worker.id, n + 100);
+            old.state = QuestionState::Cancelled;
+            host.questions.insert(0, old);
+        }
+        fx.ctx.store.fixture_put_task(&worker).unwrap();
+        let mut terminal = fx
+            .ctx
+            .store
+            .create("Terminal debt", None, Status::Done, "")
+            .unwrap();
+        let key = corral_core::ConditionKey(format!("{}/question_open/old", terminal.id));
+        terminal.attention.records.insert(
+            key.clone(),
+            serde_json::from_value(json!({
+                "kind":"question_open","responsible":"pm","since":at(0),"since_source":"discovered",
+                "first_recorded":at(0),"opened_at":at(0)
+            }))
+            .unwrap(),
+        );
+        terminal
+            .attention
+            .outbox
+            .push(corral_core::attention::AttentionFact {
+                key: key.clone(),
+                fact_id: format!("{key}/attention_opened"),
+                kind: "attention_opened".into(),
+                detail: json!({"wake":false}),
+            });
+        fx.ctx.store.fixture_put_task(&terminal).unwrap();
+        for _ in 0..2 * scale {
+            fx.ctx
+                .store
+                .create("Unrelated settled", None, Status::Done, "")
+                .unwrap();
+        }
+        let hot = HotScope::enter();
+        let mut passes = Vec::new();
+        for _ in 0..2 {
+            let before = work::snapshot();
+            let board = super::super::handling::reconcile_projected(&fx.ctx, at(100), Some(false))
+                .unwrap()
+                .unwrap();
+            assert!(board.tasks.iter().any(|row| row.task == worker.id));
+            let after = work::snapshot();
+            passes.push(Counter::ALL.map(|counter| after.total(counter) - before.total(counter)));
+            assert_eq!(
+                after.total(Counter::FullTaskHydrations)
+                    - before.total(Counter::FullTaskHydrations),
+                0
+            );
+        }
+        measured.push(passes);
+        drop(hot);
+        assert!(
+            fx.ctx
+                .store
+                .head(&terminal.id)
+                .unwrap()
+                .attention
+                .is_empty()
+        );
+        assert!(
+            !fx.ctx
+                .store
+                .attention_input_heads()
+                .unwrap()
+                .iter()
+                .any(|head| head.id == terminal.id)
+        );
+        let resolved = fx
+            .ctx
+            .store
+            .events_page(Some(&terminal.id), &["attention_resolved"], None, 0, 100)
+            .unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(
+            resolved[0].detail["fact_id"],
+            format!("{key}/attention_resolved")
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+}
+
+#[test]
 fn hot_snapshot_preserves_named_terminal_park_and_wait_sources_without_board_history() {
     let mut measured = Vec::new();
     for scale in [1, 10] {

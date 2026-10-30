@@ -494,7 +494,8 @@ fn idle_reconcile_preserves_files_and_bounded_work_with_tenfold_done_history() {
     reconcile(&fx.ctx, at(0), Some(true)).unwrap();
     // When unchanged passes run with 1x and 10x Done history, then added work is identical.
     assert_eq!(baseline, measure());
-    assert_eq!(&baseline[..3], &[1, 0, 0]);
+    // Indexed head discovery replaces the former full-task listing entirely.
+    assert_eq!(&baseline[..3], &[0, 0, 0]);
     assert!(baseline[3] > 0 && baseline[3] <= 6);
     assert_eq!(&baseline[4..], &[0, 0, 0]);
 }
