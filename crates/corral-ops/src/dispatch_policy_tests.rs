@@ -7,6 +7,8 @@ use corral_herdr::Herdr;
 use std::path::Path;
 use std::process::Stdio;
 
+#[path = "dispatch_policy_held_tests.rs"]
+mod held;
 #[path = "dispatch_policy_plan_target_tests.rs"]
 mod plan_targets;
 #[path = "dispatch_policy_soft_tests.rs"]
