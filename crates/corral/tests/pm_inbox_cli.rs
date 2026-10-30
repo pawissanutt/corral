@@ -252,6 +252,66 @@ fn c7_a_routed_refusal_is_swept_claimed_resolved_and_notified_once() {
 }
 
 #[test]
+fn a_large_accepted_resolution_still_reaches_the_author_once() {
+    // Given an A-1 item the PM claimed, as in the review reproduction of F1.
+    let fx = Fixture::new();
+    fx.ok(
+        A1,
+        &[
+            "pm",
+            "inbox",
+            "post",
+            "--kind",
+            "handoff",
+            "--subject",
+            "Research follow-up",
+        ],
+    );
+    fx.ok(
+        PM,
+        &["pm", "inbox", "claim", "PMI-1", "--expected-revision", "0"],
+    );
+    // When it is resolved with a 4096-byte outcome and 24 artifact-shaped refs.
+    let text = "x".repeat(4096);
+    let refs: Vec<String> = (0..24)
+        .map(|i| format!("A-1:{i}-{}.md", "report-".repeat(26)))
+        .collect();
+    let mut args = vec![
+        "pm",
+        "inbox",
+        "resolve",
+        "PMI-1",
+        "--expected-revision",
+        "1",
+        "--outcome",
+        "done",
+        "--text",
+        &text,
+        "--json",
+    ];
+    for r in &refs {
+        args.extend(["--ref", r.as_str()]);
+    }
+    let resolved = fx.json(PM, &args);
+    fx.ok(OWNER, &["sync"]);
+    // Then the notice was posted once and the item keeps the complete outcome.
+    assert_eq!(resolved["notice"]["state"], "posted", "{resolved}");
+    assert_eq!(resolved["outcome"]["text"].as_str().unwrap().len(), 4096);
+    assert_eq!(resolved["outcome"]["refs"].as_array().unwrap().len(), 24);
+    let messages: Vec<_> = std::fs::read_dir(fx.root.join(".corral/inbox/assistant_A-1"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        std::fs::read_to_string(&messages[0])
+            .unwrap()
+            .contains("pmi:PMI-1:2")
+    );
+}
+
+#[test]
 fn the_author_or_owner_withdraws_and_other_callers_are_refused() {
     // Given a question from A-1.
     let fx = Fixture::new();

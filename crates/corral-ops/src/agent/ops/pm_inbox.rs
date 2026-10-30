@@ -2,7 +2,6 @@
 //! reads one, and `inbox_resolve` claims or resolves one at its current revision through the
 //! same store transitions as `corral pm inbox`. Items are workspace-wide, not project-bound.
 use anyhow::Result;
-use corral_core::agent::RESULT_MAX_BYTES;
 use corral_core::pm_inbox::{ItemState, PmInboxItem, PmInboxRefusal, Resolution, name};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,7 +9,7 @@ use serde_json::{Value, json};
 use super::super::call::{RejectCode, Rejection};
 use crate::Ctx;
 
-const CHUNK_MAX: usize = 2048;
+const CHUNK_MAX: usize = 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,10 +59,36 @@ fn rejection(error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// A summary's refs and requested command each show at most this many bytes, so one summary
+/// and one content page always fit a result frame; `refs_total` counts every ref and the
+/// by-ID read pages the complete values.
+const SUMMARY_DETAIL_MAX: usize = 512;
+
 fn summary(item: &PmInboxItem) -> Value {
+    let mut refs = Vec::new();
+    let mut bytes = 0;
+    for reference in &item.refs {
+        bytes += reference.len() + 3;
+        if bytes > SUMMARY_DETAIL_MAX {
+            break;
+        }
+        refs.push(reference);
+    }
+    let action = item.requested_action.as_ref().map(|action| {
+        let mut command = action.command();
+        if command.len() > SUMMARY_DETAIL_MAX {
+            let mut end = SUMMARY_DETAIL_MAX;
+            while !command.is_char_boundary(end) {
+                end -= 1;
+            }
+            command.truncate(end);
+            command.push_str("...");
+        }
+        command
+    });
     json!({"id": item.id, "revision": item.revision, "state": item.state, "from": item.from,
-        "kind": item.kind, "subject": item.subject, "created": item.created, "refs": item.refs,
-        "requested_action": item.requested_action.as_ref().map(|a| a.command())})
+        "kind": item.kind, "subject": item.subject, "created": item.created, "refs": refs,
+        "refs_total": item.refs.len(), "requested_action": action})
 }
 
 pub(super) fn read(ctx: &Ctx, p: Read) -> Result<Value> {
@@ -86,22 +111,22 @@ pub(super) fn read(ctx: &Ctx, p: Read) -> Result<Value> {
         )
         .into());
     }
-    // The owner quote and body can exceed one frame; page them as one JSON text by characters.
+    // Every variable-size field can exceed one frame together; page them as one JSON text by
+    // characters. A page's character re-escapes to at most 4 bytes, so 1024 characters plus
+    // the bounded summary stay under the 8 KiB result cap.
     let text = serde_json::to_string(&json!({
+        "refs": item.refs, "requested_action": item.requested_action,
         "owner_quote": item.owner_words.as_ref().map(|w| &w.quote), "body": item.body,
+        "claimed": item.claimed, "outcome": item.outcome, "withdrawn": item.withdrawn,
+        "history": item.history,
     }))?;
     let total = text.chars().count();
     let chunk: String = text.chars().skip(p.offset).take(limit).collect();
     let next = p.offset.saturating_add(chunk.chars().count());
-    let mut value = json!({"item": summary(&item), "claimed": item.claimed,
-        "withdrawn": item.withdrawn, "content_json": chunk, "total_chars": total,
-        "next_offset": (next < total).then_some(next)});
-    if serde_json::to_vec(&value)?.len() + 256 < RESULT_MAX_BYTES {
-        value["outcome"] = json!(item.outcome);
-    } else {
-        value["outcome"] = json!(item.outcome.as_ref().map(|o| name(&o.resolution)));
-    }
-    Ok(value)
+    Ok(json!({"item": summary(&item),
+        "outcome": item.outcome.as_ref().map(|o| name(&o.resolution)),
+        "content_json": chunk, "total_chars": total,
+        "next_offset": (next < total).then_some(next)}))
 }
 
 pub(super) fn resolve(ctx: &Ctx, p: &Resolve, request: &str) -> Result<Value> {
