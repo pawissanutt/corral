@@ -155,9 +155,13 @@ fn done_matches_the_legacy_full_task_transition() {
                         .unwrap();
                 }
                 let before = fx.ctx.store.get(&id).unwrap();
+                let _hot = corral_core::work::HotScope::enter();
+                let baseline = corral_core::work::snapshot();
                 let expected = legacy(&fx.ctx, &id, "finished the change", result)
                     .map(|t| t.status)
                     .map_err(|e| format!("{e:#}"));
+                let legacy_work = corral_core::work::snapshot().since(&baseline);
+                assert!(legacy_work.total(corral_core::work::Counter::FullTaskHydrations) > 0);
                 let expected_task = fx.ctx.store.get(&id).unwrap();
                 fx.ctx
                     .store
