@@ -33,8 +33,20 @@ pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<Stri
 
 /// One inventory for the whole sweep, rather than subprocesses per finished task on each board tick.
 pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
-    for task in tasks {
-        reap_closed_reviews(ctx, task);
+    // Share one event snapshot across the board, not one read per historical task.
+    if tasks.iter().any(has_closed_reviews) {
+        match ctx.store.events_shared() {
+            Ok(events) => {
+                for task in tasks.iter().filter(|task| has_closed_reviews(task)) {
+                    reap_with_events(ctx, task, &events);
+                }
+            }
+            Err(error) => {
+                if let Some(task) = tasks.first() {
+                    failed(ctx, task, "review event inventory", &error);
+                }
+            }
+        }
     }
     let terminal: Vec<&Task> = tasks
         .iter()
@@ -47,9 +59,16 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
     }
 }
 
+fn has_closed_reviews(task: &Task) -> bool {
+    task.runs
+        .iter()
+        .any(|run| run.review_runs.iter().any(|child| child.ended.is_some()))
+}
+
 pub(crate) fn reap_closed_reviews(ctx: &Ctx, task: &Task) {
-    // The verdict state precedes its event. A concurrent sync must not terminate the
-    // reviewer while its verdict command is still writing that event.
+    if !has_closed_reviews(task) {
+        return;
+    }
     let events = match ctx.store.events_shared() {
         Ok(events) => events,
         Err(error) => {
@@ -57,6 +76,12 @@ pub(crate) fn reap_closed_reviews(ctx: &Ctx, task: &Task) {
             return;
         }
     };
+    reap_with_events(ctx, task, &events);
+}
+
+fn reap_with_events(ctx: &Ctx, task: &Task, events: &[corral_core::Event]) {
+    // The verdict state precedes its event. A concurrent sync must not terminate the
+    // reviewer while its verdict command is still writing that event.
     for run in &task.runs {
         for child in run.review_runs.iter().filter(|child| child.ended.is_some()) {
             if let Some(review) = child.review.as_ref().filter(|r| r.verdict.is_some())
