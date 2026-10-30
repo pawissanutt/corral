@@ -349,31 +349,58 @@ pub fn owner_words(quote: String, input: Option<String>) -> OwnerWords {
     }
 }
 
-/// The text of an item's outcome notice; it names its key and grants no authority.
-pub fn notice_text(item: &PmInboxItem, key: &str) -> String {
-    let Some(outcome) = &item.outcome else {
-        return format!(
-            "PM inbox item {} changed; read it with `corral pm inbox show {}`.",
-            item.id, item.id
-        );
-    };
-    let mut text = format!(
-        "PM inbox outcome {key}: your item {} (\"{}\") was resolved {} by {}.\n{}\n",
-        item.id,
-        item.subject,
-        name(&outcome.resolution),
-        outcome.by,
-        outcome.text.trim()
-    );
-    if !outcome.refs.is_empty() {
-        text.push_str(&format!("Refs: {}\n", outcome.refs.join(", ")));
+/// Notice text stays this far under the native input cap, leaving room for the agent inbox's
+/// envelope and message headers (about 160 bytes for the longest assistant key).
+const NOTICE_HEADROOM: usize = 512;
+const TRUNCATED: &str = " [truncated; the full outcome is in the item]";
+
+/// `text` cut at a character boundary so that it and the truncation marker fit `max` bytes.
+fn excerpt(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_owned();
     }
-    text.push_str(&format!(
+    let mut end = max.saturating_sub(TRUNCATED.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{TRUNCATED}", &text[..end])
+}
+
+/// The text of an item's outcome notice. It names its key, grants no authority and always
+/// fits one native input: refs take at most half the room left after the fixed lines and the
+/// outcome text the rest, each cut to an excerpt when longer. The item keeps the full outcome.
+pub fn notice_text(item: &PmInboxItem, key: &str) -> String {
+    let show = format!(
         "Read it with `corral pm inbox show {}`. This notice is from corral, not the owner; \
          it grants no authority.",
         item.id
-    ));
-    text
+    );
+    let Some(outcome) = &item.outcome else {
+        return format!("PM inbox item {} changed. {show}", item.id);
+    };
+    let head = format!(
+        "PM inbox outcome {key}: your item {} (\"{}\") was resolved {} by {}.\n",
+        item.id,
+        item.subject,
+        name(&outcome.resolution),
+        outcome.by
+    );
+    let room = (NATIVE_INPUT_MAX - NOTICE_HEADROOM).saturating_sub(head.len() + show.len());
+    let mut refs = String::new();
+    for (shown, reference) in outcome.refs.iter().enumerate() {
+        let more = format!(" and {} more in the item", outcome.refs.len() - shown);
+        if "Refs:".len() + refs.len() + 2 + reference.len() + more.len() > room / 2 {
+            refs.push_str(&more);
+            break;
+        }
+        refs.push_str(if shown == 0 { " " } else { ", " });
+        refs.push_str(reference);
+    }
+    if !refs.is_empty() {
+        refs = format!("Refs:{refs}\n");
+    }
+    let text = excerpt(outcome.text.trim(), room.saturating_sub(refs.len() + 1));
+    format!("{head}{text}\n{refs}{show}")
 }
 
 impl Store {

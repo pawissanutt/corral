@@ -149,6 +149,87 @@ fn outcome_notice_reaches_the_author_inbox_once_across_repeats_and_a_lost_acknow
 }
 
 #[test]
+fn the_largest_accepted_resolution_still_publishes_one_bounded_notice() {
+    // Given the largest resolution the store accepts: a 200-byte multibyte subject, a
+    // 4096-byte multibyte outcome and 32 refs of 200 bytes each, owed to A-1.
+    let (_tmp, store) = store();
+    store.create_assistant("pi", None, None, None).unwrap();
+    let mut item = new("assistant:A-1", None);
+    item.subject = "\u{e9}".repeat(SUBJECT_MAX / 2);
+    store.pm_inbox_post(item).unwrap();
+    store.pm_inbox_claim("PMI-1", 0, None).unwrap();
+    let text = "\u{fc}".repeat(OUTCOME_MAX / 2);
+    let refs: Vec<String> = (0..LIST_MAX)
+        .map(|i| format!("A-1:{i:02}-{}", "r".repeat(TOKEN_MAX - 7)))
+        .collect();
+    store
+        .pm_inbox_resolve("PMI-1", 1, (Resolution::Done, &text, refs.clone()), None)
+        .unwrap();
+    // When the notice is published, and published again as a later sync pass would.
+    let first = store.pm_inbox_publish_notice("PMI-1").unwrap().unwrap();
+    let again = store.pm_inbox_publish_notice("PMI-1").unwrap().unwrap();
+    // Then one message fits one native input, names its key and points at the full outcome.
+    let inbox = Inbox::new(
+        &store,
+        Recipient::Assistant {
+            session: "A-1".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(inbox.messages().unwrap(), vec![first.clone()]);
+    assert_eq!(again, first);
+    assert!(first.body.len() <= NATIVE_INPUT_MAX, "{}", first.body.len());
+    assert!(first.body.contains("pmi:PMI-1:2"));
+    assert!(first.body.contains("corral pm inbox show PMI-1"));
+    assert!(first.body.contains(&refs[0]));
+    assert!(first.body.contains("more in the item"));
+    // And the item keeps the complete outcome, with the notice posted at revision 2.
+    let item = store.pm_inbox_item("PMI-1").unwrap();
+    let outcome = item.outcome.unwrap();
+    assert_eq!((outcome.text, outcome.refs), (text, refs));
+    assert_eq!(item.revision, 2);
+    assert_eq!(item.notice.unwrap().state, NoticeState::Posted);
+}
+
+#[test]
+fn notice_text_fits_the_native_input_for_every_accepted_size() {
+    // Given outcome and ref sizes across their accepted ranges, with a maximal session key.
+    let (_tmp, store) = store();
+    store.create_assistant("pi", None, None, None).unwrap();
+    store.pm_inbox_post(new("assistant:A-1", None)).unwrap();
+    let mut item = store.pm_inbox_item("PMI-1").unwrap();
+    item.subject = "\u{1f600}".repeat(SUBJECT_MAX / 4);
+    item.id = format!("PMI-{}", u64::MAX);
+    let key = format!("pmi:{}:{}", item.id, u32::MAX);
+    let overhead = format!(
+        "[corral envelope assistant_A-{max}@env{max}]\n\n[corral assistant_A-{max}#{max} {NOTICE_KIND}]\n",
+        max = u64::MAX
+    )
+    .len();
+    for text_len in [1, 100, 2000, OUTCOME_MAX] {
+        for refs in [0, 1, 8, LIST_MAX] {
+            item.outcome = Some(Outcome {
+                resolution: Resolution::EscalatedToOwner,
+                by: "pm".into(),
+                at: Timestamp::now(),
+                text: "\"".repeat(text_len),
+                refs: (0..refs)
+                    .map(|i| format!("{i:03}{}", "x".repeat(TOKEN_MAX - 3)))
+                    .collect(),
+            });
+            // When its notice text is built, then it fits with the inbox headers added.
+            let body = notice_text(&item, &key);
+            assert!(
+                body.len() + overhead <= NATIVE_INPUT_MAX,
+                "text {text_len}, refs {refs}: {} bytes",
+                body.len() + overhead
+            );
+            assert!(body.contains(&key));
+        }
+    }
+}
+
+#[test]
 fn an_ended_author_keeps_the_outcome_in_the_item_and_gets_no_message() {
     // Given a resolved item whose author session ended before the notice was published.
     let (_tmp, store) = store();
