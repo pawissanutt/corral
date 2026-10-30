@@ -487,7 +487,7 @@ pub fn open_generation_with(
     // project's text trust is recorded with them.
     let project = match (target, target.container().task()) {
         (BindTarget::Pm { project }, _) => Some(project.clone()),
-        (_, Some(task)) => store.get(task)?.project,
+        (_, Some(task)) => store.head(task)?.project.clone(),
         (_, None) => None,
     };
     let capabilities =
@@ -555,6 +555,9 @@ pub fn open_generation_with(
                 _ => (AgentRole::Worker, None),
             };
             let mut generation = 0;
+            // T-626 also owns generation live counts, max identity and ordered fencing.
+            // Attribute this retained-vector mutation, not its bounded caller/preflight.
+            let known = corral_core::work::followup("T-626", "native_generation_open");
             store.update(task_id, |task| {
                 let project = task
                     .project
@@ -592,6 +595,7 @@ pub fn open_generation_with(
                 generation = next_generation(state, &digest, pane, &capabilities)?;
                 Ok(())
             })?;
+            drop(known);
             generation
         }
         (_, None) => bail!("a worker or reviewer target names a task"),

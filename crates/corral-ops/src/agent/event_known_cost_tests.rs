@@ -45,7 +45,38 @@ fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_w
             task: task.id.clone(),
             run: run_id.clone(),
         };
+        let before_doc = fx
+            .ctx
+            .store
+            .view()
+            .unwrap()
+            .task(TaskNum(1), &TaskParts::All)
+            .unwrap()
+            .unwrap();
+        let expected_open = native::full_read_cost(&before_doc);
+        let before = work::snapshot();
+        let hot = HotScope::enter();
         let host = ts::bind(&fx, &target, "p1", "fixed-event-session");
+        let delta = work::snapshot().since(&before);
+        drop(hot);
+        delta.check_identity().unwrap();
+        assert_eq!(delta.followup_calls("T-626", "native_generation_open"), 1);
+        for counter in Counter::ALL {
+            assert_eq!(
+                delta
+                    .cells(counter)
+                    .followup
+                    .get(&("T-626".into(), "native_generation_open".into()))
+                    .copied()
+                    .unwrap_or(0),
+                expected_open[&counter],
+                "generation {}",
+                counter.name()
+            );
+        }
+        assert_eq!(host.identity.generation, 1000);
+        assert_eq!(delta.cells(Counter::FullTaskHydrations).unattributed, 0);
+        costs.push(Counter::ALL.map(|counter| delta.cells(counter).unattributed));
         ts::committed(&ts::hello(&fx, &host));
         let doc = fx
             .ctx
@@ -118,11 +149,15 @@ fn native_event_has_exact_canonical_t626_cost_and_constant_unattributed_replay_w
         );
     }
     assert_eq!(
-        costs[0], costs[2],
+        costs[0], costs[3],
+        "generation opening's bounded remainder must not follow retained history"
+    );
+    assert_eq!(
+        costs[1], costs[4],
         "event's bounded remainder must not follow retained task/native history"
     );
     assert_eq!(
-        costs[1], costs[3],
+        costs[2], costs[5],
         "all replay counters must be history-independent"
     );
 }
