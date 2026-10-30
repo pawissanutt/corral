@@ -201,9 +201,50 @@ fn blob_at(dir: &Path, path: &str, file: &Path) -> Result<Option<Blob>> {
     }))
 }
 
+/// The fixed sibling a replacement of `target` uses for `role`, so any later attempt, in either
+/// direction, finds what an interrupted one left there.
 fn sibling(target: &Path, role: &str) -> Result<std::path::PathBuf> {
     let parent = target.parent().context("a restored path has no parent")?;
-    Ok(parent.join(format!(".corral-rewind-{role}-{}", std::process::id())))
+    let name = target.file_name().context("a restored path has no name")?;
+    Ok(parent.join(format!(".{}.corral-rewind-{role}", name.to_string_lossy())))
+}
+
+fn remove_if_present(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("removing {}", path.display())),
+    }
+}
+
+/// Removes the directories under `dir` that `target`'s removal left empty.
+fn remove_empty_parents(dir: &Path, target: &Path) {
+    let mut parent = target.parent();
+    while let Some(dir_path) = parent.filter(|p| *p != dir) {
+        if std::fs::remove_dir(dir_path).is_err() {
+            break;
+        }
+        parent = dir_path.parent();
+    }
+}
+
+/// Undoes what an interrupted replacement of `path` left: its staged copy is dropped, and bytes
+/// it had moved aside go back when the path is empty, or are kept when something is there. The
+/// path is then judged afresh, so a restore never mistakes its own displacement for an edit.
+fn reconcile(dir: &Path, path: &str, keep: &Path) -> Result<()> {
+    let target = dir.join(path);
+    if !target.parent().is_some_and(Path::is_dir) {
+        return Ok(());
+    }
+    remove_if_present(&sibling(&target, "staged")?)?;
+    let aside = sibling(&target, "displaced")?;
+    if std::fs::symlink_metadata(&aside).is_err() {
+        return Ok(());
+    }
+    if !link_new(&aside, &target)? {
+        stash(&aside, keep, path)?;
+    }
+    Ok(())
 }
 
 /// Materializes `blob` (smudge filters applied) beside `path`; `None` when a parent cannot be a
@@ -345,13 +386,7 @@ fn replace(
         stash(&aside, keep, path)?;
     }
     if installed && want.is_none() {
-        let mut parent = target.parent();
-        while let Some(dir_path) = parent.filter(|p| *p != dir) {
-            if std::fs::remove_dir(dir_path).is_err() {
-                break;
-            }
-            parent = dir_path.parent();
-        }
+        remove_empty_parents(dir, &target);
     }
     Ok(installed)
 }
@@ -390,8 +425,12 @@ pub(super) fn restore(
     let mut done = Restored::default();
     for path in removals.into_iter().chain(writes) {
         let (target, previous) = (wanted.get(path), before.get(path));
+        reconcile(dir, path, &keep)?;
         let now = blob_at(dir, path, &dir.join(path))?;
         if now.as_ref() == target {
+            if target.is_none() {
+                remove_empty_parents(dir, &dir.join(path));
+            }
             if target != previous {
                 done.restored.push(path.clone());
             }
