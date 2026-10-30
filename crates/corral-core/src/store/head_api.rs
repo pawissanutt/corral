@@ -795,6 +795,7 @@ impl Store {
             fields.updated = now;
         }
         let edited = crate::edited::fields(&before, &after);
+        self.log_status_unpark(&before, &after)?;
         for decision in decision {
             self.log_event(
                 Some(&after.id),

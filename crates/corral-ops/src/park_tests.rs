@@ -1,5 +1,5 @@
 use super::*;
-use corral_core::{Store, parse_park_check};
+use corral_core::{Status, Store, parse_park_check};
 
 fn ctx() -> (tempfile::TempDir, Ctx) {
     let tmp = tempfile::tempdir().unwrap();
@@ -146,39 +146,51 @@ fn every_status_exit_clears_park_after_persistence_once() {
             Status::Done,
             Status::Dropped,
         ] {
-            let task = ctx.store.create("Exit", None, from, "").unwrap();
-            park_as(
-                &ctx,
-                &task.id,
-                "wait",
-                &[],
-                "",
-                86400,
-                (now(), Responsible::Owner),
-            )
-            .unwrap();
-            // When a normal owner/store transition leaves the allowed statuses.
-            ctx.store
-                .update(&task.id, |task| {
-                    task.status = to;
-                    Ok(())
-                })
+            for head_form in [false, true] {
+                let task = ctx.store.create("Exit", None, from, "").unwrap();
+                park_as(
+                    &ctx,
+                    &task.id,
+                    "wait",
+                    &[],
+                    "",
+                    86400,
+                    (now(), Responsible::Owner),
+                )
                 .unwrap();
-            ctx.store.update(&task.id, |_| Ok(())).unwrap();
-            // Then the same saved record has no park and exactly one system event exists.
-            assert!(ctx.store.get(&task.id).unwrap().park.is_none());
-            let events: Vec<_> = ctx
-                .store
-                .events()
-                .unwrap()
-                .into_iter()
-                .filter(|event| {
-                    event.task.as_deref() == Some(task.id.as_str()) && event.kind == "unparked"
-                })
-                .collect();
-            assert_eq!(events.len(), 1);
-            assert_eq!(events[0].detail["by"], "system");
-            assert_eq!(events[0].detail["reason"], "status");
+                // When a normal owner/store transition leaves the allowed statuses.
+                if head_form {
+                    ctx.store
+                        .update_head(&task.id, |task| {
+                            task.status = to;
+                            Ok(())
+                        })
+                        .unwrap();
+                    ctx.store.update_head(&task.id, |_| Ok(())).unwrap();
+                } else {
+                    ctx.store
+                        .update(&task.id, |task| {
+                            task.status = to;
+                            Ok(())
+                        })
+                        .unwrap();
+                    ctx.store.update(&task.id, |_| Ok(())).unwrap();
+                }
+                // Then the same saved record has no park and exactly one system event exists.
+                assert!(ctx.store.get(&task.id).unwrap().park.is_none());
+                let events: Vec<_> = ctx
+                    .store
+                    .events()
+                    .unwrap()
+                    .into_iter()
+                    .filter(|event| {
+                        event.task.as_deref() == Some(task.id.as_str()) && event.kind == "unparked"
+                    })
+                    .collect();
+                assert_eq!(events.len(), 1, "{from:?} -> {to:?}, head={head_form}");
+                assert_eq!(events[0].detail["by"], "system");
+                assert_eq!(events[0].detail["reason"], "status");
+            }
         }
     }
 }

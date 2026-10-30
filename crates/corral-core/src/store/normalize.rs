@@ -53,6 +53,27 @@ pub(super) fn task(task: &mut Task, before: Option<&Task>, now: Timestamp) -> Re
 }
 
 impl Store {
+    /// Lifecycle normalization clears a park outside its supported statuses. Keep main's
+    /// system fact in the same task unit, so a refusal rolls back both and a replay emits none.
+    pub(super) fn log_status_unpark(
+        &self,
+        before: &(impl crate::TaskFieldsRef + ?Sized),
+        after: &(impl crate::TaskFieldsRef + ?Sized),
+    ) -> Result<()> {
+        if let Some(park) = before.park()
+            && !crate::Park::supports(*after.status())
+        {
+            self.log_event(
+                Some(after.id()),
+                "unparked",
+                serde_json::json!({
+                    "by":"system","reason":"status","revision":park.revision
+                }),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Mutate only attention under the usual board/task locks, preserving `Task.updated`.
     /// A no-op does not rewrite the task. The callback must not call store writers.
     ///
