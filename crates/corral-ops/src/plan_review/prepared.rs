@@ -184,17 +184,15 @@ fn load_for(ctx: &Ctx, task: &str, plan: &str) -> Result<Option<Prepared>> {
 /// Read a suspended submission's actual refusal, not just today's broader grant.
 pub(crate) fn blocker(
     ctx: &Ctx,
-    task: &corral_core::Task,
+    task: &(impl corral_core::TaskRef + ?Sized),
 ) -> Result<Option<(jiff::Timestamp, String)>> {
-    if task.plans.is_empty()
-        || task
-            .plans
-            .last()
-            .is_some_and(|plan| plan.approval.is_some())
+    if task
+        .last_plan_head()?
+        .is_none_or(|plan| plan.approval.is_some())
     {
         return Ok(None);
     }
-    let Some(prepared) = load(ctx, &task.id)? else {
+    let Some(prepared) = load(ctx, task.id())? else {
         return Ok(None);
     };
     let record = ctx

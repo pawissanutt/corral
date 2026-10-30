@@ -1,6 +1,6 @@
 //! Parking changes execution eligibility, never authority or owner dispatch holds.
 use anyhow::{Context, Result, ensure};
-use corral_core::{Park, Responsible, ResumeCheck, Status, Task};
+use corral_core::{Park, Responsible, ResumeCheck, Task};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
@@ -135,57 +135,20 @@ pub(crate) fn checks(park: &Park, n: &Neighborhood<'_>) -> Vec<ResumeCheck> {
                     .and_then(|target| match check.kind.as_str() {
                         "status" => n
                             .task(target)
-                            .map(|task| Some(task.status.as_str()) == check.expected.as_deref()),
-                        "landed" => n.task(target).map(|task| {
-                            task.status == Status::Done
-                                && task.current_run().is_some_and(|run| {
-                                    task.landed.as_ref().is_some_and(|landed| {
-                                        landed.run == run.id && !landed.sha.is_empty()
-                                    }) || run.autopilot.as_ref().is_some_and(|state| {
-                                        state.stage == corral_core::AutoStage::Done
-                                            && state.sha.is_some()
+                            .map(|task| Some(task.status().as_str()) == check.expected.as_deref()),
+                        "landed" => n.landed(target),
+                        "answered" => n.answered(target, check.expected.as_deref()),
+                        "decision" => n.decision_answered(target),
+                        "hold-lifted" => {
+                            n.task(target)
+                                .map(|task| !*task.dispatch_hold())
+                                .or_else(|| {
+                                    n.config.projects.contains_key(target).then(|| {
+                                        !n.config.dispatch.paused
+                                            && !n.policy.paused
+                                            && n.config.ready_project_allowed(Some(target))
                                     })
                                 })
-                        }),
-                        "answered" => n.tasks.iter().find_map(|task| {
-                            crate::questions::containers(task)
-                                .into_iter()
-                                .find_map(|container| {
-                                    corral_core::agent::container_state(task, &container)?
-                                        .questions
-                                        .iter()
-                                        .find(|question| {
-                                            question.key == target
-                                                && Some(question.revision.to_string()).as_deref()
-                                                    == check.expected.as_deref()
-                                        })
-                                        .map(|question| {
-                                            question.state
-                                                == corral_core::agent::QuestionState::Answered
-                                                && question.answer.is_some()
-                                        })
-                                })
-                        }),
-                        "decision" => n
-                            .tasks
-                            .iter()
-                            .flat_map(|task| &task.runs)
-                            .flat_map(|run| std::iter::once(run).chain(&run.review_runs))
-                            .flat_map(|run| &run.obligations.decisions)
-                            .find(|decision| decision.request.id == target)
-                            .map(|decision| {
-                                decision.receipt.as_ref().is_some_and(|receipt| {
-                                    receipt.outcome == corral_core::ReceiptOutcome::Answered
-                                })
-                            }),
-                        "hold-lifted" => {
-                            n.task(target).map(|task| !task.dispatch_hold).or_else(|| {
-                                n.config.projects.contains_key(target).then(|| {
-                                    !n.config.dispatch.paused
-                                        && !n.policy.paused
-                                        && n.config.ready_project_allowed(Some(target))
-                                })
-                            })
                         }
                         _ => None,
                     });
