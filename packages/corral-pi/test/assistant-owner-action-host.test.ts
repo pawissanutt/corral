@@ -20,31 +20,36 @@ import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { nextEvent } from "./support/wait.ts";
 
-// Answers owner_input with the next journal ID and refuses a discard without the owner's answer.
+// Answers owner_input with the next journal ID and, like corral, makes a discard wait until an
+// answer is journaled for its request ID.
 const FAKE = `#!/usr/bin/env bun
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
 const envelope = JSON.parse(readFileSync(0, "utf8"));
-appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ op: envelope.op, payload: envelope.payload }) + "\\n");
+appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ op: envelope.op, request_id: envelope.request_id,
+  payload: envelope.payload }) + "\\n");
 const counter = join(dir, "inputs");
+const answered = join(dir, "answers");
 let state = "committed";
 let result = { op: envelope.op };
 if (envelope.payload.kind === "owner_input") {
   const n = (existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0) + 1;
   writeFileSync(counter, String(n));
+  if (envelope.payload.answers) appendFileSync(answered, envelope.payload.answers + "\\n");
   result = { kind: "owner_input", input: "A-1/g1/i" + n };
-} else if (envelope.op === "owner_action" && envelope.payload.kind === "discard" && !envelope.payload.confirmation) {
+} else if (envelope.op === "owner_action" && envelope.payload.kind === "discard"
+  && !(existsSync(answered) && readFileSync(answered, "utf8").split("\\n").includes(envelope.request_id))) {
   state = "rejected";
   result = { code: "confirmation_required", reason: "waits", command: "corral discard " + envelope.payload.target };
 } else if (envelope.op === "owner_action") {
-  result = { outcome: envelope.payload.confirmation ? "declined" : "executed" };
+  result = { outcome: envelope.payload.kind === "discard" ? "declined" : "executed" };
 }
 process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_id, op: envelope.op, state, result,
   at: new Date().toISOString() }) + "\\n");
 `;
 
-interface Call { op: string; payload: Record<string, unknown> }
+interface Call { op: string; request_id: string; payload: Record<string, unknown> }
 
 test("owner text is journaled and tagged, and only the confirm class asks the owner", async () => {
   const assets = buildFixtureInstall();
@@ -121,8 +126,8 @@ test("owner text is journaled and tagged, and only the confirm class asks the ow
     expect(calls().slice(before).some((call) => call.payload.kind === "owner_input")).toBeFalse();
     expect(userText()[1]).toBe("[corral] T-9 moved to review");
 
-    // When the owner asks to drop T-3, the host shows the command, journals the N answer and
-    // sends the same request once more with it.
+    // When the owner asks to drop T-3, the host shows the command, journals the N answer for
+    // this request and sends the identical request once more.
     fixtureTransport().script([
       { toolCalls: [{ callId: "drop", name: "corral_owner_action",
         arguments: { kind: "discard", target: "T-3", input: "A-1/g1/i2" } }] },
@@ -132,11 +137,15 @@ test("owner text is journaled and tagged, and only the confirm class asks the ow
     await turn(() => live.session.prompt("drop task T-3", { source: "interactive" }));
     expect(asked).toEqual(["corral discard T-3"]);
     const dropped = calls().slice(mark).filter((call) => call.op === "owner_action" || call.payload.source === "confirmation");
+    const request = dropped[0]?.request_id ?? "";
+    expect(request).toMatch(/^rq-[0-9a-f]{32}$/);
     expect(dropped.map((call) => call.payload)).toEqual([
       { kind: "discard", target: "T-3", input: "A-1/g1/i2" },
-      { kind: "owner_input", source: "confirmation", text: "n", sha256: sha256Hex("n"), command: "corral discard T-3" },
-      { kind: "discard", target: "T-3", input: "A-1/g1/i2", confirmation: "A-1/g1/i3" },
+      { kind: "owner_input", source: "confirmation", text: "n", sha256: sha256Hex("n"),
+        command: "corral discard T-3", answers: request },
+      { kind: "discard", target: "T-3", input: "A-1/g1/i2" },
     ]);
+    expect(dropped.filter((call) => call.op === "owner_action").map((call) => call.request_id)).toEqual([request, request]);
   } finally {
     host?.session.dispose();
     globalThis.fetch = originalFetch;

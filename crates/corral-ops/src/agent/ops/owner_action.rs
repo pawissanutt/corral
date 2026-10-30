@@ -4,14 +4,19 @@
 //! input of this session, then runs the command once as a direct child `corral` process that
 //! claims the reservation (`crate::assistant::owner_action`), so the same CLI path, locks and refusals apply as from
 //! the owner's shell. The confirm class first waits for the owner's y or n, which the host
-//! journals; n records a declined receipt. A replay returns the first receipt; a reservation
-//! whose executor died is reconciled from the claim and the event log, never re-executed.
+//! journals bound to this request, so the request's payload never changes; n records a
+//! declined receipt. A replay returns the first receipt; a reservation whose executor died is
+//! reconciled from the command child's own completion record or a verified terminal state,
+//! otherwise left uncertain, and never re-executed.
+#[cfg(all(test, target_os = "linux"))]
+mod crash_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 use std::process::Output;
 
 use anyhow::{Context, Result};
+use corral_core::Status;
 use corral_core::agent::{
     AGENT_RECORD_VERSION, EVIDENCE_MAX, Executor, RECEIPTS_MAX, RESULT_MAX_BYTES, ReceiptEffect,
     ReceiptEvidence, ReceiptState, RequestReceipt,
@@ -30,7 +35,7 @@ use crate::agent::receipts::{self, Commit};
 use crate::assistant::owner_action::{self as child, kinds};
 use kinds::{Action, Class};
 
-const FIELDS: &str = "kind, target?, args?, expected_revision?, input, confirmation?";
+const FIELDS: &str = "kind, target?, args?, expected_revision?, input";
 /// Output and refusal text a settled receipt keeps.
 const EXCERPT_MAX: usize = 2048;
 /// The reserved result, which names the exact argv, leaves room for the excerpt beside it.
@@ -47,8 +52,6 @@ struct Payload {
     #[serde(default)]
     expected_revision: Option<u64>,
     input: String,
-    #[serde(default)]
-    confirmation: Option<String>,
 }
 
 fn reject(code: RejectCode, reason: impl Into<String>) -> anyhow::Error {
@@ -61,7 +64,12 @@ struct Cited {
     confirmation: Option<OwnerInput>,
 }
 
-fn cite(assistant: &AssistantContainer, payload: &Payload, action: &Action) -> Result<Cited> {
+fn cite(
+    assistant: &AssistantContainer,
+    payload: &Payload,
+    action: &Action,
+    request: &str,
+) -> Result<Cited> {
     let input = assistant
         .owner_input(&payload.input)
         .filter(|entry| entry.source == OwnerInputSource::Pane)
@@ -77,45 +85,9 @@ fn cite(assistant: &AssistantContainer, payload: &Payload, action: &Action) -> R
                 ),
             )
         })?;
-    let confirmation = match (action.class, payload.confirmation.as_deref()) {
-        (_, None) => None,
-        (Class::Ordinary, Some(_)) => {
-            return Err(reject(
-                RejectCode::BadRequest,
-                format!(
-                    "{} runs on the owner's instruction and takes no confirmation",
-                    action.kind
-                ),
-            ));
-        }
-        (Class::Confirm, Some(id)) => {
-            let entry = assistant
-                .owner_input(id)
-                .filter(|entry| {
-                    entry.source == OwnerInputSource::Confirmation
-                        && entry.command.as_deref() == Some(action.command.as_str())
-                })
-                .cloned()
-                .ok_or_else(|| {
-                    reject(
-                        RejectCode::NotOwnerInput,
-                        format!(
-                            "{id} is not the owner's answer to a confirmation of `{}`",
-                            action.command
-                        ),
-                    )
-                })?;
-            let used = assistant.state.receipts.iter().any(|receipt| {
-                receipt.op == "owner_action" && receipt.result["confirmation"].as_str() == Some(id)
-            });
-            if used {
-                return Err(reject(
-                    RejectCode::BadRequest,
-                    format!("confirmation {id} already answered another owner action"),
-                ));
-            }
-            Some(entry)
-        }
+    let confirmation = match action.class {
+        Class::Ordinary => None,
+        Class::Confirm => assistant.confirmation(request, &action.command).cloned(),
     };
     Ok(Cited {
         input,
@@ -126,7 +98,7 @@ fn cite(assistant: &AssistantContainer, payload: &Payload, action: &Action) -> R
 fn base(action: &Action, cited: &Cited) -> Value {
     let confirmation = cited.confirmation.as_ref();
     json!({
-        "kind": action.kind, "command": action.command, "argv": action.argv,
+        "kind": action.kind, "target": action.target, "command": action.command, "argv": action.argv,
         "class": action.class.as_str(), "input": cited.input.id, "sha256": cited.input.sha256,
         "confirmation": confirmation.map(|entry| &entry.id),
         "confirmed": confirmation.is_some_and(|entry| entry.text == "y"),
@@ -207,38 +179,74 @@ fn refusal_code(reason: &str) -> &'static str {
     }
 }
 
-/// A started command whose process ended without a result: its events decide.
-fn from_events(ctx: &Ctx, request: &str, base: Value) -> Result<(ReceiptState, Value)> {
-    let events = ctx.store.events_shared()?;
-    let kinds: Vec<&str> = events
-        .iter()
-        .filter(|event| event.detail["owner_authority"]["request"].as_str() == Some(request))
-        .map(|event| event.kind.as_str())
-        .take(16)
-        .collect();
-    Ok(if kinds.is_empty() {
-        let reason = "the command started, but its process ended without a result and no event \
-                      names this request; check the target before asking the owner again";
-        (
-            ReceiptState::Uncertain,
-            with(
-                base,
-                json!({"outcome": "outcome_unknown", "reason": reason}),
+/// An approval is the one kind with an unambiguous terminal state: its task is Done and the
+/// task's `approved` event carries this request's authority.
+fn approved(ctx: &Ctx, receipt: &RequestReceipt) -> Result<bool> {
+    let (Some("approve"), Some(task)) = (
+        receipt.result["kind"].as_str(),
+        receipt.result["target"].as_str(),
+    ) else {
+        return Ok(false);
+    };
+    if ctx.store.get(task)?.status != Status::Done {
+        return Ok(false);
+    }
+    Ok(ctx.store.events_shared()?.iter().any(|event| {
+        event.kind == "approved"
+            && event.task.as_deref() == Some(task)
+            && event.detail["owner_authority"]["request"].as_str()
+                == Some(receipt.request_id.as_str())
+    }))
+}
+
+/// A command child that claimed its reservation and ended without the executor seeing its
+/// exit: the child's own completion record decides; without one, only a verified terminal
+/// state does. Events written before or during the effect (a rebase before landing, a claim
+/// before a launch, a failed landing) prove nothing, so everything else stays uncertain.
+fn after_claim(ctx: &Ctx, receipt: &RequestReceipt) -> Result<(ReceiptState, Value)> {
+    let base = receipt.result.clone();
+    if let Some(error) = child::completion(receipt) {
+        return Ok(match error {
+            None => (
+                ReceiptState::Committed,
+                with(
+                    base,
+                    json!({"outcome": "executed", "reconciled": "completion_record"}),
+                ),
             ),
-        )
-    } else {
-        (
+            Some(reason) => (
+                ReceiptState::Rejected,
+                with(
+                    base,
+                    json!({"outcome": "refused", "code": refusal_code(&reason),
+                        "reason": reason, "reconciled": "completion_record"}),
+                ),
+            ),
+        });
+    }
+    if approved(ctx, receipt)? {
+        return Ok((
             ReceiptState::Committed,
             with(
                 base,
-                json!({"outcome": "executed", "reconciled": true, "events": kinds}),
+                json!({"outcome": "executed", "reconciled": "target_state"}),
             ),
-        )
-    })
+        ));
+    }
+    let reason = "the command started, but its process ended without recording a result and the \
+                  target shows no verified completion; check it before asking the owner again";
+    Ok((
+        ReceiptState::Uncertain,
+        with(
+            base,
+            json!({"outcome": "outcome_unknown", "reason": reason}),
+        ),
+    ))
 }
 
 fn finished(
     ctx: &Ctx,
+    session: &str,
     request: &str,
     base: Value,
     output: Result<Output>,
@@ -276,7 +284,14 @@ fn finished(
                 ),
             )
         }
-        None => from_events(ctx, request, base)?,
+        None => {
+            let container = ctx.store.get_assistant_container(session)?;
+            let stored = container
+                .state
+                .receipt(request)
+                .context("the owner-action reservation disappeared")?;
+            after_claim(ctx, stored)?
+        }
     })
 }
 
@@ -300,7 +315,7 @@ fn reserve(
                 return Ok((stored.clone(), true));
             }
             admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
-            let cited = cite(assistant, payload, action)?;
+            let cited = cite(assistant, payload, action, &origin.request_id)?;
             if assistant.state.receipts.len() >= RECEIPTS_MAX {
                 return Err(reject(
                     RejectCode::ReceiptLimit,
@@ -374,7 +389,7 @@ fn settle(
 }
 
 /// A replayed reservation: unchanged while its executor or command runs; once both are gone, not
-/// executed when no command claimed it, else executed or uncertain by the event log.
+/// executed when no command claimed it, else settled by `after_claim`.
 fn reconcile(ctx: &Ctx, session: &str, stored: RequestReceipt) -> Result<RequestReceipt> {
     if stored.state != ReceiptState::Reserved {
         return Ok(stored);
@@ -395,7 +410,7 @@ fn reconcile(ctx: &Ctx, session: &str, stored: RequestReceipt) -> Result<Request
             ),
         ),
         Some(command) if !effects::executor_gone(command)? => return Ok(stored),
-        Some(_) => from_events(ctx, &stored.request_id, stored.result.clone())?,
+        Some(_) => after_claim(ctx, &stored)?,
     };
     let seen = stored.executor.clone();
     settle(
@@ -440,14 +455,15 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let Resolved::Assistant(assistant, _) = &admitted.resolved else {
         anyhow::bail!("owner_action resolved no assistant container");
     };
-    let cited = cite(assistant, &payload, &action)?;
+    let request = envelope.request_id.as_str();
+    let cited = cite(assistant, &payload, &action, request)?;
     if cited
         .confirmation
         .as_ref()
         .is_some_and(|answer| answer.text == "n")
     {
         return receipts::commit_assistant(ctx, &admitted, |assistant| {
-            let cited = cite(assistant, &payload, &action)?;
+            let cited = cite(assistant, &payload, &action, request)?;
             Ok(Commit {
                 result: with(base(&action, &cited), json!({"outcome": "declined"})),
                 effect: effect(&action),
@@ -483,7 +499,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     effects::failpoint("owner_action_reserved_before_run");
     let output = child::run(ctx, &session, &envelope.request_id, &action.argv);
     effects::failpoint("owner_action_ran_before_settle");
-    let to = finished(ctx, &envelope.request_id, reserved.result.clone(), output)?;
+    let to = finished(ctx, &session, request, reserved.result.clone(), output)?;
     let receipt = settle(
         ctx,
         &session,

@@ -804,7 +804,13 @@ fn main() {
             .map(|args| (cmd.name(), args.id.clone())),
         _ => None,
     };
-    if let Err(err) = cmds::run(cli, &matches) {
+    let result = cmds::run(cli, &matches);
+    // An owner action's command child records how its command ended before it exits.
+    let failure = result.as_ref().err().map(|err| format!("{err:#}"));
+    if let Err(error) = corral_ops::assistant::owner_action::finish(failure.as_deref()) {
+        eprintln!("warning: recording the owner action's completion: {error:#}");
+    }
+    if let Err(err) = result {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
         }

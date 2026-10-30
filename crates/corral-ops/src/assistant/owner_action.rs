@@ -20,6 +20,9 @@ use crate::agent::effects;
 
 pub const OWNER_ACTION_ENV: &str = "CORRAL_OWNER_ACTION";
 const STARTED: &str = "started";
+const FINISHED: &str = "finished";
+/// Bytes of a failed command's error a completion record keeps.
+const ERROR_MAX: usize = 1024;
 const CHILD: &str = "owner_action_child";
 
 /// The `owner_authority` every event of a claimed owner action carries.
@@ -46,6 +49,8 @@ pub enum OwnerAuthority {
 }
 
 static AUTHORITY: OnceLock<ViaAssistant> = OnceLock::new();
+/// The workspace root of the claimed reservation, where `finish` records completion.
+static CLAIMED_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 /// This process's authority: `ViaAssistant` once it claimed an owner action, else the shell.
 pub fn authority() -> OwnerAuthority {
@@ -81,7 +86,8 @@ pub fn claim_from_env(start: &Path) -> Result<Option<ViaAssistant>> {
     let parent = std::os::unix::process::parent_id();
     #[cfg(not(unix))]
     let parent = 0;
-    let store = Store::open_unobserved(&Store::find_root(start)?)?;
+    let root = Store::find_root(start)?;
+    let store = Store::open_unobserved(&root)?;
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let Some(via) = claim(&store, &value, &argv, parent)? else {
         return Ok(None);
@@ -89,7 +95,73 @@ pub fn claim_from_env(start: &Path) -> Result<Option<ViaAssistant>> {
     AUTHORITY
         .set(via.clone())
         .map_err(|_| anyhow!("this process already claimed an owner action"))?;
+    CLAIMED_ROOT
+        .set(root)
+        .map_err(|_| anyhow!("this process already claimed an owner action"))?;
     Ok(Some(via))
+}
+
+/// Records how this command child's command ended on its claimed reservation (`error` is
+/// none on success), once the command has returned. A no-op in any process that claimed
+/// nothing. With it, a reservation whose executor died settles from this record rather than
+/// from guesses; without it (the child died too), it stays uncertain.
+pub fn finish(error: Option<&str>) -> Result<()> {
+    let (Some(via), Some(root)) = (AUTHORITY.get(), CLAIMED_ROOT.get()) else {
+        return Ok(());
+    };
+    finish_in(&Store::open_unobserved(root)?, via, error)
+}
+
+pub(crate) fn finish_in(store: &Store, via: &ViaAssistant, error: Option<&str>) -> Result<()> {
+    let me = effects::executor()?;
+    let error = error.map(|text| {
+        let mut end = text.len().min(ERROR_MAX);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text[..end].to_owned()
+    });
+    store.settle_assistant_container(&via.session, |assistant, _| {
+        let Some(receipt) = assistant
+            .state
+            .receipts
+            .iter_mut()
+            .find(|r| r.request_id == via.request)
+        else {
+            return Ok(());
+        };
+        let mine = started(receipt).is_some_and(|child| child == me);
+        if receipt.state != ReceiptState::Reserved || !mine || completion(receipt).is_some() {
+            return Ok(());
+        }
+        if receipt.evidence.len() >= EVIDENCE_MAX {
+            receipt.evidence.remove(1);
+        }
+        receipt.evidence.push(ReceiptEvidence {
+            state: FINISHED.into(),
+            source: CHILD.into(),
+            detail: Some(serde_json::json!({"ok": error.is_none(), "error": error}).to_string()),
+            at: jiff::Timestamp::now(),
+        });
+        Ok(())
+    })
+}
+
+/// The command child's completion record: `Some(None)` when the command succeeded,
+/// `Some(Some(error))` when it failed, `None` when it recorded no completion.
+pub(crate) fn completion(receipt: &RequestReceipt) -> Option<Option<String>> {
+    let evidence = receipt
+        .evidence
+        .iter()
+        .find(|e| e.state == FINISHED && e.source == CHILD)?;
+    let record: serde_json::Value = serde_json::from_str(evidence.detail.as_deref()?).ok()?;
+    if record["ok"].as_bool()? {
+        Some(None)
+    } else {
+        Some(Some(
+            record["error"].as_str().unwrap_or("refused").to_owned(),
+        ))
+    }
 }
 
 /// The claim itself: in one container transaction, the reservation must still be reserved by

@@ -17,10 +17,10 @@ export interface ToolHost {
   sessionId(): string;
   currentTurn(): number | undefined;
   /**
-   * Shows the owner `command` and journals the answer, returning the answer's owner-input ID;
-   * undefined when no answer could be journaled. Only an assistant host provides it.
+   * Shows the owner `command` and journals the answer bound to `requestId`; true once the
+   * answer is journaled. Only an assistant host provides it.
    */
-  confirm?(command: string, context: ConfirmUi): Promise<string | undefined>;
+  confirm?(command: string, context: ConfirmUi, requestId: string): Promise<boolean>;
 }
 
 export function corralToolNames(specs: readonly CorralToolSpec[]): string[] {
@@ -51,10 +51,12 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
         ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
       });
       let receipt = await send(payload);
-      // A refusal stores nothing, so the same request carries the owner's journaled answer.
+      // A refusal stores nothing. The owner's answer is journaled against this request, so the
+      // identical call is sent again: its payload, and so any later replay of it, never changes.
       const command = confirmationCommand(receipt);
-      const answer = command !== undefined && context ? await host.confirm?.(command, context) : undefined;
-      if (answer !== undefined) receipt = await send({ ...payload, confirmation: answer });
+      const answered = command !== undefined && context !== undefined
+        && await host.confirm?.(command, context, requestId) === true;
+      if (answered) receipt = await send(payload);
       return {
         content: [{ type: "text", text: JSON.stringify({ state: receipt.state, result: receipt.result }) }],
         details: receipt,

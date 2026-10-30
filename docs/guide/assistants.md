@@ -422,9 +422,10 @@ one (unpark and plan member-gate).
 
 **Confirm class.** For a confirm-class action the host shows the owner the exact command,
 for example `corral discard T-003` or `corral config set limits.running 3`, and waits. The
-answer is journaled as a confirmation input bound to that command line. y runs the command
-once; N records a committed receipt with outcome `declined` and changes nothing. An answer
-answers one action only.
+answer is journaled as a confirmation input bound to that command line and to the request it
+answers, and the host sends the identical request again, so a later replay of it returns the
+first receipt without another question. y runs the command once; N records a committed receipt
+with outcome `declined` and changes nothing. An answer answers one request only.
 
 **Execution.** Corral first probes the task's `autopilot-<id>` lock: when autopilot or
 another approval holds it, the action refuses `conflict_in_flight` naming the lock, and the
@@ -442,11 +443,14 @@ output.
 
 **Replays and crashes.** A replayed call (the same request) returns the first receipt and
 runs nothing again. A call lost before its reservation ran nothing (`not_executed` in the
-next generation's recovery notice). A reservation whose executor died is settled on replay,
-never re-executed: `not_executed` when no command claimed it, `executed` when the event log
-holds an event naming the request, and `outcome_unknown` (state uncertain) when the command
-started but left neither a result nor an event. While the executor or the command still
-runs, a replay returns the reservation unchanged.
+next generation's recovery notice). The command child records how its command ended on the
+reservation before it exits. A reservation whose executor died is settled on replay, never
+re-executed: `not_executed` when no command claimed it; from the child's completion record
+when there is one (`executed`, or `refused` with the command's error); for an approval
+without a record, `executed` only when the task is Done and its `approved` event names the
+request; otherwise `outcome_unknown` (state uncertain). Events written before or during the
+effect, such as a rebase before landing or a failed landing, never count as success. While the
+executor or the command still runs, a replay returns the reservation unchanged.
 
 Unclear requests ("land whatever is ready") and anything outside the kinds go to the PM: the
 assistant posts a routing item with the owner's words and tells the owner the ID.

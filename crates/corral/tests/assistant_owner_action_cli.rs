@@ -95,6 +95,7 @@ impl Fixture {
             text: text.into(),
             truncated: false,
             command: None,
+            answers: None,
             request: "ev-1-1".into(),
         };
         let store = self.store();
@@ -406,17 +407,18 @@ impl<'a> Host<'a> {
     }
 
     /// The owner typed `text` (or answered a confirmation of `command`) in the pane.
-    fn journal(&mut self, text: &str, command: Option<&str>) -> String {
+    fn journal(&mut self, text: &str, answer: Option<(&str, &str)>) -> String {
         self.seq += 1;
-        let source = if command.is_some() {
+        let source = if answer.is_some() {
             "confirmation"
         } else {
             "pane"
         };
         let mut payload = json!({"kind": "owner_input", "source": source, "text": text,
             "sha256": paths::sha256_hex(text.as_bytes())});
-        if let Some(command) = command {
+        if let Some((command, call)) = answer {
             payload["command"] = json!(command);
+            payload["answers"] = json!(tool_request_id("s", call));
         }
         let request = format!("ev-1-{}", self.seq);
         let receipt = self.call("event", &request, payload, None);
@@ -484,21 +486,35 @@ fn owner_actions_run_through_the_real_agent_call_and_child_once() {
     let set = host.journal("set limits.running to 3", None);
     let config =
         json!({"kind": "config_set", "target": "limits.running", "args": ["3"], "input": set});
-    let asked = host.act("rq-ask", config.clone());
+    let asked = host.act("rq-no", config.clone());
     assert_eq!(asked["result"]["code"], "confirmation_required");
     let command = asked["result"]["command"].as_str().unwrap().to_owned();
     assert_eq!(command, "corral config set limits.running 3");
     let toml = || std::fs::read_to_string(fx.root.join(".corral/corral.toml")).unwrap();
     let before = toml();
-    // N records a declined receipt and leaves corral.toml unchanged; y sets it once.
-    let mut no = config.clone();
-    no["confirmation"] = json!(host.journal("n", Some(&command)));
-    let declined = host.act("rq-no", no);
+    // N for this call, then the identical call: a declined receipt, corral.toml unchanged, and
+    // a replay returns that receipt.
+    host.journal("n", Some((&command, "rq-no")));
+    let declined = host.act("rq-no", config.clone());
     assert_eq!(declined["result"]["outcome"], "declined", "{declined}");
+    let replayed = host.act("rq-no", config.clone());
+    assert_eq!(
+        (&replayed["replayed"], &replayed["result"]["outcome"]),
+        (&json!(true), &json!("declined"))
+    );
     assert_eq!(toml(), before);
-    let mut yes = config;
-    yes["confirmation"] = json!(host.journal("y", Some(&command)));
-    let done = host.act("rq-yes", yes);
+    // y for a new call sets it once; replaying that identical call changes nothing more.
+    let asked = host.act("rq-yes", config.clone());
+    assert_eq!(asked["result"]["code"], "confirmation_required");
+    host.journal("y", Some((&command, "rq-yes")));
+    let done = host.act("rq-yes", config.clone());
     assert_eq!(done["result"]["outcome"], "executed", "{done}");
     assert_eq!(fx.ok(&["config", "get", "limits.running"], &[]).trim(), "3");
+    let after = toml();
+    let again = host.act("rq-yes", config);
+    assert_eq!(
+        (&again["replayed"], &again["committed_at"]),
+        (&json!(true), &done["committed_at"])
+    );
+    assert_eq!(toml(), after);
 }
