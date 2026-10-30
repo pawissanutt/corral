@@ -9,7 +9,7 @@ use super::tests::{classes, event, messages, resume, run_recipient, state, sync}
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Fx, HostProc};
 use crate::agent::test_support as ts;
-use corral_core::Status;
+use corral_core::{Status, agent::TurnClass};
 
 fn started(fx: &Fx, host: &ts::Host, seq: u64, turn: u64) {
     let origin = json!({"kind": "bridge", "idempotency_key": format!("k{turn}")});
@@ -60,6 +60,40 @@ fn retries(fx: &Fx) -> usize {
         })
     };
     nudges.iter().filter(retry).count()
+}
+
+#[test]
+fn budget_stop_has_its_own_event_and_never_nudges() {
+    let fx = f::fixture(false, 5);
+    let host = HostProc::spawn(true);
+    let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
+    f::write_session(&bound, &f::session(&[], &[]));
+    started(&fx, &bound, 1, 1);
+    event(
+        &fx,
+        &bound,
+        2,
+        json!({"kind":"budget_exhausted", "turn":1, "budget":{"tokens":100,"stopped":true}}),
+    );
+    event(
+        &fx,
+        &bound,
+        3,
+        json!({"kind":"turn_ended", "turn":1, "cancelled":true}),
+    );
+    assert_eq!(
+        state(&fx, &fx.worker()).turns[0].class,
+        Some(TurnClass::BudgetExhausted)
+    );
+    for _ in 0..4 {
+        sync(&fx);
+    }
+    let events = fx.events("agent_budget_exhausted");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].detail["class"], "budget_exhausted");
+    assert_eq!(events[0].detail["budget"]["tokens"], 100);
+    assert!(fx.events("agent_provider_error").is_empty());
+    assert!(messages(&fx, &run_recipient(&fx), "turn_nudge").is_empty());
 }
 
 #[test]

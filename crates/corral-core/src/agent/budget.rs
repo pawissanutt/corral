@@ -67,7 +67,8 @@ impl BudgetLedger {
         {
             return false;
         }
-        if self.requests.len() >= 16384
+        if (self.requests.len() >= 16384
+            && (limits.max_tokens.is_some() || limits.max_usd_nanos.is_some()))
             || self.requests.iter().any(|r| r.request == request.request)
             || !limits.fits(
                 t.saturating_add(request.tokens),
@@ -158,6 +159,29 @@ mod tests {
             assert!(budget_settings(&[("max_tokens".into(), value)].into()).is_err());
         }
         assert!(budget_settings(&[("max_usd".into(), json!(1000001))].into()).is_err());
+    }
+    #[test]
+    fn unlimited_accounting_does_not_stop_at_the_ledger_cap() {
+        let request = BudgetRequest {
+            request: "prior".into(),
+            generation: 1,
+            tokens: 1,
+            usd_nanos: 0,
+            priced: true,
+            unbounded: false,
+            response: None,
+        };
+        let mut ledger = BudgetLedger {
+            requests: vec![request.clone(); 16384],
+        };
+        assert!(ledger.reserve(
+            BudgetRequest {
+                request: "next".into(),
+                ..request
+            },
+            BudgetLimits::default()
+        ));
+        assert!(!ledger.exhausted(BudgetLimits::default()));
     }
     #[test]
     fn unbounded_subprocess_lanes_cannot_claim_a_hard_cap() {

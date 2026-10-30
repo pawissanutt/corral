@@ -45,6 +45,10 @@ export class RunBudget {
   private stopped = false;
   private last: BudgetReply | undefined;
   constructor(private readonly options: BudgetOptions) {}
+  private limited(): boolean {
+    const limits = this.last?.limits as { max_tokens?: number | null; max_usd_nanos?: number | null } | undefined;
+    return limits === undefined || limits.max_tokens != null || limits.max_usd_nanos != null;
+  }
   private stop() {
     this.stopped = true;
     for (const controller of this.active) controller.abort(new Error("budget_exhausted"));
@@ -95,11 +99,11 @@ export class RunBudget {
               }
               yield event;
             }
-          } catch (error) { self.stop(); throw error; }
+          } catch (error) { if (self.limited()) self.stop(); throw error; }
           finally { self.active.delete(controller); }
         })();
       } catch (error) {
-        this.stop();
+        if (this.limited()) this.stop();
         this.active.delete(controller);
         // Once admission has committed, even a local setup failure is conservatively uncertain.
         if (admitted) this.last = { ...this.last, uncertain: true };

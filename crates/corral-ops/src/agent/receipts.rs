@@ -186,8 +186,8 @@ fn event_detail(container: &ContainerRef, receipt: &RequestReceipt) -> Value {
         "request_id": receipt.request_id, "op": receipt.op, "container": container.key(),
         "role": receipt.identity.role.as_str(), "generation": receipt.identity.generation,
     });
-    for key in ["kind", "turn", "class"] {
-        if let Some(value) = receipt.result.get(key) {
+    for key in ["kind", "turn", "class", "budget"] {
+        if let Some(value) = receipt.result.get(key).filter(|value| !value.is_null()) {
             detail[key] = value.clone();
         }
     }

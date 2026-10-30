@@ -359,6 +359,7 @@ pub enum TurnClass {
     Completed,
     Cancelled,
     ProviderFailed,
+    BudgetExhausted,
     OwnerEngaged,
     AwaitingAnswer,
     WaitingExternal,
