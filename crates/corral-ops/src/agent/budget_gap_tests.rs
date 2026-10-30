@@ -24,7 +24,9 @@ fn historical_unpriced_or_legacy_usage_cannot_claim_a_usd_cap() {
             })
             .unwrap()
     };
-    save(snapshot);
+    let mut legacy_unlimited = snapshot.clone();
+    legacy_unlimited.catalog = 6;
+    save(legacy_unlimited);
     let input = |seq, key, priced| {
         envelope(
             &host,
@@ -39,6 +41,11 @@ fn historical_unpriced_or_legacy_usage_cannot_claim_a_usd_cap() {
         committed(&send(&fx, &input(1, "unpriced", false), "event")).result["admitted"],
         true
     );
+    let reply = committed(&send(&fx, &input(2, "legacy-next", true), "event"));
+    assert_eq!(reply.result["admitted"], true);
+    assert_eq!(reply.result["exhausted"], false);
+    assert_eq!(reply.result["legacy_usage_gap"], true);
+    save(snapshot);
     config
         .set_settings(
             AgentRole::Worker,
@@ -48,15 +55,15 @@ fn historical_unpriced_or_legacy_usage_cannot_claim_a_usd_cap() {
         .unwrap();
     let capped = config.resolve(AgentRole::Worker, None);
     save(capped.clone());
-    let reply = committed(&send(&fx, &input(2, "priced", true), "event"));
+    let reply = committed(&send(&fx, &input(3, "priced", true), "event"));
     assert_eq!(reply.result["admitted"], false);
     assert_eq!(reply.result["pricing_gaps"], 1);
     // A legacy snapshot has no historical reservation guarantee, even if its transcript is copied.
     let mut legacy = capped;
     legacy.catalog = 6;
     save(legacy);
-    let reply = committed(&send(&fx, &input(3, "after-legacy", true), "event"));
+    let reply = committed(&send(&fx, &input(4, "after-legacy", true), "event"));
     assert_eq!(reply.result["admitted"], false);
     assert_eq!(reply.result["legacy_usage_gap"], true);
-    assert_eq!(state(&fx, &target.container()).budget.requests.len(), 1);
+    assert_eq!(state(&fx, &target.container()).budget.requests.len(), 2);
 }

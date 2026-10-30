@@ -300,6 +300,8 @@ pub fn classify(
         TurnClass::Completed
     } else if crate::agent::turns::cancelled(turn) {
         TurnClass::Cancelled
+    } else if turn.class == Some(TurnClass::BudgetExhausted) {
+        TurnClass::BudgetExhausted
     } else if turn.provider_error.is_some() {
         TurnClass::ProviderFailed
     } else if turn.origin.kind == TurnOriginKind::OwnerTerminal {

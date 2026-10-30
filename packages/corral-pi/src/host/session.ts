@@ -605,7 +605,9 @@ export class HostSession {
       else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
-        this.providerError(providerErrorClass(event.message.errorMessage ?? ""));
+        const message = event.message.errorMessage ?? "";
+        if (message.includes("budget_exhausted")) this.report("budget_exhausted", { budget: this.budget.state() });
+        else this.providerError(providerErrorClass(message));
       }
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
@@ -648,13 +650,14 @@ export class HostSession {
     this.report("provider_error", { class: errorClass });
   }
 
-  private report(kind: "turn_started" | "turn_ended" | "provider_error", data: Record<string, unknown>): void {
+  private report(kind: "turn_started" | "turn_ended" | "provider_error" | "budget_exhausted", data: Record<string, unknown>): void {
     const turn = this.turn;
     const event = this.options.events.emit(kind, { turn, ...data });
     if (!this.bound) return;
     const payload: Record<string, unknown> = { kind, turn };
     if (kind === "turn_started") payload.origin = data.origin;
     if (kind === "provider_error") payload.class = data.class;
+    if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
