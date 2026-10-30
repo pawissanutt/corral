@@ -123,11 +123,15 @@ pub fn release_after_loss(ctx: &Ctx, container: &ContainerRef, generation: &Agen
     }
 }
 
-/// The container's questions as a host merges them: by key, newest revision wins.
-pub fn question_snapshot(state: &AgentRunState) -> Vec<Value> {
-    let start = state.questions.len().saturating_sub(QUESTIONS_MAX);
-    state.questions[start..]
+/// The container's questions as a host merges them (by key, newest revision wins): every pending
+/// question, which the ask limits keep to a few, wherever it sits in the history, plus the named
+/// keys `also` (a transitioned question, or the keys a host still holds), at most `QUESTIONS_MAX`.
+pub fn question_snapshot(state: &AgentRunState, also: &[&str]) -> Vec<Value> {
+    let named = &also[..also.len().min(QUESTIONS_MAX)];
+    state
+        .questions
         .iter()
+        .filter(|q| q.recorded_pending() || named.contains(&q.key.as_str()))
         .map(|q| {
             let current = q
                 .terminal
@@ -151,8 +155,8 @@ fn holds(question: &AgentQuestion) -> bool {
             || question.state == QuestionState::Escalated)
 }
 
-fn send(client: &mut BridgeClient, state: &AgentRunState) -> Result<()> {
-    let questions = question_snapshot(state);
+fn send(client: &mut BridgeClient, state: &AgentRunState, also: &[&str]) -> Result<()> {
+    let questions = question_snapshot(state, also);
     match client.request("questions", json!({ "questions": questions })) {
         Ok(_) => Ok(()),
         // A host that predates the command has no projection to correct.
@@ -170,7 +174,7 @@ fn send(client: &mut BridgeClient, state: &AgentRunState) -> Result<()> {
 /// Sends a task container's questions to its live host over the authenticated bridge, so its herdr
 /// projection follows a transition the host did not make itself (an escalation or cancellation).
 /// Nothing happens without a healthy, bound, unfenced current generation.
-pub fn push_questions(ctx: &Ctx, container: &ContainerRef) -> Result<()> {
+pub fn push_questions(ctx: &Ctx, container: &ContainerRef, key: &str) -> Result<()> {
     let Some(id) = container.task() else {
         return Ok(());
     };
@@ -188,13 +192,13 @@ pub fn push_questions(ctx: &Ctx, container: &ContainerRef) -> Result<()> {
         return Ok(());
     };
     let mut client = BridgeClient::connect(&ctx.store, &recipient, generation.n)?;
-    send(&mut client, state)
+    send(&mut client, state, &[key])
 }
 
 /// `push_questions` after a question transition: a failure is reported, and sync's next probe
 /// sends the questions again while the host's projection still differs.
-pub fn push_after_transition(ctx: &Ctx, container: &ContainerRef) {
-    if let Err(error) = push_questions(ctx, container) {
+pub fn push_after_transition(ctx: &Ctx, container: &ContainerRef, key: &str) {
+    if let Err(error) = push_questions(ctx, container, key) {
         let reason = format!(
             "telling {}'s host about a question transition: {error:#}",
             container.key()
@@ -225,7 +229,8 @@ pub fn sync_questions(
     if held == holding {
         return Ok(());
     }
-    send(client, state)
+    // Naming every held key lets the host release one corral no longer holds, however old.
+    send(client, state, &held)
 }
 
 #[cfg(all(test, unix))]

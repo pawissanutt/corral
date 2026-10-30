@@ -454,7 +454,7 @@ pub(super) fn transact(
     }
     // The asking host's herdr projection follows escalations and cancellations it did not make.
     if transitioned && matches!(applied, Some(Applied::Fresh { .. })) {
-        crate::agent::herdr_status::push_after_transition(ctx, &container);
+        crate::agent::herdr_status::push_after_transition(ctx, &container, key);
     }
     if let (Some(reason), Some(Applied::Fresh { outcome, .. })) = (raised, &applied) {
         crate::obligations::transition_with_notice(
