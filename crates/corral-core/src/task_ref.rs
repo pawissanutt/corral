@@ -307,6 +307,13 @@ macro_rules! head_fields {
 }
 
 head_fields! {
+    park: Option<crate::Park>,
+    landed: Option<crate::LandingReceipt>,
+    infra_wait: Option<crate::InfraWait>,
+    attention: crate::AttentionLedger,
+    status_since: Option<Timestamp>,
+    difficulty: Option<crate::TaskDifficulty>,
+    membership_revision: u64,
     dashboard: Option<crate::DashboardSchedule>,
     origin: Option<crate::Origin>,
     idea_decision: Option<crate::IdeaDecision>,
@@ -385,6 +392,8 @@ pub trait TaskRef: TaskFieldsRef {
     fn previous_run_head(&self) -> Result<Option<RunHead>>;
 
     fn review_child(&self, run: &str, id: &str) -> Result<Option<RunHead>>;
+    /// The `n`th (1-based) review child, without decoding its siblings.
+    fn review_child_at(&self, run: &str, n: usize) -> Result<Option<RunHead>>;
     fn review_child_by_review_at(&self, run: &str, at: Timestamp) -> Result<Option<RunHead>>;
     fn stronger_source(
         &self,

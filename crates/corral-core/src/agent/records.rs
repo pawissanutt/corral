@@ -22,6 +22,8 @@ pub const EVIDENCE_MAX: usize = 16;
 pub enum AgentRole {
     Worker,
     Reviewer,
+    Planner,
+    PlanReviewer,
     Pm,
 }
 
@@ -30,7 +32,17 @@ impl AgentRole {
         match self {
             AgentRole::Worker => "worker",
             AgentRole::Reviewer => "reviewer",
+            AgentRole::Planner => "planner",
+            AgentRole::PlanReviewer => "plan_reviewer",
             AgentRole::Pm => "pm",
+        }
+    }
+
+    /// The installed role module's directory: `src/roles/<dir>/index.ts`.
+    pub fn module_dir(self) -> &'static str {
+        match self {
+            AgentRole::PlanReviewer => "plan-reviewer",
+            other => other.as_str(),
         }
     }
 }
@@ -47,9 +59,9 @@ pub enum HostHealth {
     Fenced,
 }
 
-/// `Run.agent_host` on a worker run or a review child (the plan's `Run.agent`; `agent` already
-/// serializes the profile key).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// `agent_host` on an implementation run, review child, planning run or plan review;
+/// `Run.agent` already serializes the profile key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunState {
     pub version: u32,
     pub binding: AgentBinding,
@@ -65,6 +77,16 @@ pub struct AgentRunState {
     pub wakes: Vec<WakeSubscription>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reports: Vec<AgentReport>,
+    /// PM's own progress; workers use the existing Run.progress instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo: Option<crate::RunProgress>,
+    /// Worker background jobs: durable process identity and monitor subscriptions (T-565).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub jobs: Vec<super::JobRecord>,
+    /// A planning container's question hold: the excerpt its own owner-waiting question set
+    /// when it moved the task to Needs me. Worker runs keep theirs in `Run.blocked_excerpt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_hold: Option<String>,
 }
 
 impl AgentRunState {
@@ -78,6 +100,9 @@ impl AgentRunState {
             turns: Vec::new(),
             wakes: Vec::new(),
             reports: Vec::new(),
+            todo: None,
+            jobs: Vec::new(),
+            question_hold: None,
         }
     }
 
@@ -136,6 +161,31 @@ pub struct AgentGeneration {
     /// Last bridge event sequence corral reconciled (`events_since` resumes after it).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub event_seq: u64,
+    /// Wave-0 todo flag, still written for older readers; `capabilities` supersedes it.
+    #[serde(default)]
+    pub todo: bool,
+    /// The generation's effective settings, resolved once at open and never rewritten.
+    /// Absent on generations recorded before the catalog (`legacy_strict`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<super::CapabilitySnapshot>,
+    /// How these settings differ from the previous generation's, when they do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_transition: Option<super::CapabilityTransition>,
+}
+
+impl AgentGeneration {
+    pub fn effective_capabilities(&self, role: AgentRole) -> super::CapabilitySnapshot {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(|| super::CapabilitySnapshot::legacy(role, self.todo))
+    }
+
+    pub fn capability(&self, key: &str) -> bool {
+        match &self.capabilities {
+            Some(snapshot) => snapshot.enabled(key),
+            None => key == "todo" && self.todo,
+        }
+    }
 }
 
 /// What hello proved. The bind nonce is consumed when this is written.
@@ -186,12 +236,14 @@ pub enum ReceiptState {
     Rejected,
     /// Two-phase only: the reservation committed and its executor may still run.
     Reserved,
+    /// A gate awaiting admission; no executor or submitted side effect.
+    Queued,
     Uncertain,
     Abandoned,
 }
 
 /// RequestReceipt v1: the durable answer to one request ID inside its named container.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestReceipt {
     pub version: u32,
     pub request_id: String,
@@ -233,7 +285,7 @@ pub struct ReceiptEffect {
     pub reference: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReceiptEvidence {
     pub state: String,
     pub source: String,

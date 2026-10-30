@@ -83,6 +83,21 @@ fn explain_plan(ctx: &Ctx, id: &str, choice: &ProfileChoice, json: bool, plan: b
     if json {
         println!("{}", serde_json::to_string_pretty(&explanation)?);
     } else {
+        let task = ctx.store.get(id)?;
+        let size = task
+            .size
+            .map(|size| size.to_string())
+            .unwrap_or_else(|| "not assessed".into());
+        let difficulty = task
+            .difficulty
+            .map(|difficulty| difficulty.to_string())
+            .unwrap_or_else(|| "not assessed".into());
+        let legacy = if task.difficulty.is_none() {
+            "; legacy routing applies"
+        } else {
+            ""
+        };
+        println!("Task: {size} size, {difficulty} difficulty{legacy}");
         let decision = &explanation.implementer;
         println!("profile: {}", decision.profile);
         println!("harness: {}", decision.harness);

@@ -1,7 +1,11 @@
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
 use corral_core::{AutoStage, AutopilotState, RunOutcome, Status};
 use corral_ops::Change;
 
-use super::mouse_tests::{click, find, render};
+use super::mouse_tests::{FakeClock, click, find, render};
 use super::{WorkerMsg, change_toast};
 use crate::board::tests::{key, seeded};
 use crate::{Mode, Tone};
@@ -43,6 +47,45 @@ fn header_switch_is_not_clickable_under_another_view() {
     click(&mut app, at.0, at.1);
     assert_eq!(app.stack.len(), 2);
     assert_eq!(std::fs::read(fx.ctx.store.config_path()).unwrap(), before);
+}
+
+#[test]
+fn stalled_sync_is_reported_in_the_header_until_a_pass_completes() {
+    // Given a board with work waiting and a clock the test advances (T-587).
+    let fx = seeded();
+    let mut app = fx.app(Mode::Board);
+    let now = Rc::new(Cell::new(Instant::now()));
+    app.clock = Box::new(FakeClock(now.clone()));
+    app.synced_at = now.get();
+    let waiting = app.counts.review + app.counts.ready + app.counts.tasks;
+    assert!(waiting > 0);
+    let advance = |by: Duration| now.set(now.get() + by);
+    advance(super::SYNC_STALL_AFTER - Duration::from_secs(1));
+    assert!(!render(&mut app).contains("Autopilot stalled"));
+
+    // When no pass returns (a lock or channel wait), then when passes keep failing.
+    advance(Duration::from_secs(1));
+    let hung = render(&mut app);
+    let notice = format!("Autopilot stalled: no sync completed for 5m while {waiting} tasks wait");
+    assert!(hung.contains(&notice), "{hung}");
+    assert!(hung.contains("the current pass has not returned"), "{hung}");
+    app.on_worker(WorkerMsg::Synced(Err(corral_core::UPDATE_NOTICE.into())));
+    advance(Duration::from_secs(60));
+    assert_eq!(
+        app.sync_notices(),
+        [format!(
+            "Autopilot stalled: no sync completed for 6m while {waiting} tasks wait; {}",
+            corral_core::UPDATE_NOTICE
+        )]
+    );
+
+    // Then a completed pass clears it, and an idle board never reports a stall.
+    app.on_worker(WorkerMsg::synced(&app.ctx, Ok(Vec::new())));
+    assert!(!render(&mut app).contains("Autopilot stalled"));
+    advance(super::SYNC_STALL_AFTER);
+    assert!(render(&mut app).contains("Autopilot stalled"));
+    app.counts = super::Counts::default();
+    assert!(app.sync_notices().is_empty());
 }
 
 fn change(task: &str, to: Status, stage: AutoStage, note: &str) -> Change {

@@ -78,6 +78,7 @@ fn escalate(
     note: &str,
     now: Timestamp,
 ) -> Result<Option<Change>> {
+    let mut batch = None;
     let saved = ctx.store.try_update_head(&task.id, |t| {
         if t.status != Status::Review {
             return Ok(false);
@@ -97,26 +98,17 @@ fn escalate(
             at: now,
         });
         t.status = Status::NeedsMe;
-        ctx.store.log_event(
-            Some(&task.id),
-            "review_escalated",
-            json!({"run": run.id, "reason": note}),
-        )?;
+        batch = Some(crate::owner_notice::record_stage_head(ctx, t, "legacy_review_fallback", now)?);
+        ctx.store.log_event(Some(&task.id), "review_escalated", json!({"run": run.id, "reason": note}))?;
         Ok(true)
     })?;
     let Some(saved) = saved else {
         return Ok(None);
     };
     cleanup_head(ctx, &saved, Cleanup::Round);
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("{} needs you", task.id), note, true)
-    {
-        crate::messages::report(
-            Some(&task.id),
-            "notification",
-            format!("review fallback notification failed: {error:#}"),
-        );
+    if let Some(batch) = batch {
+        crate::owner_notice::notify(ctx, crate::owner_notice::newly_committed(&saved, batch)?,
+            &format!("{} blocked", task.id), note, true)?;
     }
     Ok(Some(Change {
         task: task.id.clone(),
@@ -126,3 +118,7 @@ fn escalate(
         stage: Some(AutoStage::Escalated),
     }))
 }
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/attention_handling/fallback_entry.rs"]
+mod attention_tests;

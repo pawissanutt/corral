@@ -22,7 +22,7 @@ Sync must be running and connected to its owned herdr session for admission.
 
 At or after the due time, sync queues an unstarted Backlog/Ready task, or a Done
 task whose previous run has finished, using normal dispatch routing, dependency,
-capacity, resource and session checks. Review, NeedsMe, Running, Dropped,
+capacity, resource and session checks. Review, Blocked, Running, Dropped,
 unfinished launches and queued work are not recycled. An occurrence advances
 the next due time to admission time plus the interval, atomically with queue
 authorization. Missed occurrences coalesce: there is no catch-up burst and no

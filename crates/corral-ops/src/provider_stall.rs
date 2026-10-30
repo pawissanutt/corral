@@ -324,7 +324,8 @@ pub(crate) struct Target<'a> {
     pub scope: provider_session::Scope,
     /// The availability episode this run's candidate belongs to; None keeps legacy handling.
     pub episode: Option<String>,
-    /// The implementer's provider, when review independence requires another family.
+    /// The implementer's model family (the vendor for every non-Bedrock vendor), when review
+    /// independence requires another family.
     pub exclude_provider: Option<String>,
 }
 
@@ -569,6 +570,7 @@ pub(crate) fn advance_agent(
     };
     let from = task.status;
     let run_id = run.id.clone();
+    let mut batch = None;
     let saved = ctx.store.try_update_head(&task.id, |t| {
         if t.status != from {
             return Ok(false);
@@ -582,27 +584,23 @@ pub(crate) fn advance_agent(
         r.blocked_excerpt = Some(reason.clone());
         t.status = Status::NeedsMe;
         if from != Status::NeedsMe {
+            batch = Some(crate::owner_notice::record_entry_head(
+                ctx, t, "provider_exhausted", now, Vec::new(),
+            )?);
             ctx.store.log_event(
-                Some(&t.id),
-                "needs_me",
+                Some(&t.id), "needs_me",
                 json!({"from": from.as_str(), "agent_state": pane.status.as_str(), "note": reason}),
             )?;
         }
         Ok(true)
     })?;
-    if saved.is_none() || from == Status::NeedsMe {
+    let (Some(saved), Some(batch)) = (saved, batch) else {
         return Ok(None);
-    }
-    if let Err(err) = ctx
-        .herdr
-        .notify(&format!("▲ {} needs you", task.id), &reason, true)
-    {
-        crate::messages::report(
-            Some(&task.id),
-            "notification",
-            format!("notification for {} failed: {err:#}", task.id),
-        );
-    }
+    };
+    crate::owner_notice::notify(
+        ctx, crate::owner_notice::newly_committed(&saved, batch)?,
+        &format!("{} needs you", task.id), &reason, true,
+    )?;
     Ok(Some(Change {
         task: task.id.clone(),
         from,

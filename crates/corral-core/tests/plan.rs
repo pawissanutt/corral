@@ -1,6 +1,7 @@
 use corral_core::{
-    Artifact, ArtifactKind, ConfigDoc, HerdrRef, PlanDocument, PlanRecord, PlanReview,
-    PolicySource, Status, Store, Verdict,
+    Artifact, ArtifactKind, ConfigDoc, HerdrRef, PlanDocument, PlanOverview, PlanRecord,
+    PlanReview, PolicySource, Status, Store, Verdict,
+
 };
 use serde_yaml_ng::Value;
 
@@ -19,6 +20,100 @@ owner_decisions: []
 
 fn frontmatter(yaml: &str) -> String {
     format!("---\n{yaml}---\n# Trailing Markdown\n")
+}
+
+fn overview_yaml() -> String {
+    format!(
+        "{}human_review:\n  problem: Plans lack context\n  changes: [Show included changes]\n  retained: [None]\n",
+        YAML.replace("non_goals: []", "non_goals: [No exclusions]")
+            .replace("decisions: []", "decisions: [No important choices]")
+    )
+}
+
+#[test]
+fn historical_documents_omit_overview_without_changing_serialized_fields() {
+    // Given a plan written before the human-review format.
+    let document = PlanDocument::parse(&frontmatter(YAML)).unwrap();
+    let original: Value = serde_yaml_ng::from_str(YAML).unwrap();
+    // When serializing it again.
+    let serialized = serde_yaml_ng::to_value(&document).unwrap();
+    // Then no opt-in or other fields are added.
+    assert_eq!(document.human_review, None);
+    assert_eq!(serialized, original);
+}
+
+#[test]
+fn complete_overview_round_trips_with_explicit_none_statements() {
+    // Given an opted-in plan with explicit absence of retained behavior, exclusions and choices.
+    let document = PlanDocument::parse(&frontmatter(&overview_yaml())).unwrap();
+    // When serializing and parsing the complete plan.
+    let restored =
+        PlanDocument::parse(&frontmatter(&serde_yaml_ng::to_string(&document).unwrap())).unwrap();
+    // Then the overview and canonical fields are preserved.
+    assert_eq!(restored, document);
+    assert_eq!(
+        restored.human_review,
+        Some(PlanOverview {
+            problem: "Plans lack context".into(),
+            changes: vec!["Show included changes".into()],
+            retained: vec!["None".into()],
+        })
+    );
+    assert_eq!(restored.non_goals, ["No exclusions"]);
+    assert_eq!(restored.decisions, ["No important choices"]);
+}
+
+#[test]
+fn opted_in_documents_require_complete_nonblank_overview_and_canonical_lists() {
+    // Given every structurally incomplete new-format field.
+    let original: Value = serde_yaml_ng::from_str(&overview_yaml()).unwrap();
+    for (section, key, value) in [
+        ("human_review", "problem", Value::from(" \t")),
+        ("human_review", "changes", Value::Sequence(vec![])),
+        ("human_review", "retained", Value::Sequence(vec![])),
+        (
+            "human_review",
+            "changes",
+            Value::Sequence(vec![Value::from("Valid"), Value::from(" ")]),
+        ),
+        (
+            "human_review",
+            "retained",
+            Value::Sequence(vec![Value::from(" ")]),
+        ),
+        ("", "non_goals", Value::Sequence(vec![])),
+        ("", "decisions", Value::Sequence(vec![])),
+    ] {
+        let mut yaml = original.clone();
+        if section.is_empty() {
+            yaml[key] = value;
+        } else {
+            yaml[section][key] = value;
+        }
+        // When parsing the opted-in document.
+        let result = PlanDocument::parse(&frontmatter(&serde_yaml_ng::to_string(&yaml).unwrap()));
+        // Then incomplete structure is rejected.
+        assert!(result.is_err(), "{section}.{key}");
+    }
+}
+
+#[test]
+fn overview_rejects_missing_and_unknown_fields() {
+    // Given a complete overview with one missing or extra field.
+    let original: Value = serde_yaml_ng::from_str(&overview_yaml()).unwrap();
+    for key in ["problem", "changes", "retained", "unknown"] {
+        let mut yaml = original.clone();
+        let overview = yaml["human_review"].as_mapping_mut().unwrap();
+        if key == "unknown" {
+            overview.insert(Value::from(key), Value::from(true));
+        } else {
+            overview.remove(Value::from(key));
+        }
+        // When parsing the changed schema.
+        let result = PlanDocument::parse(&frontmatter(&serde_yaml_ng::to_string(&yaml).unwrap()));
+        // Then the schema mismatch is rejected.
+        assert!(result.is_err(), "{key}");
+    }
 }
 
 #[test]
@@ -253,6 +348,18 @@ at: 2026-10-15T00:00:00Z
     assert_eq!(review.delivery, corral_core::inbox::DeliveryMode::Legacy);
     assert_eq!(planner.inbox, Default::default());
     assert_eq!(review.inbox, Default::default());
+    assert!(planner.agent_host.is_none());
+    assert!(review.agent_host.is_none());
+    assert!(
+        !serde_yaml_ng::to_string(&planner)
+            .unwrap()
+            .contains("agent_host")
+    );
+    assert!(
+        !serde_yaml_ng::to_string(&review)
+            .unwrap()
+            .contains("agent_host")
+    );
 }
 
 #[test]
@@ -292,6 +399,7 @@ fn plan_history_and_pending_reviews_round_trip_through_store() {
     assert!(task.plans.is_empty());
     let at = "2026-10-15T00:00:00Z".parse().unwrap();
     let review = PlanReview {
+        agent_host: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,
         inbox: Default::default(),
         route: None,

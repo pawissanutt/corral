@@ -79,7 +79,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
     let _ = preflight::check(ctx, AgentRole::Worker, profile);
     let _ = review::preflight(ctx, profile);
     let _ = pm::preflight(ctx, Some(profile));
-    let _ = review::command(ctx, task, &run_head(run), profile);
+    let _ = review::command(ctx, task, &run_head(run), profile, "p-review");
     crate::provider_stall::advance_agent(
         ctx,
         &ctx.store.head(&task.id).unwrap(),
@@ -87,6 +87,7 @@ fn exercise(fx: &Fx, task: &Task, profile: &ResolvedProfile) -> Vec<&'static str
         jiff::Timestamp::now(),
     )
     .unwrap();
+
     let mut done = task.clone();
     done.status = Status::Done;
     if task_is_pi_native(&done) {
@@ -118,7 +119,7 @@ fn other_harnesses_never_reach_an_agent_hook() {
         crate::delivery::owner::review_launch_mode("omo"),
         DeliveryMode::Legacy
     );
-    assert!(review::command(&fx.ctx, &task, &run_head(&task.runs[0]), &omo).is_none());
+    assert!(review::command(&fx.ctx, &task, &run_head(&task.runs[0]), &omo, "p-review").is_none());
 }
 
 #[test]
@@ -162,7 +163,7 @@ fn pi_native_usage_note_names_the_missing_collector() {
         assert_eq!(run.usage, None);
         assert_eq!(
             run.usage_note.as_deref(),
-            Some("pi-native usage collector not installed")
+            Some("no bound Pi session: the run has no host binding")
         );
     }
 }
@@ -182,6 +183,7 @@ fn refusal(error: anyhow::Error) -> String {
 
 #[test]
 fn preflight_names_the_missing_piece_and_its_owner() {
+    let _data_root = ts::private_data_root();
     // Given a pi-native profile and an asset directory filled in one step at a time:
     let mut fx = fx();
     pi_profile(&mut fx, "openai");
@@ -233,19 +235,53 @@ fn preflight_names_the_missing_piece_and_its_owner() {
     assert_eq!(check(&fx, AgentRole::Worker), "");
     let implicit = preflight::assets(&dir, AgentRole::Worker, false).unwrap_err();
     assert_eq!(implicit.code, "fixture_assets_not_allowed");
-    // An anthropic vendor is refused before any asset is consulted.
-    pi_profile(&mut fx, "anthropic");
-    let anthropic = resolved(&fx, Some("pi"));
-    let error = preflight::check(&fx.ctx, AgentRole::Worker, &anthropic).unwrap_err();
+    // An unlisted vendor is refused before any asset is consulted.
+    pi_profile(&mut fx, "mistral");
+    let unlisted = resolved(&fx, Some("pi"));
+    let error = preflight::check(&fx.ctx, AgentRole::Worker, &unlisted).unwrap_err();
     assert!(
         format!("{error:#}")
-            .starts_with("vendor_refused: pi-native profile 'pi' uses vendor 'anthropic'"),
+            .starts_with("vendor_refused: pi-native profile 'pi' uses vendor 'mistral'"),
         "{error:#}"
+    );
+    // An allowlisted vendor the installed host does not declare is refused with its own code,
+    // and passes once compat.json lists it (or any listed provider alongside the default).
+    pi_profile(&mut fx, "anthropic");
+    let anthropic = resolved(&fx, Some("pi"));
+    let refused = |fx: &Fx| {
+        preflight::check(&fx.ctx, AgentRole::Worker, &anthropic)
+            .err()
+            .map(refusal)
+            .unwrap_or_default()
+    };
+    assert!(
+        refused(&fx).starts_with("provider_unsupported_by_host: vendor 'anthropic'"),
+        "{}",
+        refused(&fx)
+    );
+    write(
+        &dir,
+        "compat.json",
+        r#"{"verdict":"GO","providers":["openai"]}"#,
+    );
+    assert!(refused(&fx).starts_with("provider_unsupported_by_host"));
+    // Setup reports only what the installed host declares, never the bare allowlist.
+    assert_eq!(preflight::supported_vendors(&fx.ctx), vec!["openai"]);
+    write(
+        &dir,
+        "compat.json",
+        r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
+    );
+    assert_eq!(refused(&fx), "");
+    assert_eq!(
+        preflight::supported_vendors(&fx.ctx),
+        vec!["openai", "anthropic"]
     );
 }
 
 #[test]
 fn dispatch_and_pm_open_refuse_before_any_worktree_or_pane() {
+    let _data_root = ts::private_data_root();
     // Given a pi-native profile with no installed assets, a Ready task in a real project, and a
     // terminal engine that does not exist (any pane or workspace call would fail differently):
     let mut fx = fx();
@@ -289,7 +325,7 @@ fn dispatch_and_pm_open_refuse_before_any_worktree_or_pane() {
     // missing assets and, before any asset is read, for a vendor outside the allowlist.
     for (vendor, code) in [
         ("openai", "assets_unavailable"),
-        ("anthropic", "vendor_refused"),
+        ("mistral", "vendor_refused"),
     ] {
         pi_profile(&mut fx, vendor);
         let error = refusal(crate::dispatch(&fx.ctx, &task.id, &opts).unwrap_err());
@@ -420,8 +456,9 @@ fn run_end_cleanup_removes_only_ended_runtime_and_keeps_sessions() {
     terminal.runs[0].outcome = Some(RunOutcome::Done);
     let removed = cleanup::run_end_in(&fx.ctx, &terminal, root.path()).unwrap();
     assert_eq!(removed, vec![dirs[0].0.clone(), dirs[2].0.clone()]);
-    assert!(dirs.iter().all(|(runtime, sessions)| !runtime.exists()
-        && sessions.join("session.jsonl").exists()));
+    assert!(dirs
+        .iter()
+        .all(|(runtime, sessions)| !runtime.exists() && sessions.join("session.jsonl").exists()));
 }
 
 #[test]
@@ -509,7 +546,7 @@ fn sync_hook_calls_once_per_open_container_and_terminalizes_closed_ones() {
 }
 
 #[test]
-fn every_unlanded_op_routes_to_its_owner_skeleton() {
+fn no_role_has_unlanded_ops_after_the_pm_role_lands() {
     let fx = fx();
     let id = ts::worker_task(&fx, "p1");
     let worker = ts::bind(
@@ -558,9 +595,8 @@ fn every_unlanded_op_routes_to_its_owner_skeleton() {
             routed += 1;
         }
     }
-    // wait, progress, checkpoint, evidence, artifact, gate, done; evidence, artifact, verdict;
-    // reply, comment, capture and eight reads.
-    assert_eq!(routed, 7 + 3 + 11);
+    // All three roles are installed; no advertised operation points at an unlanded child.
+    assert_eq!(routed, 0);
 }
 
 #[test]
@@ -569,64 +605,40 @@ fn every_agent_subcommand_routes_to_its_owner_module() {
     let fx = fx();
     let target = AgentTarget::Pm;
     let results = [
-        cli::launch(
-            Path::new("."),
-            &cli::LaunchArgs {
-                bootstrap: "b".into(),
-                assets: None,
-            },
+        (
+            AgentCommand::Cancel,
+            cli::cancel(
+                &fx.ctx,
+                &cli::CancelArgs {
+                    target: target.clone(),
+                    turn: None,
+                },
+            ),
         ),
-        cli::install(
-            Path::new("."),
-            &cli::InstallArgs {
-                from: None,
-                json: false,
-            },
-        ),
-        cli::login(Path::new(".")),
-        cli::doctor(&fx.ctx, false),
-        cli::state(
-            &fx.ctx,
-            &cli::StateArgs {
-                target: target.clone(),
-                json: false,
-            },
-        ),
-        cli::cancel(
-            &fx.ctx,
-            &cli::CancelArgs {
-                target: target.clone(),
-                turn: None,
-            },
-        ),
-        cli::resume(
-            &fx.ctx,
-            &cli::ResumeArgs {
-                target,
-                replace: false,
-            },
+        (
+            AgentCommand::Resume,
+            cli::resume(
+                &fx.ctx,
+                &cli::ResumeArgs {
+                    target,
+                    replace: false,
+                },
+            ),
         ),
     ];
-    let owners: Vec<(AgentCommand, &str)> = results
-        .into_iter()
-        .map(|result| {
-            let error = result.unwrap_err();
-            let unavailable = error.downcast_ref::<OpUnavailable>().unwrap();
-            (unavailable.command, unavailable.owner_child)
-        })
-        .collect();
-    assert_eq!(
-        owners,
-        vec![
-            (AgentCommand::Launch, "host-bridge"),
-            (AgentCommand::Install, "host-install"),
-            (AgentCommand::Login, "host-install"),
-            (AgentCommand::Doctor, "host-install"),
-            (AgentCommand::State, "host-install"),
-            (AgentCommand::Cancel, "recovery"),
-            (AgentCommand::Resume, "recovery"),
-        ]
-    );
+    // Every subcommand has landed: cancel and resume reach recovery, which refuses an unbound PM.
+    for (command, result) in results {
+        let error = result.unwrap_err();
+        assert!(
+            error.downcast_ref::<OpUnavailable>().is_none(),
+            "{command:?}"
+        );
+        assert_eq!(command.owner(), "recovery");
+        assert!(
+            error.to_string().contains("no Pi-native PM is bound"),
+            "{error}"
+        );
+    }
 }
 
 #[test]

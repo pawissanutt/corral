@@ -43,7 +43,8 @@ sources, Clippy, `cargo nextest run --workspace` and separate
 prints a header; the first failure reports its step and exits nonzero. All
 commands inherit null stdin. Gate identity exports are preserved, not unset
 around tests: test harnesses isolate their own subprocess environments (T-053).
-Run `python3 scripts/test_gate.py` for temporary-fixture regression checks.
+Run `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py` for
+temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
 private herdr server, and reports tests over 30 seconds without terminating them.
@@ -108,12 +109,62 @@ context file corral exports as `CORRAL_GATE_CONTEXT`. It runs `cargo fmt`, the
 800-SLOC ceiling and Clippy for the crates touched since the merge base (the
 whole workspace when `Cargo.toml`, `Cargo.lock`, `.cargo/` or a toolchain or
 lint configuration file changed). Nextest runs the declared tests, joined with
-`or`, or else the touched crates. Each expected failure that matches a selected
-test is subtracted as `(binary_id(=<id>) and test(=<name>))`, with `\`, `)` and
-`,` escaped; one that matches no test is logged and excludes nothing. When the
-expected failures cover every selected test, the run is skipped; a selection
-that matches no test at all still fails as an empty nextest run. Darwin
-checks, doctests, the work budget and the docs build are skipped.
+`or`, or else the tests of the touched modules, chosen by `scripts/gate_select.py`:
+
+- A changed library source file selects its module's unit tests (test names under
+  its module path, or a sibling `<module>_tests` module), the tests of every other
+  library file that holds tests and names the module (its own tests, not those of
+  its child module files), and every integration
+  test target whose sources name that module: as `crate::module`, through a
+  crate-root re-export, or after a glob import of the crate. Within a target,
+  only the test modules whose files name it are selected, or the whole target
+  when the naming file is its root or a fixture module that holds no tests of
+  its own. A module that
+  selects no test that way is exercised through the library modules that use
+  it, so their unit tests and the targets that name them are selected instead.
+  A data file the library reads with `include_str!` or `include_bytes!` counts
+  as the including module.
+- A changed file under `tests/` selects its test module in the targets whose
+  module trees include it (counting files shared through `#[path]`), or those
+  whole targets when it is their root or a fixture module. When the library
+  also includes that file through `#[path]`, it is selected as a library module
+  as well.
+- A crate root made only of `mod` and `use` declarations adds nothing when the
+  crate's other changed paths select tests.
+- Anything the mapping cannot decide selects the whole crate, and the log names
+  the path and the reason: any other crate-root change, a file outside every
+  module tree, another non-Rust file, a manifest, a binary-only crate (its tests
+  drive the binary), or a selection that matches no test. A workspace-wide input
+  still selects the whole workspace.
+
+The quick tier runs nextest's `quick` profile, which leaves out the slow group
+(see below); declared tests ignore it and run as declared. Before running, the
+log prints `Test selection: <kind>` (declared tests, module, module with a
+crate-wide fallback, crate-wide or workspace) and one line counting the tests in
+scope, selected, skipped by selection, slow tests skipped, expected failures
+excluded, and the number left to run; nextest's own summary then reports what ran.
+Each expected failure that matches a selected test is subtracted as
+`(binary_id(=<id>) and test(=<name>))`, with `\`, `)` and `,` escaped; one that
+matches no test that would run is logged and excludes nothing. When nothing
+selected remains to run, the run is skipped; a declared selection that matches
+no test at all still fails as an empty nextest run. Darwin checks, doctests,
+the work budget and the docs build are skipped.
+
+The slow group is the `default-filter` of `[profile.quick]` in
+`.config/nextest.toml`: tests whose 75th-percentile duration across recent gate
+logs is at least 40 s. They run only in the full tier, so every landing on main
+and every `plan verify` still runs them. To review membership, list the current
+tests and measure the gate logs:
+
+```text
+cargo nextest list --workspace --message-format json >/tmp/tests.json
+python3 scripts/slow-tests.py --list /tmp/tests.json <workspace>/.corral/state/gates/*.log
+```
+
+It prints `enter` for a current test at p75 of 40 s or more outside the group,
+`leave` for a member below 30 s or no longer seen, and `keep` otherwise. Edit
+the filter's `binary_id(=..) & test(=..)` terms to match, and remove a term
+when its test is renamed or deleted.
 
 A tiered worker's sequence after its last commit is:
 
@@ -362,7 +413,7 @@ corral plan accept T-010 --attempt A2
 `plan add-member` is owner-only, with the same entry rules as `plan member-gate`.
 The new member must be unstarted (Idea, Backlog or Ready with no runs), in the
 Plan's project, and not already in a Plan. The Plan must not be Done, Dropped or
-accepted. No existing member may be Running, Needs me or in Review, because
+accepted. No existing member may be Running, Blocked or in Review, because
 that run is bound to the current membership. A decomposed Plan's design gets
 the same member, so member-gate and scope amendments keep working. The
 addition logs one `plan_member_added` event. If a crash interrupts it,
@@ -373,3 +424,44 @@ covers the Plan is refused until the owner confirms it again. Every earlier
 attempt names `members` as stale. The member gates and runs like any other
 member, and the new attempt is the same full-tier verification with every
 member required. Neither tier is lowered.
+
+### Moving a held member to another Plan
+
+A member that is deliberately held, for example in Backlog until other work
+lands, keeps its Plan from verifying. The owner can move it to another tracker
+Plan in the same project, so the first Plan delivers without it:
+
+```bash
+corral plan move-member T-010 T-021 --to T-030
+corral plan verify T-010
+```
+
+`plan move-member` is owner-only, with the same entry rules as
+`plan add-member`. The member must be unstarted (Idea, Backlog or Ready with no
+runs), and it cannot be the source Plan's last member. Neither Plan may be Done,
+Dropped or accepted, and no member of either Plan may be Running, Blocked or in
+Review. The task keeps its ID, holds, dependencies and criteria, and the owner's
+member gate for it moves to the target Plan. A decomposed Plan's design follows
+its tracker.
+
+Members of a designed integration Plan take their gates from its decomposition
+publication, which never bound a moved member. Moving a member without an owner
+member gate into such a Plan is refused before anything is written; pass the
+gate the target records for it instead:
+
+```bash
+corral plan move-member T-010 T-021 --to T-030 --gate-file gate.yaml --reason "held until T-025 lands"
+```
+
+The gate file has the same shape as for `plan member-gate`, and its tier must be
+defined for the project. A gate file replaces a carried record as its next
+revision, keeping the earlier one in its history. Main-delivery targets refuse a
+gate file, because their members have no member gates. The move logs one
+`plan_member_moved` event on the source Plan, and rerunning the same command
+finishes a move a crash interrupted.
+
+The move advances both Plans' `membership_revision`, which is part of their
+operating contracts. Confirmed grants that cover either Plan need confirming
+again, and every earlier attempt of either Plan names `spec_digest` as stale,
+even when the source's member list is the same as when that attempt ran.
+`plan progress` and `plan verify` use the new membership right away.

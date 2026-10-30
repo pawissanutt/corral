@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::backend::HeadQuery;
 use corral_core::{AutoStage, Run, RunOutcome, Status, Task, TaskHead};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
-use crate::{Ctx, DispatchOpts, DispatchOutcome, ProcessControl, SystemProcesses, omo};
+use crate::{Ctx, ProcessControl, SystemProcesses, omo};
 
 /// One status transition made by sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +45,22 @@ pub fn sync(ctx: &Ctx) -> Result<Vec<Change>> {
     sync_at(ctx, corral_core::clock::now())
 }
 
+/// Sync with the final pass-owned attention projection, without a second classification.
+/// None means no owning pass obtained the attention reconciliation lease.
+pub fn sync_with_attention(
+    ctx: &Ctx,
+) -> Result<(Vec<Change>, Option<crate::attention::AttentionBoard>)> {
+    let mut attention = None;
+    let changes = sync_passes(
+        ctx,
+        corral_core::clock::now(),
+        &SystemProcesses,
+        None,
+        Some(&mut attention),
+    )?;
+    Ok((changes, attention))
+}
+
 /// A plugin hook must belong to both the invoking server and the selected client.
 /// Config or CORRAL_HERDR_SESSION may retarget a client, but cannot transfer an event.
 pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
@@ -62,6 +78,7 @@ pub fn sync_hook(ctx: &Ctx) -> Result<Vec<Change>> {
             corral_core::clock::now(),
             &SystemProcesses,
             Some(&source),
+            None,
         );
     }
     sync(ctx)
@@ -78,7 +95,7 @@ pub fn sync_at_with_processes(
     now: Timestamp,
     processes: &dyn ProcessControl,
 ) -> Result<Vec<Change>> {
-    sync_passes(ctx, now, processes, None)
+    sync_passes(ctx, now, processes, None, None)
 }
 
 fn sync_passes(
@@ -86,6 +103,7 @@ fn sync_passes(
     now: Timestamp,
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
+    mut attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
     if !crate::session_scope::owns_inventory(ctx)? {
         return Ok(Vec::new());
@@ -93,7 +111,7 @@ fn sync_passes(
     // Recovery and derivation preparation run before the measured passes.
     crate::settling::recover(ctx)?;
     let mut rebuild = false;
-    let changes = hot_passes(ctx, now, processes, source, &mut rebuild)?;
+    let changes = hot_passes(ctx, now, processes, source, &mut rebuild, attention)?;
     // Rebuildable state recovers outside the measured hot path (plan T-253 section 4).
     if rebuild {
         crate::content_refresh::refresh_search_index(ctx)?;
@@ -108,15 +126,16 @@ fn hot_passes(
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
     rebuild: &mut bool,
+    mut attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
     let _hot = corral_core::work::HotScope::enter();
     let mut changes = Vec::new();
     let mut attempted = std::collections::BTreeSet::new();
     loop {
-        // The change feed position, not a serialized board, tells whether anything committed.
+        // The change-feed position, never a serialization of board history.
         let before = ctx.store.view()?.seq();
-        let pass = sync_scoped(ctx, now, processes, source, rebuild)?;
-        let progressed = !pass.is_empty();
+        let pass = sync_scoped(ctx, now, processes, source, rebuild, attention.as_deref_mut())?;
+        let progressed = pass.iter().any(|change| change.to != Status::NeedsMe);
         changes.extend(pass);
         let after = ctx.store.view()?.seq();
         // A concurrent owner's write is not this pass's progress. In
@@ -166,6 +185,7 @@ fn sync_scoped(
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
     rebuild: &mut bool,
+    attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
     // The per-pass clone reads the binding once for every guard of this pass; nothing is
     // cached on the caller's long-lived ctx. Inventory re-reads under its lease.
@@ -202,12 +222,30 @@ fn sync_scoped(
             crate::obligations_sync::reconcile_head(ctx, &head, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
+        reconcile_attention(ctx, now, None, attention)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
         *rebuild |= !crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp)?;
         return Ok(changes);
     }
+    // Wait for artifact storage before taking the reconciliation lease every finishing launch
+    // needs: a long search then delays this pass, never the launches (T-505).
+    let storage = crate::artifact_storage::storage_lock(ctx)?;
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
+        // Inventory contention/UNKNOWN must stop pane decisions and new launches,
+        // not authenticated completion receipts. Use a receipt-only ownership
+        // lease here; the healthy path already owns one through inventory.
+        if let Some(_ownership) = ctx.store.try_begin_session_pass()? {
+            let tasks = ctx.store.list()?;
+            let source_owned = source
+                .map(|source| crate::session_scope::owns_tasks(source, &ctx.store, &tasks))
+                .transpose()?
+                .unwrap_or(true);
+            if source_owned && crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
+                crate::gate::collect_finished(ctx, now)?;
+            }
+        }
+        reconcile_attention(ctx, now, None, attention)?;
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
@@ -220,7 +258,6 @@ fn sync_scoped(
     {
         return Ok(changes);
     }
-    crate::hooks::reconcile_post_land(ctx)?;
     crate::gate::collect_finished(ctx, now)?;
     crate::scratch_reclaim::reclaim_scratch_pass(ctx, now)?;
     crate::storage_gc::lifecycle_pass(ctx, now)?;
@@ -312,22 +349,43 @@ fn sync_scoped(
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
+    drop(storage);
+    // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
+    crate::hooks::reconcile_post_land(ctx)?;
+    crate::agent::gate_queue::advance_tasks(ctx, &tasks)?;
     crate::plan_pilot::advance_all(ctx, now)?;
     changes.extend(crate::availability::advance_all(ctx, now)?);
     changes.extend(crate::autopilot::advance_all(ctx, now)?);
     crate::movement::reconcile(ctx, now, true)?;
     changes.extend(crate::dashboard::advance(ctx, now)?);
-    changes.extend(start_queued(ctx, now)?);
+    changes.extend(crate::parked::reacquire_woken(ctx, &tasks)?);
+    changes.extend(crate::queue_drain::start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
+    let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
+    reconcile_attention(ctx, now, pm_live, attention)?;
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     *rebuild |= !crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp)?;
     Ok(changes)
 }
 
-/// The open board's heads on one view: every task a pass reconciles.
+/// The open board's heads on one view.
 fn open_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
     ctx.store.heads(&HeadQuery::Open { project: None })
+}
+
+fn reconcile_attention(
+    ctx: &Ctx,
+    now: Timestamp,
+    pm_live: Option<bool>,
+    output: Option<&mut Option<crate::attention::AttentionBoard>>,
+) -> Result<()> {
+    if let Some(output) = output {
+        *output = crate::attention::reconcile_projected(ctx, now, pm_live)?;
+        Ok(())
+    } else {
+        crate::attention::reconcile(ctx, now, pm_live)
+    }
 }
 
 fn reconcile(
@@ -405,7 +463,11 @@ fn reconcile(
     let stuck_after = SignedDuration::from_secs(
         i64::try_from(ctx.store.config.sync.stuck_after_secs).unwrap_or(i64::MAX),
     );
-    let stuck = if herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after) {
+    // A parked worker is deliberately idle, not blocked by its foreground launcher.
+    // Do not suppress a slot_wait alone: expired/withdrawn waits must expose stuck work again.
+    let stuck = if run.parked_on(&task.id).is_empty()
+        && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
+    {
         match ctx
             .herdr
             .pane_process_info(&pane_id)
@@ -466,13 +528,24 @@ fn reconcile(
                 _ => (task.status, ""),
             }
         };
+    // A conversation reopened for changes can answer with its old "complete" state and idle,
+    // whether or not an earlier sync happened to sample it working; once startup is over, that
+    // idle turn is a report gap at the first idle sync, not after `idle_after_secs`.
+    let startup_grace = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
+    );
+    let silent_round = run
+        .changes_round
+        .as_ref()
+        .is_some_and(|round| now.duration_since(round.at) >= startup_grace);
     // A healthy pi-native binding classifies its turns causally; idleness is not a report gap.
     let (idle_since, idle_no_report) =
         if to != Status::Running || working || waiting || agent_healthy {
             (None, false)
-        } else if looks_idle && seen_working {
+        } else if looks_idle && (seen_working || silent_round) {
             let since = run.idle_since.unwrap_or(now);
-            let flagged = run.idle_no_report || now.duration_since(since) >= idle_after;
+            let flagged =
+                run.idle_no_report || silent_round || now.duration_since(since) >= idle_after;
             (Some(since), flagged)
         } else {
             (run.idle_since, run.idle_no_report)
@@ -499,20 +572,6 @@ fn reconcile(
     } else {
         Some(read_excerpt(ctx, &pane_id))
     };
-    if let Some(text) = &excerpt {
-        let last = text.lines().last().unwrap_or(note);
-        if let Err(err) = ctx
-            .herdr
-            .notify(&format!("▲ {} needs you", task.id), last, true)
-        {
-            crate::messages::report(
-                Some(&task.id),
-                "notification",
-                format!("notification for {} failed: {err:#}", task.id),
-            );
-        }
-    }
-
     // While still waiting, keep the excerpt current: an agent may print its question just after
     // herdr flags it blocked, so the snapshot taken on entry can miss it.
     let refreshed = if to == Status::NeedsMe
@@ -550,6 +609,7 @@ fn reconcile(
             .unwrap_or_else(|| read_excerpt(ctx, &pane_id));
         format!("The agent exited to its shell before reporting.\n{capture}")
     });
+    let mut notices = Vec::new();
     // Everything above was decided from the snapshot `sync` listed; herdr calls since then leave time
     // for a CLI writer (`corral done`, move, retry, ...). Apply only if the task is still in the state
     // we reconciled: same status, same run, run still open. Otherwise skip; the next tick re-reads.
@@ -627,23 +687,76 @@ fn reconcile(
                 json!({ "from": from.as_str(), "agent_state": state, "note": note }),
             )?;
         }
+        if entering_needs_me {
+            notices.push(crate::owner_notice::record_entry_head(
+                ctx,
+                t,
+                "needs_me_entry",
+                now,
+                Vec::new(),
+            )?);
+        }
+        if newly_stuck && let Some(process) = &stuck {
+            let source = format!("{run_id}:{}:{}", process.pid, process.started);
+            let claim = crate::owner_notice::prepare(
+                ctx,
+                t,
+                "stuck",
+                &source,
+                now,
+                vec![corral_core::NoticeCoverage::Exact {
+                    condition_key: format!("{}/stuck_process/{source}", t.id),
+                }],
+            )?;
+            let pending = match notices.first() {
+                Some(first) => first.sibling(claim.batch_id.clone()),
+                None => crate::owner_notice::reserve_task(ctx, &t.id, claim.batch_id.clone())?,
+            };
+            notices.push(pending);
+            t.attention.push_notice(claim)?;
+        }
         Ok(true)
     })?;
-    if written.is_none() {
+    let Some(written) = written else {
         return Ok(None);
+    };
+    for batch in notices {
+        let (title, body) = if written
+            .attention
+            .notice_outbox
+            .iter()
+            .any(|claim| claim.batch_id == batch.batch_id && claim.producer == "stuck")
+        {
+            let process = stuck.as_ref().context("stuck notice has no process")?;
+            (
+                format!("{} stuck", task.id),
+                format!("stuck: {}", process.argv.join(" ")),
+            )
+        } else {
+            (
+                format!("▲ {} blocked", task.id),
+                excerpt
+                    .as_deref()
+                    .unwrap_or(note)
+                    .lines()
+                    .last()
+                    .unwrap_or(note)
+                    .to_owned(),
+            )
+        };
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&written, batch)?,
+            &title,
+            &body,
+            true,
+        )?;
     }
     if let Some(reason) = &exit_reason {
         crate::launch_exit::record(ctx, &task.id, &run_id, "Agent launch failure", reason)?;
     }
     if newly_stuck && let Some(process) = &stuck {
         let note = format!("stuck: {}", process.argv.join(" "));
-        if let Err(err) = ctx.herdr.notify(&format!("{} stuck", task.id), &note, true) {
-            crate::messages::report(
-                Some(&task.id),
-                "notification",
-                format!("stuck notification for {} failed: {err:#}", task.id),
-            );
-        }
         return Ok(Some(Change {
             task: task.id.clone(),
             from,
@@ -683,54 +796,6 @@ fn read_excerpt(ctx: &Ctx, pane_id: &str) -> String {
         }
         Err(err) => format!("(could not read agent pane: {err:#})"),
     }
-}
-
-fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
-    let mut fresh = ctx.clone();
-    fresh.store.reload_config_if_changed()?;
-    let ctx = &fresh;
-    // Only open tasks can be queued or carry a launch claim.
-    let mut queued: Vec<Task> = Vec::new();
-    for head in open_heads(ctx)? {
-        if !head.tracker
-            && (head.launch.is_some() || crate::queue::authorized_ready(&ctx.store, &head))
-        {
-            queued.push(head.to_shell_task()?);
-        }
-    }
-    crate::queue::sort_candidates(&mut queued);
-    let mut changes = Vec::new();
-    for (index, task) in queued.into_iter().enumerate() {
-        let result = (|| {
-            if !task.queued && task.launch.is_none() {
-                crate::queue::enqueue_ready(ctx, &task.id, &DispatchOpts::default())?;
-            }
-            crate::dispatch::dispatch_queued(ctx, &task.id, index + 1, now)
-        })();
-        match result {
-            Ok(DispatchOutcome::Started { run_id, .. }) => changes.push(Change {
-                task: task.id.clone(),
-                from: task.status,
-                to: Status::Running,
-                note: format!("dispatched queued task as {run_id}"),
-                stage: None,
-            }),
-            Ok(DispatchOutcome::Queued { .. }) => {}
-            Err(err) => {
-                crate::messages::report(
-                    Some(&task.id),
-                    "dispatch",
-                    format!("dispatching queued {} failed: {err:#}", task.id),
-                );
-                ctx.store.log_event(
-                    Some(&task.id),
-                    "dispatch_failed",
-                    json!({ "error": format!("{err:#}") }),
-                )?;
-            }
-        }
-    }
-    Ok(changes)
 }
 
 #[cfg(test)]

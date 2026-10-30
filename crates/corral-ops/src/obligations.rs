@@ -84,7 +84,9 @@ fn wait_inner(
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
         }
+        let own = t.id.clone();
         let run = live_run(t, &request.run)?;
+        let parked = run.parked_on(&own);
         if let Some(old) = run
             .obligations
             .waits
@@ -127,6 +129,7 @@ fn wait_inner(
             },
             receipt: None,
         });
+        run.obligations.settle_parking(&parked, &own, now);
         if let Some(origin) = origin {
             let commit = effects::Commit {
                 result: json!({
@@ -174,7 +177,9 @@ pub fn register_decision(
     );
     ensure!(!request.owner.trim().is_empty(), "decision owner is empty");
     let written = ctx.store.try_update(id, |t| {
+        let own = t.id.clone();
         let run = live_run(t, &request.run)?;
+        let parked = run.parked_on(&own);
         if let Some(old) = run
             .obligations
             .decisions
@@ -199,6 +204,7 @@ pub fn register_decision(
             },
             receipt: None,
         });
+        run.obligations.settle_parking(&parked, &own, now);
         run.blocked_excerpt = Some(format!(
             "{}\nAction: {}",
             request.question, request.requested_action
@@ -233,7 +239,9 @@ pub fn resume_run(
 ) -> Result<Task> {
     identity(receipt.version, &receipt.id)?;
     let written = ctx.store.try_update(id, |t| {
+        let own = t.id.clone();
         let run = live_run(t, &receipt.run)?;
+        let parked = run.parked_on(&own);
         let existing = run.obligations.waits.iter().filter_map(|w| w.receipt.as_ref())
             .chain(run.obligations.decisions.iter().filter_map(|d| d.receipt.as_ref()))
             .find(|r| r.id == receipt.id).cloned();
@@ -262,6 +270,7 @@ pub fn resume_run(
         ensure!(receipt.observed_at >= registered && receipt.observed_at <= now, "receipt observation is outside this registration's lifetime");
         *observation = receipt_observation(&receipt, now);
         *slot = Some(receipt.clone());
+        run.obligations.settle_parking(&parked, &own, now);
         if let Some(pending) = run.obligations.pending_decision() {
             run.blocked_excerpt = Some(format!("{}\nAction: {}", pending.request.question, pending.request.requested_action));
             t.status = Status::NeedsMe;
@@ -280,6 +289,7 @@ pub fn resume_run(
             json!({"run":receipt.run,"receipt":receipt.id,"outcome":receipt.outcome,"delivery":receipt.delivery,
                 "decision":match target { ResumeTarget::Decision(decision) => Some(decision), ResumeTarget::Wait(_) => None }}),
         )?;
+        crate::parked::reacquire(ctx, &task.id)?;
     }
     ctx.store.get(id)
 }
@@ -323,16 +333,49 @@ pub(crate) fn answer_reply_with(ctx: &Ctx, id: &str, receipt: &ResumeReceipt) ->
 pub(crate) use corral_core::receipt_observation;
 
 pub(crate) fn transition(ctx: &Ctx, id: &str, kind: &str, detail: serde_json::Value) -> Result<()> {
+    transition_with_notice(ctx, id, kind, detail, None)
+}
+
+pub(crate) fn transition_with_notice(
+    ctx: &Ctx,
+    id: &str,
+    kind: &str,
+    detail: serde_json::Value,
+    pending: Option<crate::owner_notice::PendingNotice>,
+) -> Result<()> {
     ctx.store.log_event(Some(id), kind, detail.clone())?;
-    if let Err(err) = ctx
-        .herdr
-        .notify(&format!("{id} {kind}"), &detail.to_string(), true)
-    {
-        crate::report_message(
-            Some(id),
-            "obligations",
-            format!("obligation notification for {id} failed: {err:#}"),
-        );
+    let committed =
+        if let Some(pending) = pending {
+            Some(crate::owner_notice::newly_committed(
+                &ctx.store.get(id)?,
+                pending,
+            )?)
+        } else {
+            let source = crate::verification::digest(&serde_json::to_vec(&(kind, &detail))?);
+            crate::owner_notice::commit(ctx, id, |_, task| {
+                if task.attention.notice_outbox.iter().any(|claim| {
+                    claim.producer == "obligation_transition" && claim.source == source
+                }) {
+                    return Ok(None);
+                }
+                Ok(Some(crate::owner_notice::prepare(
+                    ctx,
+                    task,
+                    "obligation_transition",
+                    &source,
+                    Timestamp::now(),
+                    Vec::new(),
+                )?))
+            })?
+        };
+    if let Some(committed) = committed {
+        crate::owner_notice::notify(
+            ctx,
+            committed,
+            &format!("{id} {kind}"),
+            &detail.to_string(),
+            true,
+        )?;
     }
     Ok(())
 }

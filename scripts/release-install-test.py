@@ -55,6 +55,7 @@ def verify(dist: Path, target: str) -> None:
                     and key.upper() != "PSMODULEPATH"
                 }
                 environment["HOME"] = str(root / "home")
+                environment["XDG_DATA_HOME"] = str(root / "home" / ".local" / "share")
                 environment["LOCALAPPDATA"] = str(root / "localappdata")
                 environment["CORRAL_BASE_URL"] = f"http://127.0.0.1:{server.server_port}/releases"
                 tools = root / "tools"
@@ -78,6 +79,7 @@ def verify(dist: Path, target: str) -> None:
                     command = [shell, str(repo / "install.sh")]
                 assert shutil.which("cargo", path=environment["PATH"]) is None
                 assert shutil.which("rustc", path=environment["PATH"]) is None
+                assert shutil.which("bun", path=environment["PATH"]) is None
 
                 def install(case: str, success: bool) -> None:
                     """Run the public installer with closed stdin and record the outcome."""
@@ -100,6 +102,20 @@ def verify(dist: Path, target: str) -> None:
                         capture_output=True, text=True, timeout=30, check=True,
                     )
                     assert result.stdout.strip() == f"corral {version}", result.stdout
+                    if windows:
+                        return
+                    # The compiled Pi-native host installed beside corral and registered by
+                    # `corral agent install`, with no Bun on PATH.
+                    host = installed.with_name("corral-pi-host")
+                    probe = subprocess.run(
+                        [str(host), "--version"], env=environment, stdin=subprocess.DEVNULL,
+                        capture_output=True, text=True, timeout=60, check=True,
+                    )
+                    assert probe.stdout.startswith("corral-pi-host pi "), probe.stdout
+                    data = Path(environment["XDG_DATA_HOME"]) / "corral" / "pi-native"
+                    record = json.loads((data / "installed.json").read_text())
+                    assert (Path(record["path"]) / "corral-pi-host").is_file(), record
+                    assert (Path(record["path"]) / "compat.json").is_file(), record
 
                 # Given a clean user home, latest installs into the documented default.
                 install("clean-latest-no-rust", True)

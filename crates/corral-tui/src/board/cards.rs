@@ -23,6 +23,7 @@ use crate::theme;
 pub(crate) struct CardExtra<'a> {
     pub head: Option<&'a corral_core::TaskHead>,
     pub obligations: Option<&'a corral_core::RunObligations>,
+    pub attention: Option<&'a corral_core::attention::Assessment>,
     pub plan_progress: Option<&'a crate::plan::tracker::Progress>,
     pub route: Option<&'a crate::routes::CardRoute>,
     pub finish: Option<&'a Finish>,
@@ -43,7 +44,7 @@ fn ago(ts: Timestamp, now: Timestamp) -> String {
     corral_core::age_text(now.as_second() - ts.as_second())
 }
 
-pub(super) fn wrap2(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap2(text: &str, width: usize) -> Vec<String> {
     let mut first = String::new();
     let mut rest = text;
     for (i, word) in text.split(' ').enumerate() {
@@ -251,13 +252,16 @@ fn meta_lines(
             if let Some(r) = run {
                 spans.push(Span::styled(ago(r.started, now), dim));
                 if r.stuck.is_none() {
-                    if extra.head.map_or_else(
+                    let mut projected = r.clone();
+                    if let Some(open) = extra.obligations {
+                        projected.obligations = open.clone();
+                    }
+                    if let Some(label) = obligations::parked_label(&t.id, &projected) {
+                        spans.push(sep());
+                        spans.push(Span::styled(label, Style::new().fg(theme::BLUE)));
+                    } else if extra.head.map_or_else(
                         || obligations::waiting(r),
-                        |head| {
-                            head.current_run
-                                .as_ref()
-                                .is_some_and(|r| r.facts.pending_waits > 0)
-                        },
+                        |head| head.current_run.as_ref().is_some_and(|r| r.facts.pending_waits > 0),
                     ) {
                         spans.push(sep());
                         spans.push(Span::styled("⧗ waiting", Style::new().fg(theme::BLUE)));
@@ -458,9 +462,12 @@ pub(crate) fn card_lines(
     now: Timestamp,
     extra: CardExtra,
 ) -> Vec<Line<'static>> {
+    let blocked = extra
+        .attention
+        .and_then(|assessment| corral_core::attention::blocked(t, assessment));
     let bar = if selected {
         Span::styled("▌ ", Style::new().fg(theme::CYAN))
-    } else if t.status == Status::NeedsMe {
+    } else if blocked.is_some() || t.status == Status::NeedsMe {
         // Distinct from the selection bar so the focused card is never ambiguous.
         Span::styled("▲ ", Style::new().fg(theme::YELLOW))
     } else {
@@ -507,6 +514,25 @@ pub(crate) fn card_lines(
         None => &scan,
     };
     let card_cfg = &config.board.card;
+    let blocked_lines = || {
+        blocked
+            .into_iter()
+            .flat_map(|condition| crate::attention::blocked_lines(condition, width, now))
+            .map(|mut line| {
+                line.spans.insert(0, bar.clone());
+                line
+            })
+            .collect::<Vec<_>>()
+    };
+    let attention = extra
+        .attention
+        .filter(|_| blocked.is_none())
+        .and_then(|assessment| {
+            crate::attention::card_line(assessment, t, config, width, now).map(|mut line| {
+                line.spans.insert(0, bar.clone());
+                line
+            })
+        });
     if config.ui.compact_cards || card_cfg.density == Density::Compact {
         let plan = extra.head.map_or_else(
             || crate::plan::stage(t, Some(config)),
@@ -528,6 +554,7 @@ pub(crate) fn card_lines(
             route_warning,
         };
         let mut lines = vec![compact.line(bar.clone(), width, title_style)];
+        lines.extend(blocked_lines());
         if let Some(progress) = extra.plan_progress {
             for mut line in crate::plan::tracker::card_lines(progress, width) {
                 line.spans.insert(0, bar.clone());
@@ -538,6 +565,7 @@ pub(crate) fn card_lines(
             line.spans.insert(0, bar.clone());
             lines.push(line);
         }
+        lines.extend(attention);
         return lines;
     }
     let mut lines = vec![
@@ -547,6 +575,7 @@ pub(crate) fn card_lines(
             Span::styled(truncate(&t.title, width), title_style),
         ]),
     ];
+    lines.extend(blocked_lines());
     for meta in meta_lines(t, done, config, width, now, extra) {
         let mut spans = vec![bar.clone()];
         let mut used = 0;
@@ -588,5 +617,6 @@ pub(crate) fn card_lines(
             Span::styled(bar_text, Style::new().fg(theme::CYAN)),
         ]));
     }
+    lines.extend(attention);
     lines
 }

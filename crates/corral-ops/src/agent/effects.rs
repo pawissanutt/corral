@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use super::admission;
 use super::call::{CallResponse, RejectCode, Rejection};
 use crate::Ctx;
-use crate::review_budget::GateRequest;
 pub use crate::review_budget::{DueWake, due_gate_wakes, fire_wake, own_attempt};
 
 /// Test-only crash and race points, a no-op in shipped builds. In-process tests install the
@@ -44,9 +43,9 @@ pub fn process_start(pid: u32) -> Result<Option<String>> {
     #[cfg(target_os = "linux")]
     {
         let path = format!("/proc/{pid}/stat");
-        let stat = match std::fs::read_to_string(&path) {
+        let stat = match read_stat(&path) {
             Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if stat_gone(&error) => return Ok(None),
             Err(error) => return Err(error).with_context(|| format!("reading {path}")),
         };
         // After the parenthesized command, state is field 3 and starttime field 22.
@@ -61,6 +60,30 @@ pub fn process_start(pid: u32) -> Result<Option<String>> {
     }
     #[cfg(not(target_os = "linux"))]
     Ok(crate::native_process::inspect(pid)?.map(|process| process.started))
+}
+
+#[cfg(target_os = "linux")]
+fn read_stat(path: &str) -> std::io::Result<String> {
+    #[cfg(test)]
+    if let Some(errno) = STAT_FAULT.with(std::cell::Cell::take) {
+        return Err(std::io::Error::from_raw_os_error(errno));
+    }
+    std::fs::read_to_string(path)
+}
+
+// Test-only: the errno the next `/proc/<pid>/stat` read on this thread fails with, standing in
+// for a process that exits mid-read.
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    pub(super) static STAT_FAULT: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
+}
+
+/// A `/proc/<pid>/stat` read that failed because the process is gone: absent, or exited
+/// (ESRCH) while the read was in flight.
+#[cfg(target_os = "linux")]
+fn stat_gone(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound
+        || error.raw_os_error() == Some(rustix::io::Errno::SRCH.raw_os_error())
 }
 
 /// This `corral agent call` process, recorded on a reservation.
@@ -198,8 +221,17 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
     match home {
         Home::Container(_) => admission::recheck_task(task, &origin.binding),
         Home::PmTask(_) => {
+            if let Some((_, stored)) = pm_task_receipt(store, origin)? {
+                return Err(Replayed(Box::new(stored)).into());
+            }
             let pm = pm_state::load(store)?
                 .ok_or_else(|| reject(RejectCode::ContainerNotFound, "no Pi-native PM is bound"))?;
+            if let Some(stored) = pm.state.receipt(id) {
+                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                if stored.state != ReceiptState::Reserved {
+                    return Err(Replayed(Box::new(stored.clone())).into());
+                }
+            }
             admission::recheck_pm(&pm, origin.binding.generation)?;
             if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
                 return Err(reject(
@@ -210,6 +242,25 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
             Ok(())
         }
     }
+}
+
+/// Task-held receipts share the PM namespace. Writers call under dispatch; authenticated
+/// lookup callers can also use this to replay before checking current target liveness.
+pub(crate) fn pm_task_receipt(
+    store: &Store,
+    origin: &RequestOrigin,
+) -> Result<Option<(String, RequestReceipt)>> {
+    for task in store.list_shared()?.iter() {
+        if let Some(stored) = task
+            .agent_pm_receipts
+            .iter()
+            .find(|r| r.request_id == origin.request_id)
+        {
+            admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+            return Ok(Some((task.id.clone(), stored.clone())));
+        }
+    }
+    Ok(None)
 }
 
 /// What a swept operation commits with its receipt. `owed` names post-commit effects:
@@ -565,7 +616,7 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     let (task_id, run_id) = worker(&container)?;
     failpoint("gate_before_reservation");
     let me = executor()?;
-    let retained = crate::review_budget::retained_attempt(ctx, &task_id, &run_id)?;
+    let retained = crate::review_budget::adoptable_attempt(ctx, &task_id, &run_id)?;
     let attempt = retained
         .clone()
         .unwrap_or_else(|| own_attempt(&origin.request_id));
@@ -576,6 +627,13 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
             admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
             found = Some(stored.clone());
             return Ok(false);
+        }
+        if let Some(queued) = state.receipts.iter().find(|r| {
+            r.op == "gate" && r.state == ReceiptState::Queued
+                && r.identity.generation == origin.identity.generation
+        }) {
+            return Err(reject(RejectCode::BadRequest,
+                format!("gate_queued: request {} already awaits admission; end your turn and wait for its result", queued.request_id)));
         }
         admission::recheck_task(task, &origin.binding)?;
         let result =
@@ -601,7 +659,7 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     })?;
     let Some(stored) = found else {
         failpoint("gate_reserved_before_authorization");
-        return execute(ctx, origin, me, false);
+        return super::gate_queue::execute(ctx, origin, me, false);
     };
     let (settled, idle) = match stored.state {
         ReceiptState::Reserved => match &stored.executor {
@@ -619,48 +677,16 @@ pub fn gate(ctx: &Ctx, origin: &RequestOrigin) -> Result<CallResponse> {
     };
     let seen = settled.executor.as_ref();
     if idle && settled.state == ReceiptState::Reserved && take_over(ctx, origin, seen, &me)? {
-        return execute(ctx, origin, me, true);
+        return super::gate_queue::execute(ctx, origin, me, true);
     }
     super::receipts::respond(ctx, &container, settled, true)
-}
-
-fn execute(
-    ctx: &Ctx,
-    origin: &RequestOrigin,
-    me: Executor,
-    replayed: bool,
-) -> Result<CallResponse> {
-    let (task_id, _) = worker(&origin.binding.container)?;
-    let request = GateRequest {
-        request_id: origin.request_id.clone(),
-        attempt: own_attempt(&origin.request_id),
-        binding: origin.binding.clone(),
-    };
-    let outcome = crate::gate::gate_start_request(ctx, &task_id, request);
-    let error = match &outcome {
-        Ok(_) => {
-            failpoint("gate_started_before_receipt");
-            None
-        }
-        Err(error) => {
-            failpoint("gate_refused_before_receipt");
-            Some(format!("{error:#}"))
-        }
-    };
-    let task = ctx.store.get(&task_id)?;
-    let current = agent::container_state(&task, &origin.binding.container)
-        .and_then(|s| s.receipt(&origin.request_id))
-        .cloned()
-        .context("gate reservation disappeared")?;
-    let settled = crate::review_budget::settle(ctx, &current, Some(&me), true, error)?;
-    failpoint("gate_receipt_before_ack");
-    super::receipts::respond(ctx, &origin.binding.container, settled, replayed)
 }
 
 /// Sync and resume: settles one task's gate reservations whose executor is verified gone and
 /// its uncertain gates, and completes owed effects in every receipt home the task holds: each
 /// worker run, each review child (closed and historical ones too) and its PM receipts.
 pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
+    super::ops::planning::reconcile(ctx, task_id)?;
     let task = ctx.store.get(task_id)?;
     let mut homes = Vec::new();
     for run in &task.runs {
@@ -687,12 +713,14 @@ pub fn reconcile_task(ctx: &Ctx, task_id: &str) -> Result<Vec<RequestReceipt>> {
     for home in homes {
         for receipt in receipts(&task, &home).to_vec() {
             let mut receipt = match (receipt.op.as_str(), receipt.state) {
-                ("gate", ReceiptState::Reserved) => match &receipt.executor {
-                    Some(running) if !executor_gone(running)? => receipt,
-                    seen => {
-                        crate::review_budget::settle(ctx, &receipt, seen.as_ref(), false, None)?
+                ("gate", ReceiptState::Reserved | ReceiptState::Queued) => {
+                    match &receipt.executor {
+                        Some(running) if !executor_gone(running)? => receipt,
+                        seen => {
+                            crate::review_budget::settle(ctx, &receipt, seen.as_ref(), false, None)?
+                        }
                     }
-                },
+                }
                 ("gate", ReceiptState::Uncertain) => {
                     crate::review_budget::settle(ctx, &receipt, None, false, None)?
                 }
@@ -721,6 +749,15 @@ pub fn pm_reserve(
         if let Some(stored) = pm.state.receipt(&origin.request_id) {
             admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
             let receipt = stored.clone();
+            return Ok((
+                Receipted {
+                    receipt,
+                    replayed: true,
+                },
+                false,
+            ));
+        }
+        if let Some((_, receipt)) = pm_task_receipt(store, origin)? {
             return Ok((
                 Receipted {
                     receipt,

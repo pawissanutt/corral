@@ -36,6 +36,47 @@ record is stored as `agent_host` (`Option<Box<AgentRunState>>`, absent by defaul
 appears on worker runs (`task.runs[*]`) and on review children (`task.runs[*].review_runs[*]`).
 Storage class: canonical. Shape: request-receipts.
 
+T-556 also stores the same optional, version-1 `agent_host` on `PlanRun` and
+`PlanReview`. Old planning records deserialize with no host state and omit the field
+when saved. Planning hosts use roles `planner` and `plan_reviewer`; their generic
+identity maps D1 to `run` for planners, or P1 to `run` and PR1 to `review` for plan
+reviewers, with no callback. These roles do not imply implementation capabilities.
+Their session directories and container keys are `<task>/plan-<D>/` and
+`<task>/plan-<P>/<PR>/`, distinct from implementation runs and reviews.
+
+T-573 adds the planning ops, whose receipts live in these containers. `plan_write`
+(`{content, offset?}`) is single-phase: under the task lock it rewrites the container's
+launcher-selected file from `offset` (the planner's `<output_dir>/plan.md`, or the plan
+reviewer's `.corral/state/reviews/<task>-<P>-<PR>-plan-notes.md`), bounded to 1 MiB, and
+commits `{path, offset, bytes, sha256}` with effect `plan_output`. `plan_submit` (planner,
+`{}`) and `plan_verdict` (plan reviewer, `{verdict, notes?}`) are two-phase. A `reserved`
+receipt naming the executor (effect `plan_submission`/`<D>` or `plan_verdict`/`<P>/<PR>`)
+commits before `plan_submit` or `plan_verdict` with the bound attempt runs. Each service's final
+transaction first rechecks the request binding (`recheck_task`), so a fenced generation or a
+replaced planner run is refused there. A verdict's inline notes are recorded on the review
+only; its reservation carries `notes_bytes` and `notes_sha256`, and the report file changes only
+through `plan_write`. The executor
+then settles it `committed` (`{outcome: submitted, plan, sha256}` or
+`{outcome: recorded, plan, review, verdict}`) or `abandoned` (`{outcome: refused, reason}`).
+Sync reconciles a reservation whose executor is verified gone from the plan record: a
+plan of the run after `plans_before`, or the attempt's verdict whose notes begin with the
+reserved notes digest. Normal sync visits such a planning-only task (`hooks::sync::wants`), and
+the question sweeps cover planning containers. Planning question keys are
+`<task>/plan-<D>/Q<n>` and `<task>/plan-<P>/<PR>/Q<n>`. A planning container's owner-waiting
+question records its Needs me hold in `AgentRunState.question_hold` (absent when empty), the
+planning counterpart of `Run.blocked_excerpt`. Only that hold is cleared when the question settles.
+`ask` and `withdraw` also accept both planning roles.
+
+Core lookup retains historical host state, but liveness requires the latest active
+planner (`holds_slot`, task not dropped), or the latest review of the latest plan
+without a verdict, against the current task spec revision and latest associated
+planning run. Only an already-open final review turn may settle after a verdict.
+Policy freshness and artifact-byte freshness require config/store context and remain
+the caller's responsibility; the core task-record predicate cannot establish them.
+`container_run[_mut]` remains implementation-only. `container_state[_mut]`,
+`container_host_mut` (including empty slots), and `container_pane` cover planning
+containers too.
+
 | Field | Type | Bound | Writer |
 |---|---|---|---|
 | `version` | u32 | 1 | request-receipts |
@@ -46,12 +87,38 @@ Storage class: canonical. Shape: request-receipts.
 | `turns` | AgentTurn[] | ≤ 512 (`TURNS_MAX`); the oldest ended turns are evicted first, open turns never | request-receipts (facts), worker-role and reviewer-role (`class`) |
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |
 | `reports` | AgentReport[] | ≤ 64 (`REPORTS_MAX`) | op-receipts |
+| `todo` | RunProgress? | PM-only canonical ledger; absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
+| `jobs` | JobRecord[] | worker only; ≤ 64 (`JOBS_MAX`), the oldest ended job evicted first, live jobs never | background-shell |
+
+`JobRecord` holds `id`, the owning `generation`, `command` (≤ 4 KiB), `state`
+(`prepared`, `running`, `exited`, `reaped`, `lost`), the process-group leader `pid` and its kernel
+`start_time`, timestamps, `exit_code`/`signal`, a reaper `detail`, `group_clear` (the whole
+process group is verified gone, set by the host's exit report or the reaper), `swept` (the reaper
+has dealt with the job, including leaving an unverifiable group alone) and ≤ 16 `monitors`. The
+recorded pid is the launcher's, which leads the group for the job's whole lifetime; ownership
+is anchored on that pid still having the recorded start time. Each
+`JobMonitor` names its run wait (`wait`), `on` (`exit` or `line`), the line `pattern` and the
+registering `request_id`. The monitor's wait is an ordinary `Run.obligations` wait with a
+`job:<id>` channel handle and a deadline. Its wake subscription commits in the same
+transaction, and a `-job` resume receipt settles it once. Output files under the generation
+runtime directory are caches; these records are the recovery evidence. A live job, or an exited one
+neither `group_clear` nor `swept`, of a fenced or superseded generation or of an ended run keeps the
+container in sync until it is reaped.
+
+Workers continue to use `Run.progress`; `agent_host.todo` is not a worker shadow copy.
+The PM ledger is stored in `AgentPm.state.todo` and read through `agent::pm_state`.
+Its `spec_revision` is `pm:<bound-project>`; changing the PM's project on a new binding
+starts a separate empty ledger. Task acceptance links are not permitted in PM progress.
+Both ledgers retain terminal states and drop reasons. Each top-level `todo` operation
+commits the new revision with its canonical receipt and owes a `progress_updated` event.
+An identical request returns the original receipt even after a fence; it never reapplies
+the command. No separate runtime file is needed to recover the ledger.
 
 AgentBinding: launcher-bound, never model-supplied.
 
 | Field | Type | Notes |
 |---|---|---|
-| `role` | `worker` \| `reviewer` \| `pm` | must equal `identity.role` |
+| `role` | `worker` \| `reviewer` \| `planner` \| `plan_reviewer` \| `pm` | must equal `identity.role` |
 | `store` | string | `paths::store_id` |
 | `project` | string | the task's project; for the PM, its one authorized scope |
 | `generation` | u32 | the current generation; 0 before the first |
@@ -71,6 +138,15 @@ AgentGeneration: one host process lifetime.
 | `fenced` | GenerationFence? | `{reason, at}`, permanent |
 | `nudged_at` | timestamp? | OD11's one automatic `turn_nudge` (worker-role) |
 | `event_seq` | u64 | last reconciled bridge event sequence (recovery) |
+| `todo` | bool | resolved worker/PM todo enablement for this generation; serde-default false for legacy records; still written beside `capabilities` |
+| `capabilities` | CapabilitySnapshot? | the effective per-role settings and digest resolved at open, never rewritten; absent on legacy records (`legacy_strict`) |
+| `capability_transition` | CapabilityTransition? | present when the snapshot's digest differs from the previous generation's: `from_generation`, `from_digest`, `from_preset`, `changes [{key, from, to}]` |
+
+`open_generation` resolves `[agent.capabilities]` against the shared catalog and the
+installed host's `compat.json` and records the snapshot; the launch message carries it and
+hello omits todo when disabled. Config edits affect the next explicit generation, not an
+active one's loadout. See [capabilities](pi-native-capabilities.md) for the catalog,
+digest, legacy label and older-host behavior.
 
 GenerationBound: `host_cap_sha256`, `ctl_cap_sha256` (64 hex each, and different from each
 other), `session_id` (≤ 128), `session_file` (absolute, under the container's sessions
@@ -91,7 +167,7 @@ question-lifecycle and pm-role (PM receipts).
 | `op` | string | one of the enumerated v1 ops |
 | `payload_sha256` | hex | SHA-256 of the canonical payload (see "Wire formats") |
 | `identity` | RequestIdentity | `{store, project, role, task?, run?, review?, callback?, session_id, generation, turn?}`; never auth |
-| `state` | `committed` \| `rejected` \| `reserved` \| `uncertain` \| `abandoned` | `reserved` only for two-phase ops |
+| `state` | `committed` \| `rejected` \| `reserved` \| `queued` \| `uncertain` \| `abandoned` | `reserved` only for two-phase ops; `queued` only for gate admission |
 | `result` | JSON | ≤ 8 KiB serialized (`RESULT_MAX_BYTES`) |
 | `executor` | `{pid, start_time}`? | reservations only |
 | `effect` | `{kind, ref}`? | the durable effect, e.g. `generation_bound`/`g1`, `turn`/`1/3`, a gate attempt |
@@ -105,14 +181,48 @@ receipt_lookup, whose own request is never stored. A PM container's receipts inc
 same op and payload digest returns the stored receipt. Reusing it with another op or payload
 is rejected `payload_mismatch` and logged as `agent_request_rejected`.
 
+A queued gate keeps its `pending_start` wake. Sync claims the receipt after releasing its
+pane-inventory lease, retries temporary admission without model turns, and uses the existing
+gate-result wake after submission. A permanent refusal after queueing wakes the worker with
+`not_started`; a fenced or closed run is abandoned without a wake. A claimed queued receipt
+records its executor; recovery checks attempt evidence before retrying, so a lost submission
+acknowledgement never starts a second gate. Admission gates the clean HEAD at launch time.
+Stores containing `queued` receipts require a binary that understands this state; do not
+open them with an older binary.
+
 ### ResumeClass and InterruptedCall
 
 `ResumeClass` is one of `result`, `rejected`, `prepared`, `in_progress`, `outcome_unknown`,
 `not_committed`, `not_executed` and `interrupted_no_effect`; only upstream read, grep, find
-and ls take `interrupted_no_effect`. `InterruptedCall` is
-`{tool_call_id, tool, request_id?, class, detail?}`. Both reach a new generation inside one
+and ls take `interrupted_no_effect`, and none of them does when a hook ran or may have
+run around it (below). `InterruptedCall` is
+`{tool_call_id, tool, request_id?, class, detail?}`. An unfinished hook is reported as one
+with `tool_call_id` = its invocation ID and `tool` = `hook:<phase>:<name>`. Both reach a new generation inside one
 `recovery_notice` inbox message and are never written into a Pi session file. Storage class:
 canonical as inbox message content. Shape: request-receipts. Writer: recovery.
+
+### `corral_hook` session entry (T-572)
+
+A Pi custom entry the worker host appends to its bound session file before launching a
+configured hook, then once it has started and once it has completed. Storage class:
+recovery-critical, in the container's session file (`paths::container_sessions_dir`), read
+by recovery with the same byte bounds as tool calls and never written by corral.
+
+| Field | Type | Bound / notes |
+|---|---|---|
+| `invocation` | string | `hk-<generation>-<seq>`, ≤ 128 |
+| `phase` | `pre_tool` \| `post_tool` \| `turn_end` | |
+| `hook` | string | the configured name, ≤ 64 |
+| `state` | `prepared` \| `started` \| `completed` | `prepared` is written before the process is spawned |
+| `tool`, `tool_call_id` | string? | pre/post hooks: the wrapped top-level call |
+| `turn` | u64? | the host turn |
+| `pid`, `exit_code`, `signal`, `timed_out`, `error` | | `started` / `completed` details |
+
+After the generation's binding marker, recovery keeps the records of calls still without a
+result and every invocation that never completed (at most 256, else scan limit `hooks`).
+A recorded hook, or a pre/post hook in the lost generation's `hooks` snapshot settings that
+wraps the tool, makes that call `outcome_unknown`; unfinished hooks are listed
+`outcome_unknown`. Nothing is replayed.
 
 ### AgentTurn, TurnOrigin, TurnClass
 
@@ -270,7 +380,10 @@ container.
 | `agent_request_rejected` | `request_id`, `op`, `code`, `reason`, `container`, `role`, `generation`, `key` | request-receipts |
 | `question_opened`, `question_answered`, `question_escalated`, `question_expired`, `question_cancelled`, `question_withdrawn`, `question_unattended` | question key and revision | question-lifecycle |
 | `agent_lost`, `agent_resumed`, `agent_call_reconciled` | container, generation, request ID | recovery |
+| `agent_session_reclassified` | `container`, `class` (`terminal_transcript`), `dir`, `sessions`, `closure` | recovery (`crates/corral-ops/src/agent/hooks/sync.rs`, `reclassify`) |
+| `delivery_fenced` | `envelope`, `endpoint`, `members` (each with `id` and `observed`) | recovery (`crates/corral-ops/src/agent/bridge/notice.rs`, `settle_unconfirmed`) |
 | `agent_wake_posted` | wake key | worker-role, pm-role |
+| `agent_job_reaped` | `run`, `job`, `state` (`reaped` or `lost`), `detail` | background-shell |
 
 ## Wire formats (not stored)
 

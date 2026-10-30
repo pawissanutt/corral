@@ -54,11 +54,11 @@ pub(super) fn rows(cfg: &Config) -> Vec<Row> {
         .help("Display slot usage in the header and Running column; limits still apply."),
         toggle(
             Preference::NotifyNeedsMe,
-            "Desktop: Needs me",
+            "Desktop: Blocked",
             "ui.notify_needs_me",
             ui.notify_needs_me,
         )
-        .help("Opt-in desktop alerts when a task enters Needs me; separate from herdr alerts."),
+        .help("Opt-in desktop alerts when an agent enters Blocked; separate from herdr alerts."),
         toggle(
             Preference::NotifyReview,
             "Desktop: Review",

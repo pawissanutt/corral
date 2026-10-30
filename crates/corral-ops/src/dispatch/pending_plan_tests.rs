@@ -93,6 +93,7 @@ fn planner(ctx: &Ctx, task: &Task) -> Task {
     ctx.store
         .update(&task.id, |t| {
             t.plan_runs.push(PlanRun {
+                agent_host: None,
                 execution: None,
                 route: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
@@ -125,6 +126,7 @@ fn planner(ctx: &Ctx, task: &Task) -> Task {
 
 fn set_review(task: &mut Task, verdict: Option<Verdict>) {
     task.plans.last_mut().unwrap().reviews.push(PlanReview {
+        agent_host: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,
         inbox: Default::default(),
         route: None,

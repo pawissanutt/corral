@@ -84,7 +84,11 @@ pub(crate) fn summary(workset: &PmWorkset) -> String {
 }
 
 pub(crate) fn readback(ctx: &Ctx) -> String {
-    match corral_ops::pm_workset(ctx) {
+    readback_result(corral_ops::pm_workset(ctx))
+}
+
+pub(super) fn readback_result(result: anyhow::Result<PmWorkset>) -> String {
+    match result {
         Ok(workset) => summary(&workset),
         Err(error) => format!("Assist | policy unavailable; no automatic authority: {error:#}"),
     }

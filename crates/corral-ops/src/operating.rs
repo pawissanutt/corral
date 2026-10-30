@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, ensure};
 use corral_core::{
     ActionAuthorization, OperatingActionIdentity, OperatingActionKind, OperatingOrigin, Store,
-    SubmissionOutcome, Task, TaskHeadMut, TaskRef,
+    SubmissionDisposition, SubmissionOutcome, Task, TaskHeadMut, TaskRef,
 };
 
 use crate::Ctx;
@@ -119,21 +119,30 @@ pub(crate) fn authorize(
     if existing {
         let previous = load(ctx, &action.task, &action.run, action.kind, &action.attempt)?;
         if previous.action.plan == action.plan && previous.action.round == action.round {
-            ensure!(
-                previous.action == action,
-                "prepared action identity changed"
-            );
+            if previous.action != action {
+                ensure!(
+                    rederivable(ctx, &previous, &action, origin)?,
+                    "prepared action identity changed"
+                );
+                // This was never submitted. Replace its authorization below, retaining the
+                // old preparation in history; never reuse its consent or verification result.
+            }
             if !is_automatic(&previous) {
                 ensure!(
                     origin == Origin::Owner,
                     "automatic caller cannot use owner approval"
                 );
-                return Ok(previous);
+                // A fresh owner request is fresh consent: it supersedes a refused or stale
+                // approval in place, and the old one stays in the authorization history.
+                if !ctx.store.operating_authorization_stale(&previous)? {
+                    return Ok(previous);
+                }
+            } else {
+                ensure!(
+                    origin == Origin::Automatic,
+                    "cannot convert automatic preparation to owner authority"
+                );
             }
-            ensure!(
-                origin == Origin::Automatic,
-                "cannot convert automatic preparation to owner authority"
-            );
         }
     }
     let provenance = match origin {
@@ -177,6 +186,26 @@ pub(crate) fn authorize(
         return Ok(winner);
     }
     Ok(authorization)
+}
+
+/// Only a definitely unsubmitted automatic action may be rebound to a moved base.
+/// All other candidate inputs (including policy, environment and source bytes) stay fenced.
+fn rederivable(
+    ctx: &Ctx,
+    previous: &ActionAuthorization,
+    action: &OperatingActionIdentity,
+    origin: Origin,
+) -> Result<bool> {
+    if origin != Origin::Automatic || !is_automatic(previous) {
+        return Ok(false);
+    }
+    if !previous.action.only_integration_base_changed(action) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        ctx.store.authorized_submission(&previous.id)?.disposition,
+        SubmissionDisposition::Prepared | SubmissionDisposition::AuthorizationRefused { .. }
+    ))
 }
 
 /// Persist intent before IPC and keep policy writers excluded through that one attempt.
@@ -256,6 +285,37 @@ pub(crate) fn require_origin<T: TaskRef + ?Sized>(
         Origin::Owner => Ok(()),
         Origin::Automatic => require(store, task, kind),
     }
+}
+
+/// Why an unsubmitted owner approval no longer matches the task contract or policy revision.
+/// Only an explicit owner request may renew it (T-204); automatic authority is never stale here.
+pub(crate) fn owner_consent_drift(
+    ctx: &Ctx,
+    authorization: &ActionAuthorization,
+) -> Result<Option<&'static str>> {
+    if is_automatic(authorization) {
+        return Ok(None);
+    }
+    match ctx
+        .store
+        .authorized_submission(&authorization.id)?
+        .disposition
+    {
+        SubmissionDisposition::Prepared | SubmissionDisposition::AuthorizationRefused { .. } => {
+            ctx.store.operating_consent_drift(authorization)
+        }
+        SubmissionDisposition::Submitting
+        | SubmissionDisposition::Submitted
+        | SubmissionDisposition::Uncertain { .. } => Ok(None),
+    }
+}
+
+/// The one stable Blocked reason a stale owner-queued launch shows instead of retrying (T-560).
+pub(crate) fn stale_owner_queue(task: &str, reason: &str) -> String {
+    format!(
+        "queued owner consent is stale ({reason}); re-authorize with `corral dispatch {task}` \
+         (d on the card)"
+    )
 }
 
 pub(crate) fn refused(error: &anyhow::Error) -> bool {

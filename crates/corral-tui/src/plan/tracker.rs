@@ -15,6 +15,28 @@ pub(crate) fn load(ctx: &corral_ops::Ctx, task: &corral_core::Task) -> Option<Pr
         .then(|| corral_ops::plan_progress(ctx, &task.id).map_err(|error| format!("{error:#}")))
 }
 
+/// [`load`] for every tracker of `tasks`, over one read of the board (T-547).
+pub(crate) fn load_all(
+    ctx: &corral_ops::Ctx,
+    tasks: &[corral_core::Task],
+) -> std::collections::HashMap<String, Progress> {
+    let mut board = None;
+    tasks
+        .iter()
+        .filter(|task| task.tracker && task.approved_scope.is_some())
+        .map(|task| {
+            let board = board.get_or_insert_with(|| {
+                corral_ops::plan_board(ctx).map_err(|error| format!("{error:#}"))
+            });
+            let progress = board.as_ref().map_err(Clone::clone).and_then(|board| {
+                corral_ops::plan_progress_in(ctx, board, &task.id)
+                    .map_err(|error| format!("{error:#}"))
+            });
+            (task.id.clone(), progress)
+        })
+        .collect()
+}
+
 pub(crate) fn counts(progress: &PlanProgress) -> String {
     let c = &progress.counts;
     format!(

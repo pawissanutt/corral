@@ -103,7 +103,7 @@ fn guide_popup(
     hit::buttons(f, hits, inner.x, inner.bottom() - 1, inner.right(), buttons);
 }
 
-/// Seven short cards: the columns, opening an agent, getting back, Needs me, approving, Autopilot, leaving.
+/// Seven short cards: the columns, opening an agent, getting back, Blocked, approving, Autopilot, leaving.
 pub(crate) struct TourView {
     pub(crate) step: usize,
     nav: NavKeys,
@@ -124,7 +124,7 @@ impl TourView {
                 "This is your board",
                 format!(
                     "Every task is a card. Cards move left to right as work happens: Backlog → Ready → Running → \
-                     Needs me → Review → Done. Press {} to add one.", ui.bound_key('n')
+                     Blocked → Review → Done. Press {} to add one.", ui.bound_key('n')
                 ),
             ),
             1 => (
@@ -143,10 +143,11 @@ impl TourView {
                 ),
             ),
             3 => (
-                "Needs me",
+                "Blocked",
                 format!(
-                    "When an agent asks a question, its card moves to Needs me. Press {} to answer right here, \
-                     or {} to answer in its pane.", ui.bound_key('r'), ui.bound_key('a')
+                    "Tasks that cannot continue appear in Blocked with a reason, unblocker and age. Press ⏎ \
+                     for full details. For an agent question, press {} to answer here, or {} to open its pane.",
+                    ui.bound_key('r'), ui.bound_key('a')
                 ),
             ),
             4 => (

@@ -56,6 +56,8 @@ pub struct TaskHeadMut {
     /// Set by [`Self::restart_current_run`] and [`Self::restart_last_plan_run`]: the only
     /// in-place change of a current container's start.
     pub(crate) restarted: Restarted,
+    /// Attention accounting does not advance task activity timestamps.
+    pub(crate) preserve_updated: bool,
 }
 
 /// Which current containers this mutation restarted the clock of.
@@ -265,6 +267,7 @@ impl TaskHeadMut {
             scope_history_changed: false,
             contract_settled: None,
             restarted: Restarted::default(),
+            preserve_updated: false,
         }
     }
 

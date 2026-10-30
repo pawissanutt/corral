@@ -15,6 +15,8 @@ mod rework;
 mod routing;
 #[path = "cli/routing_override.rs"]
 mod routing_override;
+#[path = "cli/sessions.rs"]
+mod sessions;
 #[path = "cli/skill.rs"]
 mod skill;
 #[path = "cli/sync_gate.rs"]
@@ -224,6 +226,7 @@ fn show_displays_gate_result() {
                 }),
                 idle_since: None,
                 idle_no_report: false,
+                changes_round: None,
                 herdr_idle_since: None,
                 stuck: None,
                 pending_reply: None,
@@ -237,6 +240,7 @@ fn show_displays_gate_result() {
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
                 agent_host: None,
+                session: None,
             });
             Ok(())
         })
@@ -254,6 +258,21 @@ fn show_displays_gate_result() {
     assert_eq!(json["runs"][0]["gate"]["result"], "fail");
     assert_eq!(json["runs"][0]["gate"]["sha"], "abcdef1234567890");
     assert_eq!(json["runs"][0]["route"]["index"], 2);
+    store
+        .update("T-001", |task| {
+            let gate = task.runs[0].gate.as_mut().unwrap();
+            gate.result = GateResult::Stale;
+            gate.failed_cmd =
+                Some("stale_result: changed integration_base; rebase and gate once".into());
+            Ok(())
+        })
+        .unwrap();
+    let out = ok(&ws.root, &["show", "T-001"]);
+    assert!(out.contains("gate: stale at abcdef1"), "{out}");
+    assert!(out.contains("integration_base") && out.contains("rebase and gate once"));
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["show", "T-001", "--json"])).unwrap();
+    assert_eq!(json["runs"][0]["gate"]["result"], "stale");
 }
 
 /// A T-001 in Review whose run has a real worktree; `review` is the run's starting review record.
@@ -336,6 +355,7 @@ fn review_task(
                 gate: None,
                 idle_since: None,
                 idle_no_report: false,
+                changes_round: None,
                 herdr_idle_since: None,
                 stuck: None,
                 pending_reply: None,
@@ -349,6 +369,7 @@ fn review_task(
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
                 agent_host: None,
+                session: None,
             });
             t.status = Status::Review;
             Ok(())

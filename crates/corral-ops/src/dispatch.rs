@@ -1,5 +1,8 @@
 mod admission;
+#[cfg(all(test, target_os = "linux"))]
+mod metered_tests;
 mod pane;
+mod worker_session;
 #[cfg(test)]
 mod pending_plan_tests;
 mod planner_reply;
@@ -20,6 +23,7 @@ mod setup;
 use setup::carried_changes;
 pub(crate) use setup::check_plan;
 pub(crate) use setup::install_skill;
+pub(crate) use setup::metered_notice;
 
 #[derive(Debug, Clone, Default)]
 pub struct DispatchOpts {
@@ -119,7 +123,9 @@ fn dispatch_with(
     opts: &DispatchOpts,
     admission: Admission,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
-    crate::tracker::check_action(&ctx.store.head(id)?, "dispatch tracker")?;
+    let requested = ctx.store.head(id)?;
+    corral_core::Park::require_unparked_ref(&requested)?;
+    crate::tracker::check_action(&requested, "dispatch tracker")?;
     let queued_only = matches!(admission, Admission::Queued { .. });
     ctx.store.check_runtime()?;
     let mut fresh = ctx.clone();
@@ -142,12 +148,14 @@ fn dispatch_with(
         .try_lock(&format!("launch-{}", task.id))?
         .context("dispatch is already in progress for this task")?;
     let head = Box::new(ctx.store.head(&task.id)?);
+    corral_core::Park::require_unparked_ref(&*head)?;
     crate::tracker::check_action(&*head, "dispatch tracker")?;
     if queued_only && !crate::queue::authorized_ready(&ctx.store, &*head) && head.launch.is_none() {
         bail!("{} is no longer authorized for queued dispatch", head.id);
     }
     if head.launch.is_some() {
-        return crate::launch::resume(ctx, &head, opts.force_resources);
+        let owner = matches!(admission, Admission::Manual);
+        return crate::launch::resume(ctx, &head, opts.force_resources, owner);
     }
     // Read-only checks below see head fields and current containers only.
     let task = head.shell_task()?;
@@ -305,6 +313,7 @@ fn dispatch_with(
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        changes_round: None,
         herdr_idle_since: None,
         stuck: None,
         pending_reply: None,
@@ -318,6 +327,7 @@ fn dispatch_with(
         gate_rules,
         promotion_origin: None,
         agent_host: None,
+        session: None,
     };
     run.completion.required_checks = Some(crate::gate_tier::required_checks(
         ctx,

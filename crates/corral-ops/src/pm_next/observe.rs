@@ -36,10 +36,16 @@ struct LoadCheck {
 }
 
 pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
+    let board = crate::attention::board(ctx, jiff::Timestamp::now())?;
+    with_assessments(ctx, &board.tasks)
+}
+
+pub(crate) fn with_assessments(
+    ctx: &Ctx,
+    assessments: &[crate::attention::TaskAssessment],
+) -> Result<Vec<PmObservation>> {
     let heads = super::heads::inputs(ctx)?;
-    let mut tasks = heads
-        .iter()
-        .map(|head| super::heads::observed_task(ctx, head))
+    let mut tasks = heads.iter().map(|head| super::heads::observed_task(ctx, head))
         .collect::<Result<Vec<_>>>()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let mut out = Vec::new();
@@ -94,7 +100,14 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
         }
         out.extend(super::questions::observations(task));
         if let Some(run) = task.current_run() {
-            match crate::pm_questions::pending(ctx, run) {
+            // A finished task's worker is gone, so a leftover native question is stale. An
+            // explicitly registered portable decision stays visible below.
+            let native = if task.status == Status::Done {
+                Ok(None)
+            } else {
+                crate::pm_questions::pending(ctx, run)
+            };
+            match native {
                 Ok(Some(question)) => {
                     out.push(PmObservation::Question {
                         task: task.id.clone(),
@@ -200,7 +213,9 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
             }
         }
     }
-    if crate::dispatch_policy::free_slots(ctx)? > 0 {
+    project_blocked(assessments, &mut out);
+    // Each candidate's own soft/hard cap is checked below; P0 and red-main Ideas may use headroom.
+    if crate::dispatch_policy::headroom_slots(ctx)? > 0 {
         let mut shortlist = Vec::new();
         for candidate in crate::promotion::promotion_shortlist(ctx)? {
             let mode = ctx
@@ -232,7 +247,46 @@ pub(crate) fn observations(ctx: &Ctx) -> Result<Vec<PmObservation>> {
     Ok(out)
 }
 
-fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Result<PmObservation> {
+fn project_blocked(
+    assessments: &[crate::attention::TaskAssessment],
+    observations: &mut Vec<PmObservation>,
+) {
+    for task in assessments {
+        let Some(condition) = &task.blocked else {
+            continue;
+        };
+        let mut observed = false;
+        for observation in observations.iter_mut() {
+            if observation.task() != Some(task.task.as_str()) {
+                continue;
+            }
+            observed = true;
+            if matches!(
+                observation,
+                PmObservation::ReviewInFlight { .. } | PmObservation::AutomaticWait { .. }
+            ) {
+                *observation = PmObservation::Blocked {
+                    task: task.task.clone(),
+                    condition: Box::new(condition.clone()),
+                };
+            }
+        }
+        if !observed {
+            observations.push(PmObservation::Blocked {
+                task: task.task.clone(),
+                condition: Box::new(condition.clone()),
+            });
+        }
+    }
+}
+
+fn review_observation(
+    ctx: &Ctx,
+    task: &Task,
+    run: &Run,
+    tasks: &[Task],
+) -> Result<PmObservation> {
+    let id = &task.id;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let checked = super::heads::review_task(&ctx.store.head(&task.id)?, task, &head)?;
     let task = &checked;
@@ -336,6 +390,9 @@ fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Resu
                         "Await the running gate's collected result; do not launch another attempt."
                             .into(),
                 });
+            }
+            Some(g) if g.result == GateResult::Stale => {
+                return Ok(PmObservation::GateNeeded { task: id.clone() });
             }
             Some(g) if g.result == GateResult::Fail => {
                 // Delegated bounded repair is routine work, not an owner question.

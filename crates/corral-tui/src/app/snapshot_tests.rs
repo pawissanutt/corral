@@ -48,21 +48,95 @@ fn worker_result_moves_card_when_store_changes_between_ticks() {
     terminal.draw(|frame| app.draw(frame)).unwrap();
     let text = buffer_text(terminal.backend().buffer());
     let heading = text.lines().find(|line| line.contains("Backlog")).unwrap();
-    let review_x =
-        unicode_width::UnicodeWidthStr::width(&heading[..heading.find("Review").unwrap()]);
+    let blocked_x =
+        unicode_width::UnicodeWidthStr::width(&heading[..heading.find("Blocked").unwrap()]);
     let card_x = (0..45)
         .flat_map(|y| (0..160).map(move |x| (x, y)))
         .find(|(x, y)| matches!(app.hits.at(*x, *y), Some(Hit::Card(id)) if id == "T-002"))
         .unwrap()
         .0;
     assert!(
-        (review_x - 2..review_x + 24).contains(&usize::from(card_x)),
+        (blocked_x - 2..blocked_x + 24).contains(&usize::from(card_x)),
         "{text}"
     );
-    assert_eq!(app.counts.review, 2);
+    assert_eq!((app.counts.review, app.counts.needs), (0, 3));
 }
 
 struct RefreshCounter(Rc<Cell<usize>>);
+
+#[test]
+fn header_counts_derived_membership_on_load_and_worker_refresh() {
+    // Given a native parked run and an ordinary worker with unchanged canonical statuses.
+    let fx = crate::board::blocked_tests::parked();
+    let mut app = fx.app(Mode::Board);
+    assert_eq!((app.counts.needs, app.counts.used), (3, 2));
+    fx.ctx
+        .store
+        .update("T-004", |task| {
+            task.current_run_mut().unwrap().obligations.waits.clear();
+            Ok(())
+        })
+        .unwrap();
+    let snapshot = crate::board::BoardSnapshot::load_with_attention(
+        &fx.ctx,
+        crate::attention::load(&fx.ctx, fx.now.get()),
+    )
+    .unwrap();
+
+    // When a worker refresh resumes the parked run.
+    app.on_worker(WorkerMsg::Synced(Ok((Vec::new(), Box::new(snapshot)))));
+
+    // Then the header follows visual membership and native resumption reoccupies its slot.
+    assert_eq!((app.counts.needs, app.counts.used), (2, 3));
+    assert_eq!(fx.ctx.store.get("T-004").unwrap().status, Status::Running);
+}
+
+#[test]
+fn worker_projection_reaches_visible_detail_without_reclassification() {
+    let mut fx = seeded();
+    fx.ctx.store.config.dispatch.paused = true;
+    fx.ctx.store.config.review.autopilot = Some(false);
+    fx.ctx.store.save_config().unwrap();
+    let mut app = fx.app(Mode::Board);
+    app.apply(Action::OpenDetail("T-005".into()));
+    assert_eq!(app.stack.len(), 2);
+    let update = WorkerMsg::synced_with_attention(&fx.ctx, &app.message_tx);
+    assert!(matches!(&update, WorkerMsg::Synced(Ok(_))));
+    let WorkerMsg::Synced(Ok((_, snapshot))) = &update else {
+        unreachable!()
+    };
+    assert_eq!(
+        snapshot.operating_header,
+        super::operating::readback(&fx.ctx)
+    );
+    let before = corral_core::work::Work::ALL.map(corral_core::work::count);
+    app.on_worker(update);
+    let after = corral_core::work::Work::ALL.map(corral_core::work::count);
+    let visits = corral_core::work::Work::ALL
+        .iter()
+        .position(|work| *work == corral_core::work::Work::AttentionVisit)
+        .unwrap();
+    assert_eq!(after[visits], before[visits]);
+    let mut terminal = Terminal::new(TestBackend::new(120, 45)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    let text = buffer_text(terminal.backend().buffer());
+    assert!(text.contains("Waiting"), "{text}");
+    assert!(!text.contains("attention unavailable"), "{text}");
+}
+
+#[test]
+fn worker_projection_keeps_decode_failure_unavailable_and_forwards_diagnostics() {
+    let fx = seeded();
+    let (messages, diagnostics) = std::sync::mpsc::channel();
+    std::fs::write(fx.ctx.store.dir().join("tasks/broken.md"), "not a task").unwrap();
+    let update = WorkerMsg::synced_with_attention(&fx.ctx, &messages);
+    let WorkerMsg::Synced(Ok((_, snapshot))) = update else {
+        panic!("expected a partial board snapshot with an explicit attention error");
+    };
+    assert!(snapshot.attention.is_err());
+    assert!(snapshot.operating_header.contains("policy unavailable"));
+    assert!(diagnostics.try_iter().any(|message| message.file.is_some()));
+}
 
 impl View for RefreshCounter {
     fn draw(&mut self, _: &mut Frame, _: Rect, _: &Ctx, _: &mut HitMap) {}
@@ -108,7 +182,7 @@ fn worker_snapshot_refreshes_operating_header_after_external_policy_change() {
         .unwrap();
     let mut fresh = fx.ctx.clone();
     fresh.reload_config().unwrap();
-    let snapshot = WorkerMsg::synced(&fresh, Ok(Vec::new()));
+    let snapshot = WorkerMsg::synced_with_attention(&fresh, &app.message_tx);
     app.on_worker(snapshot);
     // Then the live header matches the same fresh readback without manual reload.
     assert_ne!(app.operating_header, before);

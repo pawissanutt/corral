@@ -1,6 +1,6 @@
 //! The plain `corral list` rows, and `--columns`: the same fields the board cards can show.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 use corral_core::{CardField, PinRef, Task};
@@ -21,15 +21,30 @@ fn cell(name: &str, t: &Task, all: &[Task], pinned: &BTreeSet<String>, now: Time
 }
 
 pub fn print(ctx: &Ctx, tasks: &[Task], columns: &[String]) -> Result<()> {
+    let now = Timestamp::now();
+    let assessments: BTreeMap<_, _> = corral_ops::attention::board(ctx, now)?
+        .tasks
+        .into_iter()
+        .map(|row| (row.task, row.assessment))
+        .collect();
+    let blocker = |task: &Task| {
+        assessments
+            .get(&task.id)
+            .and_then(|assessment| corral_core::attention::blocked(task, assessment))
+    };
     if columns.is_empty() {
         for t in tasks {
+            let blocked = blocker(t);
             println!(
-                "{:<7} {:<9} {:<3} {:<14} {}",
+                "{:<7} {:<9} {:<3} {:<14} {}{}",
                 t.id,
-                t.status.label(),
+                blocked.map_or(t.status.label(), |_| "Blocked"),
                 t.priority,
                 t.project.as_deref().unwrap_or("-"),
-                t.title
+                t.title,
+                blocked
+                    .map(|condition| format!("  [{}]", blocked_text(condition)))
+                    .unwrap_or_default()
             );
         }
         return Ok(());
@@ -52,13 +67,16 @@ pub fn print(ctx: &Ctx, tasks: &[Task], columns: &[String]) -> Result<()> {
         .filter_map(|p| PinRef::parse(&p.target).ok())
         .map(|r| r.task().to_string())
         .collect();
-    let now = Timestamp::now();
     let rows: Vec<Vec<String>> = tasks
         .iter()
         .map(|t| {
             columns
                 .iter()
-                .map(|c| cell(c, t, &all, &pinned, now))
+                .map(|c| match (c.as_str(), blocker(t)) {
+                    ("status", Some(_)) => "Blocked".into(),
+                    ("blocked" | "needs_me", Some(condition)) => blocked_text(condition),
+                    _ => cell(c, t, &all, &pinned, now),
+                })
                 .collect()
         })
         .collect();
@@ -121,12 +139,22 @@ pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String
         .map(|r| r.task().to_owned())
         .collect();
     let now = Timestamp::now();
+    let assessments: BTreeMap<_, _> = if columns.iter().any(|c| matches!(c.as_str(), "status" | "blocked" | "needs_me")) {
+        corral_ops::attention::board(ctx, now)?.tasks.into_iter()
+            .map(|row| (row.task, row.assessment)).collect()
+    } else { BTreeMap::new() };
     let mut rows = Vec::new();
-    for head in heads {
+    for (head, task) in heads.iter().zip(&tasks) {
+        let blocked = assessments.get(&head.id)
+            .and_then(|assessment| corral_core::attention::blocked(task, assessment));
         rows.push(
             columns
                 .iter()
-                .map(|name| head_cell(name, head, &done, &pinned, now))
+                .map(|name| match (name.as_str(), blocked) {
+                    ("status", Some(_)) => "Blocked".into(),
+                    ("blocked" | "needs_me", Some(condition)) => blocked_text(condition),
+                    _ => head_cell(name, head, &done, &pinned, now),
+                })
                 .collect::<Vec<_>>(),
         );
     }
@@ -281,4 +309,19 @@ mod artifact_facts_list {
             );
         }
     }
+}
+
+fn blocked_text(condition: &corral_core::attention::Condition) -> String {
+    format!(
+        "{}; unblocks: {}; {}",
+        condition
+            .age_secs
+            .map_or_else(|| "age unknown".into(), corral_core::age_text),
+        condition.unblocker(),
+        condition
+            .reason
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
 }

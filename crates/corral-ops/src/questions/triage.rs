@@ -124,6 +124,7 @@ pub fn settle_needs_me(task: &mut Task, container: &ContainerRef) {
 /// escalation or an unattended mark), however it got there, so sync never leaves one
 /// unraised. Returns whether the task changed.
 pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
+    let mut notice = None;
     let held = ctx.store.try_update(task_id, |task| {
         let mut changed = false;
         for container in super::containers(task) {
@@ -132,27 +133,33 @@ pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
             }
             changed |= apply_needs_me(task, &container, &NeedsMe::Raise("question_attention"));
         }
+        if changed {
+            notice = Some(record_entry_notice(ctx, task, Timestamp::now())?);
+        }
         Ok(changed)
     })?;
     if held.is_some() {
-        crate::obligations::transition(
+        crate::obligations::transition_with_notice(
             ctx,
             task_id,
             "needs_me",
             json!({"reason": "question_attention"}),
+            notice,
         )?;
     }
     Ok(held.is_some())
 }
 
 /// Moves the task to Needs me for a question that waits on the owner, from Running for a
-/// worker run or from Review for a review child (whose binding stays live through
-/// `agent::question_hold`), and back once none of the container's questions waits on the owner,
-/// mirroring `register_decision`.
+/// worker run or planner, or from Review for a review child or plan reviewer (whose binding stays
+/// live through `agent::question_hold` or its open plan review), and back once none of the
+/// container's questions waits on the owner, mirroring `register_decision`. The hold lives in the
+/// run's `blocked_excerpt`, or a planning container's own `question_hold`, so only a hold that a
+/// question raised is ever cleared.
 fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe) -> bool {
-    let (run, resting) = match container {
-        ContainerRef::Worker { run, .. } => (run, Status::Running),
-        ContainerRef::Reviewer { run, .. } => (run, Status::Review),
+    let resting = match container {
+        ContainerRef::Worker { .. } | ContainerRef::Planner { .. } => Status::Running,
+        ContainerRef::Reviewer { .. } | ContainerRef::PlanReviewer { .. } => Status::Review,
         ContainerRef::Pm => return false,
     };
     let waiting = agent::container_state(task, container).and_then(|state| {
@@ -163,43 +170,79 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
             .map(excerpt)
     });
     let status = task.status;
-    let Some(record) = task.runs.iter_mut().find(|r| r.id == *run) else {
-        return false;
+    let (slot, decision_pending) = match container {
+        ContainerRef::Worker { run, .. } | ContainerRef::Reviewer { run, .. } => {
+            let Some(record) = task.runs.iter_mut().find(|r| r.id == *run) else {
+                return false;
+            };
+            let pending = record.obligations.pending_decision().is_some();
+            (&mut record.blocked_excerpt, pending)
+        }
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+            let Some(state) = agent::container_state_mut(task, container) else {
+                return false;
+            };
+            (&mut state.question_hold, false)
+        }
+        ContainerRef::Pm => return false,
     };
-    match needs_me {
+    let held = slot
+        .as_deref()
+        .is_some_and(|e| e.starts_with(EXCERPT_PREFIX));
+    let (raised, next) = match needs_me {
         NeedsMe::Raise(_) if status == resting && waiting.is_some() => {
-            record.blocked_excerpt = waiting;
-            task.status = Status::NeedsMe;
-            true
+            *slot = waiting;
+            (true, Some(Status::NeedsMe))
         }
-        NeedsMe::Raise(_) | NeedsMe::Settle
-            if status == Status::NeedsMe
-                && record
-                    .blocked_excerpt
-                    .as_deref()
-                    .is_some_and(|e| e.starts_with(EXCERPT_PREFIX)) =>
-        {
-            match waiting {
-                Some(next) => record.blocked_excerpt = Some(next),
-                None if record.obligations.pending_decision().is_none() => {
-                    record.blocked_excerpt = None;
-                    task.status = resting;
-                }
-                None => {}
+        NeedsMe::Raise(_) | NeedsMe::Settle if status == Status::NeedsMe && held => match waiting {
+            Some(next) => {
+                *slot = Some(next);
+                (false, None)
             }
-            false
-        }
-        _ => false,
+            None if !decision_pending => {
+                *slot = None;
+                (false, Some(resting))
+            }
+            None => (false, None),
+        },
+        _ => (false, None),
+    };
+    if let Some(next) = next {
+        task.status = next;
     }
+    raised
+}
+
+fn record_entry_notice(
+    ctx: &Ctx,
+    task: &mut Task,
+    now: Timestamp,
+) -> Result<crate::owner_notice::PendingNotice> {
+    let exact = super::containers(task)
+        .iter()
+        .filter_map(|container| agent::container_state(task, container))
+        .flat_map(|state| &state.questions)
+        .filter(|question| question.recorded_pending() && super::needs_owner(question))
+        .map(|question| {
+            format!(
+                "{}/{}/{}@{}",
+                task.id,
+                if question.unattended_at.is_some() {
+                    "question_unattended"
+                } else {
+                    "question_escalated"
+                },
+                question.key,
+                question.revision
+            )
+        })
+        .collect();
+    crate::owner_notice::record_entry(ctx, task, "question_needs_me", now, exact)
 }
 
 fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion) -> Result<()> {
-    if question.state == QuestionState::Withdrawn {
-        return Err(refuse(
-            RefusalKind::Withdrawn,
-            format!("{} was withdrawn", question.key),
-        ));
-    }
+    // Container closure governs every new action, even on an already withdrawn question.
+    // Committed PM receipt replays are handled by transact before reaching this check.
     if let Some(reason) = agent::container_closure(task, container) {
         return Err(refuse(
             RefusalKind::Closed,
@@ -208,6 +251,12 @@ fn refuse_closed(task: &Task, container: &ContainerRef, question: &AgentQuestion
                 question.key,
                 reason.as_str()
             ),
+        ));
+    }
+    if question.state == QuestionState::Withdrawn {
+        return Err(refuse(
+            RefusalKind::Withdrawn,
+            format!("{} was withdrawn", question.key),
         ));
     }
     if let Some(terminal) = &question.terminal {
@@ -303,6 +352,7 @@ pub(super) fn transact(
     let mut applied = None;
     let mut posted: Option<Message> = None;
     let mut raised: Option<&'static str> = None;
+    let mut notice = None;
     ctx.store.try_update(parsed.task(), |task| {
         if let Some(pm) = actor.pm_request() {
             if let Some(stored) = pm_replay(ctx, task, pm.origin)? {
@@ -340,11 +390,15 @@ pub(super) fn transact(
                         body: &body,
                         binding: MessageBinding {
                             run: match &container {
-                                ContainerRef::Worker { run, .. } => Some(run.clone()),
-                                ContainerRef::Reviewer { review, .. } => Some(review.clone()),
+                                ContainerRef::Worker { run, .. }
+                                | ContainerRef::Planner { run, .. } => Some(run.clone()),
+                                ContainerRef::Reviewer { review, .. }
+                                | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
                                 ContainerRef::Pm => None,
                             },
-                            question_request: Some(question.asked.request_id.clone()),
+                            // Not question-bound: that convention marks an OmO native answer
+                            // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
+                            // answer is a `pi_native` message and travels in an envelope.
                             ..MessageBinding::default()
                         },
                         subject: Some(json!({"key": key, "revision": question.revision})),
@@ -374,6 +428,7 @@ pub(super) fn transact(
             && let NeedsMe::Raise(reason) = change.needs_me
         {
             raised = Some(reason);
+            notice = Some(record_entry_notice(ctx, task, now)?);
         }
         let receipt = match actor.pm_request() {
             Some(pm) => {
@@ -396,12 +451,13 @@ pub(super) fn transact(
         super::events::reconcile_question(&ctx.store, key)?;
     }
     if let (Some(reason), Some(Applied::Fresh { outcome, .. })) = (raised, &applied) {
-        crate::obligations::transition(
+        crate::obligations::transition_with_notice(
             ctx,
             parsed.task(),
             "needs_me",
             json!({"run": container_run(&container), "question": key,
                    "revision": outcome.revision, "reason": reason}),
+            notice,
         )?;
     }
     Ok(applied)
@@ -410,7 +466,7 @@ pub(super) fn transact(
 fn container_run(container: &ContainerRef) -> Option<&str> {
     match container {
         ContainerRef::Worker { run, .. } | ContainerRef::Reviewer { run, .. } => Some(run),
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => None,
     }
 }
 

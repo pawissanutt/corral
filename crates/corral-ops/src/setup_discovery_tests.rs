@@ -14,6 +14,7 @@ fn discovery() -> SetupDiscovery {
             installed: true,
             models: vec!["provider/model".into()],
             efforts: vec!["high".into()],
+            vendors: vec![],
         }],
         candidates: vec![CandidateObservation {
             harness: "omo".into(),
@@ -93,10 +94,119 @@ fn empty_inventory_when_config_has_no_harnesses() {
     config.harnesses.clear();
     config.agents.clear();
     // When: local discovery runs.
-    let report = setup_discover(&config);
+    let report = discover_with(
+        timestamp(),
+        crate::detect_harnesses(&config),
+        &config,
+        false,
+        vec!["openai".into()],
+    );
     // Then: it supplies no candidate or inferred access.
     assert!(report.harnesses.is_empty());
     assert!(report.candidates.is_empty());
+    report.validate().unwrap();
+}
+
+#[test]
+fn pi_native_is_reported_ready_with_its_vendors_and_efforts() {
+    // Given a config that does not name pi-native, and a host the doctor reports ready.
+    let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
+    config.harnesses.clear();
+    config.agents.clear();
+    // When discovery runs.
+    let report = discover_with(
+        timestamp(),
+        Vec::new(),
+        &config,
+        true,
+        vec!["openai".into()],
+    );
+    // Then the built-in host is listed installed, free-text model, openai only.
+    let entry = report
+        .harnesses
+        .iter()
+        .find(|h| h.key == "pi-native")
+        .unwrap();
+    assert!(entry.installed && entry.models.is_empty());
+    assert_eq!(entry.vendors, vec!["openai".to_owned()]);
+    assert!(entry.efforts.contains(&"medium".to_owned()));
+    report.validate().unwrap();
+}
+
+#[test]
+fn pi_native_carries_the_models_its_host_listed() {
+    // Given a ready host whose detection listed provider-qualified models.
+    let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
+    config.harnesses.clear();
+    config.agents.clear();
+    let probed = crate::HarnessInfo {
+        key: "pi-native".into(),
+        program: None,
+        path: Some("/bin/bun".into()),
+        version: Some("1.3.0".into()),
+        models: vec!["openai-codex/gpt-6.1-sol".into()],
+        model_source: crate::ModelSource::Listed,
+        efforts: Vec::new(),
+        takes_effort: true,
+        notes: Vec::new(),
+    };
+    // When discovery runs.
+    let report = discover_with(
+        timestamp(),
+        vec![probed],
+        &config,
+        true,
+        vec!["openai".into()],
+    );
+    // Then the settings picker and routing see the listed models.
+    let entry = report
+        .harnesses
+        .iter()
+        .find(|h| h.key == "pi-native")
+        .unwrap();
+    assert_eq!(entry.models, vec!["openai-codex/gpt-6.1-sol".to_owned()]);
+    report.validate().unwrap();
+}
+
+#[test]
+fn pi_native_is_listed_unready_only_when_configured() {
+    // Given an unready host and a config that opts in through a pi-native harness.
+    let mut config = Config::default_for(std::path::Path::new("/nonexistent"));
+    config.harnesses.clear();
+    config.agents.clear();
+    assert!(
+        discover_with(
+            timestamp(),
+            Vec::new(),
+            &config,
+            false,
+            vec!["openai".into()]
+        )
+        .harnesses
+        .is_empty()
+    );
+    config.harnesses.insert(
+        "pi-native".into(),
+        corral_core::Harness {
+            command: "{corral} agent launch {delivery_args}".into(),
+            flags: None,
+            model_flag: None,
+            effort_flag: None,
+            efforts: Vec::new(),
+            prompt: None,
+        },
+    );
+    // When discovery also saw a probed (and not installed) entry of the same key.
+    let probed = crate::detect_harnesses(&config);
+    let report = discover_with(timestamp(), probed, &config, false, vec!["openai".into()]);
+    // Then one entry remains, not installed.
+    let entries: Vec<_> = report
+        .harnesses
+        .iter()
+        .filter(|h| h.key == "pi-native")
+        .collect();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].installed);
     report.validate().unwrap();
 }
 

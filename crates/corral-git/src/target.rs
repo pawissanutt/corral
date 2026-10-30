@@ -1,8 +1,11 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::ensure;
+
+use anyhow::{Context, Result};
 
 use crate::history::{git_utf8, validate_commit};
 use crate::{git, git_raw, repo_root, validate_branch_name};
@@ -31,7 +34,112 @@ pub fn create_target_branch(repo: &Path, branch: &str, head: &str) -> Result<()>
     Ok(())
 }
 
+/// A fixed Git lock marker is present. Callers may retry without modifying the marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitLockContention {
+    pub marker: String,
+    pub path: PathBuf,
+    pub mtime: SystemTime,
+}
+
+impl std::fmt::Display for GitLockContention {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Git lock contention: {} ({})",
+            self.marker,
+            self.path.display()
+        )
+    }
+}
+
+impl std::error::Error for GitLockContention {}
+
+/// A target checkout has unfinished Git operation metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitOperationOngoing {
+    pub marker: String,
+    pub path: PathBuf,
+}
+
+impl std::fmt::Display for GitOperationOngoing {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Git operation ongoing: {} ({})",
+            self.marker,
+            self.path.display()
+        )
+    }
+}
+
+impl std::error::Error for GitOperationOngoing {}
+
+/// Check only fixed marker paths, without spawning Git, enumerating directories, reading
+/// marker contents, or taking locks. `admin` is the worktree's Git administrative directory;
+/// `common` is its shared Git directory. The caller supplies previously validated ownership
+/// and a literal branch name, so this can recheck an already-recorded wait independently of
+/// normal checkout preflight. Operation metadata takes precedence over lock contention.
+///
+/// # Errors
+/// Returns [`GitOperationOngoing`], [`GitLockContention`], or a metadata I/O error.
+pub fn check_target_markers(admin: &Path, common: &Path, branch: &str) -> Result<()> {
+    ensure!(
+        !branch.is_empty()
+            && branch.split('/').all(|part| !part.is_empty()
+                && Path::new(part)
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_)))),
+        "target branch must be a literal relative name"
+    );
+    for marker in [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-apply",
+        "rebase-merge",
+        "sequencer",
+    ] {
+        let path = admin.join(marker);
+        if present(&path)? {
+            return Err(GitOperationOngoing {
+                marker: marker.to_owned(),
+                path,
+            }
+            .into());
+        }
+    }
+    let branch_lock = format!("refs/heads/{branch}.lock");
+    for (directory, marker) in [
+        (admin, "index.lock"),
+        (admin, "HEAD.lock"),
+        (common, branch_lock.as_str()),
+        (common, "packed-refs.lock"),
+    ] {
+        let path = directory.join(marker);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking {}", path.display()));
+            }
+        };
+        let mtime = metadata
+            .modified()
+            .with_context(|| format!("reading {} modification time", path.display()))?;
+        return Err(GitLockContention {
+            marker: marker.to_owned(),
+            path,
+            mtime,
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// Check an owned target checkout without modifying refs, registrations, or files.
+/// Status runs with `--no-optional-locks`, so the check itself never creates `index.lock`.
 /// Ownership and the expected full commit ID come from the caller's common-dir journal.
 /// Caller holds `landing_lock`. Paths must be canonical, absolute, direct children of
 /// `<repo>/.worktrees`; aliases, main checkouts, duplicate registrations, moved refs,
@@ -78,11 +186,12 @@ pub fn check_target_checkout(
         git_utf8(checkout, &["rev-parse", "--verify", "HEAD"])?.trim_end() == expected_head,
         "target HEAD moved"
     );
-    no_operation(&git_dir)?;
+    check_target_markers(&git_dir, &git_common_dir(repo)?, branch)?;
     ensure!(
         git_utf8(
             checkout,
             &[
+                "--no-optional-locks",
                 "status",
                 "--porcelain=v1",
                 "--untracked-files=all",
@@ -118,6 +227,11 @@ pub fn ensure_target_checkout(
         .to_str()
         .context("non-UTF-8 target checkout path")?;
     if registered {
+        check_target_markers(
+            &target_admin(repo, checkout)?,
+            &git_common_dir(repo)?,
+            branch,
+        )?;
         // Git refuses locked or otherwise unsafe registrations. Never prune unrelated entries.
         git(repo, &["worktree", "remove", "--", path])?;
     }
@@ -166,6 +280,7 @@ pub fn verification_checkout(repo: &Path, checkout: &Path, head: &str) -> Result
             git_utf8(
                 checkout,
                 &[
+                    "--no-optional-locks",
                     "status",
                     "--porcelain=v1",
                     "--untracked-files=all",
@@ -199,26 +314,6 @@ fn present(path: &Path) -> Result<bool> {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error).with_context(|| format!("checking {}", path.display())),
     }
-}
-
-fn no_operation(git_dir: &Path) -> Result<()> {
-    for name in [
-        "MERGE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD",
-        "rebase-apply",
-        "rebase-merge",
-        "sequencer",
-        "BISECT_LOG",
-        "index.lock",
-        "HEAD.lock",
-    ] {
-        ensure!(
-            !present(&git_dir.join(name))?,
-            "Git operation ongoing: {name}"
-        );
-    }
-    Ok(())
 }
 
 fn target_admin(repo: &Path, checkout: &Path) -> Result<PathBuf> {
@@ -348,9 +443,6 @@ fn target_registration(
                 );
             }
         }
-    }
-    if owned.is_some() {
-        no_operation(&target_admin(repo, checkout)?)?;
     }
     Ok(owned)
 }

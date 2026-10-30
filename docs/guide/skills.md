@@ -32,6 +32,13 @@ Subscriptions re-arm `corral wait --after SEQ --json --print-cursor` with the re
 `cursor.seq`; a timeout does not advance that cursor. See [events](events.md) for
 condition runs and [storage](storage.md) for migration and retention.
 
+Pi-native also has a separate five-skill pack (`frontend`, `visual-qa`, `programming`,
+`debugging`, `git-master`), installed with `corral skill install --harness pi-native` or
+`corral agent install` into `~/.corral/skills/pi-native`. This harness target installs the pack,
+not extra role-skill copies. It stays outside OmO's discovery roots; do not put these copies in
+shared directories. See [Pi-native skills](pi-native.md#curated-pi-native-skill-pack) for loading,
+opt-outs and extensions. The same managed-file refresh rules apply.
+
 ## Versions and refresh
 
 Each managed skill carries the managed marker followed by a stamp line:

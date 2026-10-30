@@ -1,11 +1,13 @@
 //! Admission in contract order: bounds (envelope.rs), resolution of the NAMED container,
 //! authentication against the named generation, receipt lookup, then role liveness, current
 //! generation and saved pane for new mutations. Also the generation binding primitives.
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, bail, ensure};
 use corral_core::agent::{
-    self, AgentBinding, AgentGeneration, AgentPm, AgentRole, AgentRunState, ContainerRef,
-    GENERATIONS_MAX, GenerationFence, HostHealth, RequestBinding, RequestIdentity, RequestOrigin,
-    RequestReceipt, paths, pm_state,
+    self, AgentBinding, AgentGeneration, AgentPm, AgentRole, AgentRunState, CapabilitySnapshot,
+    ContainerRef, GENERATIONS_MAX, GenerationFence, HostHealth, RequestBinding, RequestIdentity,
+    RequestOrigin, RequestReceipt, paths, pm_state,
 };
 use corral_core::{Store, Task};
 use serde_json::json;
@@ -64,6 +66,12 @@ pub(crate) fn container_of(identity: &RequestIdentity) -> ContainerRef {
         (AgentRole::Reviewer, Some(review)) => ContainerRef::Reviewer {
             task,
             run,
+            review: review.clone(),
+        },
+        (AgentRole::Planner, _) => ContainerRef::Planner { task, run },
+        (AgentRole::PlanReviewer, Some(review)) => ContainerRef::PlanReviewer {
+            task,
+            plan: run,
             review: review.clone(),
         },
         _ => ContainerRef::Worker { task, run },
@@ -203,12 +211,9 @@ fn saved_pane(state: &AgentRunState, generation: u32, saved: Option<&str>) -> Re
 /// Liveness, fence and saved pane, repeated by every final transaction under the task lock.
 pub(crate) fn recheck_task(task: &Task, binding: &RequestBinding) -> Result<()> {
     agent::check_live(task, binding)?;
-    let run = agent::container_run(task, &binding.container);
     let state = agent::container_state(task, &binding.container)
         .context("the container lost its agent binding")?;
-    let pane = run
-        .and_then(|r| r.herdr.as_ref())
-        .map(|h| h.pane_id.as_str());
+    let pane = agent::container_pane(task, &binding.container).map(|h| h.pane_id.as_str());
     saved_pane(state, binding.generation, pane)
 }
 
@@ -266,6 +271,15 @@ pub(crate) fn admit(ctx: &Ctx, envelope: &Envelope, mode: Mode) -> Result<Admiss
 /// What a launcher binds: never chosen by the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindTarget {
+    Planner {
+        task: String,
+        run: String,
+    },
+    PlanReviewer {
+        task: String,
+        plan: String,
+        review: String,
+    },
     Worker {
         task: String,
         run: String,
@@ -284,6 +298,15 @@ pub enum BindTarget {
 impl BindTarget {
     pub fn container(&self) -> ContainerRef {
         match self {
+            BindTarget::Planner { task, run } => ContainerRef::Planner {
+                task: task.clone(),
+                run: run.clone(),
+            },
+            BindTarget::PlanReviewer { task, plan, review } => ContainerRef::PlanReviewer {
+                task: task.clone(),
+                plan: plan.clone(),
+                review: review.clone(),
+            },
             BindTarget::Worker { task, run } => ContainerRef::Worker {
                 task: task.clone(),
                 run: run.clone(),
@@ -306,6 +329,8 @@ pub struct GenerationGrant {
     pub container: ContainerRef,
     pub generation: u32,
     pub bind_nonce: String,
+    /// The snapshot this generation recorded; the bootstrap carries the same value.
+    pub capabilities: CapabilitySnapshot,
 }
 
 impl std::fmt::Debug for GenerationGrant {
@@ -324,7 +349,12 @@ fn random_secret() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-fn next_generation(state: &mut AgentRunState, nonce_digest: &str, pane: &str) -> Result<u32> {
+fn next_generation(
+    state: &mut AgentRunState,
+    nonce_digest: &str,
+    pane: &str,
+    capabilities: &CapabilitySnapshot,
+) -> Result<u32> {
     ensure!(
         state.generations.len() < GENERATIONS_MAX,
         "{} already opened {GENERATIONS_MAX} generations",
@@ -332,6 +362,14 @@ fn next_generation(state: &mut AgentRunState, nonce_digest: &str, pane: &str) ->
     );
     let now = corral_core::clock::now();
     let n = state.generations.iter().map(|g| g.n).max().unwrap_or(0) + 1;
+    let role = state.binding.role;
+    let transition = state
+        .generations
+        .iter()
+        .max_by_key(|g| g.n)
+        .and_then(|previous| {
+            capabilities.transition_from(previous.n, &previous.effective_capabilities(role))
+        });
     for older in state.generations.iter_mut().filter(|g| g.fenced.is_none()) {
         older.fenced = Some(GenerationFence {
             reason: format!("replaced by generation {n}"),
@@ -347,6 +385,9 @@ fn next_generation(state: &mut AgentRunState, nonce_digest: &str, pane: &str) ->
         fenced: None,
         nudged_at: None,
         event_seq: 0,
+        todo: capabilities.enabled("todo"),
+        capabilities: Some(capabilities.clone()),
+        capability_transition: transition,
     });
     state.binding.generation = n;
     state.binding.health = HostHealth::Unbound;
@@ -369,6 +410,67 @@ fn binding(role: AgentRole, store: &str, project: &str, callback: Option<String>
 /// Opens generation n+1 of a container in `pane`, fencing every older generation in the same
 /// commit. Dispatch, review-run, pm open and resume call this before writing the bootstrap.
 pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result<GenerationGrant> {
+    open_generation_with(store, target, pane, false, None)
+}
+
+impl BindTarget {
+    pub fn role(&self) -> AgentRole {
+        match self {
+            BindTarget::Worker { .. } => AgentRole::Worker,
+            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
+            BindTarget::Planner { .. } => AgentRole::Planner,
+            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
+            BindTarget::Pm { .. } => AgentRole::Pm,
+        }
+    }
+}
+
+/// `open_generation`; with `adopt`, a PM's new pane is recorded as the owner's pane adopted by
+/// `corral pi` in the same commit that moves the PM there, so a refused launch changes nothing.
+pub fn open_generation_with(
+    store: &Store,
+    target: &BindTarget,
+    pane: &str,
+    adopt: bool,
+    supported: Option<&BTreeSet<String>>,
+) -> Result<GenerationGrant> {
+    // Settings resolve once per generation; an explicit request the host lacks refuses
+    // before any record changes, while an unavailable default is only reported. The
+    // project's text trust is recorded with them.
+    let project = match (target, target.container().task()) {
+        (BindTarget::Pm { project }, _) => Some(project.clone()),
+        (_, Some(task)) => store.get(task)?.project,
+        (_, None) => None,
+    };
+    let capabilities =
+        store
+            .config
+            .agent
+            .capabilities
+            .resolve_for(target.role(), project.as_deref(), supported);
+    if let Some((key, reason)) = capabilities.explicit_unavailable() {
+        bail!(
+            "capability_unavailable: [agent.capabilities.{}] {key} = true, but {reason}, or \
+             remove the override",
+            target.role().as_str()
+        );
+    }
+    // A disabled native planning role refuses here, before any record changes; corral never
+    // falls back to another harness in its place.
+    if let Some(state) = capabilities.features.get("role_enabled")
+        && !state.enabled
+    {
+        let role = target.role().as_str();
+        match &state.unavailable {
+            Some(reason) => bail!("role_unavailable: native {role} role: {reason}"),
+            None => bail!(
+                "role_disabled: the native {role} role is off (preset {} or \
+                 [agent.capabilities.{role}] role_enabled = false); enable it, or choose a \
+                 non-native planning profile explicitly",
+                capabilities.preset.as_str()
+            ),
+        }
+    }
     let nonce = random_secret()?;
     let digest = paths::sha256_hex(nonce.as_bytes());
     let store_id = paths::store_id(store);
@@ -379,12 +481,26 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
                 let state = AgentRunState::new(binding(AgentRole::Pm, &store_id, project, None));
                 AgentPm::new(pane.into(), state)
             });
+            // Adoption moves only with an adopting launch; another pane drops it, the same keeps it.
+            if adopt {
+                pm.adopted_pane = Some(pane.into());
+            } else if pm.pane != pane {
+                pm.adopted_pane = None;
+            }
             pm.pane = pane.into();
+            if pm.state.binding.project != *project {
+                pm.state.todo = None;
+            }
             pm.state.binding.project = project.clone();
-            Ok((next_generation(&mut pm.state, &digest, pane)?, true))
+            Ok((
+                next_generation(&mut pm.state, &digest, pane, &capabilities)?,
+                true,
+            ))
         })?,
         (_, Some(task_id)) => {
             let (role, callback) = match target {
+                BindTarget::Planner { .. } => (AgentRole::Planner, None),
+                BindTarget::PlanReviewer { .. } => (AgentRole::PlanReviewer, None),
                 BindTarget::Reviewer { callback, .. } => {
                     (AgentRole::Reviewer, Some(callback.clone()))
                 }
@@ -401,9 +517,18 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
                 {
                     bail!("only the current run can bind a Pi-native worker");
                 }
-                let run = agent::container_run_mut(task, &container)
+                if matches!(
+                    container,
+                    ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+                ) {
+                    ensure!(
+                        agent::container_closure(task, &container).is_none(),
+                        "only a current open planning container can bind a Pi-native host"
+                    );
+                }
+                let host = agent::container_host_mut(task, &container)
                     .with_context(|| format!("{} does not exist", container.key()))?;
-                let state = run.agent_host.get_or_insert_with(|| {
+                let state = host.get_or_insert_with(|| {
                     Box::new(AgentRunState::new(binding(
                         role,
                         &store_id,
@@ -416,7 +541,7 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
                     "{} is bound to another role or review attempt",
                     container.key()
                 );
-                generation = next_generation(state, &digest, pane)?;
+                generation = next_generation(state, &digest, pane, &capabilities)?;
                 Ok(())
             })?;
             generation
@@ -427,6 +552,7 @@ pub fn open_generation(store: &Store, target: &BindTarget, pane: &str) -> Result
         container,
         generation,
         bind_nonce: nonce,
+        capabilities,
     })
 }
 

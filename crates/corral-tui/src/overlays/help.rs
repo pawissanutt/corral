@@ -63,7 +63,7 @@ impl HelpView {
                 "back to this board from any pane",
                 false,
             ),
-            row("r", "answer an agent that needs you", true),
+            row("r", "answer a Blocked agent question", true),
             row("q", "close board; agents keep running", true),
             row(
                 &self.nav.detach.short(),

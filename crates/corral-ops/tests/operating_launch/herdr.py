@@ -34,6 +34,7 @@ def main() -> None:
             }
             state.append(pane)
             state_path.write_text(json.dumps(state))
+            (directory / f"{pane['pane_id']}.json").write_text(json.dumps(pane) + "\n")
             result = {"workspace": pane, "root_pane": pane}
         case ("pane", "list"):
             result = {"panes": [

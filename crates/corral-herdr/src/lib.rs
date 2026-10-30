@@ -136,6 +136,11 @@ impl Herdr {
         self.session.as_deref()
     }
 
+    /// The herdr executable this client runs.
+    pub fn bin(&self) -> &Path {
+        &self.bin
+    }
+
     /// Retargets config-driven requests without replacing the selected executable.
     pub fn set_session(&mut self, session: Option<String>) {
         self.session = session;

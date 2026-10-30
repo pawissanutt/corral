@@ -5,6 +5,34 @@ use serde_json::json;
 use crate::Ctx;
 use crate::skill::SkillAction;
 
+/// One presentation per worker or planner launch, beside its role-skill installation.
+pub(crate) fn metered_notice(
+    ctx: &Ctx,
+    id: &str,
+    role: &str,
+    resolved: &corral_core::ResolvedProfile,
+) -> Result<()> {
+    if !corral_core::is_pi_native(&resolved.harness)
+        || resolved.vendor.as_deref() != Some("amazon-bedrock")
+    {
+        return Ok(());
+    }
+    let binding = crate::agent::aws_profile::read_binding(&crate::agent::install::data_root()?)?
+        .context("credentials_unavailable: Amazon Bedrock login binding is missing")?;
+    if let Some(text) = crate::agent::hooks::preflight::metered_notice(role, resolved, &binding) {
+        corral_core::messages::report(Some(id), "metered", text);
+        ctx.store.log_event(
+            Some(id),
+            "metered_notice",
+            json!({
+                "role": role, "profile": resolved.profile, "model": resolved.model,
+                "aws_profile": binding.profile, "region": binding.region,
+            }),
+        )?;
+    }
+    Ok(())
+}
+
 /// Installs or refreshes the role skills for the run's harness (its `flags` map name, else its key) under
 /// $HOME; logs "skill_installed" or "skill_refreshed" per written role. A foreign file is left alone with a
 /// warning. A failed install is reported and does not stop the run.
@@ -120,7 +148,7 @@ pub(crate) fn check_plan<T: TaskRef + ?Sized>(
                     None,
                 )?;
                 policy
-                    .check_reviewer_family(actual.vendor.as_deref(), reviewer.vendor.as_deref())?;
+                    .check_reviewer_family(actual.family().as_ref(), reviewer.family().as_ref())?;
             }
         }
         if plan.run.is_none()
@@ -128,9 +156,8 @@ pub(crate) fn check_plan<T: TaskRef + ?Sized>(
         {
             let actual = implementation_profile(&config, task, route)?;
             let reviewer = config.cross_vendor_reviewer(
-                actual
-                    .vendor
-                    .as_deref()
+                &actual
+                    .family()
                     .context("plan approval requires a known dispatch vendor")?,
             )?;
             if head.plan_review_approved_by(&plan.id, &reviewer)?.is_none() {

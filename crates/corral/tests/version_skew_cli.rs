@@ -95,6 +95,49 @@ fn watch_refuses_next_tick_after_its_executable_is_replaced() {
 }
 
 #[test]
+fn latched_process_resumes_sync_through_the_installed_executable() {
+    // Given: a store whose scheduled digest every completed sync pass writes, and a process
+    // latched by an update whose cause is gone again (T-587); never the live store or herdr.
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = corral_core::Store::init(tmp.path()).unwrap();
+    store.config.digest.every = Some("1h".into());
+    store.save_config().unwrap();
+    let ctx = corral_ops::Ctx {
+        store,
+        herdr: corral_herdr::Herdr::with_bin(
+            tmp.path().join("no-herdr"),
+            Some("corral-test".into()),
+        ),
+        resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
+    };
+    let marker = ctx.store.state_dir().join("schema-version");
+    let current = std::fs::read(&marker).ok();
+    std::fs::write(&marker, "999\n").unwrap();
+    let refused = corral_ops::sync(&ctx).unwrap_err();
+    assert_eq!(refused.to_string(), corral_core::UPDATE_NOTICE);
+    match current {
+        Some(bytes) => std::fs::write(&marker, bytes).unwrap(),
+        None => std::fs::remove_file(&marker).unwrap(),
+    }
+    let count = |kind: &str| {
+        let events = ctx.store.events().unwrap();
+        events.iter().filter(|event| event.kind == kind).count()
+    };
+    // The stall: every later in-process pass refuses, so nothing advances.
+    let refused = corral_ops::sync(&ctx).unwrap_err();
+    assert_eq!(refused.to_string(), corral_core::UPDATE_NOTICE);
+    assert_eq!(count("digest"), 0);
+
+    // When: the installed executable runs the latched process's next pass.
+    corral_ops::sync_installed(&ctx, std::path::Path::new(env!("CARGO_BIN_EXE_corral"))).unwrap();
+
+    // Then: the pass completed its side effects; the latched process wrote only its skew event.
+    assert_eq!(count("digest"), 1);
+    assert_eq!(count("version_skew"), 1);
+    assert!(ctx.store.runtime_latched());
+}
+
+#[test]
 fn inherited_gate_attempt_cannot_discover_parent_workspace() {
     // Given
     let tmp = tempfile::tempdir().unwrap();

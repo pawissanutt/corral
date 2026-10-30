@@ -129,13 +129,20 @@ fn done_inner(
     }
     if !matches!(task.status, Status::Running | Status::NeedsMe) {
         bail!(
-            "task {} is {}; only Running or Needs me tasks can be marked done",
+            "task {} is {}; only Running or Blocked tasks can be marked done",
             task.id,
             task.status.label()
         );
     }
     let run = current_run(&task)?;
     refuse_open_questions(&task, &run.id)?;
+    if run
+        .gate
+        .as_ref()
+        .is_some_and(|g| g.result == GateResult::Stale)
+    {
+        bail!("gate_stale: rebase onto current main and run the gate once on the new base");
+    }
     if let Some(report) = report {
         report.check_gate_ref(ctx, &task)?;
     }
@@ -408,7 +415,7 @@ pub(crate) fn landing_gate_passed<T: TaskRef + ?Sized>(
 
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.
 fn quick_approval_on_full_fail(run: &RunHead) -> Option<&str> {
-    let gate = run.gate.as_ref().filter(|g| g.result == GateResult::Fail)?;
+    let gate = run.gate.as_ref().filter(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))?;
     gate.identity.as_ref().filter(|i| i.gate_tier.is_none())?;
     let review = run.review.as_ref()?;
     let binding = review.identity.as_ref()?.gate_tier.as_deref()?;
@@ -484,48 +491,19 @@ pub fn approve(
         .with_context(|| {
             format!("approval already in progress; run `corral approve {id}` after it finishes")
         })?;
+    if ctx
+        .store
+        .get(id)?
+        .current_run()
+        .and_then(|r| r.gate.as_ref())
+        .is_some_and(|g| g.result == GateResult::Stale)
+    {
+        bail!("gate_stale: rebase onto current main and run the gate once on the new base");
+    }
     crate::verdict_carry::prepare_approval(ctx, id, strategy)?;
     approve_landed(ctx, id, strategy, remove_worktree, keep_branch, None).map(|(_, line)| line)
 }
 
-/// Called under the repository landing and board locks. Hold peer task locks through landing
-/// so an existing peer cannot start a review after this check and before the merge.
-/// Only an open peer can hold a review: each is read as its head, current run included.
-fn lock_review_peers<T: TaskRef + ?Sized>(
-    ctx: &Ctx,
-    task: &T,
-) -> Result<Vec<corral_core::StoreLock>> {
-    use corral_core::TaskRef as _;
-    let mut locks = Vec::new();
-    let open = corral_core::backend::HeadQuery::Open {
-        project: task.project().clone(),
-    };
-    for peer in ctx.store.heads(&open)? {
-        if peer.id == *task.id() || peer.project != *task.project() {
-            continue;
-        }
-        let lock = ctx
-            .store
-            .try_lock(&peer.id)?
-            .with_context(|| format!("{} is changing; retry landing after it settles", peer.id))?;
-        let peer = ctx.store.head(&peer.id)?;
-        let run = peer.current_run_head()?;
-        if peer.project == *task.project()
-            && peer.status == Status::Review
-            && let Some(run) = run.as_deref()
-            && !review_interrupted(run)
-            && let Some(review) = run.review.as_ref().filter(|r| r.verdict.is_none())
-            && corral_git::rev_sha(&run.worktree, "HEAD")? == review.sha
-        {
-            bail!(
-                "{} has a review in progress; wait for its verdict before landing",
-                peer.id
-            );
-        }
-        locks.push(lock);
-    }
-    Ok(locks)
-}
 
 /// `approve`, also returning the sha the base (or kept branch) ended at.
 pub(crate) fn approve_landed(
@@ -562,6 +540,13 @@ pub(crate) fn approve_landed(
             task.status.label()
         );
     }
+    if run
+        .gate
+        .as_ref()
+        .is_some_and(|g| g.result == GateResult::Stale)
+    {
+        bail!("gate_stale: rebase onto current main and run the gate once on the new base");
+    }
     let checkout = target
         .as_ref()
         .map_or(repo.as_path(), |target| target.checkout.as_path())
@@ -588,14 +573,10 @@ pub(crate) fn approve_landed(
     let mut landed = None;
     let mut operation = None;
     let mut previous_sha = None;
+    // Peers under review keep going; a clean replay may carry their approval.
     let task = ctx.store.dispatch_update_head(&task.id, |store, head| {
         let contract = corral_core::TaskRef::contract_revision(&*head)?;
         let t = &*head;
-        let _review_locks = if strategy != ApproveStrategy::KeepBranch {
-            lock_review_peers(ctx, t)?
-        } else {
-            Vec::new()
-        };
         if !awaiting_owner(t)? || t.current_run_head()?.is_none_or(|r| r.id != run.id) {
             bail!("stale_retry: task or run changed before landing");
         }
@@ -689,6 +670,12 @@ pub(crate) fn approve_landed(
             (sha, line)
         }
     };
+        if strategy != ApproveStrategy::KeepBranch {
+            t.landed = Some(corral_core::LandingReceipt {
+                run: run.id.clone(),
+                sha: sha.clone(),
+            });
+        }
         landed = Some((sha, action));
         // A legacy/concurrent change request may have reopened the run. Landing
         // owns the terminal transition: never persist Done with a working run.

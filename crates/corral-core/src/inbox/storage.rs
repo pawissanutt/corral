@@ -77,20 +77,11 @@ impl<'a> Inbox<'a> {
                     let Some(inbox) = current_inbox(head, &self.recipient) else {
                         return Ok(false);
                     };
-                    let mut state = InboxState {
-                        next_seq: inbox.next_seq,
-                        next_envelope: inbox.next_envelope,
-                        open_envelope: inbox.open_envelope,
-                        replacement_envelope: inbox.replacement_envelope,
-                        effects_applied: Default::default(),
-                        binding: inbox.binding.clone(),
-                        observe_cursor: inbox.observe_cursor.clone(),
-                        observe_cursors: Vec::new(),
-                        settled: inbox.settled,
-                    };
+                    let mut state = inbox.scalars();
                     let update = f.take().context("inbox state update ran twice")?;
                     result = Some(update(&mut state)?);
                     *inbox = crate::InboxHead {
+                        owner_header: state.owner_header,
                         next_seq: state.next_seq,
                         next_envelope: state.next_envelope,
                         open_envelope: state.open_envelope,
@@ -158,13 +149,10 @@ impl<'a> Inbox<'a> {
     }
 
     fn build(&self, state: &mut InboxState, post: Post<'_>) -> Result<Message> {
-        self.build_at(&mut state.next_seq, post)
-    }
-
-    fn build_at(&self, next_seq: &mut u64, post: Post<'_>) -> Result<Message> {
-        let seq = *next_seq;
-        *next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
-        Ok(Message {
+        self.admit_owner(state, post.kind)?;
+        let seq = state.next_seq;
+        state.next_seq = seq.checked_add(1).context("inbox sequence exhausted")?;
+        let message = Message {
             id: format!("{}#{seq}", self.key),
             recipient: self.recipient.clone(),
             seq,
@@ -175,7 +163,9 @@ impl<'a> Inbox<'a> {
             binding: post.binding,
             subject: post.subject,
             body: format!("[corral {}#{seq} {}]\n{}", self.key, post.kind, post.body),
-        })
+        };
+        Self::retain_owner(state, &message);
+        Ok(message)
     }
 
     /// Reserve inside the caller's task unit, with the inbox lease taken first. The Inbox's
@@ -190,6 +180,8 @@ impl<'a> Inbox<'a> {
         let mut next = state.clone();
         let message = self.build(&mut next, post)?;
         self.write_message(&message)?;
+        #[cfg(test)]
+        super::header::checkpoint("reserve_file_written")?;
         *state = next;
         self.store.submission_effect_barrier("inbox_reserved");
         Ok(message)
@@ -211,10 +203,11 @@ impl<'a> Inbox<'a> {
             "inbox reservation requires an open task transaction"
         );
         let message = head.inbox_state_mut(&self.recipient, |inbox| {
-            let mut next_seq = inbox.next_seq;
-            let message = self.build_at(&mut next_seq, post)?;
+            let mut state = inbox.scalars();
+            let message = self.build(&mut state, post)?;
             self.write_message(&message)?;
-            inbox.next_seq = next_seq;
+            inbox.next_seq = state.next_seq;
+            inbox.owner_header = state.owner_header;
             Ok(message)
         })?;
         self.store.submission_effect_barrier("inbox_reserved");
@@ -232,11 +225,24 @@ impl<'a> Inbox<'a> {
         post: Post<'_>,
         admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
     ) -> Result<Message> {
+        self.post_with_reservation(post, admit, |_| Ok(()))
+    }
+
+    /// `reserving` runs after definitive validation/admission but before the sequence can
+    /// commit. Once it succeeds, a later error does not prove publication was rolled back.
+    /// It sees the exact replacement identity while the posting lock is held.
+    pub(super) fn post_with_reservation(
+        &self,
+        post: Post<'_>,
+        admit: impl FnOnce(&mut Task, &Message) -> Result<()>,
+        reserving: impl FnOnce(&Message) -> Result<()>,
+    ) -> Result<Message> {
         self.check(&post)?;
         let _lock = self.lock()?;
         let message = match &self.recipient {
             Recipient::Pm => self.store.records_transaction(|| {
                 let message = self.update_state(|state| self.build(state, post))?;
+                reserving(&message)?;
                 self.write_message(&message)?;
                 Ok(message)
             })?,
@@ -249,6 +255,7 @@ impl<'a> Inbox<'a> {
                         let mut next = state_mut(task, &self.recipient)?.clone();
                         let value = self.build(&mut next, post)?;
                         admit(task, &value)?;
+                        reserving(&value)?;
                         *state_mut(task, &self.recipient)? = next;
                         self.write_message(&value)?;
                         message = Some(value);
@@ -257,6 +264,8 @@ impl<'a> Inbox<'a> {
                 message.context("message reservation did not run")?
             }
         };
+        #[cfg(test)]
+        super::header::checkpoint("post_reserved")?;
         self.announce(&message)?;
         Ok(message)
     }
@@ -270,6 +279,7 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn message(&self, seq: u64) -> Result<Message> {
+        crate::work::record(crate::work::Work::InboxMessageRead, 1);
         let row: super::records::MessageRecord = self
             .record("messages", &format!("{seq:020}"))?
             .context("inbox message not found")?;
@@ -323,6 +333,7 @@ impl<'a> Inbox<'a> {
     }
 
     pub fn receipt(&self, seq: u64, level: ReceiptLevel) -> Result<Option<Receipt>> {
+        crate::work::record(crate::work::Work::InboxRecordRead, 1);
         self.record(
             &format!("receipt.{}", level.suffix()),
             &format!("{seq:020}"),
@@ -338,9 +349,8 @@ impl<'a> Inbox<'a> {
             TerminalState::Failed,
             TerminalState::Abandoned,
         ] {
-            if self
-                .record::<Value>(state.suffix(), &format!("{seq:020}"))?
-                .is_some()
+            if self.record::<Value>(state.suffix(), &format!("{seq:020}"))?
+                .is_some_and(|record| !proof_only(&record))
             {
                 return Ok(Some(state));
             }
@@ -348,10 +358,94 @@ impl<'a> Inbox<'a> {
         Ok(None)
     }
 
+    /// The failed-record slot also retains proof without claiming terminality.
+    /// It is already one of the bounded reader's five keyed probes.
+    pub(super) fn retain_retry_bars(&self, members: &[u64], first: &RetryWitness) -> Result<()> {
+        let state = self.state_head()?.scalars();
+        for seq in members {
+            let prior = state.owner_header.as_ref().and_then(|header| {
+                header
+                    .iter()
+                    .find(|entry| entry.seq == *seq)
+                    .and_then(|entry| match &entry.retry_evidence.history {
+                        RetryHistory::Barred { first } => Some(first),
+                        RetryHistory::NeverAttempted | RetryHistory::RejectedOnly { .. } => None,
+                    })
+            });
+            let key = format!("{seq:020}");
+            let record = self.record::<Value>(TerminalState::Failed.suffix(), &key)?;
+            self.save_record(TerminalState::Failed.suffix(), &key,
+                &retry_bar_record(record, prior.unwrap_or(first))?)?;
+        }
+        Ok(())
+    }
+
+    /// Mirror (or clear) the exact retry claim in the failed-record slot, so the bounded owner
+    /// read finds it without a sixth probe. The `retried` marker stays authoritative for retry.
+    /// Caller holds this recipient's inbox lock.
+    pub(super) fn mirror_retry_claim(&self, seq: u64, claim: Option<&Value>) -> Result<()> {
+        let key = format!("{seq:020}");
+        let record = self.record::<Value>(TerminalState::Failed.suffix(), &key)?;
+        let Some(claim) = claim else {
+            let Some(mut record) = record else {
+                return Ok(());
+            };
+            if record
+                .as_object_mut()
+                .and_then(|object| object.remove("retry_claim"))
+                .is_none()
+            {
+                return Ok(());
+            }
+            return if record == json!({"proof_only": true}) {
+                self.delete_record(TerminalState::Failed.suffix(), &key)
+            } else {
+                self.save_record(TerminalState::Failed.suffix(), &key, &record)
+            };
+        };
+        let mut record = record.unwrap_or_else(|| json!({"proof_only": true}));
+        record
+            .as_object_mut()
+            .context("terminal proof record must be an object")?
+            .insert("retry_claim".into(), claim.clone());
+        self.save_record(TerminalState::Failed.suffix(), &key, &record)
+    }
+
+    pub(super) fn write_terminal_record(
+        &self,
+        seq: u64,
+        state: TerminalState,
+        mut record: Value,
+    ) -> Result<bool> {
+        let key = format!("{seq:020}");
+        if let Some(prior) = self.record::<Value>(state.suffix(), &key)? {
+            if state != TerminalState::Failed || !proof_only(&prior) {
+                return Ok(false);
+            }
+            record["retry_bar"] = serde_json::to_value(retry_bar(&prior)?)
+                .context("serializing retained terminal proof")?;
+            if let Some(claim) = prior.get("retry_claim") {
+                record["retry_claim"] = claim.clone();
+            }
+        }
+        self.save_record(state.suffix(), &key, &record)?;
+        Ok(true)
+    }
+
     pub fn record_receipt(&self, seq: u64, level: ReceiptLevel, receipt: &Receipt) -> Result<bool> {
         let _lock = self.lock()?;
         self.message(seq)?;
+        let reason = match level {
+            ReceiptLevel::Admitted => WitnessReason::Admitted,
+            ReceiptLevel::Observed => WitnessReason::Observed,
+        };
+        self.project_members(&[seq], |entry| {
+            entry.retry_evidence.bar(reason, None);
+        })?;
         self.store.records_transaction(|| {
+            self.retain_retry_bars(&[seq], &RetryWitness { reason, attempt: None })?;
+            #[cfg(test)]
+            super::header::checkpoint("receipt_barred")?;
             let kind = format!("receipt.{}", level.suffix());
             let key = format!("{seq:020}");
             let inserted = if self.record::<Receipt>(&kind, &key)?.is_some() {
@@ -360,19 +454,32 @@ impl<'a> Inbox<'a> {
                 self.save_record(&kind, &key, receipt)?;
                 true
             };
+            #[cfg(test)]
+            super::header::checkpoint("receipt_written")?;
             if level == ReceiptLevel::Observed {
                 for state in [
                     TerminalState::Cancelled,
                     TerminalState::Failed,
                     TerminalState::Abandoned,
                 ] {
-                    if self.record::<Value>(state.suffix(), &key)?.is_some() {
+                    let Some(prior) = self.record::<Value>(state.suffix(), &key)? else {
+                        continue;
+                    };
+                    if state == TerminalState::Failed
+                        && let Some(claim) = prior.get("retry_claim")
+                    {
+                        let kept = json!({"proof_only": true, "retry_claim": claim});
+                        if prior == kept {
+                            continue;
+                        }
+                        self.save_record(state.suffix(), &key, &kept)?;
+                    } else {
                         self.delete_record(state.suffix(), &key)?;
-                        self.event(
-                            "message_terminal_noop",
-                            json!({"seq":seq,"state":state,"reason":"observed wins"}),
-                        )?;
                     }
+                    self.event(
+                        "message_terminal_noop",
+                        json!({"seq":seq,"state":state,"reason":"observed wins"}),
+                    )?;
                 }
             }
             if inserted {
@@ -406,11 +513,11 @@ impl<'a> Inbox<'a> {
             return Ok(false);
         }
         self.store.records_transaction(|| {
-            self.save_record(
-                state.suffix(),
-                &format!("{seq:020}"),
-                &json!({"reason":reason,"via":via,"at":self.store.now()}),
-            )?;
+            if !self.write_terminal_record(
+                seq, state, json!({"reason":reason,"via":via,"at":self.store.now()}),
+            )? {
+                return Ok(false);
+            }
             self.event(
                 &format!("message_{}", state.suffix()),
                 json!({"seq":seq,"reason":reason,"via":via}),
@@ -424,6 +531,32 @@ impl<'a> Inbox<'a> {
         detail["key"] = json!(self.key);
         self.store.log_event(self.recipient.task(), kind, detail)
     }
+}
+
+pub(super) fn proof_only(record: &Value) -> bool {
+    record.get("proof_only").and_then(Value::as_bool) == Some(true)
+}
+
+pub(super) fn retry_bar(record: &Value) -> Result<Option<RetryWitness>> {
+    record
+        .get("retry_bar")
+        .filter(|bar| !bar.is_null())
+        .map(|bar| serde_json::from_value(bar.clone()).context("parsing terminal retry proof"))
+        .transpose()
+}
+
+pub(super) fn retry_bar_record(record: Option<Value>, first: &RetryWitness) -> Result<Value> {
+    let mut record = record.unwrap_or_else(|| json!({"proof_only":true}));
+    if retry_bar(&record)?.is_none() {
+        record
+            .as_object_mut()
+            .context("terminal proof record must be an object")?
+            .insert(
+                "retry_bar".into(),
+                serde_json::to_value(first).context("serializing retry proof")?,
+            );
+    }
+    Ok(record)
 }
 
 pub(super) fn state_mut<'a>(
@@ -494,5 +627,6 @@ fn current_inbox<'h>(
             .filter(|r| &r.id == review)
             .map(|r| &mut r.inbox),
         Recipient::Pm => None,
+
     }
 }

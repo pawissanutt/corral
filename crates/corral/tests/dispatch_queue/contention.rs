@@ -54,6 +54,326 @@ impl ProtocolBarrier {
     }
 }
 
+fn churn(f: &Fixture, ids: &[String]) -> usize {
+    f.ctx
+        .store
+        .events()
+        .unwrap()
+        .iter()
+        .filter(|e| matches!(e.kind.as_str(), "queued" | "dispatch_failed"))
+        .filter(|e| e.task.as_ref().is_some_and(|t| ids.contains(t)))
+        .count()
+}
+
+#[test]
+fn unrunnable_ready_tasks_stay_quiet_across_syncs_and_leave_review_launches_free() {
+    // Given a task awaiting its gate and N authorized Ready tasks whose dependency is not done.
+    let mut f = super::queue_fixture();
+    f.ctx.store.config.review.gate = Some(vec!["true".into()]);
+    f.ctx.store.save_config().unwrap();
+    let reviewed = f.task("app", Status::Ready);
+    f.ok(&["dispatch", &reviewed.id]);
+    f.ok(&[
+        "done",
+        &reviewed.id,
+        "--summary",
+        "Verified: fixture\nNot verified: none",
+    ]);
+    let predecessor = f.task("other", Status::Backlog);
+    let blocked: Vec<String> = (0..4)
+        .map(|_| {
+            let task = f.task("other", Status::Ready);
+            f.ctx
+                .store
+                .update(&task.id, |t| {
+                    t.depends_on.push(predecessor.id.clone());
+                    Ok(())
+                })
+                .unwrap();
+            corral_ops::enqueue(&f.ctx, &task.id, &DispatchOpts::default()).unwrap();
+            task.id
+        })
+        .collect();
+    let enqueued = churn(&f, &blocked);
+
+    // When several sync passes run, some while another process holds the reconciliation lease.
+    let lease = f
+        .ctx
+        .store
+        .try_lock_shared("session-ownership")
+        .unwrap()
+        .unwrap();
+    for _ in 0..3 {
+        corral_ops::sync(&f.ctx).unwrap();
+    }
+    drop(lease);
+    for _ in 0..3 {
+        corral_ops::sync(&f.ctx).unwrap();
+    }
+
+    // Then no pass re-queues or re-fails the unchanged tasks, and the gate launch is admitted.
+    assert_eq!(churn(&f, &blocked), enqueued);
+    corral_ops::gate_start(&f.ctx, &reviewed.id).unwrap();
+    for id in &blocked {
+        assert!(f.ctx.store.get(id).unwrap().runs.is_empty());
+    }
+
+    // And the meaningful state change, the predecessor landing, admits the queued work again.
+    f.ctx
+        .store
+        .update(&predecessor.id, |t| {
+            t.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::sync(&f.ctx).unwrap();
+    assert!(
+        blocked
+            .iter()
+            .any(|id| f.ctx.store.get(id).unwrap().status == Status::Running)
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn wrapped(f: &Fixture, prefix: &[&str], args: &[&str]) -> std::process::Command {
+    let inner = f.command(args);
+    let mut command = std::process::Command::new(prefix[0]);
+    command
+        .args(&prefix[1..])
+        .arg(inner.get_program())
+        .args(inner.get_args())
+        .stdin(std::process::Stdio::null());
+    for (key, value) in inner.get_envs() {
+        match value {
+            Some(value) => command.env(key, value),
+            None => command.env_remove(key),
+        };
+    }
+    command
+}
+
+#[cfg(target_os = "linux")]
+fn reviewed(f: &Fixture, project: &str) -> String {
+    let task = f.task(project, Status::Ready);
+    f.ok(&["dispatch", &task.id]);
+    f.ok(&[
+        "done",
+        &task.id,
+        "--summary",
+        "Verified: fixture\nNot verified: none",
+    ]);
+    task.id
+}
+
+#[cfg(target_os = "linux")]
+struct Traced {
+    child: std::process::Child,
+    trace: std::sync::mpsc::Receiver<Vec<u8>>,
+    seen: Vec<u8>,
+    reader: std::thread::JoinHandle<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl Traced {
+    fn sync(f: &Fixture, strace: &[&str]) -> Self {
+        use std::io::Read;
+        let mut child = wrapped(f, strace, &["sync"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (tx, trace) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0; 4096];
+            while let Ok(n) = stderr.read(&mut chunk) {
+                if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            trace,
+            seen: Vec::new(),
+            reader,
+        }
+    }
+
+    /// Awaits traced syscall text with a bounded deadline, without polling.
+    fn until(&mut self, reached: impl Fn(&str) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !reached(&String::from_utf8_lossy(&self.seen)) {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "trace never matched: {}",
+                        String::from_utf8_lossy(&self.seen)
+                    )
+                });
+            self.seen
+                .extend(self.trace.recv_timeout(remaining).unwrap());
+        }
+    }
+
+    fn finish(self) -> std::process::ExitStatus {
+        let mut child = self.child;
+        let status = child.wait().unwrap();
+        drop(self.trace);
+        self.reader.join().unwrap();
+        status
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn concurrent_syncs_attempt_an_unchanged_refusal_once() {
+    // Given an authorized Ready task whose admission claim refuses its missing dependency.
+    let mut f = super::queue_fixture();
+    let task = f.task("app", Status::Ready);
+    f.ctx
+        .store
+        .update(&task.id, |t| {
+            t.depends_on = vec!["T-999".into()];
+            Ok(())
+        })
+        .unwrap();
+    f.grant(&[&task.id]);
+
+    // When one sync process stops right after opening the refusal state, before its attempt,
+    let refusals = f.ctx.store.state_dir().join("queue-refusals.json");
+    let refusals = refusals.to_str().unwrap();
+    let stop = "inject=openat:signal=SIGSTOP:when=1";
+    let mut stopped = Traced::sync(
+        &f,
+        &["strace", "-P", refusals, "-e", "trace=openat", "-e", stop],
+    );
+    stopped.until(|trace| trace.contains("stopped by SIGSTOP"));
+    // another sync process runs to completion,
+    f.ok(&["sync"]);
+    // and the stopped one then resumes.
+    let tracer = stopped.child.id();
+    let tracee = std::fs::read_to_string(format!("/proc/{tracer}/task/{tracer}/children")).unwrap();
+    let resumed = std::process::Command::new("kill")
+        .arg("-CONT")
+        .arg(tracee.trim())
+        .status()
+        .unwrap();
+    assert!(resumed.success());
+    assert!(stopped.finish().success());
+
+    // Then the unchanged refusal was attempted and logged exactly once.
+    let failures = f
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "dispatch_failed" && e.task.as_deref() == Some(task.id.as_str()))
+        .count();
+    assert_eq!(failures, 1);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
+    use std::io::Read;
+    use std::process::Stdio;
+    // Given a finished gate that sync must collect and attach, and an unrelated task ready to gate.
+    let mut f = Fixture::new();
+    f.ctx.store.config.review.gate = Some(vec!["true".into()]);
+    f.ctx.store.config.limits.running = 3;
+    f.ctx.store.config.limits.review = 2;
+    f.ctx.store.save_config().unwrap();
+    let finished = reviewed(&f, "app");
+    let unrelated = reviewed(&f, "other");
+    f.ok(&["gate", &finished]);
+    let script = corral_ops::gate_paths(&f.ctx, &finished, "R1").script;
+    let ran = std::process::Command::new("bash")
+        .arg(script)
+        .env("CORRAL_ROOT", f.temp.path())
+        .env_remove("CORRAL_GATE_ATTEMPT")
+        .env_remove("CORRAL_CANDIDATE_HEAD")
+        .env_remove("CORRAL_INTEGRATION_BASE")
+        .env_remove("HERDR_PANE_ID")
+        .env_remove("HERDR_WORKSPACE_ID")
+        .env_remove("HERDR_TAB_ID")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(ran.status.success(), "{ran:?}");
+
+    // When another process holds artifact storage while a real sync process starts.
+    let lock = f.ctx.store.dir().join("lock/artifact-storage.lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    held.lock().unwrap();
+    let mut sync = wrapped(&f, &["strace", "-yy", "-e", "trace=flock"], &["sync"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut trace = sync.stderr.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut chunk = [0; 4096];
+        while let Ok(n) = trace.read(&mut chunk) {
+            if n == 0 || tx.send(chunk[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    // Await the exact blocking syscall entry, bounded, without polling.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = Vec::new();
+    while !String::from_utf8_lossy(&seen).contains("/artifact-storage.lock>, LOCK_EX") {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| {
+                panic!(
+                    "sync never reached storage: {}",
+                    String::from_utf8_lossy(&seen)
+                )
+            });
+        seen.extend(rx.recv_timeout(remaining).unwrap());
+    }
+
+    // Then an unrelated gate launch proceeds while that pass still waits for storage.
+    let launch = wrapped(&f, &["timeout", "60"], &["gate", &unrelated])
+        .output()
+        .unwrap();
+    assert!(launch.status.success(), "{launch:?}");
+    assert!(sync.try_wait().unwrap().is_none(), "sync finished early");
+    let started = f.ctx.store.get(&unrelated).unwrap();
+    assert_eq!(
+        started.current_run().unwrap().gate.as_ref().unwrap().result,
+        corral_core::GateResult::Running
+    );
+
+    // And the pass collects the finished gate once storage is released.
+    held.unlock().unwrap();
+    assert!(sync.wait().unwrap().success());
+    drop(rx);
+    reader.join().unwrap();
+    let collected = f.ctx.store.get(&finished).unwrap();
+    assert_eq!(
+        collected
+            .current_run()
+            .unwrap()
+            .gate
+            .as_ref()
+            .unwrap()
+            .result,
+        corral_core::GateResult::Pass
+    );
+}
+
 #[test]
 fn protocol_barrier_retries_interrupted_receive() {
     // Given a real, queued protocol datagram and an interrupted first receive.

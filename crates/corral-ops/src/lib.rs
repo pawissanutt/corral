@@ -10,6 +10,7 @@ mod artifact_search;
 mod artifact_server;
 mod artifact_storage;
 mod artifacts;
+pub mod attention;
 mod automation_controls;
 mod automation_status;
 mod autopilot;
@@ -56,7 +57,10 @@ mod obligations;
 mod obligations_sync;
 mod omo;
 mod operating;
+mod owner_notice;
 mod pane_liveness;
+pub mod park;
+mod parked;
 pub mod phases;
 mod plan;
 mod plan_acceptance;
@@ -87,6 +91,7 @@ mod provider_stall;
 mod question_reply;
 pub mod questions;
 mod queue;
+mod queue_drain;
 mod reply_ack;
 mod resource_escalation;
 pub mod resources;
@@ -95,6 +100,9 @@ mod revert;
 mod review;
 mod review_budget;
 mod reviewer;
+mod role_session;
+mod round_notice;
+pub use role_session::refresh_role_sessions;
 mod routing;
 mod scratch_reclaim;
 mod search;
@@ -105,11 +113,14 @@ mod setup_discovery;
 mod setup_structure;
 mod setup_validation;
 mod skill;
+#[cfg(test)]
+mod skill_pack_tests;
 mod slots;
 mod sprint;
 mod stats;
 pub mod storage_gc;
 mod sync;
+mod sync_installed;
 mod tasks;
 pub mod throughput;
 mod thumbnails;
@@ -179,7 +190,7 @@ pub use gate_tier::{
 };
 pub use harness::{
     CLAUDE_MODEL_ALIASES, HARNESS_CACHE_FILE, HarnessInfo, HarnessReport, ModelSource,
-    cached_harness_report, detect_harnesses, harness_report,
+    cached_harness_report, detect_harnesses, harness_report, models_for_profile,
 };
 pub use history::{Finish, Landed, finished_tasks, finishes, finishes_for};
 pub use hooks::{
@@ -203,9 +214,11 @@ pub use phases::{CommandSpan, Phase, Span, task_phases};
 pub use plan::member_add::{PlanMemberAdded, plan_add_member, plan_add_member_from};
 pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
+#[doc(hidden)]
+pub use plan::member_move::{MoveGate, PlanMemberMoved, plan_move_member, plan_move_member_from};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
-pub use plan_review::{PlanVerdict, plan_review, plan_verdict, plan_verdict_with_evidence};
+pub use plan_review::{PlanVerdict, plan_review, plan_verdict, plan_verdict_report, plan_verdict_report_with_evidence, plan_verdict_with_evidence};
 pub use plan_review_offer::{
     PlanReviewOffer, plan_review_offer, plan_review_retryable, plan_review_wait,
 };
@@ -218,7 +231,7 @@ pub use pm_policy::{pm_policy_health, reconcile_pm_policy};
 pub use pm_questions::set_transcript_settle_window;
 pub use pm_workset::{
     OperatingStatus, PmActionOutcome, PmActionResult, PmDecision, PmExecutable, PmWorkset,
-    ScopedProgress, pm_act, pm_workset, pm_workset_with_policy,
+    ScopedProgress, pm_act, pm_workset, pm_workset_with_attention, pm_workset_with_policy,
 };
 pub use pricing::{
     CacheRateFallback, PriceShadow, PricingCheck, UnpricedModel, pricing_check, pricing_coverage,
@@ -261,24 +274,26 @@ pub use review_routing::ReviewMapping;
 pub mod review_contracts;
 pub mod review_packet;
 pub mod review_receipts;
+pub use parked::ParkedRun;
 pub use reviewer::{StrongerOutcome, request_stronger_review, review_callback_token};
 pub use routing::{
     PlannerMapping, PlannerSource, ReviewExplanation, RouteExplanation, route, route_with_plan,
 };
 pub use search::{SearchData, search_tasks};
 pub use skill::{
-    MODEL_SELECTION_PROCEDURE, MODEL_SELECTION_VERSION, PLANNER_SKILL, PM_SKILL, ROLE_SKILLS,
-    SKILL_HARNESSES, SKILL_MARKER, SKILL_SHARED, SUBMIT_SKILL, SkillAction, SkillWrite, VERBS,
-    WORKER_SKILL, duplicate_skills, ensure_skills, install_harness_skills, install_role_skills,
-    role_skill_markdown, skill_markdown, skills_dir_for, verbs_block,
+    MODEL_SELECTION_PROCEDURE, MODEL_SELECTION_VERSION, PI_SKILLS, PLANNER_SKILL, PM_SKILL,
+    ROLE_SKILLS, SKILL_HARNESSES, SKILL_MARKER, SKILL_SHARED, SUBMIT_SKILL, SkillAction,
+    SkillWrite, VERBS, WORKER_SKILL, duplicate_skills, ensure_skills, install_harness_skills,
+    install_role_skills, role_skill_markdown, skill_markdown, skills_dir_for, verbs_block,
 };
-pub use slots::{SlotUsage, slot_usage};
+pub use slots::{SlotUsage, slot_usage, soft_target};
 pub use sprint::{
     SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,
     SprintTotals, collect_sprint_review, review_sprint,
 };
 pub use stats::{StatsBy, StatsRow, stats};
-pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook};
+pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook, sync_with_attention};
+pub use sync_installed::sync_installed;
 pub use tasks::{
     infer_project, move_task, move_task_with_decision, new_task, new_task_initialized,
     new_task_with_origin, slots,
@@ -287,7 +302,7 @@ pub use thumbnails::{artifact_thumbnail, capture_html_thumbnails, is_visual_arti
 pub use timeline::{EntryClass, TimelineEntry, TimelineFilter, Wait, timeline};
 pub use tracker::{
     PlanCoverage, PlanPrerequisite, PlanProgress, PlanWork, PlanWorkCounts, PlanWorkState,
-    plan_progress,
+    plan_board, plan_progress, plan_progress_in,
 };
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};

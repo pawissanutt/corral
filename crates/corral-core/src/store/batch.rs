@@ -44,6 +44,11 @@ impl Store {
             return Ok(tasks);
         }
         let stage = tempfile::tempdir_in(fresh.dir()).context("staging task batch")?;
+        for task in &mut tasks {
+            let now = fresh.now();
+            super::normalize::task(task, None, now)?;
+            task.updated = now;
+        }
         let files = snapshots
             .into_iter()
             .map(|(path, bytes)| (fresh.dir().join(path), bytes));
@@ -120,6 +125,10 @@ pub(super) fn draft_task(
 ) -> Task {
     let now = crate::clock::now();
     Task {
+        park: None,
+        landed: None,
+        infra_wait: None,
+        attention: Default::default(),
         dashboard: None,
         origin: Some(if status == Status::Idea {
             Origin::Owner
@@ -133,9 +142,11 @@ pub(super) fn draft_task(
         id: format!("T-{number:03}"),
         title: title.to_owned(),
         status,
+        status_since: None,
         project: project.map(str::to_owned),
         kind: None,
         size: None,
+        difficulty: None,
         priority: "P2".into(),
         depends_on: Vec::new(),
         labels: Vec::new(),
@@ -156,6 +167,7 @@ pub(super) fn draft_task(
         approved_scope: None,
         approved_scope_revision: 0,
         approved_scope_history: Vec::new(),
+        membership_revision: 0,
         member_gates: Default::default(),
         aggregate_attempts: Vec::new(),
         parent: None,

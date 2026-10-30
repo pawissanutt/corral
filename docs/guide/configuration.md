@@ -81,11 +81,22 @@ How many agents run at once.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `running` | `3` | Global slots: each Running/Needs me task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. |
+| `running` | `3` | Global slots: each Running/Blocked task, running gate, active reviewer, and pending launch reservation counts once. Must be above 0. This is the hard limit. |
+| `running_target` | `running` | Soft target that automatic coding admission fills up to; see below. Must be within `1..=running`. |
 | `per_project.<project>` | none | Optional cap for one project. Must name a configured project and be above 0. |
 | `count_reviews` | `true` | Include active reviewer processes in global and project slots. |
 | `count_gates` | `true` | Include running gates in global and project slots. |
 | `review` | `2` | Additional combined gate/reviewer process cap, even when either counting switch is off. Must be above 0. |
+
+`running_target` (default: unset, meaning `running`) is the soft coding-slot target. Automatic
+Backlog admission, Idea promotion and automatically queued Ready work fill coding slots only up
+to it. The gap up to the hard `running` limit is headroom: direct `corral dispatch`, work the
+owner authorized with `corral dispatch --queue`, woken parked runs, and automatic admission of
+P0 tasks and red-main fixes may use it. It must be within `1..=running`; the same finishing
+(`limits.review`) headroom is reserved below either limit, and machine-pressure holds apply to
+all of them. Parked runs that released their slot count against neither. A task waiting for
+this reason shows `waiting: at soft target (...)`; `corral queue list` prints
+`running N / soft S / hard H` and the board shows `(soft target S)` beside the slot fraction.
 
 `corral dispatch --queue` moves work to Ready without launching it. Sync admits Ready work
 when capacity permits, reserving `limits.review` headroom for gates and reviews.
@@ -93,6 +104,7 @@ when capacity permits, reserving `limits.review` headroom for gates and reviews.
 ```toml
 [limits]
 running = 3
+# running_target = 2   # optional soft target; keeps one slot for ad-hoc and P0 work
 
 [limits.per_project]
 app = 2
@@ -133,7 +145,7 @@ This override bypasses only machine pressure, never slot, dependency, or candida
 `corral dispatch T-042 --queue` instead authorizes the task to wait for recovery.
 
 Memory or disk pressure also raises one owner notification and `escalated` event per episode,
-with the largest per-task worktree and target sizes. If a task is Running, one is shown in Needs me
+with the largest per-task worktree and target sizes. If a task is Running, one is shown in Blocked
 until the resource alert clears; its previous state is restored if it still belongs to that alert.
 Ready and Review work retains its admission state and waiting explanation, without taking a slot
 for resource attention. With no Running task, the workspace notification and the header's
@@ -268,7 +280,7 @@ before reporting. The command runs in its own child shell, so a trailing `;`, `&
 `set -e`, or a fish pane shell cannot skip the receipt.
 On the next sync:
 
-- A worker run ends as `failed`, keeps the pane's error lines and waits in Needs me without holding a run slot.
+- A worker run ends as `failed`, keeps the pane's error lines and waits in Blocked without holding a run slot.
 - An implementation reviewer's slot is released, and the autopilot escalates.
 - A plan-review attempt gets an `escalate` verdict that carries the error.
 - An aggregate review is abandoned with the error. This includes one assigned to a PM that has exited.
@@ -308,7 +320,10 @@ flags = "generic"
 model_flag = "--model"
 ```
 
-`corral harness list` shows which harnesses are installed, their versions and models.
+`corral harness list` shows which harnesses are installed, their versions and models. The built-in pi-native
+harness lists the installed host's offline Pi catalog (`openai-codex/<id>`, `anthropic/<id>`) for each provider
+`corral agent doctor` sees logged in; without an installation or a login it falls back to free-text models with a
+note naming `corral agent install` or `corral agent login`.
 
 ## profiles
 
@@ -341,15 +356,29 @@ Which profile a run uses is decided by [routing](#routing).
 
 ## routing
 
-Rules pick a profile from a task's classification, so small tasks can go to a cheap profile and hard ones to a
-strong one without choosing by hand. Classify tasks when you file them:
+Leave **Agent: Auto** selected. The PM assesses the task and routing picks a preset.
+Size means **how much work**; difficulty means **how much reasoning**. A large,
+repetitive implementation can use an ordinary preset; a small, difficult optimization
+can use a stronger one. Model and reasoning effort come from the chosen preset.
+
+When filing directly, classification is optional:
 
 ```bash
-corral new "Add a --dry-run flag" -p app --ready --kind backend --size s
+corral new "Add a --dry-run flag" -p app --ready --kind backend --size s --difficulty routine
 ```
 
 `--kind` is one of `ui`, `backend`, `logic`, `docs`, `test`, `refactor`, `research`; `--size` is one of `xs`, `s`,
-`m`, `l`, `xl`. Both are optional and stored in the task file.
+`m`, `l`, `xl`. `--difficulty` is `routine`, `standard`, or `hard`:
+
+- **Routine:** the solution follows a known pattern; most work is implementation or repetition.
+- **Standard:** bounded design and debugging using understood techniques.
+- **Hard:** unresolved behavior, algorithmic discovery, subtle invariants, or difficult trade-offs.
+
+All three fields are optional and stored in the task file. Missing difficulty means
+**not assessed**, not easy; existing routes continue to apply. The PM assesses the
+actual spec, not keywords: authentication can be routine when following an established
+design, and hard when its security model is unresolved. Optimization can be routine
+when applying a measured, known fix, and hard when finding the algorithm is the task.
 
 Rules are `[[routing.rules]]` entries, checked in order; the first match wins.
 
@@ -360,6 +389,7 @@ Rules are `[[routing.rules]]` entries, checked in order; the first match wins.
 | `project` | any | One project key or a list. |
 | `kind` | any | One kind or a list. |
 | `size` | any | One size or a list. |
+| `difficulty` | any | One difficulty or a list, independent of size. |
 | `title_regex` | any | Regular expression the task title must match (alias `title`). |
 | `body_regex` | any | Regular expression the task body must match (alias `body`). |
 
@@ -371,18 +401,18 @@ task. Unknown keys are rejected.
 profile = "sonnet"
 
 [[routing.rules]]
-name = "UI work needs the strongest model"
-kind = "ui"
+name = "Hard reasoning, at any size"
+difficulty = "hard"
 profile = "opus-high"
 
 [[routing.rules]]
-name = "Small and test tasks"
-size = ["xs", "s"]
+name = "Known implementation, at any size"
+difficulty = ["routine", "standard"]
 profile = "sonnet"
 
 [[routing.rules]]
-name = "Hard correctness"
-title_regex = "(?i)hard correctness"
+name = "Unassessed large tasks"
+size = ["l", "xl"]
 profile = "opus-high"
 
 [profiles.sonnet]
@@ -396,9 +426,19 @@ effort = "high"
 ```
 
 `corral init` writes a commented starter (profiles, rules and a `[defaults]` example) that you can enable.
+Its explicit difficulty rules precede legacy size rules: hard work uses `gpt-astra`,
+while routine/standard backend, logic, test, refactor and research work uses `gpt-sol`
+at every size. UI specialization remains separate.
 Its XS, S, and test rules select `gpt-sol`; docs select `gpt-luna`.
 The optional `gpt-sol-fast` profile buys speed at a higher price, not higher quality,
 and no starter rule selects it.
+
+For an existing workspace, place difficulty rules **before** broad size rules.
+Rules keep their existing top-to-bottom order; adding task metadata alone does not
+override an earlier owner rule. Profile names and their models/effort remain configurable.
+Explicit task or dispatch pins still win. Updating a task's difficulty invalidates its
+previous Auto selection receipt, so the PM must select again; it does not invalidate an
+approved plan. Running agents keep their recorded preset.
 
 The profile for a run is the first of these that applies:
 
@@ -413,7 +453,7 @@ The profile for a run is the first of these that applies:
 
 Rules skip a profile whose model is not available (with a warning). Explicit choices are always honored, but
 dispatch checks the final model against what the harness reports before it creates a worktree or pane: the
-model must exactly match a discovered id (`provider/id` for OMO and OMP), and an unknown id fails with the close
+model must exactly match a discovered id (`provider/id` for OMO, OMP and pi-native), and an unknown id fails with the close
 matches instead of silently picking another model. If harness discovery itself failed, dispatch warns and allows
 the unverified model. `corral harness list --refresh` re-detects installed models.
 
@@ -661,10 +701,13 @@ reviewer, and you accept every run yourself. See [automation](automation.md) for
 | `gate_tiers` | `{}` | Named gate tiers: tier name to shell commands, merged by name across global and project policy. See [gate tiers](#gate-tiers). |
 | `tier_policy` | unset | `plan_member` and `review_rounds` each name `full` or a defined tier; set field by field. See [gate tiers](#gate-tiers). |
 | `plan_checkpoint_every` | unset | Operational: a positive interval for advisory full-gate checkpoints on a Plan integration target. Never part of the review policy. |
+| `infra_wait_secs` | `300` | Operational infrastructure-wait bound, from 30 through 3600 seconds. A persistent Git lock or operation holds Review and notifies once, rather than consuming a review round. |
 | `reviewer` | `"none"` | `"none"`, `"pm"`, `"cross-vendor"`, `"auto"`, or the name of a profile that reviews the run independently. A task's `reviewer:` frontmatter wins over this; see [reviewer per task](#reviewer-per-task) and [task-aware review routing](#task-aware-review-routing). |
 | `require_cross_family` | `false` | Require a different reviewer model vendor/family for both plan and implementation reviews, including explicit reviewer overrides. Project settings override global settings. |
 | `accept` | `"owner"` | `"owner"` stops in Review for you. Under a grant that delegates acceptance, the built-in default yields to the grant, but an explicitly set `"owner"` (workspace, project or task) stays owner-only. `"auto"` alone grants nothing: landing also needs a confirmed `[automation]` grant with `--accept`. |
 | `max_rounds` | `2` | Automatic change-request loops before the task is handed to you. |
+| `worker_session` | `"reuse"` | Reuse the task worker's conversation for fixes. `"fresh"` starts a new worker conversation for a change round. |
+| `reviewer_session` | `"reuse"` | Resume the separate task reviewer's conversation in later review attempts. `"fresh"` starts an empty reviewer conversation each time. |
 | `merge` | `"rebase"` | How an auto-accepted run lands: `"rebase"` or `"ff"`. |
 | `remove_worktree` | `true` | Remove the worktree after landing. |
 | `max_diff_lines` | removed | Deprecated and ignored: diffs of any size go through normal review. Existing configs still load; corral warns once. Delete the key. |
@@ -687,6 +730,28 @@ even when the boolean is off. Named reviewers are validated, not silently replac
 Turning diversity off does not turn off reviewers, gates, plan approval or owner acceptance.
 `corral route <id>` and `--json` show the effective requirement and its policy source;
 `corral config get review.require_cross_family --source` shows the configured boolean.
+
+Worker and reviewer session settings inherit independently from global and project review tables.
+Session settings alone do not activate the review autopilot or require a gate.
+Omitting both preserves the worker conversation and a distinct reviewer conversation by default.
+`corral show <id>` prints the effective policy, selected session identity and new/reused/resumed
+action; `--json` includes `session_policy` and each run's `session` record. A session ID is
+`not yet observed` until the harness has written its transcript. Readback refreshes those identities.
+
+OmO and OMP use role-specific transcript directories; Claude uses separately allocated exact session
+UUIDs. A resumed process is given the recorded file or UUID, never the newest session in the worktree.
+Pi-native hosts likewise receive the exact recorded transcript, including generation 1 of a new
+review accounting child. Its callback capability is new, so the old review attempt cannot authorize
+the new candidate. Each review receives the current candidate, gate packet, callback and prior
+findings and must check the delta and unresolved findings again.
+
+An exited worker resumes its recorded conversation in the same task run. A missing or incompatible
+worker transcript refuses recovery with a diagnostic; restore the file or explicitly select
+`worker_session = "fresh"`. A changed reviewer harness/model/vendor/worktree, or an unavailable
+reviewer transcript, gets one explicitly diagnosed fresh replacement attempt under the existing
+review limits. Unrecognized harnesses can keep a live worker pane, but cannot promise durable
+process resumption. Their configured commands need a supported harness flag map to opt into an
+adapter. Session reuse changes neither ownership, holds, gates nor independent-review requirements.
 
 `env` and `size_limits` merge individual keys: built-in defaults, then global, then project.
 An empty map preserves inherited keys. Environment names must use portable shell identifiers
@@ -733,7 +798,7 @@ commands, and saving uses the normal validated config path. Repository scripts a
 have read-only content previews.
 
 An empty gate never passes: `corral gate` and approval's re-gate report
-`project <p> has no gate configured`; the autopilot hands configured review policies to Needs me
+`project <p> has no gate configured`; the autopilot hands configured review policies to Blocked
 with that reason. A workspace with no review policy at all retains the manual review flow.
 
 ```toml
@@ -769,7 +834,7 @@ How `corral sync` (and the board's background sync) reads agent activity.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `startup_grace_secs` | `30` | Positive startup window for a dispatched pane to appear in herdr's pane list. Missing panes become **Needs me** after this window, or immediately if previously listed (even idle). |
+| `startup_grace_secs` | `30` | Positive startup window for a dispatched pane to appear in herdr's pane list. Missing panes become **Blocked** after this window, or immediately if previously listed (even idle). |
 | `idle_after_secs` | `120` | A run that looks idle without calling `corral done` gets an `idle_no_report` badge after this many seconds. It never moves the card. |
 | `review_idle_after_secs` | `1800` | Positive idle bound for a pending reviewer, separate from worker warnings so quiet monitor/background waits can finish. The persisted deadline survives syncs and restarts; expiry escalates with the saved notes path. |
 | `stuck_after_secs` | `300` | Seconds of raw herdr idle, and foreground-process age, before a run gets the `stuck:` warning (see [the watchdog](automation.md#the-watchdog-stuck-commands)). |
@@ -797,7 +862,7 @@ omo_agent_dir = "/home/me/.omo/agent"
 | `accent` | `"cyan"` | Focus, link and shortcut color: `cyan`, `blue`, `magenta`, `green`, or `orange`. Status colors remain unchanged. |
 | `compact_cards` | `false` | One-line cards; off restores the density in `board.card`. |
 | `route_warnings` | `false` | Show the yellow route warning triangle on board cards (all densities). Only the glyph is hidden when off; route pairs, other warnings and `review.require_cross_family` enforcement are unchanged. Boolean only. |
-| `notify_needs_me` | `false` | Desktop alert when a task is observed entering Needs me. |
+| `notify_needs_me` | `false` | Desktop alert when a task is observed entering Blocked. |
 | `notify_review` | `false` | Desktop alert when a task is observed entering Review. |
 | `keys` | `{}` | Board action to single printable ASCII character; omitted actions use their defaults. Digits, arrows, Enter and Ctrl+C are fixed. Duplicate bindings are rejected. |
 
@@ -842,11 +907,11 @@ Which fields a board card shows beyond its id, title and status line. Cost is on
 
 | Key | Default | Meaning |
 |---|---|---|
-| `fields` | `["cost"]` | Fields in priority order; at narrow widths the last ones are dropped first. Available: `cost`, `tokens`, `profile`, `model`, `effort`, `harness`, `stage`, `progress`, `rounds`, `age`, `depends_on`, `priority`, `artifacts`, `pinned`, `lines`, `needs_me`. |
+| `fields` | `["cost"]` | Fields in priority order; at narrow widths the last ones are dropped first. Available: `cost`, `tokens`, `profile`, `model`, `effort`, `harness`, `stage`, `progress`, `rounds`, `age`, `depends_on`, `priority`, `artifacts`, `pinned`, `lines`, `blocked` (legacy alias: `needs_me`). |
 | `density` | `"comfortable"` | `compact` is one line per card (id, title, fields; it has no menu glyph, so the whole card is the click and drag target, and right-click or the keyboard opens the card menu); `comfortable` adds the status lines; `rich` adds a progress bar. |
 | `cost_warn` | unset | Cards whose cost is at or above this many USD show it in the warning color. |
 | `column_cost` | `false` | Show the summed cost of a column in its header when there is room. |
-| `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `needs_me`, `review` or `done`. |
+| `columns` | none | Per-column override of `fields`, keyed `backlog`, `ready`, `running`, `blocked`, `review` or `done`. The legacy `needs_me` override remains accepted; `blocked` wins when both are present. |
 
 Cost is the task total across every run, review and gate, summed per usage entry so nothing known is lost, and
 the board refreshes unfinished runs from their harness transcripts on every sync (no need to open the task). The
@@ -980,7 +1045,10 @@ scratch_root = "/home/me/miti-workspace/.scratch"
 |---|---|---|
 | `agent` | `"omo"` | Profile used for the workspace PM pane (`corral pm`, `P` on the board). Must name a profile. |
 | `push_events` | `false` | Opt in to sync pushing `[corral]` messages to the live PM pane only. |
-| `push_kinds` | `["done", "needs_me", "stuck", "blocked", "escalated", "config_changed"]` | Selected actionable kinds. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
+| `push_kinds` | `attention_due` plus the existing ten default task/configuration kinds | Selected actionable kinds; see [events](events.md) for the complete list. Only PM-relevant config changes wake the PM. Unknown names are rejected; `[]` selects none. |
+| `attention_secs` | `900` | PM condition re-wake age, 60..86400 seconds. |
+| `attention_owner_secs` | `1800` | Owner notification age; greater than `attention_secs`, at most 604800 seconds (7 days). |
+| `attention_notify` | `true` | Invoke owner transport for new ladder claims. False records a not-invoked outcome; conditions and ladder state remain durable. |
 
 ```toml
 [pm]
@@ -992,6 +1060,27 @@ push disabled. Sync checkpoints past events while disabled or when PM/herdr is a
 do not form a backlog. The first enabled sync with a live PM and no saved cursor considers retained history;
 run one sync with push disabled first to skip it. Position persists in the store's `pm-events` record.
 See [board events](events.md) for delivery, wait filters, cursors and harness-specific wake guidance.
+
+## agent.capabilities
+
+Optional Pi-native features per role; only pi-native runs read them.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `preset` | `"standard"` | `strict`, `standard` or `full`; each catalog feature defines its value per preset and role. |
+| `trusted_projects` | `["*"]` | Projects whose repository text (context files, `.agents/skills`, `.agents/prompts`) a host may load; `"*"` is every registered project, `[]` none. |
+| `worker`, `reviewer`, `pm`, `planner`, `plan_reviewer` | empty | Per-role tables of catalog key = boolean overrides, or a compound key's table (`enabled` plus settings such as `skills.user_dirs` or `compaction.reserve_tokens`). Unknown keys, settings and keys outside the role's ceiling are rejected. |
+
+```toml
+[agent.capabilities]
+preset = "standard"
+
+[agent.capabilities.worker]
+todo = false
+```
+
+Settings are resolved once per generation and again on explicit resume. See
+[Pi-native capabilities](pi-native.md#capabilities) for the catalog and recovery behavior.
 
 ## herdr
 

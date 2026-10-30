@@ -17,8 +17,10 @@ pub const PI_NATIVE_HARNESS: &str = "pi-native";
 /// Built-in launch template; `{corral}` and `{delivery_args}` are rendered by the agent launch
 /// hook. Model and effort travel in the one-shot bootstrap, never on the command line.
 pub const PI_NATIVE_COMMAND: &str = "{corral} agent launch {delivery_args}";
-/// Vendors a pi-native profile may use (OD5); widening it is a reviewed follow-up.
-pub const PI_NATIVE_VENDORS: [&str; 1] = ["openai"];
+/// Vendors a pi-native profile may use. Bedrock is the explicit metered exception to OD5.
+pub const PI_NATIVE_VENDORS: [&str; 4] = ["openai", "anthropic", "amazon-bedrock", "llama.cpp"];
+/// Metered vendors require an explicit profile vendor, never model-only inference.
+pub const PI_NATIVE_METERED_VENDORS: [&str; 1] = ["amazon-bedrock"];
 
 pub fn is_pi_native(harness: &str) -> bool {
     harness == PI_NATIVE_HARNESS
@@ -38,6 +40,24 @@ pub fn check_pi_native_vendor(profile: &str, vendor: Option<&str>) -> Result<()>
             PI_NATIVE_VENDORS.join(", ")
         ),
     }
+}
+
+/// Refuses an inferred metered route; the profile's raw vendor must name the resolved vendor.
+pub fn check_pi_native_metered_opt_in(
+    profile: &str,
+    explicit_vendor: Option<&str>,
+    resolved_vendor: Option<&str>,
+) -> Result<()> {
+    if let Some(vendor) = resolved_vendor
+        && PI_NATIVE_METERED_VENDORS.contains(&vendor)
+        && explicit_vendor != Some(vendor)
+    {
+        bail!(
+            "metered_vendor_not_explicit: pi-native profile '{profile}' must explicitly set \
+             vendor = \"{vendor}\" to opt in to metered usage"
+        );
+    }
+    Ok(())
 }
 
 /// The semantic operation determines which supplied inputs a diagnostic requires.
@@ -397,6 +417,18 @@ pub fn validate_delivery_template(command: &str, required: bool) -> Result<()> {
 
 /// Infers a vendor from a provider-qualified model or a known bare model family.
 pub fn infer_vendor(model: &str) -> Option<String> {
+    // A Bedrock catalog ID may contain a version colon, which is not a provider separator.
+    if !model.contains('/')
+        && !model.starts_with("gpt-")
+        && !model.starts_with("claude-")
+        && !model
+            .strip_prefix('o')
+            .and_then(|suffix| suffix.as_bytes().first())
+            .is_some_and(u8::is_ascii_digit)
+        && crate::model_family(Some("amazon-bedrock"), Some(model)).is_some()
+    {
+        return Some("amazon-bedrock".into());
+    }
     let Some((provider, model)) = model.split_once(['/', ':']) else {
         return if model.starts_with("claude-") {
             Some("anthropic".to_string())
@@ -742,5 +774,21 @@ impl Config {
             effort: effort.as_deref().map(normalize_effort),
             model_args,
         })
+    }
+}
+
+#[cfg(test)]
+mod local_vendor_tests {
+    use super::*;
+
+    #[test]
+    fn local_vendor_is_admitted_without_changing_cloud_vendor_policy() {
+        // Given the cloud vendors and an explicit local inference vendor.
+        for vendor in ["openai", "anthropic", "amazon-bedrock", "llama.cpp"] {
+            // When dispatch checks the vendor, then each supported route is admitted.
+            assert!(check_pi_native_vendor("configured", Some(vendor)).is_ok());
+        }
+        assert!(check_pi_native_vendor("configured", Some("unconfigured")).is_err());
+        assert!(check_pi_native_vendor("configured", None).is_err());
     }
 }

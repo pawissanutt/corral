@@ -30,6 +30,14 @@ impl std::fmt::Display for CapacityWait {
 }
 impl std::error::Error for CapacityWait {}
 
+/// Temporary launch serialization, not a candidate refusal.
+#[derive(Debug)]
+pub(crate) struct LaunchBusy(pub &'static str);
+impl std::fmt::Display for LaunchBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(self.0) }
+}
+impl std::error::Error for LaunchBusy {}
+
 impl CapacityWait {
     pub(crate) fn persist(&self, ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
         ctx.store.update_head(id, |task| {
@@ -189,6 +197,7 @@ fn active_processes(ctx: &Ctx, id: &str, kind: Kind) -> Result<usize> {
             // Collect completed gates even if their pane remains open.
             if record_kind == Kind::Gate
                 && run.gate.as_ref().is_some_and(|g| g.identity.is_some())
+                && let Some(_storage) = crate::artifact_storage::try_storage_lock(ctx)?
                 && crate::gate::gate_collect(ctx, &head.id)?.is_some()
             {
                 continue;
@@ -329,11 +338,12 @@ impl<'a> ReviewLaunch<'a> {
     ) -> Result<Self> {
         crate::session_scope::check_launch(ctx)?;
         let requested = ctx.store.head(id)?;
+        corral_core::Park::require_unparked_ref(&requested)?;
         let id = requested.id.as_str();
         let lock = ctx
             .store
             .try_lock("review-budget")?
-            .context("another review launch is in progress; try again")?;
+            .ok_or(LaunchBusy("another review launch is in progress; try again"))?;
         crate::session_scope::check_launch(ctx)?;
         if let Some(pending) = load_pending(ctx)? {
             abandon(ctx, &pending)?;
@@ -367,8 +377,9 @@ impl<'a> ReviewLaunch<'a> {
         let ownership = ctx
             .store
             .try_lock("session-ownership")?
-            .context("pane inventory is being reconciled; retry review launch")?;
+            .ok_or(LaunchBusy("pane inventory is being reconciled; retry review launch"))?;
         let (_, waiting) = ctx.store.dispatch_update_head(id, |store, current| {
+            corral_core::Park::require_unparked_ref(&*current)?;
             crate::operating::require_origin(
                 store,
                 &*current,
@@ -397,6 +408,9 @@ impl<'a> ReviewLaunch<'a> {
                     "review process limit reached ({active}/{limit})"
                 )));
             }
+            if kind == Kind::Gate
+                && let Some(reason) = crate::parked::gate_precedence(store, &current.shell_task()?, active)?
+            { return Ok(Some(reason)); }
             let counted = match kind {
                 Kind::Gate => store.config.limits.count_gates,
                 Kind::Reviewer => store.config.limits.count_reviews,
@@ -411,9 +425,10 @@ impl<'a> ReviewLaunch<'a> {
                     .as_ref()
                     .is_some_and(|g| g.holds_slot() && g.identity.is_none()),
             });
+            let sharing = kind == Kind::Gate && crate::slots::gate_shares_dispatch_slot(&current.shell_task()?);
             if counted
                 && let Some(reason) =
-                    crate::slots::capacity_reason(store, &*current, usize::from(replacing))?
+                    crate::slots::capacity_reason(store, &*current, usize::from(replacing || sharing))?
             {
                 return Ok(Some(reason));
             }
@@ -493,13 +508,17 @@ impl<'a> ReviewLaunch<'a> {
     }
 }
 
+pub(crate) fn retained_preparation(store: &corral_core::Store, task: &str, run: &str, kind: Kind) -> Result<bool> {
+    submission::has_retained(store, task, run, kind)
+}
+
 mod attempt;
 mod recovery;
 
 #[cfg(test)]
-pub(crate) use attempt::{AttemptState, attempt_state};
+pub(crate) use attempt::{AttemptState, attempt_state, retained_attempt};
 pub use attempt::{DueWake, due_gate_wakes, fire_wake, own_attempt};
-pub(crate) use attempt::{evidence, retained_attempt, settle};
+pub(crate) use attempt::{adoptable_attempt, bounded, evidence, settle};
 
 /// Release completed/gone review processes even when review autopilot is disabled.
 pub(crate) fn reconcile(

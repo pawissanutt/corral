@@ -118,6 +118,7 @@ pub(super) fn retry_with(
         .try_lock(&format!("launch-{id}"))?
         .context("dispatch is already in progress for this task")?;
     let head = ctx.store.head(&id)?;
+    corral_core::Park::require_unparked_ref(&head)?;
     // The retry choice and checks read head fields and the current run's scalars only.
     let task = head.shell_task()?;
     if let Some(expected) = expected {
@@ -190,6 +191,7 @@ pub(super) fn retry_with(
     }
     // Back to Ready so the retried task can be dispatched and does not count against its own slot.
     let (task, ()) = ctx.store.dispatch_update_head(&task.id, |store, t| {
+        corral_core::Park::require_unparked_ref(&*t)?;
         if let Some(expected) = expected {
             expected.check(&t.shell_task()?)?;
             crate::operating::require(store, &*t, corral_core::OperatingActionKind::Repair)?;
@@ -233,7 +235,7 @@ pub(super) fn retry_with(
                     .or_else(|| {
                         run.gate
                             .as_ref()
-                            .filter(|g| g.result == corral_core::GateResult::Fail)
+                            .filter(|g| matches!(g.result, corral_core::GateResult::Fail | corral_core::GateResult::Stale))
                             .map(|g| {
                                 format!(
                                     "Gate failed: {}",

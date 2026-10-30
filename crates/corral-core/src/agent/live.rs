@@ -17,22 +17,38 @@ pub enum ContainerRef {
         run: String,
         review: String,
     },
+    Planner {
+        task: String,
+        run: String,
+    },
+    PlanReviewer {
+        task: String,
+        plan: String,
+        review: String,
+    },
     Pm,
 }
 
 impl ContainerRef {
-    /// `<task>/<run>`, `<task>/<run>/<review>` or `pm`; the prefix of every question key.
+    /// Container key; planning IDs are namespaced with `plan-`.
     pub fn key(&self) -> String {
         match self {
             ContainerRef::Worker { task, run } => format!("{task}/{run}"),
             ContainerRef::Reviewer { task, run, review } => format!("{task}/{run}/{review}"),
+            ContainerRef::Planner { task, run } => format!("{task}/plan-{run}"),
+            ContainerRef::PlanReviewer { task, plan, review } => {
+                format!("{task}/plan-{plan}/{review}")
+            }
             ContainerRef::Pm => "pm".into(),
         }
     }
 
     pub fn task(&self) -> Option<&str> {
         match self {
-            ContainerRef::Worker { task, .. } | ContainerRef::Reviewer { task, .. } => Some(task),
+            ContainerRef::Worker { task, .. }
+            | ContainerRef::Reviewer { task, .. }
+            | ContainerRef::Planner { task, .. }
+            | ContainerRef::PlanReviewer { task, .. } => Some(task),
             ContainerRef::Pm => None,
         }
     }
@@ -129,7 +145,7 @@ impl ClosureReason {
     }
 }
 
-/// The worker run or review child a container names, current or historical.
+/// The implementation run or review child, current or historical; never a planning record.
 pub fn container_run<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'a Run> {
     match container {
         ContainerRef::Worker { task: id, run } => {
@@ -144,7 +160,7 @@ pub fn container_run<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'a
             .review_runs
             .iter()
             .find(|c| c.id == *review),
-        ContainerRef::Pm => None,
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => None,
     }
 }
 
@@ -171,21 +187,96 @@ pub fn container_run_mut<'a>(task: &'a mut Task, container: &ContainerRef) -> Op
                 .iter_mut()
                 .find(|c| c.id == *review)
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => None,
     }
 }
 
 pub fn container_state<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'a AgentRunState> {
-    container_run(task, container)?.agent_host.as_deref()
+    if container.task()? != task.id {
+        return None;
+    }
+    match container {
+        ContainerRef::Planner { run, .. } => task
+            .plan_runs
+            .iter()
+            .find(|r| r.id == *run)?
+            .agent_host
+            .as_deref(),
+        ContainerRef::PlanReviewer { plan, review, .. } => task
+            .plans
+            .iter()
+            .find(|p| p.id == *plan)?
+            .reviews
+            .iter()
+            .find(|r| r.id == *review)?
+            .agent_host
+            .as_deref(),
+        ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } => {
+            container_run(task, container)?.agent_host.as_deref()
+        }
+        ContainerRef::Pm => None,
+    }
 }
 
 pub fn container_state_mut<'a>(
     task: &'a mut Task,
     container: &ContainerRef,
 ) -> Option<&'a mut AgentRunState> {
-    container_run_mut(task, container)?
-        .agent_host
-        .as_deref_mut()
+    container_host_mut(task, container)?.as_deref_mut()
+}
+
+/// The host slot of a named container, including an unbound or historical one.
+pub fn container_host_mut<'a>(
+    task: &'a mut Task,
+    container: &ContainerRef,
+) -> Option<&'a mut Option<Box<AgentRunState>>> {
+    if container.task()? != task.id {
+        return None;
+    }
+    match container {
+        ContainerRef::Planner { run, .. } => {
+            Some(&mut task.plan_runs.iter_mut().find(|r| r.id == *run)?.agent_host)
+        }
+        ContainerRef::PlanReviewer { plan, review, .. } => Some(
+            &mut task
+                .plans
+                .iter_mut()
+                .find(|p| p.id == *plan)?
+                .reviews
+                .iter_mut()
+                .find(|r| r.id == *review)?
+                .agent_host,
+        ),
+        ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } => {
+            Some(&mut container_run_mut(task, container)?.agent_host)
+        }
+        ContainerRef::Pm => None,
+    }
+}
+
+/// The recorded pane, independent of whether the host has completed binding.
+pub fn container_pane<'a>(task: &'a Task, container: &ContainerRef) -> Option<&'a crate::HerdrRef> {
+    if container.task()? != task.id {
+        return None;
+    }
+    match container {
+        ContainerRef::Planner { run, .. } => {
+            task.plan_runs.iter().find(|r| r.id == *run)?.herdr.as_ref()
+        }
+        ContainerRef::PlanReviewer { plan, review, .. } => task
+            .plans
+            .iter()
+            .find(|p| p.id == *plan)?
+            .reviews
+            .iter()
+            .find(|r| r.id == *review)?
+            .herdr
+            .as_ref(),
+        ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. } => {
+            container_run(task, container)?.herdr.as_ref()
+        }
+        ContainerRef::Pm => None,
+    }
 }
 
 /// A worker run ends only by discard, retry, drop or landing; done in Review, a refused
@@ -221,6 +312,37 @@ pub fn container_closure(task: &Task, container: &ContainerRef) -> Option<Closur
 /// child, so the verdict's own final turn can settle without waiving any other requirement.
 fn closure(task: &Task, container: &ContainerRef, verdict_closes: bool) -> Option<ClosureReason> {
     match container {
+        ContainerRef::Planner { task: id, run } => (task.id != *id
+            || task.status == Status::Dropped
+            || task
+                .plan_runs
+                .last()
+                .is_none_or(|r| r.id != *run || !r.holds_slot()))
+        .then_some(ClosureReason::RunEnded),
+        ContainerRef::PlanReviewer {
+            task: id,
+            plan,
+            review,
+        } => {
+            if task.id != *id || task.status == Status::Dropped {
+                return Some(ClosureReason::RunEnded);
+            }
+            let Some(parent) = task.plans.last().filter(|p| p.id == *plan) else {
+                return Some(ClosureReason::ReviewSuperseded);
+            };
+            if !crate::plan_contract_revision(task).is_ok_and(|r| r == parent.spec_revision)
+                || parent
+                    .run
+                    .as_ref()
+                    .is_some_and(|run| task.plan_runs.last().is_none_or(|r| r.id != *run))
+            {
+                return Some(ClosureReason::ReviewSuperseded);
+            }
+            let Some(child) = parent.reviews.last().filter(|r| r.id == *review) else {
+                return Some(ClosureReason::ReviewSuperseded);
+            };
+            (verdict_closes && child.verdict.is_some()).then_some(ClosureReason::ReviewClosed)
+        }
         ContainerRef::Worker { task: id, run } => {
             (task.id != *id || worker_closed(task, run)).then_some(ClosureReason::RunEnded)
         }
@@ -285,6 +407,37 @@ fn generation_live(state: &AgentRunState, generation: u32) -> Result<(), AgentRe
 /// boundary call it under the task lock.
 pub fn check_live(task: &Task, binding: &RequestBinding) -> Result<(), AgentRefusal> {
     let ended = |detail: &str| AgentRefusal::new(RefusalCode::RunEnded, detail);
+    if matches!(
+        binding.container,
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. }
+    ) {
+        let state = container_state(task, &binding.container);
+        if let Some(reason) = closure(task, &binding.container, !binding.settles_open_turn(state)) {
+            return Err(AgentRefusal::new(
+                if reason == ClosureReason::RunEnded {
+                    RefusalCode::RunEnded
+                } else {
+                    RefusalCode::ReviewClosed
+                },
+                reason.as_str(),
+            ));
+        }
+        let state = state.ok_or_else(|| {
+            AgentRefusal::new(
+                RefusalCode::AgentFenced,
+                "the container has no agent binding",
+            )
+        })?;
+        if matches!(binding.container, ContainerRef::PlanReviewer { .. })
+            && state.binding.callback != binding.callback
+        {
+            return Err(AgentRefusal::new(
+                RefusalCode::ReviewClosed,
+                "the callback token does not match the bound attempt",
+            ));
+        }
+        return generation_live(state, binding.generation);
+    }
     let (run_id, review) = match &binding.container {
         ContainerRef::Worker { task: id, run } if *id == task.id => (run, None),
         ContainerRef::Reviewer {

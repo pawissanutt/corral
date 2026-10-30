@@ -140,17 +140,31 @@ impl TaskHead {
         token: Option<String>,
         open: bool,
     ) -> Result<Vec<HistoryRow>> {
-        let (task, run, child) = match container {
-            ContainerRef::Worker { task, run } => (task, run, None),
-            ContainerRef::Reviewer { task, run, review } => (task, run, Some(review.as_str())),
-            ContainerRef::Pm => return Ok(Vec::new()),
-        };
-        if *task != self.task.id {
+        if container.task().is_none_or(|task| task != self.task.id) {
             return Ok(Vec::new());
         }
-        let Some(owner) = self.owner_key(run, child)? else {
-            return Ok(Vec::new());
+        let owner = match container {
+            ContainerRef::Worker { run, .. } => self.owner_key(run, None)?,
+            ContainerRef::Reviewer { run, review, .. } => self.owner_key(run, Some(review))?,
+            ContainerRef::Planner { run, .. } => {
+                let key = if self.last_plan_run.as_ref().is_some_and(|r| r.id == *run) {
+                    self.seqs.plan_run.map(super::codec::seq)
+                } else {
+                    self.query(&RowQuery::part(TaskPart::PlanRun).with_index(format!("id:{run}")),
+                        1, Counter::HistoryRowDecodes)?.pop().map(|row| row.key)
+                };
+                key.map(|key| format!("plan_run:{key}"))
+            }
+            ContainerRef::PlanReviewer { plan, review, .. } => {
+                let Some(n) = self.plan_seq(plan)? else { return Ok(Vec::new()); };
+                let prefix = format!("{n:06}/");
+                self.query(&RowQuery::under(TaskPart::PlanReview, prefix)
+                    .with_index(format!("id:{review}")), 1, Counter::NestedRowDecodes)?
+                    .pop().map(|row| format!("plan_review:{}", row.key))
+            }
+            ContainerRef::Pm => None,
         };
+        let Some(owner) = owner else { return Ok(Vec::new()); };
         let mut q = RowQuery::under(TaskPart::AgentRecord, format!("{owner}/{kind}/"));
         let limit = if token.is_some() { 1 } else { u32::MAX };
         q.index = token;
@@ -332,6 +346,7 @@ impl TaskHead {
                 .collect())
         };
         Ok(RunObligations {
+            slot_wait: crate::TaskRef::run_head(self, run)?.and_then(|r| r.obligations.slot_wait),
             waits: decode_all(rows("wait/")?)?,
             decisions: decode_all(rows("decision/")?)?,
         })
@@ -352,6 +367,7 @@ impl TaskHead {
                 .collect())
         };
         Ok(RunObligations {
+            slot_wait: crate::TaskRef::run_head(self, run)?.and_then(|r| r.obligations.slot_wait),
             waits: decode_all(rows("wait/")?)?,
             decisions: decode_all(rows("decision/")?)?,
         })

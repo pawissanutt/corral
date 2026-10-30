@@ -14,5 +14,5 @@ pub fn launch_mode() -> DeliveryMode {
 /// The adapter registered for pi-native recipients.
 pub fn adapter() -> Box<dyn DeliveryAdapter> {
     consulted("delivery");
-    Box::new(super::super::delivery::Unavailable)
+    Box::new(super::super::delivery::PiNativeAdapter)
 }

@@ -112,7 +112,7 @@ shot() {
 }
 col() { for _ in 1 2 3 4 5 6; do key h; done; for _ in $(seq "$1"); do key l; done; }
 
-shot board "The corral board: backlog, ready, running, needs me, review"
+shot board "The corral board: backlog, ready, running, blocked, review"
 col 3; key enter; key 3
 shot task-detail "Task detail with artifacts"
 key esc

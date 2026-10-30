@@ -20,6 +20,23 @@ const RUN_TEMPLATE: &str = include_str!("../assets/run.md");
 /// running binary. The gate is the effective `[review]` gate, else the gate quoted in the repo's AGENTS.md.
 /// A tiered run's `{{gate}}` points to the one authoritative Gate contract section that is always
 /// appended after the template, whether or not the template contains `{{gate}}`.
+/// Whether the run's prompt carries project lessons: always for other harnesses; for a
+/// pi-native worker, the `lessons` capability (on in every preset, disableable per role).
+pub(crate) fn lessons_included(ctx: &Ctx, task: &Task, run: &Run) -> bool {
+    !crate::agent::hooks::run_is_pi_native(run)
+        || ctx
+            .store
+            .config
+            .agent
+            .capabilities
+            .resolve_for(
+                corral_core::agent::AgentRole::Worker,
+                task.project.as_deref(),
+                None,
+            )
+            .enabled("lessons")
+}
+
 pub fn task_prompt(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     render_prompt(
         ctx,
@@ -167,11 +184,11 @@ fn render_prompt(
             ctx.store.dir().join(&plan.artifact.path).display(), plan.artifact.sha256,
         ));
     }
-    prompt.push_str(&crate::lessons::lessons_prompt(
-        ctx,
-        task,
-        &corral_core::RunHead::of(run)?,
-    )?);
+    if lessons_included(ctx, task, run) {
+        prompt.push_str(&crate::lessons::lessons_prompt(
+            ctx, task, &corral_core::RunHead::of(run)?,
+        )?);
+    }
     prompt.push_str(comments);
     let packet = packet()?;
     prompt.push_str("\n## Portable resume contract\n\n");
@@ -451,6 +468,18 @@ pub fn render_command(
     run: &Run,
     prompt_file: &Path,
 ) -> Result<String> {
+    render_command_noticed(ctx, profile, task, run, prompt_file, None)
+}
+
+/// `render_command` whose `{prompt_ref}` message also carries a single-line new-round `notice`.
+pub(crate) fn render_command_noticed(
+    ctx: &Ctx,
+    profile: &str,
+    task: &Task,
+    run: &Run,
+    prompt_file: &Path,
+    notice: Option<&str>,
+) -> Result<String> {
     let choice = ProfileChoice {
         profile: Some(profile.to_string()),
         model: run.model.clone(),
@@ -460,16 +489,18 @@ pub fn render_command(
         Some(snapshot) => snapshot.resolved.clone(),
         None => ctx.store.config.resolve_profile(&choice, None, None)?,
     };
+    let resolved = crate::role_session::command(ctx, run, &resolved)?;
     let name = format!("{} {}", task.id, task.title);
-    render_template(
-        &resolved,
-        &[
-            ("prompt_file", prompt_file.display().to_string()),
-            ("name", name),
-            ("task", task.id.clone()),
-            ("worktree", run.worktree.display().to_string()),
-        ],
-    )
+    let mut values = vec![
+        ("prompt_file", prompt_file.display().to_string()),
+        ("name", name),
+        ("task", task.id.clone()),
+        ("worktree", run.worktree.display().to_string()),
+    ];
+    if let Some(notice) = notice {
+        values.push((NOTICE_KEY, notice.to_string()));
+    }
+    render_template(&resolved, &values)
 }
 
 /// Records referencing each run's rendered dispatch prompt blob, keyed `<task>/<run>`.
@@ -636,11 +667,18 @@ pub(crate) fn render_template(
             .iter()
             .find(|(key, _)| *key == "prompt_file")
             .context("{prompt_ref} needs a prompt file")?;
-        out = out.replace(PROMPT_REF, &sh_quote(&pointer(Path::new(&file.1))));
+        let message = pointer(Path::new(&file.1));
+        let message = match values.iter().find(|(key, _)| *key == NOTICE_KEY) {
+            Some((_, notice)) => format!("{notice} {message}"),
+            None => message,
+        };
+        out = out.replace(PROMPT_REF, &sh_quote(&message));
     }
     Ok(out)
 }
 
+/// Template value naming a new-round notice that precedes the `{prompt_ref}` pointer message.
+pub(crate) const NOTICE_KEY: &str = "round_notice";
 const PROMPT_REF: &str = "{prompt_ref}";
 /// The pre-T-260 default: the whole prompt as one argument, which Linux caps at 128 KiB.
 const INLINE_PROMPT: &str = "\"$(cat '{prompt_file}')\"";

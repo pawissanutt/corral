@@ -85,6 +85,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        changes_round: None,
         review: None,
         review_runs: Vec::new(),
         usage: None,
@@ -98,6 +99,7 @@ fn run(root: &Path, harness: Option<&str>) -> Run {
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
         agent_host: None,
+        session: None,
     }
 }
 
@@ -276,20 +278,22 @@ fn actions(writes: &[corral_ops::SkillWrite]) -> Vec<(&'static str, corral_ops::
 
 #[test]
 fn fresh_install_writes_every_role_for_installed_harnesses_only() {
-    use corral_ops::{ROLE_SKILLS, SKILL_HARNESSES, SkillAction};
+    use corral_ops::{PI_SKILLS, ROLE_SKILLS, SKILL_HARNESSES, SkillAction};
     let home = tempfile::tempdir().unwrap();
     let home = home.path();
     std::fs::create_dir_all(home.join(".omp")).unwrap();
     std::fs::create_dir_all(home.join(".claude")).unwrap();
     for (harness, marker, skills) in SKILL_HARNESSES {
         let writes = corral_ops::ensure_skills(home, harness).unwrap();
-        if home.join(marker).is_dir() {
-            let expected: Vec<_> = ROLE_SKILLS
-                .iter()
-                .map(|r| (*r, SkillAction::Wrote))
-                .collect();
+        if *harness == "pi-native" || home.join(marker).is_dir() {
+            let roles: &[&str] = if *harness == "pi-native" {
+                &PI_SKILLS
+            } else {
+                &ROLE_SKILLS
+            };
+            let expected: Vec<_> = roles.iter().map(|r| (*r, SkillAction::Wrote)).collect();
             assert_eq!(actions(&writes), expected, "{harness}");
-            for role in ROLE_SKILLS {
+            for role in roles {
                 let text = std::fs::read_to_string(skill_file(home, skills, role)).unwrap();
                 assert_eq!(Some(text), corral_ops::role_skill_markdown(role));
                 assert!(
@@ -387,4 +391,35 @@ fn run_prompt_names_the_worker_skill() {
         prompt.contains(&format!("`{}`", corral_ops::WORKER_SKILL)),
         "{prompt}"
     );
+}
+
+#[test]
+fn pi_native_prompt_lessons_follow_the_worker_lessons_capability() {
+    // Given a project lesson that matches every run.
+    let (tmp, mut ctx) = workspace();
+    let task = task(&ctx);
+    let lesson: corral_core::Lesson = serde_json::from_value(serde_json::json!({
+        "id": "L-any", "rule": "Check every gate attempt", "why": "Observed history",
+        "confidence": 0.8, "last_seen": "2026-10-15T00:00:00Z"
+    }))
+    .unwrap();
+    ctx.store.save_lessons("app", &[lesson]).unwrap();
+    let has_lessons = |ctx: &Ctx, harness| {
+        corral_ops::task_prompt(ctx, &task, &run(tmp.path(), Some(harness)))
+            .unwrap()
+            .contains("<corral-lessons>")
+    };
+    // Then the default includes lessons for every harness.
+    assert!(has_lessons(&ctx, "omp"));
+    assert!(has_lessons(&ctx, "pi-native"));
+    // When the worker opts out, only the pi-native prompt drops them; lesson storage is unchanged.
+    ctx.store
+        .config
+        .agent
+        .capabilities
+        .set(corral_core::agent::AgentRole::Worker, "lessons", false)
+        .unwrap();
+    assert!(!has_lessons(&ctx, "pi-native"));
+    assert!(has_lessons(&ctx, "omp"));
+    assert_eq!(ctx.store.lessons("app").unwrap().len(), 1);
 }

@@ -118,7 +118,13 @@ impl BoardView {
     /// the card's own column or when nothing is being dragged.
     pub(super) fn drop_target(&self, col: Status) -> Option<bool> {
         let d = self.drag.as_ref().filter(|d| d.active)?;
-        if d.status.column() == Some(col) {
+        if self
+            .tasks
+            .iter()
+            .find(|task| task.id == d.id)
+            .and_then(|task| crate::attention::column(task, &self.attention))
+            == Some(col)
+        {
             return None;
         }
         Some(drop_key(d.status, col).is_some())

@@ -8,7 +8,7 @@ use crate::{Ctx, operating, plan};
 pub enum PlanReviewOffer {
     /// The latest plan has no review attempt yet.
     Run,
-    /// The last attempt ended in an escalation: the reviewer disappeared, failed to launch or escalated.
+    /// The last attempt failed to launch or lost its reviewer before a verdict.
     Retry,
 }
 
@@ -31,7 +31,17 @@ fn offer_for(task: &Task) -> Option<PlanReviewOffer> {
     }
     match plan.reviews.last() {
         None => Some(PlanReviewOffer::Run),
-        Some(review) if review.verdict == Some(Verdict::Escalate) => Some(PlanReviewOffer::Retry),
+        // Infrastructure failures did not review the snapshot. A substantive escalation,
+        // however, needs an owner decision/revision, not another review of the same plan.
+        Some(review)
+            if review.verdict == Some(Verdict::Escalate)
+                && review.notes.as_deref().is_some_and(|notes| {
+                    notes.starts_with("Review launch failed:")
+                        || notes == "plan reviewer disappeared before recording a verdict"
+                }) =>
+        {
+            Some(PlanReviewOffer::Retry)
+        }
         Some(_) => None,
     }
 }
@@ -54,10 +64,12 @@ pub fn plan_review_wait(ctx: &Ctx, task: &Task) -> Option<String> {
 }
 
 /// A refusal that leaves the plan unchanged and the same request valid later: pane inventory under
-/// reconciliation, or a full review or machine slot. Other authorization refusals, such as a changed
-/// policy revision, will not clear by asking again.
+/// reconciliation, a full review or machine slot, or a policy revision that changed under the
+/// request (a fresh owner request re-authorizes against the current policy). Other authorization
+/// refusals will not clear by asking again.
 pub fn plan_review_retryable(error: &anyhow::Error) -> bool {
-    const MARKERS: [&str; 4] = [
+    const MARKERS: [&str; 5] = [
+        "action policy revision changed",
         "pane inventory is being reconciled",
         "review process limit reached",
         "waiting: machine busy",
@@ -87,8 +99,11 @@ mod tests {
         assert!(!plan_review_retryable(&anyhow!(
             "plan review already pending"
         )));
-        assert!(!plan_review_retryable(&anyhow::Error::new(
+        assert!(plan_review_retryable(&anyhow::Error::new(
             operating::AuthorizationRefused("action policy revision changed".into())
+        )));
+        assert!(!plan_review_retryable(&anyhow::Error::new(
+            operating::AuthorizationRefused("automatic grant was revoked".into())
         )));
         assert!(plan_review_retryable(&anyhow::Error::new(
             operating::AuthorizationRefused("waiting: machine busy (load)".into())

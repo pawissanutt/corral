@@ -231,6 +231,27 @@ fn edits_keep_every_comment_and_unrelated_byte() {
 }
 
 #[test]
+fn soft_running_target_must_stay_within_the_hard_limit() {
+    let (_d, s) = workspace(COMMENTED);
+    for bad in ["0", "99"] {
+        let err = s
+            .edit_config(|doc| doc.set_str("limits.running_target", bad))
+            .unwrap_err();
+        let p = problems(&err);
+        assert!(
+            p.iter()
+                .any(|m| m == "limits.running_target must be within 1..=limits.running"),
+            "{bad}: {p:#?}"
+        );
+        assert_eq!(on_disk(&s), COMMENTED);
+    }
+    let saved = s
+        .edit_config(|doc| doc.set_str("limits.running_target", "1"))
+        .unwrap();
+    assert_eq!(saved.limits.running_target, Some(1));
+}
+
+#[test]
 fn invalid_edits_are_rejected_and_leave_the_file_alone() {
     let (_d, s) = workspace(COMMENTED);
     let err = s

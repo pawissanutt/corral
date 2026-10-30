@@ -254,11 +254,17 @@ fn check_publication_identity<T: TaskRef + ?Sized>(
 /// board lock. Child writes use rendered files directly under that same lock,
 /// not create/save/update (which would acquire it again).
 pub(crate) fn apply(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
+    apply_refreshing(ctx, id, plan_id).map(drop)
+}
+
+/// Like `apply`, returning the already published children whose approval binding
+/// this re-acceptance refreshed (empty for a first publication).
+pub(crate) fn apply_refreshing(ctx: &Ctx, id: &str, plan_id: &str) -> Result<Vec<String>> {
     apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Owner)
 }
 
 pub(crate) fn apply_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
-    apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Automatic)
+    apply_with_origin(ctx, id, plan_id, crate::operating::Origin::Automatic).map(drop)
 }
 
 fn apply_with_origin(
@@ -266,7 +272,7 @@ fn apply_with_origin(
     id: &str,
     plan_id: &str,
     origin: crate::operating::Origin,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     // A plan of at most one scope projects onto its own task, and an automatic multi-scope
     // publication stages its children from the parent's head shell: both read and write the
     // parent as a head. Only the owner's decomposition reads the full parent.
@@ -278,12 +284,12 @@ fn apply_with_origin(
         .filter(|plan| plan.id == plan_id)
         .map(|plan| plan.document.dependencies.len());
     if scopes.is_some_and(|n| n <= 1) {
-        return self_projection::apply(ctx, id, plan_id, origin);
+        return self_projection::apply(ctx, id, plan_id, origin).map(|()| Vec::new());
     }
     if scopes.is_some() && origin == crate::operating::Origin::Automatic {
-        return publish_head::apply(ctx, id, plan_id);
+        return publish_head::apply(ctx, id, plan_id).map(|()| Vec::new());
     }
-    ctx.store.dispatch_update(id, |store, parent| {
+    let (_, refreshed) = ctx.store.dispatch_update(id, |store, parent| {
         crate::operating::require_origin(store, parent, OperatingActionKind::AcceptPlan, origin)?;
         ensure!(
             parent.plans.last().is_some_and(|plan| plan.id == plan_id),
@@ -375,7 +381,7 @@ fn apply_with_origin(
             };
             PUBLICATIONS.save(store, &parent.id, &journal)?;
             *parent = projected;
-            return Ok(());
+            return Ok(Vec::new());
         }
         if parent.plan.as_ref() == Some(&backlink)
             && parent.status == Status::Done
@@ -387,7 +393,9 @@ fn apply_with_origin(
                         .context("published child authorization is missing")?;
                 }
             }
-            return Ok(());
+            // Children read the parent's current approval, so a re-accepted
+            // plan needs no child rewrite: report who is bound by it again.
+            return Ok(parent.children.clone());
         }
         ensure!(
             parent.children.is_empty(),
@@ -456,9 +464,9 @@ fn apply_with_origin(
                 "target":"plan", "plan":plan_id, "children":parent.children,
             }),
         )?;
-        Ok(())
+        Ok(Vec::new())
     })?;
-    Ok(())
+    Ok(refreshed)
 }
 
 pub(crate) fn validate(document: &PlanDocument) -> Result<()> {

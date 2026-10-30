@@ -15,9 +15,14 @@ corral wait --after 12345 --json --print-cursor
 corral wait --for config_changed,config_invalid --json --print-cursor
 ```
 
-`--for` defaults to every actionable kind: `done`, `needs_me`, `stuck`, `blocked`, `escalated`,
-`config_changed`, `config_invalid`, `lessons_due`, `run_resumed`, `wait_transition` and
-`pm_decision_resolved`; `--task` and `--project` narrow the match. Configuration events
+`--for` accepts, and defaults to, every PM-actionable kind (`corral_core::PM_ACTIONABLE_KINDS`,
+the same list `pm.push_kinds` accepts) plus `config_invalid`: `done`, `needs_me`, `stuck`,
+`blocked`, `escalated`, `config_changed`, `lessons_due`, `run_resumed`, `wait_transition`,
+`pm_decision_resolved`, `delivery_uncertain`, `delivery_orphaned`, `message_unobserved`,
+`question_opened`, `question_escalated`, `question_unattended`, `turn_ended_without_report`,
+`attention_due` and `slot_reacquired`.
+Other question events such as `question_answered` never wake a wait. `--task` and `--project`
+narrow the match. Configuration events
 are workspace-wide and do not match task/project filters. Unlike PM push, an explicit
 config subscription includes UI-only changes as well as policy changes.
 `--since` includes events at or after an RFC3339 timestamp and scans retained history.
@@ -147,12 +152,14 @@ agent still follows its Run contract and finishes with `corral done`.
 agent = "omo"
 push_events = false
 push_kinds = ["done", "needs_me", "stuck", "blocked", "escalated", "config_changed",
-              "lessons_due", "run_resumed", "wait_transition", "pm_decision_resolved"]
+              "lessons_due", "run_resumed", "wait_transition", "pm_decision_resolved", "attention_due"]
 ```
 
 Push is off by default, including for existing configs. Enable it in `.corral/corral.toml` or
-Settings > General > PM event push. PM push kinds is a comma-separated list of those ten
-actionable names (all ten by default); clearing it selects none. Invalid names block saving. `config_changed`
+Settings > General > PM event push. PM push kinds is a comma-separated list of PM-actionable
+names: the eleven above by default, plus the opt-in `delivery_uncertain`, `delivery_orphaned`,
+`message_unobserved`, `question_opened`, `question_escalated`, `question_unattended`,
+`turn_ended_without_report` and `slot_reacquired`. Clearing it selects none. Invalid names block saving. `config_changed`
 wakes the PM only when the event's `pm_relevant` flag is true. `config_invalid` is available
 to `wait` and config history but is not a PM push kind.
 
@@ -163,6 +170,26 @@ unavailable herdr, and an absent PM checkpoint the event tail during sync: skipp
 not replayed later. A first-ever enabled sync with a live PM and no saved cursor considers the
 retained history from sequence zero. To skip old history, run one sync with push disabled first.
 Event delivery is awareness, not authorization to dispatch, approve, or recover a process.
+
+### Attention lifecycle and routing
+
+`attention_opened`, `attention_overdue` (re-wake/owner levels),
+`attention_handled`, and `attention_resolved` carry deterministic `fact_id`
+values. Interrupted publication may repeat a fact with the same ID; consumers
+deduplicate by ID. Resolution facts contain the kind, responsibility, since/source,
+opened time, PM liveness at opening, first handling, fired levels and resolution
+time, so later record pruning does not lose these values.
+
+`attention_due` carries `project` (nullable), complete `tasks`, complete `count`,
+at most 16 display `entries`, and nullable `pm_live`. It is emitted at most once
+per project/pass with announcements or re-wakes. `event.task` is set for a
+single-task digest; `wait --task` also matches membership in `detail.tasks`.
+`wait --project` retains its existing detail/project fallback rule.
+
+`notification_claimed`, `owner_notified`, `owner_notify_failed` and
+`notification_not_invoked` preserve `batch_id`, `claim_ids`, source, producer and
+the complete coverage/exemption relation. One physical batch can cover several
+conditions. A missing outcome is unknown, not proof that transport was skipped.
 
 ### Operating policy events
 

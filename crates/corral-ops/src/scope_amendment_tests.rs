@@ -22,6 +22,7 @@ fn design(ctx: &Ctx, approve: bool) -> String {
     let scope = approved_scope();
     let document = PlanDocument {
         delivery_target: None,
+        human_review: None,
         goal: scope.goal,
         acceptance: scope.acceptance,
         non_goals: Vec::new(),

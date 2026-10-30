@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config_validation::SemanticInputs;
-use crate::{Config, Task};
+use crate::{Config, SessionPolicy, Task};
 
 /// The existing planning contract identity, kept independent from execution progress.
 pub fn plan_contract_revision<T: crate::TaskFieldsRef + ?Sized>(task: &T) -> Result<String> {
@@ -95,6 +95,10 @@ impl Reviewer {
 #[serde(deny_unknown_fields)]
 pub struct ReviewOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_session: Option<SessionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer_session: Option<SessionPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_accept: Option<Accept>,
@@ -116,6 +120,9 @@ pub struct ReviewOverride {
     /// Operational Plan-target checkpoint interval; never part of [`ReviewPolicy`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_checkpoint_every: Option<u32>,
+    /// Operational infrastructure-wait bound; never part of [`ReviewPolicy`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infra_wait_secs: Option<u64>,
     /// "none" | "pm" | "cross-vendor" | "auto" | "<profile>".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<String>,
@@ -148,16 +155,23 @@ pub struct ReviewOverride {
 
 impl ReviewOverride {
     /// True when no effective review setting is present; the deprecated, ignored `max_diff_lines`
-    /// and the operational `plan_checkpoint_every` do not count, so neither can activate
+    /// and operational checkpoint/infra-wait bounds do not count, so they cannot activate
     /// review-policy requirements.
     pub fn is_empty(&self) -> bool {
         let mut effective = self.clone();
         effective.max_diff_lines = None;
         effective.plan_checkpoint_every = None;
+        effective.infra_wait_secs = None;
         effective == ReviewOverride::default()
     }
 
     fn apply(&self, p: &mut ReviewPolicy) {
+        if let Some(v) = self.worker_session {
+            p.worker_session = v;
+        }
+        if let Some(v) = self.reviewer_session {
+            p.reviewer_session = v;
+        }
         if let Some(v) = self.plan_required {
             p.plan_required = v;
         }
@@ -209,6 +223,11 @@ impl ReviewOverride {
 /// The effective review policy for one task.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewPolicy {
+    /// Omitted at the legacy default so existing policy identities remain stable.
+    #[serde(skip_serializing_if = "SessionPolicy::is_reuse")]
+    pub worker_session: SessionPolicy,
+    #[serde(skip_serializing_if = "SessionPolicy::is_reuse")]
+    pub reviewer_session: SessionPolicy,
     pub plan_required: bool,
     pub plan_accept: Accept,
     pub gate: Vec<String>,
@@ -235,6 +254,8 @@ impl Default for ReviewPolicy {
     /// Today's manual flow: no gate, no reviewer, the owner accepts.
     fn default() -> Self {
         ReviewPolicy {
+            worker_session: SessionPolicy::Reuse,
+            reviewer_session: SessionPolicy::Reuse,
             plan_required: false,
             plan_accept: Accept::Owner,
             gate: Vec::new(),
@@ -260,24 +281,24 @@ impl ReviewPolicy {
         self.require_cross_family || self.reviewer == Reviewer::CrossVendor
     }
 
-    /// Checks the selected reviewer's vendor only when diversity is required.
+    /// Checks the selected reviewer's model family only when diversity is required.
     pub fn check_reviewer_family(
         &self,
-        author_vendor: Option<&str>,
-        reviewer_vendor: Option<&str>,
+        author: Option<&crate::ModelFamily>,
+        reviewer: Option<&crate::ModelFamily>,
     ) -> Result<()> {
         if !self.cross_family_required() {
             return Ok(());
         }
-        let author = author_vendor
-            .filter(|v| !v.trim().is_empty())
-            .context("cross-family review is required but author vendor is unknown")?;
-        let reviewer = reviewer_vendor
-            .filter(|v| !v.trim().is_empty())
-            .context("cross-family review is required but reviewer vendor is unknown")?;
+        let author = author.filter(|v| !v.as_str().trim().is_empty()).context(
+            "cross-family review is required but author vendor or model family is unknown",
+        )?;
+        let reviewer = reviewer.filter(|v| !v.as_str().trim().is_empty()).context(
+            "cross-family review is required but reviewer vendor or model family is unknown",
+        )?;
         if author == reviewer {
             bail!(
-                "cross-family review is required: reviewer vendor '{reviewer}' matches author vendor '{author}'"
+                "cross-family review is required: reviewer model family '{reviewer}' matches author model family '{author}' (a different routing vendor, such as amazon-bedrock, does not change the family)"
             );
         }
         Ok(())
@@ -314,6 +335,8 @@ impl PolicySource {
 /// Where each field of an effective [`ReviewPolicy`] came from (see [`Config::review_policy_sources`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PolicySources {
+    pub worker_session: PolicySource,
+    pub reviewer_session: PolicySource,
     pub plan_required: PolicySource,
     pub plan_accept: PolicySource,
     pub gate: PolicySource,
@@ -376,12 +399,13 @@ impl Config {
         }
     }
 
-    /// Selects an independent reviewer by the reviewer's vendor, without a same-vendor fallback.
-    pub fn cross_vendor_reviewer(&self, implementer_vendor: &str) -> Result<String> {
-        if implementer_vendor.trim().is_empty() {
+    /// Selects an independent reviewer by model family (`reviewer_by_vendor` keys are families),
+    /// without a same-family fallback.
+    pub fn cross_vendor_reviewer(&self, author: &crate::ModelFamily) -> Result<String> {
+        if author.as_str().trim().is_empty() {
             bail!("cross-vendor review requires a known implementer vendor");
         }
-        let vendor = match implementer_vendor {
+        let vendor = match author.as_str() {
             "anthropic" => "openai",
             "openai" => "anthropic",
             other => {
@@ -419,13 +443,12 @@ impl Config {
             None,
             None,
         )?;
-        let actual = resolved
-            .vendor
-            .filter(|value| !value.trim().is_empty())
-            .with_context(|| format!("reviewer profile '{name}' has unknown vendor"))?;
-        if actual != vendor {
+        let actual = resolved.family().with_context(|| {
+            format!("reviewer profile '{name}' has unknown vendor or model family")
+        })?;
+        if actual.as_str() != vendor {
             bail!(
-                "reviewer profile '{name}' vendor '{actual}' does not match mapping vendor '{vendor}'"
+                "reviewer profile '{name}' model family '{actual}' does not match mapping vendor '{vendor}'"
             );
         }
         Ok(name.clone())
@@ -478,10 +501,16 @@ impl Config {
 
     /// Whether review was explicitly configured, even if its effective gate is empty.
     pub fn has_review_policy(&self, project: Option<&str>, task_accept: Option<Accept>) -> bool {
-        !self.review.is_empty()
+        let configured = |layer: &ReviewOverride| {
+            let mut review = layer.clone();
+            review.worker_session = None;
+            review.reviewer_session = None;
+            !review.is_empty()
+        };
+        configured(&self.review)
             || project
                 .and_then(|name| self.projects.get(name))
-                .is_some_and(|project| !project.review.is_empty())
+                .is_some_and(|project| configured(&project.review))
             || task_accept.is_some()
     }
 
@@ -565,6 +594,8 @@ impl Config {
             }
         };
         PolicySources {
+            worker_session: src(|r| r.worker_session.is_some()),
+            reviewer_session: src(|r| r.reviewer_session.is_some()),
             plan_required: src(|r| r.plan_required.is_some()),
             plan_accept: src(|r| r.plan_accept.is_some()),
             gate: src(|r| r.gate.is_some()),

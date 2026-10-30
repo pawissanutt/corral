@@ -124,6 +124,7 @@ pub(crate) fn fixture() -> Fixture {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        changes_round: None,
         review: None,
         review_runs: Vec::new(),
         usage: None,
@@ -137,6 +138,7 @@ pub(crate) fn fixture() -> Fixture {
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
         agent_host: None,
+        session: None,
     };
     ctx.store
         .update(&id, |t| {

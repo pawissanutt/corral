@@ -219,6 +219,10 @@ mod tests {
     fn task(id: &str, status: Status, updated: i64) -> Task {
         let ts = Timestamp::from_second(updated).unwrap();
         Task {
+            park: None,
+            landed: None,
+            infra_wait: None,
+            attention: Default::default(),
             dashboard: None,
             origin: None,
             idea_decision: None,
@@ -232,6 +236,7 @@ mod tests {
             approved_scope: None,
             approved_scope_revision: 0,
             approved_scope_history: Vec::new(),
+            membership_revision: 0,
             aggregate_attempts: Vec::new(),
             parent: None,
             source_digest: None,
@@ -241,9 +246,11 @@ mod tests {
             id: id.into(),
             title: id.into(),
             status,
+            status_since: None,
             project: None,
             kind: None,
             size: None,
+            difficulty: None,
             priority: "P2".into(),
             depends_on: Vec::new(),
             labels: Vec::new(),

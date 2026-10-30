@@ -55,7 +55,7 @@ model = "missing-model"
 }
 
 #[test]
-fn new_kind_size_roundtrip() {
+fn new_kind_size_difficulty_roundtrip() {
     // Given an initialized workspace.
     let ws = init_ws();
     // When a classified task is filed.
@@ -70,26 +70,31 @@ fn new_kind_size_roundtrip() {
             "backend",
             "--size",
             "m",
+            "--difficulty",
+            "hard",
         ],
     );
-    // Then both metadata fields survive storage and appear in CLI views.
+    // Then the metadata fields survive storage and appear in CLI views.
     let show: serde_json::Value =
         serde_json::from_str(&ok(&ws.root, &["show", "1", "--json"])).expect("json");
     assert_eq!(show["kind"], "backend");
     assert_eq!(show["size"], "m");
+    assert_eq!(show["difficulty"], "hard");
     let list: serde_json::Value =
         serde_json::from_str(&ok(&ws.root, &["list", "--json"])).expect("json");
     assert_eq!(list[0]["kind"], "backend");
     assert_eq!(list[0]["size"], "m");
+    assert_eq!(list[0]["difficulty"], "hard");
     let text = ok(&ws.root, &["show", "1"]);
     assert!(text.contains("kind:     backend"), "{text}");
     assert!(text.contains("size:     m"), "{text}");
+    assert!(text.contains("difficulty: hard"), "{text}");
 }
 
 #[test]
-fn new_rejects_invalid_kind_and_size_before_writing() {
+fn new_rejects_invalid_classification_before_writing() {
     let ws = init_ws();
-    for flag in ["--kind", "--size"] {
+    for flag in ["--kind", "--size", "--difficulty"] {
         // Given no tasks, when an invalid classification is supplied.
         let out = corral(&ws.root, &["new", "Invalid", flag, "bogus"]);
         // Then argument parsing rejects it and leaves storage untouched.
@@ -101,6 +106,9 @@ fn new_rejects_invalid_kind_and_size_before_writing() {
         serde_json::from_str(&ok(&ws.root, &["list", "--json"])).expect("json");
     assert_eq!(list, serde_json::json!([]));
 }
+
+#[path = "routing_difficulty.rs"]
+mod difficulty;
 
 #[test]
 fn route_text_includes_unset_defaults_and_source() {
@@ -329,10 +337,10 @@ fn route_explains_reviewer_rule_and_fallback() {
     let ws = routing_ws("");
     let mut store = corral_core::Store::open(&ws.root).unwrap();
     store.config.review.reviewer = Some("task".into());
-    store.config.routing.reviewer_rules = vec![
+    let small_rule =
         serde_json::from_str(r#"{"name": "small", "size": ["xs", "s"], "profile": "rule"}"#)
-            .unwrap(),
-    ];
+            .unwrap();
+    store.config.routing.reviewer_rules = vec![small_rule];
     store.save_config().unwrap();
     ok(&ws.root, &["new", "Small", "-p", "app", "--size", "xs"]);
     ok(&ws.root, &["new", "Large", "-p", "app", "--size", "l"]);
@@ -467,10 +475,16 @@ fn dispatch_records_matched_route_and_launches_resolved_preset() {
         serde_json::json!({"source":"rule","index":1,"name":"backend"})
     );
     let launch = std::fs::read_to_string(ws.root.join("launch")).expect("launch");
+    let session = run["session"]["id"]
+        .as_str()
+        .expect("allocated session UUID");
+    let expected = format!("fixture --model rule-model --effort high --session-id '{session}'\"");
     assert_eq!(
         launch.trim().split(" corral-launch \"").nth(1),
-        Some("fixture --model rule-model --effort high\"")
+        Some(expected.as_str())
     );
+    assert_eq!(run["session"]["policy"], "reuse");
+    assert_eq!(run["session"]["action"], "new");
     let events = store.events().expect("events");
     let event = events
         .iter()
@@ -579,13 +593,20 @@ fn dispatch_accepts_an_exact_provider_qualified_model() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+    let task: serde_json::Value =
+        serde_json::from_str(&ok(&ws.root, &["show", "1", "--json"])).expect("json");
+    let directory = task["runs"][0]["session"]["directory"]
+        .as_str()
+        .expect("role session directory");
+    let expected =
+        format!("fixture --model openai-codex/gpt-6.1-sol-fast --session-dir '{directory}'\"");
     assert_eq!(
         std::fs::read_to_string(ws.root.join("launch"))
             .expect("launch")
             .trim()
             .split(" corral-launch \"")
             .nth(1),
-        Some("fixture --model openai-codex/gpt-6.1-sol-fast\"")
+        Some(expected.as_str())
     );
 }
 
@@ -650,4 +671,169 @@ fn failed_discovery_warns_and_allows_routing_and_dispatch() {
     assert!(stderr.contains("allowing unverified model"), "{stderr}");
     assert_eq!(stderr.matches("allowing unverified model").count(), 1);
     assert!(ws.root.join("launch").is_file());
+}
+
+#[cfg(unix)]
+/// pi-native profiles over a harness report where the installed host listed both providers'
+/// offline catalogs (fixture listing output, no live provider).
+fn pi_native_ws() -> Ws {
+    let mut profiles = String::new();
+    for (name, vendor, model) in [
+        ("pi-typo", "openai", "openai-codex/gpt-6.1-sl"),
+        ("pi-openai", "openai", "openai-codex/gpt-6.1-sol"),
+        ("pi-openai-bare", "openai", "gpt-6.1-sol"),
+        ("pi-anthropic", "anthropic", "anthropic/claude-opus-5-5"),
+        ("pi-anthropic-bare", "anthropic", "claude-opus-5-5"),
+        ("pi-openai-cross", "openai", "anthropic/claude-opus-5-5"),
+        (
+            "pi-anthropic-cross",
+            "anthropic",
+            "openai-codex/gpt-6.1-sol",
+        ),
+    ] {
+        profiles.push_str(&format!(
+            "[profiles.{name}]\nharness = 'pi-native'\nvendor = '{vendor}'\nmodel = '{model}'\n"
+        ));
+    }
+    let ws = routing_ws(&profiles);
+    let path = ws.root.join(".corral/state/harnesses.json");
+    let mut cache: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("cache")).expect("json");
+    cache["harnesses"]
+        .as_array_mut()
+        .expect("harnesses")
+        .push(serde_json::json!({
+            "key": "pi-native",
+            "program": null,
+            "path": "/fixture/bun",
+            "version": "1.3.0",
+            "models": [
+                "openai-codex/gpt-6.1-sol", "openai-codex/gpt-5.5",
+                "anthropic/claude-opus-5-5", "anthropic/claude-sonnet-5-5"
+            ],
+            "model_source": "listed",
+            "efforts": [],
+            "takes_effort": true
+        }));
+    std::fs::write(&path, serde_json::to_vec(&cache).expect("json")).expect("cache");
+    ok(&ws.root, &["new", "Pi models", "-p", "app", "--ready"]);
+    ws
+}
+
+#[cfg(unix)]
+#[test]
+fn a_misspelled_pi_native_model_gets_close_matches_from_its_listed_catalog() {
+    // Given an OpenAI pi-native profile with a typo, and both providers listed.
+    let ws = pi_native_ws();
+    // When it is dispatched.
+    let out = dispatch_with_herdr(&ws.root, &["--profile", "pi-typo"]);
+    // Then its provider's listed models reject the typo with close matches, not as unverified.
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        error.contains("not an exact discovered model ID for harness 'pi-native'"),
+        "{error}"
+    );
+    assert!(
+        error.contains("close matches:") && error.contains("openai-codex/gpt-6.1-sol"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("anthropic/"),
+        "only its provider's models: {error}"
+    );
+    assert!(!error.contains("allowing unverified model"), "{error}");
+    assert!(!ws.root.join("app/.worktrees").exists());
+    assert!(!ws.root.join("launch").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn bare_and_qualified_pi_native_ids_of_the_profiles_provider_pass_model_checks() {
+    let ws = pi_native_ws();
+    for profile in [
+        "pi-openai",
+        "pi-openai-bare",
+        "pi-anthropic",
+        "pi-anthropic-bare",
+    ] {
+        // When the route is explained and then dispatched:
+        let route: serde_json::Value = serde_json::from_str(&ok(
+            &ws.root,
+            &["route", "1", "--profile", profile, "--json"],
+        ))
+        .expect("route json");
+        let out = dispatch_with_herdr(&ws.root, &["--profile", profile]);
+        // Then neither the route nor the final dispatch validation rejects the model; dispatch
+        // stops later, at the pi-native preflight of this fixture without an installation.
+        assert_eq!(
+            route["warnings"],
+            serde_json::json!([]),
+            "{profile}: {route}"
+        );
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{profile}");
+        assert!(
+            !error.contains("not an exact discovered"),
+            "{profile}: {error}"
+        );
+        assert!(
+            error.contains("pi-native preflight refused"),
+            "{profile}: {error}"
+        );
+        assert!(!ws.root.join("launch").exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pi_native_profile_rejects_the_other_providers_models() {
+    let ws = pi_native_ws();
+    // Given profiles bound to one provider naming the other provider's listed selector:
+    for (profile, own, other) in [
+        (
+            "pi-openai-cross",
+            "openai-codex/",
+            "anthropic/claude-opus-5-5",
+        ),
+        (
+            "pi-anthropic-cross",
+            "anthropic/",
+            "openai-codex/gpt-6.1-sol",
+        ),
+    ] {
+        // When it is dispatched, then validation rejects it with its own provider's matches.
+        let out = dispatch_with_herdr(&ws.root, &["--profile", profile]);
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{profile}");
+        assert!(
+            error.contains(&format!("model '{other}' is not an exact discovered")),
+            "{error}"
+        );
+        let matches = error.split("close matches:").nth(1).unwrap_or_default();
+        assert!(
+            matches.contains(own) && !matches.contains(other),
+            "{profile}: {error}"
+        );
+        assert!(!ws.root.join("launch").exists());
+    }
+    // And an explicit cross-provider override on an OpenAI profile is flagged by the route.
+    let route: serde_json::Value = serde_json::from_str(&ok(
+        &ws.root,
+        &[
+            "route",
+            "1",
+            "--profile",
+            "pi-openai",
+            "--model",
+            "anthropic/claude-opus-5-5",
+            "--json",
+        ],
+    ))
+    .expect("route json");
+    let warnings = route["warnings"].to_string();
+    assert!(
+        warnings.contains("not an exact discovered model ID"),
+        "{route}"
+    );
 }

@@ -4,6 +4,9 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+/// Published ahead of every other unread message of its recipient (T-252 recovery).
+const RECOVERY_NOTICE_KIND: &str = "recovery_notice";
+
 impl Inbox<'_> {
     pub fn has_pending_delivery(&self, flush: bool) -> Result<bool> {
         for message in self.pending_messages()? {
@@ -23,6 +26,25 @@ impl Inbox<'_> {
             "attempted envelope cannot be retired"
         );
         let _lock = self.lock()?;
+        let actual = self.envelope(envelope.number)?;
+        ensure!(
+            actual.attempts.is_empty()
+                && actual.outcome.is_none()
+                && actual
+                    .stages
+                    .iter()
+                    .all(|stage| matches!(stage, Stage::Blocked)),
+            "attempted envelope cannot be retired"
+        );
+        for seq in &actual.members {
+            // Observation settles this member; publication excludes it from the replacement.
+            // Its receipt and cumulative bar remain authoritative, so this never replays it.
+            ensure!(
+                self.receipt(*seq, ReceiptLevel::Observed)?.is_some()
+                    || self.receipt(*seq, ReceiptLevel::Admitted)?.is_none(),
+                "submitted envelope cannot be retired"
+            );
+        }
         self.update_state(|s| {
             // Publication already authorized delivery, including an info-only owner flush.
             // Preserve that eligibility before retirement so interrupted rebinding can resume.
@@ -51,6 +73,7 @@ impl Inbox<'_> {
     }
 
     pub fn envelope(&self, number: u64) -> Result<Envelope> {
+        crate::work::record(crate::work::Work::InboxEnvelopeRead, 1);
         self.record("envelopes", &format!("{number:020}"))?
             .context("open envelope record missing")
     }
@@ -58,6 +81,7 @@ impl Inbox<'_> {
     pub fn envelopes(&self) -> Result<Vec<Envelope>> {
         let mut envelopes = Vec::new();
         for row in self.records("envelopes")? {
+            crate::work::record(crate::work::Work::InboxEnvelopeRead, 1);
             envelopes
                 .push(serde_json::from_value::<Envelope>(row.doc).context("decoding envelope")?);
         }
@@ -136,6 +160,8 @@ impl Inbox<'_> {
         if !flush && !unread.iter().any(|m| m.urgency == Urgency::Wake) {
             return Ok(None);
         }
+        // A resumed Pi host reads its recovery notice before anything queued while it was lost.
+        unread.sort_by_key(|m| m.kind != RECOVERY_NOTICE_KIND);
         if unread.is_empty() {
             return Ok(None);
         }
@@ -172,6 +198,7 @@ impl Inbox<'_> {
             outcome: None,
             stages: Vec::new(),
             attempts: Vec::new(),
+            retry_bar: None,
         };
         self.update_state(|state| {
             self.save_record("payloads", &format!("{number:020}"), &payload)?;
@@ -182,7 +209,10 @@ impl Inbox<'_> {
             state.next_envelope = number
                 .checked_add(1)
                 .context("envelope sequence exhausted")?;
+            #[cfg(test)]
+            super::header::checkpoint("envelope_written")?;
             state.open_envelope = Some(number);
+            Self::annotate_owner(state, &envelope, false);
             state.replacement_envelope = None;
             if state.binding.as_ref() != Some(binding) {
                 state.observe_cursor = ObserveCursor::default();
@@ -217,6 +247,8 @@ impl Inbox<'_> {
             }
         }
         if state.open_envelope.is_some() {
+            let envelope = self.envelope(state.open_envelope.context("open envelope")?)?;
+            self.repair_owner_annotation(&envelope)?;
             return Ok(());
         }
         // Publication and its pointer commit together. Only the latest reserved identity
@@ -232,6 +264,7 @@ impl Inbox<'_> {
         {
             self.update_state(|s| {
                 s.open_envelope = Some(envelope.number);
+                Self::annotate_owner(s, &envelope, true);
                 s.replacement_envelope = None;
                 if s.binding.as_ref() != Some(&envelope.binding) {
                     s.observe_cursor = ObserveCursor::default();
@@ -239,18 +272,61 @@ impl Inbox<'_> {
                 s.binding = Some(envelope.binding.clone());
                 Ok(())
             })?;
+
         }
         Ok(())
     }
 
     pub fn save_envelope(&self, envelope: &Envelope) -> Result<()> {
         let _lock = self.lock()?;
-        let mut old = self.envelope(envelope.number)?;
+        let old = self.envelope(envelope.number)?;
+        self.validate_envelope(&old, envelope)?;
+        let mut next = envelope.clone();
+        next.retry_bar = old.retry_bar.clone().or(next.retry_bar);
+        if old.outcome != envelope.outcome
+            || old.attempts != envelope.attempts
+            || old.retry_bar != next.retry_bar
+            || old.stages.iter().chain(&envelope.stages).any(|stage| {
+                !matches!(stage, Stage::Outcome | Stage::Blocked)
+                    && old.stages.contains(stage) != envelope.stages.contains(stage)
+            })
+        {
+            let first = next
+                .retry_bar
+                .get_or_insert(RetryWitness {
+                    reason: WitnessReason::UntrackedMutation,
+                    attempt: None,
+                })
+                .clone();
+            self.project_members(&envelope.members, |entry| {
+                entry.retry_evidence.coverage = RetryCoverage::Unknown;
+                entry.retry_evidence.bar(first.reason, first.attempt);
+                if entry.envelope == Some(envelope.number) {
+                    entry.delivery = Some(DeliveryHeader {
+                        state: DeliveryState::Unknown,
+                        at: None,
+                        attempt: None,
+                    });
+                }
+            })?;
+            self.retain_retry_bars(&envelope.members, &first)?;
+        }
+        // The bar and rewritten evidence commit atomically in the existing envelope record.
+        self.persist_envelope(&next)
+    }
+
+    fn validate_envelope(&self, old: &Envelope, envelope: &Envelope) -> Result<()> {
+        let mut old = old.clone();
         old.outcome = envelope.outcome.clone();
         old.stages.clone_from(&envelope.stages);
         old.attempts.clone_from(&envelope.attempts);
+        old.retry_bar.clone_from(&envelope.retry_bar);
         ensure!(old == *envelope, "envelope immutable fields changed");
         self.payload(envelope)?;
+        Ok(())
+    }
+
+    fn persist_envelope(&self, envelope: &Envelope) -> Result<()> {
         self.store.records_transaction(|| {
             let key = format!("{:020}", envelope.number);
             self.save_record("envelopes", &key, envelope)?;
@@ -298,15 +374,114 @@ impl Inbox<'_> {
     }
 
     pub fn begin_attempt(&self, envelope: &mut Envelope, now: Timestamp) -> Result<()> {
+        let _lock = self.lock()?;
+        let old = self.envelope(envelope.number)?;
+        envelope.retry_bar.clone_from(&old.retry_bar);
+        ensure!(old == *envelope, "stale envelope attempt");
+        ensure!(
+            self.state_head()?.open_envelope == Some(envelope.number),
+            "attempt requires the current open publication"
+        );
+        self.validate_envelope(&old, envelope)?;
+        let attempt = AttemptRef {
+            envelope: envelope.number,
+            ordinal: u64::try_from(envelope.attempts.len())?
+                .checked_add(1)
+                .context("attempt ordinal exhausted")?,
+        };
+        #[cfg(test)]
+        super::header::checkpoint("before_attempt_fence")?;
+        self.project_members(&envelope.members, |entry| {
+            if let Some(first) = &envelope.retry_bar {
+                entry.retry_evidence.bar(first.reason, first.attempt);
+            }
+            if entry
+                .retry_evidence
+                .pending
+                .is_some_and(|pending| pending != attempt)
+            {
+                entry
+                    .retry_evidence
+                    .bar(WitnessReason::UnresolvedPrior, entry.retry_evidence.pending);
+            }
+            entry.retry_evidence.pending = Some(attempt);
+            entry.delivery = Some(DeliveryHeader {
+                state: DeliveryState::Dispatching,
+                at: Some(now),
+                attempt: Some(attempt),
+            });
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_fenced")?;
         envelope.stages.push(Stage::Dispatching);
         envelope.attempts.push(Attempt {
             at: now,
             outcome: None,
         });
-        self.save_envelope(envelope)
+        self.persist_envelope(envelope)?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_written")?;
+        Ok(())
     }
 
     pub fn finish_attempt(&self, envelope: &mut Envelope, outcome: SendOutcome) -> Result<()> {
+        let _lock = self.lock()?;
+        let old = self.envelope(envelope.number)?;
+        self.validate_envelope(&old, envelope)?;
+        envelope.retry_bar.clone_from(&old.retry_bar);
+        let attempt = AttemptRef {
+            envelope: envelope.number,
+            ordinal: u64::try_from(envelope.attempts.len())?,
+        };
+        ensure!(attempt.ordinal > 0, "no dispatching attempt");
+        let (state, witness) = match &outcome {
+            SendOutcome::Rejected { .. } => (DeliveryState::Rejected, None),
+            SendOutcome::Accepted => (DeliveryState::Accepted, Some(WitnessReason::Accepted)),
+            SendOutcome::Admitted { .. } => {
+                (DeliveryState::Admitted, Some(WitnessReason::Admitted))
+            }
+            SendOutcome::Held { .. } => (DeliveryState::Held, Some(WitnessReason::Held)),
+            SendOutcome::Uncertain { .. } => {
+                (DeliveryState::Uncertain, Some(WitnessReason::Uncertain))
+            }
+            SendOutcome::Conflicted { .. } => {
+                (DeliveryState::Conflicted, Some(WitnessReason::Conflicted))
+            }
+        };
+        // A stale earlier callback cannot overwrite a later attempt or clear its fence.
+        if old.attempts.len() != envelope.attempts.len() {
+            if let Some(reason) = witness {
+                let mut current = old;
+                let first = current
+                    .retry_bar
+                    .get_or_insert(RetryWitness {
+                        reason,
+                        attempt: Some(attempt),
+                    })
+                    .clone();
+                let projected = self.project_members(&current.members, |entry| {
+                    entry.retry_evidence.bar(first.reason, first.attempt);
+                });
+                // The keyed proof also fences a completed newer attempt if task saving fails.
+                self.retain_retry_bars(&current.members, &first)?;
+                self.persist_envelope(&current)?;
+                #[cfg(test)]
+                super::header::checkpoint("stale_attempt_bar_written")?;
+                projected?;
+            }
+            return Ok(());
+        }
+        let persisted = old.attempts.last().context("no dispatching attempt")?;
+        if let Some(previous) = &persisted.outcome {
+            ensure!(previous == &outcome, "attempt outcome already recorded");
+            if let Some(first) = &old.retry_bar {
+                self.project_members(&old.members, |entry| {
+                    entry.retry_evidence.bar(first.reason, first.attempt);
+                })?;
+            }
+            return Ok(());
+        }
+        ensure!(old == *envelope, "stale envelope outcome");
         envelope
             .attempts
             .last_mut()
@@ -314,7 +489,50 @@ impl Inbox<'_> {
             .outcome = Some(outcome.clone());
         envelope.outcome = Some(outcome);
         envelope.stages.push(Stage::Outcome);
-        self.save_envelope(envelope)?;
+        if let Some(reason) = witness {
+            envelope.retry_bar.get_or_insert(RetryWitness {
+                reason,
+                attempt: Some(attempt),
+            });
+        }
+        #[cfg(test)]
+        super::header::checkpoint("before_attempt_outcome")?;
+        self.persist_envelope(envelope)?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_outcome_written")?;
+        self.project_members(&envelope.members, |entry| {
+            let evidence = &mut entry.retry_evidence;
+            if let Some(first) = &envelope.retry_bar {
+                evidence.bar(first.reason, first.attempt);
+            }
+            if evidence.pending == Some(attempt) {
+                if let Some(SendOutcome::Rejected {
+                    retryable_after_fix,
+                    ..
+                }) = &envelope.outcome
+                    && evidence.coverage == RetryCoverage::Complete
+                    && evidence.route == RetryRoute::EnvelopeOnly
+                    && !matches!(evidence.history, RetryHistory::Barred { .. })
+                {
+                    evidence.history = RetryHistory::RejectedOnly {
+                        last: attempt,
+                        retryable_after_fix: *retryable_after_fix,
+                    };
+                }
+                if matches!(envelope.outcome, Some(SendOutcome::Rejected { .. })) {
+                    evidence.pending = None;
+                }
+                if entry.envelope == Some(envelope.number) {
+                    entry.delivery = Some(DeliveryHeader {
+                        state,
+                        at: Some(persisted.at),
+                        attempt: Some(attempt),
+                    });
+                }
+            }
+        })?;
+        #[cfg(test)]
+        super::header::checkpoint("attempt_projected")?;
         self.event("envelope_attempt", json!({"envelope": envelope.number, "members": envelope.members,
             "adapter":envelope.adapter,"binding":envelope.binding,"mode":envelope.mode,"outcome":envelope.outcome}))
     }

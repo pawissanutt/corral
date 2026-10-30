@@ -46,6 +46,8 @@ fn tracker_progress_cli_reads_shared_projection_and_fails_on_broken_graphs() {
     let imported = json(tmp.path(), &["import", path.to_str().unwrap(), "--json"]);
     let id = imported["tracker"]["id"].as_str().unwrap();
     let children = imported["tasks"].as_array().unwrap();
+    // Progress must stay readable while dispatch/sync holds the board lock.
+    let _dispatch = store.try_lock("dispatch").unwrap().unwrap();
     // When the real CLI reads the Plan twice, including its human-readable form.
     let progress = json(tmp.path(), &["plan", "progress", id, "--json"]);
     let human = cli(tmp.path(), &["plan", "progress", id]);
@@ -65,6 +67,7 @@ fn tracker_progress_cli_reads_shared_projection_and_fails_on_broken_graphs() {
     assert_eq!(progress["work"][1]["prerequisites"][0]["target"], "main");
     assert_eq!(progress["unmapped_criteria"][0]["criterion"], "C1");
     assert_eq!(store.get(id).unwrap().status, Status::Backlog);
+    drop(_dispatch);
 
     // A malformed graph must fail at the same real CLI boundary, even without a grant.
     store

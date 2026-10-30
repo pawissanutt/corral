@@ -154,14 +154,10 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
             if review.reviewer == "owner" {
                 mapping.profile = None;
             } else {
-                match review_routing::resolve(config, &selected, run.vendor.as_deref()) {
+                let family = corral_core::model_family(run.vendor.as_deref(), run.model.as_deref());
+                match review_routing::resolve(config, &selected, family.as_ref()) {
                     Ok((_, profile)) => {
-                        review_routing::fill(
-                            &mut mapping,
-                            profile,
-                            run.vendor.as_deref(),
-                            "planner",
-                        );
+                        review_routing::fill(&mut mapping, profile, family.as_ref(), "planner");
                     }
                     Err(error) => mapping.warnings.push(format!("{error:#}")),
                 }
@@ -199,12 +195,13 @@ pub fn recorded_route(ctx: &Ctx, task: &Task) -> Result<RouteExplanation> {
         explanation.review.reviewer.source = "recorded_run".into();
         explanation.review.reviewer.rule = None;
         explanation.review.reviewer.warnings.clear();
-        if reviewer.vendor.is_some() && reviewer.vendor == run.vendor {
+        let family = reviewer.family(reviewer.vendor.as_deref());
+        if family.is_some() && family == run.family(run.vendor.as_deref()) {
             explanation
                 .review
                 .reviewer
                 .warnings
-                .push("reviewer uses the same vendor as the implementer".into());
+                .push("reviewer uses the same model family as the implementer".into());
         }
     }
     Ok(explanation)
@@ -254,8 +251,13 @@ fn explain_route(
     };
     let vendor =
         recorded_vendor.unwrap_or_else(|| resolved.as_ref().and_then(|r| r.vendor.as_deref()));
+    let model = resolved
+        .as_ref()
+        .and_then(|r| r.model.as_deref())
+        .or(implementer.model.as_deref());
+    let family = corral_core::model_family(vendor, model);
     let mut review = ReviewExplanation {
-        reviewer: review_routing::explain(config, task, vendor),
+        reviewer: review_routing::explain(config, task, family.as_ref()),
         planner: None,
         plan_reviewer: None,
     };
@@ -292,10 +294,11 @@ fn explain_route(
             model: planner.model.as_deref(),
             vendor: planner.vendor.as_deref(),
         });
-        let reference_vendor = match identity {
-            Some(planner) => planner.vendor,
-            None => vendor,
+        let reference_family = match identity {
+            Some(planner) => planner.family(),
+            None => family.clone(),
         };
+        let reference_family = reference_family.as_ref();
         let reference_role = if identity.is_some() {
             "planner"
         } else {
@@ -306,7 +309,7 @@ fn explain_route(
         let expected = if submitted_plan {
             crate::plan::expected_reviewer(config, task)
         } else {
-            crate::plan::expected_reviewer_for(config, task, identity, vendor)
+            crate::plan::expected_reviewer_for(config, task, identity, family.as_ref())
         };
         match expected {
             Ok(name) if name == "owner" => {
@@ -327,13 +330,13 @@ fn explain_route(
                 if selected == Reviewer::None {
                     mapping.source = "independent_profile".into();
                 }
-                match review_routing::resolve(config, &reviewer, reference_vendor) {
+                match review_routing::resolve(config, &reviewer, reference_family) {
                     Ok((name, profile)) => {
                         mapping.selection = name;
                         review_routing::fill(
                             &mut mapping,
                             profile,
-                            reference_vendor,
+                            reference_family,
                             reference_role,
                         );
                     }
@@ -343,9 +346,9 @@ fn explain_route(
             Err(error) => {
                 if selected != Reviewer::None
                     && let Ok((_, profile)) =
-                        review_routing::resolve(config, &selected, reference_vendor)
+                        review_routing::resolve(config, &selected, reference_family)
                 {
-                    review_routing::fill(&mut mapping, profile, reference_vendor, reference_role);
+                    review_routing::fill(&mut mapping, profile, reference_family, reference_role);
                 }
                 mapping.warnings.push(format!("{error:#}"));
             }
@@ -385,7 +388,9 @@ pub(crate) fn route_task_for_role(
             .entry(profile.harness.clone())
             .or_insert_with(|| model_catalog(ctx, &profile.harness));
         match catalog {
-            ModelCatalog::Known(models) => rejection(&profile.harness, model, models),
+            ModelCatalog::Known(models) => {
+                rejection(&profile.harness, profile.vendor.as_deref(), model, models)
+            }
             ModelCatalog::Unknown(reason) => {
                 if !warnings.contains(reason) {
                     warnings.push(reason.clone());
@@ -415,7 +420,13 @@ pub(crate) fn validate_model(ctx: &Ctx, decision: &RouteDecision) -> Result<Opti
     };
     match discovered_catalog(ctx, &decision.harness) {
         ModelCatalog::Known(models) => {
-            if let Some(reason) = rejection(&decision.harness, model, &models) {
+            let vendor = ctx
+                .store
+                .config
+                .resolve_route(decision)
+                .ok()
+                .and_then(|resolved| resolved.vendor);
+            if let Some(reason) = rejection(&decision.harness, vendor.as_deref(), model, &models) {
                 bail!("profile '{}': {reason}", decision.profile);
             }
             Ok(None)
@@ -445,14 +456,17 @@ pub(crate) fn known_model_unavailability(
         .unwrap_or(&profile.harness)
         == "omo";
     if is_omo && let Some(models) = harness::preferred_omo_models(ctx) {
-        return rejection(&profile.harness, model, &models);
+        return rejection(&profile.harness, profile.vendor.as_deref(), model, &models);
     }
     let report = harness::cached_harness_report(ctx)?;
     let info = report.get(&profile.harness)?;
     match info.model_source {
-        ModelSource::Listed | ModelSource::Builtin => {
-            rejection(&profile.harness, model, &info.models)
-        }
+        ModelSource::Listed | ModelSource::Builtin => rejection(
+            &profile.harness,
+            profile.vendor.as_deref(),
+            model,
+            &info.models,
+        ),
         ModelSource::FreeText | ModelSource::None => None,
     }
 }
@@ -499,8 +513,25 @@ fn discovered_catalog(ctx: &Ctx, key: &str) -> ModelCatalog {
     }
 }
 
-fn rejection(harness: &str, model: &str, models: &[String]) -> Option<String> {
-    if models.iter().any(|listed| listed == model) {
+/// Whether `model` is outside the discovered catalog of a profile on `harness` bound to `vendor`.
+/// A pi-native profile is checked against its own provider's models only, with a bare id
+/// qualified by that provider. A selector naming another provider never runs on its host; when
+/// discovery listed none of the profile provider's models (it is not logged in), the catalog is
+/// no evidence about any other id.
+fn rejection(
+    harness: &str,
+    vendor: Option<&str>,
+    model: &str,
+    models: &[String],
+) -> Option<String> {
+    let scoped = harness::models_for_profile(harness, vendor, Some(model), models);
+    if scoped.is_empty() && !models.is_empty() && !harness::foreign_selector(harness, vendor, model)
+    {
+        return None;
+    }
+    let models = &scoped[..];
+    let selector = harness::catalog_selector(harness, vendor, model);
+    if models.contains(&selector) {
         return None;
     }
     let mut nearest: Vec<_> = models

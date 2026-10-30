@@ -396,6 +396,7 @@ fn active_planner_pair_survives_a_future_implementer_pin() {
     task.profile = Some("sonnet".into());
     task.plan_required = Some(true);
     task.plan_runs.push(corral_core::PlanRun {
+        agent_host: None,
         execution: None,
         route: None,
         delivery: corral_core::inbox::DeliveryMode::Legacy,

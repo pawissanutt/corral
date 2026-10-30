@@ -1,7 +1,8 @@
 //! Handlers behind every v1 `corral agent` subcommand other than `call`. The CLI parses the
 //! complete surface once (request-receipts); each handler delegates to its owner's module
 //! (`launch`, `install`, `credentials`, `recovery`), so the owning child fills that module and
-//! never edits this file or the CLI crate. Until it lands, a handler answers `op_unavailable`.
+//! never edits this file or the CLI crate. Every subcommand has landed; `OpUnavailable` names
+//! the owner a subcommand answered with before its child landed.
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -65,14 +66,6 @@ impl std::fmt::Display for OpUnavailable {
 
 impl std::error::Error for OpUnavailable {}
 
-pub(crate) fn unavailable(command: AgentCommand) -> anyhow::Error {
-    OpUnavailable {
-        command,
-        owner_child: command.owner(),
-    }
-    .into()
-}
-
 /// The container a state, cancel or resume command names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentTarget {
@@ -124,9 +117,10 @@ pub fn install(start: &Path, args: &InstallArgs) -> Result<()> {
     super::install::install(start, args)
 }
 
-/// One interactive owner login into the corral-owned Pi auth directory (OD8).
-pub fn login(start: &Path) -> Result<()> {
-    super::credentials::login(start)
+/// One interactive owner login into the corral-owned Pi auth directory (OD8): `provider`, or
+/// the one the owner picks on a terminal.
+pub fn login(start: &Path, provider: Option<&str>) -> Result<()> {
+    super::credentials::login(start, provider)
 }
 
 pub fn doctor(ctx: &Ctx, json: bool) -> Result<()> {

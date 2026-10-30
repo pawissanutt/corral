@@ -254,7 +254,7 @@ impl ProfileReviewSelection {
                     config,
                     plan.context("a plan review selection needs its task")?,
                     planner,
-                    context.author_vendor,
+                    context.author_family,
                 )?;
                 let profile = if expected == "pm" {
                     config.pm.agent.as_str()
@@ -290,7 +290,7 @@ impl ProfileReviewSelection {
                 ensure!(key == &self.profile, "explicit reviewer policy mismatch")
             }
             Reviewer::CrossVendor => {
-                let author = context.author_vendor.context("unknown author vendor")?;
+                let author = context.author_family.context("unknown author vendor")?;
                 ensure!(
                     config.cross_vendor_reviewer(author)? == self.profile,
                     "cross-vendor reviewer policy mismatch"
@@ -305,7 +305,7 @@ impl ProfileReviewSelection {
             None,
             None,
         )?;
-        policy.check_reviewer_family(context.author_vendor, resolved.vendor.as_deref())?;
+        policy.check_reviewer_family(context.author_family, resolved.family().as_ref())?;
         Ok(())
     }
 }
@@ -313,7 +313,7 @@ impl ProfileReviewSelection {
 pub struct ReviewSelectionContext<'a, T: ?Sized = Task> {
     pub task: &'a T,
     pub subject: &'a ProfileReviewSubject,
-    pub author_vendor: Option<&'a str>,
+    pub author_family: Option<&'a crate::ModelFamily>,
 }
 
 pub fn reviewer_selector(reviewer: &Reviewer) -> String {
@@ -369,7 +369,7 @@ impl AutoProfileSelection {
             "Auto selection reason is empty"
         );
         ensure!(
-            self.spec_revision == crate::plan_contract_revision(task)?,
+            self.spec_revision == profile_selection_revision(task)?,
             "stale task specification"
         );
         ensure!(
@@ -430,5 +430,15 @@ impl AutoProfileSelection {
             }
         }
         Ok(())
+    }
+}
+
+/// Difficulty changes invalidate a semantic choice without invalidating an approved plan.
+/// Unclassified tasks retain the existing receipt identity.
+pub fn profile_selection_revision(task: &(impl crate::TaskFieldsRef + ?Sized)) -> Result<String> {
+    let spec = crate::plan_contract_revision(task)?;
+    match task.difficulty() {
+        Some(difficulty) => crate::operating::digest(&(spec, difficulty)),
+        None => Ok(spec),
     }
 }

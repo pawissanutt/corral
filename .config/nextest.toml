@@ -22,3 +22,29 @@ binary(/(^live$|_live$)/)
 test-group = "herdr"
 # The live CLI fixtures also launch Git, corral, and Python subprocesses.
 threads-required = 2
+
+# The quick gate tier (scripts/gate.sh --tier quick) runs this profile. It inherits
+# everything above and leaves out the slow group, which only the full tier (every
+# landing on main and plan verify) runs. Declared tests ignore this filter.
+#
+# The slow group is tests whose 75th-percentile duration across recent gate logs is at
+# least 40 s. `python3 scripts/slow-tests.py --list <nextest list JSON> <gate logs>`
+# measures .corral/state/gates/*.log and prints the tests that should enter
+# (p75 >= 40 s) or leave (p75 < 30 s) the group; edit the list below to match. A renamed or deleted test matches nothing here, so
+# remove its term when it goes.
+[profile.quick]
+default-filter = '''
+not (
+  (binary_id(=corral-ops::attention_eval) & test(=delivery_history::s21_prior_unsafe_attempts_bar_rejected_resends_after_restart_and_fifo_promotion))
+| (binary_id(=corral-ops::attention_eval) & test(=delivery_history::s21_ten_current_attempts_preserve_prior_unsafe_witness_on_every_recipient))
+| (binary_id(=corral-ops::attention_eval) & test(=delivery_history::s21_unattempted_replacements_retry_original_recipient_after_restart_and_promotion))
+| (binary_id(=corral-ops::plan_ops) & test(=self_projection_recovery::self_projection_restart_rejects_changed_publication_identities))
+| (binary_id(=corral-ops::autopilot_ops) & test(=tier_refusals::inputs_changed_between_approval_and_the_full_gate_refuse_the_carry))
+| (binary_id(=corral-ops::operating_launch) & test(=interrupted_coding_stages_keep_automatic_origin_and_never_replay_submitting))
+| (binary_id(=corral-ops::operating_launch) & test(=planning::concrete_planning_paths_refuse_every_revocation_and_collect_running_receipts))
+| (binary_id(=corral-ops::operating_launch) & test(=concrete_gate_and_profile_reviewer_refuse_all_revocations_and_reuse_preparation))
+| (binary_id(=corral-ops::gate_tiers_e2e) & test(=plan::a_member_fixing_the_expected_failure_lets_plan_verify_pass_and_main_receive_that_candidate))
+| (binary_id(=corral-ops::gate_tiers_e2e) & test(=plan::one_plan_recovers_from_a_failed_full_verify_by_adding_and_landing_a_fixing_member))
+| (binary_id(=corral-git) & test(=memo_tests::settings_changes_never_serve_facts_computed_under_other_settings))
+)
+'''

@@ -92,6 +92,7 @@ pub struct PmWorkset {
     pub actions: Vec<PmExecutable>,
     pub decisions: Vec<PmDecision>,
     pub waits: Vec<PmAction>,
+    pub assessments: Vec<crate::attention::TaskAssessment>,
     pub blockers: Vec<String>,
     pub independent_work_continues: bool,
     pub next: PmAction,
@@ -244,8 +245,30 @@ pub fn pm_workset(ctx: &Ctx) -> Result<PmWorkset> {
     pm_workset_with_policy(ctx).map(|(workset, _)| workset)
 }
 
+/// Attention bookkeeping does not change executable authority. Every other field still does.
+fn task_identity(task: &Task) -> Result<Vec<u8>> {
+    let mut canonical = task.clone();
+    canonical.attention = corral_core::AttentionLedger::default();
+    Ok(serde_json::to_vec(&canonical)?)
+}
+
 /// The workset and the effective policy it was computed from, both from one read of the board.
 pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
+    project(ctx, None)
+}
+
+/// Reuse the current refresh's assessment; executable authority still comes from fresh policy.
+pub fn pm_workset_with_attention(
+    ctx: &Ctx,
+    attention: &crate::attention::AttentionBoard,
+) -> Result<PmWorkset> {
+    project(ctx, Some(attention)).map(|(workset, _)| workset)
+}
+
+fn project(
+    ctx: &Ctx,
+    attention: Option<&crate::attention::AttentionBoard>,
+) -> Result<(PmWorkset, EffectivePolicy)> {
     let frozen;
     let ctx = if ctx.store.is_snapshot() {
         ctx
@@ -269,17 +292,42 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         .iter()
         .map(crate::pm_next::heads::shell)
         .collect::<Result<Vec<_>>>()?;
+    let fresh;
+    let board = if let Some(board) = attention {
+        board
+    } else {
+        fresh = crate::attention::board(ctx, jiff::Timestamp::now())?;
+        &fresh
+    };
+    let assessments: Vec<_> = if policy.tasks.is_empty() {
+        Vec::new()
+    } else {
+        board
+            .tasks
+            .iter()
+            .filter(|row| policy.tasks.contains_key(&row.task))
+            .cloned()
+            .collect()
+    };
     let bin = format!(
         "{} --root {}",
         crate::gate_script::q(&crate::prompt::corral_bin()?.display().to_string()),
         crate::gate_script::q(&ctx.store.root().display().to_string())
     );
-    let mut observations = crate::pm_next::observe::observations(ctx)?;
+    let mut observations = crate::pm_next::observe::with_assessments(ctx, &board.tasks)?;
     observations.sort_by_key(crate::pm_next::rank);
     let mut actions = Vec::new();
     let mut decisions = Vec::new();
     let mut waits = Vec::new();
-    for observation in observations {
+    for mut observation in observations {
+        if let crate::PmObservation::AutomaticWait { task, condition } = &mut observation
+            && let Some(primary) = assessments
+                .iter()
+                .find(|row| row.task == *task)
+                .and_then(|row| row.assessment.primary.as_ref())
+        {
+            *condition = primary.reason.clone();
+        }
         let mut action = pm_card(&observation, &bin);
         let task = action
             .task
@@ -426,24 +474,27 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
                 if !actions.iter().any(|a| a.action.task.as_ref() == Some(id))
                     && !decisions.iter().any(|d| &d.task == id)
                 {
-                    let reason = if matches!(task.status, Status::Ready | Status::Backlog) {
-                        crate::queue::blocked_reason(ctx, &ctx.store, task, false)
-                            .unwrap_or_else(|error| {
-                                Some(format!("dependency or admission unavailable: {error:#}"))
-                            })
-                            .or(crate::dispatch_policy::automatic_capacity_reason(
-                                &ctx.store, task,
-                            )?)
-                            .or(crate::resources::read_admission(ctx)?)
-                    } else {
-                        None
-                    };
-                    let condition = reason.unwrap_or_else(|| {
-                        format!(
-                            "{}; await an existing executor or worker receipt",
-                            task.status.as_str()
-                        )
-                    });
+                    let condition = assessments
+                        .iter()
+                        .find(|row| row.task == *id)
+                        .and_then(|row| {
+                            row.assessment
+                                .primary
+                                .as_ref()
+                                .map(|condition| condition.reason.clone())
+                                .or_else(|| {
+                                    row.assessment
+                                        .progress
+                                        .as_ref()
+                                        .map(|progress| progress.reason.clone())
+                                })
+                        })
+                        .unwrap_or_else(|| {
+                            format!(
+                                "{}; await an existing executor or worker receipt",
+                                task.status.as_str()
+                            )
+                        });
                     blockers.push(format!("{id}: {condition}"));
                     if !waits.iter().any(|wait| wait.task.as_ref() == Some(id)) {
                         waits.push(pm_card(
@@ -462,11 +513,30 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
             }
         }
     }
+    for row in &assessments {
+        if policy.tasks.contains_key(&row.task)
+            && !waits
+                .iter()
+                .any(|wait| wait.task.as_ref() == Some(&row.task))
+            && let Some(primary) = &row.assessment.primary
+        {
+            waits.push(pm_card(
+                &crate::PmObservation::AutomaticWait {
+                    task: row.task.clone(),
+                    condition: primary.reason.clone(),
+                },
+                &bin,
+            ));
+        }
+    }
     let independent_work_continues = !actions.is_empty()
         || tasks.iter().any(|task| {
             policy.tasks.contains_key(&task.id)
                 && task.holds_dispatch_slot()
                 && !decisions.iter().any(|d| d.task == task.id)
+                && !assessments
+                    .iter()
+                    .any(|row| row.task == task.id && row.blocked.is_some())
         });
     let status = if !decisions.is_empty() || policy.paused || !progress.missing.is_empty() {
         OperatingStatus::NeedsYourDecision
@@ -488,7 +558,25 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         })
         .or_else(|| waits.first().cloned())
         .unwrap_or_else(|| crate::pm_next::pm_select(&[], &bin));
-    let next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
+    let mut next = crate::pm_next::enrich(ctx, next, actions.is_empty())?;
+    if let Some(condition) = board
+        .tasks
+        .iter()
+        .find(|row| next.task.as_deref() == Some(&row.task))
+        .and_then(|row| row.blocked.as_ref())
+    {
+        next.why = format!("Blocked: {}", condition.reason);
+        let unblocker = format!("unblocks: {}", condition.unblocker());
+        if !next.evidence.contains(&unblocker) {
+            next.evidence.push(unblocker);
+            next.evidence.push(format!(
+                "blocked since: {}",
+                condition
+                    .since
+                    .map_or_else(|| "unknown".into(), |at| at.to_string())
+            ));
+        }
+    }
     let workset = PmWorkset {
         policy_revision: policy.revision.clone(),
         mode: policy.mode,
@@ -498,6 +586,7 @@ pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)>
         actions,
         decisions,
         waits,
+        assessments,
         blockers,
         independent_work_continues,
         next,
@@ -534,9 +623,9 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
         .task
         .as_deref()
         .context("automatic action has no task")?;
-    let before = serde_json::to_vec(&ctx.store.get(task)?)?;
+    let before = task_identity(&ctx.store.get(task)?)?;
     crate::sync(ctx)?;
-    let after = serde_json::to_vec(&ctx.store.get(task)?)?;
+    let after = task_identity(&ctx.store.get(task)?)?;
     Ok(PmActionResult {
         outcome: if before == after {
             PmActionOutcome::Waiting
@@ -545,4 +634,208 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
         },
         workset: pm_workset(ctx)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_pm_scope_does_not_request_whole_board_attention() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let task = store.create("Unscoped", None, Status::Ready, "").unwrap();
+        let ctx = crate::resources::FixedResourceProbe::ctx(store);
+        let (workset, policy) = pm_workset_with_policy(&ctx).unwrap();
+        assert!(policy.tasks.is_empty());
+        assert!(workset.assessments.is_empty());
+        // Whole-board attention remains available through its explicit read surface.
+        let board = crate::attention::board(&ctx, jiff::Timestamp::now()).unwrap();
+        assert_eq!(board.tasks.len(), 1);
+        assert_eq!(board.tasks[0].task, task.id);
+    }
+
+    #[test]
+    fn canonical_needs_me_loss_survives_an_inventory_free_board_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let task = store
+            .create_initialized("Lost", None, Status::NeedsMe, "", |task| {
+                task.runs.push(serde_json::from_value(serde_json::json!({
+                "id":"R1","agent":"fixture","worktree":"/not-read","branch":"unused",
+                "base":"main","base_sha":"abc","started":"2026-10-25T20:00:00Z","agent_state":"gone"
+            }))?);
+                Ok(())
+            })
+            .unwrap();
+        let view = crate::attention::board(
+            &crate::Ctx::from_store(store),
+            "2026-10-25T23:00:00Z".parse().unwrap(),
+        )
+        .unwrap();
+        let row = view.tasks.iter().find(|row| row.task == task.id).unwrap();
+        let primary = row.assessment.primary.as_ref().unwrap();
+        assert_eq!(primary.kind, "agent_lost");
+        assert_eq!(primary.responsible, corral_core::Responsible::Pm);
+        assert_eq!(primary.since, task.status_since);
+        assert!(row.assessment.progress.is_none());
+    }
+
+    #[test]
+    fn legacy_lost_agent_uses_canonical_idle_time_without_inventing_status_time() {
+        use crate::attention::{Neighborhood, assess};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let mut task = store.create("Lost", None, Status::NeedsMe, "").unwrap();
+        task.status_since = None;
+        task.runs.push(
+            serde_json::from_value(serde_json::json!({
+                "id":"R1","agent":"fixture","worktree":"/not-read","branch":"unused",
+                "base":"main","base_sha":"abc","started":"2026-10-25T20:00:00Z",
+                "agent_state":"gone","idle_since":"2026-10-25T21:00:00Z"
+            }))
+            .unwrap(),
+        );
+        let tasks = std::slice::from_ref(&task);
+        let policy = store.effective_operating_policy().unwrap();
+        let mut n = Neighborhood::new(tasks, &store.config, &policy);
+        n.inventory_known = true;
+        let a = assess(&task, &n, "2026-10-25T23:00:00Z".parse().unwrap());
+        let condition = a
+            .conditions
+            .iter()
+            .find(|row| row.kind == "agent_lost")
+            .unwrap();
+        assert_eq!(
+            condition.since,
+            Some("2026-10-25T21:00:00Z".parse().unwrap())
+        );
+        assert_eq!(condition.since_source, corral_core::SinceSource::Canonical);
+        assert_eq!(condition.responsible, corral_core::Responsible::Pm);
+    }
+
+    #[test]
+    fn provider_reset_wait_keeps_worker_progress_and_has_no_ladder_key() {
+        use crate::attention::{Neighborhood, assess};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = corral_core::Store::init(tmp.path()).unwrap();
+        let mut task = store.create("Provider", None, Status::Running, "").unwrap();
+        task.runs.push(
+            serde_json::from_value(serde_json::json!({
+                "id":"R1","agent":"fixture","worktree":"/not-read","branch":"unused",
+                "base":"main","base_sha":"abc","started":"2026-10-25T20:00:00Z"
+            }))
+            .unwrap(),
+        );
+        let policy = store.effective_operating_policy().unwrap();
+        let mut n = Neighborhood::new(std::slice::from_ref(&task), &store.config, &policy);
+        let since = "2026-10-25T21:00:00Z".parse().unwrap();
+        n.availability.insert(
+            task.id.clone(),
+            corral_core::AvailabilityEpisode {
+                version: 1,
+                id: "episode".into(),
+                task: task.id.clone(),
+                role: corral_core::ProfileRole::Implementation,
+                profile: "fixture".into(),
+                revision: "1".into(),
+                started: since,
+                attempts: Vec::new(),
+                notice: None,
+                exhausted: Some(corral_core::Exhaustion {
+                    reason: "provider reset".into(),
+                    at: since,
+                    waiting_until: Some("2026-10-26T00:00:00Z".parse().unwrap()),
+                }),
+            },
+        );
+        let a = assess(&task, &n, "2026-10-25T23:00:00Z".parse().unwrap());
+        assert_eq!(a.progress.unwrap().executor, "worker");
+        let condition = a
+            .conditions
+            .iter()
+            .find(|row| row.kind == "provider_wait")
+            .unwrap();
+        assert_eq!(condition.since, Some(since));
+        assert!(condition.key.is_none());
+        assert_eq!(condition.responsible, corral_core::Responsible::External);
+    }
+    #[test]
+    fn generated_board_accounts_for_two_hundred_lifecycle_combinations() {
+        use crate::attention::{Neighborhood, assess};
+        use corral_core::Store;
+        use serde_json::json;
+        let now = "2026-10-25T23:00:00Z".parse().unwrap();
+        // Given 200 tasks varying status, run closure, liveness and queue membership.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::init(tmp.path()).unwrap();
+        let seed = store.create("Seed", None, Status::Ready, "").unwrap();
+        let statuses = [
+            Status::Idea,
+            Status::Backlog,
+            Status::Ready,
+            Status::Running,
+            Status::NeedsMe,
+            Status::Review,
+            Status::Done,
+            Status::Dropped,
+        ];
+        let tasks: Vec<_> = (0..200)
+            .map(|index| {
+                let mut task = seed.clone();
+                task.id = format!("T-{index:03}");
+                task.status = statuses[index % 8];
+                task.queued = index % 3 == 0;
+                if index % 4 != 0 {
+                    let mut worker: corral_core::Run = serde_json::from_value(json!({
+                    "id":"R1", "agent":"fixture", "worktree":"/not-a-repository",
+                    "branch":"corral/T", "base":"main", "base_sha":"abc",
+                    "started":"2026-10-25T20:00:00Z", "agent_state":"working"
+                    }))
+                    .unwrap();
+                    if index % 5 == 0 {
+                        worker.outcome = Some(corral_core::RunOutcome::Done);
+                    }
+                    if index % 7 == 0 {
+                        worker.idle_no_report = true;
+                    }
+                    task.runs.push(worker);
+                }
+                task
+            })
+            .collect();
+        let policy = EffectivePolicy {
+            mode: OperatingMode::Assist,
+            paused: false,
+            revision: "fixture".into(),
+            authorization: None,
+            tasks: Default::default(),
+            reasons: Vec::new(),
+        };
+        let n = Neighborhood::new(&tasks, &store.config, &policy);
+        // When the generated board is classified.
+        for task in &tasks {
+            let a = assess(task, &n, now);
+            // Then every scheduled unfinished task is accounted for, with evidence on any stall.
+            if !matches!(task.status, Status::Done | Status::Dropped) {
+                assert!(
+                    a.progress.is_some() || !a.conditions.is_empty(),
+                    "{}",
+                    task.id
+                );
+            }
+            if task.status == Status::Idea || (task.status == Status::Backlog && !task.queued) {
+                assert_eq!(a.primary.as_ref().unwrap().kind, "not_scheduled");
+                assert!(a.primary.as_ref().unwrap().key.is_none());
+            }
+            for condition in a.conditions.iter().filter(|c| c.kind == "unexpected_stall") {
+                assert!(
+                    condition
+                        .reason
+                        .contains(&format!("status={}", task.status.as_str()))
+                );
+                assert!(condition.reason.contains("stage="));
+            }
+        }
+    }
 }

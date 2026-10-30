@@ -117,7 +117,7 @@ pub fn plan_member_gate_from(
     })
 }
 
-fn read_gate(ctx: &Ctx, path: &Path) -> Result<ScopeGate> {
+pub(super) fn read_gate(ctx: &Ctx, path: &Path) -> Result<ScopeGate> {
     let bytes = super::read_plan(ctx, path)?;
     let text = std::str::from_utf8(&bytes).context("member gate file must be UTF-8")?;
     let gate: ScopeGate = serde_yaml_ng::from_str(text)

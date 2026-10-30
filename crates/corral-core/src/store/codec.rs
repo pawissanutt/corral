@@ -70,13 +70,14 @@ const HISTORY_VECTORS: &[&str] = &[
 ];
 
 /// Pi-native record lists of a run's host state, each one row per record.
-pub const AGENT_KINDS: [&str; 6] = [
+pub const AGENT_KINDS: [&str; 7] = [
     "generations",
     "receipts",
     "questions",
     "turns",
     "wakes",
     "reports",
+    "jobs",
 ];
 
 pub fn seq(n: usize) -> String {
@@ -329,6 +330,7 @@ pub(crate) fn plan_run_rows(
     let key = seq(n);
     let mut doc = object(doc, "plan run")?;
     split_inbox(rows, &format!("plan_run:{key}"), &mut doc)?;
+    split_agent_host(rows, &format!("plan_run:{key}"), run.agent_host.as_deref(), &mut doc)?;
     doc.insert(
         FACTS.to_owned(),
         serde_json::to_value(ContainerFacts::of_plan_run(&key, run))?,
@@ -370,6 +372,7 @@ pub(crate) fn plan_review_rows(
     let review_key = format!("{plan_key}/{}", seq(r));
     let mut doc = object(doc, "plan review")?;
     split_inbox(rows, &format!("plan_review:{review_key}"), &mut doc)?;
+    split_agent_host(rows, &format!("plan_review:{review_key}"), review.agent_host.as_deref(), &mut doc)?;
     rows.put_indexed(
         row(
             TaskPart::PlanReview,
@@ -663,10 +666,21 @@ fn split_nested(
                 index,
             );
         }
+        if !obligations.is_empty() {
+            doc.insert("obligations".to_owned(), Value::Object(obligations));
+        }
     }
     split_inbox(rows, &format!("run:{owner}"), doc)?;
+    split_agent_host(rows, owner, run.agent_host.as_deref(), doc)
+}
+
+pub(crate) fn split_agent_host(
+    rows: &mut Rows,
+    owner: &str,
+    typed: Option<&crate::agent::AgentRunState>,
+    doc: &mut Map<String, Value>,
+) -> Result<()> {
     if let Some(Value::Object(host)) = doc.get_mut("agent_host") {
-        let typed = run.agent_host.as_deref();
         for kind in AGENT_KINDS {
             for (i, record) in take_array(host, kind).into_iter().enumerate() {
                 let (open, index) = agent_flags(typed, kind, i);
@@ -718,6 +732,9 @@ fn agent_flags(
         ),
         "questions" => host.questions.get(i).map_or((false, Vec::new()), |q| {
             (q.state.pending(), vec![format!("key:{}", q.key)])
+        }),
+        "jobs" => host.jobs.get(i).map_or((false, Vec::new()), |job| {
+            (job.needs_reap(), vec![format!("id:{}", job.id)])
         }),
         "wakes" => host.wakes.get(i).map_or((false, Vec::new()), |w| {
             (

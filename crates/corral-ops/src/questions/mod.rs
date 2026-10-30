@@ -147,15 +147,29 @@ impl QuestionKey {
         if !parts[..parts.len() - 1].iter().all(word) {
             return Err(bad());
         }
+        // Planning containers key their run or plan as `plan-<D|P>` (`ContainerRef::key`).
         let container = match parts.as_slice() {
-            [task, run, _] => ContainerRef::Worker {
-                task: (*task).into(),
-                run: (*run).into(),
+            [task, run, _] => match run.strip_prefix("plan-") {
+                Some(run) => ContainerRef::Planner {
+                    task: (*task).into(),
+                    run: run.into(),
+                },
+                None => ContainerRef::Worker {
+                    task: (*task).into(),
+                    run: (*run).into(),
+                },
             },
-            [task, run, review, _] => ContainerRef::Reviewer {
-                task: (*task).into(),
-                run: (*run).into(),
-                review: (*review).into(),
+            [task, run, review, _] => match run.strip_prefix("plan-") {
+                Some(plan) => ContainerRef::PlanReviewer {
+                    task: (*task).into(),
+                    plan: plan.into(),
+                    review: (*review).into(),
+                },
+                None => ContainerRef::Reviewer {
+                    task: (*task).into(),
+                    run: (*run).into(),
+                    review: (*review).into(),
+                },
             },
             _ => return Err(bad()),
         };
@@ -172,9 +186,10 @@ pub fn question_key(container: &ContainerRef, n: usize) -> String {
     format!("{}/Q{n}", container.key())
 }
 
-/// Every Pi-native worker run and review child of a task, current or historical.
+/// Every Pi-native worker run, review child, planner run and plan review of a task, current or
+/// historical.
 pub fn containers(task: &Task) -> Vec<ContainerRef> {
-    let mut out = Vec::new();
+    let mut out = crate::agent::ops::planning::containers(task);
     for run in &task.runs {
         if run.agent_host.is_some() {
             out.push(ContainerRef::Worker {
@@ -333,6 +348,15 @@ pub(crate) fn transition(
 /// The inbox recipient of a container's messages: the worker run, or the exact review child.
 pub(crate) fn recipient(container: &ContainerRef) -> Option<Recipient> {
     match container {
+        ContainerRef::Planner { task, run } => Some(Recipient::PlanRun {
+            task: task.clone(),
+            plan_run: run.clone(),
+        }),
+        ContainerRef::PlanReviewer { task, plan, review } => Some(Recipient::PlanReview {
+            task: task.clone(),
+            plan: plan.clone(),
+            review: review.clone(),
+        }),
         ContainerRef::Worker { task, run } => Some(Recipient::Run {
             task: task.clone(),
             run: run.clone(),

@@ -1,21 +1,20 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Event, EventCursor, EventReader, Store, actionable_kind, format_event_line};
+use corral_core::{
+    Event, EventCursor, EventReader, PM_ACTIONABLE_KINDS, Store, actionable_kind, format_event_line,
+};
 
-const KINDS: [&str; 11] = [
-    "done",
-    "needs_me",
-    "stuck",
-    "blocked",
-    "escalated",
-    "config_changed",
-    "config_invalid",
-    "lessons_due",
-    "run_resumed",
-    "wait_transition",
-    "pm_decision_resolved",
-];
+/// The PM-actionable kinds plus `config_invalid`, which only a watcher can await.
+const KINDS: [&str; PM_ACTIONABLE_KINDS.len() + 1] = {
+    let mut kinds = ["config_invalid"; PM_ACTIONABLE_KINDS.len() + 1];
+    let mut i = 0;
+    while i < PM_ACTIONABLE_KINDS.len() {
+        kinds[i] = PM_ACTIONABLE_KINDS[i];
+        i += 1;
+    }
+    kinds
+};
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(clap::Args, Debug)]
@@ -99,10 +98,14 @@ impl WaitArgs {
             actionable_kind(event)
         };
         if !kind.is_some_and(|kind| self.kinds.iter().any(|k| k == kind))
-            || self
-                .task
-                .as_deref()
-                .is_some_and(|id| event.task.as_deref() != Some(id))
+            || self.task.as_deref().is_some_and(|id| {
+                event.task.as_deref() != Some(id)
+                    && !event
+                        .detail
+                        .get("tasks")
+                        .and_then(|tasks| tasks.as_array())
+                        .is_some_and(|tasks| tasks.iter().any(|task| task.as_str() == Some(id)))
+            })
             || self.since.is_some_and(|since| event.ts < since)
         {
             return Ok(false);

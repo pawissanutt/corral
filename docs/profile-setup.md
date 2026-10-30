@@ -299,6 +299,12 @@ is later than it. Otherwise set `discovery.observed_at` after collecting every
 candidate observation, for example to the latest candidate `observed_at`, and
 keep each access record's `observed_at` equal to its candidate's.
 
+The built-in `pi-native` host appears in `harnesses` (with `vendors: ["openai"]`) when
+`corral agent doctor` reports it ready, `installed: false` when the configuration names it
+but it is not ready. Its candidates take no `args` and no `model_args`: the effort must be a
+level of its flag map and the provider must be an allowed vendor, otherwise validation
+refuses with `vendor_refused`.
+
 ```sh
 corral setup begin --expected-revision 0
 corral setup validate --file proposal.json

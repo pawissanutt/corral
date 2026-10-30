@@ -35,6 +35,7 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
             task.status = Status::NeedsMe;
             task.plan_required = Some(true);
             task.plan_runs.push(PlanRun {
+                agent_host: None,
                 execution: None,
                 route: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
@@ -61,6 +62,7 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
                 spec_revision: "fixture".into(),
                 document: PlanDocument {
                     delivery_target: None,
+                    human_review: None,
                     goal: "Fixture plan".into(),
                     non_goals: Vec::new(),
                     decisions: Vec::new(),
@@ -72,6 +74,7 @@ pub(crate) fn reviewing(state: PlanRunState) -> Fixture {
                     owner_decisions: Vec::new(),
                 },
                 reviews: vec![PlanReview {
+                    agent_host: None,
                     delivery: corral_core::inbox::DeliveryMode::Legacy,
                     inbox: Default::default(),
                     route: None,
