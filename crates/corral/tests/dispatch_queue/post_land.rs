@@ -61,6 +61,7 @@ fn post_land_hook_running_corral_completes_during_sync() {
         abandoned: false,
         notified: false,
         notice: None,
+        install_checked: false,
         hooks: vec![HookReceipt {
             hook,
             state: HookState::Pending,

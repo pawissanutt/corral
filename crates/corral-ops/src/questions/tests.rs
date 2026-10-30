@@ -54,7 +54,7 @@ fn worker_question_and_derived_status_have_one_default_wake_per_cause() {
     let (id, worker) = worker(&fx);
     let key = ask_ok(&fx, &worker, "wake", true);
     let task = fx.ctx.store.get(&id).unwrap();
-    assert_eq!(super::pending_keys(&task), [key.clone()]);
+    assert_eq!(super::pending_keys(&task), std::slice::from_ref(&key));
     // Sync's blocked-state projection carries these canonical keys, not just prose.
     fx.ctx
         .store
