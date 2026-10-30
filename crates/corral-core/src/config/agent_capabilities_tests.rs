@@ -742,7 +742,7 @@ mod llama_cpp_tests {
             );
             let snapshot = config.resolve(role, None);
             assert!(snapshot.enabled("llama_cpp.enabled"));
-            assert_eq!(snapshot.catalog, 5);
+            assert_eq!(snapshot.catalog, crate::agent::CAPABILITY_CATALOG_VERSION);
             assert_eq!(
                 snapshot.llama_cpp.unwrap(),
                 LlamaCppSettings {
