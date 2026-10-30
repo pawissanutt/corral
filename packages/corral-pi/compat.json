@@ -67,6 +67,8 @@
     "lsp",
     "browser",
     "llama_cpp.enabled",
-    "checkpoints"
+    "checkpoints",
+    "subagents",
+    "oracle"
   ]
 }

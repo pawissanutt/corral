@@ -23,4 +23,20 @@ pub struct UsageSession {
     /// Fallback for session formats without a model-change entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Host invocation key. Legacy accounting-only references have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<String>,
+    /// Missing/uncertain after launch is never evidence of zero billable spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<AuxiliaryOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuxiliaryOutcome {
+    Prepared,
+    Running,
+    Completed,
+    Uncertain,
+    NotStarted,
 }

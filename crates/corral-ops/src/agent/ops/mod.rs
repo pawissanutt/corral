@@ -1,6 +1,7 @@
 //! Handlers of the ops request-receipts lands (hello, event and receipt_lookup), and the role
 //! modules integration-seams declares for the rest: `worker` (worker-role), `reviewer`
 //! (reviewer-role) and `pm` (pm-role). `call.rs` routes every op to one of them.
+mod auxiliary;
 mod event;
 mod hello;
 pub(crate) mod jobs;

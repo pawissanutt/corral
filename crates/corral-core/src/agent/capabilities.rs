@@ -24,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 5;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 6;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -165,6 +165,26 @@ pub const CATALOG: &[CapabilityDef] = &[
         defaults: llama_cpp_defaults,
         host: true,
         settings: None,
+    },
+    CapabilityDef {
+        key: "subagents",
+        summary: "bounded read-only explore children",
+        defaults: |role| match role {
+            AgentRole::Worker | AgentRole::Planner | AgentRole::PlanReviewer => {
+                Some([false, true, true])
+            }
+            AgentRole::Reviewer => Some([false, false, true]),
+            AgentRole::Pm => None,
+        },
+        host: true,
+        settings: Some(super::auxiliary::explore_settings),
+    },
+    CapabilityDef {
+        key: "oracle",
+        summary: "tool-free consultation using a configured model",
+        defaults: |_| Some([false, false, true]),
+        host: true,
+        settings: Some(super::auxiliary::oracle_settings),
     },
     CapabilityDef {
         key: "checkpoints",
