@@ -1,6 +1,15 @@
 use super::*;
 
 #[test]
+fn missing_receipt_never_overwrites_real_exit_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let receipt = tmp.path().join("attempt.exited");
+    std::fs::write(&receipt, "17\n").unwrap();
+    record_missing(&receipt).unwrap();
+    assert_eq!(std::fs::read_to_string(receipt).unwrap(), "17\n");
+}
+
+#[test]
 #[cfg(unix)]
 fn launch_exports_stable_attempt_marker_only_to_child() {
     let tmp = tempfile::tempdir().unwrap();
