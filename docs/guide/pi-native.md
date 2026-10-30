@@ -876,11 +876,12 @@ and the inbox delivering its answer or correction, or a committed `corral_withdr
 settles it. A turn that ends, fails at the provider or is cancelled, and a nested tool call, never
 clear `blocked`, and a settled turn never stays `working`. A resumed host starts from the pending
 questions its hello receipt names. When the PM or owner escalates, cancels or answers a question,
-corral sends the asking host the container's question states over its authenticated bridge
-(`questions`), with no message to the model and no new turn: an escalation blocks, a cancellation
-releases only that question. Each question keeps its newest revision, so a late or repeated
+corral sends the asking host, over its authenticated bridge (`questions`), the state of every
+pending question of the container and of the one that changed, however old, with no message to
+the model and no new turn: an escalation blocks, a cancellation releases only that question. Each question keeps its newest revision, so a late or repeated
 update cannot undo a newer fact. Should that push fail, sync's next probe of the host sends the
-states again while the host still shows other blocking questions than corral holds.
+pending questions and every question the host still holds, until it shows the blocking questions
+corral holds.
 
 One report is in flight at a time, and changes that arrive meanwhile are sent once, as the latest
 state; an unchanged state sends nothing. Sequence numbers fence generations: at hello corral

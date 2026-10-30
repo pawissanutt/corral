@@ -123,7 +123,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     let epoch = bound.herdr_seq_epoch;
     receipts::commit(ctx, &admitted, move |state, _| {
         // A resumed host projects its still-pending questions from the start.
-        let questions = herdr_status::question_snapshot(state);
+        let questions = herdr_status::question_snapshot(state, &[]);
         let generation = state
             .generation_mut(n)
             .context("the generation disappeared")?;

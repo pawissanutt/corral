@@ -281,8 +281,8 @@ fn owner_and_pm_cancellations_and_escalations_reach_the_asking_host_at_their_new
         let sent = pushes(&bridge);
         assert_eq!(sent.len(), 2, "pm={pm}");
         assert_eq!(entry(&sent[0], &keys[0]), (json!(2), json!("cancelled")));
+        assert_eq!(entry(&sent[0], &keys[2]), (json!(1), json!("open")));
         let last = &sent[1];
-        assert_eq!(entry(last, &keys[0]), (json!(2), json!("cancelled")));
         assert_eq!(entry(last, &keys[1]), (json!(2), json!("escalated")));
         assert_eq!(entry(last, &keys[2]), (json!(1), json!("open")));
         assert!(untouched_panes(&fx));
@@ -332,6 +332,74 @@ fn a_probe_resends_questions_only_while_the_host_projection_differs() {
     assert_eq!(sent.len(), 1);
     assert_eq!(entry(&sent[0], &keys[0]), (json!(2), json!("cancelled")));
     held.lock().unwrap().clear();
+    sync(&fx);
+    assert!(pushes(&bridge).is_empty());
+}
+
+#[test]
+fn an_old_pending_question_behind_130_settled_ones_survives_hello_pushes_and_retries() {
+    // Given Q1 (owner) and Q2 (non-blocking) pending, then 130 settled questions:
+    let fx = f::fixture(false, 5);
+    let mut first = HostProc::spawn(true);
+    let bound = fx.bind(&fx.worker_target(), "w0:p1", &first);
+    let worker = fx.worker().key();
+    let mut asked = vec![
+        question(&format!("{worker}/Q1"), "owner_only", true),
+        question(&format!("{worker}/Q2"), "clarification", false),
+    ];
+    for n in 3..=132 {
+        let mut settled = question(&format!("{worker}/Q{n}"), "clarification", false);
+        settled.revision = 2;
+        settled.state = corral_core::agent::QuestionState::Withdrawn;
+        asked.push(settled);
+    }
+    let keys = add_questions(&fx, &asked);
+
+    // When the host is lost and resumed, then generation 2's hello names both pending questions
+    // and none of the settled history, so the resumed host starts blocked on Q1:
+    exited(&fx, &mut first);
+    sync(&fx);
+    crate::agent::recovery::resume_container(&f::ctx_at(fx.root()), &fx.worker(), false).unwrap();
+    let second = HostProc::spawn(true);
+    fx.hello_next(&bound, &run_recipient(&fx), &second);
+    let named: Vec<Value> = hello_result(&fx, 2)["questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q["key"].clone())
+        .collect();
+    assert_eq!(named, vec![json!(keys[0]), json!(keys[1])]);
+
+    // When the PM escalates Q2 and the owner cancels Q1:
+    let held = Arc::new(Mutex::new(vec![keys[0].clone()]));
+    let bridge = f::bridge(
+        &fx.ctx.store,
+        &run_recipient(&fx),
+        2,
+        Some(f::CAP),
+        projecting(held.clone()),
+    );
+    crate::questions::escalate(&fx.ctx, &keys[1], 1, Actor::Pm(None), None, None).unwrap();
+    crate::questions::cancel(&fx.ctx, &keys[0], 1, Actor::Owner, "not needed").unwrap();
+
+    // Then each push names its question at the new revision, in a frame of pending questions only:
+    let sent = pushes(&bridge);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(entry(&sent[0], &keys[1]), (json!(2), json!("escalated")));
+    assert_eq!(entry(&sent[1], &keys[0]), (json!(2), json!("cancelled")));
+    assert!(
+        sent.iter()
+            .all(|frame| frame.as_array().unwrap().len() <= 2)
+    );
+
+    // When the host missed the cancellation and still holds Q1, a probe resends naming Q1, and
+    // stops once the host holds only the escalated Q2:
+    sync(&fx);
+    let resent = pushes(&bridge);
+    assert_eq!(resent.len(), 1);
+    assert_eq!(entry(&resent[0], &keys[0]), (json!(2), json!("cancelled")));
+    assert_eq!(entry(&resent[0], &keys[1]), (json!(2), json!("escalated")));
+    *held.lock().unwrap() = vec![keys[1].clone()];
     sync(&fx);
     assert!(pushes(&bridge).is_empty());
 }
