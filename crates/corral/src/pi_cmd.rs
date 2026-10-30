@@ -25,6 +25,9 @@ pub struct PiArgs {
     /// Open an assistant even when assistant.max_live assistants are already live
     #[arg(long)]
     over_cap: bool,
+    /// Preload bounded read-only context for this task in a new assistant
+    #[arg(long, value_name = "TASK-ID", conflicts_with_all = ["bare", "pm", "resume"])]
+    task: Option<String>,
     /// Model to run instead of the profile's (bare: Pi's default for the provider)
     #[arg(long)]
     model: Option<String>,
@@ -59,9 +62,9 @@ pub fn invocation(args: &PiArgs, in_workspace: bool) -> Result<Invocation> {
         return Ok(Invocation::Bare { notice: false });
     }
     if !in_workspace {
-        if args.pm || args.resume.is_some() || args.over_cap {
+        if args.pm || args.resume.is_some() || args.over_cap || args.task.is_some() {
             bail!(
-                "corral pi refused: not_in_workspace: --pm, --resume and --over-cap need a corral \
+                "corral pi refused: not_in_workspace: --pm, --resume, --task and --over-cap need a corral \
                  workspace; run them inside one, or `corral pi --bare`"
             );
         }
@@ -95,9 +98,12 @@ pub fn run(start: &Path, args: PiArgs, entry: &Entry) -> Result<()> {
             })
         }
         Invocation::Pm => pi::bound(start, &entry.open(start)?, &overrides),
-        Invocation::Assistant { over_cap } => {
-            pi::assistant(&entry.open(start)?, &overrides, over_cap)
-        }
+        Invocation::Assistant { over_cap } => pi::assistant_focused(
+            &entry.open(start)?,
+            &overrides,
+            over_cap,
+            args.task.as_deref(),
+        ),
         Invocation::Resume(id) => pi::resume_assistant(&entry.open(start)?, &id, &overrides),
     }
 }
@@ -125,6 +131,12 @@ mod tests {
             (&[], true, Some(Assistant { over_cap: false })),
             (&["--over-cap"], true, Some(Assistant { over_cap: true })),
             (&["--pm"], true, Some(Pm)),
+            (
+                &["--task", "T-42"],
+                true,
+                Some(Assistant { over_cap: false }),
+            ),
+            (&["--task", "T-42"], false, None),
             (&["--resume", "A-1"], true, Some(Resume("A-1".into()))),
             (&["--bare"], true, Some(Bare { notice: false })),
             (&["--bare"], false, Some(Bare { notice: false })),
@@ -151,6 +163,9 @@ mod tests {
     fn conflicting_modes_are_usage_errors() {
         for argv in [
             &["--bare", "--pm"][..],
+            &["--bare", "--task", "T-42"],
+            &["--pm", "--task", "T-42"],
+            &["--resume", "A-1", "--task", "T-42"],
             &["--bare", "--resume", "A-1"],
             &["--pm", "--resume", "A-1"],
             &["--pm", "--over-cap"],

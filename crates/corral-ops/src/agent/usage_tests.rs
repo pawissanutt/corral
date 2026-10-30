@@ -14,6 +14,46 @@ const FIXTURE: &str = include_str!("../../../../tools/pi-probe/fixtures/session-
 const EXPECTED: &str =
     include_str!("../../../../tools/pi-probe/fixtures/session-usage.expected.json");
 
+#[test]
+fn transcript_pages_use_bound_worker_and_review_files() {
+    let fx = fx();
+    let (id, target) = worker(&fx);
+    let host = bound_hello(&fx, &target, "p1", "sess-worker");
+    write_session(
+        &host.sessions.join("session.jsonl"),
+        &[r#"{"type":"message","text":"worker only"}"#],
+    );
+    fx.ctx
+        .store
+        .update(&id, |t| {
+            t.status = Status::Review;
+            t.runs[0].outcome = Some(RunOutcome::Done);
+            t.runs[0].ended = Some(jiff::Timestamp::now());
+            t.runs[0].review_runs.push(ts::run("R1-review1", "p2"));
+            Ok(())
+        })
+        .unwrap();
+    let target = BindTarget::Reviewer {
+        task: id.clone(),
+        run: "R1".into(),
+        review: "R1-review1".into(),
+        callback: "g1:c1".into(),
+    };
+    let review = bound_hello(&fx, &target, "p2", "sess-review");
+    write_session(
+        &review.sessions.join("session.jsonl"),
+        &[r#"{"type":"message","text":"review only"}"#],
+    );
+    let worker = crate::transcript_page(&fx.ctx.store, &id, "R1", None, 1, 200).unwrap();
+    let child = crate::transcript_page(&fx.ctx.store, &id, "R1", Some(1), 1, 200).unwrap();
+    assert!(worker.contains("worker only") && !worker.contains("review only"));
+    assert!(child.contains("review only") && !child.contains("worker only"));
+    std::fs::remove_file(review.sessions.join("session.jsonl")).unwrap();
+    let error = crate::transcript_page(&fx.ctx.store, &id, "R1", Some(1), 1, 200).unwrap_err();
+    assert!(format!("{error:#}").contains("transcript_unavailable"));
+    assert!(format!("{error:#}").contains("session.jsonl"));
+}
+
 fn totals() -> [u64; 4] {
     let expected: Value = serde_json::from_str(EXPECTED).unwrap();
     let t = &expected["totals"];

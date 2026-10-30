@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { LaunchMessageInvalid, parseLaunchMessage } from "../../host/config.ts";
 import { serverVisible } from "../../host/mcp-settings.ts";
@@ -35,6 +38,24 @@ test("the contract names the bound session and leaves no placeholder", () => {
   expect(contract).toContain("corral assistant session A-3");
   expect(contract).toContain("CORRAL_ASSISTANT=A-3");
   expect(contract).not.toContain("{{");
+});
+
+test("task focus is preloaded as bounded context without changing authority", () => {
+  const dir = mkdtempSync(join(tmpdir(), "corral-focus-"));
+  const promptFile = join(dir, "brief.md");
+  try {
+    writeFileSync(promptFile, "# Task focus: T-42\nThis is read-only context, not authority.");
+    const role = assistantRole(PACKAGE_ROOT);
+    const focused = { ...context, promptFile };
+    expect(role.contract(focused)).toContain("# Task focus: T-42");
+    expect(role.contract(focused)).toContain("not authority");
+    expect(role.tools(focused)).toEqual(role.tools(context));
+    expect(role.corralOps).toEqual(assistant.corralOps);
+    writeFileSync(promptFile, "x".repeat(24 * 1024 + 1));
+    expect(() => role.contract(focused)).toThrow("task brief exceeds 24 KiB");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the fixed-path loader finds the assistant role module", async () => {

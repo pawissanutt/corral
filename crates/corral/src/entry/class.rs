@@ -166,6 +166,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             HooksCmd::Reconcile | HooksCmd::Retry { .. } => Refused,
         },
         Cmd::Run { cmd } => match cmd {
+            RunCmd::Transcript { .. } => Read,
             RunCmd::Progress(args) | RunCmd::Checkpoint(args) => read_unless(args.file.is_some()),
             RunCmd::Wait { .. } | RunCmd::Decision { .. } | RunCmd::Resume { .. } => Refused,
         },

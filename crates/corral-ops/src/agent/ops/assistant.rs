@@ -151,7 +151,18 @@ fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Resul
         provider: launch::host_provider(resolved.vendor.as_deref(), &model),
         model,
         effort: resolved.effort.clone(),
-        prompt_file: None,
+        prompt_file: {
+            let session = ctx.store.get_assistant(id)?;
+            if session.focus != "workspace" {
+                let brief = crate::assistant::task_brief(&ctx.store, &session.focus)?;
+                let path = ctx.store.prompts_dir().join(format!("{id}-focus.md"));
+                std::fs::write(&path, brief)
+                    .with_context(|| format!("writing {}", path.display()))?;
+                Some(path)
+            } else {
+                None
+            }
+        },
         adopt: true,
     };
     let target = BindTarget::Assistant { session: id.into() };
@@ -177,13 +188,27 @@ pub fn open(
     overrides: &Overrides,
     over_cap: bool,
 ) -> Result<(AssistantSession, Prepared, Option<String>)> {
+    open_focused(ctx, pane, overrides, over_cap, None)
+}
+
+/// Open an assistant with optional read-only task context.
+pub fn open_focused(
+    ctx: &Ctx,
+    pane: &str,
+    overrides: &Overrides,
+    over_cap: bool,
+    focus: Option<&str>,
+) -> Result<(AssistantSession, Prepared, Option<String>)> {
+    if let Some(task) = focus {
+        ctx.store.get(task)?;
+    }
     pane_known(ctx, pane)?;
     let resolved = profile(ctx, None, overrides)?;
     let warning = admit(ctx, over_cap)?;
     let socket = ctx.herdr.socket_path().ok();
     let session = ctx
         .store
-        .create_assistant(&resolved.profile, None, Some(pane), socket)?;
+        .create_assistant(&resolved.profile, focus, Some(pane), socket)?;
     match prepare(ctx, &session.id, pane, &resolved) {
         Ok(prepared) => {
             ctx.store.log_event(
