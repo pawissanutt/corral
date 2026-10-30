@@ -87,7 +87,8 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
         // Then cloud model/auth/transport selection survives without local catalog traffic.
         expect(host.state().model).toBe(`${provider}/${model}`);
         expect(host.state().capabilities).toEqual(capabilities);
-        expect(credentialContexts).toEqual([provider]);
+        expect(credentialContexts).toEqual(role === "pm" && provider !== "amazon-bedrock"
+          ? [provider, provider === "openai-codex" ? "anthropic" : "openai-codex"] : [provider]);
         expect(transport.requests).toBe(0);
         await expect(network.fetch("http://127.0.0.1:8080/v1/models")).rejects.toThrow(/network_refused/);
         if (provider === "openai-codex") {

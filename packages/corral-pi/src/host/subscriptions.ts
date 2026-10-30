@@ -4,8 +4,10 @@ import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent
 import { PROVIDER_IDS, PROVIDERS, type ProviderId } from "../auth/providers.ts";
 import type { AuthModule } from "../auth/types.ts";
 import { resolveClaudeCode } from "../claude/sdk.ts";
+import { NO_CATALOG_CREDENTIALS } from "./catalog.ts";
 
 export async function subscriptionRoutes(auth: AuthModule, primary: ProviderId, role: string) {
+  if (PROVIDERS[primary].auth === "local") return { providers: [primary], credentials: NO_CATALOG_CREDENTIALS };
   const context = (provider: ProviderId) => ({ provider, apiEndpoint: PROVIDERS[provider].api,
     refreshEndpoint: PROVIDERS[provider].refresh });
   const stores = new Map<string, CredentialStore>();
