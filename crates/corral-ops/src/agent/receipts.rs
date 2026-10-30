@@ -9,6 +9,7 @@ use corral_core::agent::{
     RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths, pm_state,
     rejections,
 };
+use corral_core::assistant::AssistantContainer;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
@@ -92,19 +93,8 @@ pub(crate) fn commit(
     let origin = &admitted.origin;
     let container = &origin.binding.container;
     let mut outcome: Option<(RequestReceipt, bool)> = None;
-    if let Some(id) = container.assistant() {
-        let (receipt, replayed) =
-            ctx.store
-                .settle_assistant_container(id, |assistant, ended| {
-                    if let Some(stored) = assistant.state.receipt(&origin.request_id) {
-                        admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
-                        return Ok((stored.clone(), true));
-                    }
-                    admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
-                    let commit = apply(&mut assistant.state, None)?;
-                    Ok((append(&mut assistant.state, origin, commit)?, false))
-                })?;
-        return respond(ctx, container, receipt, replayed);
+    if container.assistant().is_some() {
+        return commit_assistant(ctx, admitted, |assistant| apply(&mut assistant.state, None));
     }
     match container.task() {
         None => pm_state::update(&ctx.store, |pm| {
@@ -131,6 +121,32 @@ pub(crate) fn commit(
         }
     }
     let (receipt, replayed) = outcome.context("the commit produced no receipt")?;
+    respond(ctx, container, receipt, replayed)
+}
+
+/// `commit` for an assistant session whose op also changes its container beyond the run state,
+/// such as the owner-input journal, in the same transaction as its receipt.
+pub(crate) fn commit_assistant(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    apply: impl FnOnce(&mut AssistantContainer) -> Result<Commit>,
+) -> Result<CallResponse> {
+    let origin = &admitted.origin;
+    let container = &origin.binding.container;
+    let id = container
+        .assistant()
+        .context("an assistant commit names an assistant session")?;
+    let (receipt, replayed) = ctx
+        .store
+        .settle_assistant_container(id, |assistant, ended| {
+            if let Some(stored) = assistant.state.receipt(&origin.request_id) {
+                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                return Ok((stored.clone(), true));
+            }
+            admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
+            let commit = apply(assistant)?;
+            Ok((append(&mut assistant.state, origin, commit)?, false))
+        })?;
     respond(ctx, container, receipt, replayed)
 }
 
