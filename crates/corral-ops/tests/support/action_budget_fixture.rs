@@ -463,6 +463,8 @@ fn filler(store: &Store) {
 }
 
 pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
+    // Cold children have different PID/nonce widths; pin identity, never the measured work.
+    crate::operating::pin_start_attempt(Some("start-fixture-0000000000000000000"));
     corral_core::clock::pin_thread(Some(fixture::now()));
     crate::resources::pin_psi(Some(PSI));
     let (fx, id, attempt) = setup(kind);
@@ -611,6 +613,7 @@ fn bench_ticks(bench: &Bench) -> bool {
 
 /// The store `root` another process built and settled, opened afresh.
 pub(super) fn reopen(root: &FsPath, id: &str, attempt: &str) -> Bench {
+    crate::operating::pin_start_attempt(Some("start-fixture-0000000000000000000"));
     corral_core::clock::pin_thread(Some(fixture::now()));
     let store = super::action_budget_trace::decorate(&Store::open(root).unwrap());
     let herdr = Herdr::with_bin(
