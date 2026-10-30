@@ -55,6 +55,12 @@ fn append(
         )
         .into());
     }
+    let receipt = new_receipt(origin, commit)?;
+    state.receipts.push(receipt.clone());
+    Ok(receipt)
+}
+
+fn new_receipt(origin: &RequestOrigin, commit: Commit) -> Result<RequestReceipt> {
     let bytes = serde_json::to_vec(&commit.result)?.len();
     anyhow::ensure!(
         bytes <= RESULT_MAX_BYTES,
@@ -76,7 +82,6 @@ fn append(
         at: now,
         committed_at: Some(now),
     };
-    state.receipts.push(receipt.clone());
     Ok(receipt)
 }
 
@@ -116,6 +121,47 @@ pub(crate) fn commit(
         }
     }
     let (receipt, replayed) = outcome.context("the commit produced no receipt")?;
+    respond(ctx, container, receipt, replayed)
+}
+
+/// A task mutation and its receipt share one head transaction; no accumulated native vectors
+/// are loaded. PM operations keep their separate journal and do not enter this task-only seam.
+pub(crate) fn commit_head(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    apply: impl FnOnce(&mut corral_core::TaskHeadMut) -> Result<Commit>,
+) -> Result<CallResponse> {
+    failpoint("agent_admitted_before_commit");
+    let origin = &admitted.origin;
+    let container = &origin.binding.container;
+    let task_id = container
+        .task()
+        .context("a head commit names a task container")?;
+    let mut outcome = None;
+    ctx.store.try_update_head(task_id, |task| {
+        if let Some(stored) = task.agent_receipt(container, &origin.request_id)? {
+            admission::same_request(&stored, &origin.op, &origin.payload_sha256)?;
+            outcome = Some((stored, true));
+            return Ok(false);
+        }
+        admission::recheck_task_head(task, &origin.binding)?;
+        let commit = apply(task)?;
+        let head = task
+            .agent_head(container)?
+            .context("the agent binding disappeared")?;
+        if head.records.receipt_count() >= RECEIPTS_MAX as u64 {
+            return Err(Rejection::new(
+                RejectCode::ReceiptLimit,
+                format!("the container already holds {RECEIPTS_MAX} receipts"),
+            )
+            .into());
+        }
+        let receipt = new_receipt(origin, commit)?;
+        task.put_agent_record(container, agent::NativeRecord::Receipt(receipt.clone()))?;
+        outcome = Some((receipt, false));
+        Ok(true)
+    })?;
+    let (receipt, replayed) = outcome.context("the head commit produced no receipt")?;
     respond(ctx, container, receipt, replayed)
 }
 

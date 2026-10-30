@@ -4,7 +4,9 @@ use std::path::{Component, PathBuf};
 
 use anyhow::{Context, Result};
 use corral_core::TaskRef;
-use corral_core::agent::{ContainerRef, GenerationBound, HostHealth, ReceiptEffect, paths};
+use corral_core::agent::{
+    AgentRole, ContainerRef, GenerationBound, HostHealth, NativeRecord, ReceiptEffect, paths,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -110,6 +112,28 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         at: corral_core::clock::now(),
     };
     let key = container.key();
+    if container.task().is_some() {
+        return receipts::commit_head(ctx, &admitted, move |task| {
+            let mut generation = task
+                .agent_generation(&container, n)?
+                .context("the generation disappeared")?;
+            if generation.bound.is_some() {
+                return Err(Rejection::new(
+                    RejectCode::NonceConsumed,
+                    "the bind nonce was already consumed",
+                )
+                .into());
+            }
+            generation.bound = Some(bound);
+            let todo = generation.todo;
+            task.put_agent_record(&container, NativeRecord::Generation(generation))?;
+            task.edit_agent_head(&container, |head| {
+                head.binding.health = HostHealth::Healthy;
+                Ok(())
+            })?;
+            Ok(bound_commit(n, role, &key, todo))
+        });
+    }
     receipts::commit(ctx, &admitted, move |state, _| {
         let generation = state
             .generation_mut(n)
@@ -124,17 +148,21 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         generation.bound = Some(bound);
         let todo = generation.todo;
         state.binding.health = HostHealth::Healthy;
-        Ok(Commit {
-            result: json!({
-                "generation": n, "container": key, "role": role.as_str(),
-                "ops": AgentOp::implemented_for(role).into_iter()
-                    .filter(|op| *op != "todo" || todo).collect::<Vec<_>>(),
-            }),
-            effect: Some(ReceiptEffect {
-                kind: "generation_bound".into(),
-                reference: format!("g{n}"),
-            }),
-            post_pending: vec!["event:agent_bound".into()],
-        })
+        Ok(bound_commit(n, role, &key, todo))
     })
+}
+
+fn bound_commit(n: u32, role: AgentRole, key: &str, todo: bool) -> Commit {
+    Commit {
+        result: json!({
+            "generation": n, "container": key, "role": role.as_str(),
+            "ops": AgentOp::implemented_for(role).into_iter()
+                .filter(|op| *op != "todo" || todo).collect::<Vec<_>>(),
+        }),
+        effect: Some(ReceiptEffect {
+            kind: "generation_bound".into(),
+            reference: format!("g{n}"),
+        }),
+        post_pending: vec!["event:agent_bound".into()],
+    }
 }

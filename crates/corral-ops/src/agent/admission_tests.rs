@@ -137,6 +137,67 @@ fn admission_work_is_equal_with_tenfold_settled_native_history() {
 }
 
 #[test]
+fn task_hello_commit_has_equal_work_with_tenfold_settled_native_history() {
+    use corral_core::work::{self, Counter, HotScope};
+    struct Unpin;
+    impl Drop for Unpin {
+        fn drop(&mut self) {
+            corral_core::clock::pin_thread(None);
+        }
+    }
+    let at = "2026-01-01T00:00:00Z".parse().unwrap();
+    corral_core::clock::pin_thread(Some(at));
+    let _clock = Unpin;
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let fx = fx();
+        let id = worker_task(&fx, "p1");
+        let _first = worker(&fx, &id);
+        let mut task = fx.ctx.store.get(&id).unwrap();
+        let state = task.current_run_mut().unwrap().agent_host.as_mut().unwrap();
+        let template = state.receipts[0].clone();
+        for n in 0..2 * scale {
+            state.receipts.push(stored(
+                &template,
+                &format!("older-{n:06}"),
+                json!({"finished":true}),
+            ));
+            state.turns.push(
+                serde_json::from_value(json!({
+                    "generation":1,"seq":n+1,"origin":{"kind":"bridge"},"started":at,"ended":at
+                }))
+                .unwrap(),
+            );
+        }
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        let target = BindTarget::Worker {
+            task: id.clone(),
+            run: "R1".into(),
+        };
+        let next = bind(&fx, &target, "p1", "next-session");
+        assert_eq!(next.identity.generation, 2);
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        let receipt = committed(&hello(&fx, &next));
+        assert_eq!(receipt.result["generation"], 2);
+        let after = work::snapshot();
+        measured.push(
+            [
+                Counter::TaskHeadDecodes,
+                Counter::NestedRowDecodes,
+                Counter::HistoryRowDecodes,
+                Counter::FullTaskHydrations,
+                Counter::DecodedDocBytes,
+                Counter::ViewsOpened,
+            ]
+            .map(|counter| after.total(counter) - before.total(counter)),
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+    assert_eq!(measured[0][3], 0);
+}
+
+#[test]
 fn a_lookup_reusing_a_committed_request_id_is_rejected_as_a_payload_mismatch() {
     let fx = fx();
     let id = worker_task(&fx, "p1");

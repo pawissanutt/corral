@@ -348,6 +348,11 @@ pub struct NativeRecordCounts {
 }
 
 impl NativeRecordCounts {
+    /// Total receipt append positions, independent of settled receipt history.
+    pub fn receipt_count(&self) -> u64 {
+        self.counts[1]
+    }
+
     pub(crate) fn of(state: &crate::agent::AgentRunState) -> Self {
         let counts = [
             state.generations.len(),
