@@ -1,8 +1,8 @@
 //! receipt_lookup: reads one receipt of the requester's own named container, whatever
 //! generation committed it. Authentication only; nothing is written.
 use anyhow::Result;
+use corral_core::Store;
 use corral_core::agent::RequestReceipt;
-use corral_core::{Store, TaskRef};
 use serde::Deserialize;
 
 use crate::Ctx;
