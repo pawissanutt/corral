@@ -172,15 +172,15 @@ pub(crate) fn advance_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Resul
         }
         effects::failpoint("gate_queue_claimed");
         execute(ctx, &origin, me.clone(), true)?;
-        let task = ctx.store.get(id)?;
-        let still_queued = agent::container_state(&task, &origin.binding.container)
-            .and_then(|s| s.receipt(&origin.request_id))
-            .is_some_and(|r| r.state == ReceiptState::Queued);
-        let due = effects::due_gate_wakes(
+        let task = ctx.store.head(id)?;
+        let still_queued = task
+            .agent_receipt(&origin.binding.container, &origin.request_id)?
+            .is_some_and(|receipt| receipt.state == ReceiptState::Queued);
+        let due = crate::review_budget::due_gate_wakes_ref(
             &task,
-            jiff::Timestamp::now(),
+            ctx.store.now(),
             std::time::Duration::from_secs(ctx.store.config.agent.gate_start_uncertain_secs),
-        );
+        )?;
         super::wake::post_due(ctx, &due)?;
         if still_queued {
             break;
