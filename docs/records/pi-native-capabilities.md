@@ -29,7 +29,8 @@ validates a compound key's configured table and returns its effective settings.
 | `tool_search` (T-567) | off / on / on | off / on / on | off / on / on | none |
 | `headless` (T-577) | off / off / off | not available | reviewer off / off / off; planning roles not available | none |
 
-`headless` is an operational choice: only a role override turns it on. The host then binds
+`headless` is an operational choice: only a role override turns it on, and only for worker and
+reviewer (assistants are interactive by definition, so the assistant role cannot set it). The host then binds
 its extensions without InteractiveMode (`packages/corral-pi/src/host/headless.ts`), reads no
 terminal input and reports `mode: "headless"` in `get_state`; `corral agent state` derives
 `mode` from the current generation's snapshot.

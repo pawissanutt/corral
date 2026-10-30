@@ -386,7 +386,8 @@ fn plan_role_defaults(role: AgentRole) -> Option<[bool; 3]> {
 fn headless_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker | AgentRole::Reviewer => Some([false, false, false]),
-        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+        // Assistants are interactive by definition (docs/plans/assistant-sessions.md).
+        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer | AgentRole::Assistant => None,
     }
 }
 
