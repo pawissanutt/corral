@@ -34,7 +34,7 @@ fn lifecycle() -> Fixture {
                 held_at: Some(now - SignedDuration::from_secs(1700)),
             });
         }
-        std::fs::write(&task.path, corral_core::render_task(&task)).unwrap();
+        fx.ctx.store.fixture_put_task(&task).unwrap();
     }
     fx
 }
@@ -295,9 +295,6 @@ fn attention_refresh_keeps_warm_decodes_and_active_work_independent_of_settled_h
                 .unwrap();
         }
         fx.ctx.store = corral_core::Store::open(fx.ctx.store.root()).unwrap();
-        fx.ctx
-            .store
-            .set_task_settle_window(std::time::Duration::ZERO);
         let before = corral_core::work::Work::ALL.map(corral_core::work::count);
         // When cold and warm refreshes project the same unchanged records.
         let cold = attention::load(&fx.ctx, fx.now.get()).unwrap();

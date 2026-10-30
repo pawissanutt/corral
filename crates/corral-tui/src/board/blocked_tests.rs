@@ -81,10 +81,7 @@ fn parked_membership_preserves_actions_slots_and_done_history() {
     // Given a native parked run, ordinary worker and fixed-clock board snapshot.
     let fx = parked();
     let mut board = fx.board();
-    let usage = board
-        .index
-        .usage(&board.tasks, &fx.ctx.store.config.limits)
-        .clone();
+    let usage = board.slot_usage.clone();
 
     // When navigation selects the derived Blocked column's parked card.
     board.selected = Some("T-004".into());
@@ -112,10 +109,7 @@ fn refresh_returns_resumed_worker_to_running_and_keeps_selection() {
     let mut board = fx.board();
     board.selected = Some("T-004".into());
     board.restore_selection();
-    let before = board
-        .index
-        .usage(&board.tasks, &fx.ctx.store.config.limits)
-        .total();
+    let before = board.slot_usage.total();
     fx.ctx
         .store
         .update("T-004", |task| {
@@ -133,13 +127,7 @@ fn refresh_returns_resumed_worker_to_running_and_keeps_selection() {
     assert_eq!(board.columns()[board.col], Status::Running);
     assert_eq!(board.column_tasks(Status::NeedsMe).len(), 2);
     assert_eq!(board.column_tasks(Status::Running).len(), 2);
-    assert_eq!(
-        board
-            .index
-            .usage(&board.tasks, &fx.ctx.store.config.limits)
-            .total(),
-        before + 1
-    );
+    assert_eq!(board.slot_usage.total(), before + 1);
 }
 
 #[test]
