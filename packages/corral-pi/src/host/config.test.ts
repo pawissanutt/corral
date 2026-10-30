@@ -85,7 +85,7 @@ test("web settings come from the generation snapshot and require an eligible ena
   ]) {
     expect(() => parseLaunchMessage(JSON.stringify({ ...message, capabilities: invalid }))).toThrow(LaunchMessageInvalid);
   }
-  expect(() => parseLaunchMessage(JSON.stringify({ ...message, role: "pm", capabilities }))).toThrow(LaunchMessageInvalid);
+  expect(parseLaunchMessage(JSON.stringify({ ...message, role: "pm", capabilities })).capabilities?.web).toEqual(web);
 });
 
 test("MCP and cached search parse independently without enabling codemode", () => {

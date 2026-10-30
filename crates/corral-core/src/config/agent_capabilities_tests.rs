@@ -163,6 +163,8 @@ fn web_presets_overrides_and_role_ceilings_share_the_catalog() {
             AgentRole::Reviewer,
             AgentRole::Planner,
             AgentRole::PlanReviewer,
+            AgentRole::Pm,
+            AgentRole::Assistant,
         ] {
             let snapshot = config.resolve(role, None);
             assert_eq!(snapshot.enabled("web.enabled"), preset != Preset::Strict);
@@ -180,10 +182,8 @@ fn web_presets_overrides_and_role_ceilings_share_the_catalog() {
                 preset == Preset::Strict
             );
         }
-        assert!(config.set(AgentRole::Pm, "web.enabled", true).is_err());
-        assert!(config.resolve(AgentRole::Pm, None).web.is_none());
     }
-    assert!(toml::from_str::<AgentCapabilities>("[pm.web]\nhosts = ['*']").is_err());
+    assert!(toml::from_str::<AgentCapabilities>("[pm.web]\nhosts = ['*']").is_ok());
 }
 
 #[test]
@@ -537,12 +537,7 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
         serde_json::json!("ask")
     );
     assert!(!reviewer.features.contains_key("hooks"));
-    assert!(
-        !config
-            .resolve(AgentRole::Pm, None)
-            .features
-            .contains_key("bash_rules")
-    );
+    assert!(config.resolve(AgentRole::Pm, None).enabled("bash_rules"));
     // And standard leaves both off until a role override enables one.
     let mut standard = AgentCapabilities::default();
     let before = standard.resolve(AgentRole::Worker, None);
@@ -564,7 +559,6 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
     // And role ceilings and invalid settings are configuration errors.
     for invalid in [
         "[reviewer.hooks]\nenabled = true",
-        "[pm]\nbash_rules = true",
         "[worker.hooks]\n[[worker.hooks.pre_tool]]\nname = 'x'\nargv = []",
         "[worker.hooks]\n[[worker.hooks.post_tool]]\nname = 'x'\nargv = ['x']\ntools = ['corral_done']",
         "[worker.bash_rules]\ndefault = 'maybe'",
@@ -673,7 +667,6 @@ fn browser_is_worker_only_and_records_validated_origins() {
     assert!(!strict.resolve(AgentRole::Worker, None).enabled("browser"));
     for role in [
         AgentRole::Reviewer,
-        AgentRole::Pm,
         AgentRole::Planner,
         AgentRole::PlanReviewer,
     ] {
@@ -682,7 +675,6 @@ fn browser_is_worker_only_and_records_validated_origins() {
     // And other roles, paths, credentials, non-HTTP schemes and bad values are refused.
     for invalid in [
         "[reviewer]\nbrowser = true",
-        "[pm.browser]\nenabled = true",
         "[worker.browser]\norigins = ['http://localhost:3000/app']",
         "[worker.browser]\norigins = ['http://localhost:3000?x=1']",
         "[worker.browser]\norigins = ['http://user:pw@localhost:3000']",

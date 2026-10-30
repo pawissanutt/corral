@@ -68,9 +68,8 @@ pub(super) fn lsp_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker => Some([true, true, true]),
         AgentRole::Reviewer => Some([false, false, true]),
-        AgentRole::Planner | AgentRole::PlanReviewer | AgentRole::Assistant => {
+        AgentRole::Planner | AgentRole::PlanReviewer | AgentRole::Assistant | AgentRole::Pm => {
             Some([false, true, true])
         }
-        AgentRole::Pm => None,
     }
 }

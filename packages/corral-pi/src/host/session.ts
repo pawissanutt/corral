@@ -300,7 +300,7 @@ export class HostSession {
       throw new Error(`module_invalid: local tools ${roleNames.join(",")} differ from localToolNames`);
     }
     const webEnabled = options.capabilities?.enabled.includes("web.enabled") === true;
-    if (webEnabled && (options.identity.role === "pm" || !options.network.web || !options.capabilities?.web)) {
+    if (webEnabled && (!options.network.web || !options.capabilities?.web)) {
       throw new Error("module_invalid: web.enabled needs an eligible role and its generation-bound web transport");
     }
     let browser: ReturnType<typeof browserSettings>;
@@ -311,7 +311,7 @@ export class HostSession {
     }
     const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
       ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
-    if (lspEnabled && options.identity.role !== "worker" && options.identity.role !== "pm") {
+    if (lspEnabled && options.identity.role !== "worker") {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp) });
     }
     this.jobs = this.jobRuntime();
