@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+#[path = "model_slots.rs"]
+mod slots;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatingActionKind {
@@ -264,17 +267,6 @@ pub struct GateRecord {
     pub tier: Option<Box<crate::GateTierReceipt>>,
 }
 
-impl GateRecord {
-    pub fn holds_slot(&self) -> bool {
-        self.result == GateResult::Running && !self.process_lost
-    }
-
-    /// True when the gate passed on exactly `head`.
-    pub fn passed_at(&self, head: &str) -> bool {
-        self.result == GateResult::Pass && self.sha == head
-    }
-}
-
 /// A reviewer's judgment on a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -332,12 +324,6 @@ pub struct ReviewRecord {
     /// Contract, capability and reviewer selection for this attempt; absent on legacy records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<Box<crate::ReviewRoute>>,
-}
-
-impl ReviewRecord {
-    pub fn holds_slot(&self) -> bool {
-        self.verdict.is_none() && !self.process_lost
-    }
 }
 
 /// Token evidence and separately labelled reported / API-equivalent costs.

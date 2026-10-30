@@ -104,14 +104,9 @@ fn open(ctx: &Ctx, container: &ContainerRef) -> Result<(AgentRunState, Option<Ta
     Ok((state, task))
 }
 
-fn health(state: &AgentRunState) -> &'static str {
-    match state.binding.health {
-        HostHealth::Unbound => "unbound",
-        HostHealth::Healthy => "healthy",
-        HostHealth::Lost => "lost",
-        HostHealth::Fenced => "fenced",
-    }
-}
+#[path = "recovery_health.rs"]
+mod labels;
+use labels::health;
 
 /// Cancels a turn of a live host. It never fences: the run, its questions and its receipts stay
 /// live, and an in-flight call keeps its own truthful receipt.
@@ -123,7 +118,7 @@ pub fn cancel(ctx: &Ctx, args: &CancelArgs) -> Result<()> {
         state.binding.health == HostHealth::Healthy,
         "host_{}: generation {n} of {} cannot take a cancel; `corral agent resume` starts the \
          next generation",
-        health(&state),
+        health(state.binding.health),
         container.key()
     );
     let reply = BridgeClient::connect(&ctx.store, &recipient(&container), n)?.cancel(args.turn)?;
