@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRunState, ContainerRef, HostHealth, pm_state};
-use corral_core::inbox::{Envelope, ObserveCursor, Recipient, SendOutcome, SessionBinding};
+use corral_core::inbox::{Envelope, Inbox, ObserveCursor, Recipient, SendOutcome, SessionBinding};
 use serde_json::json;
 
 use crate::Ctx;
@@ -299,9 +299,13 @@ impl DeliveryAdapter for PiNativeAdapter {
     }
 
     fn send(&self, ctx: &Ctx, binding: &SessionBinding, envelope: &Envelope) -> SendOutcome {
-        let text = match std::fs::read_to_string(&envelope.payload_path) {
-            Ok(text) if observe::sha256(&text) == envelope.payload_sha256 => text,
-            Ok(_) | Err(_) => {
+        let payload =
+            Recipient::parse_key(envelope.idempotency_key.split('@').next().unwrap_or(""))
+                .and_then(|recipient| Inbox::new(&ctx.store, recipient))
+                .and_then(|inbox| inbox.payload(envelope));
+        let text = match payload {
+            Ok(text) => text,
+            Err(_) => {
                 return SendOutcome::Rejected {
                     reason: "frozen envelope payload unreadable or changed".into(),
                     retryable_after_fix: true,
