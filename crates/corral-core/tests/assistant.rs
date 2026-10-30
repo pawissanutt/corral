@@ -67,6 +67,7 @@ fn sessions_and_containers_round_trip_and_end_retains_transcripts() {
                     start_time: "start".into(),
                     request_id: "hello".into(),
                     at: first.created,
+                    herdr_seq_epoch: None,
                 }),
                 fenced: None,
                 nudged_at: None,

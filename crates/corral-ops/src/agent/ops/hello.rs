@@ -12,6 +12,7 @@ use crate::Ctx;
 use crate::agent::admission::{self, Admission, Mode};
 use crate::agent::call::{AgentOp, CallResponse, RejectCode, Rejection};
 use crate::agent::envelope::{self, Envelope};
+use crate::agent::herdr_status;
 use crate::agent::receipts::{self, Commit};
 
 #[derive(Deserialize)]
@@ -98,7 +99,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         .into());
     }
     let role = envelope.identity.role;
-    let bound = GenerationBound {
+    let mut bound = GenerationBound {
         host_cap_sha256: paths::sha256_hex(envelope.auth.host_cap.as_bytes()),
         ctl_cap_sha256: payload.ctl_cap_sha256,
         session_id: envelope.identity.session_id.clone(),
@@ -107,20 +108,22 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         start_time: payload.start_time,
         request_id: envelope.request_id.clone(),
         at: Timestamp::now(),
+        herdr_seq_epoch: None,
     };
     let key = container.key();
-    // The host's herdr sequence range starts here (`agent::herdr_status`).
-    let epoch = bound.at.as_millisecond();
+    // The host's herdr sequence range; without one the host reports nothing to herdr.
+    bound.herdr_seq_epoch = match herdr_status::allocate_epoch(bound.at) {
+        Ok(epoch) => Some(epoch),
+        Err(error) => {
+            let reason = format!("allocating {key}'s herdr sequence epoch: {error:#}");
+            crate::messages::report(container.task(), "agent herdr status", reason);
+            None
+        }
+    };
+    let epoch = bound.herdr_seq_epoch;
     receipts::commit(ctx, &admitted, move |state, _| {
         // A resumed host projects its still-pending questions from the start.
-        let questions: Vec<_> = state
-            .questions
-            .iter()
-            .filter(|q| q.recorded_pending())
-            .map(
-                |q| json!({"key": q.key, "kind": q.kind, "blocking": q.blocking, "state": q.state}),
-            )
-            .collect();
+        let questions = herdr_status::question_snapshot(state);
         let generation = state
             .generation_mut(n)
             .context("the generation disappeared")?;
