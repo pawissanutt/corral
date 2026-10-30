@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use super::{git, holder, limits, measure, remove, repo_of};
 use crate::Ctx;
+use crate::cleanup_worktree::Callers;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GcItem {
@@ -23,9 +24,9 @@ pub struct GcItem {
     pub action: &'static str,
     pub reason: String,
     pub bytes: Option<u64>,
-    /// Its work goes (or would go) to a session diff artifact before removal.
+    /// Its work goes (or would go) to session diff artifacts before removal.
     pub preserve: bool,
-    pub artifact: Option<String>,
+    pub artifacts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,7 +101,7 @@ impl Sweep<'_> {
             reason: String::new(),
             bytes: None,
             preserve: false,
-            artifact: None,
+            artifacts: Vec::new(),
         };
         if let Err(error) = self.try_visit(session, scratch, &mut item) {
             item.action = "failed";
@@ -137,7 +138,8 @@ impl Sweep<'_> {
             item.reason = format!("pending finish: {holder}");
             return Ok(());
         }
-        let busy = crate::cleanup_worktree::scratch_residents(&scratch.path)?;
+        // The shell or process running GC counts too: its directory is still in use.
+        let busy = crate::cleanup_worktree::scratch_residents(&scratch.path, Callers::Occupy)?;
         if !busy.is_empty() {
             item.reason = format!("live process cwd: {busy:?}");
             return Ok(());
@@ -160,29 +162,33 @@ impl Sweep<'_> {
             item.reason = "landing in progress".into();
             return Ok(());
         };
-        let _guard = super::lock(self.ctx, &session.id, &scratch.slug)?;
+        let _guard = super::lock(
+            self.ctx,
+            &format!("scratch-{}-{}", session.id, scratch.slug),
+        )?;
         // Re-read under the lock: a concurrent discard may have removed it already.
         let Ok(current) = super::find(self.ctx, &session.id, &scratch.slug) else {
             item.reason = "already removed".into();
             return Ok(());
         };
-        let removed = remove(self.ctx, &session.id, &current)?;
+        let removed = remove(self.ctx, &session.id, &current, Callers::Occupy)?;
         self.ctx.store.log_event(
             None,
             "assistant_scratch_collected",
             serde_json::json!({
                 "session": session.id, "slug": current.slug, "project": current.project,
-                "branch": current.branch, "head": removed.head, "artifact": removed.artifact,
+                "branch": current.branch, "head": removed.head, "artifacts": removed.artifacts,
                 "bytes": item.bytes,
             }),
         )?;
         item.action = "removed";
-        item.preserve = removed.artifact.is_some();
-        item.reason = match &removed.artifact {
-            Some(path) => format!("idle; work saved as {path}"),
-            None => "idle; nothing beyond its base".into(),
+        item.preserve = !removed.artifacts.is_empty();
+        item.reason = if item.preserve {
+            format!("idle; work saved as {}", removed.artifacts.join(", "))
+        } else {
+            "idle; nothing beyond its base".into()
         };
-        item.artifact = removed.artifact;
+        item.artifacts = removed.artifacts;
         Ok(())
     }
 
