@@ -121,6 +121,34 @@ fn owned_orphan_daemon_is_removed_after_landing() {
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn verdict_reaps_reviewer_resident_before_landing() {
+    let fx = Fx::new();
+    fx.review();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let marker_path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(marker_path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    corral_ops::verdict(&fx.ctx, &fx.id, Verdict::Approve, "Checked.").unwrap();
+    assert!(
+        resident.0.try_wait().unwrap().is_some(),
+        "reviewer survived verdict"
+    );
+    fx.sync();
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
 #[test]
 fn foreign_harness_retains_worktree_and_branch_with_warning() {
     let fx = Fx::new();
