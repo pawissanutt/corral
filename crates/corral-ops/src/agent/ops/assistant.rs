@@ -54,11 +54,29 @@ pub fn profile(ctx: &Ctx, name: Option<&str>, overrides: &Overrides) -> Result<R
     };
     let mut resolved = config.resolve_profile(&choice, None, None)?;
     if !crate::agent::hooks::is_pi_native(&resolved.harness) {
+        let profiles: Vec<&str> = config
+            .profiles
+            .iter()
+            .filter(|(_, profile)| crate::agent::hooks::is_pi_native(&profile.harness))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        let fix = if profiles.is_empty() {
+            "no Pi-native profile exists; add one with `corral config set profiles.<name> ...` or use setup".to_owned()
+        } else {
+            let preferred = if profiles.contains(&"pi-sol") {
+                "pi-sol"
+            } else {
+                profiles[0]
+            };
+            format!(
+                "run `corral config set assistant.agent {preferred}`; Pi-native profiles: {}",
+                profiles.join(", ")
+            )
+        };
         return Err(refuse(
             "assistant_profile",
             format!(
-                "profile '{name}' runs harness '{}', and assistants are Pi-native only; set \
-                 `assistant.agent` to a pi-native profile",
+                "profile '{name}' runs harness '{}', and assistants are Pi-native only; {fix}",
                 resolved.harness
             ),
         ));
@@ -67,7 +85,9 @@ pub fn profile(ctx: &Ctx, name: Option<&str>, overrides: &Overrides) -> Result<R
     if resolved.model.is_none() {
         return Err(refuse(
             "assistant_profile",
-            format!("profile '{name}' names no model; pass --model or set one on the profile"),
+            format!(
+                "profile '{name}' names no model; pass `--model <model>` or run `corral config set profiles.{name}.model <model>`"
+            ),
         ));
     }
     crate::agent::hooks::preflight::check(ctx, AgentRole::Assistant, &resolved)?;
