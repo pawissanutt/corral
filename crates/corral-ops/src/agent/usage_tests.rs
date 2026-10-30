@@ -298,6 +298,8 @@ fn auxiliary_references_survive_serialization_and_share_response_deduplication()
             session_id: key.into(),
             session_file: file,
             model: None,
+            request: None,
+            outcome: None,
         });
     }
     // Give the oracle a distinct canonical session identity, independent of fixture naming.

@@ -1181,6 +1181,44 @@ is written to `.corral/`. It refuses `assets_unavailable` without an installatio
 `bare_unavailable` when a source installation predates `corral pi` (reinstall with `corral
 agent install`), and `credentials_unavailable` without the provider's login.
 
+## Explore children and oracle
+
+`explore` researches one prompt in a separate read-only session. Concurrent calls are FIFO queued
+above `subagents.max_parallel` (default 3). Standard enables it for workers and native planning
+roles; reviewers need full or an explicit override, and PM cannot use it. Children inherit only
+parent-enabled read/grep/find/ls and read LSP/web tools. They have no shell, writes, MCP, hooks,
+Corral operations or recursive delegation. Both direct and nested calls use the final execution
+check. Each result names its request and initiating generation; output is capped at 32,768
+characters. Turn cancellation, host shutdown and parent fencing cancel outstanding work.
+
+`oracle` is a single tool-free consultation, full-only by default for every role. It requires a
+configured model; an absent model gives setup guidance without a provider request. Both tools
+reuse the parent's restricted provider runtime and credentials, not ambient Pi settings or another
+harness's credential store. Model selection is limited to the bound provider's existing catalog;
+select a stronger model there rather than introducing another credential route.
+
+```toml
+[agent.capabilities.worker.subagents]
+max_parallel = 3       # 1..16
+max_turns = 12         # 1..64
+ timeout_secs = 120    # 1..600, includes queue time
+# model = "gpt-6.1-sol" # absent: parent's configured model
+
+[agent.capabilities.worker.oracle]
+enabled = true
+model = "gpt-6.1-sol"
+timeout_secs = 120
+```
+
+Before execution, a host lifecycle receipt stores a parent-generation `usage_sessions` reference
+under the container's canonical auxiliary path. Starts and terminal outcomes are receipted too;
+a request is not silently replayed after a crash. `prepared` means work was not yet admitted;
+`running` without a terminal record and `uncertain` both retain possible billable spend. Cancellation
+can stop local work without establishing a provider's final charge. Completed partial usage remains
+in the auxiliary transcript and the existing collector deduplicates responses across collections;
+an absent response is **not** proof of zero spending. Budgets/reservations are a separate capability.
+These are in-process children, not Corral runs, worker dispatches or new role authority.
+
 ## What else already applies
 
 - **Usage.** The installed collector reads each generation's bound Pi transcript when task
@@ -1192,7 +1230,8 @@ agent install`), and `credentials_unavailable` without the provider's login.
   The shared `agent::usage::collect_container` readback also supports durable PM/planning records;
   these are separate from implementation task totals. Auxiliary producers can persist
   `AgentRunState.usage_sessions` with parent generation and launcher-selected session references.
-  That seam does not itself implement explore/oracle or a PM/planning cost CLI.
+  Explore and oracle use this seam before launching billable work; it does not provide a
+  PM/planning cost CLI.
   See [the early checkpoint](../records/pi-native-capabilities.md#early-usage-checkpoint-t-570).
 - **Messages.** Messages to a pi-native run or review child use inbox delivery through the
   `pi_native` adapter, and every sync gives each open one a delivery pass. They are never typed
