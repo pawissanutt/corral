@@ -437,6 +437,23 @@ pub(super) fn measure(bench: &Bench, kind: Kind) -> Measured {
         }
     }
     m.failures.extend(effect);
+    if matches!(
+        kind,
+        Kind::RepairLegacy | Kind::RepairInbox | Kind::RepairTickLegacy | Kind::RepairTickInbox
+    ) {
+        let head = bench.ctx.store.head(&bench.id).unwrap();
+        if let Some(round) = head
+            .current_run
+            .as_deref()
+            .and_then(|run| run.changes_round.as_ref())
+            && round.at != bench.ctx.store.now()
+        {
+            m.failures.push(format!(
+                "changes-round timestamp is not the store clock: {}",
+                round.at
+            ));
+        }
+    }
     if let Err(error) = delta.check_identity() {
         m.failures.push(format!("identity: {error}"));
     }
@@ -748,6 +765,16 @@ fn action_budget_repair_inbox_submits_one_real_action() {
 #[test]
 fn action_budget_worker_uses_fixed_inputs_without_output_masks() {
     budget(&[Kind::Worker]);
+}
+
+#[test]
+fn action_budget_repair_direct_and_tick_keep_exact_cells_and_submit() {
+    budget(&[
+        Kind::RepairLegacy,
+        Kind::RepairInbox,
+        Kind::RepairTickLegacy,
+        Kind::RepairTickInbox,
+    ]);
 }
 
 #[test]

@@ -116,7 +116,7 @@ fn send_changes(
         expected.check(&ctx.store.head(&task.id)?.shell_task()?)?;
     }
     let changes_round = (continuation.session.policy != corral_core::SessionPolicy::Fresh)
-        .then(|| crate::round_notice::next_round(previous, Timestamp::now()));
+        .then(|| crate::round_notice::next_round(previous, ctx.store.now()));
     let notice = changes_round
         .as_ref()
         .map(|next| crate::round_notice::changes(&task, previous, next, round));
