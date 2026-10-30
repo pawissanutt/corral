@@ -16,6 +16,76 @@ fn questions(container: &ContainerRef, role: AgentRole, n: usize) -> Box<AgentRu
     Box::new(state)
 }
 
+#[cfg(unix)]
+#[test]
+fn owner_attention_commits_one_head_notice_and_preserves_exact_growth_work_on_replay() {
+    let mut measured = Vec::new();
+    for scale in [1, 10] {
+        let (_dir, store) = data::store();
+        store.fixture_pin_now(data::at(100_000)).unwrap();
+        let mut task = data::rich(
+            &store,
+            2 * scale + 1,
+            2 * scale + 1,
+            2 * scale + 1,
+            2 * scale,
+        );
+        task.status = Status::Running;
+        let run = task.runs.last_mut().unwrap();
+        run.outcome = None;
+        run.review = None;
+        let container = ContainerRef::Worker {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        let mut state = questions(&container, AgentRole::Worker, 2 * scale);
+        state.questions.last_mut().unwrap().state = QuestionState::Escalated;
+        run.agent_host = Some(state);
+        store.fixture_put_task(&task).unwrap();
+        let transport = crate::agent::bridge::fixture::fixture(false, 5);
+        let mut ctx = Ctx::from_store(store);
+        ctx.herdr = transport.ctx.herdr.clone();
+        let hot = HotScope::enter();
+        let before = work::snapshot();
+        assert!(hold_owner_attention(&ctx, &task.id).unwrap());
+        assert!(!hold_owner_attention(&ctx, &task.id).unwrap());
+        let head = ctx.store.head(&task.id).unwrap();
+        assert_eq!(head.status, Status::NeedsMe);
+        assert!(
+            head.current_run
+                .as_ref()
+                .unwrap()
+                .blocked_excerpt
+                .as_ref()
+                .unwrap()
+                .starts_with(corral_core::agent::QUESTION_HOLD_PREFIX)
+        );
+        let after = work::snapshot();
+        measured.push(Counter::ALL.map(|c| after.total(c) - before.total(c)));
+        assert_eq!(
+            after.total(Counter::FullTaskHydrations) - before.total(Counter::FullTaskHydrations),
+            0
+        );
+        drop(hot);
+        let events = ctx.store.events().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "needs_me")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "notification_claimed")
+                .count(),
+            1
+        );
+    }
+    assert_eq!(measured[0], measured[1]);
+}
+
 #[test]
 fn pending_views_and_default_lists_match_full_order_closure_and_constant_history_work() {
     let mut measured = Vec::new();
