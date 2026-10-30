@@ -105,7 +105,8 @@ fn send_changes(
         );
     }
     let previous = task.current_run().context("task has no run")?;
-    let continuation = super::worker_session::Continuation::prepare(ctx, &task, previous)?;
+    let previous_head = head.current_run.as_deref().context("task has no run")?;
+    let continuation = super::worker_session::Continuation::prepare(ctx, &head, previous_head)?;
     let pane = previous
         .herdr
         .as_ref()
@@ -279,9 +280,13 @@ fn send_changes(
         return Err(error);
     }
     if restarted.is_some() {
-        let saved = ctx.store.head(&task.id)?.shell_task()?;
-        if let Some(run) = saved.current_run() {
-            crate::role_session::observe(ctx, &saved, run, false);
+        let saved = ctx.store.head(&task.id)?;
+        if let Some(run) = saved.current_run.as_deref() {
+            let container = corral_core::agent::ContainerRef::Worker {
+                task: saved.id.clone(),
+                run: run.id.clone(),
+            };
+            crate::role_session::observe_head(ctx, &saved, run, &container);
         }
     }
     crate::watch::capture_review(ctx, &task, &corral_core::RunHead::of(previous)?);

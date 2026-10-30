@@ -103,6 +103,8 @@ mod reviewer;
 mod role_session;
 mod round_notice;
 pub use role_session::refresh_role_sessions;
+#[doc(hidden)]
+pub use role_session::{FixtureRoleEntropyGuard, fixture_role_entropy};
 mod routing;
 mod scratch_reclaim;
 mod search;

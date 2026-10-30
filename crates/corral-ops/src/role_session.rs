@@ -6,7 +6,11 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use anyhow::{bail, ensure};
-use corral_core::{ResolvedProfile, RoleSession, Run, SessionAction, SessionPolicy, Task};
+use corral_core::agent::ContainerRef;
+use corral_core::{
+    ResolvedProfile, RoleSession, Run, RunHead, SessionAction, SessionPolicy, Task, TaskFieldsRef,
+    TaskRef,
+};
 use serde_json::Value;
 
 use serde_json::json;
@@ -16,6 +20,10 @@ use crate::Ctx;
 use crate::provider_session;
 
 mod claude;
+mod entropy;
+pub use entropy::{FixtureRoleEntropyGuard, fixture_role_entropy};
+#[cfg(test)]
+mod heads_tests;
 #[cfg(test)]
 mod tests;
 
@@ -39,11 +47,23 @@ fn adapter<'a>(ctx: &'a Ctx, harness: &'a str) -> &'a str {
         .unwrap_or(harness)
 }
 
-pub(crate) fn fresh(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result<RoleSession> {
+pub(crate) fn fresh<T: TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &Run,
+    reviewer: bool,
+) -> Result<RoleSession> {
+    fresh_head(ctx, task, &RunHead::of(run)?, reviewer)
+}
+
+pub(crate) fn fresh_head<T: TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    reviewer: bool,
+) -> Result<RoleSession> {
     let policy = ctx.store.config.task_review_policy(task);
-    let mut nonce = [0_u8; 16];
-    getrandom::fill(&mut nonce)
-        .map_err(|error| anyhow::anyhow!("allocating role session identity: {error}"))?;
+    let nonce = entropy::nonce()?;
     let nonce: String = nonce.iter().map(|byte| format!("{byte:02x}")).collect();
     let harness = run.harness.as_deref().unwrap_or(&run.agent);
     let selected_adapter = run
@@ -61,7 +81,7 @@ pub(crate) fn fresh(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result
         id: None,
         transcript: None,
         directory: corral_core::agent::paths::sessions_dir(&ctx.store)
-            .join(&task.id)
+            .join(task.id())
             .join(&run.id)
             .join(format!("role-{nonce}")),
         harness: harness.into(),
@@ -122,9 +142,47 @@ fn header(path: &Path, cwd: &Path) -> Result<String> {
 
 /// Capture only a saved binding or a unique transcript in this role's private directory.
 pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Result<RoleSession> {
+    let native = run
+        .agent_host
+        .as_deref()
+        .and_then(|host| host.current_generation())
+        .and_then(|generation| generation.bound.as_ref())
+        .map(|bound| (bound.session_id.clone(), bound.session_file.clone()));
+    capture_metadata(ctx, task, &RunHead::of(run)?, reviewer, native)
+}
+
+pub(crate) fn capture_head<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    container: &ContainerRef,
+) -> Result<RoleSession> {
+    let native = match run.agent_host.as_deref() {
+        Some(host) => task
+            .agent_generation(container, host.binding.generation)?
+            .and_then(|generation| generation.bound)
+            .map(|bound| (bound.session_id, bound.session_file)),
+        None => None,
+    };
+    capture_metadata(
+        ctx,
+        task,
+        run,
+        matches!(container, ContainerRef::Reviewer { .. }),
+        native,
+    )
+}
+
+fn capture_metadata<T: TaskFieldsRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    reviewer: bool,
+    native: Option<(String, std::path::PathBuf)>,
+) -> Result<RoleSession> {
     let mut session = match &run.session {
         Some(session) => session.clone(),
-        None => fresh(ctx, task, run, reviewer)?,
+        None => fresh_head(ctx, task, run, reviewer)?,
     };
     if session.adapter.is_none() {
         session.adapter = Some(adapter(ctx, &session.harness).into());
@@ -135,13 +193,8 @@ pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Resu
             && session.vendor == run.vendor,
         "session harness/model/vendor is incompatible"
     );
-    let native = run
-        .agent_host
-        .as_ref()
-        .and_then(|host| host.current_generation())
-        .and_then(|generation| generation.bound.as_ref());
-    let path = if let Some(bound) = native {
-        Some(bound.session_file.clone())
+    let path = if let Some((_, path)) = &native {
+        Some(path.clone())
     } else if let Some(path) = &session.transcript {
         Some(path.clone())
     } else if let Some(path) = run
@@ -177,10 +230,10 @@ pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Resu
         );
         files.into_iter().next()
     } else {
-        provider_session::discover(
+        provider_session::discover_head(
             ctx,
             run,
-            provider_session::boundary(ctx, &task.id, run),
+            provider_session::boundary_head(ctx, task.id(), &run.id, run.started),
             provider_session::Scope::Created {
                 until: run.ended.or_else(|| run.review.as_ref().map(|r| r.at)),
             },
@@ -194,9 +247,9 @@ pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Resu
             "session identity changed: expected {expected}, found {id}"
         );
     }
-    if let Some(bound) = native {
+    if let Some((session_id, _)) = native {
         ensure!(
-            id == bound.session_id,
+            id == session_id,
             "native session identity does not match its binding"
         );
     }
@@ -210,12 +263,22 @@ pub(crate) fn capture(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) -> Resu
 }
 
 /// One explicit fresh replacement on incompatibility; never label a lost conversation reused.
+#[cfg(test)]
 pub(crate) fn reviewer(ctx: &Ctx, task: &Task, parent: &Run, child: &Run) -> Result<RoleSession> {
+    reviewer_head(ctx, task, &RunHead::of(parent)?, child)
+}
+
+pub(crate) fn reviewer_head<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    parent: &RunHead,
+    child: &Run,
+) -> Result<RoleSession> {
     let mut next = fresh(ctx, task, child, true)?;
     if next.policy == SessionPolicy::Fresh {
         return Ok(next);
     }
-    let Some(previous) = parent.review_runs.last() else {
+    let Some(previous) = parent.current_child.as_deref() else {
         return Ok(next);
     };
     let reused = (|| {
@@ -226,7 +289,12 @@ pub(crate) fn reviewer(ctx: &Ctx, task: &Task, parent: &Run, child: &Run) -> Res
                 && previous.worktree == child.worktree,
             "reviewer session is incompatible with the selected harness/model/vendor/worktree"
         );
-        let mut session = capture(ctx, task, previous, true)?;
+        let container = ContainerRef::Reviewer {
+            task: task.id().clone(),
+            run: parent.id.clone(),
+            review: previous.id.clone(),
+        };
+        let mut session = capture_head(ctx, task, previous, &container)?;
         ensure!(
             session.adapter == next.adapter,
             "reviewer session adapter is incompatible"
@@ -248,6 +316,14 @@ pub(crate) fn reviewer(ctx: &Ctx, task: &Task, parent: &Run, child: &Run) -> Res
 
 /// Add concrete adapter arguments before the current prompt, not a directory-wide `continue`.
 pub(crate) fn command(ctx: &Ctx, run: &Run, resolved: &ResolvedProfile) -> Result<ResolvedProfile> {
+    command_head(ctx, &RunHead::of(run)?, resolved)
+}
+
+pub(crate) fn command_head(
+    ctx: &Ctx,
+    run: &RunHead,
+    resolved: &ResolvedProfile,
+) -> Result<ResolvedProfile> {
     if corral_core::is_pi_native(&resolved.harness) {
         return Ok(resolved.clone());
     }
@@ -390,6 +466,47 @@ pub(crate) fn observe(ctx: &Ctx, task: &Task, run: &Run, reviewer: bool) {
         });
         if let Err(error) = result {
             crate::messages::report(Some(&task.id), "session", format!("{error:#}"));
+        }
+    }
+}
+
+/// Observe the actual current worker/reviewer header and keyed native generation.
+pub(crate) fn observe_head<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    container: &ContainerRef,
+) {
+    if let Ok(session) = capture_head(ctx, task, run, container) {
+        let result = ctx.store.update_head(task.id(), |current| {
+            match container {
+                ContainerRef::Worker { run, .. } => {
+                    current
+                        .current_run_mut()
+                        .filter(|current| current.id == *run)
+                        .context("session worker changed")?
+                        .session = Some(session.clone());
+                }
+                ContainerRef::Reviewer { run, review, .. } => {
+                    ensure!(
+                        current
+                            .head()
+                            .current_run
+                            .as_ref()
+                            .is_some_and(|parent| parent.id == *run),
+                        "session parent disappeared"
+                    );
+                    current.edit_review_child(run, review, |child| {
+                        child.session = Some(session.clone());
+                        Ok(())
+                    })?;
+                }
+                _ => bail!("not a coding role session"),
+            }
+            Ok(())
+        });
+        if let Err(error) = result {
+            crate::messages::report(Some(task.id()), "session", format!("{error:#}"));
         }
     }
 }

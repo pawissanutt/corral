@@ -44,19 +44,27 @@ impl Drop for Prepared {
 }
 
 impl Continuation {
-    pub fn prepare(ctx: &Ctx, task: &Task, run: &Run) -> Result<Self> {
-        let fresh = crate::role_session::fresh(ctx, task, run, false)?;
+    pub fn prepare<T: corral_core::TaskRef + ?Sized>(
+        ctx: &Ctx,
+        task: &T,
+        run: &corral_core::RunHead,
+    ) -> Result<Self> {
+        let fresh = crate::role_session::fresh_head(ctx, task, run, false)?;
         let pane = run.herdr.as_ref().map(|h| h.pane_id.as_str());
         let missing = match pane {
             Some(pane) => ctx.herdr.pane_get(pane)?.is_none(),
             None => true,
         };
-        let exited = crate::launch_exit::exited_for(ctx, &task.id, &run.id);
+        let exited = crate::launch_exit::exited_for(ctx, task.id(), &run.id);
         let restart = missing || exited || fresh.policy == SessionPolicy::Fresh;
         let session = if fresh.policy == SessionPolicy::Fresh {
             fresh
         } else {
-            match crate::role_session::capture(ctx, task, run, false) {
+            let container = corral_core::agent::ContainerRef::Worker {
+                task: task.id().clone(),
+                run: run.id.clone(),
+            };
+            match crate::role_session::capture_head(ctx, task, run, &container) {
                 Ok(mut session) => {
                     session.policy = fresh.policy;
                     session.action = if restart { SessionAction::Resumed } else { SessionAction::Reused };
@@ -184,7 +192,8 @@ impl Continuation {
             active.inbox.observe_cursor = Default::default();
             Ok(())
         })?;
-        let saved = saved.shell_task()?;
+        let saved_head = saved;
+        let saved = saved_head.shell_task()?;
         let active = saved
             .current_run()
             .context("worker disappeared after pane creation")?;
@@ -199,7 +208,17 @@ impl Continuation {
             &crate::launch_exit::receipt(ctx, id, &active.id)?,
         )?;
         ctx.herdr.pane_run(&herdr.pane_id, &command)?;
-        crate::role_session::observe(ctx, &saved, active, false);
+        let observed = ctx.store.head(id)?;
+        let actual = observed
+            .current_run
+            .as_deref()
+            .filter(|run| run.id == active.id)
+            .context("worker disappeared after pane creation")?;
+        let container = corral_core::agent::ContainerRef::Worker {
+            task: saved.id.clone(),
+            run: active.id.clone(),
+        };
+        crate::role_session::observe_head(ctx, &observed, actual, &container);
         crate::role_session::log(ctx, &saved.id, &active.id)
     }
 }

@@ -434,10 +434,13 @@ fn advance(
     )?;
     let task = ctx.store.head(&task.id)?;
     crate::provider_session::record_launch(ctx, &task.id, &run_id, launched_at);
-    let shell = task.shell_task()?;
-    if let Some(run) = shell.current_run() {
-        crate::role_session::observe(ctx, &shell, run, false);
-        crate::role_session::log(ctx, &shell.id, &run.id)?;
+    if let Some(run) = task.current_run.as_deref() {
+        let container = corral_core::agent::ContainerRef::Worker {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        crate::role_session::observe_head(ctx, &task, run, &container);
+        crate::role_session::log(ctx, &task.id, &run.id)?;
     }
     finish(ctx, &task, false)
 }
