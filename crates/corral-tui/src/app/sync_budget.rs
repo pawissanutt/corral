@@ -32,10 +32,10 @@ const STEP_VAR: &str = "CORRAL_SYNC_BUDGET_STEP";
 /// pane observations are written once.
 const SETTLE: usize = 3;
 
-/// `sync_step::run` with the clock read at whole seconds, so the records a tick writes have
-/// one timestamp width at every size.
+/// `sync_step::run` on the fixture's pinned clock: crossings of wall-clock seconds must
+/// not introduce different maintenance work in base and grown passes.
 fn tick(fx: &Fixture) -> String {
-    let now = jiff::Timestamp::from_second(corral_core::clock::now().as_second()).unwrap();
+    let now = fx.ctx.store.now();
     corral_ops::lesson_rows::prepare_evaluation(&fx.ctx).unwrap();
     let synced = corral_ops::sync_at(&fx.ctx, now);
     corral_ops::refresh_active_usage(&fx.ctx.store);
