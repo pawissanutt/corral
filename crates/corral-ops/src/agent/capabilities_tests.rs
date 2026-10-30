@@ -494,8 +494,8 @@ fn disabled_unsupported_and_historical_web_settings_are_omitted_from_launch() {
 }
 
 #[test]
-fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
-    // Given a registered project and a PM launched at the workspace root for it.
+fn the_workspace_pm_bootstrap_names_workspace_root_for_guidance() {
+    // Given a registered project and a workspace-bound PM, not a project-bound PM.
     let mut fx = fixture(Some(&["todo"]));
     let app = fx.tmp.path().join("app");
     std::fs::create_dir_all(&app).unwrap();
@@ -508,7 +508,7 @@ fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
         "export default {};\n",
     );
     let pm = BindTarget::Pm {
-        project: "corral".into(),
+        project: String::new(),
     };
     let spec = HostSpec {
         cwd: fx.tmp.path().to_path_buf(),
@@ -518,9 +518,11 @@ fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
     let prepared = prepare_bootstrap(&fx.ctx, &pm, "p1", &spec).unwrap();
     let bootstrap = consume_bootstrap(&prepared.bootstrap).unwrap();
     let worker = fx.open().unwrap();
-    // Then only the PM names the project checkout, separately from its workspace cwd.
+    // Then the PM loads workspace guidance, never the registered project's checkout.
+    assert!(bootstrap.project.is_empty());
     assert_eq!(bootstrap.cwd, fx.tmp.path());
-    assert_eq!(bootstrap.project_dir.as_deref(), Some(app.as_path()));
+    assert_eq!(bootstrap.project_dir.as_deref(), Some(fx.tmp.path()));
+    assert_ne!(bootstrap.project_dir.as_deref(), Some(app.as_path()));
     assert_eq!(bootstrap.capabilities.unwrap().project_text, Some(true));
     // The worker's launch message pins "project_dir": null in the exact-message test above.
     assert_eq!(worker.project_dir, None);
