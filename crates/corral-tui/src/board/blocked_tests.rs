@@ -237,3 +237,36 @@ fn blocked_cards_render_in_derived_column_at_every_density_and_size() {
         }
     }
 }
+
+#[test]
+fn failed_job_exits_do_not_block_and_collapse_on_card() {
+    let fx = seeded();
+    let at = fx.now.get();
+    fx.ctx.store.update("T-004", |task| {
+        let run = task.current_run_mut().unwrap();
+        for i in 0..40 {
+            run.obligations.waits.push(serde_json::from_value(json!({
+                "request": {"version": 1, "id": format!("j{i}.m1"), "run": "R1", "condition": format!("job j{i} exits"), "owner": "worker", "source": "worker", "handle": {"kind": "channel", "channel_id": format!("job:j{i}"), "capability": "wait_v1"}},
+                "registered_at": at, "observation": {"at": at, "state": "failed", "detail": "exit 1"}
+            })).unwrap());
+        }
+        Ok(())
+    }).unwrap();
+    let board = fx.board();
+    assert!(
+        board
+            .column_tasks(Status::Running)
+            .iter()
+            .any(|t| t.id == "T-004")
+    );
+    assert!(
+        !board
+            .column_tasks(Status::NeedsMe)
+            .iter()
+            .any(|t| t.id == "T-004")
+    );
+    let task = fx.ctx.store.get("T-004").unwrap();
+    let lines = crate::obligations::card_lines(task.current_run().unwrap(), true);
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].to_string().contains("40 settled"));
+}

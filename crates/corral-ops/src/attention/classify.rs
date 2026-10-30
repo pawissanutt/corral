@@ -428,7 +428,7 @@ fn run_conditions(task: &Task, run: &Run, now: Timestamp, out: &mut Vec<Conditio
         .obligations
         .waits
         .iter()
-        .filter(|wait| wait.receipt.is_none())
+        .filter(|wait| wait.receipt.is_none() && !wait.settled_job_exit())
     {
         let mut condition = row(
             task,
