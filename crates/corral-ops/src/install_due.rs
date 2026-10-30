@@ -10,13 +10,12 @@ pub(crate) fn check(ctx: &Ctx, op: &PostLandOperation) -> Result<()> {
             .arg("build-identity")
             .stdin(std::process::Stdio::null())
             .output();
-        let installed = output
+        output
             .ok()
             .filter(|output| output.status.success())
             .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
             .filter(|identity| !identity.is_empty())
-            .unwrap_or_else(|| "unknown".into());
-        installed
+            .unwrap_or_else(|| "unknown".into())
     })
 }
 
