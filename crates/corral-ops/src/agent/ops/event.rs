@@ -32,6 +32,10 @@ struct EventPayload {
     #[serde(default)]
     origin: Option<TurnOrigin>,
     #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
     class: Option<String>,
     #[serde(default)]
     budget: Option<serde_json::Value>,
@@ -69,6 +73,19 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     }
     if payload.origin.is_some() && payload.kind != EventKind::TurnStarted {
         return Err(bad("only turn_started carries an origin"));
+    }
+    if payload.provider.is_some() != payload.model.is_some()
+        || ((payload.provider.is_some() || payload.model.is_some())
+            && payload.kind != EventKind::TurnStarted)
+        || payload.provider.as_ref().is_some_and(|p| !word(p, 64))
+        || payload
+            .model
+            .as_ref()
+            .is_some_and(|m| m.is_empty() || m.len() > 1024 || m.chars().any(char::is_control))
+    {
+        return Err(bad(
+            "only turn_started carries a provider/model pair of bounded identifiers",
+        ));
     }
     if payload.owner_input && payload.kind != EventKind::TurnEnded {
         return Err(bad("only turn_ended carries owner_input"));
@@ -120,6 +137,8 @@ fn turn(generation: u32, seq: u64) -> AgentTurn {
         ended: None,
         class: None,
         provider_error: None,
+        provider: None,
+        model: None,
     }
 }
 
@@ -150,6 +169,8 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         kind,
         turn: seq,
         origin,
+        provider,
+        model,
         class,
         budget,
         owner_input,
@@ -167,6 +188,8 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             (EventKind::TurnStarted, None) => {
                 let mut started = turn(n, seq);
                 started.started = Some(now);
+                started.provider = provider.clone();
+                started.model = model.clone();
                 if let Some(origin) = origin {
                     started.origin = origin;
                 }
@@ -222,7 +245,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             result: json!({
                 "kind": kind_name, "turn": seq, "generation": n,
                 "class": if kind == EventKind::BudgetExhausted { Some("budget_exhausted") } else { class.as_deref() }, "fenced": closes,
-                "budget": budget,
+                "budget": budget, "provider": provider, "model": model,
             }),
             effect: Some(ReceiptEffect {
                 kind: "turn".into(),

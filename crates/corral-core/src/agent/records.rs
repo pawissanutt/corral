@@ -386,6 +386,11 @@ pub struct AgentTurn {
     pub class: Option<TurnClass>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_error: Option<String>,
+    /// Active selection at the start of this turn (legacy hosts omit it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
