@@ -178,6 +178,87 @@ fn scoped_publication_keeps_legacy_and_tracker_children_working_with_partial_gra
 }
 
 #[test]
+fn published_member_repair_submission_survives_reviewer_policy_change() {
+    use corral_core::{OperatingActionIdentity, OperatingOrigin, SubmissionOutcome};
+    use std::cell::Cell;
+
+    for with_tracker in [false, true] {
+        let (mut fixture, children, _) = published(with_tracker, false);
+        fixture.store = Store::open(fixture.root.path()).unwrap();
+        fixture.store.config.agents.insert(
+            "reviewer".into(),
+            corral_core::AgentCmd {
+                command: "true".into(),
+            },
+        );
+        fixture.store.config.review.reviewer = Some("reviewer".into());
+        fixture.store.save_config().unwrap();
+        let effective = fixture.store.effective_operating_policy().unwrap();
+        let authorization = fixture
+            .store
+            .authorize_operating_action(
+                OperatingActionIdentity {
+                    task: children[0].id.clone(),
+                    run: "R1".into(),
+                    attempt: "repair-1".into(),
+                    kind: OperatingActionKind::Repair,
+                    candidate: Some(corral_core::CandidateIdentity {
+                        version: 2,
+                        task: children[0].id.clone(),
+                        run: "R1".into(),
+                        attempt: "gate-1".into(),
+                        head: "head".into(),
+                        tree: "tree".into(),
+                        integration_base: "base".into(),
+                        dispatch_base: "base".into(),
+                        spec_digest: "spec".into(),
+                        policy_digest: "policy".into(),
+                        inputs_digest: "inputs".into(),
+                        environment: vec![],
+                        gate_tier: None,
+                    }),
+                    plan: None,
+                    round: None,
+                },
+                OperatingOrigin::Automatic {
+                    authorization: effective.authorization.unwrap(),
+                    revision: fixture
+                        .store
+                        .config_layers()
+                        .unwrap()
+                        .config()
+                        .unwrap()
+                        .automation
+                        .revision,
+                },
+            )
+            .unwrap();
+        let submitted = Cell::new(false);
+        let outcome = fixture
+            .store
+            .submit_operating_action(
+                &authorization,
+                &authorization.action,
+                |_, task| {
+                    task.queued = true;
+                    Ok(())
+                },
+                || {
+                    submitted.set(true);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(
+            matches!(outcome, SubmissionOutcome::Submitted(())),
+            "{outcome:?}"
+        );
+        assert!(submitted.get());
+        assert!(fixture.store.get(&children[0].id).unwrap().queued);
+    }
+}
+
+#[test]
 fn published_tracker_scope_identity_hold_and_lifecycle_guard_derived_authority() {
     for change in [
         "scope", "target", "children", "hold", "dropped", "progress", "excluded",
