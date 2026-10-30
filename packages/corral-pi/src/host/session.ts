@@ -27,7 +27,7 @@ import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
-import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
+import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
@@ -641,15 +641,23 @@ export class HostSession {
   /** Only corral's receipts open or settle a question in the herdr projection. */
   private observeQuestion(tool: string, input: Record<string, unknown>, details: unknown): void {
     const receipt = details as Partial<CorralReceipt> | undefined;
-    const result = (receipt?.result ?? {}) as { key?: unknown; blocking?: unknown; code?: unknown };
+    const result = (receipt?.result ?? {}) as { key?: unknown; blocking?: unknown; code?: unknown; revision?: unknown };
+    const revision = typeof result.revision === "number" ? result.revision : undefined;
     if (tool === "corral_ask" && receipt?.state === "committed" && receipt.replayed !== true &&
         typeof result.key === "string" && typeof input.kind === "string") {
       const blocking = typeof result.blocking === "boolean" ? result.blocking : input.blocking === true;
-      this.options.herdr?.asked({ key: result.key, kind: input.kind, blocking });
+      this.options.herdr?.asked({ key: result.key, kind: input.kind, blocking, revision: revision ?? 1 });
     }
-    const settled = receipt?.state === "committed" ||
-      (receipt?.state === "rejected" && NOT_PENDING.has(String(result.code)));
-    if (tool === "corral_withdraw" && settled && typeof input.key === "string") this.options.herdr?.resolved(input.key);
+    if (tool !== "corral_withdraw" || typeof input.key !== "string") return;
+    if (receipt?.state === "committed") this.options.herdr?.resolved(input.key, revision);
+    else if (receipt?.state === "rejected" && NOT_PENDING.has(String(result.code))) this.options.herdr?.resolved(input.key);
+  }
+
+  /** Bridge `questions`: corral's question states, including transitions this host did not make. */
+  questionsChanged(updates: readonly QuestionUpdate[]): Record<string, unknown> {
+    if (!this.options.herdr) return { applied: false };
+    this.options.herdr.apply(updates);
+    return { applied: true, blocked_on: this.options.herdr.readback().blocked_on };
   }
 
   private turnEnded(aborted: boolean): void {
@@ -787,7 +795,9 @@ export class HostSession {
     // Only a corral inbox delivery can carry the owner's answer to a bound permission question.
     const permission = input.origin === "corral-inbox" ? this.permissions?.observeAnswer(input.text) : undefined;
     if (permission) this.options.events.emit("bash_permission_answer", { decision: permission });
-    if (input.origin === "corral-inbox") for (const key of answeredKeys(input.text)) this.options.herdr?.resolved(key);
+    if (input.origin === "corral-inbox") {
+      for (const { key, revision } of answeredKeys(input.text)) this.options.herdr?.resolved(key, revision);
+    }
     return new Promise<SubmitResult>((resolve) => {
       let settled = false;
       const settle = (result: SubmitResult) => {

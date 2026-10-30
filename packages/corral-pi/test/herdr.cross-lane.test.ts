@@ -131,7 +131,18 @@ for (const { identity, display } of cases) {
     seq = await within(untilReported(client, "working", seq), 30_000, "the working report");
     expect(herdr("pane", "get", pane).pane.agent_status).toBe("working");
     expect((await client.request(frame("cancel"))).result?.cancelled).toBeTrue();
-    await within(untilReported(client, "idle", seq), 30_000, "the settled idle report");
+    seq = await within(untilReported(client, "idle", seq), 30_000, "the settled idle report");
+    expect(["idle", "done"]).toContain(herdr("pane", "get", pane).pane.agent_status);
+
+    // When corral reports an escalated question over the bridge, and later its cancellation:
+    const question = { key: "T-001/R1/Q7", kind: "clarification", blocking: false };
+    await client.request(frame("questions", { questions: [{ ...question, revision: 2, state: "escalated" }] }));
+    seq = await within(untilReported(client, "blocked", seq), 30_000, "the blocked report");
+    expect(herdr("pane", "get", pane).pane.agent_status).toBe("blocked");
+    await client.request(frame("questions", { questions: [{ ...question, revision: 3, state: "cancelled" }] }));
+    await within(untilReported(client, "idle", seq), 30_000, "the idle report after the cancellation");
+
+    // Then herdr showed blocked for the escalation and no longer blocks after the cancellation:
     expect(["idle", "done"]).toContain(herdr("pane", "get", pane).pane.agent_status);
 
     // When corral asks the host to shut down over the bridge:

@@ -7,8 +7,10 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { type TestClient, connect } from "../../test/support/bridge-client.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../test/support/fixture-install.ts";
 import { ownerNewIsRefused } from "../../test/support/replacement.ts";
+import { within } from "../../test/support/wait.ts";
 import {
   EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, run, sha256,
 } from "../../test/support/workspace.ts";
@@ -24,6 +26,21 @@ const workspaces: string[] = [];
 const cli = (...args: string[]) => ok([corral, "--root", workspace, ...args], { cwd: workspace });
 const show = (task: string): any => JSON.parse(cli("show", task, "--json"));
 const herdr = (...args: string[]): any => JSON.parse(ok(["herdr", "--session", "corral-test", ...args])).result;
+const ASK = { toolCalls: [{ callId: "call_ask", name: "corral_ask", arguments: {
+  kind: "clarification", text: "Which adapter should the reply use?", blocking: true, options: ["inbox", "pane"],
+} }] };
+let steps = "";
+
+/** The host's own record that herdr accepted a report of `state` after event `after`. */
+async function untilReported(client: TestClient, cap: string, state: string, after: number): Promise<number> {
+  for (let seq = after; ;) {
+    const page = (await client.request({ version: 1, id: `qx-${seq}-${Math.random().toString(36).slice(2, 8)}`,
+      ctl_cap: cap, generation: 1, command: "events_since", args: { seq } })).result as { events: any[]; next: number };
+    const event = page.events.find((candidate) => candidate.kind === "herdr_reported" && candidate.state === state);
+    if (event) return event.seq;
+    seq = page.next;
+  }
+}
 
 beforeAll(() => {
   if (!isolated) {
@@ -41,12 +58,8 @@ beforeAll(() => {
   ok(["git", "-C", app, "commit", "-q", "-m", "initial commit"]);
   cli("init");
   // The kickoff turn asks one blocking question; every later provider request gets the default reply.
-  const steps = join(workspace, "steps.json");
-  writeFileSync(steps, JSON.stringify([
-    { toolCalls: [{ callId: "call_ask", name: "corral_ask", arguments: {
-      kind: "clarification", text: "Which adapter should the reply use?", blocking: true, options: ["inbox", "pane"],
-    } }] },
-  ]));
+  steps = join(workspace, "steps.json");
+  writeFileSync(steps, JSON.stringify([ASK]));
   assets = buildFixtureInstall({ parent: workspace, omit: ["role", "delivery"] });
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const auth = join(assets.dir, "src/auth");
@@ -153,4 +166,33 @@ test("a question answered after the owner's refused /new is observed from the or
   expect(sha256(readFileSync(envelope.payload_path, "utf8"))).toBe(envelope.payload_sha256);
   const after = JSON.parse(cli("question", "show", question.key, "--json"));
   expect(after.answer?.message_id ?? after.question?.answer?.message_id).toBe(answered.message_id);
+}, 600_000);
+
+test("an owner's cancellation of a blocking question releases the host's herdr blocked state without a turn", async () => {
+  if (!isolated) return;
+  // Given a dispatched production worker whose kickoff turn asked a blocking question:
+  writeFileSync(steps, JSON.stringify([ASK]));
+  cli("new", "Pi question cancelled by the owner", "-p", "app", "--ready");
+  const kickoff = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-002");
+  cli("dispatch", "T-002", "--profile", "pi", "--force");
+  const runRecord = show("T-002").runs.at(-1);
+  workspaces.push(runRecord.herdr.workspace_id);
+  await kickoff;
+  const pane: string = runRecord.herdr.pane_id;
+  expect(herdr("agent", "wait", pane, "--until", "blocked", "--timeout", "30000").agent.agent_status).toBe("blocked");
+  const dir = generationDir(workspace, "T-002", "R1", 1);
+  const cap = readFileSync(join(dir, "ctl.cap"), "utf8");
+  const client = await connect(join(dir, "host.sock"));
+  const after = (await client.request({ version: 1, id: "qx-last", ctl_cap: cap, generation: 1,
+    command: "events_since", args: { seq: 0 } })).result?.last as number;
+
+  // When the owner cancels it, with no message to the host and no new turn:
+  cli("question", "cancel", "T-002/R1/Q1", "--rev", "1", "--reason", "Not needed any more.", "--owner");
+
+  // Then corral told the host over its bridge, and herdr no longer shows it blocked:
+  await within(untilReported(client, cap, "idle", after), 30_000, "the idle report after the cancellation");
+  client.close();
+  expect(["idle", "done"]).toContain(herdr("pane", "get", pane).pane.agent_status);
+  const shown = JSON.parse(cli("question", "show", "T-002/R1/Q1", "--json"));
+  expect(shown.question?.state ?? shown.state).toBe("cancelled");
 }, 600_000);

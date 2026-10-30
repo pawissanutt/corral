@@ -13,8 +13,12 @@ export const INPUT_REPLY_MS = 30_000;
 /** Room left in a frame for the reply envelope around a page of events. */
 export const EVENT_PAGE_BYTES = FRAME_MAX_BYTES - 4 * 1024;
 
-export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown";
-export const COMMANDS: readonly Command[] = ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown"];
+export type Command = "hello" | "get_state" | "submit_input" | "cancel" | "events_since" | "shutdown" | "questions";
+export const COMMANDS: readonly Command[] = [
+  "hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions",
+];
+/** At most this many questions in one `questions` request (corral sends its newest 128). */
+export const QUESTIONS_MAX = 256;
 
 /** `pending`: admitted, upstream has not answered yet; the outcome follows as `input_settled`. */
 export type Disposition = "started" | "queued" | "handled" | "rejected" | "pending";
@@ -38,6 +42,15 @@ export interface SubmitInput {
   readonly busyPolicy: BusyPolicy;
   readonly idempotencyKey: string;
   readonly origin: string;
+}
+
+/** One question of the container as corral holds it, for the host's herdr projection. */
+export interface QuestionUpdate {
+  readonly key: string;
+  readonly revision: number;
+  readonly kind: string;
+  readonly blocking: boolean;
+  readonly state: string;
 }
 
 export interface SubmitResult {
@@ -99,6 +112,26 @@ export function parseTurn(args: Record<string, unknown>): number | undefined {
     throw new BridgeRefusal("bad_input", "turn must be a positive integer");
   }
   return args.turn;
+}
+
+const QUESTION_KEY = /^[A-Za-z0-9._:/-]{1,160}$/;
+const WORD = /^[a-z_]{1,32}$/;
+
+export function parseQuestions(args: Record<string, unknown>): QuestionUpdate[] {
+  const list = args.questions;
+  if (!Array.isArray(list) || list.length > QUESTIONS_MAX) {
+    throw new BridgeRefusal("bad_input", `questions must be a list of at most ${QUESTIONS_MAX}`);
+  }
+  return list.map((item: unknown) => {
+    if (!record(item)) throw new BridgeRefusal("bad_input", "each question is an object");
+    const { key, revision, kind, blocking, state } = item;
+    if (typeof key !== "string" || !QUESTION_KEY.test(key) || typeof revision !== "number" ||
+        !Number.isSafeInteger(revision) || revision < 1 || typeof kind !== "string" || !WORD.test(kind) ||
+        typeof blocking !== "boolean" || typeof state !== "string" || !WORD.test(state)) {
+      throw new BridgeRefusal("bad_input", "a question names key, revision, kind, blocking and state");
+    }
+    return { key, revision, kind, blocking, state };
+  });
 }
 
 export function parseSeq(args: Record<string, unknown>): number {
