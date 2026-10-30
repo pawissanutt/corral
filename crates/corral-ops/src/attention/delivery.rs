@@ -1,12 +1,16 @@
 //! Delivery assessment uses only retained identities and keyed receipt projections.
 use corral_core::attention::{Condition, NextAction, Responsible, ResumeCheck, WaitClass};
 use corral_core::inbox::{
-    DeliveryMode, DeliveryState, InboxState, OwnerEntry, Recipient, RetryCoverage, RetryHistory,
-    RetryRoute, TerminalState,
+    DeliveryMode, DeliveryState, OwnerEntry, Recipient, RetryCoverage, RetryHistory, RetryRoute,
+    TerminalState,
 };
-use corral_core::{Run, Task};
+use corral_core::{InboxHead, Run, Task, TaskFieldsRef};
+
+#[path = "delivery_source.rs"]
+mod source;
 use jiff::Timestamp;
 use sha2::{Digest, Sha256};
+pub(super) use source::conditions_ref;
 
 use super::{Neighborhood, row};
 
@@ -14,11 +18,11 @@ use super::{Neighborhood, row};
 /// well before the generic ten-minute unobserved bound.
 const CHANGES_UNDELIVERED_SECS: i64 = 60;
 
-struct Delivery<'a> {
+struct Delivery {
     recipient: Recipient,
-    state: &'a InboxState,
+    state: InboxHead,
     mode: DeliveryMode,
-    pending: Option<&'a str>,
+    pending: Option<String>,
     unacted: bool,
     orphaned: bool,
     task_reply: bool,
@@ -82,9 +86,9 @@ pub(super) fn conditions(
                 task: task.id.clone(),
                 plan_run: run.id.clone(),
             },
-            state: &run.inbox,
+            state: InboxHead::of(&run.inbox),
             mode: run.delivery,
-            pending: run.pending_reply.as_deref(),
+            pending: run.pending_reply.clone(),
             // An open planning/changes phase has not submitted its matching report.
             unacted: true,
             orphaned: false,
@@ -103,9 +107,9 @@ pub(super) fn conditions(
                     plan: plan.id.clone(),
                     review: review.id.clone(),
                 },
-                state: &review.inbox,
+                state: InboxHead::of(&review.inbox),
                 mode: review.delivery,
-                pending: review.pending_reply.as_deref(),
+                pending: review.pending_reply.clone(),
                 // An open plan review has no matching verdict.
                 unacted: true,
                 orphaned: false,
@@ -113,12 +117,22 @@ pub(super) fn conditions(
             });
         }
     }
+    project(task, neighborhood, now, recipients, out);
+}
+
+fn project(
+    task: &(impl TaskFieldsRef + ?Sized),
+    neighborhood: &Neighborhood<'_>,
+    now: Timestamp,
+    recipients: Vec<Delivery>,
+    out: &mut Vec<Condition>,
+) {
     for delivery in recipients {
         let Ok(key) = delivery.recipient.key() else {
             continue;
         };
         let entries = neighborhood.deliveries.get(&key);
-        if let Some(pending) = delivery.pending
+        if let Some(pending) = delivery.pending.as_deref()
             && entries.is_none_or(Vec::is_empty)
         {
             let digest = format!("{:x}", Sha256::digest(pending.as_bytes()));
@@ -129,8 +143,8 @@ pub(super) fn conditions(
                 WaitClass::PmAction,
                 Responsible::Pm,
                 (
-                    Some(format!("{key}:{digest}:{:?}", task.status_since)),
-                    task.status_since,
+                    Some(format!("{key}:{digest}:{:?}", task.status_since())),
+                    *task.status_since(),
                 ),
                 format!(
                     "Legacy pending reply for {key}; delivery has no retained message identity"
@@ -139,7 +153,7 @@ pub(super) fn conditions(
             condition.next_action = NextAction {
                 command: delivery
                     .task_reply
-                    .then(|| format!("corral reply {} --resend", task.id)),
+                    .then(|| format!("corral reply {} --resend", task.id())),
                 description: if delivery.task_reply {
                     "Resend the existing pending reply to the current live worker or planner".into()
                 } else {
@@ -194,17 +208,17 @@ pub(super) fn conditions(
     }
 }
 
-fn run_delivery<'a>(
+fn run_delivery(
     recipient: Recipient,
-    run: &'a Run,
+    run: &Run,
     task_reply: bool,
     neighborhood: &Neighborhood<'_>,
-) -> Delivery<'a> {
+) -> Delivery {
     Delivery {
         recipient,
-        state: &run.inbox,
+        state: InboxHead::of(&run.inbox),
         mode: run.delivery,
-        pending: run.pending_reply.as_deref(),
+        pending: run.pending_reply.clone(),
         unacted: run.idle_no_report && run.outcome.is_none() && run.ended.is_none(),
         orphaned: neighborhood.inventory_known && run.agent_state.as_deref() == Some("gone"),
         // Task reply never targets a reviewer, or a worker which has already reported.
@@ -213,8 +227,8 @@ fn run_delivery<'a>(
 }
 
 fn header_conditions(
-    task: &Task,
-    delivery: &Delivery<'_>,
+    task: &(impl TaskFieldsRef + ?Sized),
+    delivery: &Delivery,
     key: &str,
     now: Timestamp,
     out: &mut Vec<Condition>,
@@ -307,8 +321,8 @@ fn header_conditions(
 }
 
 fn entry_condition(
-    task: &Task,
-    delivery: &Delivery<'_>,
+    task: &(impl TaskFieldsRef + ?Sized),
+    delivery: &Delivery,
     key: &str,
     entry: &OwnerEntry,
     capacity_blocked: bool,
@@ -468,7 +482,7 @@ fn entry_condition(
         kind = "changes_not_delivered";
         reason = format!(
             "Changes requested on {} ({id}) were never delivered to the worker: no delivery attempt has been made",
-            task.id
+            task.id()
         );
         command = Some("corral sync".to_string());
         description = format!(

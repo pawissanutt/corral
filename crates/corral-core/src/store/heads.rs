@@ -422,6 +422,20 @@ impl PlanRunHead {
 }
 
 impl InboxHead {
+    /// Scalar projection of a full inbox; accumulated effect/cursor history is not copied.
+    pub fn of(state: &crate::inbox::InboxState) -> Self {
+        Self {
+            owner_header: state.owner_header.clone(),
+            next_seq: state.next_seq,
+            next_envelope: state.next_envelope,
+            open_envelope: state.open_envelope,
+            replacement_envelope: state.replacement_envelope,
+            binding: state.binding.clone(),
+            observe_cursor: state.observe_cursor.clone(),
+            settled: state.settled,
+        }
+    }
+
     /// Bounded scalar state; applied effects and scoped cursors remain keyed rows.
     pub fn scalars(&self) -> crate::inbox::InboxState {
         crate::inbox::InboxState {
