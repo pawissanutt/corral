@@ -6,6 +6,9 @@ const AT: jiff::Timestamp = jiff::Timestamp::constant(1_767_225_600, 0);
 fn fixture(factor: usize) -> (tempfile::TempDir, Ctx, Task, Task) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
+    // Fix every store-generated stamp (including status_since), not just created/updated.
+    // Otherwise fractional wall-clock precision changes decoded bytes between scales.
+    store.fixture_pin_now(AT).unwrap();
     let ctx = Ctx::from_store(store);
     let mut plan = ctx
         .store
