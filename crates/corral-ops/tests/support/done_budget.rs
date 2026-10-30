@@ -96,7 +96,7 @@ fn done_budget_is_identical_warm_and_cold() {
                     let text = String::from_utf8(out.stdout).unwrap();
                     let line = text
                         .lines()
-                        .find_map(|l| l.strip_prefix("DONEBUDGET "))
+                        .find_map(|l| l.split_once("DONEBUDGET ").map(|(_, json)| json))
                         .unwrap();
                     serde_json::from_str(line).unwrap()
                 } else {

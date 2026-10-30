@@ -250,6 +250,7 @@ pub(super) fn obligated(n: usize, finished: bool) -> (Fx, String) {
         .unwrap();
     }
     action_heads::checkpoint(&fx, &id);
+    normalize_checkpoint_artifact_width(&fx, &id);
     // Retry and the handoff act on a run its worker finished, the task in Review; approve
     // (`corral done`) on the running one.
     if finished {
@@ -266,6 +267,48 @@ pub(super) fn obligated(n: usize, finished: bool) -> (Fx, String) {
     }
     fx.grant(&[&id]);
     (fx, id)
+}
+
+fn normalize_checkpoint_artifact_width(fx: &Fx, id: &str) {
+    let task = fx.ctx.store.get(id).unwrap();
+    let record = task.current_run().unwrap().checkpoints.last().unwrap();
+    let old = task
+        .artifacts
+        .iter()
+        .find(|a| a.path == record.artifact)
+        .unwrap();
+    let mut bytes = crate::artifact_read(&fx.ctx, old).unwrap();
+    // Equal-width Artifact.bytes avoids decimal digit noise; the real checkpoint/obligation payload still scales.
+    bytes.resize(bytes.len() + 100_000, b' ');
+    assert_eq!(
+        serde_json::from_slice::<corral_core::Checkpoint>(&bytes).unwrap(),
+        record.checkpoint
+    );
+    let file = fx.temp.path().join("padded-checkpoint.json");
+    std::fs::write(&file, &bytes).unwrap();
+    let padded = crate::artifacts::add_artifact_to_run(
+        &fx.ctx,
+        id,
+        &record.checkpoint.input.run,
+        &file,
+        Some(old.kind),
+        Some(&old.title),
+    )
+    .unwrap();
+    assert!((100_000..1_000_000).contains(&padded.bytes));
+    fx.ctx
+        .store
+        .update(id, |task| {
+            task.artifacts.retain(|a| a.path != old.path);
+            task.current_run_mut()
+                .unwrap()
+                .checkpoints
+                .last_mut()
+                .unwrap()
+                .artifact = padded.path.clone();
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// The rows require_checkpoint reads as R1's own records: its waits and decisions, its newest
