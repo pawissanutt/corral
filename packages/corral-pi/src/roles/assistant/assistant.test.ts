@@ -12,6 +12,9 @@ import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import type { HostIdentity } from "../types.ts";
 import { GENERATION_ENV, SESSION_ENV, exportAssistantSession } from "./env.ts";
 import assistant, { UPSTREAM, assistantRole } from "./index.ts";
+import { OWNER_ACTION_TIMEOUT_MS, ownerActionTool, ownerInputText, utf8Prefix } from "./owner-action.ts";
+import { confirmationCommand, defineCorralTool } from "../../tools/define.ts";
+import type { CorralCall, CorralReceipt } from "../../tools/corral.ts";
 
 const identity: HostIdentity = { store: "st-0123456789abcdef", project: "", role: "assistant", assistant: "A-3", generation: 2 };
 const context = { identity, cwd: "/work", model: "m" };
@@ -28,9 +31,9 @@ test("the assistant loadout reads, shells and writes behind its path guard, and 
   expect(assistant.upstreamTools).toContain("edit");
   expect(assistant.upstreamTools).toContain("write");
   expect(typeof assistant.extend).toBe("function");
-  expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo"]);
-  expect(assistant.tools(context)).toEqual([]);
-  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_todo"]);
+  expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo", "owner_action"]);
+  expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_owner_action"]);
+  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_owner_action", "corral_todo"]);
 });
 
 test("the contract names the bound session and leaves no placeholder", () => {
@@ -103,4 +106,51 @@ test("a workspace-scoped assistant sees every configured MCP server; bound roles
   expect(serverVisible(server, "worker", "app")).toBeTrue();
   expect(serverVisible(server, "worker", "web")).toBeFalse();
   expect(serverVisible(server, "pm", "")).toBeFalse();
+});
+
+test("an owner action sends only the fields given and runs under its long deadline", () => {
+  expect(ownerActionTool.op).toBe("owner_action");
+  expect(ownerActionTool.timeoutMs).toBe(OWNER_ACTION_TIMEOUT_MS);
+  expect(ownerActionTool.payload({ kind: "approve", target: "T-5", input: "A-1/g1/i1" }))
+    .toEqual({ kind: "approve", target: "T-5", input: "A-1/g1/i1" });
+  expect(ownerActionTool.payload({ kind: "config_set", target: "limits.running", args: ["3"], args_unused: 1,
+    expected_revision: 2, input: "A-1/g1/i2" } as never))
+    .toEqual({ kind: "config_set", target: "limits.running", args: ["3"], expected_revision: 2, input: "A-1/g1/i2" });
+  expect(ownerInputText("do it", "A-1/g2/i7")).toBe("do it\n\n[owner input A-1/g2/i7]");
+  expect(utf8Prefix("ab\u00e9", 3)).toBe("ab");
+  expect(utf8Prefix("abc", 3)).toBe("abc");
+});
+
+test("the contract tells the model to cite the tagged owner input and route unclear requests", () => {
+  const contract = assistantRole(PACKAGE_ROOT).contract(context);
+  expect(contract).toContain("corral_owner_action");
+  expect(contract).toContain("[owner input A-<n>/g<g>/i<i>]");
+  expect(contract).toContain("corral pm inbox show PMI-<n>");
+});
+
+test("a confirmation_required refusal is answered once in the pane, then sent with the answer", async () => {
+  const sent: { payload: Record<string, unknown>; timeoutMs?: number }[] = [];
+  const replies: CorralReceipt[] = [
+    { version: 1, request_id: "rq", op: "owner_action", state: "rejected",
+      result: { code: "confirmation_required", command: "corral discard T-3" } },
+    { version: 1, request_id: "rq", op: "owner_action", state: "committed", result: { outcome: "declined" } },
+  ];
+  const client = { call: async (_op: string, call: CorralCall) => {
+    sent.push({ payload: call.payload, ...(call.timeoutMs !== undefined ? { timeoutMs: call.timeoutMs } : {}) });
+    return replies[sent.length - 1];
+  } } as never;
+  const asked: string[] = [];
+  const tool = defineCorralTool(ownerActionTool as never, {
+    client, allowedOps: ["owner_action"], sessionId: () => "s", currentTurn: () => 1,
+    confirm: async (command) => { asked.push(command); return "A-1/g1/i2"; },
+  });
+  const context = { hasUI: true, ui: { confirm: async () => false } } as never;
+  const result = await tool.execute("call-1", { kind: "discard", target: "T-3", input: "A-1/g1/i1" }, undefined, undefined, context);
+  expect(asked).toEqual(["corral discard T-3"]);
+  expect(sent).toEqual([
+    { payload: { kind: "discard", target: "T-3", input: "A-1/g1/i1" }, timeoutMs: OWNER_ACTION_TIMEOUT_MS },
+    { payload: { kind: "discard", target: "T-3", input: "A-1/g1/i1", confirmation: "A-1/g1/i2" }, timeoutMs: OWNER_ACTION_TIMEOUT_MS },
+  ]);
+  expect((result.details as CorralReceipt).state).toBe("committed");
+  expect(confirmationCommand(replies[1] as CorralReceipt)).toBeUndefined();
 });

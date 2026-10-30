@@ -67,6 +67,8 @@ export interface CorralCall {
   readonly payload: Record<string, unknown>;
   readonly turn?: number;
   readonly bindNonce?: string;
+  /** Overrides the client's deadline for this one call. */
+  readonly timeoutMs?: number;
 }
 
 export interface CorralClientOptions {
@@ -159,7 +161,7 @@ export class CorralClient {
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         finish(new CorralCallError("call_timeout", `corral agent call --op ${op} exceeded its deadline`));
-      }, this.options.timeoutMs ?? CALL_TIMEOUT_MS);
+      }, call.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS);
       const collect = (into: Buffer[]) => (chunk: Buffer) => {
         size += chunk.length;
         if (size > RESPONSE_MAX_BYTES) {

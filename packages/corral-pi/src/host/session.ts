@@ -58,6 +58,8 @@ import { exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { executionRefusal } from "../roles/common/execution.ts";
+import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
+import type { ConfirmUi } from "../tools/define.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -520,6 +522,8 @@ export class HostSession {
       const tool = defineCorralTool(spec, {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
         sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
+        ...(this.options.identity.role === "assistant"
+          ? { confirm: (command: string, context: ConfirmUi) => this.confirmOwnerAction(command, context) } : {}),
       });
       pi.registerTool(rich ? { ...tool, ...corralRenderers(tool.name) } : tool);
     }
@@ -593,10 +597,17 @@ export class HostSession {
     pi.on("tool_result", (event) => {
       if (event.parentToolCallId === undefined) this.observeQuestion(event.toolName, event.input, event.details);
     });
-    pi.on("input", (event) => {
+    pi.on("input", async (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
-      return { action: "continue" as const };
+      // Only text the owner typed into this pane is journaled, before the model sees it.
+      if (event.source !== "interactive" || this.options.identity.role !== "assistant" || event.text.startsWith("/")) {
+        return { action: "continue" as const };
+      }
+      const id = await this.journalOwnerInput("pane", event.text);
+      return id === undefined
+        ? { action: "continue" as const }
+        : { action: "transform" as const, text: ownerInputText(event.text, id) };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
@@ -606,6 +617,40 @@ export class HostSession {
       if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
       await this.jobs?.shutdown();
     });
+  }
+
+  /**
+   * Records owner text (typed into the pane, or the owner's y/n to a confirmation) in the
+   * session's owner-input journal and returns its ID; undefined when it was not journaled,
+   * so an owner action cannot cite it.
+   */
+  private async journalOwnerInput(source: "pane" | "confirmation", text: string, command?: string): Promise<string | undefined> {
+    if (!this.bound) return undefined;
+    const sha256 = sha256Hex(text);
+    const kept = utf8Prefix(text, OWNER_INPUT_TEXT_MAX);
+    const event = this.options.events.emit("owner_input", { source, sha256, bytes: Buffer.byteLength(text) });
+    const payload = {
+      kind: "owner_input", source, text: kept, sha256,
+      ...(kept !== text ? { truncated: true } : {}), ...(command !== undefined ? { command } : {}),
+    };
+    try {
+      const receipt = await this.options.client.call("event", {
+        requestId: eventRequestId(this.options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+      });
+      const id = (receipt.result as { input?: unknown } | undefined)?.input;
+      if (receipt.state === "committed" && typeof id === "string") return id;
+      this.options.events.emit("owner_input_unjournaled", { seq: event.seq, result: JSON.stringify(receipt.result).slice(0, 256) });
+    } catch (error) {
+      this.options.events.emit("owner_input_unjournaled", { seq: event.seq, reason: (error instanceof Error ? error.message : String(error)).slice(0, 256) });
+    }
+    return undefined;
+  }
+
+  /** Shows the owner a confirm-class command in the pane and journals the answer. */
+  private async confirmOwnerAction(command: string, context: ConfirmUi): Promise<string | undefined> {
+    if (!context.hasUI) return undefined;
+    const yes = await context.ui.confirm("corral: confirm owner action", command);
+    return this.journalOwnerInput("confirmation", yes ? "y" : "n", command);
   }
 
   private watch(session: AgentSession): void {
