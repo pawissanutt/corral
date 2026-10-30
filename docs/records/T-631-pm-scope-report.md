@@ -12,6 +12,14 @@ Workspace-root guidance is passed to the host, with workspace text trust recorde
 the capability snapshot/digest. Project checkouts are not preloaded. Scope refusals
 include the owner preview and confirmation commands.
 
+## Review F1
+
+Migrated the existing capabilities guidance regression to a workspace-bound PM with
+an empty project identity. It asserts workspace-root guidance, rejects the registered
+project checkout as the guidance path, retains recorded text trust, and preserves the
+worker assertions. The original exact test failed (exit 101); the renamed workspace
+regression passed. Raw F1 red/green logs are attached.
+
 ## Acceptance proof
 
 - `cargo test -p corral-ops --lib agent::hooks::pm:: -- --nocapture`:
