@@ -340,57 +340,6 @@ impl ReviewRecord {
     }
 }
 
-/// Token evidence and separately labelled reported / API-equivalent costs.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Usage {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-    #[serde(default)]
-    pub reported_usd: Option<f64>,
-    #[serde(default)]
-    pub estimated_usd: Option<f64>,
-    #[serde(default)]
-    pub unpriced_tokens: u64,
-    #[serde(default)]
-    pub cost_basis: Option<CostBasis>,
-    /// Per-response evidence permits repricing model switches without rereading transcripts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<UsageEntry>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CostBasis {
-    Reported,
-    Estimated,
-    Mixed,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct UsageEntry {
-    /// Response timestamp from the transcript, absent for legacy evidence.
-    #[serde(default)]
-    pub at: Option<Timestamp>,
-    /// Elapsed milliseconds since the triggering transcript input.
-    #[serde(default)]
-    pub latency_ms: Option<u64>,
-    pub model: Option<String>,
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    pub reported_usd: Option<f64>,
-    pub estimated_usd: Option<f64>,
-    /// Rate provenance, absent on unpriced or not-yet-refreshed legacy evidence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub price_source: Option<String>,
-    pub unpriced_tokens: u64,
-}
-
 /// The newest changes round a worker run was reopened for: the durable identity a reused
 /// conversation is told about and the attention it raises when it answers without reporting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -656,7 +605,7 @@ pub struct Run {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub review_runs: Vec<Run>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Usage>,
+    pub usage: Option<crate::Usage>,
     /// Why usage is unavailable; collection never prevents finishing a run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_note: Option<String>,
