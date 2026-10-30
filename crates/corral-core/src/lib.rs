@@ -126,4 +126,5 @@ pub use slot_release::*;
 pub use store::*;
 pub use ui::BOARD_KEYS;
 pub use ui::{Accent, UiCfg};
+pub use usage::{CostBasis, Usage, UsageEntry};
 pub use verification::*;
