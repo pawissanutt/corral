@@ -123,6 +123,20 @@ fn owned_orphan_daemon_is_removed_after_landing() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn gate_commands_inherit_run_ownership_marker() {
+    let mut fx = Fx::new();
+    let observed = fx.app.join("gate-marker");
+    fx.ctx.store.config.review.gate = Some(vec![format!(
+        "printf '%s' \"$CORRAL_PROCESS_OWNER\" > '{}'",
+        observed.display()
+    )]);
+    fx.ctx.store.save_config().unwrap();
+    fx.review();
+    assert_eq!(std::fs::read_to_string(observed).unwrap(), fx.marker());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn verdict_reaps_reviewer_resident_before_landing() {
     let fx = Fx::new();
     fx.review();
@@ -147,6 +161,49 @@ fn verdict_reaps_reviewer_resident_before_landing() {
     assert!(result.contains("worktree removed"), "{result}");
     assert!(!run.worktree.exists());
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn landing_reaps_reviewer_orphan_left_after_verdict() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(resident.0.try_wait().unwrap().is_some());
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sync_reaps_abandoned_reviewer() {
+    let fx = Fx::new();
+    fx.review();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    corral_ops::review_run(&fx.ctx, &fx.id, Some("rev")).unwrap();
+    fx.sync();
+    assert!(resident.0.try_wait().unwrap().is_some());
 }
 
 #[test]

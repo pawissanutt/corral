@@ -461,7 +461,18 @@ fn gate_start_origin(
     let launched = open_run_pane(ctx, &task, &run, "gate")?;
     let pane = launched.pane_id;
     launch.attach(&pane, true)?;
-    let command = format!("bash {} </dev/null", qp(&paths.script));
+    // Gate descendants share the run's durable ownership marker, including across gate
+    // replacements. The marker is distinct from the gate receipt's authorization token.
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &run.id);
+    if let Some(dir) = receipt.parent() {
+        std::fs::create_dir_all(dir).context("creating process ownership directory")?;
+    }
+    let marker = crate::launch_exit::ownership_marker(&receipt)?;
+    let command = format!(
+        "CORRAL_PROCESS_OWNER={} bash {} </dev/null",
+        crate::gate_script::q(&marker),
+        qp(&paths.script)
+    );
     let title = format!("{} gate", task.id);
     let record = GateRecord {
         identity: Some(identity),
