@@ -221,7 +221,11 @@ fn decision_answer_replays_its_journaled_receipt_after_a_crash() {
     let handler = Interrupting {
         interrupt: Cell::new(true),
     };
-    assert!(effects::reconcile(&world.ctx, &recipient, &handler).is_err());
+    let error = effects::reconcile(&world.ctx, &recipient, &handler).unwrap_err();
+    assert_eq!(
+        format!("{error:#}"),
+        "process died after the answer was committed"
+    );
     let answered = world.ctx.store.get(&world.task.id).unwrap().runs[0]
         .obligations
         .decisions[0]
