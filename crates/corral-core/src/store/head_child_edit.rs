@@ -46,6 +46,60 @@ fn plan_review_facts(
 }
 
 impl TaskHeadMut {
+    /// Set absent notes on a named review child, including a historical parent. Notes do not
+    /// change container facts; other historical child fields still use their dedicated APIs.
+    pub fn set_review_child_notes_if_absent(
+        &mut self,
+        run: &str,
+        id: &str,
+        notes: &str,
+    ) -> Result<bool> {
+        let Some(child) = self.overlaid()?.review_child(run, id)? else {
+            return Ok(false);
+        };
+        if child
+            .review
+            .as_ref()
+            .is_none_or(|review| review.notes.is_some())
+        {
+            return Ok(false);
+        }
+        if self
+            .head
+            .current_run
+            .as_ref()
+            .is_some_and(|current| current.id == run)
+        {
+            self.edit_review_child_head(run, id, |child| {
+                if let Some(review) = &mut child.review {
+                    review.notes = Some(notes.to_owned());
+                }
+                Ok(())
+            })?;
+        } else {
+            let ordinal = self
+                .overlaid()?
+                .run_seq(run)?
+                .context("review parent missing")?;
+            let mut row = self
+                .rows_now(
+                    &RowQuery::under(TaskPart::ReviewRun, format!("{}/", seq(ordinal)))
+                        .with_index(format!("id:{id}")),
+                    Counter::NestedRowDecodes,
+                )?
+                .pop()
+                .context("review child missing")?;
+            row.doc
+                .get_mut("review")
+                .and_then(serde_json::Value::as_object_mut)
+                .context("review metadata missing")?
+                .insert("notes".into(), serde_json::Value::String(notes.to_owned()));
+            self.history_edit = true;
+            self.put(row);
+        }
+        Ok(true)
+    }
+
     /// Edits review child `id` of the current run `run` as its projection.
     ///
     /// # Errors

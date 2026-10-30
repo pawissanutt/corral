@@ -177,42 +177,10 @@ fn capture_child(
     }
 }
 
-/// Records the reviewer's notes on review child `child` when it has none: a keyed edit of
-/// the child on its current run; an earlier run's child is edited in the full task.
+/// Records absent notes on exactly this child, without loading siblings or parent history.
 fn save_notes(ctx: &Ctx, task: &str, run: &str, child: &str, notes: &str) -> Result<()> {
-    use corral_core::TaskRef as _;
-    let edited = ctx.store.try_update_head(task, |head| {
-        if head.current_run_head()?.is_none_or(|r| r.id != run) {
-            return Ok(false);
-        }
-        if head
-            .review_child(run, child)?
-            .is_some_and(|c| c.review.as_ref().is_some_and(|r| r.notes.is_none()))
-        {
-            head.edit_review_child_head(run, child, |saved| {
-                if let Some(review) = saved.review.as_mut() {
-                    review.notes = Some(notes.to_owned());
-                }
-                Ok(())
-            })?;
-        }
-        Ok(true)
-    })?;
-    if edited.is_some() {
-        return Ok(());
-    }
-    ctx.store.update(task, |task| {
-        if let Some(saved) = task
-            .runs
-            .iter_mut()
-            .find(|r| r.id == run)
-            .and_then(|r| r.review_runs.iter_mut().find(|r| r.id == child))
-            .and_then(|r| r.review.as_mut())
-            && saved.notes.is_none()
-        {
-            saved.notes = Some(notes.to_owned());
-        }
-        Ok(())
+    ctx.store.try_update_head(task, |head| {
+        head.set_review_child_notes_if_absent(run, child, notes)
     })?;
     Ok(())
 }
