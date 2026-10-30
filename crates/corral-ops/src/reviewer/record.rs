@@ -178,10 +178,13 @@ pub(super) fn record_verdict(
         }
         Ok(())
     })?;
+    // Only signal after the verdict is durable. If the caller is inside the reviewer,
+    // its ancestors are protected here and the sync sweep will retry independently.
+    let saved = ctx.store.get(&task.id)?;
+    crate::cleanup::reap_closed_reviews(ctx, &saved);
     if report.is_some() {
         return Ok((record, receipt));
     }
-    let saved = ctx.store.get(&task.id)?;
     if let Some(run) = saved.current_run() {
         crate::watch::capture_review(ctx, &saved, run);
     }

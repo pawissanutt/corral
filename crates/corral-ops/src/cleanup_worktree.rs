@@ -108,6 +108,69 @@ fn process_marker(_process: &StuckProcess) -> Option<Vec<u8>> {
     None
 }
 
+/// Reap a closed reviewer outside the task-store transaction. A verdict can be submitted
+/// from inside the reviewer, so preserve our ancestors and let the next sync reap them.
+#[cfg(target_os = "linux")]
+pub(crate) fn reap_review(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<()> {
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{}", run.id, child.id));
+    let Ok(marker) = std::fs::read(receipt.with_extension("owner")) else {
+        return Ok(());
+    };
+    if marker.len() != 64 {
+        return Ok(());
+    }
+    let protected = protected_pids()?;
+    for entry in std::fs::read_dir("/proc").context("listing reviewer processes")? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if protected.contains(&pid) {
+            continue;
+        }
+        // A cheap hint avoids inspecting every process for each historical review. The
+        // marker is read again after capturing identity, before any signal.
+        let matching = std::fs::read(entry.path().join("environ"))
+            .ok()
+            .is_some_and(|env| {
+                env.split(|b| *b == 0).any(|value| {
+                    value.strip_prefix(b"CORRAL_PROCESS_OWNER=") == Some(marker.as_slice())
+                })
+            });
+        if !matching {
+            continue;
+        }
+        let Some(snapshot) = SystemProcesses.inspect(pid)? else {
+            continue;
+        };
+        let process = StuckProcess {
+            pid,
+            argv: snapshot.argv,
+            started: snapshot.started,
+        };
+        if process_marker(&process).as_deref() != Some(marker.as_slice()) {
+            continue;
+        }
+        if let Err(error) = SystemProcesses.terminate(&process)
+            && SystemProcesses
+                .inspect(pid)?
+                .is_some_and(|p| p.started == process.started)
+        {
+            return Err(error).context("terminating reviewer process");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn reap_review(_ctx: &Ctx, _task: &Task, _run: &Run, _child: &Run) -> Result<()> {
+    Ok(())
+}
+
 fn may_terminate(linux: bool, owned: bool) -> bool {
     linux && owned
 }

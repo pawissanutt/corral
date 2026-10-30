@@ -33,6 +33,9 @@ pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<Stri
 
 /// One inventory for the whole sweep, rather than subprocesses per finished task on each board tick.
 pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
+    for task in tasks {
+        reap_closed_reviews(ctx, task);
+    }
     let terminal: Vec<&Task> = tasks
         .iter()
         .filter(|task| matches!(task.status, Status::Done | Status::Dropped))
@@ -41,6 +44,21 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
         && let Some(task) = terminal.first()
     {
         failed(ctx, task, "inventory", &error);
+    }
+}
+
+pub(crate) fn reap_closed_reviews(ctx: &Ctx, task: &Task) {
+    for run in &task.runs {
+        for child in run.review_runs.iter().filter(|child| child.ended.is_some()) {
+            if let Err(error) = crate::cleanup_worktree::reap_review(ctx, task, run, child) {
+                failed(
+                    ctx,
+                    task,
+                    &format!("review {}-{}", run.id, child.id),
+                    &error,
+                );
+            }
+        }
     }
 }
 
