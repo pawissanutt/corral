@@ -1,0 +1,5 @@
+{
+  "extends": "../../../packages/corral-pi/tsconfig.json",
+  "compilerOptions": { "types": ["node"], "typeRoots": ["../../../packages/corral-pi/node_modules/@types"] },
+  "include": ["./*.ts", "../../../packages/corral-pi/src/auth/bun-ffi.d.ts", "../../../packages/corral-pi/src/host/text-modules.d.ts"]
+}

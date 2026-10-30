@@ -1,0 +1,11 @@
+[package]
+name = "pi-profile-resolver"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+corral-core = { path = "../../../crates/corral-core" }
+serde_json = "1"

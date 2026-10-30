@@ -229,6 +229,202 @@ The worker pair passes only this small arithmetic smoke; the reviewer pair is in
 There is no cost-saving, completed-standard, workflow-quality or default-harness-switch claim.
 T-313 remains a qualified historical non-pass, not a causal savings baseline.
 
+## Completed standard profile capture (T-579)
+
+### Question, boundary and controls
+
+What context overhead does the completed, shipped standard loadout add relative to strict,
+and what does one matched request cost? This is a **final capability-profile capture plus
+bounded capability-cost smoke**, not a completed-task workflow experiment or proof of quality.
+It supersedes the early subset only for feature coverage; the historical early results above
+remain unchanged. T-579/R1/Q1 revision 2 authorized 16 subscription-only requests, 1,024 output
+tokens each, no paid API, no retries and stop on provider error. All 16 completed; no allowance
+remains. No tool or auxiliary request was executed by live inference.
+
+Frozen source: `b4908eb7e8858ba226633ab105ab38dcce494fcd`, catalog 6, Pi 1.3.0,
+Bun 1.4.2, `openai-codex/gpt-6.1-sol`, SSE, effort `none`. Both arms use the exact same
+sorted-unique/sum JSON question from T-570. Arm order was saved before sending: inert then
+configured; within each, W/R/P strict then standard, followed by PL/PR standard. This fixed
+order is not randomized, cache state is uncontrolled, and one observation per arm supports
+neither statistical nor causal performance claims. PL/PR strict is disabled by the resolver:
+not runnable, not a zero-cost success. PM and planning results are separate from W/R.
+
+`tools/pi-compare/resolver/` links the production Rust catalog. The capture resolves both
+presets for every role against the checkout's actual `compat.json`; it does not recreate
+preset defaults in TypeScript. The host sessions use actual role modules with private fixture
+auth/delivery. No owner home, credential text, live herdr or board state enters static captures.
+The source hashes, supported keys, config requests, effective snapshots/digests, complete
+prompts/schemas and prompt/schema hashes are retained. Temporary project/home/arm/assets roots
+and the ephemeral MCP origin are normalized before estimating. A static audit verifies that
+inert/configured strict prompts and tools have identical hashes.
+
+Resources are controlled, not representative of every owner's installation:
+
+- **Inert:** empty private home skill/template directories, fixed trusted AGENTS text, empty MCP,
+  default public `web_fetch`, no SearXNG, no custom LSP languages.
+- **Configured:** same AGENTS text, one fixed home skill and template, one read-only private HTTP
+  MCP peer (`docs.lookup`), configured SearXNG origin, and lazy LSP language mapping. Startup and
+  post-activation MCP schemas are retained separately. The peer is real JSON-RPC but supplies
+  synthetic fixture content. No search/fetch or LSP process is invoked. The configured LSP
+  command is deliberately `false`: it measures settings/schema overhead, not server fitness.
+- **Live configured arm:** the post-activation schemas, with no MCP transcript/tool execution.
+  Static activation used fake provider responses, not part of the 16-request allowance.
+- Optional skill bodies, template expansions, arbitrary project lessons and real dispatch task
+  prompts can add later input. These startup profiles do not estimate those unbounded texts,
+  owner's actual skill inventory or the entire dispatched run's prompt.
+
+### Static results
+
+Estimator `utf8-json-bytes/4-v1`: prompt UTF-8 bytes and serialized
+`{name,description,parameters}` tool bytes, each divided by four and rounded up. This is a
+reproducible heuristic, **not provider tokenization**. Tools in this table are active schemas;
+MCP metadata/deferred schemas are additional when activated. All values below are
+**prompt / tools** estimated tokens.
+
+| Role | Strict, either resource case | Standard inert | Standard configured startup | Standard configured activated |
+|---|---:|---:|---:|---:|
+| W | 1,994 / 3,125 | 2,094 / 5,867 | 2,136 / 5,867 | 2,136 / 5,929 |
+| R | 1,484 / 1,757 | 1,583 / 2,961 | 1,722 / 2,961 | 1,722 / 3,023 |
+| P | 1,062 / 1,272 | 1,115 / 2,056 | 1,115 / 2,056 | 1,115 / 2,099 |
+| PL | not runnable | 776 / 3,091 | 915 / 3,091 | 915 / 3,152 |
+| PR | not runnable | 767 / 3,174 | 906 / 3,174 | 906 / 3,236 |
+
+Standard inert adds 100/2,742 estimated prompt/tool tokens for W, 99/1,204 for R and
+53/784 for P. Configured home text adds 42 prompt tokens for W, 139 for R/PL/PR and
+0 for P in this fixture; this is startup metadata, not a claim that reading skills is free.
+Activating the one approved MCP schema adds 61–62 estimated tool tokens (43 for PM's
+rendered schema). Do not sum rounded estimates as if they were exact tokenizer counts.
+
+The capture includes every shipped standard-affecting member, not just the early subset:
+
+| Member / surface | Final capture coverage and cost boundary |
+|---|---|
+| Todo / framework (T-562/563) | Current effective snapshots; W/P todo schema; role ceilings and strict planning disable retained |
+| Guidance/session (T-564), skill pack (T-583) | Real host contracts/packaged assets, fixed trust/text, automatic home directory settings, skill/template metadata; expansion/read/export/compaction invocation costs are not exercised |
+| Jobs (T-565) | W job and monitor schemas; no shell work or monitor wakes in live smoke |
+| Codemode (T-566) | Actual W/R/PL/PR declaration and prompt additions; PM standard remains off; no nested execution in live smoke |
+| MCP/search (T-567) | Empty/configured snapshots, cached controls and activated read schema; no external server fees measured |
+| Web (T-568) | Public-default fetch and configured/unconfigured SearXNG settings/schema; no search service or downloaded text costs |
+| LSP (T-569) | Worker built-ins in both presets, PL/PR standard read tools, lazy custom-language settings; R/P standard LSP off |
+| Explore/oracle (T-571) | W/PL/PR explore schema plus separate actual auxiliary-adapter static captures below; oracle standard off |
+| Native plan roles (T-573) | Actual PL/PR read-only host/schema, standard runnable; typed completion operations not executed |
+| Browser (T-574) | Actual W standard navigation/screenshot schemas are included. This differs from P3's full-only browser column; it records shipped `browser_defaults`, not a silent exclusion or a new policy change |
+| Hooks/bash rules (T-572), rewind (T-575), local model (T-578) | Present catalog entries but off in standard; no invocation cost, no full/override behavior claim |
+| Budget/headless (T-576/577) | No configured limits or headless opt-in in these controls; no budget enforcement or headless completion claim. Neither is a new standard tool-schema cost in this source |
+
+The installed agent running T-579 is not assumed to have identical assets to the frozen
+checkout; the measurement constructs sessions from that checkout. Optional feature/runtime
+failures outside these captures (including codemode execution) are not proven away by a
+schema measurement.
+
+### Dynamic results and raw outcome validity
+
+Raw controls, admissions, complete wire payloads (`max_output_tokens=1024`), full replies,
+response identities, reported usage and wall times are retained in the attached T-579 evidence
+archive. `capture/audit.ts` independently rechecks all 16 JSON answers, caps, distinct response
+identities, profile hashes and predeclared order. **16/16 arithmetic answers are valid.** This
+means only correct smoke output, not successful worker completion, review, PM action, planning
+submission, gate or landing. Strict PL/PR is absent by design, not counted as failed or passed.
+
+Each usage column is uncached input / output / cache read; **cache write is 0 in every row**.
+Output includes provider-reported reasoning tokens, even with effort `none`. USD is
+API-equivalent, not subscription billing: frozen starter prices are $2/$10/$0.10/$2.50 per
+million input/output/cache-read/cache-write tokens (`pricing.rs`, `gpt-6.1-sol`). Pi's reported
+cost object is separately preserved. No pricing gap occurred in these known-model responses;
+future unknown usage/prices remain null, never $0.
+
+| Resource | Role / preset | Input / output / cache read | API-equivalent USD | Wall ms |
+|---|---|---:|---:|---:|
+| Inert | W strict | 2,128 / 40 / 2,048 | 0.0048608 | 5,297 |
+| Inert | W standard | 6,360 / 30 / 0 | 0.0130200 | 2,441 |
+| Inert | R strict | 2,653 / 31 / 0 | 0.0056160 | 2,547 |
+| Inert | R standard | 3,733 / 78 / 0 | 0.0082460 | 5,248 |
+| Inert | P strict | 1,700 / 17 / 0 | 0.0035700 | 1,923 |
+| Inert | P standard | 2,131 / 17 / 0 | 0.0044320 | 2,450 |
+| Inert | PL standard | 3,136 / 30 / 0 | 0.0065720 | 2,295 |
+| Inert | PR standard | 3,173 / 42 / 0 | 0.0067660 | 3,302 |
+| Configured | W strict | 4,176 / 30 / 0 | 0.0086520 | 2,052 |
+| Configured | W standard | 6,464 / 39 / 0 | 0.0133180 | 5,331 |
+| Configured | R strict | 2,653 / 88 / 0 | 0.0061860 | 5,289 |
+| Configured | R standard | 3,916 / 32 / 0 | 0.0081520 | 3,060 |
+| Configured | P strict | 1,700 / 17 / 0 | 0.0035700 | 1,582 |
+| Configured | P standard | 2,162 / 17 / 0 | 0.0044940 | 2,396 |
+| Configured | PL standard | 3,319 / 28 / 0 | 0.0069180 | 1,907 |
+| Configured | PR standard | 3,356 / 40 / 0 | 0.0071120 | 2,459 |
+
+Total: 52,760 uncached input, 576 output, 2,048 cache read, 0 cache write; **55,384 tokens,
+USD 0.1114848 API-equivalent**, 49,579 ms summed request wall time. Paid API spend was $0.
+The first W strict reply had 2,048 cached input tokens, so its apparent lower uncached input
+is not a prompt reduction: input + cache read equals configured W strict's 4,176. Wall time
+excludes static capture/setup; caching and shared provider conditions prevent causal speed
+or savings conclusions. Separate roles/cohorts must not be extrapolated to task-level spend.
+
+An initial local analysis bug examined the SDK's nested `usage.cost` object as though every
+usage value were numeric, leaving all raw `api_equivalent_usd` fields null. Those captures
+are immutable. The corrected helper validates only the four priced traffic counters;
+`report-data.json` recomputes the table offline from preserved usage and retains the original
+null field alongside it. No additional inference was used. A regression covers the actual
+SDK-shaped nested cost, nonfinite usage and uncertain error-path zeros.
+
+### Auxiliary and non-token costs
+
+`capture/auxiliary.ts` drives the **production** `runAuxiliarySession` adapter with fake
+credentials/transport and the captured parent schema intersection. All six W/PL/PR ×
+inert/configured explore contexts have 49 estimated prompt tokens and 1,384 tool tokens
+(read/grep/find/ls, allowed read LSP/web). There is no recursive spawn, MCP, shell, hook or
+Corral tool. This includes no owner guidance and no parent transcript: actual child questions,
+file results and responses add variable traffic on every invocation. The tool-free oracle
+reference is 35 prompt / 1 serialized-empty-list heuristic tokens; oracle remains off in
+standard. This one-token wrapper estimate is not a real empty-tool provider charge.
+
+**Live auxiliary/summary request count is 0**, hence no auxiliary/summary usage in the main
+smoke totals. Their *future* dynamic cost is unmeasured/null, not zero. Each explore invocation
+uses its own model context and can make multiple tool-round requests; oracle and compaction
+also require separately attributed usage. The seven offline adapter responses carry synthetic
+usage, excluded from all dollar/token totals. Durable accounting/collector coverage was
+verified by T-570; this task does not rerun or replace its recovery tests.
+
+Other auxiliary costs are not billed LLM tokens: local MCP initialization/refresh and server
+runtime, LSP startup/diagnostics, shell/job CPU and output, browser page work/screenshots,
+exports, hook execution, and remote search/MCP service charges. Only private MCP fixture
+connection/activation occurred here (raw RPC list retained); process/service costs are not
+priced. No host load generation or live browser/herdr check was performed. Future tool output,
+images, search results, activated schemas, hooks and summaries can increase the next model
+request. A startup profile is not a bound on that cumulative spending.
+
+### Historical comparison and recommendation
+
+T-313 observed 65,317,494 native worker/review tokens (63,507,200 cache read) and
+USD 11.4245400 API-equivalent across five paired approval windows. It remained a **qualified
+historical non-pass**: fewer than six complete pairs, missing counterpart landings,
+`complete:false`, `valid:false`, `outcome:not_evaluated`; PM stayed OmO and was not evaluated.
+These 16 tiny strict/standard requests are neither matched to those tasks nor an OmO arm.
+There is no valid ratio between their totals, no T-313 pass promotion, and no causal savings,
+assistant-completion or default-harness-switch claim. T-544 retains assistant scope.
+
+Recommendation: keep this as the reproducible completed-standard context-cost reference,
+use the separate T-313 workflow protocol for any later outcome comparison, and request a new
+finite allowance before further inference. Standard exposes substantially more context than
+strict; configured resources and auxiliary use must be budgeted separately. Do not infer
+cost neutrality or task-quality parity from 16 correct arithmetic responses.
+
+### Reproduction and evidence
+
+Offline adapter instructions are in `tools/pi-compare/README.md`. This run used the shared
+target directory for `cargo build --manifest-path tools/pi-compare/resolver/Cargo.toml`, then
+`capture/static.ts` (final capture `final-static-v3`), `capture/smoke.ts` once under Q1,
+`capture/auxiliary.ts` (final capture `final-auxiliary-v2`) and `capture/audit.ts`. Earlier
+static captures were discarded from final analysis after normalizing arm-specific temporary
+path spellings; they consumed no inference. The raw smoke was never repeated.
+
+The attached evidence archive contains final static profiles/config snapshots/source hashes,
+static and auxiliary logs, full smoke controls/admissions/payloads/replies, the authorization
+readback and `report-data.json` with input digests. Reports and raw records remain distinct.
+Validation: 46 offline comparison/metric/profile tests pass; standalone and capture-adapter
+TypeScript checks pass; the Rust resolver builds and formats. The run's receipted quick gate
+is recorded separately; no full gate was started by this task. No workflow-quality or real
+optional-service execution acceptance is inferred from it.
+
 ## Assistant seam (T-544)
 
 T-544 consumes the same resolver; it does not get a parallel one. To add the assistant

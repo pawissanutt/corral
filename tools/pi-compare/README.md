@@ -37,6 +37,41 @@ and a qualified summary as artifacts. Error-path SDK zeros are unknown usage, no
 The T-570 run stopped after three requests when the reviewer strict arm was overloaded;
 the reviewer standard arm was not run. That partial smoke is not a workflow comparison.
 
+## Final standard capability profile (T-579)
+
+The final record is in `docs/records/pi-native-capabilities.md`. It measures current host
+prompt/schema overhead for all five roles, separately from this tool's historical T-313
+workflow pass criteria. The live cohort is a **capability-cost smoke**, not a workflow
+comparison. No tool is executed by the live requests; static MCP activation and auxiliary
+captures use fake inference and private fixtures only.
+
+Reproduce offline captures from the repository root (after frozen installs in both
+`packages/corral-pi` and this directory):
+
+```sh
+cargo build --locked --manifest-path tools/pi-compare/resolver/Cargo.toml
+bun tools/pi-compare/capture/static.ts RESOLVER_BINARY NEW_STATIC_DIR
+bun tools/pi-compare/capture/auxiliary.ts STATIC_DIR NEW_AUXILIARY_DIR
+bun tools/pi-compare/capture/audit.ts STATIC_DIR SMOKE_DIR NEW_REPORT_JSON
+```
+
+`RESOLVER_BINARY` is the executable Cargo built (respect the repo's target-dir setting).
+The standalone research adapter links the production Rust catalog; it has no preset
+matrix of its own. `capture/tsconfig.json` uses the host's compiler conventions because
+these adapters import host source; check it with this directory's `tsc -p capture/tsconfig.json`.
+Normal `bun run typecheck` checks the standalone offline analysis/tests.
+
+`capture/smoke.ts` requires a **fresh finite allowance** before execution. Its T-579
+acknowledgement flag is not reusable permission. It refuses an existing output directory,
+preregisters all 16 eligible requests (W/R/P strict/standard, PL/PR standard, each with
+inert/configured resources), caps the wire at 1,024 output tokens, disables retries and
+stops on errors. The first capture's raw API-equivalent fields were null due to a local
+nested-SDK-cost validation bug; `capture/audit.ts` recomputes them offline from preserved
+usage without rewriting records or spending more inference. Unknown usage remains null.
+Never use static heuristic tokens as billable tokens or treat disabled strict planning
+trials as zero-cost successes. The raw T-579 evidence is attached as an archive rather
+than checked into source.
+
 ## Capture contract
 
 Before any live pair, preregister the seed, six task IDs, expected **pair** tokens,
