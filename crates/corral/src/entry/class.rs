@@ -57,9 +57,9 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             AssistantCmd::Create { .. } | AssistantCmd::End { .. } => Refused,
             AssistantCmd::Scratch(args) => match &args.cmd {
                 // Own-session scratch only: the operation refuses another's with not_own_scratch.
-                ScratchCmd::New { .. } | ScratchCmd::Discard { .. } | ScratchCmd::Promote { .. } => {
-                    File
-                }
+                ScratchCmd::New { .. }
+                | ScratchCmd::Discard { .. }
+                | ScratchCmd::Promote { .. } => File,
                 ScratchCmd::List { .. } => Read,
                 ScratchCmd::Gc { .. } => Refused,
             },
