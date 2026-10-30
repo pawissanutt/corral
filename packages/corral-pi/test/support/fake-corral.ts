@@ -71,12 +71,16 @@ export function writeFakeCorral(dir: string): FakeCorral {
   const log = join(dir, "calls.jsonl");
   return {
     path,
-    calls: () => existsSync(log)
-      ? readFileSync(log, "utf8").trim().split("\n").map((line) => {
+    calls: () => {
+      if (!existsSync(log)) return [];
+      // A concurrent append can be visible before its newline; only parse committed lines.
+      const lines = readFileSync(log, "utf8").split("\n");
+      lines.pop();
+      return lines.map((line) => {
         const call = JSON.parse(line) as Omit<FakeCall, "envelope">;
         return { ...call, envelope: JSON.parse(call.stdin) as FakeCall["envelope"] };
-      })
-      : [],
+      });
+    },
     failWith: (code) => writeFileSync(join(dir, "fail"), String(code)),
     snapshot: (value) => writeFileSync(join(dir, "snapshot.json"), JSON.stringify(value)),
   };
