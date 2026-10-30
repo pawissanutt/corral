@@ -1380,6 +1380,45 @@ restarted after the login. There is no automatic paid fallback outside the confi
 (`provider_escalated`). A retry's turn that is still running keeps the episode and the retries it
 spent; a turn that ends without a provider error ends the stall (`provider_recovered`).
 
+## Cumulative model budgets
+
+For any Pi role, configure limits in its capability table (for example):
+
+```toml
+[agent.capabilities.worker.budget]
+max_tokens = 2000000
+max_usd = 25.0
+```
+
+Supplying either positive limit enables enforcement in strict, standard and full. `enabled = false`
+explicitly disables enforcement, not accounting. An enabled budget needs at least one limit.
+Catalog-7 hosts account main requests, retries, compaction/branch-summary requests, explore and oracle
+through one provider wrapper, even without limits. No new model tool can change these values.
+
+Reservations commit in the bound container before transport starts. Admission conservatively reserves
+**the model's full context window plus its bounded output**, with highest configured model price tiers
+for USD (API-equivalent, not subscription billing). Small limits can therefore refuse a request even
+when its likely actual usage would fit. Zero-priced nonlocal models are a pricing gap: a USD cap
+refuses them and also refuses new calls if earlier unpriced usage exists. Local llama.cpp can have
+explicit zero USD while still consuming tokens. Unbounded/invalid model metadata is refused.
+The Claude Agent SDK subprocess lane can make hidden additional requests and does not bind an output
+cap; it is explicitly unbounded, so hard-budget admission refuses it rather than claiming enforcement.
+Uncapped lane usage is still recorded, and interrupted unbounded usage prevents later hard-cap admission.
+
+Successful, nonzero terminal usage replaces its reservation once by provider/model/response identity.
+Interrupted, errored, deferred or missing-usage calls retain their reservation; copies and rewinds do
+not clear it. A refused admission or exhausted balance stops the host and cancels active providers,
+parent work and children. Cancellation is best effort: provider billing may lag, so this is not a
+zero-overrun billing guarantee. Inspect the host's `budget` state for cumulative tokens/nanodollars,
+uncertain request count, pricing gaps, active requests and stop status.
+
+Edit configuration and explicitly resume to apply new limits in the new generation's snapshot. Spent
+and uncertain reservations remain; an unchanged exhausted cap stays stopped. Editing configuration
+under an active host does not change its limits. Generations before catalog 7 have no reservation
+history: state labels that limitation, and a hard cap on a container with such bound history refuses
+admission rather than pretending earlier usage was zero. Use a new run for a fully enforced budget.
+The offline usage collector remains separate and can report historical usage without amending limits.
+
 ## Rollback
 
 Pi-native is opt-in, so rolling back means removing what you opted into. Nothing else changes:

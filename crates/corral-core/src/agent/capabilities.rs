@@ -24,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 6;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 7;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -40,6 +40,13 @@ pub struct CapabilityDef {
 
 /// Every capability Corral resolves. Each later member registers its own implemented key here.
 pub const CATALOG: &[CapabilityDef] = &[
+    CapabilityDef {
+        key: "budget",
+        summary: "cumulative model token/USD admission limits",
+        defaults: |_| Some([false, false, false]),
+        host: true,
+        settings: Some(super::budget::budget_settings),
+    },
     CapabilityDef {
         key: "todo",
         summary: "corral_todo progress ledger",

@@ -336,6 +336,15 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                         role.as_str()
                     ));
                 }
+                if key == "budget"
+                    && config.role(role).get(key) == Some(true)
+                    && config.role(role).settings(key).is_empty()
+                {
+                    return Err(format!(
+                        "[agent.capabilities.{}.budget] enabled needs max_tokens or max_usd",
+                        role.as_str()
+                    ));
+                }
                 let Some(RoleSetting::Table(table)) = setting else {
                     continue;
                 };
@@ -462,6 +471,9 @@ impl AgentCapabilities {
                 let defaults = (def.defaults)(role)?;
                 let (wanted, source) = match overrides.get(def.key) {
                     Some(value) => (value, CapabilitySource::RoleOverride),
+                    None if def.key == "budget" && !overrides.settings("budget").is_empty() => {
+                        (true, CapabilitySource::RoleOverride)
+                    }
                     None => (defaults[self.0.preset.index()], CapabilitySource::Preset),
                 };
                 let lacking = def.host && supported.is_some_and(|keys| !keys.contains(def.key));

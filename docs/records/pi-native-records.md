@@ -400,6 +400,26 @@ authority. Storage class: canonical (state journal). Owner: op-receipts
   `Superseded` or no longer being last (`review_superseded`), any other outcome or
   `process_lost` (`review_interrupted`), or a closed parent (`run_ended`).
 
+## Model budget reservations (catalog 7)
+
+`AgentRunState.budget` is canonical recovery-critical container data, beside receipts and auxiliary
+references, not a Pi-session custom entry or runtime cache. Its `requests` retain request UUID,
+generation, cumulative token/nanodollar charge, pricing availability, unbounded-transport flag and optional settled response
+identity. Absence of a response means reserved/uncertain. Recovery, transcript copying, cursor rewind
+and generation replacement never delete these entries. Old records default to an empty ledger; bound
+pre-catalog-7 history is explicitly a usage gap and cannot silently acquire a hard cap.
+
+Host-only `event` payloads with `kind=budget` support `reserve`, `settle` and `state`, using lifecycle
+request IDs. Existing authentication, liveness, fencing, atomic container transactions and receipt
+replay apply; there is no model-callable amendment operation. The current generation's immutable
+`budget` settings determine limits on every admission. `reserve` commits either an admission or a
+refusal; parallel main/summary/explore/oracle requests share the same balance. `settle` reconciles one
+request once and deduplicates known provider/model/response identities across generations. Unknown
+spend keeps its reservation. USD rates are captured in the request charge rather than repriced on
+resume. A ledger with unpriced history cannot claim USD enforcement; a new unbounded request or
+uncertain unbounded history cannot claim either hard cap. Explicit resume resolves new
+limits without resetting charges or reservations. Ledger/receipt capacity failures fail closed.
+
 ## Events (slim)
 
 Lines in `.corral/events.jsonl` that reference keys and request IDs only, never secrets. An

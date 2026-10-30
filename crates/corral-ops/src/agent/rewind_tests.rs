@@ -187,6 +187,17 @@ fn an_interrupted_rewind_continues_to_the_checkpoint_and_keeps_receipts_usage_an
             .unwrap()
             .receipts
             .push(receipt.clone());
+        t.runs[0].agent_host.as_mut().unwrap().budget.requests.push(
+            corral_core::agent::BudgetRequest {
+                request: "interrupted-billable-request".into(),
+                generation: 1,
+                tokens: 1000,
+                usd_nanos: 250000000,
+                priced: true,
+                unbounded: false,
+                response: None,
+            },
+        );
         Ok(())
     };
     wt.fx.ctx.store.update(&wt.fx.id, add).unwrap();
@@ -280,6 +291,8 @@ fn an_interrupted_rewind_continues_to_the_checkpoint_and_keeps_receipts_usage_an
     let kept = after.receipt(&receipt.request_id).unwrap();
     assert_eq!(kept.state, ReceiptState::Committed);
     assert_eq!(wt.usage(), usage);
+    assert_eq!(after.budget.totals(), (1000, 250000000));
+    assert!(after.budget.requests[0].response.is_none());
     assert_eq!(wt.fx.events("agent_rewound").len(), 1);
 }
 
