@@ -31,7 +31,7 @@ pub(super) fn enqueue(
 }
 
 pub(super) fn publish(ctx: &Ctx, id: &str, wakes: &mut Wakes) -> Result<()> {
-    let task = ctx.store.get(id)?;
+    let task = ctx.store.head(id)?;
     if task.attention.outbox.is_empty() {
         return Ok(());
     }
@@ -63,7 +63,7 @@ pub(super) fn publish(ctx: &Ctx, id: &str, wakes: &mut Wakes) -> Result<()> {
         .map(|fact| fact.fact_id.as_str())
         .collect();
     if !acknowledged.is_empty() {
-        ctx.store.update_attention(id, |ledger| {
+        ctx.store.update_attention_head(id, |ledger| {
             ledger
                 .outbox
                 .retain(|fact| !acknowledged.contains(fact.fact_id.as_str()));
@@ -110,7 +110,7 @@ pub(super) fn finish(
         if facts.is_empty() {
             continue;
         }
-        ctx.store.update_attention(id, |ledger| {
+        ctx.store.update_attention_head(id, |ledger| {
             ledger.outbox.retain(|fact| !facts.contains(&fact.fact_id));
             ledger.records.retain(|key, record| {
                 record.resolved_at.is_none() || ledger.outbox.iter().any(|fact| fact.key == *key)

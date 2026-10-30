@@ -181,17 +181,53 @@ pub(crate) fn latch(
         {
             continue;
         }
-        let latched =
-            ctx.store.try_update(&task.id, |current| {
-                let Some(current) = current.park.as_mut().filter(|current| {
-                    current.revision == park.revision && current.ready_at.is_none()
-                }) else {
-                    return Ok(false);
-                };
-                current.ready_at = Some(now);
-                Ok(true)
-            })?;
+        let latched = ctx.store.try_update(&task.id, |current| {
+            Ok(latch_ready(&mut current.park, park.revision, now))
+        })?;
         changed |= latched.is_some();
+    }
+    Ok(changed)
+}
+
+fn latch_ready(park: &mut Option<Park>, revision: u64, now: Timestamp) -> bool {
+    let Some(park) = park
+        .as_mut()
+        .filter(|park| park.revision == revision && park.ready_at.is_none())
+    else {
+        return false;
+    };
+    park.ready_at = Some(now);
+    true
+}
+
+pub(crate) fn latch_heads(
+    ctx: &Ctx,
+    tasks: &[corral_core::TaskHead],
+    n: &Neighborhood<'_>,
+    now: Timestamp,
+) -> Result<bool> {
+    let mut changed = false;
+    for task in tasks {
+        let Some(park) = task
+            .park
+            .as_ref()
+            .filter(|park| park.ready_at.is_none() && !park.resume_when.is_empty())
+        else {
+            continue;
+        };
+        if !crate::session_scope::owns_head(ctx, task)?
+            || !checks(park, n)
+                .iter()
+                .all(|check| check.satisfied == Some(true))
+        {
+            continue;
+        }
+        changed |= ctx
+            .store
+            .try_update_head(&task.id, |head| {
+                Ok(latch_ready(&mut head.park, park.revision, now))
+            })?
+            .is_some();
     }
     Ok(changed)
 }

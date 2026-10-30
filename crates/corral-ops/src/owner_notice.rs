@@ -79,14 +79,40 @@ pub(crate) fn refresh_fact(claim: &mut NoticeClaim) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn covering_claim(task: &Task, condition: &Condition) -> Option<String> {
+struct NoticeRun<'a> {
+    id: &'a str,
+    autopilot: Option<&'a corral_core::AutopilotState>,
+    stuck: bool,
+}
+
+pub(crate) fn covering_claim_ref(
+    task: &(impl corral_core::TaskRef + ?Sized),
+    condition: &Condition,
+) -> Result<Option<String>> {
+    let current = task.current_run_head()?;
+    Ok(covering_source(
+        task,
+        current.as_deref().map(|run| NoticeRun {
+            id: &run.id,
+            autopilot: run.autopilot.as_ref(),
+            stuck: run.stuck.is_some(),
+        }),
+        condition,
+    ))
+}
+
+fn covering_source(
+    task: &(impl corral_core::TaskFieldsRef + ?Sized),
+    current: Option<NoticeRun<'_>>,
+    condition: &Condition,
+) -> Option<String> {
     let key = condition.key.as_ref()?;
-    if let Some(record) = task.attention.records.get(key)
+    if let Some(record) = task.attention().records.get(key)
         && let Some(batch) = &record.levels.owner_claim
     {
         return Some(batch.clone());
     }
-    for claim in &task.attention.notice_outbox {
+    for claim in &task.attention().notice_outbox {
         if claim.coverage.iter().any(|coverage| match coverage {
             NoticeCoverage::Exact { condition_key } => *condition_key == key.0,
             NoticeCoverage::Episode {
@@ -95,13 +121,13 @@ pub(crate) fn covering_claim(task: &Task, condition: &Condition) -> Option<Strin
                 stage,
                 at,
             } => {
-                if *id != task.id {
+                if id != task.id() {
                     return false;
                 }
                 if stage == "needs_me" {
-                    return task.attention.entry_notice.as_ref().is_some_and(|entry| {
+                    return task.attention().entry_notice.as_ref().is_some_and(|entry| {
                         entry.batch_id == claim.batch_id
-                            && entry.status_since == task.status_since
+                            && entry.status_since == *task.status_since()
                             && condition.since.is_some_and(|since| since <= entry.at)
                             && matches!(
                                 condition.kind.as_str(),
@@ -112,11 +138,10 @@ pub(crate) fn covering_claim(task: &Task, condition: &Condition) -> Option<Strin
                             )
                     });
                 }
-                task.current_run().is_some_and(|current| {
-                    run.as_deref() == Some(current.id.as_str())
+                current.as_ref().is_some_and(|current| {
+                    run.as_deref() == Some(current.id)
                         && current
                             .autopilot
-                            .as_ref()
                             .is_some_and(|pilot| pilot.stage.as_str() == stage && pilot.at == *at)
                         && matches!(
                             condition.kind.as_str(),
@@ -132,9 +157,9 @@ pub(crate) fn covering_claim(task: &Task, condition: &Condition) -> Option<Strin
     if matches!(
         condition.kind.as_str(),
         "escalation" | "infra_escalation" | "landing_blocked"
-    ) && task
-        .current_run()
-        .and_then(|run| run.autopilot.as_ref())
+    ) && current
+        .as_ref()
+        .and_then(|run| run.autopilot)
         .is_some_and(|pilot| {
             matches!(
                 pilot.stage,
@@ -144,11 +169,10 @@ pub(crate) fn covering_claim(task: &Task, condition: &Condition) -> Option<Strin
     {
         return Some(format!("legacy_unknown/{key}"));
     }
-    if (condition.kind == "stuck_process"
-        && task.current_run().is_some_and(|run| run.stuck.is_some()))
+    if (condition.kind == "stuck_process" && current.as_ref().is_some_and(|run| run.stuck))
         || (condition.kind == "infra_hold"
             && task
-                .infra_wait
+                .infra_wait()
                 .as_ref()
                 .is_some_and(|wait| wait.held_at.is_some()))
     {
@@ -696,31 +720,59 @@ pub(crate) fn drain(ctx: &Ctx) -> Result<()> {
     drain_snapshot(ctx, &ctx.store.list_shared()?)
 }
 
+#[cfg(test)]
 pub(crate) fn drain_snapshot(ctx: &Ctx, tasks: &[Task]) -> Result<()> {
     for task in tasks {
-        if crate::session_scope::owns_task(ctx, task)? {
-            for source in &task.attention.source_notices {
-                let Some(_source_lock) = ctx
-                    .store
-                    .try_lock(&format!("notice-source-{}-{}", source.area, source.key))?
-                else {
-                    continue;
-                };
-                publish_source(ctx, Some(&task.id), source)?;
-                // The creator holds this lease continuously from before registration through
-                // send/outcome publication. Acquiring it proves that exact source transaction
-                // settled; a worker's unrelated pane liveness is not evidence either way.
-                ctx.store.update_attention_head(&task.id, |ledger| {
-                    ledger
-                        .source_notices
-                        .retain(|reference| reference != source);
-                    Ok(())
-                })?;
-            }
+        drain_sources(
+            ctx,
+            &task.id,
+            &task.attention,
+            crate::session_scope::owns_task(ctx, task)?,
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn drain_heads(ctx: &Ctx, tasks: &[corral_core::TaskHead]) -> Result<()> {
+    for task in tasks {
+        drain_sources(
+            ctx,
+            &task.id,
+            &task.attention,
+            crate::session_scope::owns_head(ctx, task)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn drain_sources(
+    ctx: &Ctx,
+    id: &str,
+    ledger: &corral_core::AttentionLedger,
+    owned: bool,
+) -> Result<()> {
+    if owned {
+        for source in &ledger.source_notices {
+            let Some(_source_lock) = ctx
+                .store
+                .try_lock(&format!("notice-source-{}-{}", source.area, source.key))?
+            else {
+                continue;
+            };
+            publish_source(ctx, Some(id), source)?;
+            // The creator holds this lease continuously from before registration through
+            // send/outcome publication. Acquiring it proves that exact source transaction
+            // settled; a worker's unrelated pane liveness is not evidence either way.
+            ctx.store.update_attention_head(id, |ledger| {
+                ledger
+                    .source_notices
+                    .retain(|reference| reference != source);
+                Ok(())
+            })?;
         }
-        if !task.attention.notice_outbox.is_empty() && crate::session_scope::owns_task(ctx, task)? {
-            drain_task(ctx, &task.id)?;
-        }
+    }
+    if !ledger.notice_outbox.is_empty() && owned {
+        drain_task(ctx, id)?;
     }
     Ok(())
 }
