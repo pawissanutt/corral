@@ -18,6 +18,25 @@ Exit 0 means a complete, valid, measured comparison met every owner threshold;
 exit 2 means no pass (incomplete, synthetic, invalid, budget stop, or threshold
 failure); exit 1 means the input could not be parsed or measured.
 
+## Early capability smoke (T-570)
+
+The T-313 six-pair workflow parser below is not reused to turn a tiny capability smoke into
+an experimental pass. The separate early checkpoint is documented in
+`docs/records/pi-native-capabilities.md` (repository root). Static raw profiles come from
+`packages/corral-pi/test/usage-baseline.test.ts`; `usage-smoke.test.ts` tests admission controls
+without inference. All five roles have static records, with unshipped native planning roles
+explicitly not runnable rather than zero-cost successes.
+
+The explicitly invoked runner lives beside the pinned host imports at
+`packages/corral-pi/src/host/usage-smoke.ts`. It consumes the static log, refuses an existing
+output directory, and records admissions/payloads/results for at most W/R × strict/standard.
+It uses Corral's subscription-only credential/provider path, SSE, no retries, and a 1,024-token
+wire cap. Do not run it without a fresh finite owner allowance: its T-570 authorization flag
+is an acknowledgement, not reusable permission. Keep controls, full payloads, raw responses
+and a qualified summary as artifacts. Error-path SDK zeros are unknown usage, not $0 work.
+The T-570 run stopped after three requests when the reviewer strict arm was overloaded;
+the reviewer standard arm was not run. That partial smoke is not a workflow comparison.
+
 ## Capture contract
 
 Before any live pair, preregister the seed, six task IDs, expected **pair** tokens,
