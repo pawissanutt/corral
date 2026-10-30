@@ -868,6 +868,7 @@ Options:
       --pm                   Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
       --resume <A-N>         Resume assistant session A-<n> in this pane, fencing its previous generation
       --over-cap             Open an assistant even when assistant.max_live assistants are already live
+      --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
       --model <MODEL>        Model to run instead of the profile's (bare: Pi's default for the provider)
       --provider <PROVIDER>  Provider whose `corral agent login` runs the session (bare default: openai-codex) [possible values: openai-codex, anthropic]
       --effort <EFFORT>      Reasoning effort instead of the profile's
@@ -1976,6 +1977,7 @@ Persist run progress, checkpoints, waits, decisions and resume receipts
 Usage: corral run [OPTIONS] <COMMAND>
 
 Commands:
+  transcript  Read a bounded JSONL transcript page (context only, no run authority)
   wait        Register an explicit event wait (version 1 JSON); never executes monitor commands
   decision    Ask the owner an exact question with a requested action (version 1 JSON)
   resume      Record an event or answered decision receipt and prompt the worker to continue; never relaunches work
@@ -1986,6 +1988,24 @@ Commands:
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+### `corral run transcript`
+
+```text
+Read a bounded JSONL transcript page (context only, no run authority)
+
+Usage: corral run transcript [OPTIONS] <ID> <RUN>
+
+Arguments:
+  <ID>   
+  <RUN>  
+
+Options:
+      --review <REVIEW>  One-based review child number
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --lines <LINES>    Inclusive one-based range, at most 200 lines and 24 KiB per page [default: 1-200]
+  -h, --help             Print help
 ```
 
 ### `corral run wait`
