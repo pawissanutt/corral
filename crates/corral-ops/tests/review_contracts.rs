@@ -177,7 +177,12 @@ fn candidate(fx: &Fx, kind: &str, labels: &[&str], file: &str) -> String {
         },
     )
     .unwrap();
-    corral_ops::done(ctx, &task.id, "widget changed; Verified: all tests pass").unwrap();
+    let finished =
+        corral_ops::done(ctx, &task.id, "widget changed; Verified: all tests pass").unwrap();
+    assert_eq!(
+        finished.current_run().unwrap().agent_state.as_deref(),
+        Some("done")
+    );
     corral_ops::gate_start(ctx, &task.id).unwrap();
     corral_ops::gate_wait(ctx, &task.id).unwrap();
     task.id

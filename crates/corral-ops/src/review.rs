@@ -241,6 +241,7 @@ fn done_inner(
             r.completion.audit = Some(audit.clone());
             r.summary = Some(summary.to_string());
             r.ended = Some(Timestamp::now());
+            r.agent_state = Some("done".into());
             r.outcome = Some(RunOutcome::Done);
             crate::usage::collect(r, &ctx.store);
         }

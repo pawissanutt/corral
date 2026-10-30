@@ -27,6 +27,7 @@ import { serverVisible } from "./mcp-settings.ts";
 import { exportAssistantSession } from "../roles/assistant/env.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
+import { guardTerminalStop } from "./terminal-stop.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -139,6 +140,7 @@ async function main(): Promise<void> {
     return;
   }
   terminal = new sdk.InteractiveMode(session.runtime, { verbose: false });
+  guardTerminalStop(terminal, process.stdin);
   await terminal.init();
   session.markAttached("interactive");
   try { await terminal.run(); }
