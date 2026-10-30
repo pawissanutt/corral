@@ -328,6 +328,35 @@ Options:
       --agent-session-path <PATH>
 ```
 
+## herdr pane report-agent-session (0.9.5)
+
+```
+Report pane agent session identity
+
+Usage: herdr pane report-agent-session [OPTIONS] --source <ID> --agent <LABEL> <PANE_ID> [-- [RESUME_ARG]...]
+
+Options:
+      --source <ID>
+      --agent <LABEL>
+      --seq <N>
+      --agent-session-id <ID>
+      --agent-session-path <PATH>
+      --session-start-source <SOURCE>
+```
+
+## herdr pane release-agent (0.9.5)
+
+```
+Release pane agent lifecycle authority
+
+Usage: herdr pane release-agent [OPTIONS] --source <ID> --agent <LABEL> <PANE_ID>
+
+Options:
+      --source <ID>
+      --agent <LABEL>
+      --seq <N>
+```
+
 ## herdr agent list
 
 ```
@@ -736,5 +765,18 @@ Arguments:
 - herdr never reports `blocked` for an OMO question prompt. In a probe (herdr session corral-test, 2026-10-15) OMO showed its `Ask user` prompt for ask_user_question while `pane get` returned `agent: "claude", agent_status: "idle"` throughout (45 idle, 4 unknown, 1 `pi`/idle samples; never working or blocked). Only `terminal_title` revealed it: `OmO - Running ask_user_question`. So an OMO run waiting on a question stays Running (eventually with `idle_no_report`); detecting the question from the title or transcript is a follow-up. Evidence: T-014 artifact "herdr status for an OmO question prompt".
 - With OmO's herdr state extension (`~/.omo/agent/extensions/herdr-omo-agent-state.ts`) herdr labels OmO panes agent "omo" with accurate working/idle/blocked, but `agent prompt` refuses them with code `agent_not_ready` ("is not an active named agent" / "is no longer the pane foreground process"). corral's `agent_prompt` treats `agent_not_ready` like `agent_blocked`/no-agent codes and falls back to `pane send-text` + `send-keys enter`, so reply and request-changes still reach OmO panes.
 - `pane report-agent --state` accepts idle|working|blocked|unknown.
+- Agent reporting (herdr 0.9.5, private plugin-free server, 2026-10-30; T-605): `--seq` is a u64
+  tracked per pane and per source; a report, release or metadata patch whose number is not above the
+  last one accepted from that source for that pane exits 0 but changes nothing. Metadata numbers are
+  tracked apart from `report-agent`/`release-agent` numbers. `release-agent` naming another source or
+  agent label changes nothing; on a missing pane it fails with code `pane_not_found`.
+- After `release-agent`, `pane get` shows no agent and no `display_agent` (a display name set with
+  `--applies-to-source` applies only while that source holds the pane, and is stored if sent first),
+  but tokens remain until cleared with `--clear-token`. herdr's own exit check clears the agent once
+  the pane is back at its shell prompt, not the tokens.
+- `--agent-session-id`/`--agent-session-path` from a custom source are accepted, but `pane get`,
+  `agent get/list` and `api snapshot` show no `agent_session` for it.
+- An idle report after a working one reads `agent_status: "done"` until the pane is seen.
+  `agent wait <pane> --until <state>` returns the agent's `display_agent` and `tokens`.
 - Plugin runtime commands run with the PLUGIN directory as cwd; the focused pane's cwd is in $HERDR_PLUGIN_CONTEXT_JSON.
 - Plugin-free test server: in a subshell, `source scripts/test-herdr.sh; corral_test_herdr_start || exit 1`, then run clients/tests there. The helper isolates HOME/XDG configuration, uses a private `corral-test` socket, and cleans up only its own server. A bare `herdr --session corral-test server` still loads owner plugins; a session name is not plugin isolation. See AGENTS.md for the complete safe-start example.
