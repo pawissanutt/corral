@@ -328,7 +328,7 @@ impl Inbox<'_> {
                     current.is_none_or(|r| r.id != *review || r.verdict.is_some())
                 }
             }
-            Recipient::Pm => false,
+            Recipient::Pm | Recipient::Assistant { .. } => false,
         }
     }
 
@@ -619,10 +619,10 @@ impl Inbox<'_> {
     pub(super) fn admit_owner(&self, state: &mut InboxState, kind: &str) -> Result<()> {
         // Fresh provenance starts at the first reservation, even when it is not owner-kind.
         // Otherwise a later owner message would mistake this upgraded writer for legacy debt.
-        if self.recipient != Recipient::Pm && state.next_seq == 1 {
+        if self.recipient.task().is_some() && state.next_seq == 1 {
             Self::initialize_owner_header(state, Timestamp::now());
         }
-        if self.recipient == Recipient::Pm || !owner_kind(kind) {
+        if self.recipient.task().is_none() || !owner_kind(kind) {
             return Ok(());
         }
         self.maintain_header(state, Timestamp::now())?;
@@ -635,7 +635,7 @@ impl Inbox<'_> {
     }
 
     pub(super) fn preview_owner_admission(&self, state: &InboxState, kind: &str) -> Result<()> {
-        if self.recipient == Recipient::Pm || !owner_kind(kind) {
+        if self.recipient.task().is_none() || !owner_kind(kind) {
             return Ok(());
         }
         let (header, _) = self.preview_header(state, Timestamp::now())?;

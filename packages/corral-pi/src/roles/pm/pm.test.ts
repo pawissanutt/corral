@@ -41,6 +41,10 @@ const cases = [
   } },
   { name: "reply", op: "reply", payload: { task: "T-007", text: "Continue within scope." } },
   { name: "comment", op: "comment", payload: { task: "T-007", text: "Evidence recorded." } },
+  { name: "inbox_read", op: "inbox_read", payload: { id: "PMI-1", offset: 0, limit: 512 } },
+  { name: "inbox_resolve", op: "inbox_resolve", payload: {
+    id: "PMI-1", expected_revision: 1, action: "resolve", outcome: "done", text: "Filed T-9.", refs: ["T-9"],
+  } },
   { name: "capture", op: "capture", payload: {
     project: "demo", title: "Follow-up", body: "Investigate the adapter.", status: "backlog",
   } },
@@ -137,6 +141,10 @@ const invalidCases: readonly (readonly [string, Record<string, unknown>])[] = [
   ["reply", { task: "T-007", message: "wrong field" }],
   ["comment", { text: "missing task" }],
   ["capture", { project: "demo", title: "x", body: "y", status: "ready" }],
+  ["inbox_read", { state: "stale" }],
+  ["inbox_resolve", { id: "PMI-1", action: "claim" }],
+  ["inbox_resolve", { id: "PMI-1", expected_revision: 0, action: "approve" }],
+  ["inbox_resolve", { id: "PMI-1", expected_revision: 1, action: "resolve", outcome: "landed" }],
 ];
 for (const [index, [name, payload]] of invalidCases.entries()) test(`the ${name} schema refuses invalid case ${index}`, () => {
   // Given malformed input, when checking the schema, then it cannot reach the client.
@@ -200,7 +208,7 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
       expect(call.identity.task).toBeUndefined();
       expect(call.identity.run).toBeUndefined();
     }
-    expect(calls).toHaveLength(14);
+    expect(calls).toHaveLength(cases.length);
     const results = host.session.messages.filter((message) => message.role === "toolResult");
     for (const { name } of forbidden) {
       expect(results.findLast((message) => message.toolName === name)?.isError).toBeTrue();

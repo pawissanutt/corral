@@ -7,6 +7,7 @@ use corral_core::{Actor, Store};
 use corral_ops::Ctx;
 
 use crate::Cmd;
+use crate::pm_cmd::PmCmd;
 
 mod class;
 
@@ -55,7 +56,9 @@ impl Entry {
             .context("parsing command event author")?;
         let (actor, via) = match cmd {
             Cmd::Hook | Cmd::Plugin { .. } | Cmd::FocusBoard => (Some(Actor::System), "hook"),
-            Cmd::Pm { .. } => (Some(Actor::Pm), "pm"),
+            Cmd::Pm { cmd } if !cmd.as_ref().is_some_and(PmCmd::acts_as_caller) => {
+                (Some(Actor::Pm), "pm")
+            }
             Cmd::Board { .. }
             | Cmd::Capture { .. }
             | Cmd::Artifacts { .. }
@@ -117,6 +120,15 @@ impl Entry {
             return Ok((self.actor.unwrap_or(Actor::Agent), format!("run:{run}")));
         }
         Ok((self.actor.unwrap_or(Actor::Owner), "cli".into()))
+    }
+
+    /// The PM inbox author this invocation acts as: `owner`, `assistant:A-<n>` or its actor.
+    pub fn inbox_author(&self, store: &Store) -> Result<String> {
+        let (actor, via) = self.resolve(store)?;
+        Ok(match actor {
+            Actor::Assistant => via,
+            _ => self.decision_author(store)?.into(),
+        })
     }
 
     pub fn decision_author(&self, store: &Store) -> Result<&'static str> {

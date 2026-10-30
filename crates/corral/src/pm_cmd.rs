@@ -49,6 +49,18 @@ pub enum PmCmd {
         #[arg(long)]
         answer: String,
     },
+    /// The PM inbox: requests from assistants and the owner, each with a recorded outcome
+    Inbox {
+        #[command(subcommand)]
+        cmd: crate::pm_inbox_cmd::PmInboxCmd,
+    },
+}
+
+impl PmCmd {
+    /// Inbox posts and withdrawals act as their caller, not as the PM.
+    pub fn acts_as_caller(&self) -> bool {
+        matches!(self, Self::Inbox { cmd } if cmd.acts_as_caller())
+    }
 }
 
 /// Evaluates `pass` on one `read_only_snapshot`: one read of the board and of the session
@@ -113,6 +125,9 @@ fn print_workset(ctx: &corral_ops::Ctx) -> Result<()> {
     }
     for blocker in state.blockers {
         println!("Blocker: {blocker}");
+    }
+    for item in state.inbox {
+        println!("Inbox: {} [{}]", item.why, item.evidence.join("; "));
     }
     Ok(())
 }
@@ -218,6 +233,7 @@ pub fn run(start: &Path, cmd: Option<PmCmd>, entry: &crate::entry::Entry) -> Res
             corral_ops::pm_resolve(&entry.open(start)?, &decision, &answer)?;
             println!("Owner answer recorded; task restrictions remain enforced.");
         }
+        Some(PmCmd::Inbox { cmd }) => crate::pm_inbox_cmd::run(start, cmd, entry)?,
         Some(PmCmd::Brief { json }) => {
             let ctx = entry.open(start)?;
             let health = corral_ops::pm_health(&ctx)?;

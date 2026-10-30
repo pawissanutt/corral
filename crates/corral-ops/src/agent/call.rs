@@ -49,6 +49,8 @@ pub enum AgentOp {
     ReadRoute,
     ReadArtifacts,
     ReadLessons,
+    InboxRead,
+    InboxResolve,
     Job,
     JobMonitor,
     PlanWrite,
@@ -80,7 +82,7 @@ const PM: &[AgentRole] = &[AgentRole::Pm];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 33] = [
+    pub const ALL: [AgentOp; 35] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -109,6 +111,8 @@ impl AgentOp {
         AgentOp::ReadRoute,
         AgentOp::ReadArtifacts,
         AgentOp::ReadLessons,
+        AgentOp::InboxRead,
+        AgentOp::InboxResolve,
         AgentOp::Job,
         AgentOp::JobMonitor,
         AgentOp::PlanWrite,
@@ -146,6 +150,8 @@ impl AgentOp {
             AgentOp::ReadRoute => "read_route",
             AgentOp::ReadArtifacts => "read_artifacts",
             AgentOp::ReadLessons => "read_lessons",
+            AgentOp::InboxRead => "inbox_read",
+            AgentOp::InboxResolve => "inbox_resolve",
             AgentOp::Job => "job",
             AgentOp::JobMonitor => "job_monitor",
             AgentOp::PlanWrite => "plan_write",
@@ -216,7 +222,9 @@ impl AgentOp {
             | AgentOp::ReadSearch
             | AgentOp::ReadRoute
             | AgentOp::ReadArtifacts
-            | AgentOp::ReadLessons => Some(Route::Pm),
+            | AgentOp::ReadLessons
+            | AgentOp::InboxRead
+            | AgentOp::InboxResolve => Some(Route::Pm),
             AgentOp::PlanWrite | AgentOp::PlanSubmit | AgentOp::PlanVerdict => {
                 Some(Route::Planning)
             }

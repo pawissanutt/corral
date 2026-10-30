@@ -314,6 +314,7 @@ fn sync_scoped(
         }
     }
     crate::delivery::owner::reconcile_all(ctx)?;
+    crate::pm_inbox::sweep(ctx)?;
     crate::agent::hooks::sync::pass(ctx)?;
     crate::review_budget::reconcile(ctx, snapshot, now)?;
     // Launching queued/autopilot work must acquire an exclusive ownership claim.

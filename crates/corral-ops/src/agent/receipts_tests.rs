@@ -130,7 +130,9 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "read_search",
                 "read_route",
                 "read_artifacts",
-                "read_lessons"
+                "read_lessons",
+                "inbox_read",
+                "inbox_resolve"
             ]),
             BindTarget::Worker { .. } => json!([
                 "hello",

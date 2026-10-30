@@ -64,6 +64,10 @@ pub enum Recipient {
         review: String,
     },
     Pm,
+    /// A Pi-native assistant session, keyed `assistant_<id>`: PM inbox outcome notices only.
+    Assistant {
+        session: String,
+    },
 }
 
 impl Recipient {
@@ -78,6 +82,7 @@ impl Recipient {
             Self::PlanReview { task, plan, review } => vec![task, plan, review],
             Self::ReviewRun { task, run, review } => vec![task, run, review],
             Self::Pm => Vec::new(),
+            Self::Assistant { session } => vec![session],
         };
         for part in parts {
             ensure!(
@@ -97,6 +102,7 @@ impl Recipient {
             }
             Self::ReviewRun { task, run, review } => format!("{task}_{run}_rv-{review}"),
             Self::Pm => "pm".into(),
+            Self::Assistant { session } => format!("assistant_{session}"),
         })
     }
 
@@ -104,6 +110,9 @@ impl Recipient {
         let parts: Vec<_> = key.split('_').collect();
         let recipient = match parts.as_slice() {
             ["pm"] => Self::Pm,
+            ["assistant", session] => Self::Assistant {
+                session: (*session).into(),
+            },
             [task, planner] if planner.starts_with("plan-") => Self::PlanRun {
                 task: (*task).into(),
                 plan_run: planner["plan-".len()..].into(),
@@ -134,7 +143,7 @@ impl Recipient {
             | Self::PlanRun { task, .. }
             | Self::PlanReview { task, .. }
             | Self::ReviewRun { task, .. } => Some(task),
-            Self::Pm => None,
+            Self::Pm | Self::Assistant { .. } => None,
         }
     }
 }

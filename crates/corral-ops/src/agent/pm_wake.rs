@@ -20,7 +20,7 @@ use super::delivery::PiNativeAdapter;
 /// The T-252 child that lands the outbox.
 pub const OWNER: &str = "pm-role";
 
-fn healthy(pm: &AgentPm) -> bool {
+pub(crate) fn healthy(pm: &AgentPm) -> bool {
     pm.state.binding.health == HostHealth::Healthy
         && super::admission::recheck_pm(pm, pm.state.binding.generation).is_ok()
 }

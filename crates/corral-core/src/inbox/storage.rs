@@ -43,10 +43,22 @@ impl<'a> Inbox<'a> {
         self.store.lock(&format!("deliver-{}", self.key))
     }
 
-    pub fn state(&self) -> Result<InboxState> {
+    /// A recipient without a task (the PM, an assistant session) keeps its state in this file.
+    fn state_path(&self) -> Option<PathBuf> {
+        let dir = self.store.state_dir();
         match &self.recipient {
-            Recipient::Pm => Ok(self.pm_state()?.inbox),
-            _ => {
+            Recipient::Pm => Some(dir.join("pm-inbox.json")),
+            Recipient::Assistant { session } => {
+                Some(dir.join("assistant-inbox").join(format!("{session}.json")))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn state(&self) -> Result<InboxState> {
+        match self.state_path() {
+            Some(path) => Ok(read_optional::<PmInbox>(&path)?.unwrap_or_default().inbox),
+            None => {
                 let mut task = self
                     .store
                     .get(self.recipient.task().context("task recipient")?)?;
@@ -61,16 +73,16 @@ impl<'a> Inbox<'a> {
 
     /// Caller must hold the inbox lock (and deliver lock for envelope changes).
     pub fn update_state<T>(&self, f: impl FnOnce(&mut InboxState) -> Result<T>) -> Result<T> {
-        match &self.recipient {
-            Recipient::Pm => {
-                let mut pm = self.pm_state()?;
-                let result = f(&mut pm.inbox)?;
-                fs::create_dir_all(self.store.state_dir())
+        match self.state_path() {
+            Some(path) => {
+                let mut side: PmInbox = read_optional(&path)?.unwrap_or_default();
+                let result = f(&mut side.inbox)?;
+                fs::create_dir_all(path.parent().context("inbox state has no directory")?)
                     .context("creating inbox state directory")?;
-                write_json(&self.store.state_dir().join("pm-inbox.json"), &pm)?;
+                write_json(&path, &side)?;
                 Ok(result)
             }
-            _ => {
+            None => {
                 let mut result = None;
                 self.store
                     .update(self.recipient.task().context("task recipient")?, |task| {
@@ -191,7 +203,7 @@ impl<'a> Inbox<'a> {
         self.check(&post)?;
         let _lock = self.lock()?;
         let message = match &self.recipient {
-            Recipient::Pm => self.update_state(|state| {
+            Recipient::Pm | Recipient::Assistant { .. } => self.update_state(|state| {
                 let message = self.build(state, post)?;
                 reserving(&message)?;
                 Ok(message)
@@ -562,6 +574,7 @@ pub(super) fn state_mut<'a>(
             .context("inbox review child not found")?
             .inbox),
         Recipient::Pm => anyhow::bail!("PM has no task state"),
+        Recipient::Assistant { .. } => anyhow::bail!("an assistant session has no task state"),
     }
 }
 

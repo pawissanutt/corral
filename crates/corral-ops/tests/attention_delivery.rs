@@ -259,7 +259,7 @@ impl World {
                     Recipient::PlanReview { .. } => {
                         task.plans[0].reviews[0].verdict = Some(Verdict::Approve);
                     }
-                    Recipient::Pm => unreachable!(),
+                    Recipient::Pm | Recipient::Assistant { .. } => unreachable!(),
                 }
                 Ok(())
             })

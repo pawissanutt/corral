@@ -301,7 +301,9 @@ class; nothing reaches an assistant by default.
   `corral assistant summary` for the calling session, `corral artifact add --session`
   for the calling session only (never a task run or another session), and
   `corral assistant scratch new`, `discard` and `promote` (the operation refuses another
-  session's scratch with `not_own_scratch`). `corral assistant scratch list` is a Read. `corral agent call`,
+  session's scratch with `not_own_scratch`), and `corral pm inbox post` and
+  `corral pm inbox withdraw` (own items only). `corral assistant scratch list` is a Read.
+  `corral agent call`,
   the host's authenticated channel, is admitted too; its operation table decides what the
   assistant role may do there.
 - **Refused**: everything else, including `corral approve`, `corral move`,
@@ -317,8 +319,8 @@ they record, whatever the current directory, `CORRAL_PM` or an explicit `--autho
 record the owner as filer and comment author); the event log carries the assistant
 attribution. A refused command changes nothing and exits 2 with
 `"assistant_refused: corral approve needs the owner; use corral_owner_action or corral pm inbox post"`,
-naming the command it refused. The owner action and the PM inbox are separate members of
-the plan.
+naming the command it refused. The PM inbox is described [below](#handing-work-to-the-pm-the-pm-inbox);
+the owner action is a separate member of the plan.
 
 The owner-only guards behind `corral automation confirm`, the `corral mode` grants
 (autopilot confirmation, resume and turbo), agent inbox recovery and retry, and
@@ -328,8 +330,33 @@ inherits `CORRAL_PM=1`. `corral ext` and unknown subcommands start external
 `corral-ext-<name>` executables without classification, as the shell could; any `corral`
 command they run inherits the variable and is classified.
 
+## Handing work to the PM: the PM inbox
+
+An assistant that should not or cannot do something itself routes it to the PM. Typical
+cases are a command its shell refused, an owner request it cannot read clearly, or a
+question for the board. It posts an item and tells the owner its ID:
+
+```sh
+corral pm inbox post --kind action_request --subject "Approve T-5" --ref T-5 --action "approve T-5" --quote "T-5 looks good, please land it"
+corral pm inbox show PMI-1
+corral pm inbox withdraw PMI-1 --expected-revision 0 --reason "the owner answered"
+```
+
+From an assistant shell, `post` and `withdraw` are File commands and `list` and `show`
+are reads. Posts are attributed to `assistant:A-<n>` and listed in the session record's
+`inbox_items`. A session withdraws only its own items (`not_author` otherwise).
+`claim` and `resolve` belong to the PM and are refused (`assistant_refused`). The owner
+can post and withdraw from a plain shell too.
+
+When the PM resolves an item, the author session gets the outcome once, as a native agent
+inbox message keyed `pmi:<id>:<revision>` (for example `pmi:PMI-1:2`). It arrives as a
+follow-up turn, like any corral message, never as owner input. If the host is down, the
+message waits in the session's inbox (`.corral/inbox/assistant_A-<n>/`) and is delivered
+once sync finds the host live, for example after `corral pi --resume`. An ended session
+gets no message; the outcome stays in the item. The
+[PM guide](pm.md#the-pm-inbox) has the full state machine and the PM side.
+
 ## Not here yet
 
-The PM inbox and native inbox delivery to assistants, owner-authorized actions, co-work
-landing and task focus (`--task`) are separate members of the
-[reviewed assistant plan](../plans/assistant-sessions.md).
+Owner-authorized actions, co-work landing and task focus (`--task`) are separate members
+of the [reviewed assistant plan](../plans/assistant-sessions.md).
