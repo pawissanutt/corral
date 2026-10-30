@@ -7,5 +7,5 @@ publish = false
 [workspace]
 
 [dependencies]
-corral-core = { path = "../../../crates/corral-core" }
+corral-core = { path = @CORE_PATH@ }
 serde_json = "1"

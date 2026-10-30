@@ -49,7 +49,7 @@ Reproduce offline captures from the repository root (after frozen installs in bo
 `packages/corral-pi` and this directory):
 
 ```sh
-cargo build --locked --manifest-path tools/pi-compare/resolver/Cargo.toml
+python3 tools/pi-compare/resolver/build.py tools/pi-compare/records/resolver-build TARGET_DIR
 bun tools/pi-compare/capture/static.ts RESOLVER_BINARY NEW_STATIC_DIR
 bun tools/pi-compare/capture/auxiliary.ts STATIC_DIR NEW_AUXILIARY_DIR
 bun tools/pi-compare/capture/audit.ts STATIC_DIR SMOKE_DIR NEW_REPORT_JSON
@@ -57,7 +57,8 @@ bun tools/pi-compare/capture/audit.ts STATIC_DIR SMOKE_DIR NEW_REPORT_JSON
 
 `RESOLVER_BINARY` is the executable Cargo built (respect the repo's target-dir setting).
 The standalone research adapter links the production Rust catalog; it has no preset
-matrix of its own. `capture/tsconfig.json` uses the host's compiler conventions because
+matrix of its own. `build.py` generates its manifest in the new ignored build directory,
+so it cannot be mistaken for a repository workspace member by quick-gate discovery. `capture/tsconfig.json` uses the host's compiler conventions because
 these adapters import host source; check it with this directory's `tsc -p capture/tsconfig.json`.
 Normal `bun run typecheck` checks the standalone offline analysis/tests.
 

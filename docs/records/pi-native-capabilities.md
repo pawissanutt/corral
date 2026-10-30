@@ -417,6 +417,12 @@ target directory for `cargo build --manifest-path tools/pi-compare/resolver/Carg
 static captures were discarded from final analysis after normalizing arm-specific temporary
 path spellings; they consumed no inference. The raw smoke was never repeated.
 
+The first quick gate failed before tests because the research adapter's standalone Cargo
+manifest was mistaken for a workspace member. Its manifest is now a template, materialized
+only in an ignored scratch directory by `resolver/build.py`; the original capture binary,
+source controls and live records remain unchanged. This packaging repair changes no host
+behavior or measured cohort and does not authorize further inference.
+
 The attached evidence archive contains final static profiles/config snapshots/source hashes,
 static and auxiliary logs, full smoke controls/admissions/payloads/replies, the authorization
 readback and `report-data.json` with input digests. Reports and raw records remain distinct.
