@@ -689,7 +689,7 @@ mod operating_reauthorization {
     }
 
     #[test]
-    fn refresh_refuses_changed_candidate_or_task_contract() {
+    fn refresh_replaces_a_changed_candidate_but_refuses_a_changed_task_contract() {
         for change_candidate in [false, true] {
             // Given a definitely-unsubmitted identity under an earlier grant.
             let (root, store, original) = prepared();
@@ -723,10 +723,22 @@ mod operating_reauthorization {
                 std::slice::from_ref(&action.task),
             );
             let before = store.authorized_submission(&original.id).unwrap();
-            // When refresh would change preparation rather than only its authority.
-            assert!(authorize(&store, &action).is_err());
-            // Then the original provenance and single slot are retained.
-            assert_eq!(store.authorized_submission(&original.id).unwrap(), before);
+            // When fresh automatic authority re-prepares the action.
+            let refreshed = authorize(&store, &action);
+            let after = store.authorized_submission(&original.id).unwrap();
+            if change_candidate {
+                // Then a stale candidate is replaced in the same slot, the old one archived.
+                assert_eq!(refreshed.unwrap().id, original.id);
+                assert_eq!(after.authorization.action, action);
+                assert_eq!(
+                    after.authorization_history.last().unwrap().authorization,
+                    before.authorization
+                );
+            } else {
+                // Then a changed task contract keeps the original provenance and slot.
+                assert!(refreshed.is_err());
+                assert_eq!(after, before);
+            }
         }
     }
 
