@@ -7,12 +7,17 @@ use corral_core::agent::{
     self, ContainerRef, JOB_DETAIL_MAX_BYTES, JobRecord, JobState, MonitorOn, bounded_text,
 };
 use corral_core::{
-    ReceiptOutcome, ResumeDelivery, ResumeReceipt, Run, Task, WaitObservation, WaitState,
+    ReceiptOutcome, ResumeDelivery, ResumeReceipt, Run, TaskMut, TaskRef, WaitObservation,
+    WaitRecord, WaitState,
 };
 use jiff::Timestamp;
 use serde_json::json;
 
 use crate::Ctx;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "jobs_head_tests.rs"]
+mod head_tests;
 
 /// Settles the pending run wait of one monitor; false when it already left `pending`.
 pub(crate) fn resolve(
@@ -30,6 +35,17 @@ pub(crate) fn resolve(
     else {
         return false;
     };
+    resolve_record(record, &run.id, wait, outcome, detail, now)
+}
+
+fn resolve_record(
+    record: &mut WaitRecord,
+    run: &str,
+    wait: &str,
+    outcome: ReceiptOutcome,
+    detail: &str,
+    now: Timestamp,
+) -> bool {
     if record.observation.state != WaitState::Pending || record.receipt.is_some() {
         return false;
     }
@@ -47,7 +63,7 @@ pub(crate) fn resolve(
     record.receipt = Some(ResumeReceipt {
         version: 1,
         id: format!("{wait}-job"),
-        run: run.id.clone(),
+        run: run.to_owned(),
         outcome,
         delivery: ResumeDelivery::Acknowledged,
         observed_at: now,
@@ -83,6 +99,61 @@ pub(crate) fn resolve_ended(
     settled
 }
 
+fn resolve_ref<T: TaskMut + ?Sized>(
+    task: &mut T,
+    run: &str,
+    wait: &str,
+    outcome: ReceiptOutcome,
+    detail: &str,
+    now: Timestamp,
+) -> Result<bool> {
+    let Some(record) = task.wait(run, wait)? else {
+        return Ok(false);
+    };
+    if record.observation.state != WaitState::Pending || record.receipt.is_some() {
+        return Ok(false);
+    }
+    let mut changed = false;
+    task.edit_run_wait(run, wait, |record| {
+        changed = resolve_record(record, run, wait, outcome, detail, now);
+        Ok(())
+    })?;
+    Ok(changed)
+}
+
+pub(crate) fn resolve_ended_ref<T: TaskMut + ?Sized>(
+    task: &mut T,
+    run: &str,
+    job: &JobRecord,
+    exit: ReceiptOutcome,
+    now: Timestamp,
+) -> Result<usize> {
+    let end = job.detail.clone().unwrap_or_else(|| ended_detail(job));
+    let mut settled = 0;
+    for monitor in &job.monitors {
+        let (outcome, detail) = match monitor.on {
+            MonitorOn::Exit => (exit, format!("job {} {end}", job.id)),
+            MonitorOn::Line => (
+                if exit == ReceiptOutcome::Ready {
+                    ReceiptOutcome::Failed
+                } else {
+                    exit
+                },
+                format!("job {} {end} before a line matched", job.id),
+            ),
+        };
+        settled += usize::from(resolve_ref(
+            task,
+            run,
+            &monitor.wait,
+            outcome,
+            &detail,
+            now,
+        )?);
+    }
+    Ok(settled)
+}
+
 pub(crate) fn ended_detail(job: &JobRecord) -> String {
     match (job.exit_code, job.signal.as_deref()) {
         (Some(code), _) => format!("exited with code {code}"),
@@ -92,16 +163,25 @@ pub(crate) fn ended_detail(job: &JobRecord) -> String {
 }
 
 /// A job its host no longer owns: its run ended, or its generation was fenced or replaced.
-fn orphaned(task: &Task, container: &ContainerRef, job: &JobRecord) -> bool {
-    let Some(state) = agent::container_state(task, container) else {
-        return false;
+fn orphaned<T: TaskRef + ?Sized>(
+    task: &T,
+    container: &ContainerRef,
+    job: &JobRecord,
+) -> Result<bool> {
+    let Some(host) = task.agent_head(container)? else {
+        return Ok(false);
     };
-    job.needs_reap()
-        && (agent::container_closure(task, container).is_some()
-            || job.generation != state.binding.generation
-            || state
-                .generation(job.generation)
-                .is_none_or(|g| g.fenced.is_some()))
+    if !job.needs_reap() {
+        return Ok(false);
+    }
+    if agent::container_closure_ref(task, container)?.is_some()
+        || job.generation != host.binding.generation
+    {
+        return Ok(true);
+    }
+    Ok(task
+        .agent_generation(container, job.generation)?
+        .is_none_or(|generation| generation.fenced.is_some()))
 }
 
 /// The job's process group as seen now. Ownership is anchored on the recorded leader: its pid
@@ -237,49 +317,37 @@ fn kill_group(pid: u32) -> Result<()> {
 
 /// Reaps the orphaned jobs of every worker container of `task_id`; returns how many it settled.
 pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
-    let task = ctx.store.get(task_id)?;
+    let task = ctx.store.head(task_id)?;
     let mut reaped = Vec::new();
-    for run in &task.runs {
-        let container = ContainerRef::Worker {
-            task: task.id.clone(),
-            run: run.id.clone(),
-        };
-        let Some(state) = agent::container_state(&task, &container) else {
+    for container in task.unfinished_native_containers()? {
+        let ContainerRef::Worker { run, .. } = &container else {
             continue;
         };
-        for job in state.jobs.iter().filter(|j| orphaned(&task, &container, j)) {
-            let (state, detail, clear) = reap_one(job)?;
-            reaped.push((
-                run.id.clone(),
-                job.id.clone(),
-                job.state,
-                state,
-                detail,
-                clear,
-            ));
+        for job in task.pending_agent_jobs(&container)? {
+            if !orphaned(&task, &container, &job)? {
+                continue;
+            }
+            let (state, detail, clear) = reap_one(&job)?;
+            reaped.push((run.clone(), job.id.clone(), job.state, state, detail, clear));
         }
     }
     if reaped.is_empty() {
         return Ok(0);
     }
     let mut ended = 0;
-    ctx.store.try_update(task_id, |task| {
+    ctx.store.try_update_head(task_id, |task| {
         let mut changed = false;
         for (run_id, job_id, before, after, detail, clear) in &reaped {
             let container = ContainerRef::Worker {
                 task: task.id.clone(),
                 run: run_id.clone(),
             };
-            let Some(state) = agent::container_state_mut(task, &container) else {
+            let Some(mut job) = task.agent_job(&container, job_id)? else {
                 continue;
             };
-            let Some(job) = state
-                .jobs
-                .iter_mut()
-                .find(|j| &j.id == job_id && j.state == *before && j.needs_reap())
-            else {
+            if job.state != *before || !job.needs_reap() {
                 continue;
-            };
+            }
             job.state = *after;
             job.group_clear = *clear;
             job.swept = true;
@@ -287,12 +355,10 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
             if before.live() {
                 job.ended_at = Some(now);
             }
-            let job = job.clone();
-            if before.live()
-                && let Some(run) = task.runs.iter_mut().find(|r| &r.id == run_id)
-            {
-                resolve_ended(run, &job, ReceiptOutcome::Lost, now);
+            if before.live() {
+                resolve_ended_ref(task, run_id, &job, ReceiptOutcome::Lost, now)?;
             }
+            task.put_agent_record(&container, agent::NativeRecord::Job(job))?;
             ended += 1;
             changed = true;
         }
