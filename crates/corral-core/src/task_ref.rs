@@ -408,6 +408,8 @@ pub trait TaskRef: TaskFieldsRef {
     fn aggregate_review(&self, attempt: &str, id: &str) -> Result<Option<AggregateReview>>;
     fn wait(&self, run: &str, id: &str) -> Result<Option<WaitRecord>>;
     fn decision(&self, run: &str, id: &str) -> Result<Option<DecisionRecord>>;
+    /// First matching decision in run/child registration order, including closed history.
+    fn decision_by_id(&self, id: &str) -> Result<Option<DecisionRecord>>;
     fn receipt(&self, run: &str, id: &str) -> Result<Option<ResumeReceipt>>;
     fn checkpoint_by_artifact(&self, run: &str, artifact: &str) -> Result<Option<CheckpointMeta>>;
     fn effect_applied(&self, recipient: &Recipient, seq: u64) -> Result<bool>;
@@ -473,6 +475,8 @@ pub trait TaskRef: TaskFieldsRef {
     ) -> Result<Option<RequestReceipt>>;
     /// The native question `key` of `container`.
     fn agent_question(&self, container: &ContainerRef, key: &str) -> Result<Option<AgentQuestion>>;
+    /// A globally named task question without enumerating the task's containers.
+    fn question_by_key(&self, key: &str) -> Result<Option<AgentQuestion>>;
     /// The questions of `container` still waiting for an answer.
     fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>>;
     /// The wake subscription of request `request_id` of `container`.
