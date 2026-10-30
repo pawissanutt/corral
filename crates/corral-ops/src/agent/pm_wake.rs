@@ -37,7 +37,11 @@ pub fn repost(ctx: &Ctx) -> Result<usize> {
     let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
     let mut posted = 0;
     for task in ctx.store.list()? {
-        if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+        if !super::hooks::pm::contains(
+            &ctx.store,
+            &pm.state.binding.project,
+            task.project.as_deref(),
+        )? {
             continue;
         }
         for view in crate::questions::views(&task).into_iter().filter(|v| {
@@ -73,7 +77,11 @@ fn post_one(
     };
     let task = ctx.store.get(&view.task)?;
     if !same_pm(pm, &current_pm)
-        || task.project.as_deref() != Some(current_pm.state.binding.project.as_str())
+        || !super::hooks::pm::contains(
+            &ctx.store,
+            &current_pm.state.binding.project,
+            task.project.as_deref(),
+        )?
         || !crate::questions::views(&task).iter().any(|fresh| {
             fresh.pending
                 && fresh.question.key == view.question.key
@@ -85,7 +93,13 @@ fn post_one(
     }
     // The question's outbox was committed before this post. A PM/project change here may
     // leave a stale queued wake, which ScopedPm refuses; it must never ack a new transition.
-    let message = publish(inbox, &view.question, &current_pm.state.binding.project)?;
+    let message = publish(
+        inbox,
+        &view.question,
+        task.project
+            .as_deref()
+            .context("question task has no project")?,
+    )?;
     acknowledge(ctx, pm, view, &message)
 }
 
@@ -100,7 +114,11 @@ fn acknowledge(
             return Ok(false);
         };
         if !same_pm(pm, &current_pm)
-            || task.project.as_deref() != Some(current_pm.state.binding.project.as_str())
+            || !super::hooks::pm::contains(
+                &ctx.store,
+                &current_pm.state.binding.project,
+                task.project.as_deref(),
+            )?
         {
             return Ok(false);
         }
@@ -183,14 +201,16 @@ fn in_scope(ctx: &Ctx, message: &Message, project: &str) -> Result<bool> {
         .subject
         .as_ref()
         .context("question wake has no scope")?;
-    if subject["project"] != project {
+    if !super::hooks::pm::contains(&ctx.store, project, subject["project"].as_str())? {
         return Ok(false);
     }
     let key = subject["question"]
         .as_str()
         .context("question wake has no key")?;
     let parsed = crate::questions::QuestionKey::parse(key)?;
-    Ok(ctx.store.get(parsed.task())?.project.as_deref() == Some(project))
+    let task = ctx.store.get(parsed.task())?;
+    Ok(task.project.as_deref() == subject["project"].as_str()
+        && super::hooks::pm::contains(&ctx.store, project, task.project.as_deref())?)
 }
 
 impl DeliveryAdapter for ScopedPm {

@@ -195,6 +195,8 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
         }
         (AgentRole::Assistant, None) => return Err(bad("identity.assistant is required")),
         (_, Some(_)) => return Err(bad("identity.assistant is for the assistant role only")),
+        // Workspace PMs carry no project; older project-bound sessions remain valid.
+        (AgentRole::Pm, None) if identity.project.is_empty() => {}
         (_, None) => token("identity.project", &identity.project, 128, "._-")?,
     }
     token("identity.session_id", &identity.session_id, 128, "._:-")?;

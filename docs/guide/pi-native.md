@@ -141,13 +141,14 @@ Under standard and full every role loads, as text only:
 - the `AGENTS.md`/`CLAUDE.md` context files from the working directory up to the corral
   workspace root, in that order, where a linked worktree's file replaces its main checkout's.
 
-Workers and reviewers read project text from their worktree. The PM runs at the workspace root, so
-corral also passes it its selected project's checkout, and the PM's project context, skills and
-templates come from there.
+Workers and reviewers read project text from their worktree. The PM loads guidance from the
+workspace root only, including its AGENTS.md chain, not from any project's checkout. Project
+instructions remain reachable by reading files as needed; they are not preloaded.
 
 Project files (context files, `.agents/skills`, `.agents/prompts`) load only when the task's
 project is in `trusted_projects`; the decision is recorded in the generation's snapshot as
-`project_text`. Home directories do not depend on it. Pi's own discovery stays off: nothing is
+`project_text`. The workspace PM records trust for the workspace root's own guidance instead;
+this does not trust or preload its project checkouts. Home directories do not depend on it. Pi's own discovery stays off: nothing is
 read from `~/.pi` or a project's `.pi` (settings, extensions, MCP, skills, prompts), and no
 ambient extension, MCP server or theme loads. The worker keeps its packaged corral-worker skill in every
 preset; a home or repository skill with the same name is skipped (the pane shows the conflict). `corral agent state` lists the selected paths under `guidance`.
@@ -1163,9 +1164,12 @@ Blocked at once with `turn_ended_without_report`, as the idle watchdog would aft
 ## The PM role
 
 OmO remains the default PM; explicitly select a `pi-native` profile as `pm.agent` to opt in.
-Opening a Pi PM requires an approved operating scope selecting exactly one project. Its
-`AgentPm` binding is separate from task runs, with null task and run, one current PM and one
-authorized project. Mutations check that binding and the target project again at commit.
+Opening a Pi PM requires an approved operating scope selecting one or more projects. Its
+`AgentPm` binding is workspace-level, separate from task runs, with null task and run and an
+empty project identity. Mutations check that binding and the current approved project set again
+at commit. Adding or dropping approved projects does not change the PM session on resume.
+An empty or unapproved scope refuses with the `corral mode autopilot --project <project>`
+preview command; review the preview and repeat it with `--confirm <digest>`.
 
 The PM gets typed read-only tools for brief, next, show, list, search, route, artifacts and
 lessons, plus receipted question answer, escalate and cancel, reply, comment and capture.
@@ -1183,8 +1187,8 @@ the same logical message instead of posting another. The Pi inbox adapter then s
 to the host, starting an idle turn. Enqueueing alone is not delivery, and observation still
 requires the host's `corral_delivery` entry.
 
-PM replacement and project changes are rechecked before publication and at the delivery
-boundary, so an old project's wake is never sent to a new project's PM. OmO question push
+PM replacement and the current approved project set are rechecked before publication and at the
+delivery boundary, so wakes for projects removed from scope are not delivered. OmO question push
 keeps its existing opt-in configuration; without triage, waiting questions still reach
 Blocked after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
 
@@ -1245,7 +1249,7 @@ in [assistant sessions](assistants.md).
 **Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
 herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
 the same checks as `corral pm` and `corral agent resume --pm` (a pi-native profile, an
-approved scope with exactly one project, the asset installation, the provider's login); the
+approved scope with one or more projects, the asset installation, the provider's login); the
 flags replace the profile's model, provider (`openai-codex` or `anthropic`) and effort for this
 launch. It then opens the PM's next generation in this pane, writes the one-shot bootstrap and
 launches it in-process: the same consume, check and exec `corral agent launch` performs, so the
@@ -1404,7 +1408,7 @@ hold the next generation's nudges or provider retries.
 
 **`corral agent resume <task> [--run <id>] [--review <id>] [--replace]`** starts the next host
 generation of an open run or review child in the same pane. `corral agent resume --pm`
-resumes the PM's host in its saved pane, retaining its project scope and durable records.
+resumes the PM's host in its saved pane, retaining its workspace identity and durable records.
 
 1. It refuses a closed run or review child (`container_closed`) and a pane that is gone
    (`pane_gone`: retry or discard the run; a review child whose pane is gone is closed by the

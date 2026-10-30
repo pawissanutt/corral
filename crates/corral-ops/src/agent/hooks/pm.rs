@@ -30,36 +30,54 @@ pub fn preflight(ctx: &Ctx, bootstrap: Option<&ResolvedProfile>) -> Result<()> {
     };
     super::preflight::check(ctx, AgentRole::Pm, &resolved)?;
     if is_pi_native(&resolved.harness) {
-        ensure!(resolved.model.is_some(), "a Pi-native PM needs a model");
+        ensure!(
+            resolved.model.is_some(),
+            "a Pi-native PM needs a model; run `corral pi --pm --model <model>`"
+        );
         project(ctx)?;
     }
     Ok(())
 }
 
-/// Only an approved, unambiguous operating scope selects the PM's project.
-pub fn project(ctx: &Ctx) -> Result<String> {
-    let config = ctx.store.config_layers()?.config()?;
-    let effective = ctx.store.effective_operating_policy()?;
+/// Stable workspace identity, deliberately independent of the mutable approved scope.
+/// Empty project is reserved for workspace roles, never a configured project name.
+/// Legacy project-bound PM records remain readable until their next launch.
+pub(crate) const WORKSPACE: &str = "";
+
+pub(crate) fn projects(store: &corral_core::Store) -> Result<std::collections::BTreeSet<String>> {
+    let config = store.config_layers()?.config()?;
+    let effective = store.effective_operating_policy()?;
     ensure!(
         effective.authorization.is_some(),
-        "pm_scope_unapproved: a Pi-native PM requires an approved operating scope"
+        "pm_scope_unapproved: approve a scope with `corral mode autopilot --project <project>`; review the preview and repeat with --confirm <digest>"
     );
     let scope = &config.automation.scope;
-    let projects: std::collections::BTreeSet<_> = scope
+    Ok(scope
         .projects
         .keys()
         .chain(scope.tasks.values().map(|task| &task.project))
-        .collect();
-    ensure!(
-        projects.len() == 1,
-        "pm_scope_ambiguous: a Pi-native PM requires exactly one approved project, found {}",
-        projects.len()
-    );
-    projects
-        .into_iter()
-        .next()
         .cloned()
-        .context("no approved PM project")
+        .collect())
+}
+
+pub(crate) fn contains(
+    store: &corral_core::Store,
+    binding: &str,
+    project: Option<&str>,
+) -> Result<bool> {
+    if binding != WORKSPACE {
+        return Ok(project == Some(binding));
+    }
+    Ok(project.is_some_and(|project| projects(store).is_ok_and(|set| set.contains(project))))
+}
+
+/// Validate approval without selecting one project's identity or guidance.
+pub fn project(ctx: &Ctx) -> Result<String> {
+    ensure!(
+        !projects(&ctx.store)?.is_empty(),
+        "pm_scope_empty: add and approve a project with `corral mode autopilot --project <project>`; review the preview and repeat with --confirm <digest>"
+    );
+    Ok(WORKSPACE.into())
 }
 
 /// What `corral pi` may change of the configured PM profile for one launch.
@@ -169,7 +187,12 @@ pub fn prepared(
 }
 
 #[cfg(all(test, target_os = "linux"))]
+#[path = "pm_scope_tests.rs"]
+mod scope_tests;
+
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) mod tests {
+    use super::WORKSPACE;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     use std::sync::mpsc;
@@ -330,58 +353,87 @@ case "$1 $2" in"#;
     }
 
     #[test]
-    fn resume_refuses_a_different_approved_project_without_changing_the_binding() {
+    fn resume_changed_approved_scope_keeps_the_pm_session() {
         use crate::agent::bridge::fixture::HostProc;
         use corral_core::agent::{ContainerRef, pm_state};
-        // Given a dead PM originally bound to corral and a newly approved other scope.
-        let mut fx = fixture();
-        let mut host = HostProc::spawn(true);
-        fx.bind(
-            &crate::agent::BindTarget::Pm {
-                project: "corral".into(),
-            },
-            "pm-pane",
-            &host,
-        );
-        host.kill();
-        fx.ctx.store.config.projects.insert(
-            "other".into(),
-            serde_json::from_value(json!({"path":"app"})).unwrap(),
-        );
-        fx.ctx.store.save_config().unwrap();
-        let task = fx
-            .ctx
-            .store
-            .create(
-                "other",
-                Some("other"),
-                corral_core::Status::Ready,
-                "fixture",
+        for initial_project in [WORKSPACE, "corral"] {
+            // Both workspace and legacy bindings resume after dropping corral and adding other.
+            let mut fx = fixture();
+            let mut host = HostProc::spawn(true);
+            let bound = fx.bind(
+                &crate::agent::BindTarget::Pm {
+                    project: initial_project.into(),
+                },
+                "pm-pane",
+                &host,
+            );
+            crate::agent::bridge::fixture::write_session(
+                &bound,
+                &crate::agent::bridge::fixture::session(&[], &[]),
+            );
+            host.kill();
+            fx.ctx.store.config.projects.insert(
+                "other".into(),
+                serde_json::from_value(json!({"path":"app"})).unwrap(),
+            );
+            fx.ctx.store.save_config().unwrap();
+            let task = fx
+                .ctx
+                .store
+                .create(
+                    "other",
+                    Some("other"),
+                    corral_core::Status::Ready,
+                    "fixture",
+                )
+                .unwrap();
+            let selection = OperatingSelection {
+                tasks: [task.id].into(),
+                ..Default::default()
+            };
+            let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
+            fx.ctx
+                .store
+                .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+                .unwrap();
+            // When resume attempts to use the changed scope.
+            let outcome = crate::agent::recovery::resume_container(
+                &f::ctx_at(fx.root()),
+                &ContainerRef::Pm,
+                false,
             )
             .unwrap();
-        let selection = OperatingSelection {
-            tasks: [task.id].into(),
-            ..Default::default()
-        };
-        let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
-        fx.ctx
-            .store
-            .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
+            assert_eq!(outcome["generation"], 2);
+            let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+            assert_eq!(pm.state.binding.project, WORKSPACE);
+            assert_eq!(pm.state.binding.generation, 2);
+            let calls = fx.calls("pane run");
+            assert_eq!(calls.len(), 1);
+            let bootstrap: crate::agent::launch::Bootstrap = serde_json::from_slice(
+                &std::fs::read(
+                    crate::agent::launch::generation_dir(
+                        &fx.ctx.store,
+                        &corral_core::inbox::Recipient::Pm,
+                        2,
+                    )
+                    .unwrap()
+                    .join("bootstrap.json"),
+                )
+                .unwrap(),
+            )
             .unwrap();
-        // When resume attempts to use the changed scope.
-        let error = crate::agent::recovery::resume_container(
-            &f::ctx_at(fx.root()),
-            &ContainerRef::Pm,
-            false,
-        )
-        .unwrap_err();
-        // Then only an explicit new launch may change project; recovery leaves generation 1 intact.
-        assert!(error.to_string().starts_with("out_of_scope"), "{error}");
-        let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
-        assert_eq!(pm.state.binding.project, "corral");
-        assert_eq!(pm.state.binding.generation, 1);
-        assert!(pm.state.generation(1).unwrap().fenced.is_none());
-        assert!(fx.calls("pane run").is_empty());
+            assert_eq!(
+                bootstrap.resume_session,
+                Some(
+                    bound
+                        .sessions
+                        .join(format!("{}.jsonl", bound.identity.session_id))
+                )
+            );
+            assert_eq!(bootstrap.project_dir.as_deref(), Some(fx.root()));
+            assert!(bootstrap.project.is_empty());
+            assert_eq!(bootstrap.capabilities.unwrap().project_text, Some(true));
+        }
     }
 
     #[test]

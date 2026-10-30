@@ -414,7 +414,7 @@ pub fn prepare_bootstrap(
         ContainerRef::Pm | ContainerRef::Assistant { .. } => (None, None, None),
     };
     let project_dir = match target {
-        BindTarget::Pm { .. } => ctx.store.project_path(&project).ok(),
+        BindTarget::Pm { .. } => Some(ctx.store.root().to_path_buf()),
         _ => None,
     };
     let bootstrap = Bootstrap {

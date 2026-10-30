@@ -235,7 +235,8 @@ export function parseLaunchMessage(text: string): HostConfig {
   return {
     identity: {
       store: field(message, "store", TOKEN, 64),
-      project: role === "assistant" ? "" : field(message, "project", TOKEN, 128),
+      project: role === "assistant" || (role === "pm" && message.project === "")
+        ? "" : field(message, "project", TOKEN, 128),
       role: role as Role,
       task: optional(message, "task", TOKEN),
       run: optional(message, "run", TOKEN),

@@ -707,7 +707,11 @@ fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRespon
             Rejection::new(RejectCode::ContainerNotFound, "no Pi-native PM is bound")
         })?;
         admission::recheck_pm(&pm, generation)?;
-        if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+        if !super::hooks::pm::contains(
+            &ctx.store,
+            &pm.state.binding.project,
+            task.project.as_deref(),
+        )? {
             return Err(Rejection::new(
                 RejectCode::OutOfScope,
                 format!("{} lies outside the PM's project scope", task.id),

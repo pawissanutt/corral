@@ -234,7 +234,11 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
                 }
             }
             admission::recheck_pm(&pm, origin.binding.generation)?;
-            if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+            if !super::hooks::pm::contains(
+                store,
+                &pm.state.binding.project,
+                task.project.as_deref(),
+            )? {
                 return Err(reject(
                     RejectCode::OutOfScope,
                     "the task is outside the PM's project scope",
