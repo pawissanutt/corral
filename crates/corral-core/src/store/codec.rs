@@ -344,6 +344,9 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
         rows.put(super::head_keyed::finding_row(key, &finding)?);
     }
     super::cleanup_panes::derive_ledger(&mut rows);
+    if let Some(row) = super::work_index::full(task) {
+        rows.put(row);
+    }
     Ok(Split {
         fields: task_fields(task)?,
         doc: head_doc(task)?,

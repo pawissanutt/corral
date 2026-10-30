@@ -22,6 +22,10 @@ impl TaskHeadMut {
         self.sync()?;
         let mut writes: BTreeMap<(TaskPart, String), Option<HistoryRow>> =
             std::mem::take(&mut self.rows);
+        let work = super::work_index::head(&self.head);
+        if work != super::work_index::head(&self.base) {
+            writes.insert((TaskPart::WorkIndex, super::work_index::KEY.into()), work);
+        }
         // A queued row of a demoted container is an edit made after its demotion, so it wins.
         for row in self.demoted_rows()? {
             writes

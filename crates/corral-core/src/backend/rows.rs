@@ -137,6 +137,8 @@ pub enum TaskPart {
     /// reviewer panes, a plan reviewer's pane; never the PM's), kept after its record is
     /// replaced. `open` until cleanup confirms the pane closed or absent.
     CleanupPane,
+    /// One payload-free derived task marker for owed attention and held-slot inputs.
+    WorkIndex,
 }
 
 /// One history or child row. `current` marks the row a head carries; `open` marks a row that

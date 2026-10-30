@@ -52,6 +52,7 @@ mod submit;
 mod task_mut_task;
 mod task_ref_head;
 pub(crate) mod task_ref_task;
+mod work_index;
 mod write;
 pub use cleanup_panes::CleanupPane;
 pub use codec::{spec_revision, task_panes};
