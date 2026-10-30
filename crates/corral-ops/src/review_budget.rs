@@ -644,6 +644,14 @@ pub(crate) fn reconcile(
                             serde_json::json!({"run": run.id, "kind": kind, "reason": reason}),
                         )?;
                     } else if released.is_some() {
+                        if kind == Kind::Reviewer
+                            && let Some(child) = run.review_runs.last()
+                        {
+                            let attempt = format!("{}-{}", run.id, child.id);
+                            crate::launch_exit::record_missing(&crate::launch_exit::receipt(
+                                ctx, &task.id, &attempt,
+                            ))?;
+                        }
                         ctx.store.log_event(
                             Some(&task.id),
                             "review_released",

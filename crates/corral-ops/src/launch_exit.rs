@@ -107,6 +107,28 @@ pub(crate) fn exited(receipt: &Path) -> bool {
     receipt.is_file()
 }
 
+/// Record a disappeared pane without inventing an exit status or overwriting a real receipt.
+pub(crate) fn record_missing(receipt: &Path) -> Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(
+        receipt
+            .parent()
+            .context("launch receipt has no directory")?,
+    )
+    .context("creating launch receipt directory")?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(receipt)
+    {
+        Ok(mut file) => file
+            .write_all(b"unknown: pane disappeared\n")
+            .with_context(|| format!("writing {}", receipt.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("creating {}", receipt.display())),
+    }
+}
+
 /// Why the attempt ended: the shell's last lines carry the error.
 pub(crate) fn reason(ctx: &Ctx, what: &str, pane: Option<&str>) -> String {
     let capture = match pane.map(|p| ctx.herdr.pane_read_if_present(p, 80)) {
@@ -144,7 +166,12 @@ pub(crate) fn record(ctx: &Ctx, task: &str, run: &str, title: &str, reason: &str
 
 /// End a pending plan-review attempt whose reviewer returned to its shell, exactly as a failed
 /// launch does: an `escalate` verdict carrying the error, a failed plan run, and Needs me.
-pub(crate) fn plan_review(ctx: &Ctx, task: &Task) -> Result<Option<crate::Change>> {
+pub(crate) fn plan_review(
+    ctx: &Ctx,
+    task: &Task,
+    snapshot: crate::pane_liveness::Snapshot<'_>,
+    now: Timestamp,
+) -> Result<Option<crate::Change>> {
     let Some(plan) = task.plans.last() else {
         return Ok(None);
     };
@@ -156,11 +183,35 @@ pub(crate) fn plan_review(ctx: &Ctx, task: &Task) -> Result<Option<crate::Change
         return Ok(None);
     };
     let attempt = format!("{}-{}", plan.id, review.id);
-    if !exited(&receipt(ctx, &task.id, &attempt)) {
+    let receipt = receipt(ctx, &task.id, &attempt);
+    let pane = review.herdr.as_ref().map(|h| h.pane_id.as_str());
+    let returned = exited(&receipt);
+    let gone = if returned || snapshot.panes.is_empty() || pane.is_none() {
+        false
+    } else {
+        crate::pane_liveness::gone(
+            ctx,
+            crate::pane_liveness::Sample {
+                task,
+                pane,
+                started: review.at,
+                seen: false,
+                present: pane.is_some_and(|id| snapshot.panes.contains_key(id)),
+                at: now,
+                ticket: snapshot.ticket,
+                count_miss: true,
+            },
+        )?
+    };
+    if !returned && !gone {
         return Ok(None);
     }
-    let pane = review.herdr.as_ref().map(|h| h.pane_id.as_str());
-    let reason = reason(ctx, "The plan reviewer", pane);
+    let reason = if gone {
+        "The plan reviewer pane disappeared before reporting; its exit status is unknown."
+            .to_string()
+    } else {
+        reason(ctx, "The plan reviewer", pane)
+    };
     let saved = ctx.store.try_update(&task.id, |t| {
         if !crate::session_scope::owns_task(ctx, t)? {
             return Ok(false);
@@ -168,13 +219,14 @@ pub(crate) fn plan_review(ctx: &Ctx, task: &Task) -> Result<Option<crate::Change
         let Some(p) = t.plans.last_mut().filter(|p| p.id == plan.id) else {
             return Ok(false);
         };
-        let Some(r) = p
-            .reviews
-            .last_mut()
-            .filter(|r| r.id == review.id && r.verdict.is_none())
-        else {
+        let Some(r) = p.reviews.last_mut().filter(|r| {
+            r.id == review.id && r.verdict.is_none() && r.at == review.at && r.herdr == review.herdr
+        }) else {
             return Ok(false);
         };
+        if gone {
+            record_missing(&receipt)?;
+        }
         r.verdict = Some(Verdict::Escalate);
         r.notes = Some(format!("Review launch failed: {reason}"));
         r.pending_reply = None;
