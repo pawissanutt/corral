@@ -370,3 +370,99 @@ fn live_pm_keeps_its_pending_aggregate_review() {
     assert_eq!(stored.id, review.id);
     assert!(stored.pending(), "{stored:?}");
 }
+
+const BEDROCK_CLAUDE: &str = "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+/// Members implemented on Anthropic directly and on Bedrock Claude, with Anthropic and
+/// OpenAI reviewer profiles mapped by family.
+fn mixed_transport(reviewer: &str, cross_family: bool) -> Fixture {
+    let f = Fixture::new(Delivery::Main, &GATE);
+    let runs = [
+        ("anthropic", "anthropic/claude-fixture"),
+        ("amazon-bedrock", BEDROCK_CLAUDE),
+    ];
+    for (member, (vendor, model)) in f.members.iter().zip(runs) {
+        f.ctx
+            .store
+            .update(member, |task| {
+                let run = task.runs.last_mut().unwrap();
+                run.vendor = Some(vendor.into());
+                run.model = Some(model.into());
+                Ok(())
+            })
+            .unwrap();
+    }
+    let mut store = f.ctx.store.reopen().unwrap();
+    store.config.harnesses.insert(
+        "h".into(),
+        corral_core::Harness {
+            command: "true {model_args}".into(),
+            flags: Some("claude".into()),
+            model_flag: None,
+            effort_flag: None,
+            efforts: vec![],
+            prompt: None,
+        },
+    );
+    for (name, vendor, model) in [
+        ("opus", "anthropic", "anthropic/claude-opus-fixture"),
+        ("sol", "openai", "openai/sol-fixture"),
+    ] {
+        store.config.profiles.insert(
+            name.into(),
+            corral_core::Profile {
+                metadata: None,
+                harness: "h".into(),
+                model: Some(model.into()),
+                vendor: Some(vendor.into()),
+                effort: None,
+                args: vec![],
+                escalate_to: None,
+            },
+        );
+    }
+    store.config.routing.reviewer_by_vendor = [
+        ("anthropic".into(), "opus".into()),
+        ("openai".into(), "sol".into()),
+    ]
+    .into();
+    store.config.review.reviewer = Some(reviewer.into());
+    store.config.review.require_cross_family = Some(cross_family);
+    store.save_config().unwrap();
+    f
+}
+
+#[test]
+fn mixed_transport_members_are_one_family_for_cross_vendor_aggregate_review() {
+    // Given members that ran on Anthropic and on Bedrock Claude under cross-vendor review.
+    let f = mixed_transport("cross-vendor", false);
+    let attempt = f.passing();
+    // When the aggregate reviewer launches, it is the openai-family reviewer.
+    let review = f.launch(&attempt.id).unwrap();
+    assert_eq!(review.reviewer, "sol");
+    f.verdict(
+        &attempt.id,
+        &review.id,
+        Verdict::Approve,
+        "combined scenario holds",
+    )
+    .unwrap();
+    // Then its approval satisfies acceptance.
+    plan_accept(&f.ctx, &f.plan, &attempt.id, false).unwrap();
+    assert_eq!(f.plan().status, Status::Done);
+}
+
+#[test]
+fn an_anthropic_aggregate_reviewer_is_refused_for_bedrock_claude_members_only_under_policy() {
+    // Given an Anthropic-family pinned reviewer for Anthropic and Bedrock Claude members.
+    let f = mixed_transport("opus", true);
+    let attempt = f.passing();
+    // When required, the shared anthropic family refuses the launch.
+    let error = message(f.launch(&attempt.id));
+    assert!(error.contains("cross-family review is required"), "{error}");
+    assert!(error.contains("'anthropic'"), "{error}");
+    // With the policy off, the same reviewer launches as before.
+    let f = mixed_transport("opus", false);
+    let attempt = f.passing();
+    assert_eq!(f.launch(&attempt.id).unwrap().reviewer, "opus");
+}

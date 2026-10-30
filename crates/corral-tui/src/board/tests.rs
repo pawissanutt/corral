@@ -105,6 +105,7 @@ pub(crate) fn run(id: &str, agent: &str) -> Run {
         gate: None,
         idle_since: None,
         idle_no_report: false,
+        changes_round: None,
         review: None,
         review_runs: Vec::new(),
         usage: None,
@@ -118,6 +119,7 @@ pub(crate) fn run(id: &str, agent: &str) -> Run {
         gate_rules: corral_core::GateRules::Legacy,
         promotion_origin: None,
         agent_host: None,
+        session: None,
     }
 }
 
@@ -137,7 +139,7 @@ fn artifact(kind: ArtifactKind, title: &str) -> Artifact {
     }
 }
 
-/// T-001 idea, T-002 backlog, T-003 ready, T-004 running, T-005 needs me, T-006 review, T-007 done.
+/// T-001 idea, T-002 backlog, T-003 ready, T-004 running, T-005 blocked, T-006 review, T-007 done.
 pub(crate) fn seeded() -> Fixture {
     let n = SEQ.fetch_add(1, Ordering::SeqCst);
     let root = std::env::temp_dir().join(format!("corral-tui-test-{}-{n}", std::process::id()));
@@ -282,9 +284,9 @@ fn board_renders_columns_cards_and_meta() {
     assert!(text.contains("╭ Backlog ─"), "focused column title\n{text}");
     assert!(
         text.contains("2/3 ╮"),
-        "Running and Needs me occupy shared slots\n{text}"
+        "Running and Blocked runs occupy shared slots\n{text}"
     );
-    for title in ["Backlog", "Ready", "Running", "Needs me", "Review", "Done"] {
+    for title in ["Backlog", "Ready", "Running", "Blocked", "Review", "Done"] {
         assert!(text.contains(title), "missing column {title}\n{text}");
     }
     for id in [
@@ -310,7 +312,8 @@ fn board_renders_columns_cards_and_meta() {
 
 #[test]
 fn board_shows_idle_no_report_badge_on_running_card() {
-    let fx = seeded();
+    let mut fx = seeded();
+    fx.ctx.store.config.ui.columns = vec![Status::Running, Status::NeedsMe];
     let mut b = fx.board();
     assert!(!render(&mut b, &fx.ctx).contains("idle, no report"));
     fx.ctx
@@ -387,7 +390,8 @@ fn board_shows_undelivered_reply_on_running_needs_me_and_review_cards() {
 
 #[test]
 fn board_stuck_badge_replaces_idle_badge() {
-    let fx = seeded();
+    let mut fx = seeded();
+    fx.ctx.store.config.ui.columns = vec![Status::Running, Status::NeedsMe];
     fx.ctx
         .store
         .update("T-004", |t| {
@@ -434,7 +438,7 @@ fn board_navigation_and_open_actions() {
         "running is not a manual move"
     );
     b.on_key(code(KeyCode::Right), ctx);
-    b.on_key(key('l'), ctx);
+    b.on_key(key('j'), ctx);
     assert_eq!(
         b.on_key(code(KeyCode::Enter), ctx),
         Action::OpenDetail("T-006".into())
@@ -563,7 +567,7 @@ fn board_review_cards_show_each_autopilot_sub_state_badge() {
     for (stage, reason, rounds, badge) in cases {
         let line = review_badge(stage, reason, rounds);
         assert!(
-            line.contains(&format!("  {badge}")),
+            line.contains(badge),
             "{stage:?}: expected {badge:?} under the meta line, got {line:?}"
         );
     }
@@ -687,6 +691,7 @@ fn board_dispatch_routes_automatically_until_profile_is_changed() {
             project: Vec::new(),
             kind: Vec::new(),
             size: Vec::new(),
+            difficulty: Vec::new(),
             title_regex: None,
             body_regex: None,
             profile: "generic".into(),

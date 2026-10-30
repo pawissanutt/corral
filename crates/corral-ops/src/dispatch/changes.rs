@@ -32,9 +32,10 @@ fn deliver(
 
 /// From Review (or Needs me after an autopilot escalation): sends the change request to the same run's pane
 /// (agent_prompt), clears the run's outcome/ended/summary, status Running, logs "changes_requested". The owner
-/// redirecting the task resets the autopilot's rounds and its record on the run. Error when the pane is gone.
+/// redirecting the task resets the autopilot's rounds and its record on the run. A gone process resumes its
+/// recorded session, or refuses recovery explicitly when that conversation is unavailable.
 pub fn request_changes(ctx: &Ctx, id: &str, text: &str) -> Result<Task> {
-    let head = send_changes(ctx, id, text, "owner", None, |t| {
+    let head = send_changes(ctx, id, text, "owner", None, None, |t| {
         t.rounds = 0;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = None;
@@ -53,7 +54,7 @@ pub(crate) fn auto_request_changes(
     expected: &RepairKey,
 ) -> Result<TaskHead> {
     let _action = corral_core::work::action(id, corral_core::OperatingActionKind::Repair);
-    send_changes(ctx, id, text, "autopilot", Some(expected), |t| {
+    send_changes(ctx, id, text, "autopilot", Some(expected), Some(round), |t| {
         t.rounds = round;
         if let Some(run) = t.current_run_mut() {
             run.autopilot = Some(state);
@@ -67,6 +68,7 @@ fn send_changes(
     text: &str,
     by: &str,
     expected: Option<&RepairKey>,
+    round: Option<u32>,
     mark: impl FnOnce(&mut TaskHeadMut),
 ) -> Result<TaskHead> {
     let mut fresh = ctx.clone();
@@ -95,18 +97,27 @@ fn send_changes(
         );
     }
     let previous = task.current_run().context("task has no run")?;
+    let continuation = super::worker_session::Continuation::prepare(ctx, &task, previous)?;
     let pane = previous
         .herdr
         .as_ref()
-        .context("task has no run attached to herdr")?
-        .pane_id
-        .clone();
-    if ctx.herdr.pane_get(&pane)?.is_none() {
-        bail!("{}: agent pane {pane} is gone; use retry instead", task.id);
-    }
+        .map(|h| h.pane_id.clone())
+        .unwrap_or_default();
     if let Some(expected) = expected {
         expected.check(&ctx.store.head(&task.id)?.shell_task()?)?;
     }
+    let changes_round = (continuation.session.policy != corral_core::SessionPolicy::Fresh)
+        .then(|| crate::round_notice::next_round(previous, Timestamp::now()));
+    let notice = changes_round
+        .as_ref()
+        .map(|next| crate::round_notice::changes(&task, previous, next, round));
+    let text = &match &notice {
+        Some(notice) if !crate::round_notice::has_changes_notice(text) => {
+            format!("{notice} {text}")
+        }
+        _ => text.to_string(),
+    };
+    let restarted = continuation.prepare_legacy(ctx, &task, text, notice.as_deref())?;
     // Reopening Review reserves shared capacity before contacting the composer.
     // Pending text and Running status survive a launcher crash without freeing its slot.
     let prepare = |store: &corral_core::Store, current: &mut TaskHeadMut| {
@@ -134,6 +145,13 @@ fn send_changes(
             );
         }
         run.pending_reply = Some(text.to_string());
+        run.session = Some(continuation.session.clone());
+        if let Some(round) = &changes_round {
+            run.changes_round = Some(round.clone());
+        }
+        if let Some(restarted) = &restarted {
+            run.herdr = Some(restarted.herdr.clone());
+        }
         run.outcome = None;
         run.ended = None;
         run.summary = None;
@@ -205,7 +223,11 @@ fn send_changes(
                 .map(|()| posted = reserved.into_inner())
             }
             None => crate::operating::submit_head(ctx, &authorization, prepare, || {
-                deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+                if let Some(restarted) = &restarted {
+                    restarted.submit(ctx)
+                } else {
+                    deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+                }
             }),
         }
     } else if let Some(inbox) = &inbox {
@@ -219,7 +241,10 @@ fn send_changes(
         inbox.announce(&message).map(|()| posted = Some(message))
     } else {
         ctx.store.dispatch_update_head(&task.id, prepare)?;
-        deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by))
+        match &restarted {
+            Some(restarted) => restarted.submit(ctx),
+            None => deliver(ctx, &task.id, &pane, text, "changes_requested", Some(by)),
+        }
     };
     if let Err(error) = delivery {
         if crate::operating::refused(&error) {
@@ -228,7 +253,7 @@ fn send_changes(
         // Keep T-051's failed-delivery contract: preserve the pending request in Review.
         // Do not overwrite a worker that reported completion in the meantime.
         let status = task.status;
-        ctx.store.update_head(&task.id, |current| {
+        ctx.store.try_update_head(&task.id, |current| {
             if current.status == Status::Running
                 && let Some(run) = current
                     .current_run_mut()
@@ -237,11 +262,19 @@ fn send_changes(
                 run.outcome = previous.outcome;
                 run.ended = previous.ended;
                 run.summary = previous.summary.clone();
+                run.changes_round = previous.changes_round.clone();
                 current.status = status;
+                return Ok(true);
             }
-            Ok(())
+            Ok(false)
         })?;
         return Err(error);
+    }
+    if restarted.is_some() {
+        let saved = ctx.store.head(&task.id)?.shell_task()?;
+        if let Some(run) = saved.current_run() {
+            crate::role_session::observe(ctx, &saved, run, false);
+        }
     }
     crate::watch::capture_review(ctx, &task, &corral_core::RunHead::of(previous)?);
     if let (Some(recipient), Some(message)) = (&recipient, posted) {
@@ -255,10 +288,20 @@ fn send_changes(
                 bail!("run changed after posting changes");
             }
             crate::reviewer::supersede_review_head(current, corral_core::clock::now())?;
+            if let Some(run) = current.current_run_mut() {
+                run.seen_working = false;
+                run.idle_since = None;
+                run.idle_no_report = false;
+            }
             mark(current);
             Ok(())
         })?;
         cleanup_head(ctx, &task, Cleanup::Round);
+        continuation.start(ctx, &task.id)?;
+        let shell = task.shell_task()?;
+        if let Some(run) = shell.current_run() {
+            crate::role_session::log(ctx, &shell, run)?;
+        }
         let status = crate::delivery::owner::kick(ctx, recipient);
         let observed = crate::delivery::owner::is_observed(ctx, recipient, message.seq)?;
         ctx.store.log_event(
@@ -294,5 +337,9 @@ fn send_changes(
         Ok(())
     })?;
     cleanup_head(ctx, &task, Cleanup::Round);
-    Ok(task)
+    let shell = task.shell_task()?;
+    if let Some(run) = shell.current_run() {
+        crate::role_session::log(ctx, &shell, run)?;
+    }
+    ctx.store.head(&task.id)
 }

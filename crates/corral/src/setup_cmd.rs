@@ -214,7 +214,9 @@ pub fn run(start: &Path, args: SetupArgs) -> Result<()> {
         }
         SetupCmd::Status => print_json(&corral_ops::setup_status(&store)?),
         SetupCmd::Catalog => print_json(&corral_ops::setup_catalog(&store)?),
-        SetupCmd::Discover => print_json(&corral_ops::setup_discover(&store.config)),
+        SetupCmd::Discover => print_json(&corral_ops::setup_discover(
+            &corral_ops::Ctx::from_store(store),
+        )),
         SetupCmd::Begin { expected_revision } => {
             print_json(&corral_ops::setup_begin(&store, expected_revision)?)
         }

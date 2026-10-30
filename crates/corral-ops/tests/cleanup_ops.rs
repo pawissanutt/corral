@@ -398,7 +398,10 @@ fn approve_case(strategy: ApproveStrategy, remove_worktree: bool, policy_keeps: 
         .unwrap();
     assert_eq!(cleared.len(), 1);
     assert_eq!(cleared[0].detail["count"], 2);
-    assert_eq!(run.worktree.exists(), !remove_worktree || policy_keeps);
+    assert_eq!(
+        run.worktree.exists(),
+        !remove_worktree || policy_keeps || strategy == ApproveStrategy::KeepBranch
+    );
     assert_eq!(
         fx.app.join("feature.txt").exists(),
         strategy != ApproveStrategy::KeepBranch
@@ -524,7 +527,9 @@ fn send_back_releases_review_tools_but_keeps_agent_and_workspace() {
     for pane in &panes[1..] {
         assert!(!fx.pane_exists(pane), "send-back leaked review tool {pane}");
     }
-    assert!(fx.called(&["agent", "prompt", &h.pane_id, "Fix the edge case."]));
+    let calls = fx.state()["calls"].to_string();
+    let head = format!(r#"["agent","prompt","{}","NEW CHANGES ROUND 1:"#, h.pane_id);
+    assert!(calls.contains(&head) && calls.contains(r#" Fix the edge case."]"#));
 }
 
 fn terminal_history(status: Status) {

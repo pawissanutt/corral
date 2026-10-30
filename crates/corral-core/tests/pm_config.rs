@@ -21,14 +21,15 @@ fn old_configs_keep_push_disabled_and_default_kinds() {
                 "lessons_due",
                 "run_resumed",
                 "wait_transition",
-                "pm_decision_resolved"
+                "pm_decision_resolved",
+                "attention_due"
             ]
         );
     }
     let root = tempdir().unwrap();
     let cfg = Config::default_for(root.path());
     assert!(!cfg.pm.push_events);
-    assert_eq!(cfg.pm.push_kinds.len(), 10);
+    assert_eq!(cfg.pm.push_kinds.len(), 11);
 }
 
 #[test]

@@ -8,7 +8,7 @@ const DEFAULT_TEMPLATE: &str = include_str!("../../assets/review.md");
 /// A routed review always appends its versioned contract, even under a custom template, and a
 /// tiered run's review always appends one authoritative Gate contract (review) section.
 pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> Result<String> {
-    let gate_contract = crate::review_packet::gate_contract(ctx, task, run)?;
+    let gate_contract = crate::review_packet::gate_contract(ctx, task, run, None)?;
     let override_file = ctx.store.template_override("review.md");
     let template = match std::fs::read_to_string(&override_file) {
         Ok(t) => t,
@@ -84,6 +84,16 @@ pub fn review_prompt<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) ->
     }
     prompt.push_str(&crate::lessons::lessons_prompt(ctx, task, run)?);
     prompt.push_str(&crate::comments::owner_comments_ref(task)?);
+    if run.facts.children > 1 {
+        let previous = task.review_child_at(&run.id, usize::try_from(run.facts.children - 1)?)?
+            .and_then(|child| child.review);
+        prompt.push_str(&format!(
+            "\n## Continued review\n\nThis is a new assessment of the current candidate and callback attempt above. \
+             Check the new delta and every unresolved finding against the current tree and gate evidence. \
+             Earlier verdicts authorize no changed candidate. Previous findings:\n\n{}\n",
+            previous.as_ref().and_then(|r| r.notes.as_deref()).unwrap_or("(no prior findings recorded)")
+        ));
+    }
     if task.completion().is_some() {
         prompt.push_str(&format!(
             "\n## Criterion evidence (worker assertions, not machine PASS)\n\n```json\n{}\n```\n",
@@ -178,8 +188,9 @@ pub(super) fn gate_text<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead)
     let mut text = match g.result {
         GateResult::Running => format!("Gate still running at {sha}."),
         GateResult::Pass => format!("Gate passed at {sha} ({})", g.at),
-        GateResult::Fail => format!(
-            "Gate FAILED at {sha} ({}): `{}`",
+        GateResult::Fail | GateResult::Stale => format!(
+            "Gate {} at {sha} ({}): `{}`",
+            g.result.as_str(),
             g.at,
             g.failed_cmd.as_deref().unwrap_or("?")
         ),

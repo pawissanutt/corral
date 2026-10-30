@@ -57,7 +57,8 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
             app.counts.reviews,
             app.counts.gates
         ),
-        (4, 2, 1, 1)
+        // T-004's running gate shares its worker's slot, so it is listed but not counted twice.
+        (3, 2, 1, 1)
     );
     for (width, height) in [(160, 45), (80, 30)] {
         let mut term = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -65,7 +66,7 @@ fn shared_slot_header_renders_at_wide_and_narrow_terminal_widths() {
         let buffer = term.backend().buffer();
         let text = buffer_text(buffer);
         let header = text.lines().next().unwrap();
-        assert!(header.contains("4/7"), "{header}");
+        assert!(header.contains("3/7"), "{header}");
         assert!(text.contains("O mode"), "{text}");
         assert!(app.hits.iter().all(|(rect, _)| rect.right() <= width));
 

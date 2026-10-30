@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "verdict": "GO",
+  "source": {
+    "file": "tools/pi-probe/bun-go.json",
+    "sha256": "59eb5ff2d58219b883b739839a1ee0106bb56de3f22d04536390cd48bb557f1a",
+    "task": "T-298",
+    "plan": "T-252@P5"
+  },
+  "bun": {
+    "range": "1.4.2",
+    "tested": [
+      "1.4.2"
+    ]
+  },
+  "pi": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "1.3.0",
+    "integrity": "sha512-V/WoCjA2hQSe3QLWIUB24cTRdtEdeLiIzkDqU5RMXV6VWuD+KGZnzVBMhglwdnQTySkehZsjt8a3g6Jd2g4nnw==",
+    "upstreamCommit": "71023aec1546d6d677a65669c5665c0927ce0dd0",
+    "packages": {
+      "@earendil-works/pi-agent-core": "1.3.0",
+      "@earendil-works/pi-ai": "1.3.0",
+      "@earendil-works/pi-codemode": "1.3.0",
+      "@earendil-works/pi-coding-agent": "1.3.0",
+      "@earendil-works/pi-mcp": "1.3.0",
+      "@earendil-works/pi-telemetry": "1.3.0",
+      "@earendil-works/pi-tui": "1.3.0"
+    }
+  },
+  "lock": {
+    "file": "bun.lock",
+    "sha256": "db2a4fc3d9ccd879c4efb4dd2454814319599e2d3cbbfe60af4cbe601dc1df19"
+  },
+  "claude": {
+    "task": "T-493",
+    "package": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.306",
+    "integrity": "sha512-kmxcd+4WNhqhqnzODRPM5aOKb1EH2EdlRsf7ZeMx8uQsC1tHAHgHftQGFXGT8yMaYaYlDP9BGYJy1/aYv7IhkQ==",
+    "zod": "4.6.7"
+  },
+  "provider": {
+    "id": "openai-codex",
+    "model_route": "openai-codex-responses"
+  },
+  "providers": [
+    "openai",
+    "anthropic",
+    "amazon-bedrock",
+    "llama.cpp"
+  ],
+  "capabilities": [
+    "todo",
+    "web.enabled",
+    "context_files",
+    "skills",
+    "prompt_templates",
+    "compaction",
+    "session_export",
+    "mcp.enabled",
+    "tool_search",
+    "codemode",
+    "hooks",
+    "bash_rules",
+    "background_shell",
+    "role_enabled",
+    "lsp",
+    "browser",
+    "llama_cpp.enabled"
+  ]
+}

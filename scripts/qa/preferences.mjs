@@ -216,7 +216,7 @@ try {
   for (const [name, label, value] of [
     ["04-compact-staged", "Compact cards", "on"],
     ["05-wip-staged", "Show WIP usage", "off"],
-    ["06-needs-me-staged", "Desktop: Needs me", "on"],
+    ["06-blocked-staged", "Desktop: Blocked", "on"],
     ["07-review-staged", "Desktop: Review", "on"],
     ["08-auto-dispatch-staged", "Auto-dispatch queue", "on"],
   ]) {

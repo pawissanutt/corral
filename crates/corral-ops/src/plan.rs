@@ -11,6 +11,7 @@ use crate::{Ctx, add_artifact, verification};
 
 pub(crate) mod member_add;
 pub(crate) mod member_gate;
+pub(crate) mod member_move;
 pub(crate) mod scope_gate;
 
 /// Revision of the task contract, including T-052 criterion IDs and dependencies.
@@ -50,6 +51,17 @@ pub(crate) fn check_criteria(task: &Task, document: &PlanDocument) -> Result<()>
 }
 
 pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
+    plan_submit_checked(ctx, id, path, &|_| Ok(()))
+}
+
+/// `plan_submit` whose final transaction first runs `check`: a native planner's binding.
+pub(crate) fn plan_submit_checked(
+    ctx: &Ctx,
+    id: &str,
+    path: &Path,
+    check: &dyn Fn(&Task) -> Result<()>,
+) -> Result<PlanRecord> {
+    check(&ctx.store.get(id)?)?;
     crate::tracker::check_action(&ctx.store.get(id)?, "submit tracker to the plan pipeline")?;
     let bytes = read_plan(ctx, path)?;
     PlanDocument::parse(std::str::from_utf8(&bytes).context("plan must be UTF-8")?)?;
@@ -78,6 +90,7 @@ pub fn plan_submit(ctx: &Ctx, id: &str, path: &Path) -> Result<PlanRecord> {
     )?;
     let mut previous = None;
     let saved = ctx.store.update(id, |task| {
+        check(task)?;
         crate::tracker::check_action(task, "submit tracker to the plan pipeline")?;
         check_criteria(task, &document)?;
         let revision = plan_spec_revision(task)?;
@@ -193,6 +206,19 @@ pub fn approved_plan<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<
     Ok(Some(plan.clone()))
 }
 
+/// A Done design task whose accepted plan already published its children. Its
+/// status is the dependency barrier for those children and must not be reopened.
+pub(crate) fn published_design(task: &corral_core::Task) -> bool {
+    task.status == corral_core::Status::Done
+        && !task.children.is_empty()
+        && task.plan.as_deref()
+            == Some(&format!(
+                "{}@{}",
+                task.id,
+                task.plans.last().map_or("", |p| &p.id)
+            ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +229,7 @@ mod tests {
         let store = Store::init(tmp.path()).unwrap();
         let mut task = store.create("Plan", None, Status::Ready, "Spec").unwrap();
         task.plan_runs.push(PlanRun {
+            agent_host: None,
             execution: None,
             route: None,
             delivery: corral_core::inbox::DeliveryMode::Legacy,

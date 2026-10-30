@@ -6,6 +6,8 @@
 mod authority;
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;
+#[path = "autopilot_ops/deferred_gate.rs"]
+mod deferred_gate;
 #[path = "autopilot_ops/diagnostics.rs"]
 mod diagnostics;
 #[path = "autopilot_ops/empty_gates.rs"]
@@ -20,10 +22,14 @@ mod freshness;
 mod gate_admission;
 #[path = "autopilot_ops/guardrails.rs"]
 mod guardrails;
+#[path = "autopilot_ops/infra.rs"]
+mod infra;
 #[path = "autopilot_ops/integration.rs"]
 mod integration;
 #[path = "autopilot_ops/manual_approval.rs"]
 mod manual_approval;
+#[path = "autopilot_ops/moved_base.rs"]
+mod moved_base;
 #[path = "autopilot_ops/plan_target_carry.rs"]
 mod plan_target_carry;
 #[path = "autopilot_ops/plan_targets.rs"]
@@ -32,10 +38,14 @@ mod plan_targets;
 mod resources;
 #[path = "autopilot_ops/rework.rs"]
 mod rework;
+#[path = "autopilot_ops/round_limits.rs"]
+mod round_limits;
 #[path = "autopilot_ops/routing.rs"]
 mod routing;
 #[path = "autopilot_ops/send_back.rs"]
 mod send_back;
+#[path = "autopilot_ops/sessions.rs"]
+mod sessions;
 #[path = "autopilot_ops/tier_refusals.rs"]
 mod tier_refusals;
 #[path = "autopilot_ops/tiers.rs"]
@@ -89,6 +99,10 @@ struct Fx {
 
 impl Fx {
     fn new(policy: impl FnOnce(&mut ReviewOverride)) -> Fx {
+        Self::with_config(policy, None)
+    }
+
+    fn with_config(policy: impl FnOnce(&mut ReviewOverride), config: Option<&str>) -> Fx {
         let tmp = tempfile::tempdir().unwrap();
         let bin_dir = tmp.path().join("fake-herdr");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -107,7 +121,13 @@ impl Fx {
         std::fs::write(app.join("README.md"), "hello\n").unwrap();
         git(&app, &["add", "-A"]);
         git(&app, &["commit", "-q", "-m", "init"]);
-        let mut store = Store::init(tmp.path()).unwrap();
+        let mut store = Store::init_with(tmp.path(), |store| {
+            if let Some(config) = config {
+                std::fs::write(store.config_path(), config)?;
+            }
+            Ok(())
+        })
+        .unwrap();
         for name in ["fake", "rev"] {
             store.config.agents.insert(
                 name.into(),
@@ -389,6 +409,14 @@ fn gate_failure_sends_the_run_back_and_the_second_done_lands() {
         prompts.contains("round 1 of 2") && prompts.contains("`test -f fixed.txt`"),
         "{prompts}"
     );
+    let round = run.changes_round.as_ref().unwrap();
+    assert_eq!(round.n, 1);
+    assert!(
+        prompts.contains("NEW CHANGES ROUND 1 (autopilot round 1):")
+            && prompts.contains(&round.sha)
+            && prompts.contains("Every earlier round is finished"),
+        "{prompts}"
+    );
     let request = fx.artifact_text("Autopilot changes (round 1)");
     assert!(
         request.contains("$ test -f fixed.txt") && request.contains("corral gate: fail"),
@@ -438,7 +466,7 @@ fn exhausted_rounds_escalate_to_needs_me_and_the_owner_can_still_approve() {
         "{}",
         fx.reason()
     );
-    assert_eq!(fx.herdr_log("notify.log"), "▲ T-001 needs you\n");
+    assert_eq!(fx.herdr_log("notify.log"), "▲ T-001 blocked\n");
     assert_eq!(fx.sync().status, Status::NeedsMe, "waits for the owner");
     assert_eq!(fx.events("autopilot"), 4);
 
@@ -535,6 +563,17 @@ fn dirty_main_checkout_blocks_until_it_is_clean() {
         "⏸ T-001 cannot land\n",
         "notified once"
     );
+    let notices: Vec<_> = fx
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.kind == "owner_notified")
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].detail["producer"], "landing_blocked");
+    assert_eq!(notices[0].detail["claim_ids"].as_array().unwrap().len(), 1);
 
     git(&fx.app, &["checkout", "--", "README.md"]);
     let t = fx.sync();
@@ -738,10 +777,11 @@ fn reviewer_changes_loop_back_and_an_escalation_goes_to_needs_me() {
 }
 
 #[test]
-fn a_gone_agent_pane_gets_a_retry_run_carrying_the_request() {
+fn fresh_mode_gives_a_gone_agent_a_retry_run_carrying_the_request() {
     let fx = Fx::new(|r| {
         r.gate = gate(&["test -f fixed.txt"]);
         r.accept = Some(Accept::Auto);
+        r.worker_session = Some(corral_core::SessionPolicy::Fresh);
     });
     fx.change("widget.txt", "w\n");
     fx.done();

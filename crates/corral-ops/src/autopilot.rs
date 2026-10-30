@@ -30,6 +30,7 @@ use corral_core::{TaskMut as _, TaskRef as _};
 const MAX_STEPS: usize = 16;
 
 mod handoff;
+mod infra;
 mod output;
 mod repair;
 mod tiers;
@@ -71,7 +72,13 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         if crate::plan_pilot::handles_ref(&task)? {
             continue;
         }
-        output::record_authority(&ctx, &task)?;
+        // Defer typed markers to advance, which records them under the task lock.
+        if task.infra_wait.is_none()
+            && let Err(error) = output::record_authority(&ctx, &task)
+            && !infra::classified(&error)
+        {
+            return Err(error);
+        }
         match advance(&ctx, &task.id, now) {
             Ok(c) => {
                 output::record_clean(&ctx, &task)?;
@@ -158,7 +165,37 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
                 && run_head_sha(run).as_deref() == Some(r.sha.as_str())
         })
     {
+        let Some(kind) = crate::automation_status::next_action(ctx, &task)? else {
+            return Ok(Step::Wait);
+        };
+        if crate::operating::require(&ctx.store, &task, kind).is_err() {
+            return Ok(Step::Wait);
+        }
+        if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+            return pilot.escalate(&error.to_string());
+        }
         return pilot.reviewer_changes(review);
+    }
+    if task.infra_wait.is_some() {
+        match pilot.infra_guard() {
+            Ok(Some(step)) => return Ok(step),
+            Ok(None) => return step(ctx, id, now),
+            Err(error) => {
+                return pilot.escalate(&format!("integration preflight error: {error:#}"));
+            }
+        }
+    }
+    let kind = match crate::automation_status::next_action(ctx, &task) {
+        Ok(Some(kind)) => kind,
+        Ok(None) => return Ok(Step::Wait),
+        Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
+        Err(error) => return Err(error),
+    };
+    if crate::operating::require(&ctx.store, &task, kind).is_err() {
+        return Ok(Step::Wait);
+    }
+    if let Err(error) = verification::require_gate(&pilot.policy, &task) {
+        return pilot.escalate(&error.to_string());
     }
     if pilot.policy.reviewer == Reviewer::CrossVendor {
         match crate::reviewer::implementer_vendor(ctx, task, run) {
@@ -185,6 +222,7 @@ fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
             Ok(Some(step)) => return Ok(step),
             Ok(None) => {}
             Err(error) if error.is::<crate::integration::StalePacket>() => return Ok(Step::Wait),
+            Err(error) if infra::classified(&error) => return pilot.record_infra(&error),
             Err(error) => {
                 return pilot.escalate(&format!("integration preflight error: {error:#}"));
             }
@@ -248,7 +286,9 @@ impl Pilot<'_> {
         }
         // A gate that passed (or is running) on this exact commit stands; a failed one is re-run.
         let reuse = match &self.run.gate {
-            Some(g) if g.result != GateResult::Fail => self.gate_stands(g)?,
+            Some(g) if !matches!(g.result, GateResult::Fail | GateResult::Stale) => {
+                self.gate_stands(g)?
+            }
             _ => false,
         };
         if !reuse && let GateNow::Replayed(step) = self.start_gate(&head)? {
@@ -344,7 +384,7 @@ impl Pilot<'_> {
         }
         Ok(match gate.result {
             GateResult::Pass => GateNow::Pass,
-            GateResult::Fail => GateNow::Fail(Box::new(gate)),
+            GateResult::Fail | GateResult::Stale => GateNow::Fail(Box::new(gate)),
             GateResult::Running => GateNow::Pending,
         })
     }
@@ -619,7 +659,8 @@ impl Pilot<'_> {
     }
 
     /// Sends the run back to its agent with `summary` (one line) and `details`, or escalates when the rounds are
-    /// used up. Escalation or a missing agent pane starts a fresh retry whose prompt carries the request.
+    /// used up. Reuse resumes a missing worker's recorded session; explicit fresh mode or an incompatible
+    /// profile escalation starts a retry whose prompt carries the request.
     fn send_request(
         &self,
         summary: &str,
@@ -635,7 +676,7 @@ impl Pilot<'_> {
         }
         let round = self.head.rounds + 1;
         let max = self.policy.max_rounds;
-        if round > max {
+        if round > max && !self.ctx.store.config.automation.turbo {
             return self.escalate(&format!("{summary} (all {max} change rounds used)"));
         }
         crate::operating::require(&self.ctx.store, self.head, OperatingActionKind::Repair)?;
@@ -668,9 +709,12 @@ impl Pilot<'_> {
             at: self.now,
         };
         let pane = self.run.herdr.as_ref().map(|h| h.pane_id.as_str());
-        let switch =
-            crate::escalation::escalation_head(self.config, &self.ctx.store.head(id)?, false)?;
-        let sent: Result<(Status, String)> = if switch.is_none() && self.pane_alive(pane)? {
+        let task = self.ctx.store.head(id)?;
+        let switch = crate::escalation::escalation_head(self.config, &task, false)?;
+        let reuse = self.config.task_review_policy(&task).worker_session
+            == corral_core::SessionPolicy::Reuse;
+        let alive = if switch.is_none() { self.pane_alive(pane)? } else { false };
+        let sent: Result<(Status, String)> = if switch.is_none() && (reuse || alive) {
             auto_request_changes(self.ctx, id, &message, round, state, key).map(|_| {
                 (
                     Status::Running,
@@ -697,6 +741,9 @@ impl Pilot<'_> {
         // stays claimed, so a later sync retries the same request instead of handing it to the owner.
         let (to, note) = match sent {
             Err(error) if crate::operating::transient_refusal(&error) => return Ok(Step::Wait),
+            Err(error) if error.is::<crate::role_session::SessionUnavailable>() => {
+                return self.escalate(&error.to_string());
+            }
             sent => sent?,
         };
         if let Some(packet) = packet {
@@ -743,45 +790,6 @@ impl Pilot<'_> {
         }))
     }
 
-    /// Compare-and-swap: writes `state` and `status` only while the task is still in Review on this finished run at
-    /// stage `from`; false when it moved on (an owner action, another writer).
-    fn write(
-        &self,
-        from: Option<AutoStage>,
-        state: AutopilotState,
-        status: Status,
-    ) -> Result<bool> {
-        let run_id = self.run.id.clone();
-        let (_, written) = self.ctx.store.dispatch_update_head(self.id(), |store, t| {
-            let current = Ctx {
-                store: store.clone(),
-                ..self.ctx.clone()
-            };
-            let Some(kind) = crate::automation_status::next_action_head(&current, &*t)? else {
-                return Ok(false);
-            };
-            if crate::operating::require(store, &*t, kind).is_err() {
-                return Ok(false);
-            }
-            if t.current_run_head()?.is_none_or(|r| {
-                r.id != run_id
-                    || r.outcome != Some(RunOutcome::Done)
-                    || r.autopilot.as_ref().map(|a| a.stage) != from
-            }) {
-                return Ok(false);
-            }
-            t.edit_run(&run_id, |r| {
-                r.autopilot = Some(state);
-                Ok(())
-            })?;
-            t.edit_head_fields(|f| {
-                f.status = status;
-                Ok(())
-            })?;
-            Ok(true)
-        })?;
-        Ok(written)
-    }
 
     fn log(
         &self,
@@ -791,6 +799,24 @@ impl Pilot<'_> {
         reason: Option<&str>,
         note: &str,
     ) -> Result<()> {
+        let current = self.ctx.store.get(self.id())?;
+        let released_review_runs: Vec<_> = if to == AutoStage::Escalated {
+            self.run
+                .review_runs
+                .iter()
+                .filter(|before| {
+                    before.ended.is_none()
+                        && current.current_run().is_some_and(|run| {
+                            run.review_runs
+                                .iter()
+                                .any(|after| after.id == before.id && after.ended.is_some())
+                        })
+                })
+                .map(|run| &run.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.ctx.store.log_event(
             Some(self.id()),
             "autopilot",
@@ -800,9 +826,20 @@ impl Pilot<'_> {
                 "to": to.as_str(),
                 "round": round,
                 "max_rounds": self.policy.max_rounds,
+                "effective_max_rounds": if self.config.automation.turbo {
+                    None
+                } else {
+                    Some(self.policy.max_rounds)
+                },
+                "round_limit_source": if self.config.automation.turbo {
+                    "automation.turbo"
+                } else {
+                    "task_review_policy.max_rounds"
+                },
                 "sha": sha,
                 "reason": reason,
                 "note": note,
+                "released_review_runs": released_review_runs,
             }),
         )
     }

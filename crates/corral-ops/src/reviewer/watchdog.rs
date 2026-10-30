@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
-use corral_core::{AutoStage, AutopilotState, ReviewRecord, RunOutcome, Status, Task};
+use corral_core::{AutoStage, AutopilotState, ReviewRecord, Run, RunOutcome, Status, Task};
 use corral_herdr::{AgentStatus, PaneInfo};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
@@ -58,6 +58,75 @@ fn finish_review_child(review: &ReviewRecord, child: &mut corral_core::RunHead, 
         child.ended = Some(ended);
         child.usage_pending = true;
     }
+}
+
+/// A refusal on the review packet alone, with the candidate unchanged and main moved cleanly
+/// forward from the reviewed base, is base-derived staleness: review again instead of escalating.
+fn base_moved_refusal(run: &Run, review: &ReviewRecord, failure: Option<&str>) -> Result<bool> {
+    let Some(changes) = failure
+        .and_then(|f| f.strip_prefix(FAILURE_PREFIX))
+        .and_then(|f| f.strip_prefix("stale review: "))
+        .and_then(|f| serde_json::from_str::<Vec<serde_json::Value>>(f).ok())
+    else {
+        return Ok(false);
+    };
+    if changes.is_empty() || changes.iter().any(|c| c["field"] != "packet_digest") {
+        return Ok(false);
+    }
+    let Some(reviewed) = review
+        .identity
+        .as_ref()
+        .map(|i| i.integration_base.as_str())
+    else {
+        return Ok(false);
+    };
+    if crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str()) {
+        return Ok(false);
+    }
+    let base = corral_git::rev_sha(&run.worktree, &run.base)?;
+    if base == reviewed || !corral_git::is_ancestor(&run.worktree, reviewed, &base)? {
+        return Ok(false);
+    }
+    let merge = corral_git::merge_preflight(&run.worktree, &base, &review.sha)?;
+    Ok(matches!(merge, corral_git::MergePreflight::Clean { .. }))
+}
+
+/// Supersede the refused review without a verdict or a round; autopilot re-gates if needed and
+/// starts a fresh review of the current candidate in the normal queue.
+fn relaunch(
+    ctx: &Ctx,
+    id: &str,
+    run: &Run,
+    review: &ReviewRecord,
+    now: Timestamp,
+) -> Result<Option<Change>> {
+    let saved = ctx.store.try_update_head(id, |current| {
+        if current.status != Status::Review {
+            return Ok(false);
+        }
+        let Some(parent) = current
+            .current_run_mut()
+            .filter(|r| r.id == run.id && r.review.as_ref() == Some(review))
+        else {
+            return Ok(false);
+        };
+        super::supersede_review_head(current, now)?;
+        Ok(true)
+    })?;
+    let Some(saved) = saved else {
+        return Ok(None);
+    };
+    cleanup_head(ctx, &saved, Cleanup::Round);
+    ctx.store.log_event(
+        Some(id),
+        "review_relaunched",
+        json!({
+            "run": run.id, "reviewer": review.reviewer,
+            "reason": "main moved during review; the candidate is unchanged",
+            "notes": super::review_notes_path(ctx, id, &run.id),
+        }),
+    )?;
+    Ok(None)
 }
 
 /// Called by sync even when autopilot is disabled. `panes` is one authoritative herdr inventory;
@@ -176,10 +245,27 @@ pub(crate) fn reconcile_review_sampled_at(
     // The worker is finished: this idle stretch belongs to its pending reviewer.
     let since = idle.then(|| run.idle_since.filter(|at| *at >= review.at).unwrap_or(now));
     let elapsed = since.is_some_and(|at| now.duration_since(at) >= window);
+    let startup = SignedDuration::from_secs(
+        i64::try_from(ctx.store.config.sync.startup_grace_secs).unwrap_or(i64::MAX),
+    );
+    // A reused conversation can answer a new round with its old "complete" state and go idle.
+    let silent = idle
+        && now.duration_since(review.at) >= startup
+        && run
+            .review_runs
+            .last()
+            .is_some_and(|child| child.outcome.is_none() && crate::round_notice::reused(child));
     let failure = run
         .blocked_excerpt
         .as_deref()
         .filter(|text| text.starts_with(FAILURE_PREFIX));
+    // A healthy pi-native host is never idle here; between its turns it is equally settled, and
+    // sync runs this before the hook's nudge, so the relaunch also wins that silent turn.
+    let settled =
+        idle || (agent_reports && crate::agent::hooks::review::between_silent_turns(&task));
+    if settled && !gone && stalled.is_none() && base_moved_refusal(run, review, failure)? {
+        return relaunch(ctx, id, run, review, now);
+    }
     let problem = if gone && crate::gate::worktree_head(run).as_deref() != Some(review.sha.as_str())
     {
         Some(
@@ -211,38 +297,74 @@ pub(crate) fn reconcile_review_sampled_at(
             notes.display()
         )
     });
-    if since == run.idle_since && reason.is_none() {
+    let flagged = run
+        .review_runs
+        .last()
+        .is_some_and(|child| child.idle_no_report);
+    if since == run.idle_since && reason.is_none() && silent == flagged {
         return Ok(None);
     }
-    let state = pane.map(|p| p.status.as_str()).unwrap_or("gone");
-    let saved = commit_observation(
-        ctx,
-        id,
-        &Observation {
-            run,
-            review,
-            since,
-            state,
-            reason: reason.as_deref(),
-            stalled: stalled.is_some(),
-            notes: &notes,
-            now,
-        },
-    )?;
-    let (Some(_), Some(reason)) = (saved, reason) else {
+    let mut batch = None;
+    let saved = ctx.store.try_update_head(id, |current| {
+        if !crate::session_scope::owns_head(ctx, current.head())? {
+            return Ok(false);
+        }
+        if current.status != Status::Review {
+            return Ok(false);
+        }
+        let Some(parent) = current.current_run_mut().filter(|r| r.id == run.id) else {
+            return Ok(false);
+        };
+        if parent.review.as_ref() != Some(review)
+            || parent.idle_since != run.idle_since
+            || parent.blocked_excerpt != run.blocked_excerpt
+        {
+            return Ok(false);
+        }
+        parent.idle_since = since;
+        if let Some(child) = parent.current_child.as_deref_mut() {
+            child.idle_since = since;
+            child.idle_no_report = silent;
+            child.agent_state = Some(
+                pane.map(|p| p.status.as_str())
+                    .unwrap_or("gone")
+                    .to_string(),
+            );
+        }
+        if let Some(reason) = &reason {
+            if let Some(child) = parent.current_child.as_deref_mut() {
+                finish_review_child(review, child, now);
+                if stalled.is_some() { child.outcome = Some(RunOutcome::Interrupted); }
+            }
+            parent.blocked_excerpt = Some(reason.clone());
+            parent.autopilot = Some(AutopilotState {
+                stage: AutoStage::Escalated,
+                reason: Some(reason.clone()),
+                sha: Some(review.sha.clone()),
+                at: now,
+            });
+            current.status = Status::NeedsMe;
+            batch = Some(crate::owner_notice::record_stage_head(
+                ctx,
+                current,
+                "legacy_review_watchdog",
+                now,
+            )?);
+        }
+        Ok(true)
+    })?;
+    let (Some(saved), Some(reason)) = (saved, reason) else {
         return Ok(None);
     };
-    // Escalation only: the round's panes are the run's unreleased pane references.
-    cleanup_head(ctx, &ctx.store.head(id)?, Cleanup::Round);
-    if let Err(error) = ctx
-        .herdr
-        .notify(&format!("{} needs you", id), &reason, true)
-    {
-        crate::messages::report(
-            Some(id),
-            "notification",
-            format!("review escalation notification failed: {error:#}"),
-        );
+    cleanup_head(ctx, &saved, Cleanup::Round);
+    if let Some(batch) = batch {
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::newly_committed(&saved, batch)?,
+            &format!("{} blocked", id),
+            &reason,
+            true,
+        )?;
     }
     Ok(Some(Change {
         task: id.to_string(),
@@ -254,6 +376,7 @@ pub(crate) fn reconcile_review_sampled_at(
 }
 
 /// What one watchdog sample observed of a reviewing run.
+#[cfg(test)]
 pub(crate) struct Observation<'a> {
     pub(crate) run: &'a corral_core::Run,
     pub(crate) review: &'a ReviewRecord,
@@ -270,6 +393,7 @@ pub(crate) struct Observation<'a> {
 /// Writes `o` on the head: the run's idle start, the current child's liveness and, with a
 /// reason, the child's finish and the run's escalation. Every write is a scalar of a projection,
 /// so no nested row of the child's history is read. `None` when the head moved on.
+#[cfg(test)]
 pub(crate) fn commit_observation(
     ctx: &Ctx,
     id: &str,

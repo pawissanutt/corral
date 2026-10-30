@@ -9,6 +9,7 @@ use super::{autopilot_line, gate_line, parse_status, review_line, route};
 mod hot_read_tests;
 
 pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
+    corral_ops::refresh_role_sessions(ctx, id)?;
     corral_ops::refresh_usage(&ctx.store, id)?;
     let t = ctx.store.get(id)?;
     if json {
@@ -19,6 +20,10 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         let gate = corral_ops::gate_readback(ctx, &t)?;
         value["gate_contract"] = serde_json::to_value(&gate.gate_contract)?;
         value["gate_ref"] = serde_json::to_value(&gate.gate_ref)?;
+        let policy = ctx.store.config.task_review_policy(&t);
+        value["session_policy"] = serde_json::json!({
+            "worker": policy.worker_session, "reviewer": policy.reviewer_session
+        });
         if let Some(error) = gate.gate_contract_error {
             value["gate_contract_error"] = error.into();
         }
@@ -31,12 +36,20 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         println!("automation blocked: {reason}");
     }
     println!("project:  {}", t.project.as_deref().unwrap_or("-"));
+    let policy = ctx.store.config.task_review_policy(&t);
+    println!(
+        "sessions: worker={:?}, reviewer={:?}",
+        policy.worker_session, policy.reviewer_session
+    );
     println!("priority: {}", t.priority);
     if let Some(kind) = &t.kind {
         println!("kind:     {kind}");
     }
     if let Some(size) = t.size {
         println!("size:     {size}");
+    }
+    if let Some(difficulty) = t.difficulty {
+        println!("difficulty: {difficulty}");
     }
     if !t.labels.is_empty() {
         println!("labels:   {}", t.labels.join(", "));
@@ -125,6 +138,10 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
                 .unwrap_or_default()
         );
         crate::stats::show_run_usage(r, "    ");
+        show_session(r, "worker");
+        for child in &r.review_runs {
+            show_session(child, "reviewer");
+        }
         for line in r.obligations.lines() {
             println!("    {line}");
         }
@@ -168,6 +185,21 @@ pub(super) fn show(ctx: &Ctx, id: &str, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn show_session(run: &corral_core::Run, role: &str) {
+    if let Some(session) = &run.session {
+        println!(
+            "    {role} session ({}): {:?} {:?} {}",
+            run.id,
+            session.policy,
+            session.action,
+            session.id.as_deref().unwrap_or("not yet observed")
+        );
+        if let Some(reason) = &session.diagnostic {
+            println!("      {reason}");
+        }
+    }
 }
 
 pub(super) fn list(
@@ -235,16 +267,38 @@ pub(super) fn list(
         Some(input) => corral_ops::search_tasks(&ctx.store, input)?,
         None => ctx.store.list()?,
     };
+    let assessment = if want.is_some() || json {
+        Some(corral_ops::attention::board(ctx, jiff::Timestamp::now())?)
+    } else {
+        None
+    };
+    let blocked = |t: &Task| {
+        assessment
+            .as_ref()
+            .and_then(|board| board.tasks.iter().find(|row| row.task == t.id))
+            .and_then(|row| corral_core::attention::blocked(t, &row.assessment))
+    };
     let tasks: Vec<Task> = tasks
         .into_iter()
         .filter(|t| match want {
-            Some(s) => t.status == s,
+            Some(Status::NeedsMe) => blocked(t).is_some(),
+            Some(s) => t.status == s && blocked(t).is_none(),
             None => query.is_some() || all || !matches!(t.status, Status::Done | Status::Dropped),
         })
         .filter(|t| project.is_none_or(|p| t.project.as_deref() == Some(p)))
         .collect();
     if json {
-        let v: Vec<_> = tasks.iter().map(|t| task_json(t, false)).collect();
+        let v: Vec<_> = tasks
+            .iter()
+            .map(|t| {
+                let mut value = task_json(t, false);
+                let condition = blocked(t);
+                value["display_status"] = condition.map_or(t.status.label(), |_| "Blocked").into();
+                value["blocked"] = serde_json::json!(condition);
+                value["unblocker"] = serde_json::json!(condition.map(|c| c.unblocker()));
+                value
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&v)?);
         return Ok(());
     }

@@ -20,6 +20,7 @@ impl Store {
         task: &T,
         authorization: &ActionAuthorization,
     ) -> Result<()> {
+        crate::Park::require_unparked_ref(task)?;
         ensure!(
             authorization.workspace == self.root() && authorization.action.task == *task.id(),
             "action workspace/task identity changed"
@@ -29,7 +30,7 @@ impl Store {
             "action task contract or project identity changed"
         );
         ensure!(
-            authorization.policy_revision == self.policy_revision(config)?,
+            self.policy_revision_current(config, &authorization.policy_revision)?,
             "action policy revision changed"
         );
         match &authorization.origin {

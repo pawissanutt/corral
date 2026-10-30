@@ -29,6 +29,7 @@ tasks:
     title: Implement the widget API
     kind: logic
     size: m
+    difficulty: standard
     priority: P1
     profile: coder
     labels: [widget]
@@ -57,12 +58,20 @@ above are examples.
 | `approved_scope` | Optional approved scope for the tracker Plan; see below. |
 
 Each child requires a unique plan-local `key` and a `title`. Optional fields
-are `project`, `kind`, `size`, `priority`, `profile`, `labels`, `body`, and
+are `project`, `kind`, `size`, `difficulty`, `priority`, `profile`, `labels`, `body`, and
 `depends`. Task metadata uses the same values as ordinary corral tasks.
 `body` is that child's Markdown specification. `depends` names prerequisite
 task keys from this plan or existing `T-...` task IDs; corral resolves local
 keys to task IDs on import. Unknown dependencies and cycles are refused. In
 the example, `ui` depends on `api`, not the other way around.
+
+`size` measures work volume; `difficulty` measures reasoning, independently:
+`routine` for a known pattern or repetition, `standard` for bounded reasoning,
+and `hard` for uncertainty, algorithmic optimization, or correctness argued from
+invariants. Classify from the actual work, never title keywords or size alone.
+Omitted difficulty means not assessed; legacy routing applies. Keep `profile`
+unset for Agent: Auto. After import, the PM must persist any revised difficulty
+with `corral edit <id>` before loading a selection catalog or saving its receipt.
 
 The Markdown after the frontmatter becomes the tracker specification, not
 every child's body. The source plan is attached to the tracker so the imported

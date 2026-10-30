@@ -75,8 +75,15 @@ pub(crate) fn reconcile(
             | corral_herdr::AgentStatus::Done
             | corral_herdr::AgentStatus::Unknown => task.status,
         };
-        if task.status != status {
-            // A scalar status change: written on the head, never the full task.
+        // A planner question that waits on the owner holds Needs me like a worker's: the pane's
+        // working state never clears that hold; answering or withdrawing the question does.
+        let planner = corral_core::agent::ContainerRef::Planner {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        let question_hold = corral_core::agent::container_state(task, &planner)
+            .is_some_and(|state| state.question_hold.is_some());
+        if task.status != status && !question_hold {
             ctx.store.update_head(&task.id, |t| {
                 t.status = status;
                 ctx.store.log_event(
@@ -130,7 +137,7 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<()> {
     Ok(())
 }
 
-/// The last plan run is still the planner's, or ended without a plan to progress.
+/// Whether the planner still owns the current planning attempt.
 fn planner_owns(task: &Task) -> bool {
     task.plan_runs.last().is_some_and(|r| {
         matches!(
@@ -145,7 +152,7 @@ fn planner_owns(task: &Task) -> bool {
 
 fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<()> {
     let shell = ctx.store.head(id)?.to_shell_task()?;
-    if idle(ctx, &shell, now)? {
+    if shell.park.is_some() || idle(ctx, &shell, now)? {
         return Ok(());
     }
     act(ctx, id, now)

@@ -78,6 +78,7 @@ pub(crate) fn reconcile_head(
             transitions.push(json!({"decision":decision.request.id,"state":"expired","question":decision.request.question}));
         }
     }
+    next.settle_parking(&open.parked_on(&head.id), &head.id, now);
     if next == open {
         return Ok(None);
     }
@@ -99,6 +100,7 @@ pub(crate) fn reconcile_head(
         if fresh.facts.obligations_rev != rev || fresh.gate != run.gate {
             return Ok(false);
         }
+        fresh.obligations.slot_wait = next.slot_wait.clone();
         for (before, after) in open.waits.iter().zip(&next.waits) {
             if before != after {
                 t.edit_wait(&run.id, &after.request.id, |w| {
@@ -123,6 +125,7 @@ pub(crate) fn reconcile_head(
     for detail in transitions {
         transition(ctx, &task.id, "wait_transition", detail)?;
     }
+    crate::parked::reacquire(ctx, &task.id)?;
     Ok(Some(Change {
         task: task.id.clone(),
         from: task.status,
@@ -184,7 +187,7 @@ fn observe(
                 );
             }
             match gate.result {
-                GateResult::Pass | GateResult::Fail => {
+                GateResult::Pass | GateResult::Fail | GateResult::Stale => {
                     // gate_collect is the only authority that turns the real result file into Pass/Fail.
                     let receipt = ResumeReceipt {
                         version: 1,

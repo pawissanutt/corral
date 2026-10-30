@@ -83,6 +83,7 @@ const LIVE_LINES: usize = 200;
 /// u -> confirm popup (pid + argv) that calls `corral_ops::unstick` for the current run's stuck process,
 /// * pins the selected artifact (Artifacts tab) or the task.
 pub struct DetailView {
+    attention: crate::attention::Snapshot,
     overview: bool,
     show_live: bool,
     routing: routing::Routing,
@@ -128,6 +129,7 @@ impl DetailView {
         let tab = if task.tracker { PLAN } else { 0 };
         let operating = acceptance::effective_lines(ctx, &task);
         Ok(DetailView {
+            attention: crate::attention::load(ctx, jiff::Timestamp::now()),
             overview: true,
             show_live: false,
             routing,
@@ -576,7 +578,11 @@ impl View for DetailView {
             return action;
         }
         let on_plan = self.tab == PLAN;
+        let was_details = self.plan.showing_details();
         if let Some(action) = self.plan.on_key(&key, ctx, &self.task, on_plan) {
+            if self.plan.showing_details() != was_details {
+                self.scroll = Scroll::default();
+            }
             return action;
         }
         if key.code == KeyCode::F(5) && self.plan.enabled {
@@ -716,6 +722,32 @@ impl View for DetailView {
     }
 
     fn refresh(&mut self, ctx: &Ctx) {
+        self.refresh_with_attention(ctx, crate::attention::load(ctx, jiff::Timestamp::now()));
+    }
+
+    fn refresh_board_snapshot(&mut self, ctx: &Ctx, snapshot: &crate::board::BoardSnapshot) {
+        self.refresh_with_attention(ctx, snapshot.attention.clone());
+    }
+
+    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
+        self.mouse(ev, m)
+    }
+
+    fn captures_text(&self) -> bool {
+        self.comment.is_some() || self.plan.sheet_open()
+    }
+
+    fn has_unsaved_text(&self) -> bool {
+        self.comment
+            .as_ref()
+            .is_some_and(|c| !c.input.text.is_empty())
+            || self.plan.has_unsaved_text()
+    }
+}
+
+impl DetailView {
+    fn refresh_with_attention(&mut self, ctx: &Ctx, attention: crate::attention::Snapshot) {
+        self.attention = attention;
         if let Err(error) = corral_ops::refresh_usage(&ctx.store, &self.task.id) {
             corral_ops::report_message(
                 Some(&self.task.id),
@@ -724,6 +756,11 @@ impl View for DetailView {
             );
         }
         if let Ok(t) = ctx.store.get(&self.task.id) {
+            if self.tab == PLAN
+                && self.task.plans.last().map(|p| &p.id) != t.plans.last().map(|p| &p.id)
+            {
+                self.scroll = Scroll::default();
+            }
             self.task = t;
             self.operating = acceptance::effective_lines(ctx, &self.task);
             self.routing.refresh(ctx, &self.task);
@@ -748,20 +785,5 @@ impl View for DetailView {
         if !self.overview && self.tab == 3 {
             self.set_tab(3, ctx);
         }
-    }
-
-    fn on_mouse(&mut self, ev: MouseEvent, m: &MouseCtx) -> Action {
-        self.mouse(ev, m)
-    }
-
-    fn captures_text(&self) -> bool {
-        self.comment.is_some() || self.plan.sheet_open()
-    }
-
-    fn has_unsaved_text(&self) -> bool {
-        self.comment
-            .as_ref()
-            .is_some_and(|c| !c.input.text.is_empty())
-            || self.plan.has_unsaved_text()
     }
 }

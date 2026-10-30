@@ -25,6 +25,103 @@ fn session(fx: &Fx, settled: bool) {
     .unwrap();
 }
 
+/// The T-389 shape: a blocking `ask_user_question` resolved in the harness's local UI writes only
+/// its tool result, with no `ask-user:settlement` record.
+fn ask_tool_session(fx: &Fx) -> std::path::PathBuf {
+    let dir = fx
+        .agent_dir
+        .join("sessions")
+        .join(format!("--{}--", slug(&fx.worktree)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("2026-10-25T01-37-15-467Z_ask.jsonl");
+    let entries = [
+        json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"ask_user_question","id":"toolu_scope","arguments":{"questions":[{"header":"Write scope","question":"Which out-of-scope edits?","options":[{"label":"Session"},{"label":"Stall"}],"multiSelect":true}],"waitForAnswer":true}}]}}),
+        json!({"type":"custom","customType":"ask-user:question","data":{"requestId":"toolu_scope","headers":["Write scope"]}}),
+    ];
+    std::fs::write(
+        &path,
+        entries.iter().map(|e| format!("{e}\n")).collect::<String>(),
+    )
+    .unwrap();
+    path
+}
+
+fn local_ui_answer(path: &std::path::Path, request: &str) {
+    use std::io::Write;
+    let entry = json!({"type":"message","message":{"role":"toolResult","toolCallId":request,"toolName":"ask_user_question","details":{"resolvedBy":"local_ui","answers":{"Which out-of-scope edits?":"Session, Stall"},"unanswered":[],"status":"answered"},"content":[{"type":"text","text":"Write scope: Session, Stall"}],"isError":false}});
+    let mut transcript = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(transcript, "{entry}").unwrap();
+}
+
+#[test]
+fn local_ui_answered_ask_user_question_leaves_no_native_decision() {
+    // Given an ask_user_question answered in the local UI while the agent keeps working.
+    let fx = Fx::new("omo");
+    let path = ask_tool_session(&fx);
+    local_ui_answer(&path, "toolu_scope");
+    fx.herdr_says("working");
+    // When the board syncs and the stateless PM reads it.
+    let task = fx.sync(1);
+    let card = pm_next(&fx.ctx).unwrap();
+    // Then the live run stays Running and no native-question decision is offered.
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(fx.events("needs_me"), 0);
+    assert_ne!(card.kind, PmActionKind::Question);
+    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    assert!(
+        workset
+            .decisions
+            .iter()
+            .all(|d| !d.source.contains(" request toolu_scope"))
+    );
+}
+
+#[test]
+fn local_ui_answer_to_another_request_does_not_clear_the_question() {
+    // Given an unanswered ask_user_question and a local UI answer for a different request.
+    let fx = Fx::new("omo");
+    let path = ask_tool_session(&fx);
+    local_ui_answer(&path, "toolu_other");
+    fx.herdr_says("working");
+    // When the board syncs and the stateless PM reads it.
+    let task = fx.sync(1);
+    let card = pm_next(&fx.ctx).unwrap();
+    // Then the question still needs the owner.
+    assert_eq!(task.status, Status::NeedsMe);
+    assert_eq!(card.kind, PmActionKind::Question);
+    assert!(card.requires_owner);
+}
+
+#[test]
+fn presented_native_decision_is_released_by_a_later_local_ui_answer() {
+    // Given the T-311 shape: a presented native decision for an unanswered ask_user_question.
+    let fx = Fx::new("omo");
+    let path = ask_tool_session(&fx);
+    fx.herdr_says("working");
+    assert_eq!(fx.sync(1).status, Status::NeedsMe);
+    let native = corral_ops::pm_workset(&fx.ctx)
+        .unwrap()
+        .decisions
+        .iter()
+        .find(|d| d.source.contains(" request toolu_scope"))
+        .unwrap()
+        .id
+        .clone();
+    corral_ops::pm_present(&fx.ctx, &native, "owner-pane:native", true, fx.at(2)).unwrap();
+    // When the owner answers it in the local UI and the board syncs again.
+    local_ui_answer(&path, "toolu_scope");
+    let task = fx.sync(3);
+    // Then the saved decision is dropped and the live run is not held in Needs me.
+    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    assert!(workset.decisions.iter().all(|d| d.id != native));
+    assert_ne!(
+        workset.status,
+        corral_ops::OperatingStatus::NeedsYourDecision
+    );
+    assert_ne!(pm_next(&fx.ctx).unwrap().kind, PmActionKind::Question);
+    assert_eq!(task.status, Status::Running);
+}
+
 #[test]
 fn native_pending_question_surfaces_needs_me_while_herdr_reports_working() {
     // Given a native question that is registered and acknowledged, but not settled.
@@ -56,4 +153,94 @@ fn native_settlement_releases_question_without_waiting_for_terminal_idle() {
     // Then no owner decision is invented from an already acknowledged tool call.
     assert_eq!(task.status, Status::Running);
     assert_eq!(fx.events("needs_me"), 0);
+}
+
+#[test]
+fn timed_out_native_question_answered_later_does_not_hold_needs_me() {
+    // Given the T-207 shape: accepted, settled timed_out, then an answer as a user message.
+    let fx = Fx::new("omo");
+    session(&fx, false);
+    let path = fx
+        .agent_dir
+        .join("sessions")
+        .join(format!("--{}--", slug(&fx.worktree)))
+        .join("2026-10-15T09-00-00-000Z_native.jsonl");
+    let mut transcript = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    for entry in [
+        json!({"type":"custom","customType":"ask-user:settlement","data":{"requestId":"complete|request-id","status":"timed_out"}}),
+        json!({"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Answer to question complete|request-id]\nPreserve guard"}]}}),
+    ] {
+        use std::io::Write;
+        writeln!(transcript, "{entry}").unwrap();
+    }
+    fx.herdr_says("working");
+    // When the board syncs.
+    let task = fx.sync(1);
+    // Then the stale question neither holds Needs me nor blocks operating actions.
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(fx.events("needs_me"), 0);
+}
+
+#[test]
+fn done_task_shows_no_stale_native_question_card() {
+    // Given a finished task whose transcript still ends on an unsettled native question.
+    let fx = Fx::new("omo");
+    session(&fx, false);
+    fx.ctx
+        .store
+        .update("T-001", |task| {
+            task.status = Status::Done;
+            Ok(())
+        })
+        .unwrap();
+    // When the stateless PM reads the board.
+    let card = pm_next(&fx.ctx).unwrap();
+    // Then no question decision is shown for it.
+    assert_ne!(card.kind, PmActionKind::Question);
+}
+
+fn presented_native_decision_survives_terminal_status(terminal: Status) {
+    // Given a presented, persisted native-question decision on an unsettled transcript.
+    let fx = Fx::new("omo");
+    session(&fx, false);
+    fx.herdr_says("working");
+    fx.sync(1);
+    let workset = corral_ops::pm_workset(&fx.ctx).unwrap();
+    let native = workset
+        .decisions
+        .iter()
+        .find(|d| d.source.contains(" request complete|request-id"))
+        .unwrap()
+        .id
+        .clone();
+    corral_ops::pm_present(&fx.ctx, &native, "owner-pane:native", true, fx.at(2)).unwrap();
+    assert!(
+        corral_ops::pm_workset(&fx.ctx)
+            .unwrap()
+            .decisions
+            .iter()
+            .any(|d| d.id == native)
+    );
+    // When the task becomes terminal while the transcript stays unsettled.
+    fx.ctx
+        .store
+        .update("T-001", |task| {
+            task.status = terminal;
+            Ok(())
+        })
+        .unwrap();
+    // Then the saved decision is not restored into the workset or its status.
+    let after = corral_ops::pm_workset(&fx.ctx).unwrap();
+    assert!(after.decisions.iter().all(|d| d.id != native));
+    assert_ne!(after.status, corral_ops::OperatingStatus::NeedsYourDecision);
+}
+
+#[test]
+fn presented_native_decision_is_dropped_when_the_task_is_done() {
+    presented_native_decision_survives_terminal_status(Status::Done);
+}
+
+#[test]
+fn presented_native_decision_is_dropped_when_the_task_is_dropped() {
+    presented_native_decision_survives_terminal_status(Status::Dropped);
 }

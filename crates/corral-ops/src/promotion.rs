@@ -43,6 +43,7 @@ pub struct PromotionCandidate {
 /// All eligible Ideas, irrespective of promotion mode or current free capacity.
 /// Reads tasks and bounded historical lesson signals; never mutates board state.
 pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
+    let ctx = &Ctx { store: ctx.store.read_only_snapshot()?, ..ctx.clone() };
     let heads = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
@@ -60,6 +61,7 @@ pub fn promotion_shortlist(ctx: &Ctx) -> Result<Vec<PromotionCandidate>> {
     let dependencies = ctx
         .store
         .heads(&corral_core::backend::HeadQuery::Ids(dependency_ids))?;
+
     let mut out = Vec::new();
     for task in tasks.iter().filter(|t| t.status == Status::Idea) {
         let Some(project) = task.project.as_deref() else {

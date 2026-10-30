@@ -59,6 +59,10 @@ pub enum PmObservation {
         task: String,
         condition: String,
     },
+    Blocked {
+        task: String,
+        condition: Box<corral_core::attention::Condition>,
+    },
     GateNeeded {
         task: String,
     },
@@ -102,6 +106,30 @@ pub enum PmObservation {
         text: String,
         reason: String,
     },
+}
+
+impl PmObservation {
+    pub(crate) fn task(&self) -> Option<&str> {
+        match self {
+            Self::GateUntrusted { task, .. }
+            | Self::StaleReview { task, .. }
+            | Self::Question { task, .. }
+            | Self::EvidenceOnly { task, .. }
+            | Self::LoadFailure { task, .. }
+            | Self::ReviewInFlight { task, .. }
+            | Self::AutomaticWait { task, .. }
+            | Self::Blocked { task, .. }
+            | Self::GateNeeded { task }
+            | Self::ReviewNeeded { task }
+            | Self::ReadyToLand { task }
+            | Self::Dispatch { task }
+            | Self::PlanDecision { task, .. }
+            | Self::AgentQuestion { task, .. }
+            | Self::OwnerQuestion { task, .. }
+            | Self::Owner { task, .. } => Some(task),
+            Self::IdleIdeas { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,7 +234,7 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
         } => (
             PmActionKind::Question,
             Some(task.clone()),
-            "Needs me: an unanswered harness question outranks a working pane.",
+            "Blocked: an unanswered harness question outranks a working pane.",
             "The owner answers the exact question; a decision receipt acknowledges delivery.",
             vec![
                 format!("source: {source}"),
@@ -368,6 +396,41 @@ pub fn pm_card(observation: &PmObservation, bin: &str) -> PmAction {
                 false,
             )],
         ),
+        Blocked { task, condition } => {
+            let command = format!("{bin} show {} --json", q(task));
+            let requires_owner = condition.next_action.requires_owner;
+            let id = if requires_owner { "ask_owner" } else { "wait" };
+            return PmAction {
+                kind: if requires_owner {
+                    PmActionKind::Owner
+                } else {
+                    PmActionKind::Wait
+                },
+                task: Some(task.clone()),
+                why: format!("Blocked: {}", condition.reason),
+                command: command.clone(),
+                verify: condition.next_action.description.clone(),
+                evidence: vec![
+                    format!("unblocks: {}", condition.unblocker()),
+                    format!(
+                        "blocked since: {}",
+                        condition
+                            .since
+                            .map_or_else(|| "unknown".into(), |at| at.to_string())
+                    ),
+                    format!("resume checks: {}", condition.resume.len()),
+                ],
+                options: vec![option(
+                    id,
+                    "Inspect the blocker and resume checks",
+                    command,
+                    requires_owner,
+                )],
+                recommended: id.into(),
+                requires_owner,
+                shortlist: vec![],
+            };
+        }
         GateNeeded { task } => (
             PmActionKind::Gate,
             Some(task.clone()),
@@ -541,7 +604,9 @@ pub(crate) fn rank(observation: &PmObservation) -> u8 {
         PmObservation::GateUntrusted { .. } => 2,
         PmObservation::LoadFailure { .. } => 3,
         PmObservation::EvidenceOnly { .. } => 4,
-        PmObservation::Owner { .. } | PmObservation::PlanDecision { .. } => 5,
+        PmObservation::Owner { .. }
+        | PmObservation::PlanDecision { .. }
+        | PmObservation::Blocked { .. } => 5,
         PmObservation::GateNeeded { .. } => 6,
         PmObservation::ReviewNeeded { .. } => 7,
         PmObservation::ReviewInFlight { .. } => 8,

@@ -15,7 +15,8 @@ struct Exec {
 }
 
 fn spawn(fx: &Fx, o: &RequestOrigin, points: &str) -> Exec {
-    let spec = json!({"root": fx.root(), "identity": o.identity, "request": o.request_id, "payload": o.payload_sha256});
+    let spec = json!({"root": fx.root(), "identity": o.identity, "request": o.request_id, "payload": o.payload_sha256,
+        "queue": points.contains("gate_queue_claimed")});
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -126,12 +127,46 @@ fn gate_executor_child() {
         identity,
         binding,
     };
+    if spec["queue"] == true {
+        super::super::gate_queue::advance(&ctx).unwrap();
+    }
     let response = effects::gate(&ctx, &o).unwrap();
     println!("\nRESULT {}", response.to_json().unwrap());
 }
 
 fn reconcile(fx: &Fx) {
     effects::reconcile_task(&fx.ctx, &fx.id).unwrap();
+}
+
+#[test]
+fn queued_gate_claim_crash_requeues_and_submission_crash_never_duplicates() {
+    for point in ["gate_queue_claimed", "gate_started_before_receipt"] {
+        // Given a queued gate and an executor stopped before or after submission.
+        let fx = fixture(true);
+        let o = fx.call(fx.bind(), point, "gate");
+        super::queue::queued(&fx, &o);
+        let points = if point == "gate_queue_claimed" {
+            point.to_owned()
+        } else {
+            format!("gate_queue_claimed,{point}")
+        };
+        let mut exec = spawn(&fx, &o, &points);
+        exec.reached("gate_queue_claimed");
+        if point != "gate_queue_claimed" {
+            exec.release().reached(point);
+        }
+        exec.kill();
+        // When sync reconciles the dead executor and retries admission.
+        reconcile(&fx);
+        if point == "gate_queue_claimed" {
+            assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Queued);
+        }
+        super::super::gate_queue::advance(&fx.ctx).unwrap();
+        // Then the request starts once, including after a lost submission acknowledgement.
+        assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Committed);
+        assert_eq!(fx.calls("pane run"), 1);
+        assert_eq!(wake(&fx, &o), WakeState::Armed);
+    }
 }
 
 fn attempt(fx: &Fx, o: &RequestOrigin, attempt: &str) -> AttemptState {
@@ -166,6 +201,47 @@ fn wake(fx: &Fx, o: &RequestOrigin) -> WakeState {
         .find(|w| w.request_id == o.request_id)
         .unwrap()
         .state
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn an_executor_exiting_during_the_stat_read_is_settled_by_reconciliation() {
+    use rustix::event::{PollFd, PollFlags, poll};
+    use rustix::io::Errno;
+    use rustix::process::{Pid, PidfdFlags, pidfd_open};
+    use rustix::time::Timespec;
+
+    let fx = fixture(true);
+    let g = fx.bind();
+    let o = fx.call(g, "gate-esrch", "gate");
+    let mut exec = spawn(&fx, &o, "gate_reserved_before_authorization");
+    exec.reached("gate_reserved_before_authorization");
+    assert_eq!(fx.receipt(&o).unwrap().state, ReceiptState::Reserved);
+
+    let pid = Pid::from_raw(i32::try_from(exec.child.id()).unwrap()).unwrap();
+    let pidfd = pidfd_open(pid, PidfdFlags::empty()).unwrap();
+    exec.child.kill().unwrap();
+    let mut ready = [PollFd::new(&pidfd, PollFlags::IN)];
+    let timeout = Timespec {
+        tv_sec: 120,
+        tv_nsec: 0,
+    };
+    assert_eq!(poll(&mut ready, Some(&timeout)).unwrap(), 1, "pidfd ready");
+
+    // The executor is unreaped and its exit has been observed; the read that follows fails as
+    // it does for a process reaped mid-read.
+    effects::STAT_FAULT.with(|fault| fault.set(Some(Errno::SRCH.raw_os_error())));
+    reconcile(&fx);
+    assert_eq!(
+        effects::STAT_FAULT.with(std::cell::Cell::get),
+        None,
+        "the ESRCH read was consumed"
+    );
+    let settled = fx.receipt(&o).unwrap();
+    assert_eq!(
+        (settled.state, settled.result["outcome"].as_str()),
+        (ReceiptState::Abandoned, Some("not_started"))
+    );
 }
 
 #[test]

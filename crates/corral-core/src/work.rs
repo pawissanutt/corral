@@ -34,6 +34,8 @@ pub enum Work {
     TranscriptRead,
     /// A task visited deriving board state (column order, Done history, slot usage).
     BoardVisit,
+    /// An unfinished task classified for attention, independent of UI board-index construction.
+    AttentionVisit,
     /// A read of the store schema marker (`state/schema-version`).
     SchemaRead,
     /// A read of the durable herdr session binding (with its review-launch journal).
@@ -52,10 +54,18 @@ pub enum Work {
     LessonSignalScan,
     /// A project repository's identity resolved from the filesystem (paths, `.git` marker).
     ProjectIdentity,
+    InboxRecordRead,
+    InboxMessageRead,
+    InboxEnvelopeRead,
+    InboxList,
+    InboxHeaderWrite,
+    InboxIndexRead,
+    /// A full resolution of the effective operating policy (grant, members and refusals).
+    PolicyResolve,
 }
 
 impl Work {
-    pub const ALL: [Work; 21] = [
+    pub const ALL: [Work; 29] = [
         Work::ConfigRead,
         Work::ConfigParse,
         Work::TaskList,
@@ -68,6 +78,7 @@ impl Work {
         Work::EventParse,
         Work::TranscriptRead,
         Work::BoardVisit,
+        Work::AttentionVisit,
         Work::SchemaRead,
         Work::SessionBindingRead,
         Work::OwnershipScan,
@@ -77,6 +88,13 @@ impl Work {
         Work::WorktreeWalk,
         Work::LessonSignalScan,
         Work::ProjectIdentity,
+        Work::InboxRecordRead,
+        Work::InboxMessageRead,
+        Work::InboxEnvelopeRead,
+        Work::InboxList,
+        Work::InboxHeaderWrite,
+        Work::InboxIndexRead,
+        Work::PolicyResolve,
     ];
 
     pub fn name(self) -> &'static str {
@@ -93,6 +111,7 @@ impl Work {
             Work::EventParse => "event_parses",
             Work::TranscriptRead => "transcript_reads",
             Work::BoardVisit => "board_visits",
+            Work::AttentionVisit => "attention_visits",
             Work::SchemaRead => "schema_reads",
             Work::SessionBindingRead => "session_binding_reads",
             Work::OwnershipScan => "ownership_scans",
@@ -102,6 +121,13 @@ impl Work {
             Work::WorktreeWalk => "worktree_walks",
             Work::LessonSignalScan => "lesson_signal_scans",
             Work::ProjectIdentity => "project_identities",
+            Work::InboxRecordRead => "inbox_record_reads",
+            Work::InboxMessageRead => "inbox_message_reads",
+            Work::InboxEnvelopeRead => "inbox_envelope_reads",
+            Work::InboxList => "inbox_lists",
+            Work::InboxHeaderWrite => "inbox_header_writes",
+            Work::InboxIndexRead => "inbox_index_reads",
+            Work::PolicyResolve => "policy_resolves",
         }
     }
 }

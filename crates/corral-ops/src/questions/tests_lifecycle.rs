@@ -221,28 +221,149 @@ fn review_child_closure_paths_cancel_with_their_reason_and_refuse_later_actions(
 }
 
 #[test]
-fn late_answer_after_withdraw_and_verdict_is_refused_as_withdrawn() {
-    let fx = fx();
-    let (id, reviewer) = reviewer(&fx);
-    let key = ask_ok(&fx, &reviewer, "r1", true);
+fn withdrawn_reviewer_questions_refuse_new_triage_as_closed_after_closure() {
+    let closings: [Closing; 4] = [
+        ("verdict", |t| {
+            t.runs[0].review_runs[0].review = Some(review_record(Some(Verdict::Approve), false))
+        }),
+        ("supersession", |t| {
+            t.runs[0].review_runs[0].outcome = Some(RunOutcome::Superseded)
+        }),
+        ("process_loss", |t| {
+            t.runs[0].review_runs[0].review = Some(review_record(None, true))
+        }),
+        ("terminal_parent", |t| {
+            t.runs[0].outcome = Some(RunOutcome::Discarded)
+        }),
+    ];
+    for (name, close) in closings {
+        {
+            let fx = fx();
+            let (id, reviewer) = reviewer(&fx);
+            let key = ask_ok(&fx, &reviewer, "r1", true);
+            withdraw_question(&fx, &reviewer, &key);
+            fx.ctx
+                .store
+                .update(&id, |t| {
+                    close(t);
+                    Ok(())
+                })
+                .unwrap();
+            let before = serde_json::to_value(fx.ctx.store.get(&id).unwrap()).unwrap();
+            let events_before = std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap();
+            let inbox_before = review_messages(&fx, &id, "R1-review1");
+            assert_closed_everywhere(&fx, &key, question(&fx, &key).revision);
+            assert!(super::terminalize(&fx.ctx, &id).unwrap().is_empty());
+            assert_eq!(
+                serde_json::to_value(fx.ctx.store.get(&id).unwrap()).unwrap(),
+                before,
+                "{name}"
+            );
+            assert_eq!(
+                std::fs::read(fx.ctx.store.dir().join("events.jsonl")).unwrap(),
+                events_before,
+                "{name}"
+            );
+            assert_eq!(
+                review_messages(&fx, &id, "R1-review1"),
+                inbox_before,
+                "{name}"
+            );
+        }
+    }
+}
+
+fn withdraw_question(fx: &Fx, host: &Host, key: &str) {
     let withdraw = json!({"key": key, "reason": "answered by the diff"});
     assert!(
-        send(&fx, &reviewer, "withdraw", "w1", withdraw)
+        send(fx, host, "withdraw", "w1", withdraw)
             .receipt()
             .is_some()
     );
+}
+
+#[test]
+fn withdrawn_question_in_open_container_still_refuses_as_withdrawn() {
+    let fx = fx();
+    let (_, reviewer) = reviewer(&fx);
+    let key = ask_ok(&fx, &reviewer, "r1", true);
+    withdraw_question(&fx, &reviewer, &key);
+    let attempts = [
+        pm_answer(&fx, &key, 2),
+        super::answer(
+            &fx.ctx,
+            &key,
+            2,
+            Actor::Owner,
+            AnswerInput {
+                text: "late".into(),
+                ..AnswerInput::default()
+            },
+        ),
+        super::escalate(&fx.ctx, &key, 2, Actor::Pm(None), None, None),
+        super::cancel(&fx.ctx, &key, 2, Actor::Owner, "late"),
+        super::deadline(&fx.ctx, &key, 2, Timestamp::now(), "late"),
+    ];
+    for attempt in attempts {
+        assert_eq!(refusal(&attempt.unwrap_err()), "question_withdrawn");
+    }
+}
+
+#[test]
+fn withdrawn_worker_question_refuses_as_closed_after_run_ends() {
+    let fx = fx();
+    let (id, worker) = worker(&fx);
+    let key = ask_ok(&fx, &worker, "c1", true);
+    withdraw_question(&fx, &worker, &key);
     fx.ctx
         .store
         .update(&id, |t| {
-            t.runs[0].review_runs[0].review = Some(review_record(Some(Verdict::Approve), false));
+            t.runs[0].outcome = Some(RunOutcome::Discarded);
             Ok(())
         })
         .unwrap();
-    assert_eq!(
-        refusal(&pm_answer(&fx, &key, 2).unwrap_err()),
-        "question_withdrawn"
-    );
-    assert!(super::terminalize(&fx.ctx, &id).unwrap().is_empty());
+    assert_closed_everywhere(&fx, &key, 2);
+}
+
+#[test]
+fn committed_triage_receipt_replays_after_withdrawal_and_container_closure() {
+    for superseded in [false, true] {
+        let fx = fx();
+        let (id, reviewer) = reviewer(&fx);
+        let key = ask_ok(&fx, &reviewer, "r1", true);
+        let pm = pm_host(&fx);
+        let payload = json!({"key": key, "rev": 1, "note": "owner call"});
+        let first = send(&fx, &pm, "question_escalate", "e1", payload.clone());
+        let receipt = first.receipt().unwrap().clone();
+        withdraw_question(&fx, &reviewer, &key);
+        fx.ctx
+            .store
+            .update(&id, |t| {
+                if superseded {
+                    t.runs[0].review_runs[0].outcome = Some(RunOutcome::Superseded);
+                } else {
+                    t.runs[0].review_runs[0].review =
+                        Some(review_record(Some(Verdict::Approve), false));
+                }
+                Ok(())
+            })
+            .unwrap();
+        let before = serde_json::to_value(fx.ctx.store.get(&id).unwrap()).unwrap();
+        let replay = send(&fx, &pm, "question_escalate", "e1", payload.clone());
+        assert!(matches!(
+            replay,
+            crate::agent::CallResponse::Receipt { replayed: true, .. }
+        ));
+        assert_eq!(replay.receipt(), Some(&receipt));
+        assert_eq!(
+            code(&send(&fx, &pm, "question_escalate", "e2", payload)),
+            Some("question_closed")
+        );
+        assert_eq!(
+            serde_json::to_value(fx.ctx.store.get(&id).unwrap()).unwrap(),
+            before
+        );
+    }
 }
 
 #[test]

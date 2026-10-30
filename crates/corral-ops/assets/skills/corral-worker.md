@@ -12,6 +12,15 @@ artifact globs and the `done` result and summary shapes. This skill explains how
 step says "contract step N", follow that numbered step of the Run contract as written; this skill never
 restates or relaxes it. Read `corral <verb> --help` for exact flags.
 
+## Load testing: container only
+
+Never generate intentional load on the shared host: no host CPU/memory burners,
+spin loops, `stress-ng`, or parallel stress harnesses. The only allowed way to
+load-test is `scripts/load-sandbox.sh --cpus 2 --memory 2g --pids-limit 256 --burners 2 -- COMMAND`
+(one Podman container, maximum 4 CPUs, removed on exit/interrupt). If unavailable,
+report the blocked check; never fall back to host load. See `docs/guide/load-sandbox.md`.
+This does not authorize an extra gate or a different tier.
+
 ## Lifecycle
 
 1. **Orient** (contract step 1). Read the task with `corral show <id> --json`, the pitfalls captured
@@ -49,7 +58,11 @@ restates or relaxes it. Read `corral <verb> --help` for exact flags.
    `corral run decision <id> --file <json>`. To declare that the run waits on something external (CI,
    another task landing), use `corral run wait <id> --file <json>` and record the outcome with
    `corral run resume <id> --wait <wait-id> --file <receipt-json>`. Payloads are in
-   docs/guide/automation.md, "Explicit waits and owner decisions".
+   docs/guide/automation.md, "Explicit waits and owner decisions". Name the task in a landing wait's
+   channel ID (`task:T-512:landed`): the run then releases its coding slot while parked. If
+   `corral run resume` reports the run queued for a slot, run the exact
+   `corral wait --for slot_reacquired --task <id> --since <time>` command it prints and resume work
+   only after it returns.
 
 ## Variants by task kind
 
@@ -75,7 +88,7 @@ no new tests; never pin wording with a test.
 
 ### Flaky-test fix
 
-Reproduce first: run the test in a loop, record the failure rate and keep that log. Find the cause,
+Reproduce first: run the test in a loop inside `scripts/load-sandbox.sh`, record the failure rate and keep that log. Find the cause,
 then make the test deterministic by waiting on the exact event, using a barrier or injecting a clock.
 Never add sleeps, raise timeouts or budgets, add retries, or skip or ignore the test. Prove it with a
 red log that reproduces the failure before the fix and an N/N stress log after it.

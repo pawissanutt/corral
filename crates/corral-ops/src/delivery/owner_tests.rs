@@ -7,9 +7,14 @@ use serde_json::Value;
 use super::*;
 use crate::delivery::omo_fixture::OmoWorld;
 
+pub(super) type PassHook = Box<dyn FnOnce(&Ctx)>;
+
 thread_local! {
     /// Runs once between `done`'s first unobserved check and its final admission.
     pub(super) static BEFORE_DONE_ADMISSION: RefCell<Option<Box<dyn FnOnce()>>> =
+        const { RefCell::new(None) };
+    /// Runs once in `reconcile_all_with`, after its task snapshot and before a recipient's pass.
+    pub(super) static BEFORE_RECIPIENT_PASS: RefCell<Option<PassHook>> =
         const { RefCell::new(None) };
 }
 
@@ -69,10 +74,9 @@ fn request_changes_reopens_the_run_and_posts_the_request() {
     let task = crate::request_changes(&world.ctx, &world.task.id, "split the module").unwrap();
     assert_eq!(task.status, Status::Running);
     assert_eq!(task.runs[0].outcome, None);
-    assert_eq!(
-        task.runs[0].pending_reply.as_deref(),
-        Some("split the module")
-    );
+    let pending = task.runs[0].pending_reply.as_deref().unwrap();
+    assert!(pending.starts_with("NEW CHANGES ROUND 1:"), "{pending}");
+    assert!(pending.ends_with(" split the module"), "{pending}");
     let posted = messages(&world);
     assert_eq!(posted[0].kind, "changes_requested");
     assert_eq!(
@@ -246,49 +250,87 @@ fn decision_answer_replays_its_journaled_receipt_after_a_crash() {
 }
 
 #[test]
-fn run_end_cancels_unsent_and_orphans_attempted_messages_once() {
+fn a_stale_run_ended_snapshot_never_cancels_changes_posted_to_the_reopened_run() {
+    // Given T-128: R1 finished in Review after two owner messages were settled.
+    let world = OmoWorld::new(Status::Running);
+    let recipient = world.recipient();
+    let inbox = Inbox::new(&world.ctx.store, recipient.clone()).unwrap();
+    for text in ["first", "second"] {
+        let message = post_reply(&world, text, MessageBinding::default());
+        inbox.mark_observed(message.seq, "fixture").unwrap();
+    }
+    finish_run(&world);
+    reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+    let id = world.task.id.clone();
+    // When the changes path reopens R1 and posts #3 after sync snapshotted the ended run.
+    BEFORE_RECIPIENT_PASS.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |ctx: &Ctx| {
+            crate::request_changes(ctx, &id, "fix the findings").unwrap();
+        }));
+    });
+    reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+
+    // Then the fenced retire re-reads the open run and cancels nothing.
+    let changes = messages(&world).pop().unwrap();
+    assert_eq!(
+        (changes.seq, changes.kind.as_str()),
+        (3, "changes_requested")
+    );
+    assert_eq!(inbox.terminal(changes.seq).unwrap(), None);
+    assert_eq!(world.events("message_cancelled"), Vec::<Value>::new());
+    assert!(world.sends().is_empty());
+
+    // And the next delivery pass submits it to the reopened run.
+    reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+    let sends = world.sends();
+    assert_eq!(sends.len(), 1);
+    assert!(sends[0].join(" ").contains("fix the findings"), "{sends:?}");
+    assert_eq!(inbox.terminal(changes.seq).unwrap(), None);
+}
+
+#[test]
+fn a_genuinely_ended_run_cancels_unsent_and_orphans_attempted_messages_through_sync() {
+    // Given a Done run with one attempted and one never-submitted wake message.
     let world = OmoWorld::new(Status::Running);
     world.script(&["0 send-busy.exit0.json 0"]);
     let recipient = world.recipient();
-    let attempted = post(
-        &world.ctx,
-        &recipient,
-        "owner_reply",
-        "first",
-        MessageBinding::default(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
+    let attempted = post_reply(&world, "first", MessageBinding::default());
     kick_with(&world.ctx, &recipient, &world.adapter()).unwrap();
-    let unsent = post(
-        &world.ctx,
-        &recipient,
-        "owner_reply",
-        "second",
-        MessageBinding::default(),
-        |_, _| Ok(()),
-    )
-    .unwrap();
-    world
-        .ctx
-        .store
-        .update(&world.task.id, |task| {
-            task.runs[0].outcome = Some(RunOutcome::Superseded);
-            task.runs[0].ended = Some(jiff::Timestamp::now());
-            Ok(())
-        })
-        .unwrap();
+    let unsent = post_reply(&world, "second", MessageBinding::default());
+    let sent = world.sends().len();
+    finish_run(&world);
+
+    // When sync visits the ended run twice.
     for _ in 0..2 {
-        retire(&world.ctx, &recipient, "run superseded").unwrap();
+        reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
     }
+
+    // Then the unsent message is cancelled as run ended, the attempted one is orphaned once,
+    // and nothing is resent.
     let inbox = Inbox::new(&world.ctx.store, recipient).unwrap();
     assert_eq!(
         inbox.terminal(unsent.seq).unwrap(),
         Some(TerminalState::Cancelled)
     );
     assert_eq!(inbox.terminal(attempted.seq).unwrap(), None);
+    let cancelled = world.events("message_cancelled");
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(cancelled[0]["seq"], unsent.seq);
+    assert_eq!(cancelled[0]["reason"], "run ended");
     assert_eq!(world.events("delivery_orphaned").len(), 1);
-    assert_eq!(world.events("message_cancelled").len(), 1);
+    assert_eq!(world.sends().len(), sent);
+}
+
+fn finish_run(world: &OmoWorld) {
+    let store = &world.ctx.store;
+    store
+        .update(&world.task.id, |task| {
+            (task.status, task.runs[0].pending_reply) = (Status::Review, None);
+            task.runs[0].outcome = Some(RunOutcome::Done);
+            task.runs[0].ended = Some(jiff::Timestamp::now());
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -556,10 +598,41 @@ fn two_replies_to_one_decision_both_clear_the_view() {
         decision: Some("D1".into()),
         ..Default::default()
     };
-    post_reply(&world, "yes", binding.clone());
+    let first = post_reply(&world, "yes", binding.clone());
     let second = post_reply(&world, "yes, and also", binding);
-    kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    // Observation belongs to the fixture's registration clock, not wall-clock scheduling.
+    let observed_at = "2026-10-19T00:00:06Z".parse::<jiff::Timestamp>().unwrap();
+    for _ in 0..2 {
+        super::super::deliver_at(
+            &world.ctx,
+            &world.recipient(),
+            &world.adapter(),
+            None,
+            observed_at,
+        )
+        .unwrap();
+    }
     let inbox = Inbox::new(&world.ctx.store, world.recipient()).unwrap();
+    assert_eq!(
+        inbox
+            .receipt(first.seq, ReceiptLevel::Observed)
+            .unwrap()
+            .unwrap()
+            .observed_at,
+        observed_at
+    );
+    kick_with(&world.ctx, &world.recipient(), &world.adapter()).unwrap();
+    let task = world.ctx.store.get(&world.task.id).unwrap();
+    let receipt = task.runs[0].obligations.decisions[0]
+        .receipt
+        .as_ref()
+        .unwrap();
+    assert_eq!(receipt.answer.as_deref(), Some("yes"));
+    assert_eq!(receipt.observed_at, observed_at);
+    assert_eq!(
+        inbox.entry(first.seq).unwrap().effect.unwrap().status,
+        EffectStatus::Applied
+    );
     let effect = inbox.entry(second.seq).unwrap().effect.unwrap();
     assert_eq!(effect.status, EffectStatus::SkippedStale);
     assert_eq!(world.pending(), None);

@@ -36,8 +36,8 @@ pub(crate) fn dispatch(
     opts: &DispatchOpts,
     admission: &Admission,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    corral_core::Park::require_unparked_ref(head)?;
     crate::tracker::check_action(head, "dispatch tracker to the plan pipeline")?;
-    // The planner checks read head fields and the current containers only.
     let task = &head.shell_task()?;
     let project = task
         .project
@@ -57,6 +57,7 @@ pub(crate) fn dispatch(
     }
     .open(ctx)?;
     let resolved = ctx.store.config.resolve_route(&plan.route)?;
+    crate::agent::hooks::preflight::check(ctx, corral_core::agent::AgentRole::Planner, &resolved)?;
     let _ownership = ctx
         .store
         .try_lock("session-ownership")?
@@ -110,6 +111,7 @@ pub(crate) fn dispatch(
         } else {
             let spec_revision = crate::plan_spec_revision(&current.shell_task()?)?;
             current.start_plan_run(PlanRun {
+                agent_host: None,
                 execution: Some(corral_core::ExecutionSnapshot {
                     candidate: plan.route.availability.clone(),
                     ..corral_core::ExecutionSnapshot::new(&ctx.store.config, resolved.clone())
@@ -211,16 +213,24 @@ fn launch(
     let output = run.output_dir.join("plan.md");
     let corral = prompt::corral_bin()?;
     crate::dispatch::install_skill(ctx, &task.id, &run.harness)?;
+    if let Some(snapshot) = &run.execution {
+        crate::dispatch::metered_notice(ctx, &task.id, "planner", &snapshot.resolved)?;
+    }
     let mut text = format!(
         "# {} {}\n\n{}\n\n## Plan run contract\n\n\
          Load the `{}` skill for this session. \
          You are the planner, not an implementer or the workspace PM. Read {}/AGENTS.md \
          and the repository contracts. The repository is mounted read-only. \
          Do not create a branch or worktree, edit source, run the code gate, commit, land, or call corral done.\n\
-         Write {} in the YAML frontmatter format documented in docs/guide/plans.md. \
+         Write one canonical plan at {} in the new YAML frontmatter format documented in docs/guide/plans.md. \
+         Include human_review with a nonblank problem and nonempty changes and retained lists. \
+         Keep goal, non_goals, decisions and acceptance canonical; non_goals and decisions must be nonempty. \
+         Use explicit None, No exclusions or No important choices statements when appropriate. \
+         Put human sections before technical details: problem, goal, included changes and retained behavior, \
+         exclusions, choices, done scenarios, then implementation. Do not write a separate brief or guess extra product scope. \
          Include goal/non-goals, alternatives, risks, contracts, owner decisions, verification, \
          and dependencies with task names, write_scope, depends_on and acceptance. \
-         An optional design note belongs beside the plan in {}.\n\
+         On revisions, identify scope additions and changed promises separately from technical-only edits.\n\
          Finish by submitting the plan:\n\n    '{}' --root '{}' plan submit {} '{}'\n",
         task.id,
         task.title,
@@ -228,7 +238,6 @@ fn launch(
         crate::skill::PLANNER_SKILL,
         repo.display(),
         output.display(),
-        run.output_dir.display(),
         prompt::sh_escape(&corral.display().to_string()),
         prompt::sh_escape(&ctx.store.root().display().to_string()),
         task.id,
@@ -244,12 +253,6 @@ fn launch(
     ));
     crate::prompt::append_working_instructions(&mut text, run.execution.as_ref());
     std::fs::write(&prompt_file, text).context("writing planning contract")?;
-    let command = render_command(ctx, task, run, repo, &prompt_file)?;
-    // Source stays read-only; the board store and its plan-output directory are
-    // explicitly writable so the planner can submit through the normal CLI.
-    let command = crate::plan_sandbox::command(repo, ctx.store.dir(), &command);
-    let smoke = crate::plan_lifecycle::Smoke::new(run)?;
-    let command = crate::plan_lifecycle::record_exit(run, &command);
     let herdr = match &claim.herdr {
         Some(herdr) => {
             ensure!(
@@ -274,7 +277,6 @@ fn launch(
         }
     };
     claim.herdr = Some(herdr.clone());
-    claim.command = Some(command.clone());
     claim.save(task)?;
     let saved = ctx.store.update_head(&task.id, |t| {
         claim.check(&t.shell_task()?)?;
@@ -296,6 +298,15 @@ fn launch(
             return Err(error);
         }
     };
+    prepared.herdr = Some(herdr.clone());
+    let run = &prepared;
+    let command = render_command(ctx, &saved, run, repo, &prompt_file)?;
+    // Source stays read-only; only the board store and plan output are writable.
+    let command = crate::plan_sandbox::command(repo, ctx.store.dir(), &command);
+    let smoke = crate::plan_lifecycle::Smoke::new(run)?;
+    let command = crate::plan_lifecycle::record_exit(run, &command);
+    claim.command = Some(command.clone());
+    claim.save(&saved)?;
     let round = claim.round.to_string();
     ctx.herdr.pane_report_metadata(
         &herdr.pane_id,
@@ -389,6 +400,26 @@ fn render_command(
             None,
         )?,
     };
+    if crate::agent::hooks::is_pi_native(&resolved.harness) {
+        crate::agent::hooks::preflight::check(
+            ctx,
+            corral_core::agent::AgentRole::Planner,
+            resolved,
+        )?;
+        let target = crate::agent::BindTarget::Planner {
+            task: task.id.clone(),
+            run: run.id.clone(),
+        };
+        let pane = &run.herdr.as_ref().context("planner pane missing")?.pane_id;
+        return crate::agent::hooks::launch::plan_command(
+            ctx,
+            &target,
+            pane,
+            resolved,
+            repo,
+            prompt_file,
+        );
+    }
     prompt::render_template(
         resolved,
         &[
@@ -498,9 +529,9 @@ pub(crate) fn revise(
     let owner = origin == crate::operating::Origin::Owner;
     let _action = (!owner).then(|| corral_core::work::action(&head.id, OperatingActionKind::Plan));
     crate::tracker::check_action(head, "revise tracker in the plan pipeline")?;
-    // The revision reads head fields and the current plan, review and planner run only.
     let task = &head.shell_task()?;
     let current = ctx.store.head(&task.id)?;
+    corral_core::Park::require_unparked_ref(&current)?;
     if current.dispatch_hold
         || current
             .last_plan_run
@@ -556,6 +587,7 @@ pub(crate) fn revise(
     };
     crate::operating::authorize(ctx, claim.identity(&task.id), origin)?;
     let (claimed, started) = ctx.store.dispatch_update_head(&task.id, |store, current| {
+        corral_core::Park::require_unparked_ref(&*current)?;
         // Cancellation is terminal even for a pilot holding an older snapshot.
         if current.dispatch_hold
             || current
@@ -626,20 +658,15 @@ pub(crate) fn revise(
 }
 
 /// Resume a definitely unsubmitted claim with its original owner or automatic consent.
-/// Whether [`resume_prepared`] could find a prepared planner launch: it reads only head fields
-/// and the last plan run's claim file.
+/// Whether the current planner has a resumable prepared claim.
 pub(crate) fn may_resume(task: &Task) -> Result<bool> {
-    let cancelled = task
-        .plan_runs
-        .last()
-        .is_some_and(|run| run.state == PlanRunState::Cancelled);
-    Ok(!task.dispatch_hold && !cancelled && claim::load(task)?.is_some())
+    let cancelled = task.plan_runs.last().is_some_and(|run| run.state == PlanRunState::Cancelled);
+    Ok(task.park.is_none() && !task.dispatch_hold && !cancelled && claim::load(task)?.is_some())
 }
 
 pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
-    // The prepared claim and its checks read head fields and the current containers only.
     let task = &head.shell_task()?;
-    if task.dispatch_hold
+    if task.park.is_some() || task.dispatch_hold
         || task
             .plan_runs
             .last()
@@ -686,6 +713,7 @@ pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
         )?;
     }
     let (admitted, ()) = ctx.store.dispatch_update_head(&task.id, |store, task| {
+        corral_core::Park::require_unparked_ref(&*task)?;
         let shell = task.shell_task()?;
         claim.check(&shell)?;
         if automatic {

@@ -11,6 +11,59 @@ use serde_json::{Value, json};
 use super::*;
 use crate::Ctx;
 
+thread_local! {
+    static DATA_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn data_root_override() -> Option<PathBuf> {
+    DATA_ROOT.with_borrow(Clone::clone)
+}
+
+/// A private managed-install root for this test thread, restored even on panic.
+/// Unlike changing HOME/XDG_DATA_HOME, this cannot affect concurrently running tests.
+pub(crate) struct PrivateDataRoot {
+    _tmp: tempfile::TempDir,
+    previous: Option<PathBuf>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+pub(crate) fn private_data_root() -> PrivateDataRoot {
+    let tmp = tempfile::tempdir().unwrap();
+    let previous = DATA_ROOT.replace(Some(tmp.path().to_path_buf()));
+    PrivateDataRoot {
+        _tmp: tmp,
+        previous,
+        _thread: std::marker::PhantomData,
+    }
+}
+
+impl Drop for PrivateDataRoot {
+    fn drop(&mut self) {
+        DATA_ROOT.set(self.previous.take());
+    }
+}
+
+#[test]
+fn private_data_roots_are_thread_local_and_restore_after_unwinding() {
+    assert!(data_root_override().is_none());
+    let _outer = private_data_root();
+    let root = super::install::data_root().unwrap();
+    assert!(root.is_dir());
+    std::thread::spawn(|| assert!(data_root_override().is_none()))
+        .join()
+        .unwrap();
+    let panic = std::panic::catch_unwind(|| {
+        let _inner = private_data_root();
+        assert_ne!(super::install::data_root().unwrap(), root);
+        panic!("exercise cleanup");
+    });
+    assert!(panic.is_err());
+    assert_eq!(super::install::data_root().unwrap(), root);
+    drop(_outer);
+    assert!(data_root_override().is_none());
+    assert!(!root.exists());
+}
+
 pub(crate) struct Fx {
     pub(crate) _tmp: tempfile::TempDir,
     pub(crate) ctx: Ctx,
@@ -85,6 +138,16 @@ pub(crate) fn secret(label: &str, generation: u32) -> String {
 pub(crate) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> Host {
     let grant = open_generation(&fx.ctx.store, target, pane).unwrap();
     let (role, task, run, review, callback) = match target {
+        BindTarget::Planner { task, run } => {
+            (AgentRole::Planner, Some(task), Some(run), None, None)
+        }
+        BindTarget::PlanReviewer { task, plan, review } => (
+            AgentRole::PlanReviewer,
+            Some(task),
+            Some(plan),
+            Some(review),
+            None,
+        ),
         BindTarget::Worker { task, run } => (AgentRole::Worker, Some(task), Some(run), None, None),
         BindTarget::Reviewer {
             task,
@@ -217,4 +280,21 @@ pub(crate) fn task_bytes(fx: &Fx, id: &str) -> Vec<u8> {
 pub(crate) fn events(fx: &Fx, kind: &str) -> usize {
     let events = fx.ctx.store.events().unwrap();
     events.iter().filter(|e| e.kind == kind).count()
+}
+
+/// A receipt of `host`'s Pi session call `call`, for the recovery tests.
+#[cfg(target_os = "linux")]
+pub(crate) fn receipt(
+    host: &Host,
+    call: &str,
+    op: &str,
+    state: &str,
+    result: Value,
+) -> corral_core::agent::RequestReceipt {
+    serde_json::from_value(json!({
+        "version": 1, "request_id": tool_request_id(super::bridge::fixture::SESSION, call),
+        "op": op, "payload_sha256": "00", "identity": host.identity, "state": state,
+        "result": result, "at": "2026-10-25T00:00:00Z",
+    }))
+    .unwrap()
 }

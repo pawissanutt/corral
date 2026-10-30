@@ -250,10 +250,14 @@ fn failed_changes_are_retained_and_resend_records_delivery() {
     assert!(corral_ops::request_changes(&ctx, "T-001", "fix this").is_err());
     let pending = fx.store.get("T-001").unwrap();
     assert_eq!(pending.status, Status::Review);
-    assert_eq!(
-        pending.current_run().unwrap().pending_reply.as_deref(),
-        Some("fix this")
-    );
+    let text = pending
+        .current_run()
+        .unwrap()
+        .pending_reply
+        .clone()
+        .unwrap();
+    assert!(text.starts_with("NEW CHANGES ROUND 1:"), "{text}");
+    assert!(text.ends_with(" fix this"), "{text}");
     let events = fx.store.events().unwrap();
     let failed = events
         .iter()

@@ -124,22 +124,8 @@ fn tracker_dispatch_is_absent_from_hints_and_menu_and_refused_by_key() {
             })
             .unwrap();
         let mut board = fx.board();
-        board.col = board
-            .columns()
-            .iter()
-            .position(|s| {
-                *s == if status == Status::Idea {
-                    Status::Backlog
-                } else {
-                    status
-                }
-            })
-            .unwrap();
-        board.row = board
-            .column_tasks(board.columns()[board.col])
-            .iter()
-            .position(|t| t.id == TRACKER)
-            .unwrap();
+        board.selected = Some(TRACKER.into());
+        board.restore_selection();
         assert_eq!(board.selected_task().unwrap().id, TRACKER);
         assert!(!board.hints().iter().any(|(key, _)| *key == "d"));
         board.on_key(key('.'), &fx.ctx);
@@ -294,7 +280,8 @@ fn scoped_tracker_board_restart_retains_shared_json_projection_and_all_buckets()
         serde_json::to_value(corral_ops::plan_progress(&fx.ctx, TRACKER).unwrap()).unwrap();
     let before = fx.ctx.store.list().unwrap();
     let events = fx.ctx.store.events().unwrap().len();
-    // When both an initial board and a restarted board read durable state.
+    // When dispatch holds the lock, both an initial and a restarted board still read progress.
+    let _dispatch = fx.ctx.store.try_lock("dispatch").unwrap().unwrap();
     for board in [fx.board(), fx.board()] {
         let progress = board.plan_progress[TRACKER].as_ref().unwrap();
         // Then the full shared projection, not just counts, agrees with JSON.
@@ -321,6 +308,12 @@ fn scoped_tracker_board_restart_retains_shared_json_projection_and_all_buckets()
                 );
                 assert!(lines.iter().all(|l| l.width() <= width + 2));
                 assert!(!lines.iter().any(|l| l.to_string().contains("done")));
+                let text = lines.iter().map(|l| l.to_string()).collect::<String>();
+                assert!(!text.contains("unavailable"), "{text}");
+                assert!(!text.contains("board is being updated"), "{text}");
+                if width == 80 {
+                    assert!(text.contains("1 accepted"), "{text}");
+                }
             }
         }
     }
@@ -387,6 +380,28 @@ fn scoped_tracker_projection_errors_remain_visible_instead_of_done_counts() {
     // Then the tracker reports the actual error and does not fall back to a done badge.
     let progress = board.plan_progress[TRACKER].as_ref().unwrap_err();
     assert!(progress.contains("T-999"), "{progress}");
+}
+
+#[test]
+fn board_refresh_reads_the_board_once_for_every_tracker() {
+    use corral_core::work::{Work, count};
+    // Given a scoped tracker.
+    let fx = scoped_tracker();
+    let task = fx.ctx.store.get(TRACKER).unwrap();
+    let lists = |tasks: &[corral_core::Task]| {
+        let start = count(Work::TaskList);
+        let progress = crate::plan::tracker::load_all(&fx.ctx, tasks);
+        (count(Work::TaskList) - start, progress)
+    };
+    // When one refresh projects one tracker, then three (T-547).
+    let (one, single) = lists(std::slice::from_ref(&task));
+    let (three, many) = lists(&[task.clone(), task.clone(), task.clone()]);
+    // Then the trackers share one read of the board, with the same projection as `load`.
+    assert_eq!(three, one);
+    let shown = |p: &crate::plan::tracker::Progress| crate::plan::tracker::summary(p);
+    let loaded = crate::plan::tracker::load(&fx.ctx, &task).unwrap();
+    assert_eq!(shown(&single[TRACKER]), shown(&loaded));
+    assert_eq!(shown(&many[TRACKER]), shown(&loaded));
 }
 
 #[test]

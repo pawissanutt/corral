@@ -93,12 +93,16 @@ fn binding_requires_one_live_tui_session_inside_the_run_window() {
     let live = world.row("S1", "2026-10-19T00:00:01Z");
     assert_eq!(candidates(&json!([live]), &target, now).unwrap().len(), 1);
     // A session that predates the run (a stale binding) is never a candidate.
-    let stale = world.row("S0", "2026-10-18T23:59:59Z");
+    let stale = world.row("S0", "2026-10-18T23:59:50Z");
     assert!(
         candidates(&json!([stale]), &target, now)
             .unwrap()
             .is_empty()
     );
+    // Launch stamps `started` after the terminal accepts the command, so the session it
+    // starts can predate that stamp by milliseconds: still this run's session.
+    let early = world.row("S5", "2026-10-18T23:59:59.992Z");
+    assert_eq!(candidates(&json!([early]), &target, now).unwrap().len(), 1);
     let mut closed = world.row("S2", "2026-10-19T00:00:02Z");
     closed["status"] = json!("resumable");
     let mut readonly = world.row("S3", "2026-10-19T00:00:02Z");
@@ -334,4 +338,33 @@ fn an_unavailable_gateway_host_blocks_binding_without_sending() {
     assert!(error.contains("exit Some(3)"), "{error}");
     assert!(world.sends().is_empty());
     assert_eq!(world.events("delivery_blocked").len(), 1);
+}
+
+#[test]
+fn changes_requested_after_done_reaches_an_idle_session_created_just_before_the_run_stamp() {
+    // Given T-475: the worker's session was created 8 ms before launch stamped `started`,
+    // the worker ran `corral done`, and its session is now idle in Review.
+    let world = OmoWorld::new(Status::Review);
+    world.set_list(&[world.row("S1", "2026-10-18T23:59:59.992Z")]);
+    world
+        .ctx
+        .store
+        .update(&world.task.id, |task| {
+            task.runs[0].outcome = Some(corral_core::RunOutcome::Done);
+            task.runs[0].ended = Some(jiff::Timestamp::now());
+            Ok(())
+        })
+        .unwrap();
+
+    // When the changes are requested and one sync pass runs.
+    crate::request_changes(&world.ctx, &world.task.id, "fix the findings").unwrap();
+    owner::reconcile_all_with(&world.ctx, &world.adapter()).unwrap();
+
+    // Then the entry has an attempted envelope and is observed in the idle session.
+    let inbox = Inbox::new(&world.ctx.store, world.recipient()).unwrap();
+    let message = inbox.messages().unwrap().pop().unwrap();
+    assert_eq!(message.kind, "changes_requested");
+    assert!(inbox.entry(message.seq).unwrap().envelope.is_some());
+    assert_eq!(world.sends().len(), 1);
+    assert!(owner::is_observed(&world.ctx, &world.recipient(), message.seq).unwrap());
 }

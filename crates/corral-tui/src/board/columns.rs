@@ -84,6 +84,13 @@ impl BoardView {
         } else {
             right
         };
+        let right = if col == Status::NeedsMe
+            && usize::from(area.width) < title.width() + right.width() + 4
+        {
+            Span::raw("")
+        } else {
+            right
+        };
         let block = if focused {
             overlays::focused_block(title)
         } else {
@@ -142,6 +149,11 @@ impl BoardView {
                     let extra = CardExtra {
                         head: self.heads.get(&t.id),
                         obligations: self.obligations.get(&t.id),
+                        attention: self
+                            .attention
+                            .as_ref()
+                            .ok()
+                            .and_then(|rows| rows.get(&t.id)),
                         plan_progress: self.plan_progress.get(&t.id),
                         finish: self.finishes.get(&t.id),
                         pinned: self.pinned.contains(&t.id),

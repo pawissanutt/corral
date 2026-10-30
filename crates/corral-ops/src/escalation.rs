@@ -8,7 +8,7 @@ use corral_core::{
 };
 
 fn failed(gate: Option<&GateRecord>, review: Option<&ReviewRecord>, failures: u32) -> u32 {
-    let failed = gate.is_some_and(|g| g.result == GateResult::Fail)
+    let failed = gate.is_some_and(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))
         || review.is_some_and(|r| r.verdict == Some(Verdict::Changes));
     failures.max(u32::from(failed))
 }

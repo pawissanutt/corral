@@ -231,7 +231,7 @@ pub(crate) fn prepare_approval(ctx: &Ctx, id: &str, strategy: ApproveStrategy) -
         && run
             .gate
             .as_ref()
-            .is_some_and(|g| g.result == GateResult::Fail)
+            .is_some_and(|g| matches!(g.result, GateResult::Fail | GateResult::Stale))
         && replayed(ctx, id, &run.id, |event| {
             run.gate.as_ref().is_some_and(|gate| {
                 event.detail["new_sha"] == gate.sha

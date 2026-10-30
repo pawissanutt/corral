@@ -32,7 +32,7 @@ of the operating mode.
 An existing current-spec plan awaiting review or owner acceptance blocks
 automatic planning and ordinary manual dispatch. The refusal names the pending
 revision. `dispatch --plan` explicitly requests a replacement instead.
-On a Review or Needs me task whose latest unapproved plan has a `changes`
+On a Review or Blocked task whose latest unapproved plan has a `changes`
 verdict, `dispatch --plan` revises that plan with the verdict's notes in its
 own planner run when that run still matches the current task contract.
 Otherwise (no planner run, or the task contract changed) it starts a new
@@ -57,9 +57,16 @@ Readbacks do not accept, relaunch or otherwise change the task. A genuinely
 active replacement planner keeps its normal wait or owner-input handling.
 
 The planning contract names an output directory under `.corral/state/plans/`,
-asks for a structured plan plus an optional design note, and finishes with
+asks for one canonical structured plan with human and technical sections, and finishes with
 `corral plan submit`, not `corral done`. Planner sessions and outcomes live in
 `plan_runs` / plan history, never in implementation `runs`.
+
+With a `pi-native` planning profile, the planner and the plan reviewer run as Corral's own
+read-only Pi roles. The planner writes `plan.md` through a typed tool and submits it
+through the same submission service. The plan reviewer records its verdict for its bound
+attempt only, so it can never accept a plan for the owner. With `role_enabled` off for a
+role (preset `strict`), its native launch is refused; it never falls back to another
+harness. See [Pi-native agents](pi-native.md#the-planner-and-plan-reviewer-roles).
 
 ## Reply and cancellation
 
@@ -72,7 +79,7 @@ Replies reach a live planner through the usual prompt delivery path; a missing,
 exited, shell-only or terminal planner gives a plan-specific error.
 Cancellation closes the owned planner pane, ends the plan run as `cancelled`,
 releases its slot and holds automatic dispatch. It retains every plan snapshot
-and verdict. A pending plan stays in Needs me without being accepted or rejected.
+and verdict. A pending plan stays in Blocked without being accepted or rejected.
 Cancellation can also clean up an already failed planner and is idempotent.
 An approved plan run cannot be cancelled.
 Later review callbacks can record their verdicts but cannot revive the cancelled
@@ -85,13 +92,32 @@ acceptance remain intact. The command must target D1's owning herdr session.
 
 ## Plan format
 
-Write a UTF-8 Markdown file with YAML frontmatter:
+Write one UTF-8 Markdown plan with YAML frontmatter. Generate the human sections
+before technical details: problem, goal, included changes and retained behavior,
+exclusions, choices, done scenarios, then implementation. Keep them together in
+the canonical plan, not in a separate brief. Derive scope from the task and
+repository evidence; do not guess additional product requirements.
+Name who experiences the problem. Explain significant choices, trade-offs and
+dependencies (including cross-plan assumptions when relevant), recommendations
+and consequences in plain language. Acceptance scenarios should give concrete,
+observable examples. Keep these values before execution metadata in the
+frontmatter too.
+
+This complete example uses the new format:
 
 ```yaml
 ---
+human_review:
+  problem: Neither the API nor the CLI can request a single widget rotation
+  changes: [Add a spin operation, Expose spin on the command line]
+  retained: [Existing widget operations and CLI flags keep their behavior]
 goal: Give the widget one explicit spin operation
 non_goals: [No scheduling changes]
 decisions: [Keep the current widget contract]
+acceptance:
+  - criterion: C1
+    scenario: widget --spin
+    expected: One clockwise rotation
 affected_paths: [src/widget.rs, src/cli.rs]
 contracts: [Widget.spin]
 dependencies:
@@ -107,24 +133,51 @@ dependencies:
     acceptance:
       - scenario: widget --spin
         expected: Calls Widget.spin once
-acceptance:
-  - criterion: C1
-    scenario: widget --spin
-    expected: One clockwise rotation
 verification: [cargo test -p widget]
 owner_decisions: []
 ---
-## Alternatives considered
-Explain the alternatives and why the chosen approach fits the goal.
+## Problem
+Neither the API nor the CLI can request a single widget rotation.
 
-## Risks
-Name failure modes, mitigations and any remaining uncertainty.
+## Goal
+Give the widget one explicit spin operation.
 
-## Design
-Explain contracts, task boundaries and verification.
+## Included changes and retained behavior
+Add a spin operation and expose it on the command line. Existing widget
+operations and CLI flags keep their behavior.
+
+## Exclusions
+No scheduling changes.
+
+## Choices
+Keep the current widget contract.
+
+## Done scenarios
+`widget --spin` produces one clockwise rotation (C1).
+
+## Implementation
+widget-api adds Widget.spin in src/widget.rs; widget-cli exposes it in
+src/cli.rs after the API lands. Verify both with `cargo test -p widget`.
+A separate spin service was rejected because one method is sufficient.
+Spin direction on a mirrored widget is unspecified; the tests pin clockwise.
 ```
 
-Top-level metadata fields are required; empty lists explicitly mean none.
+The optional YAML `human_review` is the version opt-in. When present, its
+`problem` must be nonblank, and `changes` and `retained` must be nonempty lists
+of nonblank strings. The canonical `non_goals` and `decisions` must also be
+nonempty. An explicit statement such as `retained: [None]`,
+`non_goals: [No exclusions]` or `decisions: [No important choices]` is accepted.
+There is no semantic grading of these statements at parse time: validation
+checks structural completeness only, not quality, consent or approval.
+Historical documents without `human_review` remain valid unchanged, including
+empty `non_goals` and `decisions`; they need no migration.
+
+`goal`, `non_goals`, `decisions` and `acceptance` remain the canonical goal,
+exclusions, choices and done scenarios. `human_review` adds problem, included
+changes and retained behavior without replacing those fields. Keep the human
+Markdown sections consistent with these sources, not as a competing contract.
+
+Other top-level metadata fields are required; empty lists explicitly mean none.
 `goal`, `affected_paths`, `acceptance` and `verification` must be nonempty.
 Scope-level `acceptance` is optional and otherwise inherits the top-level
 scenarios. Dependency names are local plan labels, unique and acyclic, with no
@@ -431,14 +484,37 @@ policy; plan approval itself launches no implementation agent.
 The board shows planning stages on cards and adds
 **Plan > Plan review > Your approval > Tasks** before implementation stages.
 The detail **Plan** tab shows the snapshot, revision and verdict history,
-reviewer notes and child links. Awaiting approvals appear in Needs me and count
+reviewer notes and child links. Awaiting approvals appear in Blocked and count
 in the header's **needs you** total. Both mouse and keyboard can inspect the plan
 and approve or request changes.
+New-format plans open on their human overview: problem, goal, included changes,
+retained behavior, exclusions, choices and done scenarios. Press `i` or click
+**Implementation details** to inspect the same plan's task scopes, dependency
+edges, commands, Markdown body and revision history. Press `o` or click
+**Review overview** to return. Switching views starts at the top; Page Up/Down
+and the mouse wheel reach longer content. Approval and change-request controls
+remain available in both views.
+
+Revised new-format plans show changes to the human-review fields first, with
+added and removed values. Edits only to files, task edges, verification commands,
+criterion links or the implementation body do not appear as product-scope
+changes. A newly added overview on a historical plan is identified as new
+review context, not proof of expanded scope. Historical plans keep their
+existing full-snapshot presentation without rewriting or migration.
 Owner resolution forms scroll with the wheel, Page Up/Down, or their arrow
 buttons. Tab and Shift-Tab reveal the focused field, while the approval and
 cancellation controls stay visible even with many owner questions.
 
 ## Revisions and freshness
+
+Describe a revision's scope changes before its technical changes. Compare with
+the preceding plan and name additions or removals to included changes, retained
+behavior, exclusions, choices, goal and done scenarios. New behavior or changed
+promises widen scope even if the affected paths stay the same. Path moves,
+decomposition and implementation refinements that preserve those promises can
+be technical-only edits; say why scope is unchanged. Keep the overview and
+canonical fields aligned. Neither structural completeness nor reviewer approval
+implies owner consent to added scope.
 
 Submission snapshots exact bytes and binds the plan to the task specification,
 dependencies and registered criteria. Editing either the source or snapshot,

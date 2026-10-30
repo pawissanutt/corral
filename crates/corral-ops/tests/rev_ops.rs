@@ -119,6 +119,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 gate: None,
                 idle_since: None,
                 idle_no_report: false,
+                changes_round: None,
                 herdr_idle_since: None,
                 stuck: None,
                 pending_reply: None,
@@ -132,6 +133,7 @@ fn running_task(ws: &Ws, title: &str) -> Task {
                 gate_rules: corral_core::GateRules::Legacy,
                 promotion_origin: None,
                 agent_host: None,
+                session: None,
             });
             t.status = Status::Running;
             Ok(())
@@ -477,13 +479,26 @@ fn approve_fast_forward() {
     assert!(!worktree(&t).exists());
     assert!(corral_git::rev_sha(&ws.app, &t.current_run().unwrap().branch).is_err());
     assert_eq!(approved_detail(&ws, &t)["branch_deleted"], true);
-    // The post-landing event records when the approval began, for phase timing.
-    let started: jiff::Timestamp = approved_detail(&ws, &t)["started"]
+    // Compare the recorded phase boundaries, not a fresh wall-clock reading:
+    // the host clock can step backwards after the approval event was written.
+    let approved = ws
+        .ctx
+        .store
+        .events()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == "approved" && e.task.as_deref() == Some(&t.id))
+        .unwrap();
+    let started: jiff::Timestamp = approved.detail["started"]
         .as_str()
         .unwrap()
         .parse()
         .unwrap();
-    assert!(started <= jiff::Timestamp::now());
+    assert!(
+        started <= approved.ts,
+        "approval started {started} after completion {}",
+        approved.ts
+    );
     assert_eq!(ws.ctx.store.get(&t.id).unwrap().status, Status::Done);
     assert!(
         approve(&ws.ctx, &t.id, ApproveStrategy::FastForward, true, false).is_err(),
@@ -561,16 +576,17 @@ fn approve_respects_remove_worktree_policy() {
 }
 
 #[test]
-fn approve_unmerged_strategy_keeps_branch_after_worktree_removal() {
+fn approve_unmerged_strategy_keeps_worktree_and_branch() {
     // Given a completed task with commits absent from main.
     let ws = workspace();
     let t = finish(&ws, "Do not merge");
     let branch = &t.current_run().unwrap().branch;
     let before = corral_git::rev_sha(&ws.app, branch).unwrap();
-    // When approval deliberately skips merging but removes the worktree.
-    approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, true, false).unwrap();
-    // Then the unmerged branch survives.
-    assert!(!worktree(&t).exists());
+    // When approval skips merging despite the request to remove the worktree.
+    let message = approve(&ws.ctx, &t.id, ApproveStrategy::KeepBranch, true, false).unwrap();
+    // Then both the unlanded worktree and its branch survive, with a warning.
+    assert!(message.contains("unlanded branch"), "{message}");
+    assert!(worktree(&t).exists());
     assert_eq!(corral_git::rev_sha(&ws.app, branch).unwrap(), before);
     assert_eq!(approved_detail(&ws, &t)["branch_deleted"], false);
 }

@@ -57,7 +57,7 @@ fn amended_member_regates_on_its_new_binding_while_the_running_sibling_stays_fre
     amend(&fx, &a, 1, "tier: quick\ntests: [\"package(app)\"]\n");
     // Then the running gate is collected as stale.
     let collected = corral_ops::gate_collect(&fx.ctx, &a).unwrap().unwrap();
-    assert_eq!(collected.result, GateResult::Fail);
+    assert_eq!(collected.result, GateResult::Stale);
     let reason = collected.failed_cmd.unwrap_or_default();
     assert!(reason.starts_with("stale_result"), "{reason}");
     // And the member's next gate runs the quick commands on the new binding.

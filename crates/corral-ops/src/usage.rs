@@ -437,6 +437,22 @@ pub(crate) fn collect(run: &mut Run, store: &Store) {
 }
 
 fn session_root(run: &Run, store: &Store) -> Result<(PathBuf, bool)> {
+    if let Some(session) = &run.session
+        && (session.transcript.is_some()
+            || std::fs::read_dir(&session.directory).is_ok_and(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .any(|entry| entry.path().extension().is_some_and(|ext| ext == "jsonl"))
+            }))
+    {
+        let harness = store
+            .config
+            .harnesses
+            .get(&session.harness)
+            .and_then(|h| h.flags.as_deref())
+            .unwrap_or(&session.harness);
+        return Ok((session.directory.clone(), harness == "claude"));
+    }
     session_root_of(run_harness(run, &store.config), &run.worktree, store)
 }
 
@@ -459,7 +475,18 @@ fn session_root_of(harness: &str, worktree: &Path, store: &Store) -> Result<(Pat
 
 /// Only scan regular JSONL files at the session root and one project-directory level.
 /// Artifacts, subagent directories, and symlinks are not transcript candidates.
-fn session_paths(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<PathBuf>> {
+fn session_paths(root: &Path, run: &Run, claude: bool) -> Result<Vec<PathBuf>> {
+    if let Some(path) = run
+        .session
+        .as_ref()
+        .and_then(|session| session.transcript.as_ref())
+    {
+        return Ok(vec![path.clone()]);
+    }
+    session_paths_of(root, &run.worktree, claude)
+}
+
+fn session_paths_of(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let cwd_slug: String = worktree
         .to_string_lossy()
@@ -531,7 +558,7 @@ fn session_paths(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<PathB
 
 fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result<Usage> {
     let mut total = None;
-    for path in session_paths(root, &run.worktree, claude)? {
+    for path in session_paths(root, run, claude)? {
         if let Some(usage) = transcript_cache::with_lines(&path, |lines| {
             parse_session_entries(lines, run, claude, config)
         })? {
@@ -556,7 +583,7 @@ fn transcript_of(
     let (root, claude) = session_root_of(harness, worktree, store)?;
     let end = ended.unwrap_or_else(Timestamp::now);
     let mut bytes = Vec::new();
-    for path in session_paths(&root, worktree, claude)? {
+    for path in session_paths_of(&root, worktree, claude)? {
         let mut matched = false;
         let file = File::open(&path).with_context(|| format!("opening {}", path.display()))?;
         for line in BufReader::new(file).lines() {

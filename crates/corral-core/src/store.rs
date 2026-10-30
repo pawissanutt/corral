@@ -39,6 +39,7 @@ mod head_run;
 mod heads;
 mod member_gate;
 pub(crate) mod migrate_rows;
+mod normalize;
 mod plan_member;
 mod plan_scope;
 mod read;

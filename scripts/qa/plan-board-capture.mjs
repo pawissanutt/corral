@@ -109,6 +109,17 @@ export class PlanBoardCapture {
     { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     this.viewportErrors = new Response(this.viewport.stderr).text();
     const reader = this.viewport.stdout.getReader();
+    const decoder = new TextDecoder();
+    let frames = "";
+    const consume = chunk => {
+      frames += decoder.decode(chunk, { stream: true });
+      let end;
+      while ((end = frames.indexOf("\n")) >= 0) {
+        const frame = JSON.parse(frames.slice(0, end));
+        frames = frames.slice(end + 1);
+        this.onFrame?.(frame);
+      }
+    };
     let timer;
     try {
       const first = await Promise.race([
@@ -116,9 +127,16 @@ export class PlanBoardCapture {
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Viewport control not ready")), 20000); }),
       ]);
       if (first.done) throw new Error(`Viewport control closed: ${await this.viewportErrors}`);
+      consume(first.value);
       await writeFile(join(this.evidence, "viewport.json"), new TextDecoder().decode(first.value));
     } finally { clearTimeout(timer); }
-    this.viewportOutput = (async () => { while (!(await reader.read()).done) {} })();
+    this.viewportOutput = (async () => {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) return;
+        consume(chunk.value);
+      }
+    })();
     const launch = () =>
       this.herdr("pane", "run", this.pane,
         `stty -F /dev/tty cols ${this.columns} rows 30; env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor ${quote(this.binary)} --root ${quote(this.root)} board </dev/null`);

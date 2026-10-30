@@ -39,6 +39,11 @@ enum ModeCmd {
     Pause,
     /// Resume the existing matching grant; never expands or refreshes its scope
     Resume,
+    /// Land, accept plans and repair without owner stops or round limits until `--off`
+    Turbo {
+        #[arg(long)]
+        off: bool,
+    },
 }
 
 pub(crate) fn status(ctx: &Ctx, json: bool) -> Result<()> {
@@ -61,6 +66,11 @@ pub(crate) fn status(ctx: &Ctx, json: bool) -> Result<()> {
         },
         if workset.paused { " (paused)" } else { "" }
     );
+    if config.automation.turbo {
+        println!(
+            "Turbo: on (owner-only acceptance and round limits ignored; `corral mode turbo --off` stops it)"
+        );
+    }
     println!(
         "{}: {}/{} accepted; {} scoped running; independent work continues: {}",
         workset.status.as_str(),
@@ -214,6 +224,12 @@ pub fn run(mut ctx: Ctx, args: ModeArgs) -> Result<()> {
         ModeCmd::Status { json } => return status(&ctx, json),
         ModeCmd::Assist => ctx.store.config = ctx.store.assist_operating_policy()?,
         ModeCmd::Pause => ctx.store.config = ctx.store.pause_operating_policy(true)?,
+        ModeCmd::Turbo { off } => {
+            if !off {
+                corral_ops::require_automation_owner(&ctx.store)?;
+            }
+            ctx.store.config = ctx.store.turbo_operating_policy(!off)?;
+        }
         ModeCmd::Resume => {
             corral_ops::require_automation_owner(&ctx.store)?;
             ctx.store.config = ctx.store.pause_operating_policy(false)?;

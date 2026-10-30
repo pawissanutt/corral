@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::{Ctx, plan};
 
 mod launch;
-mod prepared;
+pub(crate) mod prepared;
 use launch::review_with_origin;
 pub(crate) use prepared::{has_prepared, retains};
 
@@ -113,6 +113,29 @@ pub fn plan_verdict_with_evidence(
     input: &PlanVerdict<'_>,
     evidence: &[std::path::PathBuf],
 ) -> Result<PlanReview> {
+    verdict_report_inner(ctx, id, input, evidence, &|_| Ok(())).map(|(review, _)| review)
+}
+
+pub fn plan_verdict_report(ctx: &Ctx, id: &str, input: &PlanVerdict<'_>) -> Result<(PlanReview, Vec<String>)> {
+    verdict_report_checked(ctx, id, input, &|_| Ok(()))
+}
+
+pub fn plan_verdict_report_with_evidence(
+    ctx: &Ctx, id: &str, input: &PlanVerdict<'_>, evidence: &[std::path::PathBuf],
+) -> Result<(PlanReview, Vec<String>)> {
+    verdict_report_inner(ctx, id, input, evidence, &|_| Ok(()))
+}
+
+pub(crate) fn verdict_report_checked(
+    ctx: &Ctx, id: &str, input: &PlanVerdict<'_>, check: &dyn Fn(&Task) -> Result<()>,
+) -> Result<(PlanReview, Vec<String>)> {
+    verdict_report_inner(ctx, id, input, &[], check)
+}
+
+fn verdict_report_inner(
+    ctx: &Ctx, id: &str, input: &PlanVerdict<'_>, evidence: &[std::path::PathBuf],
+    check: &dyn Fn(&Task) -> Result<()>,
+) -> Result<(PlanReview, Vec<String>)> {
     let _attribution = input
         .attempt
         .map(|_| ctx.store.attribute(corral_core::Actor::Reviewer));
@@ -126,6 +149,7 @@ pub fn plan_verdict_with_evidence(
     let staged = evidence.stage(ctx, id)?;
     let mut superseded = None;
     let saved = ctx.store.update(id, |task| {
+        check(task)?;
         let target = crate::reviewer::current_target(task);
         let config = plan::config(ctx)?;
         let selected = task.plans.last().filter(|p| p.id == input.plan).context(
@@ -229,6 +253,7 @@ pub fn plan_verdict_with_evidence(
             None => {
                 terminalize_pending(p, "Superseded by an owner decision.");
                 p.reviews.push(PlanReview {
+                agent_host: None,
                 delivery: corral_core::inbox::DeliveryMode::Legacy,
                 inbox: Default::default(),
                 id: format!("PR{}", p.reviews.len() + 1),
@@ -253,7 +278,8 @@ pub fn plan_verdict_with_evidence(
                 Verdict::Escalate => PlanRunState::Escalated,
             };
         }
-        if !cancelled && verdict == Verdict::Approve && !accepted {
+        let published = plan::published_design(task);
+        if !cancelled && !published && verdict == Verdict::Approve && !accepted {
             let effective = ctx.store.effective_operating_policy()?;
             task.status = if decisions || config.explicit_owner_acceptance(task, true)
                 || !config.automation.authority.plan_accept
@@ -262,7 +288,7 @@ pub fn plan_verdict_with_evidence(
             } else {
                 corral_core::Status::Review
             };
-        } else if !cancelled && verdict == Verdict::Approve && accepted && run_id.is_some() {
+        } else if !cancelled && !published && verdict == Verdict::Approve && accepted && run_id.is_some() {
             task.status = corral_core::Status::Ready;
         }
         ctx.store.log_event(Some(&task.id), "plan_verdict",
@@ -296,8 +322,9 @@ pub fn plan_verdict_with_evidence(
         close_plan_review(ctx, &previous)?;
     }
     close_plan_review(ctx, p)?;
+    let mut refreshed = Vec::new();
     if p.approval.is_some() {
-        crate::plan_decompose::apply(ctx, id, input.plan)?;
+        refreshed = crate::plan_decompose::apply_refreshing(ctx, id, input.plan)?;
     } else if input.attempt.is_some()
         && p.reviews
             .last()
@@ -338,7 +365,7 @@ pub fn plan_verdict_with_evidence(
             crate::messages::report(Some(id), "owner plan revision", hint);
         }
     }
-    Ok(review)
+    Ok((review, refreshed))
 }
 
 /// Reconcile an already completed independent review under explicit automatic policy.
@@ -435,7 +462,7 @@ pub(crate) fn accept_auto(ctx: &Ctx, id: &str, plan_id: &str) -> Result<()> {
                 })?;
             }
             task.queued = false;
-            if run_id.is_some() {
+            if run_id.is_some() && !plan::published_design(task) {
                 task.status = corral_core::Status::Ready;
             }
             Ok(())

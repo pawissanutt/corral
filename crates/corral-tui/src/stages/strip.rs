@@ -102,6 +102,7 @@ fn state(task: &Task, stage: Stage) -> (&'static str, Option<&Run>) {
                         GateResult::Running => "running",
                         GateResult::Pass => "passed",
                         GateResult::Fail => "failed",
+                        GateResult::Stale => "stale",
                     }
                 }
             }),

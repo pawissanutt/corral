@@ -3,7 +3,7 @@ use serde_json::Value;
 
 const TARGET: &str = "feature/plan";
 
-fn plan() -> (Fx, Task, [String; 3]) {
+pub(super) fn plan() -> (Fx, Task, [String; 3]) {
     let mut fx = Fx::new(|r| {
         r.gate = gate(&["true"]);
         r.reviewer = Some("rev".into());
@@ -49,7 +49,7 @@ tasks:
     (fx, imported.tracker, ids)
 }
 
-fn dispatch(fx: &mut Fx, id: &str) -> Run {
+pub(super) fn dispatch(fx: &mut Fx, id: &str) -> Run {
     fx.id = id.into();
     assert!(matches!(
         corral_ops::dispatch(&fx.ctx, id, &DispatchOpts::default()).unwrap(),
@@ -60,7 +60,7 @@ fn dispatch(fx: &mut Fx, id: &str) -> Run {
     run
 }
 
-fn reviewed(fx: &mut Fx, id: &str, file: &str, text: &str) -> Run {
+pub(super) fn reviewed(fx: &mut Fx, id: &str, file: &str, text: &str) -> Run {
     fx.id = id.into();
     fx.change(file, text);
     fx.done();
@@ -79,7 +79,7 @@ fn reviewed(fx: &mut Fx, id: &str, file: &str, text: &str) -> Run {
     run
 }
 
-fn events(fx: &Fx, id: &str, kind: &str) -> Vec<Value> {
+pub(super) fn events(fx: &Fx, id: &str, kind: &str) -> Vec<Value> {
     fx.ctx
         .store
         .events()
@@ -394,4 +394,46 @@ fn ordinary_autopilot_lands_into_the_owned_plan_checkout() {
     assert_cleaned(&fx, &run, &head);
     assert_eq!(events(&fx, &a, "approved").len(), 1);
     assert_main(&fx, &main);
+}
+
+#[test]
+fn transient_target_index_lock_waits_for_a_later_pass_instead_of_escalating() {
+    // Given a reviewed Plan candidate while another process briefly holds the target's index.lock.
+    let (mut fx, plan, [a, _, _]) = plan();
+    fx.ctx.store.config.review.accept = Some(Accept::Auto);
+    fx.ctx.store.save_config().unwrap();
+    fx.grant(std::slice::from_ref(&plan.id));
+    let run = dispatch(&mut fx, &a);
+    reviewed(&mut fx, &a, "a.txt", "A\n");
+    let checkout = run.plan_target.as_ref().unwrap().checkout.clone();
+    let admin = git(&checkout, &["rev-parse", "--absolute-git-dir"]);
+    let lock = std::path::Path::new(&admin).join("index.lock");
+    std::fs::write(&lock, "").unwrap();
+
+    // When the autopilot pass runs, then the task waits: no escalation, no landing.
+    corral_ops::sync_at(&fx.ctx, now()).unwrap();
+    fx.id = a.clone();
+    let stage = fx.run().autopilot.map(|state| state.stage);
+    assert_ne!(stage, Some(AutoStage::Escalated), "reason={}", fx.reason());
+    assert_eq!(fx.task().status, Status::Review);
+    let wait = fx.task().infra_wait.unwrap();
+    assert_eq!(wait.class, corral_core::InfraWaitClass::Contention);
+    assert_eq!(wait.marker, "index.lock");
+    assert_eq!(wait.path, lock);
+    assert_eq!(wait.first_seen, now());
+    assert!(wait.held_at.is_none());
+    assert!(events(&fx, &a, "approved").is_empty());
+    assert!(lock.exists());
+
+    // And once the lock is released, a later pass proceeds and lands the task.
+    std::fs::remove_file(&lock).unwrap();
+    corral_ops::sync_at(&fx.ctx, now()).unwrap();
+    assert_eq!(
+        fx.task().status,
+        Status::Done,
+        "reason={}; blocker={:?}",
+        fx.reason(),
+        corral_ops::automation_blocker(&fx.ctx, &fx.task())
+    );
+    assert_eq!(events(&fx, &a, "approved").len(), 1);
 }

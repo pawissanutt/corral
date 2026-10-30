@@ -57,6 +57,23 @@ pub(crate) fn waiting(run: &Run) -> bool {
     open_waits(run).any(|w| w.observation.state == WaitState::Pending)
 }
 
+/// The Running card's state for a run that released its coding slot.
+pub(crate) fn parked_label(task: &str, run: &Run) -> Option<String> {
+    if let Some(slot) = run
+        .obligations
+        .slot_wait
+        .as_ref()
+        .filter(|_| run.outcome.is_none())
+    {
+        return Some(format!(
+            "⧗ woken from {} · queued for a slot",
+            slot.on.join(", ")
+        ));
+    }
+    let on = run.parked_on(task);
+    (!on.is_empty()).then(|| format!("⧗ parked on {} · slot released", on.join(", ")))
+}
+
 /// Card lines for a run's obligations: one `<state> <condition>` line per open wait, the pending owner
 /// question when `with_decision`, and answered decisions whose delivery is unknown.
 pub(crate) fn card_lines(run: &Run, with_decision: bool) -> Vec<Line<'static>> {

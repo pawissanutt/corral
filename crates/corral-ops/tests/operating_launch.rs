@@ -9,6 +9,8 @@ mod pause;
 mod plan_membership;
 #[path = "operating_launch/planning.rs"]
 mod planning;
+#[path = "operating_launch/stale_consent.rs"]
+mod stale_consent;
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};

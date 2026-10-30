@@ -59,6 +59,9 @@ macro_rules! keyed_reads {
         fn review_child(&self, run: &str, id: &str) -> Result<Option<RunHead>> {
             self.$reads()?.review_child(run, id)
         }
+        fn review_child_at(&self, run: &str, n: usize) -> Result<Option<RunHead>> {
+            self.$reads()?.review_child_at(run, n)
+        }
         fn review_child_by_review_at(&self, run: &str, at: Timestamp) -> Result<Option<RunHead>> {
             self.$reads()?.review_child_by_review_at(run, at)
         }

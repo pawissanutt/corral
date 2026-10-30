@@ -171,7 +171,7 @@ their model, then their current named profile (`profile`, or the legacy `agent` 
 explicit vendor wins over inference from its model. Known bare `claude-*`, `gpt-*` and `o`-series model
 IDs work as well as provider-qualified IDs. The first resolved vendor is saved on the run so later
 profile edits cannot rewrite it. If no vendor can be resolved, autopilot hands the task to you once,
-in Needs me with the reason, instead of retrying every sync.
+in Blocked with the reason, instead of retrying every sync.
 
 ```bash
 corral review-run T-042                    # use the configured reviewer
@@ -190,7 +190,7 @@ corral verdict T-042 escalate --notes "Touches billing; needs the owner."
 |---|---|
 | `approve` | continues to acceptance |
 | `changes` | sends the notes back to the task agent as a new round |
-| `escalate` | hands the task to you (Needs me) with the notes as the reason |
+| `escalate` | hands the task to you (Blocked) with the notes as the reason |
 
 A verdict belongs to one commit. If the worktree moved on after the review started, or the reviewer closed
 without recording a verdict, the task goes to you instead of being trusted.
@@ -207,10 +207,33 @@ A pending reviewer uses `[sync] review_idle_after_secs` (default 1800, or 30 min
 not the worker's 120-second idle warning. This longer bound accommodates quiet monitor
 and background-check waits without closing the review pane. Its first idle observation
 is persisted; repeated syncs and restarts do not extend the bound. Genuine activity
-resets it, and a reviewer still idle at the bound goes to Needs me with its saved notes
+resets it, and a reviewer still idle at the bound goes to Blocked with its saved notes
 path. A completed verdict stops the watchdog. A failed verdict submission escalates on the next idle sample;
 an idle legacy review missing its candidate identity escalates immediately. This liveness check
 continues with autopilot off, and activity resets the persisted idle deadline.
+
+## Integration infrastructure waits
+
+The review autopilot records `infra_wait` when an owned integration checkout has
+`index.lock`, `HEAD.lock`, its target branch ref lock, `packed-refs.lock`, or an
+unfinished merge, cherry-pick, revert, bisect, rebase or sequencer operation.
+The task stays in Review. Its gate, reviewer and change-round count are retained;
+corral neither deletes a lock nor aborts an operation.
+
+After `[review] infra_wait_secs` (300 seconds by default), the wait gains
+`held_at`, one `infra_hold` event and one owner-notification claim. Repeated syncs
+and restarts do not send again. Removing the markers clears the wait, and the
+same pass resumes using existing verification receipts. A bound Changes verdict
+still requests its defect repair while a marker exists; leaving Review clears
+the infrastructure wait in the same task save.
+
+Notification claims and pending facts live on the task. Sync republishes pending
+facts after a restart without repeating the external notification. A missing
+notification outcome means unknown, including a crash immediately before the call
+or immediately after it. `owner_notified` means the transport returned success,
+not that the owner read the message. Unclassified preflight failures still
+escalate to Blocked; their autopilot event identifies review runs released by
+round cleanup.
 
 ## Daily digests
 
@@ -287,7 +310,7 @@ Each run carries an autopilot state, shown on its card and review screen, and ev
 | `reviewed` | gate and review passed and the run waits in Review for you (`accept = "owner"`); the card says `✓ reviewed` |
 | `changes` | sent back to the task agent with the reason |
 | `blocked` | landing waits for a precondition (the main checkout is dirty or not on the base branch); retried on later syncs and notified once |
-| `escalated` | handed to you (Needs me) with the reason |
+| `escalated` | handed to you (Blocked) with the reason |
 
 The path is `gating`, then `reviewing`, then either `reviewed` (you accept) or `landing` and `done`
 (`accept = "auto"`).
@@ -298,7 +321,7 @@ Before starting a gate or reviewer, the autopilot simulates integration with `gi
 the exact candidate and current base SHAs. It distinguishes a clean merge, a conflict, and a Git
 infrastructure error by exit status and structured output. The simulation leaves branches, the index
 and the worktree unchanged. Conflicts use the existing change-request rounds; infrastructure errors
-escalate to Needs me instead of asking the worker to rebase.
+escalate to Blocked instead of asking the worker to rebase.
 
 An **Integration repair packet** JSON artifact records the dispatch base, merge base, candidate and
 current base SHAs; every base commit since dispatch; commits still missing from the candidate;
@@ -327,7 +350,7 @@ request-changes or retry resets the count.
 
 ### Early main-movement notices
 
-Sync also watches recorded landings for active Running/Needs me runs on the same project and base.
+Sync also watches recorded landings for active Running/Blocked runs on the same project and base.
 After two seconds without another observed landing, it compares the batch's changed paths with the
 worker's committed changes, staged/unstaged/untracked paths, and optional `write_scope` globs.
 Both rename endpoints count. Git status supplies uncommitted path names; corral does not read their
@@ -367,7 +390,7 @@ conflicting requirements. Keep a normal sync driver running to construct and del
 
 ### What always needs you
 
-With `accept = "auto"`, these guards stop the autopilot and put the task in Needs me with the reason spelled
+With `accept = "auto"`, these guards stop the autopilot and put the task in Blocked with the reason spelled
 out and a notification:
 
 - the change touches a path matching `owner_paths`;
@@ -381,7 +404,7 @@ Diff size is not a guard: a large diff goes through the same gate, independent r
 small one. The former `max_diff_lines` key is deprecated; existing configs that still set it load, the value
 is ignored, and corral warns once.
 
-From Needs me you can approve, request changes, retry or discard like any other Review task.
+From Blocked you can approve, request changes, retry or discard like any other Review task.
 
 ### Landing
 
@@ -398,8 +421,15 @@ fast-forward, cannot reuse the old receipts.
 
 The board, watch loop and autopilot check the running executable on every sync before side effects.
 Replacing or deleting that executable stops new gates, reviews and dispatches, records `version_skew`,
-and reports "corral was updated; restart the board (q, then corral up)". Restart explicitly; automatic
-re-execution is not enabled.
+and reports "corral was updated; restart the board (q, then corral up)". The outdated process never
+writes again, but the board keeps autopilot running: it hands each later sync pass to the installed
+executable (`corral sync` against the same store, herdr and session) and only reads the result back,
+with the restart notice in its header until you restart it. The headless `corral sync --watch` loop
+only refuses. Restart explicitly; automatic re-execution is not enabled.
+
+When no sync pass completes for five minutes while tasks wait in Review, Ready or Running, the board
+header reports that autopilot stalled, with the last sync error or that the current pass has not
+returned, until a pass completes.
 
 Saved task frontmatter uses a `schema_version: 2` envelope with the record under `task`.
 Legacy flat records remain readable for recovery, but legacy receipts without candidate identity
@@ -486,7 +516,7 @@ task again.
 queue intent, and prevent `auto_backlog` from immediately readmitting it. Move to Ready or
 explicit enqueue clears that hold. Promoting an Idea to Backlog does not set a withdrawal
 hold: it remains eligible for configured `auto_backlog` admission. Queue removal rejects
-Running, Needs me, Review, Done, and Dropped tasks; it does not stop agents or finishing work.
+Running, Blocked, Review, Done, and Dropped tasks; it does not stop agents or finishing work.
 Ready cards show the current dependency, capacity/headroom, machine-busy, paused, or
 admission-restriction reason.
 
@@ -496,8 +526,8 @@ route or launch journal. Each migrated task logs one `queue_migrated` event. Exi
 `ready_projects` lists remain restrictions; an empty list now admits all configured projects
 instead of disabling admission. Set `dispatch.paused = true` to retain a fully paused queue.
 
-Sync uses the existing queue drain, ordered by P0, P1, P2, P3 (unknown priorities last), then creation
-timestamp, then task ID. Dependencies must be **Done**: Review is not approval. Missing dependencies
+Sync uses the existing queue drain, ordered by `red_main` fixes first, then P0, P1, P2, P3 (unknown
+priorities last), then creation timestamp, then task ID (see "Parked runs and red-main fixes"). Dependencies must be **Done**: Review is not approval. Missing dependencies
 and cycles are reported as errors with task IDs, not indefinite waiting. `queue list` explains pause,
 authorization, dependency, capacity, model, launch-failure and finishing-work waits.
 
@@ -525,13 +555,13 @@ the run identity.
 
 Shell submission has an unavoidable ambiguous boundary: the IPC may succeed immediately before the
 launcher dies. Corral never sends that command a second time. It retains the one attached run/pane in
-Needs me, releases the temporary reservation into that occupied task slot, and asks the owner to inspect
+Blocked, releases the temporary reservation into that occupied task slot, and asks the owner to inspect
 the pane before retrying. This is at-most-once submission, not a claim of exactly-once arbitrary shell
 execution. An ordinary task retry or explicit reply is the owner's recovery action.
 
 ### Finishing work and capacity
 
-Running/Needs me tasks, running gates and live reviewer records each use one global and project slot by
+Running/Blocked tasks, running gates and live reviewer records each use one global and project slot by
 default. A gate started while its coding task is still Running therefore needs another slot.
 `limits.review` is an additional gate/reviewer cap; `limits.count_reviews` and `limits.count_gates`
 can explicitly exclude those process types from the shared pool (both default on).
@@ -561,8 +591,11 @@ guard still apply. A malformed dependency graph is reported without blocking unr
 
 Automatic claims leave `limits.review` headroom in the shared running pool. Live counted gates,
 reviewers, and their reservations use that headroom instead of reserving it twice. Consequently,
-`limits.running <= limits.review` leaves no automatic coding capacity. Direct manual dispatch
-retains its existing capacity rules; all sync-driven Ready admission reserves headroom. Claims recheck headroom under
+`limits.running <= limits.review` leaves no automatic coding capacity. With
+`limits.running_target` set below `limits.running`, automatic claims stop at that soft target
+except for P0 tasks and red-main fixes (Backlog, Ready and promoted Ideas alike), which may use
+the headroom up to the hard limit. Direct manual dispatch
+and the owner-authorized queue retain their existing capacity rules; all sync-driven Ready admission reserves headroom. Claims recheck headroom under
 the board lock, including recovery of an interrupted automatic launch.
 
 `promote_ideas` defaults to `"suggest"`:
@@ -666,7 +699,7 @@ PASS through resume. Finished gates produce one receipt per wait, even across sy
 Their delivery is `unknown`: collecting a result does not prove the harness received a wake.
 
 A decision uses `version`, `id`, `run`, `owner`, `source`, optional `deadline`, `question` and
-`requested_action`. It moves the task to Needs me with that exact question and action, even if
+`requested_action`. It moves the task to Blocked with that exact question and action, even if
 herdr says idle or working. A valid external wait stays Running, distinct from an unanswered
 owner question. Cards show the condition and diagnostic state; the detail Runs tab includes the
 request, handle, observation and receipt. An expired decision still requires an owner answer.
@@ -685,6 +718,35 @@ resends a command or launches another worker because a wait completed. Receipts 
 Unknown delivery requires inspection and, if necessary, an explicit owner reply rather than an
 automatic resend. All declarations leave the T-033 watchdog and its confirmed, identity-checked
 recovery path intact: a wait is never permission to suppress a stuck diagnostic or kill a process.
+
+### Parked runs and red-main fixes
+
+A run is parked when every open wait is a channel wait whose `channel_id` names another task
+(`task:T-512:landed`, `worker:T-512-landed`, `corral:T-506:landed-and-installed`; the task ID
+is `T-` followed by at least three digits), no owner decision is pending and no gate or reviewer
+is live. A parked run keeps its status, pane and worktree, but it releases its coding slot, so
+the task it waits on can be dispatched even when parked runs would otherwise fill every slot. A
+wait on CI, a monitor or the run's own task does not park the run.
+
+When the last task wait fires (a receipt, an expired deadline or any other terminal state),
+corral does not hand the slot back implicitly. The run takes a free slot at once if there is
+one; otherwise it queues (the run's `obligations.slot_wait` records since when) and `corral run
+resume` prints that it is waiting. Woken runs take the next free slots, oldest first, ahead of
+ordinary queued work, and sync grants them before it drains the queue. A claimant whose project
+is at its `per_project` cap reserves nothing, so it never blocks another project's dispatch. Each
+grant is logged as a `slot_reacquired` event. A woken worker waits with
+`corral wait --for slot_reacquired --task T-042 --since <slot_wait.since>`, which replays from
+the queue time, so a grant logged before the wait starts still releases it; no other event
+does. Pi-native wake messages for a run's waits stay owed while the run holds no slot and are
+delivered after the grant. `corral queue list` lists woken runs first and parked runs last, each with the tasks it
+waits on and the slot it released; the board's Running card says `parked on ...` or `woken ...`,
+and the slot badge counts parked runs as uncounted.
+
+A task labeled `red_main` fixes failing tests on the integration base. It sorts ahead of every
+other queued task regardless of priority, ahead of woken runs, and no other coding dispatch may
+take the last free slot while it waits. While it waits for gate admission, other gates may not
+take the last review-process slot. It also skips the finishing-work first refusal. Gate tiers,
+review policy and dependency rules are unchanged.
 
 ## Manual review
 

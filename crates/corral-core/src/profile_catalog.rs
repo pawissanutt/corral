@@ -144,10 +144,22 @@ impl ExecutionCandidate {
             "candidate provider disagrees with model identity"
         );
         flags.render(&self.harness, Some(&self.model), self.effort.as_deref())?;
-        ensure!(
-            command.contains("{model_args}"),
-            "candidate harness lacks model_args"
-        );
+        if crate::is_pi_native(&self.harness) {
+            // Built in and argument-free: model and effort travel in the host bootstrap, so the
+            // flag map's effort check above and the vendor allowlist are its rules.
+            crate::check_pi_native_vendor(&self.id, Some(&self.provider))?;
+            ensure!(
+                !crate::PI_NATIVE_METERED_VENDORS.contains(&self.provider.as_str())
+                    || matches!(self.cost, CandidateCost::Metered { .. }),
+                "pi-native metered candidate requires metered cost"
+            );
+            ensure!(self.args.is_empty(), "pi-native candidate takes no args");
+        } else {
+            ensure!(
+                command.contains("{model_args}"),
+                "candidate harness lacks model_args"
+            );
+        }
         ensure!(
             !self.args.iter().any(|arg| arg.contains('\0')),
             "candidate argv contains NUL"

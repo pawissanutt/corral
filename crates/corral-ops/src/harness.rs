@@ -3,7 +3,8 @@
 //!
 //! Probes run as argv subprocesses (never a shell) with a timeout. Results are cached in
 //! `<cache_root>/harnesses.json`; `harness_report(ctx, true)` re-detects. Model listing:
-//! omo `--list-models` (table), omp `models --json`, claude a built-in alias list. A failed or
+//! omo `--list-models` (table), omp `models --json`, claude a built-in alias list, pi-native its
+//! installed host's offline catalog for logged-in providers (`pi_native`). A failed or
 //! unparseable listing degrades to free-text model entry with a note, never an error.
 
 use std::io::Read;
@@ -13,14 +14,18 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
-use corral_core::Config;
+use corral_core::{Config, PI_NATIVE_HARNESS, is_pi_native};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::Ctx;
 
 mod availability;
+mod pi_native;
 pub(crate) use availability::preferred_omo_models;
+pub(crate) use pi_native::detect as detect_pi_native;
+pub use pi_native::models_for_profile;
+pub(crate) use pi_native::{catalog_selector, foreign_selector};
 
 #[cfg(test)]
 mod tests;
@@ -147,7 +152,8 @@ pub fn detect_harnesses(config: &Config) -> Vec<HarnessInfo> {
     })
 }
 
-/// `[harnesses]` keys plus legacy `[agents]` keys, sorted and deduplicated.
+/// `[harnesses]` keys plus legacy `[agents]` keys, plus the built-in pi-native harness when the
+/// configuration names it, sorted and deduplicated.
 fn harness_keys(config: &Config) -> Vec<String> {
     let mut keys: Vec<String> = config
         .harnesses
@@ -155,6 +161,9 @@ fn harness_keys(config: &Config) -> Vec<String> {
         .chain(config.agents.keys())
         .cloned()
         .collect();
+    if crate::agent::hooks::configured(config) {
+        keys.push(PI_NATIVE_HARNESS.into());
+    }
     keys.sort();
     keys.dedup();
     keys
@@ -195,6 +204,9 @@ fn apply_efforts(h: &mut HarnessInfo, config: &Config) {
 }
 
 fn detect_one(config: &Config, key: &str) -> HarnessInfo {
+    if is_pi_native(key) {
+        return pi_native::detect(config);
+    }
     let program = command_template(config, key).and_then(|c| program_of(&c));
     let path = program.as_deref().and_then(find_executable);
     let mut info = HarnessInfo {

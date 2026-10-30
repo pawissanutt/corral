@@ -15,6 +15,7 @@ use crate::{
     Config, OperatingActionKind, PolicySource, ReviewPolicy, Reviewer, Status, Store, Task,
 };
 
+mod authority;
 mod heads;
 mod membership;
 #[cfg(test)]
@@ -24,27 +25,8 @@ mod projects;
 mod publication;
 mod records;
 
+pub use authority::{OperatingAuthority, OperatingMode};
 pub use projects::{DEFAULT_GRANT_DAYS, ScopedProject};
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OperatingMode {
-    #[default]
-    Assist,
-    Autopilot,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct OperatingAuthority {
-    pub dispatch: bool,
-    pub accept: bool,
-    pub plan_accept: bool,
-    /// Final tracker Plan acceptance, never implied by `accept` or `plan_accept`.
-    /// Omitted when off so grants confirmed before this field keep their digest.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub aggregate_accept: bool,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +70,10 @@ pub struct OperatingScope {
 pub struct OperatingPolicy {
     pub mode: OperatingMode,
     pub paused: bool,
+    /// Owner-toggled: ignore owner-only acceptance and repair round limits until turned off.
+    /// Outside the grant digest like `paused`; omitted when off so existing files are unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub turbo: bool,
     /// Changes on scope/authority confirmation, not ordinary execution progress.
     pub revision: u64,
     pub authorization: Option<String>,
@@ -298,6 +284,12 @@ pub fn operating_contract_revision_chained(task: &Task, chain: &str) -> Result<S
     } else {
         original
     };
+    // Absent on Plans whose membership never moved, preserving their identities.
+    let scoped = if task.membership_revision != 0 {
+        digest(&(scoped, task.membership_revision))?
+    } else {
+        scoped
+    };
     if task.approved_scope_revision != 0 || !chain.is_empty() {
         digest(&(scoped, task.approved_scope_revision, chain))
     } else {
@@ -386,7 +378,9 @@ impl Store {
     pub(crate) fn policy_revision(&self, config: &Config) -> Result<String> {
         // Only policy inputs participate; unrelated personal/UI edits are not consent changes.
         // A dispatch pause is an admission hold, not withdrawal of queued owner intent.
-        // Executors still recheck the live pause at their final submission boundary.
+        // `limits.*` slot capacity is admission too (T-560): changing it must not strand
+        // queued owner or prepared automatic work. Executors still recheck the live pause and
+        // live capacity at their final submission boundary.
         let config = config.policy_view();
         let mut dispatch = config.dispatch.clone();
         dispatch.paused = false;
@@ -396,7 +390,6 @@ impl Store {
             &config.review,
             &dispatch,
             &config.projects,
-            &config.limits,
             &config.resources,
         ))
     }
@@ -532,6 +525,7 @@ impl Store {
         let policy = OperatingPolicy {
             mode: OperatingMode::Autopilot,
             paused: false,
+            turbo: false,
             revision,
             authorization: Some(id.clone()),
             authority: selection.authority.clone(),
@@ -549,9 +543,12 @@ impl Store {
     }
 
     /// A matching receipt is necessary but never sufficient for any executor's safety checks.
+    /// A read-only snapshot resolves it once per pass, like its tasks (T-547).
     pub fn effective_operating_policy(&self) -> Result<EffectivePolicy> {
-        let config = self.operating_config()?;
-        self.resolve_operating_policy(&config)
+        let policy = self.pass_derived("effective_operating_policy", || {
+            self.resolve_operating_policy(&self.operating_config()?)
+        })?;
+        Ok(policy.as_ref().clone())
     }
 
     pub(crate) fn resolve_operating_policy(&self, config: &Config) -> Result<EffectivePolicy> {
@@ -559,6 +556,7 @@ impl Store {
         if !self.is_snapshot() {
             return self.read_only_snapshot()?.resolve_operating_policy(config);
         }
+        crate::work::record(crate::work::Work::PolicyResolve, 1);
         let policy = &config.automation;
         let state = self.operating_state()?;
         let expired = state
@@ -628,9 +626,8 @@ impl Store {
                 }
             };
             let task = self.operating_task(&head)?;
-            if task.dispatch_hold {
-                common.push("task dispatch hold".into());
-            }
+            common.extend(task.dispatch_hold.then(|| "task dispatch hold".into()));
+            common.extend(task.park.as_ref().map(|park| park.refusal(&task.id)));
             match self.operating_member_head(config, &head) {
                 Ok(current) if &current == member => {}
                 Ok(_) => common.push("task contract or project identity changed".into()),
@@ -755,8 +752,9 @@ impl Store {
                     action,
                     OperatingActionKind::Accept | OperatingActionKind::AcceptAggregate
                 ) {
-                    if config.explicit_owner_acceptance(&task, false)
-                        || (aggregate && config.explicit_owner_acceptance(&task, true))
+                    if !policy.turbo
+                        && (config.explicit_owner_acceptance(&task, false)
+                            || (aggregate && config.explicit_owner_acceptance(&task, true)))
                     {
                         reasons.push("explicit owner-only acceptance".into());
                     }
@@ -770,11 +768,13 @@ impl Store {
                     }
                 }
                 if action == OperatingActionKind::AcceptPlan
+                    && !policy.turbo
                     && config.explicit_owner_acceptance(&task, true)
                 {
                     reasons.push("explicit owner-only plan acceptance".into());
                 }
                 if action == OperatingActionKind::Repair
+                    && !policy.turbo
                     && task.rounds >= resolved.review.max_rounds
                 {
                     reasons.push("automatic repair rounds exhausted".into());

@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 use corral_core::{
     CandidateIdentity, GateRecord, GateResult, GateTierBinding, IdentityChange, ReviewPolicy,
-    ReviewRecord, RunHead, TaskRef, VERIFICATION_ENV,
+    ReviewRecord, RunHead, Status, TaskRef, VERIFICATION_ENV,
 };
 use sha2::{Digest, Sha256};
 
@@ -133,7 +133,17 @@ pub(crate) fn identity_with<T: TaskRef + ?Sized>(
     gate_tier: Option<Box<GateTierBinding>>,
 ) -> Result<CandidateIdentity> {
     let store = ctx.store.reopen()?;
-    crate::plan_target::validate_run(&store, task, run)?;
+    if let Err(error) = crate::plan_target::validate_run(&store, task, run) {
+        // Ownership is checked before marker classification. A recorded wait fences
+        // stage actions, not receipt collection or a bound reviewer's verdict.
+        if task.status != Status::Review
+            || task.infra_wait.is_none()
+            || !(error.is::<corral_git::GitLockContention>()
+                || error.is::<corral_git::GitOperationOngoing>())
+        {
+            return Err(error);
+        }
+    }
     let policy = store.config.task_review_policy(task);
     let config = config_inputs(&store.config)?;
     let mut file_inputs = Vec::new();
@@ -242,6 +252,20 @@ pub(crate) fn gate_fresh_for_review<T: TaskRef + ?Sized>(
     gate_fresh_for(ctx, task, run, gate, &requirement)
 }
 
+/// Fresh for review on the reviewed base `moved.expected` while main moved forward to
+/// `moved.actual`: only the integration base may differ, and only by that move.
+pub(crate) fn gate_fresh_for_review_at<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    gate: &GateRecord,
+    moved: Option<&IdentityChange>,
+) -> Result<bool> {
+    let review = crate::gate_tier::GatePhase::Review;
+    let requirement = crate::gate_tier::requirement_for(ctx, task, run, review)?;
+    gate_fresh_for_at(ctx, task, run, gate, &requirement, moved)
+}
+
 /// The receipt re-derives under its own binding, and that binding satisfies `requirement`.
 pub(crate) fn gate_fresh_for<T: TaskRef + ?Sized>(
     ctx: &Ctx,
@@ -250,13 +274,36 @@ pub(crate) fn gate_fresh_for<T: TaskRef + ?Sized>(
     gate: &GateRecord,
     requirement: &crate::gate_tier::GateRequirement,
 ) -> Result<bool> {
+    gate_fresh_for_at(ctx, task, run, gate, requirement, None)
+}
+
+/// [`gate_fresh_for`], judged on the reviewed base `moved.expected` while main moved forward to
+/// `moved.actual`: the integration base may differ by exactly that move, nothing else.
+pub(crate) fn gate_fresh_for_at<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    gate: &GateRecord,
+    requirement: &crate::gate_tier::GateRequirement,
+    moved: Option<&IdentityChange>,
+) -> Result<bool> {
     let Some(expected) = &gate.identity else {
         return Ok(false);
     };
-    Ok(gate.sha == expected.head
-        && crate::gate_tier::satisfies(expected.gate_tier.as_deref(), requirement)
-        && corral_git::is_clean(&run.worktree)?
-        && identity(ctx, task, run, expected)? == *expected)
+    if gate.sha != expected.head
+        || !crate::gate_tier::satisfies(expected.gate_tier.as_deref(), requirement)
+        || !corral_git::is_clean(&run.worktree)?
+    {
+        return Ok(false);
+    }
+    let mut actual = identity(ctx, task, run, expected)?;
+    if let Some(moved) = moved
+        && expected.integration_base == moved.expected
+        && actual.integration_base == moved.actual
+    {
+        actual.integration_base = moved.expected.clone();
+    }
+    Ok(actual == *expected)
 }
 
 pub(crate) fn gate_passed<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, run: &RunHead) -> Result<bool> {
@@ -326,4 +373,24 @@ pub(crate) fn review_changes<T: TaskRef + ?Sized>(
         });
     }
     Ok(changes)
+}
+
+/// Changes that void a verdict on the exact candidate the reviewer saw. Main moving forward past
+/// the reviewed base is not one: the verdict stays bound to the base it reviewed (returned as the
+/// second value), and autopilot replays and re-gates it, carrying an approval only across a clean
+/// replay with an equal patch.
+pub(crate) fn verdict_changes<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    run: &RunHead,
+    review: &ReviewRecord,
+) -> Result<(Vec<IdentityChange>, Option<IdentityChange>)> {
+    let changes = review_changes(ctx, task, run, review)?;
+    if let [moved] = changes.as_slice()
+        && moved.field == "integration_base"
+        && corral_git::is_ancestor(&run.worktree, &moved.expected, &moved.actual)?
+    {
+        return Ok((Vec::new(), Some(moved.clone())));
+    }
+    Ok((changes, None))
 }

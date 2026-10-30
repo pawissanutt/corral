@@ -94,7 +94,7 @@ The card moves to **Running**. corral creates a worktree at `<project>/.worktree
 branch `corral/<task>` and opens the coding agent there, separate from your working tree.
 
 Select the card and press `a` to visit the worker; `Ctrl-b`, then `k` returns to the board with default
-keys. If it needs an answer, the card moves to **Needs me** with a reason. Press `r` to reply.
+keys. If it needs an answer, the card moves to **Blocked** with a reason. Press `r` to reply.
 
 ## 5. Check, review and land
 

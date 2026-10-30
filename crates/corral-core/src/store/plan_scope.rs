@@ -73,6 +73,11 @@ impl Task {
             "{}: member gates require a revision-guarded amendment; use corral plan member-gate <member> --file <gate.yaml> --expected-revision <n> --reason <text>",
             self.id
         );
+        ensure!(
+            self.membership_revision == proposed.membership_revision,
+            "{}: the membership revision changes only through corral plan move-member",
+            self.id
+        );
         Ok(())
     }
 

@@ -16,6 +16,8 @@ const SPEC: &str =
 
 #[path = "reviewer/scratch.rs"]
 mod scratch;
+#[path = "reviewer/sessions.rs"]
+mod sessions;
 #[path = "reviewer/transcript.rs"]
 mod transcript;
 #[path = "reviewer/watch.rs"]

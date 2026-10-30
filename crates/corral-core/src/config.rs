@@ -11,6 +11,13 @@ use crate::{Harness, Price, Profile, ReviewOverride, validate_glob};
 
 pub use crate::UiCfg;
 pub use crate::dispatch_config::{DispatchCfg, DispatchOverride, DispatchPolicy, PromoteIdeas};
+pub mod agent_capabilities;
+pub use agent_capabilities::{AgentCfg, AgentUi};
+mod attention;
+
+fn review_is_empty(review: &ReviewOverride) -> bool {
+    review.is_empty() && review.infra_wait_secs.is_none()
+}
 
 /// Every problem [`Config::validate`] found; displays one per line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +87,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "DigestCfg::is_empty")]
     pub digest: DigestCfg,
     /// `[review]`: workspace-wide review policy (gate, reviewer, acceptance).
-    #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
+    #[serde(default, skip_serializing_if = "review_is_empty")]
     pub review: ReviewOverride,
     #[serde(default)]
     pub sync: SyncCfg,
@@ -178,8 +185,12 @@ impl Defaults {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
-    /// Global run slots (Running + NeedsMe). Default 3.
+    /// Global run slots (Running + NeedsMe): the hard limit. Default 3.
     pub running: usize,
+    /// Soft target automatic coding admission fills up to; unset means `running`. The gap up to
+    /// `running` is headroom for manual and authorized-queue dispatch, P0 and red-main fixes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_target: Option<usize>,
     /// Independent concurrent gate/reviewer process budget.
     #[serde(default = "default_review_limit")]
     pub review: usize,
@@ -196,6 +207,7 @@ impl Default for Limits {
     fn default() -> Self {
         Limits {
             running: 3,
+            running_target: None,
             review: default_review_limit(),
             count_reviews: true,
             count_gates: true,
@@ -237,7 +249,7 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
     /// `[projects.<p>.review]`: overrides of the global `[review]` policy.
-    #[serde(default, skip_serializing_if = "ReviewOverride::is_empty")]
+    #[serde(default, skip_serializing_if = "review_is_empty")]
     pub review: ReviewOverride,
 }
 
@@ -351,7 +363,38 @@ pub struct PmCfg {
     /// Actionable event kinds delivered to the PM when push is enabled.
     #[serde(default = "default_push_kinds")]
     pub push_kinds: Vec<String>,
+    #[serde(default = "attention::seconds")]
+    pub attention_secs: u64,
+    #[serde(default = "attention::owner_seconds")]
+    pub attention_owner_secs: u64,
+    #[serde(default = "yes")]
+    pub attention_notify: bool,
 }
+
+/// The one list of PM-actionable event kinds, after `actionable_kind` normalization. It is what
+/// `pm.push_kinds` accepts, what `actionable_kind` returns and what `corral wait --for` accepts
+/// (plus `config_invalid`).
+pub const PM_ACTIONABLE_KINDS: [&str; 19] = [
+    "done",
+    "needs_me",
+    "stuck",
+    "blocked",
+    "escalated",
+    "config_changed",
+    "lessons_due",
+    "run_resumed",
+    "wait_transition",
+    "pm_decision_resolved",
+    "delivery_uncertain",
+    "delivery_orphaned",
+    "message_unobserved",
+    "question_opened",
+    "question_escalated",
+    "question_unattended",
+    "turn_ended_without_report",
+    "attention_due",
+    "slot_reacquired",
+];
 
 fn default_push_kinds() -> Vec<String> {
     [
@@ -365,6 +408,7 @@ fn default_push_kinds() -> Vec<String> {
         "run_resumed",
         "wait_transition",
         "pm_decision_resolved",
+        "attention_due",
     ]
     .into_iter()
     .map(str::to_string)
@@ -377,38 +421,10 @@ impl Default for PmCfg {
             agent: "omo".into(),
             push_events: false,
             push_kinds: default_push_kinds(),
+            attention_secs: attention::seconds(),
+            attention_owner_secs: attention::owner_seconds(),
+            attention_notify: true,
         }
-    }
-}
-
-/// `[agent]`: Pi-native host settings. Every value applies only to pi-native runs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgentCfg {
-    /// Explicit fixture or development asset installation; never inferred.
-    pub assets_dir: Option<PathBuf>,
-    /// A waiting question with no PM triage reaches Needs me after this many seconds.
-    pub question_unattended_secs: u64,
-    /// An uncertain gate start becomes Needs me after this many seconds.
-    pub gate_start_uncertain_secs: u64,
-    /// Grace for a host to drain before it is fenced.
-    pub drain_secs: u64,
-}
-
-impl Default for AgentCfg {
-    fn default() -> Self {
-        Self {
-            assets_dir: None,
-            question_unattended_secs: 600,
-            gate_start_uncertain_secs: 300,
-            drain_secs: 60,
-        }
-    }
-}
-
-impl AgentCfg {
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
     }
 }
 
@@ -467,6 +483,11 @@ impl Default for SyncCfg {
 }
 
 impl Config {
+    /// Workspace-wide bound before a review infrastructure wait needs owner attention.
+    pub fn review_infra_wait_secs(&self) -> u64 {
+        self.review.infra_wait_secs.unwrap_or(300)
+    }
+
     /// Reads and parses a corral.toml.
     pub fn load(path: &Path) -> Result<Config> {
         let text =
@@ -635,13 +656,24 @@ impl Config {
         );
         table.insert("board".into(), board);
         table.insert("routing".into(), routing);
-        table
+        let review = table
             .entry("review")
             .or_insert_with(|| toml::Value::Table(Default::default()))
             .as_table_mut()
-            .context("review is not a table")?
+            .context("review is not a table")?;
+        review
             .entry("require_cross_family")
             .or_insert(toml::Value::Boolean(false));
+        let policy = self.review_policy(None, None);
+        for (key, session) in [
+            ("worker_session", policy.worker_session),
+            ("reviewer_session", policy.reviewer_session),
+        ] {
+            review.insert(
+                key.into(),
+                toml::Value::try_from(session).context("encoding session policy")?,
+            );
+        }
         Ok(value)
     }
 
@@ -664,6 +696,7 @@ impl Config {
 
     pub(crate) fn problems(&self, root: &Path, inputs: &SemanticInputs) -> Vec<String> {
         let mut out = self.board.card.problems();
+        out.extend(attention::problems(&self.pm));
         if let Some(policy) = &self.routing.repair
             && let Err(error) = policy.validate()
         {
@@ -675,11 +708,21 @@ impl Config {
         if self.limits.running == 0 {
             out.push("limits.running must be > 0".to_string());
         }
+        if self
+            .limits
+            .running_target
+            .is_some_and(|t| t == 0 || t > self.limits.running)
+        {
+            out.push("limits.running_target must be within 1..=limits.running".to_string());
+        }
         if self.sync.startup_grace_secs == 0 {
             out.push("sync.startup_grace_secs must be > 0".to_string());
         }
         if self.sync.review_idle_after_secs == 0 {
             out.push("sync.review_idle_after_secs must be > 0".to_string());
+        }
+        if !(30..=3600).contains(&self.review_infra_wait_secs()) {
+            out.push("review.infra_wait_secs must be within 30..=3600".into());
         }
         if self.limits.review == 0 {
             out.push("limits.review must be > 0".to_string());
@@ -752,6 +795,13 @@ impl Config {
             out.push("lessons.top must be within 1..=20".into());
         }
         for (k, p) in &self.projects {
+            if let Some(secs) = p.review.infra_wait_secs
+                && !(30..=3600).contains(&secs)
+            {
+                out.push(format!(
+                    "projects.{k}.review.infra_wait_secs must be within 30..=3600"
+                ));
+            }
             if p.dispatch.max_auto_promotions_per_day == Some(0) {
                 out.push(format!(
                     "projects.{k}.dispatch.max_auto_promotions_per_day must be > 0"
@@ -779,27 +829,10 @@ impl Config {
         }
         check_profile(&mut out, "pm.agent".into(), &self.pm.agent);
         for kind in &self.pm.push_kinds {
-            if !matches!(
-                kind.as_str(),
-                "done"
-                    | "needs_me"
-                    | "stuck"
-                    | "blocked"
-                    | "escalated"
-                    | "config_changed"
-                    | "lessons_due"
-                    | "run_resumed"
-                    | "wait_transition"
-                    | "pm_decision_resolved"
-                    | "delivery_uncertain"
-                    | "delivery_orphaned"
-                    | "message_unobserved"
-                    | "question_opened"
-                    | "question_escalated"
-                    | "turn_ended_without_report"
-            ) {
+            if !PM_ACTIONABLE_KINDS.contains(&kind.as_str()) {
                 out.push(format!(
-                    "pm.push_kinds: unknown actionable kind {kind:?}; use done, needs_me, stuck, blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition, pm_decision_resolved, delivery_uncertain, delivery_orphaned, message_unobserved, question_opened, question_escalated, turn_ended_without_report"
+                    "pm.push_kinds: unknown actionable kind {kind:?}; use {}",
+                    PM_ACTIONABLE_KINDS.join(", ")
                 ));
             }
         }

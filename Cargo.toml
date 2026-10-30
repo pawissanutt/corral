@@ -3,10 +3,17 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
+
+# Persistence-heavy scenarios spend most of their CPU decoding task/config snapshots.
+# Optimize test code while retaining the test profile's debug assertions and overflow checks.
+[profile.test]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true
 
 [workspace.dependencies]
 anyhow = "1"
@@ -17,6 +24,7 @@ toml = "0.9"
 toml_edit = "0.23"
 jiff = { version = "0.2", features = ["serde"] }
 sha2 = "0.10"
+sha1_smol = "1"
 flate2 = "1"
 regex = "1"
 ratatui = "0.30"

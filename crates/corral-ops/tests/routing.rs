@@ -40,6 +40,7 @@ fn routing_uses_enabled_authenticated_models_without_probing_harnesses() {
             project: Vec::new(),
             kind: Vec::new(),
             size: Vec::new(),
+            difficulty: Vec::new(),
             title_regex: None,
             body_regex: None,
             profile: name.into(),

@@ -19,6 +19,7 @@ impl App {
             }
             WorkerMsg::Synced(Ok((changes, snapshot))) => {
                 self.last_sync_error = None;
+                self.synced_at = self.clock.now();
                 for c in &changes {
                     if let Some(t) = change_toast(c, snapshot.stage_reason(c)) {
                         self.messages.record(Message {
@@ -43,18 +44,19 @@ impl App {
                         snapshot.ctx.store.config_path().display().to_string(),
                     ));
                 }
-                self.counts = Counts::from_snapshot(&snapshot);
+                self.counts = Counts::from_snapshot(&snapshot)
+                    .with_attention(&snapshot.tasks, &snapshot.attention);
                 self.resources = snapshot.resources.clone();
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
-                if let Some(board) = self.stack.first_mut() {
-                    board.apply_board_snapshot(*snapshot);
-                }
                 // Hidden screens refresh when exposed by pop(), not on every periodic sync.
                 if self.stack.len() > 1
                     && let Some(top) = self.stack.last_mut()
                 {
-                    top.refresh(&self.ctx);
+                    top.refresh_board_snapshot(&self.ctx, &snapshot);
+                }
+                if let Some(board) = self.stack.first_mut() {
+                    board.apply_board_snapshot(*snapshot);
                 }
             }
             WorkerMsg::Synced(Err(e)) => {
@@ -102,10 +104,24 @@ impl App {
         let Ok(store) = self.ctx.store.read_only_snapshot() else {
             return;
         };
-        let Ok(board) = store.board(None) else {
-            return;
-        };
+        let Ok(board) = store.board(None) else { return; };
         self.counts = Counts::from_heads(&board.heads, &board.status_counts, &store.config);
+        let Ok(tasks) = board.heads.iter().map(|head| head.to_shell_task())
+            .collect::<anyhow::Result<Vec<_>>>() else { return; };
+        if let Some(columns) = self.stack.first().and_then(|view| view.column_counts()) {
+            for (status, count) in Status::COLUMNS.into_iter().zip(columns) {
+                match status {
+                    Status::NeedsMe => self.counts.needs = count,
+                    Status::Review => self.counts.review = count,
+                    Status::Ready => self.counts.ready = count,
+                    _ => {}
+                }
+            }
+        } else {
+            let ctx = corral_ops::Ctx { store: store.clone(), ..self.ctx.clone() };
+            let attention = crate::attention::load(&ctx, jiff::Timestamp::now());
+            self.counts = self.counts.with_attention(&tasks, &attention);
+        }
     }
 
     pub(super) fn reload_config(&mut self) {
@@ -137,6 +153,15 @@ impl App {
 }
 
 impl Counts {
+    fn with_attention(mut self, tasks: &[corral_core::Task], attention: &crate::attention::Snapshot) -> Self {
+        let count = |status| tasks.iter()
+            .filter(|task| crate::attention::column(task, attention) == Some(status)).count();
+        self.needs = count(Status::NeedsMe);
+        self.review = count(Status::Review);
+        self.ready = count(Status::Ready);
+        self
+    }
+
     fn from_snapshot(snapshot: &crate::board::BoardSnapshot) -> Self {
         Self::with_counts(
             &snapshot.status_counts,
@@ -169,6 +194,7 @@ impl Counts {
                 .map(|c| usize::try_from(c.n).unwrap_or(usize::MAX))
                 .sum()
         };
+
         Self {
             needs: count(Status::NeedsMe),
             used: slots.total(),
@@ -215,7 +241,7 @@ pub(crate) fn change_toast(c: &Change, reason: Option<String>) -> Option<Toast> 
         Status::NeedsMe => Some(
             Toast::new(
                 Tone::Attention,
-                format!("▲ {} needs you", c.task),
+                format!("▲ {} blocked", c.task),
                 c.note.clone(),
             )
             .about(&c.task),

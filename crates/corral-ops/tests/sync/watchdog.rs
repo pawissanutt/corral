@@ -142,6 +142,91 @@ fn harness_and_known_helpers_are_never_stuck() {
     assert!(fx.notifications().is_empty());
 }
 
+/// A pi-native launch as herdr reports it when the pane shell (bash, 10) starts a nested
+/// interactive shell (fish, 20) that runs corral's wrapper (42), the template shell (43), the
+/// compiled host (44) and the agent the host drives (45), plus any `extra` foreground processes.
+fn pi_native_pane(fx: &Fx, processes: &Processes, extra: &[(u32, u32, &[&str])]) {
+    const SCRIPT: &str = "/bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '/s/T-001-R1.exited'";
+    const LAUNCH: &str = "/opt/corral agent launch --bootstrap /s/bootstrap.json";
+    let mut tree: Vec<(u32, u32, &[&str])> = vec![
+        (42, 20, &["/bin/sh", "-c", SCRIPT, "corral-launch", LAUNCH]),
+        (43, 42, &["/bin/sh", "-c", LAUNCH, "corral-launch"]),
+        (
+            44,
+            43,
+            &["/opt/corral-pi/corral-pi-host", "--launch-fd", "3"],
+        ),
+        (45, 44, &["claude", "-p"]),
+    ];
+    tree.extend_from_slice(extra);
+    let commands: Vec<(u32, &[&str])> = tree.iter().map(|(pid, _, argv)| (*pid, *argv)).collect();
+    foreground(fx, processes, &commands, 9_000);
+    let mut live = processes.live.borrow_mut();
+    for (pid, parent, _) in &tree {
+        live.get_mut(pid).unwrap().parent_pid = *parent;
+    }
+    live.insert(
+        20,
+        ProcessSnapshot {
+            parent_pid: 10,
+            started: "start-20".into(),
+            elapsed_secs: 9_000,
+            argv: vec!["fish".into()],
+        },
+    );
+}
+
+#[test]
+fn pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck() {
+    // Given a long-idle pi-native run whose foreground is corral's own launch tree.
+    let fx = Fx::new("pi-native");
+    let processes = Processes::default();
+    pi_native_pane(&fx, &processes, &[]);
+    fx.herdr_says("idle");
+    sync(&fx, &processes, 0);
+    // When the idle threshold is exceeded.
+    let task = sync(&fx, &processes, 301);
+    // Then no process is flagged and the wrapper cannot be terminated even if forged.
+    assert!(task.current_run().unwrap().stuck.is_none());
+    assert_eq!(fx.events("stuck"), 0);
+    let live = processes.live.borrow().get(&42).cloned().unwrap();
+    let wrapper = StuckProcess {
+        pid: 42,
+        argv: live.argv,
+        started: live.started,
+    };
+    fx.ctx
+        .store
+        .update("T-001", |t| {
+            t.current_run_mut().unwrap().stuck = Some(wrapper.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert!(corral_ops::unstick_with(&fx.ctx, "T-001", &wrapper, &processes).is_err());
+    assert!(processes.killed.borrow().is_empty());
+}
+
+#[test]
+fn foreign_processes_in_a_pi_native_pane_are_still_stuck() {
+    // Given a command the host spawned, and one typed into the nested shell.
+    for (pid, parent) in [(46, 44), (47, 20)] {
+        let fx = Fx::new("pi-native");
+        let processes = Processes::default();
+        pi_native_pane(&fx, &processes, &[(pid, parent, &["sleep", "9999"])]);
+        fx.herdr_says("idle");
+        sync(&fx, &processes, 0);
+        // When the idle threshold is exceeded.
+        let task = sync(&fx, &processes, 301);
+        // Then exactly that foreign process is flagged.
+        let stuck = task.current_run().unwrap().stuck.clone().unwrap();
+        assert_eq!(
+            (stuck.pid, stuck.argv),
+            (pid, vec!["sleep".into(), "9999".into()])
+        );
+        assert_eq!(fx.events("stuck"), 1);
+    }
+}
+
 #[test]
 fn process_age_and_idle_threshold_both_must_be_exceeded() {
     let mut fx = Fx::new("fake");

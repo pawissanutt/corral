@@ -56,7 +56,7 @@ fn is_zero(n: &u32) -> bool {
 /// ```
 ///
 /// ```compile_fail
-/// fn leak(h: &corral_core::RunHead) { let _ = &h.obligations; }
+/// fn leak(h: &corral_core::RunHead) { let _ = &h.obligations.waits; }
 /// ```
 ///
 /// ```compile_fail
@@ -100,6 +100,12 @@ fn is_zero(n: &u32) -> bool {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunHead {
+    #[serde(default)]
+    pub obligations: ObligationsHead,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<crate::RoleSession>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_round: Option<crate::ChangesRound>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::ExecutionSnapshot>,
     #[serde(default)]
@@ -190,6 +196,13 @@ pub struct RunHead {
     pub facts: crate::ContainerFacts,
 }
 
+/// Bounded obligation state; wait and decision histories remain keyed rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObligationsHead {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot_wait: Option<crate::SlotWait>,
+}
+
 /// A usage record without its per-response entries.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UsageTotals {
@@ -213,6 +226,8 @@ pub struct UsageTotals {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InboxHead {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_header: Option<crate::inbox::OwnerHeader>,
     pub next_seq: u64,
     pub next_envelope: u64,
     pub open_envelope: Option<u64>,
@@ -227,6 +242,8 @@ pub struct InboxHead {
 /// A planning run without its inbox history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanRunHead {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_host: Option<Box<AgentHostHead>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::ExecutionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,6 +292,8 @@ pub struct PlanHead {
 /// A plan review without its inbox history.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanReviewHead {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_host: Option<Box<AgentHostHead>>,
     #[serde(default)]
     pub delivery: crate::inbox::DeliveryMode,
     #[serde(default)]
@@ -319,10 +338,14 @@ pub struct AttemptHead {
 }
 
 /// Pi-native host state without its accumulated records.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentHostHead {
     pub version: u32,
     pub binding: AgentBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo: Option<crate::RunProgress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_hold: Option<String>,
 }
 
 impl PlanRunHead {
@@ -332,9 +355,27 @@ impl PlanRunHead {
     }
 }
 
+impl InboxHead {
+    /// Bounded scalar state; applied effects and scoped cursors remain keyed rows.
+    pub fn scalars(&self) -> crate::inbox::InboxState {
+        crate::inbox::InboxState {
+            owner_header: self.owner_header.clone(),
+            next_seq: self.next_seq,
+            next_envelope: self.next_envelope,
+            open_envelope: self.open_envelope,
+            replacement_envelope: self.replacement_envelope,
+            binding: self.binding.clone(),
+            observe_cursor: self.observe_cursor.clone(),
+            settled: self.settled,
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for InboxHead {
     fn default() -> Self {
         Self {
+            owner_header: None,
             next_seq: 1,
             next_envelope: 1,
             open_envelope: None,
@@ -349,6 +390,20 @@ impl Default for InboxHead {
 /// A task's own fields without any history vector; `body` is the head document's body member.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskHeadFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub park: Option<crate::Park>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<crate::LandingReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infra_wait: Option<crate::InfraWait>,
+    #[serde(default, skip_serializing_if = "crate::AttentionLedger::is_empty")]
+    pub attention: crate::AttentionLedger,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_since: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<crate::TaskDifficulty>,
+    #[serde(default, skip_serializing_if = "crate::plan::is_scope_revision_zero")]
+    pub membership_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard: Option<crate::DashboardSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -435,6 +490,14 @@ pub struct MemberGateHead {
 }
 
 impl RunHead {
+    pub fn executed_model(&self) -> Option<&str> {
+        self.execution.as_ref().and_then(|e| e.resolved.model.as_deref()).or(self.model.as_deref())
+    }
+
+    pub fn family(&self, vendor: Option<&str>) -> Option<crate::ModelFamily> {
+        crate::model_family(vendor, self.executed_model())
+    }
+
     /// The projection of a whole coding run: its stored row document and facts.
     ///
     /// # Errors

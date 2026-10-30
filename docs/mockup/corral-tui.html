@@ -127,7 +127,7 @@ const ARTS=[
  {task:'T-042',run:'R1',kind:'evidence',title:'nextest partial 212/240',file:'nextest.log',size:'12 KB',type:'log'},
  {task:'T-036',run:'R1',kind:'report',title:'Seed guard: /dev/full probe',file:'oom-probe.md',size:'4 KB',type:'md'},
 ];
-const COLS=[['backlog','Backlog'],['ready','Ready'],['running','Running'],['needs','Needs me'],['review','Review'],['done','Done']];
+const COLS=[['backlog','Backlog'],['ready','Ready'],['running','Running'],['needs','Blocked'],['review','Review'],['done','Done']];
 const AGENTS=['omo','omp','claude','generic'];
 const SLOTS=3;
 let tasks,S,toastTimer,nextId;
@@ -431,7 +431,7 @@ function freeSlot(){
 }
 function moveCard(dir){
   const t=sel();if(!t)return;const flow=['backlog','ready'];const i=flow.indexOf(t.status);
-  if(i<0||i+dir<0||i+dir>1){toast('Not a manual move','Running, Needs me and Review are driven by dispatch, herdr state and corral done. Use Review to approve.','var(--or)');return;}
+  if(i<0||i+dir<0||i+dir>1){toast('Not a manual move','Running, Blocked and Review are driven by dispatch, herdr state and corral done. Use Review to approve.','var(--or)');return;}
   t.status=flow[i+dir];if(t.status==='ready'){t.idea=false;t.agent=t.agent||'omo';}selectId(t.id);
 }
 function key(e){

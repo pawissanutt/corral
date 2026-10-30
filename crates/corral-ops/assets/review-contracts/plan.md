@@ -1,7 +1,21 @@
-### Plan review (v2)
+### Plan review (v3)
 
 Question: can another agent execute this plan without inventing missing decisions?
 
+- Read the human sections before implementation details: problem, goal, included changes and
+  retained behavior, exclusions, choices and done scenarios. New generated plans opt in with
+  `human_review`; historical plans without it remain valid and do not need a format-only rewrite.
+  `goal`, `non_goals`, `decisions` and `acceptance` remain canonical. Check that the overview
+  and body agree with them, rather than treating a separate brief as authority.
+- Structural validation checks completeness, not semantic quality or approval. Assess whether
+  the included changes solve the stated problem within the task's scope, whether retained
+  behavior and exclusions are explicit, and whether choices and done scenarios support an
+  informed decision. Do not invent extra product scope to fill an apparent gap.
+- On a revision, compare against the preceding plan. Name scope additions, removals and changed
+  promises separately from technical-only edits. Changed behavior or widened commitments are
+  scope changes even in the same files; changed paths or decomposition alone need not be.
+  Request changes when added scope is hidden in implementation detail or contradicts the task.
+  Reviewer approval is not owner consent to a scope expansion.
 - Inspect the repository contracts the plan relies on. Do not trust paths, APIs or command
   names just because they appear in a polished plan.
 - Check feasibility, dependencies, interfaces, write scopes, migration, acceptance scenarios,

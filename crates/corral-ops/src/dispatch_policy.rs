@@ -11,12 +11,12 @@ use crate::{Change, Ctx, DispatchOutcome, SlotUsage};
 #[path = "dispatch_policy_tests.rs"]
 mod tests;
 
-/// Headroom is reserved even before the next finishing process starts.
-fn available_heads(store: &Store, credit: usize) -> Result<usize> {
+/// Headroom below the soft target or hard limit, over bounded task heads.
+fn available_heads(store: &Store, credit: usize, cap: usize) -> Result<usize> {
     let heads = crate::pm_next::heads::open(store)?;
     let limits = &store.config.limits;
     let usage = SlotUsage::from_heads(&heads, limits);
-    let finishing = usize::from(limits.count_gates) * usage.gates
+    let finishing = usize::from(limits.count_gates) * usage.slot_gates()
         + usize::from(limits.count_reviews) * usage.reviews
         + heads
             .iter()
@@ -24,6 +24,7 @@ fn available_heads(store: &Store, credit: usize) -> Result<usize> {
                 head.review_reservation.is_some_and(|work| match work {
                     corral_core::ReviewWork::Gate => {
                         limits.count_gates
+                            && !(head.status.holds_slot() && head.holds_dispatch_slot())
                             && !head.current_run.as_ref().is_some_and(|run| {
                                 run.gate.as_ref().is_some_and(|gate| gate.holds_slot())
                             })
@@ -39,18 +40,25 @@ fn available_heads(store: &Store, credit: usize) -> Result<usize> {
                 })
             })
             .count();
-    Ok(limits
-        .running
-        .saturating_sub(usage.total().saturating_sub(credit))
+    Ok(cap.saturating_sub(usage.total().saturating_sub(credit))
         .saturating_sub(limits.review.saturating_sub(finishing)))
 }
 
-/// Read-only capacity used by PM cards and the automatic admission pass.
+/// Read-only automatic capacity below the soft target, used by PM cards and idea promotion.
 pub(crate) fn free_slots(ctx: &Ctx) -> Result<usize> {
+    free_slots_below(ctx, crate::soft_target(&ctx.store.config.limits))
+}
+
+/// Automatic capacity below the hard limit: what P0 and red-main candidates may still use.
+pub(crate) fn headroom_slots(ctx: &Ctx) -> Result<usize> {
+    free_slots_below(ctx, ctx.store.config.limits.running)
+}
+
+fn free_slots_below(ctx: &Ctx, cap: usize) -> Result<usize> {
     if ctx.store.config.dispatch.paused || crate::resources::read_admission(ctx)?.is_some() {
         return Ok(0);
     }
-    available_heads(&ctx.store, 0)
+    available_heads(&ctx.store, 0, cap)
 }
 
 /// Rechecked under the same board lock as dispatch's durable reservation.
@@ -70,12 +78,31 @@ pub(crate) fn automatic_capacity_reason(store: &Store, task: &Task) -> Result<Op
             ));
         }
     }
+    let limits = &store.config.limits;
+    let target = crate::soft_target(limits);
+    if target < limits.running && !crate::slots::uses_headroom(task) {
+        let tasks = crate::pm_next::heads::open(store)?;
+        let credit = usize::from(task.holds_dispatch_slot());
+        if available_heads(store, credit, target)? == 0
+            && available_heads(store, credit, limits.running)? > 0
+        {
+            let used = SlotUsage::from_heads(&tasks, limits)
+                .total()
+                .saturating_sub(credit);
+            return Ok(Some(format!(
+                "waiting: at soft target ({used} used, target {target}, hard {}); headroom reserved for manual, P0 and red-main work",
+                limits.running
+            )));
+        }
+    }
     queued_capacity_reason(store, task)
 }
 
+/// Explicitly authorized queue work may use the headroom up to the hard limit.
 pub(crate) fn queued_capacity_reason(store: &Store, task: &Task) -> Result<Option<String>> {
     let credit = usize::from(task.holds_dispatch_slot());
-    if available_heads(store, credit)? == 0 {
+    let running = store.config.limits.running;
+    if available_heads(store, credit, running)? == 0 {
         return Ok(Some(format!(
             "waiting for automatic coding capacity ({} review slots reserved)",
             store.config.limits.review
@@ -196,7 +223,9 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     let mut fresh = ctx.clone();
     fresh.reload_config()?;
     let ctx = &fresh;
-    if free_slots(ctx)? == 0 {
+    // Backlog candidates may reach the hard limit only when P0 or red-main; each is rechecked.
+    let hard = ctx.store.config.limits.running;
+    if free_slots_below(ctx, hard)? == 0 {
         return Ok(vec![]);
     }
     let mut changes = Vec::new();
@@ -213,7 +242,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     }
     crate::queue::sort_candidates(&mut backlog);
     for (index, task) in backlog.iter().enumerate() {
-        if free_slots(ctx)? == 0 {
+        if free_slots_below(ctx, hard)? == 0 {
             break;
         }
         match crate::queue::blocked_reason(ctx, &ctx.store, task, false) {
@@ -236,7 +265,8 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     }
     // Recompute after each promotion: a newly running task may conflict with the next idea.
     let mut considered = std::collections::BTreeSet::new();
-    while free_slots(ctx)? > 0 {
+    // P0 and red-main Ideas may use headroom up to hard; each candidate's own cap is checked.
+    while free_slots_below(ctx, hard)? > 0 {
         let next = crate::promotion::promotion_shortlist(ctx)?
             .into_iter()
             .find(|candidate| {
@@ -261,6 +291,7 @@ pub(crate) fn advance(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
         let policy = ctx.store.config.dispatch_policy(task.project.as_deref());
         if promotions_today(&dispatch_events_today(&ctx.store, now)?, now)
             >= policy.max_auto_promotions_per_day
+            || automatic_capacity_reason(&ctx.store, &task)?.is_some()
         {
             continue;
         }

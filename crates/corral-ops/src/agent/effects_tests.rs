@@ -137,6 +137,9 @@ fn origin(
     op: &str,
 ) -> RequestOrigin {
     let (role, task, run, review, callback) = match &container {
+        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => {
+            panic!("planning containers do not execute implementation effects")
+        }
         ContainerRef::Worker { task, run } => {
             (AgentRole::Worker, Some(task), Some(run), None, None)
         }
@@ -862,6 +865,9 @@ fn verdict_waits_until_the_reviewer_observed_every_answer_and_correction() {
 
 #[path = "effects_gate_tests.rs"]
 mod gate;
+
+#[path = "effects_queue_tests.rs"]
+mod queue;
 
 #[path = "effects_recovery_tests.rs"]
 mod recovery;

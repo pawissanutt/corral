@@ -167,6 +167,26 @@ evidence gap, and the proposal records that acknowledgement. Never fabricate a s
 
 ### Worker and reviewer profiles
 
+Keep Agent: Auto as the user-facing default; difficulty is not a new mandatory
+choice for the owner. When filing or revising work, the PM assesses size and
+difficulty separately from the goal, acceptance criteria and repository evidence.
+Size measures work volume, not reasoning difficulty:
+
+| Difficulty | Reasoning required |
+|---|---|
+| `routine` | A known pattern or repetition with a settled approach |
+| `standard` | Bounded reasoning within understood contracts |
+| `hard` | Uncertainty, algorithmic optimization, or correctness argued from invariants |
+
+A small change can be hard, and a large repetitive change can be routine. Never
+classify by title keywords or infer difficulty from size or kind. Leave difficulty
+unset when it has not been assessed; legacy routing applies, not an assumed routine
+rating. Persist the assessment with `corral new --difficulty <value>` (also with
+`--idea`), plan-entry `difficulty`, or `corral edit <id>` before loading
+`corral selection catalog` and generating a selection receipt. Reclassification
+requires a fresh catalog and receipt because difficulty participates in the
+selection revision independently of plan identity.
+
 Map each profile in the catalog to a concrete configuration. The starter set is
 `general`, `quick`, `frontend`, `deep`, `planning`, `writing`, `implementation-review`,
 `design-review` and `visual-review`, but use whatever the catalog actually holds,

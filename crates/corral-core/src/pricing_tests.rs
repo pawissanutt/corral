@@ -268,3 +268,31 @@ fn invalid_pricing_edits_do_not_write_config() {
         original
     );
 }
+
+#[test]
+fn bedrock_ids_price_from_the_bedrock_catalog_and_existing_lookups_are_unchanged() {
+    let config: Config = toml::from_str("").unwrap();
+    let id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    let (price, source) = config.price_with_source(id).unwrap();
+    assert!((price.input - 3.3).abs() < 1e-12);
+    assert!((price.output - 16.5).abs() < 1e-12);
+    assert_eq!(source, "catalog-bedrock@pi-ai-1.3.0");
+    assert_eq!(bedrock_catalog_prices().len(), 193);
+    let (_, source) = config.price_with_source("claude-sonnet-4-6").unwrap();
+    assert_eq!(source, CATALOG_SOURCE);
+    assert!(config.price("anthropic.claude-unknown").is_none());
+    // Config overrides win over the Bedrock catalog.
+    let mut config = config;
+    config.pricing.insert(id.into(), price_for_test());
+    assert_eq!(config.price_with_source(id).unwrap().1, "config");
+}
+
+fn price_for_test() -> Price {
+    Price {
+        input: 1.0,
+        output: 2.0,
+        cache_read: None,
+        cache_write: None,
+        aliases: Vec::new(),
+    }
+}

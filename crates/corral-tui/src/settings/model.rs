@@ -259,7 +259,7 @@ fn general_rows(cfg: &Config, herdr_env: Option<&str>) -> Vec<Row> {
             Kind::Number { optional: false },
             cfg.limits.running.to_string(),
         )
-        .help("Runs that may hold a slot at once (Running + Needs me) across all projects.")
+        .help("Runs that may hold a slot at once, including Blocked runs, across all projects.")
         .key("limits.running"),
         Row::new(
             Field::DefaultProfile,

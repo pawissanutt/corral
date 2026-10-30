@@ -32,8 +32,9 @@ fn gate_line(g: &GateRecord, run: &Run) -> String {
             g.pane.as_deref().unwrap_or("?")
         ),
         GateResult::Pass => format!("pass at {sha} ({})", g.at),
-        GateResult::Fail => format!(
-            "fail at {sha} ({}): {}",
+        GateResult::Fail | GateResult::Stale => format!(
+            "{} at {sha} ({}): {}",
+            g.result.as_str(),
             g.at,
             g.failed_cmd.as_deref().unwrap_or("?")
         ),
@@ -67,8 +68,8 @@ fn gate(ctx: &Ctx, id: &str, wait: bool, force: bool) -> Result<()> {
         .current_run()
         .ok_or_else(|| anyhow!("{} has no run", task.id))?;
     println!("{} gate: {}", task.id, gate_line(&record, run));
-    if record.result == GateResult::Fail {
-        bail!("gate failed for {}", task.id);
+    if record.result != GateResult::Pass {
+        bail!("gate {} for {}", record.result.as_str(), task.id);
     }
     Ok(())
 }
@@ -171,7 +172,7 @@ pub(crate) fn start_dir(root: &Option<PathBuf>) -> Result<PathBuf> {
 fn parse_status(s: &str) -> Result<Status> {
     Status::parse(s).ok_or_else(|| {
         anyhow!(
-            "unknown status '{s}' (idea, backlog, ready, running, needs_me, review, done, dropped)"
+            "unknown status '{s}' (idea, backlog, ready, running, blocked, review, done, dropped)"
         )
     })
 }
@@ -349,7 +350,13 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
     match cmd {
         Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
         Cmd::Inbox(args) => crate::inbox_cmd::run(&open(&root)?.store, args),
+        Cmd::Attention(args) => {
+            let root = corral_core::Store::find_root(&start_dir(&root)?)?;
+            let ctx = Ctx::from_store(corral_core::Store::open_unobserved(&root)?);
+            crate::attention_cmd::run(&ctx, args)
+        }
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),
+        Cmd::Pi(args) => crate::pi_cmd::run(&start_dir(&root)?, args, &entry),
         Cmd::Question(args) => crate::question_cmd::run(&open(&root)?, args),
         Cmd::Automation(args) => crate::automation_cmd::run(&open(&root)?, args),
         Cmd::Selection(args) => crate::selection_cmd::run(&start_dir(&root)?, args),
@@ -412,6 +419,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
             priority,
             kind,
             size,
+            difficulty,
             design,
             labels,
         } => {
@@ -434,6 +442,7 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
                 priority,
                 kind,
                 size,
+                difficulty,
                 origin,
                 design,
                 &labels,

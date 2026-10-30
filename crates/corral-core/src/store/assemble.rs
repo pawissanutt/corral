@@ -113,6 +113,7 @@ pub fn assemble(head: &TaskHeadDoc, rows: &TaskRows<'_>) -> Result<TaskRecord> {
         let mut doc = object(&run.doc, "plan run")?;
         doc.remove(FACTS);
         inbox_value(rows, &format!("plan_run:{}", run.key), &mut doc)?;
+        agent_value(rows, &format!("plan_run:{}", run.key), &mut doc);
         plan_runs.push(Value::Object(doc));
     }
     set_list(&mut task, "plan_runs", plan_runs);
@@ -207,22 +208,25 @@ pub fn run_value(rows: &TaskRows<'_>, run_seq: usize, child: usize, doc: &Value)
     let waits = docs(rows.under(TaskPart::RunObligation, &format!("{prefix}wait/")));
     let decisions = docs(rows.under(TaskPart::RunObligation, &format!("{prefix}decision/")));
     if !waits.is_empty() || !decisions.is_empty() {
-        let mut obligations = Map::new();
+        let mut obligations = match run.remove("obligations") {
+            Some(Value::Object(scalars)) => scalars,
+            _ => Map::new(),
+        };
         set_list(&mut obligations, "waits", waits);
         set_list(&mut obligations, "decisions", decisions);
         run.insert("obligations".to_owned(), Value::Object(obligations));
     }
     inbox_value(rows, &format!("run:{owner}"), &mut run)?;
-    if let Some(Value::Object(host)) = run.get_mut("agent_host") {
+    agent_value(rows, &owner, &mut run);
+    Ok(Value::Object(run))
+}
+
+fn agent_value(rows: &TaskRows<'_>, owner: &str, doc: &mut Map<String, Value>) {
+    if let Some(Value::Object(host)) = doc.get_mut("agent_host") {
         for kind in AGENT_KINDS {
-            set_list(
-                host,
-                kind,
-                docs(rows.under(TaskPart::AgentRecord, &format!("{prefix}{kind}/"))),
-            );
+            set_list(host, kind, docs(rows.under(TaskPart::AgentRecord, &format!("{owner}/{kind}/"))));
         }
     }
-    Ok(Value::Object(run))
 }
 
 /// Restores an inbox's applied effects and scoped cursors into a container document.
@@ -246,6 +250,7 @@ pub fn plan_value(rows: &TaskRows<'_>, key: &str, doc: &Value) -> Result<Value> 
     for review in rows.under(TaskPart::PlanReview, &format!("{key}/")) {
         let mut doc = object(&review.doc, "plan review")?;
         inbox_value(rows, &format!("plan_review:{}", review.key), &mut doc)?;
+        agent_value(rows, &format!("plan_review:{}", review.key), &mut doc);
         reviews.push(Value::Object(doc));
     }
     set_list(&mut plan, "reviews", reviews);

@@ -6,7 +6,8 @@ use anyhow::{Context, Result, bail, ensure};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Config, PlanDocument, PlanRecord, PlanRun, ProfileChoice, Reviewer, Store, Task, Verdict,
+    Config, ModelFamily, PlanDocument, PlanRecord, PlanRun, ProfileChoice, Reviewer, Store, Task,
+    Verdict,
 };
 
 pub fn read_plan(store: &Store, path: &Path) -> Result<Vec<u8>> {
@@ -28,7 +29,7 @@ pub fn read_plan(store: &Store, path: &Path) -> Result<Vec<u8>> {
 
 pub fn expected_reviewer(config: &Config, task: &Task) -> Result<String> {
     let planner = planner(task)?.map(PlannerProfile::from);
-    let vendor =
+    let family =
         if planner.is_none() && config.task_review_policy(task).reviewer == Reviewer::CrossVendor {
             let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
             config
@@ -41,11 +42,11 @@ pub fn expected_reviewer(config: &Config, task: &Task) -> Result<String> {
                     None,
                     None,
                 )?
-                .vendor
+                .family()
         } else {
             None
         };
-    expected_reviewer_for(config, task, planner, vendor.as_deref())
+    expected_reviewer_for(config, task, planner, family.as_ref())
 }
 
 #[derive(Clone, Copy)]
@@ -65,12 +66,18 @@ impl<'a> From<&'a PlanRun> for PlannerProfile<'a> {
     }
 }
 
+impl PlannerProfile<'_> {
+    pub fn family(&self) -> Option<ModelFamily> {
+        crate::model_family(self.vendor, self.model)
+    }
+}
+
 /// Also accepts a prospective planner so pre-dispatch preview enforces launch-time independence.
 pub fn expected_reviewer_for(
     config: &Config,
     task: &Task,
     planner: Option<PlannerProfile<'_>>,
-    implementer_vendor: Option<&str>,
+    implementer: Option<&ModelFamily>,
 ) -> Result<String> {
     let policy = config.task_review_policy(task);
     match policy.reviewer.clone() {
@@ -103,8 +110,8 @@ pub fn expected_reviewer_for(
             if let Some(planner) = planner {
                 return config
                     .cross_vendor_reviewer(
-                        planner
-                            .vendor
+                        &planner
+                            .family()
                             .context("plan review requires a known planner vendor")?,
                     )
                     .and_then(|name| {
@@ -113,7 +120,7 @@ pub fn expected_reviewer_for(
                     });
             }
             config.cross_vendor_reviewer(
-                implementer_vendor.context("plan review requires a known implementer vendor")?,
+                implementer.context("plan review requires a known implementer vendor")?,
             )
         }
     }
@@ -199,7 +206,7 @@ pub fn check_plan_receipt(
         &crate::ReviewSelectionContext {
             task,
             subject,
-            author_vendor: None,
+            author_family: None,
         },
     )?;
     ensure!(
@@ -300,9 +307,9 @@ pub fn independent_reviewer_for(
 
 /// The author family plan independence is judged against: the recorded planner, else the
 /// task's implementation route for plans submitted without a planning run.
-pub fn plan_author_vendor(config: &Config, task: &Task) -> Result<Option<String>> {
+pub fn plan_author_family(config: &Config, task: &Task) -> Result<Option<ModelFamily>> {
     if let Some(planner) = planner(task)? {
-        return Ok(planner.vendor.clone());
+        return Ok(PlannerProfile::from(planner).family());
     }
     let route = config.route_task(task, &ProfileChoice::default(), |_| None)?;
     Ok(config
@@ -315,7 +322,7 @@ pub fn plan_author_vendor(config: &Config, task: &Task) -> Result<Option<String>
             None,
             None,
         )?
-        .vendor)
+        .family())
 }
 
 /// Plan-review independence for the reviewer model that actually starts.
@@ -330,10 +337,10 @@ pub fn independent_resolved_reviewer(
         return Ok(());
     }
     let Some(planner) = planner else {
-        let author = plan_author_vendor(config, task)?;
-        return policy.check_reviewer_family(author.as_deref(), reviewer.vendor.as_deref());
+        let author = plan_author_family(config, task)?;
+        return policy.check_reviewer_family(author.as_ref(), reviewer.family().as_ref());
     };
-    policy.check_reviewer_family(planner.vendor, reviewer.vendor.as_deref())?;
+    policy.check_reviewer_family(planner.family().as_ref(), reviewer.family().as_ref())?;
     let planner_model = planner
         .model
         .context("planner effective model is unknown")?;
@@ -341,15 +348,9 @@ pub fn independent_resolved_reviewer(
         .model
         .as_deref()
         .context("reviewer effective model is unknown")?;
-    let model_name = |model: &str| {
-        model
-            .rsplit(['/', ':'])
-            .next()
-            .unwrap_or(model)
-            .to_ascii_lowercase()
-    };
     if reviewer.profile == planner.profile
-        || model_name(reviewer_model) == model_name(planner_model)
+        || crate::model_key(reviewer.vendor.as_deref(), reviewer_model)
+            == crate::model_key(planner.vendor, planner_model)
     {
         bail!(
             "cross-family review is required: plan reviewer must use a different profile and effective model than the planner"

@@ -23,6 +23,25 @@ fn concurrent_filing(idea: bool) {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn publication_barrier_ignores_unrelated_closes() {
+    let output = std::process::Command::new("python3")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/queue_support/filing_trace_test.py"),
+        )
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn new_backlog_dependencies_are_atomic_against_sync() {
     concurrent_filing(false);
 }

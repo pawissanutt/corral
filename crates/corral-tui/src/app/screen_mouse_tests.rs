@@ -361,7 +361,7 @@ fn toast_click_dismisses_or_opens_its_task() {
     let fx = seeded();
     let mut app = App::new(fx.ctx.clone(), Mode::Board).unwrap();
     app.toast(Toast::new(Tone::Info, "plain note", "nothing to open"));
-    app.toast(Toast::new(Tone::Attention, "▲ T-005 needs you", "which file?").about("T-005"));
+    app.toast(Toast::new(Tone::Attention, "▲ T-005 blocked", "which file?").about("T-005"));
     let text = render(&mut app);
     let (x, y) = find_any(&text, "plain note");
     click(&mut app, x, y);
@@ -371,7 +371,7 @@ fn toast_click_dismisses_or_opens_its_task() {
         "plain toast dismissed"
     );
     let text = render(&mut app);
-    let (x, y) = find_any(&text, "T-005 needs you");
+    let (x, y) = find_any(&text, "T-005 blocked");
     click(&mut app, x, y);
     assert_eq!(
         (app.toasts.len(), app.stack.len()),

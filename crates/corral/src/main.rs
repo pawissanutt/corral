@@ -1,6 +1,7 @@
 mod agent_cmd;
 mod artifact_cmd;
 mod artifact_show;
+mod attention_cmd;
 mod automation_cmd;
 mod cmds;
 mod completion_cmd;
@@ -10,6 +11,7 @@ mod digest_cmd;
 mod doctor;
 mod entry;
 mod export_cmd;
+mod ext_cmd;
 mod harness;
 mod hooks_cmd;
 mod idea_cmd;
@@ -20,6 +22,7 @@ mod list_cols;
 mod log_cmd;
 mod migrate_cmd;
 mod mode_cmd;
+mod pi_cmd;
 mod pins;
 mod plan_cmd;
 mod plugin;
@@ -41,8 +44,8 @@ mod wait_cmd;
 
 use std::path::PathBuf;
 
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use corral_core::{CommentAuthor, Origin, TaskKind, TaskSize};
+use clap::{FromArgMatches, Parser, Subcommand};
+use corral_core::{CommentAuthor, Origin, TaskDifficulty, TaskKind, TaskSize};
 
 fn parse_comment_author(value: &str) -> Result<CommentAuthor, String> {
     match value {
@@ -72,8 +75,12 @@ pub enum Cmd {
     Mode(mode_cmd::ModeArgs),
     /// Inspect and durably manage agent inbox messages without delivering them
     Inbox(inbox_cmd::InboxArgs),
+    /// Inspect current task conditions and progress without changing state
+    Attention(attention_cmd::AttentionArgs),
     /// Pi-native agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
+    /// Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+    Pi(pi_cmd::PiArgs),
     /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
     Question(question_cmd::QuestionArgs),
     /// Preview, explicitly confirm, or inspect finite operating authority
@@ -229,9 +236,12 @@ pub enum Cmd {
         /// Task category used by routing rules
         #[arg(long)]
         kind: Option<TaskKind>,
-        /// Estimated task size used by routing rules
+        /// Estimated work volume, independent of reasoning difficulty
         #[arg(long)]
         size: Option<TaskSize>,
+        /// Reasoning difficulty, independent of task size: routine, standard or hard
+        #[arg(long)]
+        difficulty: Option<TaskDifficulty>,
         /// Route the idea or task through design planning before implementation
         #[arg(long, visible_alias = "plan-required")]
         design: bool,
@@ -758,7 +768,8 @@ pub enum PluginCmd {
 }
 
 fn main() {
-    let matches = Cli::command().try_get_matches().unwrap_or_else(|err| {
+    let matches = ext_cmd::command().try_get_matches().unwrap_or_else(|err| {
+        ext_cmd::forward_unknown(&err);
         // Preserve machine-readable failures even when structured arguments do not parse.
         let mut args = std::env::args_os().skip(1);
         let structured = loop {
@@ -783,6 +794,9 @@ fn main() {
         }
         err.exit()
     });
+    if let Some(("ext", ext)) = matches.subcommand() {
+        std::process::exit(ext_cmd::run(ext));
+    }
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|err| err.exit());
     let setup_json = match &cli.cmd {
         Some(Cmd::Setup(args)) => Some(args.cmd.name()),

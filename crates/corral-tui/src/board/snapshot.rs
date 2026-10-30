@@ -3,6 +3,7 @@ use super::*;
 
 /// An owned board refresh. UI-only state (selection, scroll, overlays and clock) stays in the view.
 pub struct BoardSnapshot {
+    pub(crate) attention: crate::attention::Snapshot,
     pub(crate) ctx: Ctx,
     pub(crate) tasks: Vec<Task>,
     heads: HashMap<String, corral_core::TaskHead>,
@@ -24,7 +25,20 @@ pub struct BoardSnapshot {
 }
 
 impl BoardSnapshot {
+    #[cfg(test)]
     pub(crate) fn load(ctx: &Ctx) -> Result<Self> {
+        Self::load_at(ctx, Timestamp::now())
+    }
+
+    pub(super) fn load_at(ctx: &Ctx, now: Timestamp) -> Result<Self> {
+        Self::load_refresh(ctx, now, None)
+    }
+
+    pub(crate) fn load_with_attention(ctx: &Ctx, attention: crate::attention::Snapshot) -> Result<Self> {
+        Self::load_refresh(ctx, Timestamp::now(), Some(attention))
+    }
+
+    fn load_refresh(ctx: &Ctx, now: Timestamp, attention: Option<crate::attention::Snapshot>) -> Result<Self> {
         let live_ctx = ctx.clone();
         // Count the frame's view, but leave cold derivation preparation outside HotScope.
         let store = {
@@ -58,7 +72,8 @@ impl BoardSnapshot {
                 .map(|h| h.id.clone())
                 .collect::<Vec<_>>(),
         )?;
-        let (resources, waits) = crate::resources::ResourceDisplay::sample_board(ctx, &tasks);
+        let resource_ctx = crate::attention::refresh_context(ctx);
+        let (resources, waits) = crate::resources::ResourceDisplay::sample_board(&resource_ctx, &tasks);
         let pinned = pins
             .iter()
             .filter_map(|entry| PinRef::parse(&entry.pin.target).ok())
@@ -98,6 +113,7 @@ impl BoardSnapshot {
             })
             .collect();
         Ok(Self {
+            attention: attention.unwrap_or_else(|| crate::attention::load(&resource_ctx, now)),
             ctx: live_ctx,
             tasks,
             heads: heads.into_iter().map(|h| (h.id.clone(), h)).collect(),
@@ -133,6 +149,7 @@ impl BoardView {
     /// Only transfers owned data and restores UI state. Route discovery remains on its own worker;
     /// `refresh_routes` queues task/config revisions and never reads the store.
     pub(crate) fn apply_snapshot(&mut self, snapshot: BoardSnapshot) {
+        self.attention = snapshot.attention;
         self.tasks = snapshot.tasks;
         self.heads = snapshot.heads;
         self.obligations = snapshot.obligations;
@@ -148,8 +165,9 @@ impl BoardView {
         self.plan_review_waits = snapshot.plan_review_waits;
         self.unreviewed = snapshot.unreviewed;
         self.plan_progress = snapshot.plan_progress;
-        self.index = index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned);
+        self.index = index::BoardIndex::build(&self.tasks, &self.finishes, &self.pinned, &self.attention);
         self.index.done_ids.extend(snapshot.done_ids);
+        self.index.usage(&self.tasks, &snapshot.ctx.store.config.limits);
         if let Some(cursor) = &mut self.shelf_cursor {
             *cursor = (*cursor).min(self.pins.len().saturating_sub(1));
         }

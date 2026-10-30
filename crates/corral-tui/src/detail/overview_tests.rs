@@ -108,7 +108,10 @@ fn cumulative_outcome_survives_activity_and_warns_after_scope_changes() {
     let mut view = DetailView::new(&fx.ctx, &fx.id).unwrap();
     let (screen, _) = render_at(&mut view, &fx.ctx, 80, 35);
     assert!(screen.contains("Shard reads now use a bounded per-character cache."));
-    assert!(screen.contains("Rebased only."));
+    view.on_key(key(KeyCode::PageDown), &fx.ctx);
+    let (activity, _) = render_at(&mut view, &fx.ctx, 80, 35);
+    assert!(activity.contains("Rebased only."), "{activity}");
+    view.on_key(key(KeyCode::Home), &fx.ctx);
     println!("OUTCOME 80\n{screen}");
     // When scope changes without a new outcome.
     fx.ctx

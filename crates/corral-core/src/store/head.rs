@@ -411,6 +411,14 @@ impl TaskHead {
         self.child_heads(rows)
     }
 
+    pub fn review_child_at(&self, run: &str, n: usize) -> Result<Option<RunHead>> {
+        if n == 0 { return Ok(None); }
+        let Some(s) = self.run_seq(run)? else { return Ok(None); };
+        let rows = self.query(&RowQuery::key(TaskPart::ReviewRun, child_key(s, n)),
+            1, Counter::NestedRowDecodes)?;
+        Ok(self.child_heads(rows)?.pop())
+    }
+
     /// One review child of `run` by its id.
     pub fn review_child(&self, run: &str, id: &str) -> Result<Option<RunHead>> {
         let token = format!("id:{id}");
@@ -706,6 +714,7 @@ impl TaskHead {
             return Ok(RunObligations::default());
         };
         Ok(RunObligations {
+            slot_wait: crate::TaskRef::run_head(self, run)?.and_then(|r| r.obligations.slot_wait),
             waits: Self::decode(self.owner_obligation_rows(&owner, "wait/", None, true)?)?,
             decisions: Self::decode(self.owner_obligation_rows(
                 &owner,

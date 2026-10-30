@@ -218,7 +218,10 @@ fn cross_vendor_reviewer_selects_opposite_vendor_in_both_directions() {
     let (_dir, config) = fixture();
     for (implementer, expected) in [("anthropic", "codex"), ("openai", "claude")] {
         // When selecting a reviewer, then the opposite vendor's profile wins.
-        assert_eq!(config.cross_vendor_reviewer(implementer).unwrap(), expected);
+        assert_eq!(
+            config.cross_vendor_reviewer(&implementer.into()).unwrap(),
+            expected
+        );
     }
 }
 
@@ -240,7 +243,7 @@ fn other_vendor_requires_exactly_one_different_mapping() {
             .map(|(vendor, profile)| (vendor.into(), profile.into()))
             .collect();
         // When selecting for a third-party implementer.
-        let selected = config.cross_vendor_reviewer("google");
+        let selected = config.cross_vendor_reviewer(&"google".into());
         // Then only a sole different mapping succeeds.
         match expected {
             Some(profile) => assert_eq!(selected.unwrap(), profile),
@@ -273,7 +276,7 @@ fn cross_vendor_reviewer_rejects_missing_unknown_and_mismatched_vendors() {
             }
         }
         // When selecting a reviewer, then misconfiguration fails rather than falling back.
-        assert!(config.cross_vendor_reviewer(implementer).is_err());
+        assert!(config.cross_vendor_reviewer(&implementer.into()).is_err());
     }
 }
 
@@ -283,7 +286,7 @@ fn reviewer_mapping_checks_resolved_explicit_vendor() {
     let (_dir, mut config) = fixture();
     config.profiles.get_mut("codex").unwrap().vendor = Some("anthropic".into());
     // When selecting its mapping, then the resolved vendor rejects the mismatch.
-    assert!(config.cross_vendor_reviewer("anthropic").is_err());
+    assert!(config.cross_vendor_reviewer(&"anthropic".into()).is_err());
 }
 
 #[test]

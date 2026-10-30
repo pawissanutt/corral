@@ -2,7 +2,7 @@
 //! example a fix after a failed `corral plan verify`. Plan verify and accept then require it like
 //! any other member; no gate tier changes.
 use anyhow::{Context, Result, ensure};
-use corral_core::Status;
+use corral_core::{Status, Store, Task};
 use serde::Serialize;
 
 use super::member_gate::OwnerEntry;
@@ -46,38 +46,49 @@ pub fn plan_add_member_from(
     let saved = ctx
         .store
         .add_plan_member(tracker, member, |store, plan, task| {
-            ensure!(
-                !matches!(plan.status, Status::Done | Status::Dropped)
-                    && plan.aggregate_acceptance().is_none(),
-                "{} is {} or already accepted",
-                plan.id,
-                plan.status.label()
-            );
-            ensure!(
-                matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
-                    && task.runs.is_empty()
-                    && task.launch.is_none(),
-                "{} must be unstarted (Idea, Backlog or Ready with no runs)",
-                task.id
-            );
-            for id in &plan.children {
-                let child = store.get(id)?;
-                ensure!(
-                    child.launch.is_none()
-                        && !matches!(
-                            child.status,
-                            Status::Running | Status::NeedsMe | Status::Review
-                        ),
-                    "{id} is {}; finish its run before changing {}'s membership",
-                    child.status.label(),
-                    plan.id
-                );
-            }
-            Ok(())
+            check_open_plan(store, plan)?;
+            check_unstarted(task)
         })?;
     Ok(PlanMemberAdded {
         tracker: saved.id,
         member: corral_core::Store::normalize_id(member)?,
         children: saved.children,
     })
+}
+
+/// A Plan whose membership may change: not finished or accepted, and no member run in flight,
+/// because that run is bound to the current membership.
+pub(super) fn check_open_plan(store: &Store, plan: &Task) -> Result<()> {
+    ensure!(
+        !matches!(plan.status, Status::Done | Status::Dropped)
+            && plan.aggregate_acceptance().is_none(),
+        "{} is {} or already accepted",
+        plan.id,
+        plan.status.label()
+    );
+    for id in &plan.children {
+        let child = store.get(id)?;
+        ensure!(
+            child.launch.is_none()
+                && !matches!(
+                    child.status,
+                    Status::Running | Status::NeedsMe | Status::Review
+                ),
+            "{id} is {}; finish its run before changing {}'s membership",
+            child.status.label(),
+            plan.id
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn check_unstarted(task: &Task) -> Result<()> {
+    ensure!(
+        matches!(task.status, Status::Idea | Status::Backlog | Status::Ready)
+            && task.runs.is_empty()
+            && task.launch.is_none(),
+        "{} must be unstarted (Idea, Backlog or Ready with no runs)",
+        task.id
+    );
+    Ok(())
 }

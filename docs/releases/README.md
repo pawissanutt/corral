@@ -2,8 +2,8 @@
 
 ## Publication state and decisions
 
-The owner selected **`v0.3.0`** and the manifest declares `0.3.0`.
-Tags `v0.1.0` and `v0.2.0` are already published. The owner has authorized native
+The owner selected **`v0.4.0`** and the manifest declares `0.4.0`.
+Tags `v0.1.0`, `v0.2.0` and `v0.3.0` are already published. The owner has authorized native
 Windows/macOS runtime ports and pushing only `corral/T-108` for native
 Actions validation. This does not authorize a force-push, remote tag,
 GitHub Release, package publication, or shared-main write.
@@ -44,13 +44,19 @@ runtime tests before building the packaged binary.
 
 Package basename: `corral-<target>`. Each archive contains the executable,
 `LICENSE`, and `README.md`, and has a sidecar `<archive>.sha256` containing
-SHA-256 and the exact archive basename.
+SHA-256 and the exact archive basename. The four Unix archives also contain
+`corral-pi-host`, the Pi-native agent host compiled by
+`scripts/build-pi-host.sh` on the same native runner with the Bun version the
+GO manifest pins (`oven-sh/setup-bun`); packaging refuses a Unix archive
+without it. Bun is a build dependency only, like Rust.
 
 Each native job runs `scripts/release-install-test.py` against its actual
 packaged binary. A loopback HTTP fixture presents both latest and pinned
 release paths to the real installer. Installation runs in a clean user
 directory with cargo/rustc and herdr absent from its PATH and stdin closed.
-The installed executable must pass `--version`. The proof also exercises
+The installed executable must pass `--version`. On Unix the installed
+`corral-pi-host` must pass `--version` too and `corral agent install` must
+have recorded it, with Bun absent from the installer's PATH. The proof also exercises
 updates, missing downloads/checksums, checksum mismatch, invalid archives,
 unusable executables, and unsupported architectures while verifying the
 previous executable is unchanged.
@@ -75,11 +81,11 @@ and results to the task. For the published release also capture the tag,
 release URL, asset inventory and downloaded checksum verification. Failed
 jobs upload whatever package evidence exists but never permit publication.
 Native Windows/macOS results cannot be inferred from Linux cross-checks.
-The selected release notes are in [v0.3.0.md](v0.3.0.md).
+The selected release notes are in [v0.4.0.md](v0.4.0.md).
 
 ## Prepare the selected version locally
 
-For the owner-selected `v0.3.0`:
+For the owner-selected `v0.4.0`:
 
 1. Update `[workspace.package].version` in `Cargo.toml` and refresh the
    workspace packages in `Cargo.lock` with Cargo. Keep crate versions
@@ -114,7 +120,7 @@ the selected run. Native CI is still pending until those results exist.
 
 Publishing is a separate external write. After landing the verified
 candidate on main and obtaining explicit tag/publication authorization,
-set `RELEASE_TAG=v0.3.0` and inspect
+set `RELEASE_TAG=v0.4.0` and inspect
 `git status`, `git rev-parse HEAD`, and the manifest before running:
 
 ```sh

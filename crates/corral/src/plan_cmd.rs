@@ -146,6 +146,21 @@ pub enum PlanCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+    MoveMember {
+        tracker: String,
+        member: String,
+        /// The tracker Plan that receives the member
+        #[arg(long)]
+        to: String,
+        /// Gate YAML recorded as the member's gate in the target (required by designed integration Plans)
+        #[arg(long, requires = "reason")]
+        gate_file: Option<PathBuf>,
+        #[arg(long, requires = "gate_file")]
+        reason: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Set the task's plan requirement, or inherit workspace/project review policy
     Policy {
         id: String,
@@ -476,7 +491,7 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
             let Some(verdict) = Verdict::parse(&verdict) else {
                 bail!("invalid plan verdict");
             };
-            let record = corral_ops::plan_verdict_with_evidence(
+            let (record, refreshed) = corral_ops::plan_verdict_report_with_evidence(
                 ctx,
                 &id,
                 &PlanVerdict {
@@ -497,6 +512,9 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     record.verdict.map_or("pending", Verdict::as_str),
                     record.reviewer
                 );
+                if !refreshed.is_empty() {
+                    println!("refreshed children: {}", refreshed.join(", "));
+                }
             }
         }
         PlanCmd::AddMember {
@@ -513,6 +531,34 @@ pub fn run(ctx: &Ctx, cmd: PlanCmd) -> Result<()> {
                     added.member,
                     added.tracker,
                     added.children.join(", ")
+                );
+            }
+        }
+        PlanCmd::MoveMember {
+            tracker,
+            member,
+            to,
+            gate_file,
+            reason,
+            json,
+        } => {
+            let gate = gate_file.as_deref().map(|file| corral_ops::MoveGate {
+                file,
+                reason: reason.as_deref().unwrap_or_default(),
+            });
+            let moved = corral_ops::plan_move_member(ctx, &tracker, &member, &to, gate.as_ref())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&moved)?);
+            } else {
+                println!(
+                    "{} moved from {} to {}; {} members: {}; {} members: {}",
+                    moved.member,
+                    moved.from,
+                    moved.to,
+                    moved.from,
+                    moved.from_children.join(", "),
+                    moved.to,
+                    moved.to_children.join(", ")
                 );
             }
         }

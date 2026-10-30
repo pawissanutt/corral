@@ -213,7 +213,7 @@ pub(crate) fn foreign_process(
             && local.argv == process.argv
             // The pane shell's direct child is the launch process even when its executable
             // differs from the configured harness name (shebangs, symlinks, wrappers).
-            && !launched(local.parent_pid, info, processes)?
+            && !launched(&local, info, processes)?
             && local.elapsed_secs > ctx.store.config.sync.stuck_after_secs
         {
             return Ok(Some(StuckProcess {
@@ -226,24 +226,36 @@ pub(crate) fn foreign_process(
     Ok(None)
 }
 
-/// A process whose ancestry up to the pane shell is only corral's launch shells
-/// (`/bin/sh -c <script> corral-launch ...`) is the launched agent itself.
-fn launched(parent: u32, info: &ProcessInfo, processes: &dyn ProcessControl) -> Result<bool> {
-    let mut pid = parent;
-    // The wrapper and the template's own shell: at most two launch shells, then the pane shell.
-    for _ in 0..3 {
+/// corral's launch shells: the wrapper and the template's own shell
+/// (`/bin/sh -c <script> corral-launch ...`).
+fn launch_shell(argv: &[String]) -> bool {
+    argv.get(1).is_some_and(|a| a == "-c") && argv.get(3).is_some_and(|a| a == "corral-launch")
+}
+
+/// The launched agent itself: a direct child of the pane shell, or a launch shell or a direct
+/// child of one, descending from the pane shell. The pane shell may first start a nested
+/// interactive shell (bash running fish), so launch shells need not be its direct children.
+fn launched(
+    process: &ProcessSnapshot,
+    info: &ProcessInfo,
+    processes: &dyn ProcessControl,
+) -> Result<bool> {
+    let mut wrapped = launch_shell(&process.argv);
+    let mut pid = process.parent_pid;
+    // Two launch shells and a few nested shells; deeper ancestry is not a launch.
+    for _ in 0..6 {
         if pid == info.shell_pid {
             return Ok(true);
         }
-        let Some(shell) = processes.inspect(pid)? else {
+        let Some(parent) = processes.inspect(pid)? else {
             return Ok(false);
         };
-        let launch_shell = shell.argv.get(1).is_some_and(|a| a == "-c")
-            && shell.argv.get(3).is_some_and(|a| a == "corral-launch");
-        if !launch_shell {
+        if launch_shell(&parent.argv) {
+            wrapped = true;
+        } else if !wrapped {
             return Ok(false);
         }
-        pid = shell.parent_pid;
+        pid = parent.parent_pid;
     }
     Ok(false)
 }
@@ -283,7 +295,7 @@ pub fn unstick_with(
     let current = processes
         .inspect(expected.pid)?
         .context("stuck process exited")?;
-    if launched(current.parent_pid, &info, processes)?
+    if launched(&current, &info, processes)?
         || current.started != expected.started
         || current.argv != expected.argv
     {

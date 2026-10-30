@@ -208,6 +208,7 @@ pub(crate) fn inbox_state<'a>(task: &'a Task, recipient: &Recipient) -> Option<&
 
 pub(crate) fn inbox_head_of(state: &InboxState) -> InboxHead {
     InboxHead {
+        owner_header: state.owner_header.clone(),
         next_seq: state.next_seq,
         next_envelope: state.next_envelope,
         open_envelope: state.open_envelope,
@@ -333,6 +334,10 @@ impl TaskRef for Task {
 
     fn review_child(&self, run: &str, id: &str) -> Result<Option<RunHead>> {
         Ok(children_where(self, run, |c| c.id == id, 1)?.pop())
+    }
+    fn review_child_at(&self, run: &str, n: usize) -> Result<Option<RunHead>> {
+        find_run(self, run).and_then(|r| n.checked_sub(1).and_then(|n| r.review_runs.get(n)))
+            .map(RunHead::of).transpose()
     }
 
     fn review_child_by_review_at(&self, run: &str, at: Timestamp) -> Result<Option<RunHead>> {
@@ -575,6 +580,7 @@ impl TaskRef for Task {
             return Ok(RunObligations::default());
         };
         Ok(RunObligations {
+            slot_wait: found.obligations.slot_wait.clone(),
             waits: found
                 .obligations
                 .waits

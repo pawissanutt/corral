@@ -163,22 +163,59 @@ fn detail_usage_refresh_failures_use_the_board_sink_once() {
 
 #[test]
 fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_board() {
-    // Given a board and two open tasks whose stored documents become undecodable while it
-    // owns the terminal (terminal tasks outside the Done page are never read by a frame).
+    fn capture(
+        app: &mut App,
+        width: u16,
+        height: u16,
+    ) -> (String, std::collections::BTreeMap<String, Vec<String>>) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| app.draw(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let cards = app
+            .hits
+            .regions()
+            .iter()
+            .filter_map(|(rect, hit)| {
+                let crate::Hit::Card(id) = hit else {
+                    return None;
+                };
+                let mut card = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(
+                    0,
+                    0,
+                    rect.width,
+                    rect.height,
+                ));
+                for y in 0..rect.height {
+                    for x in 0..rect.width {
+                        card[(x, y)] = buffer[(rect.x + x, rect.y + y)].clone();
+                    }
+                }
+                Some((
+                    id.clone(),
+                    buffer_text(&card).lines().map(str::to_owned).collect(),
+                ))
+            })
+            .collect();
+        (buffer_text(buffer), cards)
+    }
+
+    // Open stored documents become undecodable while the board owns the terminal.
     let fx = seeded();
-    // Avoid an unrelated missing-worktree diagnostic from the synthetic review.
+    // Keep unavailable-projection column membership stable and avoid the synthetic worktree.
     fx.ctx
         .store
         .update("T-006", |task| {
+            task.status = corral_core::Status::NeedsMe;
             task.dispatch_hold = true;
             Ok(())
         })
         .unwrap();
-    // The intact board is the one without the tasks that are about to break.
+    let attention = crate::attention::load(&fx.ctx, fx.now.get()).unwrap();
     let mut app = fx.app(Mode::Board);
-    let baseline: Vec<_> = [(160, 45), (80, 24)]
+    // Keep complete cards visible for cell equality; the small viewport is checked below.
+    let baseline: Vec<_> = [(160, 45), (80, 45)]
         .into_iter()
-        .map(|(width, height)| draw(&mut app, width, height))
+        .map(|(width, height)| capture(&mut app, width, height))
         .collect();
     let broken: Vec<String> = ["broken-a", "broken-b"]
         .into_iter()
@@ -211,6 +248,9 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
     for (width, height) in [(160, 45), (80, 24)] {
         let text = draw(&mut app, width, height);
         assert!(!text.contains("corral: skipping"), "{text}");
+        assert!(text.contains("attention unavailable:"), "{text}");
+        assert!(!text.contains("overdue 0"), "{text}");
+        assert!(!text.contains("No waits."), "{text}");
     }
     app.toasts.clear();
     app.reload();
@@ -219,8 +259,7 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
         app.toasts.is_empty(),
         "unchanged tasks do not re-toast after dismissal"
     );
-    // Column counts are the maintained status counts, which still include the stored tasks
-    // whose documents do not decode; only those digits may differ from the intact board.
+    // Maintained counts include the undecodable tasks added after the intact baseline.
     let digitless = |line: &str| -> String {
         if line.contains("Backlog") {
             line.chars().filter(|c| !c.is_ascii_digit()).collect()
@@ -228,13 +267,44 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
             line.to_owned()
         }
     };
-    for ((width, height), before) in [(160, 45), (80, 24)].into_iter().zip(baseline) {
-        let after = draw(&mut app, width, height);
+    for ((width, height), (before, mut expected_cards)) in
+        [(160, 45), (80, 45)].into_iter().zip(baseline)
+    {
+        let (after, cards) = capture(&mut app, width, height);
+        // A failed projection deliberately replaces these two cards' attention rows
+        // with the unavailable header. Every other cell in every card must survive.
+        for id in ["T-005", "T-006"] {
+            let task = fx.ctx.store.get(id).unwrap();
+            let condition =
+                corral_core::attention::blocked(&task, attention.get(id).unwrap()).unwrap();
+            let rows = expected_cards.get_mut(id).unwrap();
+            let width = unicode_width::UnicodeWidthStr::width(rows[0].as_str()).saturating_sub(2);
+            let count = crate::attention::blocked_lines(condition, width, fx.now.get()).len();
+            let removed = rows.drain(2..2 + count).collect::<Vec<_>>();
+            let row = removed.last().unwrap();
+            assert!(
+                row.contains("By Owner"),
+                "expected attention row for {id}: {row}"
+            );
+        }
+        assert_eq!(cards, expected_cards, "unaffected cards remain intact");
+        let before: Vec<_> = before.lines().collect();
+        let after: Vec<_> = after.lines().collect();
+        assert_eq!(after[..4].iter().map(|line| digitless(line)).collect::<Vec<_>>(),
+            before[..4].iter().map(|line| digitless(line)).collect::<Vec<_>>(),
+            "app header remains intact");
         assert_eq!(
-            after.lines().map(digitless).collect::<Vec<_>>(),
-            before.lines().map(digitless).collect::<Vec<_>>(),
-            "board buffer remains intact"
+            &after[after.len() - 2..],
+            &before[before.len() - 2..],
+            "footer remains intact"
         );
+        for border in ['╭', '╰'] {
+            assert_eq!(
+                after.iter().find(|line| line.starts_with(border)),
+                before.iter().find(|line| line.starts_with(border)),
+                "column border remains intact"
+            );
+        }
     }
     // A different error for one task is a new message, not a permanent suppression.
     fx.ctx

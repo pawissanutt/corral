@@ -18,7 +18,12 @@ fn snapshot_updates_board_when_store_is_unavailable() {
         })
         .unwrap();
     fx.ctx.store.pin("T-007", None, false).unwrap();
-    fx.ctx.store.config.ui.columns = vec![Status::Backlog, Status::Review, Status::Done];
+    fx.ctx.store.config.ui.columns = vec![
+        Status::Backlog,
+        Status::NeedsMe,
+        Status::Review,
+        Status::Done,
+    ];
     fx.ctx.store.config.ui.done_max = 0;
     let snapshot = BoardSnapshot::load(&fx.ctx).unwrap();
     let resource_line = snapshot.resources.line();
@@ -35,7 +40,12 @@ fn snapshot_updates_board_when_store_is_unavailable() {
     );
     assert_eq!(
         board.columns(),
-        vec![Status::Backlog, Status::Review, Status::Done]
+        vec![
+            Status::Backlog,
+            Status::NeedsMe,
+            Status::Review,
+            Status::Done
+        ]
     );
     assert_eq!(
         board

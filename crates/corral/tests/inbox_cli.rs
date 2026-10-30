@@ -28,6 +28,8 @@ fn invoke(root: &Path, args: &[&str]) -> Output {
         }
     }
     command
+        .env_remove("AI_AGENT")
+        .env_remove("PI_CODING_AGENT")
         .current_dir(root)
         .env("HOME", root)
         .env("XDG_CONFIG_HOME", root.join("config"))

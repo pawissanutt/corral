@@ -1,6 +1,6 @@
 use super::*;
 
-fn enqueue(fx: &Fx, planning: bool) -> corral_core::ActionAuthorization {
+pub(super) fn enqueue(fx: &Fx, planning: bool) -> corral_core::ActionAuthorization {
     let task = fx.task("queued owner intent", Status::Ready);
     fx.ctx
         .store

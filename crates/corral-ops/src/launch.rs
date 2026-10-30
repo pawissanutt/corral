@@ -31,11 +31,9 @@ fn phase(ctx: &Ctx, id: &str, stage: LaunchStage) -> Result<TaskHead> {
     })
 }
 
-/// Reclaim a failed launch only after its old owner released the kernel lock.
+/// Reclaim a failed launch. Only an explicit owner request may renew owner consent.
 pub(crate) fn resume(
-    ctx: &Ctx,
-    task: &TaskHead,
-    force_resources: bool,
+    ctx: &Ctx, task: &TaskHead, force_resources: bool, owner: bool,
 ) -> Result<DispatchOutcome<Box<TaskHead>>> {
     let claim = task.launch.as_ref().context("no launch to resume")?;
     // Submission cannot be replayed safely: IPC may have succeeded before the receipt.
@@ -48,9 +46,19 @@ pub(crate) fn resume(
         release(ctx, &task.id, &error)?;
         return Err(error);
     };
-    if crate::operating::is_automatic(&authorization)
-        && crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch).is_ok()
-    {
+    if !crate::operating::is_automatic(&authorization) {
+        if crate::operating::owner_consent_drift(ctx, &authorization)?.is_some() {
+            if !owner {
+                return hold_stale_owner(ctx, task);
+            }
+            // A fresh owner request is fresh consent to the current policy (T-549, T-560).
+            authorization = crate::operating::authorize(
+                ctx,
+                authorization.action.clone(),
+                crate::operating::Origin::Owner,
+            )?;
+        }
+    } else if crate::operating::require(&ctx.store, task, OperatingActionKind::Dispatch).is_ok() {
         authorization = crate::operating::authorize(
             ctx,
             authorization.action.clone(),
@@ -129,11 +137,47 @@ fn validate_execution<T: corral_core::TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> 
     Ok(())
 }
 
-pub(crate) fn launch(
-    ctx: &Ctx,
-    task: &TaskHead,
-    force_resources: bool,
-) -> Result<DispatchOutcome<Box<TaskHead>>> {
+/// Keep an owner-queued launch whose approval drifted under a policy or contract change as one
+/// stable Blocked launch error, with no IPC and no retry, until the owner explicitly
+/// re-authorizes it (T-560). Automatic callers never renew owner consent.
+fn hold_stale_owner(ctx: &Ctx, task: &TaskHead) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    let claim = task.launch.as_ref().context("launch missing")?;
+    let authorization = claim
+        .authorization
+        .as_ref()
+        .context("launch authority missing")?;
+    let reason = crate::operating::owner_consent_drift(ctx, authorization)?
+        .context("owner consent is current")?;
+    let message = crate::operating::stale_owner_queue(&task.id, reason);
+    if !claim.reserved && claim.error.as_deref() == Some(message.as_str()) {
+        return Ok(DispatchOutcome::Queued {
+            task: Box::new(task.clone()),
+            reason: message,
+        });
+    }
+    let held = ctx.store.update_head(&task.id, |t| {
+        let launch = t
+            .launch
+            .as_mut()
+            .context("launch reservation disappeared")?;
+        launch.reserved = false;
+        launch.error = Some(message.clone());
+        ctx.store.log_event(Some(&t.id), "owner_consent_stale",
+            json!({"run": task.current_run.as_ref().map(|r| &r.id), "reason": message}))?;
+        Ok(())
+    })?;
+    Ok(DispatchOutcome::Queued {
+        task: Box::new(held),
+        reason: message,
+    })
+}
+
+pub(crate) fn launch(ctx: &Ctx, task: &TaskHead, force_resources: bool) -> Result<DispatchOutcome<Box<TaskHead>>> {
+    if let Some(authorization) = task.launch.as_ref().and_then(|l| l.authorization.as_ref())
+        && crate::operating::owner_consent_drift(ctx, authorization)?.is_some()
+    {
+        return hold_stale_owner(ctx, task);
+    }
     match advance(ctx, task, force_resources) {
         Ok(outcome) => Ok(outcome),
         Err(error) => {
@@ -182,10 +226,18 @@ fn advance(
     let claim = task.launch.as_ref().context("launch missing")?;
     let plan = task.dispatch_plan.as_ref().context("launch plan missing")?;
     crate::dispatch::check_plan(ctx, &*task, &plan.route, claim.approved_plan.as_ref())?;
-    // The target and base checks read head fields and the current run's scalars only.
+    if task.current_run.as_ref().is_some_and(|run| run.session.is_none()) {
+        let shell = task.shell_task()?;
+        let session = crate::role_session::fresh(ctx, &shell,
+            shell.current_run().context("launch run missing")?, false)?;
+        task = Box::new(ctx.store.update_head(&task.id, |head| {
+            head.current_run_mut().context("launch run missing")?.session = Some(session);
+            Ok(())
+        })?);
+    }
     let shell = task.shell_task()?;
     let run = shell.current_run().context("launch has no run")?.clone();
-    crate::plan_target::validate_run(&ctx.store, &shell, &corral_core::RunHead::of(&run)?)?;
+    crate::plan_target::validate_run(&ctx.store, &shell, &RunHead::of(&run)?)?;
     crate::tracker::check_dispatch_base(&ctx.store, &shell, &run.base, &run.base_sha)?;
     if task.launch.as_ref().context("launch missing")?.stage == LaunchStage::Reserved {
         // Recheck inside the durable claim, including recovery. A refusal flows
@@ -362,6 +414,10 @@ fn advance(
     )?;
     let task = ctx.store.head(&task.id)?;
     crate::provider_session::record_launch(ctx, &task.id, &run_id, launched_at);
+    if let Some(run) = task.current_run() {
+        crate::role_session::observe(ctx, &task, run, false);
+        crate::role_session::log(ctx, &task, run)?;
+    }
     finish(ctx, &task, false)
 }
 
@@ -406,7 +462,7 @@ fn finish(ctx: &Ctx, task: &TaskHead, uncertain: bool) -> Result<DispatchOutcome
         t.launch = None;
         t.queued = false;
         t.dispatch_plan = None;
-        if !uncertain {
+        if !uncertain && crate::prompt::lessons_included(ctx, &t.shell_task()?, &run) {
             crate::lessons::record_exposure(ctx, &*t, &run.id)?;
         }
         ctx.store.log_event(
@@ -525,6 +581,9 @@ fn prepare_prompt(ctx: &Ctx, task: &TaskHead) -> Result<()> {
         Ok(())
     })?;
     crate::dispatch::install_skill(ctx, &task.id, run.harness.as_deref().unwrap_or(&run.agent))?;
+    if let Some(snapshot) = &run.execution {
+        crate::dispatch::metered_notice(ctx, &task.id, "worker", &snapshot.resolved)?;
+    }
     let mut fields = task.shell_task()?;
     fields.runs = vec![run.clone()];
     crate::lessons::record_lessons(ctx, &fields, &run)?;

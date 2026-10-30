@@ -11,8 +11,12 @@ pub struct SlotUsage {
     pub reviews: usize,
     pub gates: usize,
     pub reservations: usize,
+    /// Open runs parked on another task (or woken and queued): shown, never counted.
+    pub parked: usize,
     count_reviews: bool,
     count_gates: bool,
+    #[serde(skip)]
+    shared_gates: usize,
 }
 
 impl SlotUsage {
@@ -20,7 +24,17 @@ impl SlotUsage {
         self.tasks
             + self.reservations
             + if self.count_reviews { self.reviews } else { 0 }
-            + if self.count_gates { self.gates } else { 0 }
+            + if self.count_gates {
+                self.slot_gates()
+            } else {
+                0
+            }
+    }
+
+    /// Live gates that hold a slot of their own: every live gate except a current coding run's,
+    /// which shares its worker's slot.
+    pub fn slot_gates(&self) -> usize {
+        self.gates.saturating_sub(self.shared_gates)
     }
 
     pub fn from_tasks(tasks: &[Task], limits: &Limits) -> Self {
@@ -34,11 +48,28 @@ impl SlotUsage {
             ..Self::default()
         };
         for task in tasks {
+            let sharing = gate_shares_dispatch_slot(task);
             usage.tasks += usize::from(task.status.holds_slot() && task.holds_dispatch_slot());
+            usage.parked += usize::from(
+                task.status.holds_slot()
+                    && task
+                        .current_run()
+                        .is_some_and(|r| r.releases_slot(&task.id)),
+            );
             usage.reservations += usize::from(
                 !task.status.holds_slot() && task.launch.as_ref().is_some_and(|l| l.reserved),
             );
             for run in &task.runs {
+                usage.shared_gates += usize::from(
+                    sharing
+                        && task
+                            .current_run()
+                            .is_some_and(|current| current.id == run.id)
+                        && run
+                            .gate
+                            .as_ref()
+                            .is_some_and(corral_core::GateRecord::holds_slot),
+                );
                 usage.gates += usize::from(
                     run.gate
                         .as_ref()
@@ -68,7 +99,7 @@ impl SlotUsage {
                         .is_some_and(corral_core::ReviewRecord::holds_slot),
                 });
                 let counted = match work {
-                    ReviewWork::Gate => limits.count_gates,
+                    ReviewWork::Gate => limits.count_gates && !sharing,
                     ReviewWork::Reviewer => limits.count_reviews,
                 };
                 usage.reservations += usize::from(counted && !recorded);
@@ -76,6 +107,23 @@ impl SlotUsage {
         }
         usage
     }
+}
+
+/// The soft coding-slot target automatic admission fills up to, never above the hard limit.
+pub fn soft_target(limits: &Limits) -> usize {
+    limits
+        .running_target
+        .map_or(limits.running, |target| target.min(limits.running))
+}
+
+/// P0 tasks and red-main fixes may take automatic coding slots in the headroom up to the hard limit.
+pub(crate) fn uses_headroom(task: &Task) -> bool {
+    task.priority == "P0" || corral_core::red_main(task)
+}
+
+/// Only the current coding run can reuse a slot already held by its worker.
+pub(crate) fn gate_shares_dispatch_slot(task: &Task) -> bool {
+    task.status.holds_slot() && task.holds_dispatch_slot() && task.current_run().is_some()
 }
 
 pub fn slot_usage(ctx: &Ctx) -> Result<SlotUsage> {
@@ -189,7 +237,12 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
                     {
                         Some(ReviewWork::Reviewer)
                     }
-                    Some(GateResult::Running | GateResult::Pass | GateResult::Fail) => None,
+                    Some(
+                        GateResult::Running
+                        | GateResult::Pass
+                        | GateResult::Fail
+                        | GateResult::Stale,
+                    ) => None,
                 },
                 Some(AutoStage::Reviewing) if run.review.is_none() => Some(ReviewWork::Reviewer),
                 Some(
@@ -209,6 +262,11 @@ pub(crate) fn finishing_first(store: &Store, candidate: &str) -> Result<Option<S
             }
             Some(ReviewWork::Gate | ReviewWork::Reviewer) => {}
             None => continue,
+        }
+        if let Some(kind) = work
+            && crate::review_budget::retained_preparation(store, &task.id, &run.id, kind)?
+        {
+            continue;
         }
         if capacity_reason(store, &task, 0)?.is_none() {
             return Ok(Some(format!("waiting for finishing work on {}", task.id)));

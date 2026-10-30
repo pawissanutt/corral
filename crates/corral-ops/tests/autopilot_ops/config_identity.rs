@@ -152,7 +152,7 @@ fn verification_config_edits_invalidate_gates_and_verdicts() {
             .to_string();
         assert!(error.contains("stale review"), "{key}: {error}");
         let collected = corral_ops::gate_collect(&fx.ctx, &fx.id).unwrap().unwrap();
-        assert_eq!(collected.result, GateResult::Fail, "{key}");
+        assert_eq!(collected.result, GateResult::Stale, "{key}");
         assert_eq!(collected.sha, original.gate.unwrap().sha, "{key}");
         assert!(collected.failed_cmd.unwrap().starts_with("stale_result:"));
         assert_eq!(fx.run().review.unwrap().verdict, None, "{key}");

@@ -73,7 +73,7 @@ impl BoardView {
                     _ => Action::Toast(Toast::new(
                         Tone::Info,
                         "No live run",
-                        "a jumps to Running and Needs me cards",
+                        "a jumps to Running and Blocked cards with a live run",
                     )),
                 };
             }
@@ -86,7 +86,7 @@ impl BoardView {
                     return Action::Toast(Toast::new(
                         Tone::Info,
                         "Nothing to reply to",
-                        "r replies to Needs me cards",
+                        "r replies to Blocked agents awaiting an answer",
                     ));
                 }
             },

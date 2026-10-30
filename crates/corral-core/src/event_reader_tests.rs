@@ -216,3 +216,57 @@ fn decision_and_wait_outcomes_wake_without_delivery_accounting_loops() {
         assert_eq!(actionable_kind(&event), None);
     }
 }
+
+#[test]
+fn every_pm_actionable_kind_is_classified_and_is_exactly_what_push_kinds_accepts() {
+    use crate::config::{Config, PM_ACTIONABLE_KINDS};
+    let event = |kind: &str| -> Event {
+        serde_json::from_value(serde_json::json!({
+            "ts":"2026-10-25T00:00:00Z", "task":"T-425", "kind":kind,
+            "detail":{"pm_relevant": true}
+        }))
+        .unwrap()
+    };
+    // Given the question and silent-turn kinds that config accepted but push and wait dropped:
+    for kind in [
+        "question_opened",
+        "question_escalated",
+        "question_unattended",
+        "turn_ended_without_report",
+    ] {
+        assert!(PM_ACTIONABLE_KINDS.contains(&kind), "{kind}");
+    }
+    // When every listed kind is classified, then it is actionable as itself:
+    for kind in PM_ACTIONABLE_KINDS {
+        assert_eq!(actionable_kind(&event(kind)), Some(kind), "{kind}");
+    }
+    // And push_kinds validation accepts the whole list:
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = Config::default_for(dir.path());
+    config.pm.push_kinds = PM_ACTIONABLE_KINDS.map(String::from).to_vec();
+    let problems = config
+        .validate(dir.path())
+        .err()
+        .map(|e| e.0)
+        .unwrap_or_default();
+    assert!(
+        problems.iter().all(|p| !p.contains("push_kinds")),
+        "{problems:?}"
+    );
+    // While a kind outside the list is neither accepted nor actionable:
+    for kind in [
+        "question_answered",
+        "config_invalid",
+        "pm_event_delivery",
+        "working",
+    ] {
+        config.pm.push_kinds = vec![kind.into()];
+        let problems = config.validate(dir.path()).unwrap_err().0;
+        let prefix = format!("pm.push_kinds: unknown actionable kind {kind:?}; use done, ");
+        assert!(
+            problems.iter().any(|p| p.starts_with(&prefix)),
+            "{problems:?}"
+        );
+        assert_eq!(actionable_kind(&event(kind)), None, "{kind}");
+    }
+}

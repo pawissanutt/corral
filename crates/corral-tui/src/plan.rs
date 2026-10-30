@@ -3,6 +3,9 @@
 //! the stage strip and the Plan tab always agree.
 
 pub(crate) mod decision;
+mod overview;
+#[cfg(test)]
+pub(crate) mod overview_tests;
 pub(crate) mod review;
 #[cfg(test)]
 mod review_tests;

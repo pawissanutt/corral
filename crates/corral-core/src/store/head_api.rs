@@ -166,6 +166,7 @@ impl TaskHead {
             rows.into_iter().map(|row| row.doc).collect::<Vec<_>>()
         };
         Ok(crate::RunObligations {
+            slot_wait: crate::TaskRef::run_head(self, run)?.and_then(|r| r.obligations.slot_wait),
             waits: decode(rows("wait")?)
                 .into_iter()
                 .map(serde_json::from_value)
@@ -691,7 +692,7 @@ impl Store {
         Ok((fresh.write_head(head)?, result))
     }
 
-    pub(crate) fn write_head(&self, head: TaskHeadMut) -> Result<TaskHead> {
+    pub(crate) fn write_head(&self, mut head: TaskHeadMut) -> Result<TaskHead> {
         let _unit = self.event_unit();
         if self.frozen.is_some() {
             bail!(
@@ -704,6 +705,10 @@ impl Store {
         let base_doc = head_doc_of(&head.base.task)?;
         let base_summary = serde_json::to_value(&head.base.summary)?;
         let (num, rev) = (head.base.num, head.base.rev);
+        let preserve_updated = head.preserve_updated;
+        let mut normalized = shell_task(&head.head.task)?;
+        super::normalize::task(&mut normalized, Some(&before), self.now())?;
+        head.head.task = crate::task_head_fields(&normalized);
         let (mut new, rows, history_edit) = head.finish()?;
         let mut after = shell_task(&new.task)?;
         before.check_scope_unchanged(&after)?;
@@ -711,7 +716,7 @@ impl Store {
         let doc = head_doc_of(&new.task)?;
         let summary = serde_json::to_value(&new.summary)?;
         let mut fields = task_fields(&after)?;
-        if !rows.is_empty() || doc != base_doc || summary != base_summary {
+        if !preserve_updated && (!rows.is_empty() || doc != base_doc || summary != base_summary) {
             let now = self.now();
             new.task.updated = now;
             after.updated = now;

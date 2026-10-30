@@ -1,5 +1,5 @@
 //! Review autopilot state on board cards (docs/DESIGN.md §5): the change round on Running cards, the escalation
-//! reason on Needs me cards, the sub-state badge on Review cards (`⧗ gating`, `👁 reviewing`, `⟳ landing`,
+//! reason on Blocked cards, the sub-state badge on Review cards (`⧗ gating`, `👁 reviewing`, `⟳ landing`,
 //! `↺ changes 1/2`, `⛔ blocked: <reason>`, `✓ reviewed`), auto-landed Done cards.
 
 use corral_core::{AutoStage, Config, Run, Task};

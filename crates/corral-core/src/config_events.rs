@@ -48,6 +48,22 @@ struct ConfigWarning {
     version: u32,
 }
 
+impl OperatingActionIdentity {
+    /// A base-only drift can be re-prepared, but is never a reusable verification result.
+    /// Compare every other field exactly, including source, policy and environment inputs.
+    pub fn only_integration_base_changed(&self, actual: &Self) -> bool {
+        let mut expected = self.clone();
+        let (Some(old), Some(new)) = (&mut expected.candidate, &actual.candidate) else {
+            return false;
+        };
+        if old.integration_base == new.integration_base {
+            return false;
+        }
+        old.integration_base.clone_from(&new.integration_base);
+        expected == *actual
+    }
+}
+
 impl Store {
     /// Persist origin before executor preparation. There is deliberately no default origin.
     pub fn authorize_operating_action(
@@ -118,20 +134,36 @@ impl Store {
                     ),
                     "cannot refresh authority after a submission attempt"
                 );
-                ensure!(
-                    matches!(
-                        (&record.authorization.origin, &authorization.origin),
-                        (
-                            OperatingOrigin::Automatic { .. },
-                            OperatingOrigin::Automatic { .. }
-                        )
-                    ),
-                    "cannot change the action's authorization origin"
+                // A fresh explicit owner request is fresh consent to the current contract.
+                // Automatic authority can also re-prepare a base-only drift before submission;
+                // retain the single submission slot and archive the superseded authorization.
+                let owner_renewal = matches!(
+                    (&record.authorization.origin, &authorization.origin),
+                    (
+                        OperatingOrigin::ExplicitOwner { .. },
+                        OperatingOrigin::ExplicitOwner { .. }
+                    )
                 );
                 ensure!(
+                    owner_renewal
+                        || matches!(
+                            (&record.authorization.origin, &authorization.origin),
+                            (
+                                OperatingOrigin::Automatic { .. },
+                                OperatingOrigin::Automatic { .. }
+                            )
+                        ),
+                    "cannot change the action's authorization origin"
+                );
+                let base_refresh = !owner_renewal
+                    && record
+                        .authorization
+                        .action
+                        .only_integration_base_changed(&authorization.action);
+                ensure!(
                     record.authorization.workspace == authorization.workspace
-                        && record.authorization.member == authorization.member
-                        && record.authorization.action == authorization.action,
+                        && (owner_renewal || record.authorization.member == authorization.member)
+                        && (record.authorization.action == authorization.action || base_refresh),
                     "cannot refresh a changed prepared action identity"
                 );
                 record.authorization_history.push(AuthorizationRevision {
@@ -155,6 +187,65 @@ impl Store {
             })?;
         }
         Ok(authorization)
+    }
+
+    /// Whether an unsubmitted authorization was refused or no longer matches the current
+    /// policy revision or task contract. Attempted submissions are never stale: they must
+    /// not be replaced.
+    pub fn operating_authorization_stale(
+        &self,
+        authorization: &ActionAuthorization,
+    ) -> Result<bool> {
+        match self.authorized_submission(&authorization.id)?.disposition {
+            SubmissionDisposition::AuthorizationRefused { .. } => Ok(true),
+            SubmissionDisposition::Prepared => {
+                Ok(self.operating_consent_drift(authorization)?.is_some())
+            }
+            SubmissionDisposition::Submitting
+            | SubmissionDisposition::Submitted
+            | SubmissionDisposition::Uncertain { .. } => Ok(false),
+        }
+    }
+
+    /// The pre-T-560 revision format, which also digested `limits`. Only the identical
+    /// configuration reproduces it, so an approval carrying it was granted under exactly the
+    /// current policy and is carried across the format change without renewal.
+    fn legacy_policy_revision(&self, config: &Config) -> Result<String> {
+        let config = config.policy_view();
+        let mut dispatch = config.dispatch.clone();
+        dispatch.paused = false;
+        digest(&(
+            self.root(),
+            &config.automation,
+            &config.review,
+            &dispatch,
+            &config.projects,
+            &config.limits,
+            &config.resources,
+        ))
+    }
+
+    /// Whether `revision` names the current policy, in the current or the pre-T-560 format.
+    pub(crate) fn policy_revision_current(&self, config: &Config, revision: &str) -> Result<bool> {
+        Ok(revision == self.policy_revision(config)?
+            || revision == self.legacy_policy_revision(config)?)
+    }
+
+    /// Why an authorization no longer matches the current task contract or policy revision,
+    /// as the final submission check would report it; `None` while it still matches.
+    pub fn operating_consent_drift(
+        &self,
+        authorization: &ActionAuthorization,
+    ) -> Result<Option<&'static str>> {
+        let config = self.operating_config()?;
+        let task = self.head(&authorization.action.task)?;
+        if authorization.member != self.operating_member(&config, &task)? {
+            return Ok(Some("action task contract or project identity changed"));
+        }
+        if !self.policy_revision_current(&config, &authorization.policy_revision)? {
+            return Ok(Some("action policy revision changed"));
+        }
+        Ok(None)
     }
 
     pub fn operating_state(&self) -> Result<crate::OperatingState> {
@@ -431,6 +522,17 @@ impl Store {
             ConfigSource::Cli,
             ApprovalPublication::RevokeBeforeConfig,
             |doc| doc.set_str("automation.paused", if paused { "true" } else { "false" }),
+        )
+    }
+
+    /// Turbo widens only an existing matching grant: it drops owner-only acceptance and round limits.
+    pub fn turbo_operating_policy(&self, on: bool) -> Result<Config> {
+        let _board = self.lock("dispatch")?;
+        self.edit_config_layer_locked(
+            ConfigLayer::Workspace,
+            ConfigSource::Cli,
+            ApprovalPublication::RevokeBeforeConfig,
+            |doc| doc.set_str("automation.turbo", if on { "true" } else { "false" }),
         )
     }
 

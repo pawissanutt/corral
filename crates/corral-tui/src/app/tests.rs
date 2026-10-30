@@ -69,7 +69,7 @@ fn app_header_footer_and_board() {
     let text = render(&mut app);
     let first = text.lines().next().unwrap();
     assert!(first.contains(&format!("corral · {name}")), "{first}");
-    for part in ["▲ 1 needs you", "⟳ 2/3 slots", "◆ 1 review", "⏳ 1 queued"] {
+    for part in ["▲ 2 blocked", "⟳ 2/3 slots", "◆ 0 review", "⏳ 1 queued"] {
         assert!(first.contains(part), "header lacks {part}: {first}");
     }
     assert!(!first.contains("herdr offline"));
@@ -78,7 +78,7 @@ fn app_header_footer_and_board() {
             && text.lines().any(|line| line.contains("? help")),
         "wrapped footer retains its hints: {text}"
     );
-    assert!(text.contains("T-005") && text.contains("Needs me"));
+    assert!(text.contains("T-005") && text.contains("Blocked"));
     app.herdr_online = false;
     assert!(
         render(&mut app)
@@ -139,13 +139,13 @@ fn app_overlay_and_toasts_render() {
     assert_eq!(app.toasts.len(), 3, "repeated sync errors toast once");
     let text = render(&mut app);
     assert!(
-        text.contains("▲ T-004 needs you") && text.contains("which key?"),
+        text.contains("▲ T-004 blocked") && text.contains("which key?"),
         "{text}"
     );
     assert!(text.contains("Not a manual move") && text.contains("Sync failed"));
     let toast_line = text
         .lines()
-        .find(|l| l.contains("▲ T-004 needs you"))
+        .find(|l| l.contains("▲ T-004 blocked"))
         .unwrap();
     assert!(
         toast_line.find("▲ T-004").unwrap() > toast_line.len() / 2,
@@ -160,7 +160,7 @@ fn app_capture_mode_saves_and_exits() {
     let mut app = fx.app(Mode::Capture(cwd.clone()));
     let text = render(&mut app);
     assert!(
-        text.contains("capture") && !text.contains("needs you"),
+        text.contains("capture") && !text.contains("blocked"),
         "capture mode has no board header"
     );
     for c in "from the popup".chars() {

@@ -115,14 +115,14 @@ impl Status {
         Status::Done,
     ];
 
-    /// Human label: "Idea", "Backlog", "Ready", "Running", "Needs me", "Review", "Done", "Dropped".
+    /// Human label; the legacy `needs_me` storage status is displayed as Blocked.
     pub fn label(self) -> &'static str {
         match self {
             Status::Idea => "Idea",
             Status::Backlog => "Backlog",
             Status::Ready => "Ready",
             Status::Running => "Running",
-            Status::NeedsMe => "Needs me",
+            Status::NeedsMe => "Blocked",
             Status::Review => "Review",
             Status::Done => "Done",
             Status::Dropped => "Dropped",
@@ -143,7 +143,7 @@ impl Status {
         }
     }
 
-    /// Parses snake_case names and labels, case-insensitive; "needs-me", "needsme", "needs me" all map to NeedsMe.
+    /// Parses labels and storage names, retaining legacy aliases for Blocked.
     pub fn parse(s: &str) -> Option<Status> {
         let k: String = s
             .trim()
@@ -156,7 +156,7 @@ impl Status {
             "backlog" => Status::Backlog,
             "ready" => Status::Ready,
             "running" => Status::Running,
-            "needsme" => Status::NeedsMe,
+            "blocked" | "needsme" => Status::NeedsMe,
             "review" => Status::Review,
             "done" => Status::Done,
             "dropped" | "drop" => Status::Dropped,
@@ -217,6 +217,8 @@ pub enum GateResult {
     Running,
     Pass,
     Fail,
+    /// Commands passed, but verification inputs changed. Never authorizes completion.
+    Stale,
 }
 
 impl GateResult {
@@ -225,6 +227,7 @@ impl GateResult {
             GateResult::Running => "running",
             GateResult::Pass => "pass",
             GateResult::Fail => "fail",
+            GateResult::Stale => "stale",
         }
     }
 }
@@ -243,10 +246,10 @@ pub struct GateRecord {
     /// a synthetic Fail receipt: gate_collect remains the result authority.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub process_lost: bool,
-    /// The first command that failed (Fail only).
+    /// The first failed command, invalid receipt reason, or changed-input diagnostics (Stale).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_cmd: Option<String>,
-    /// Start time while Running, finish time once Pass/Fail.
+    /// Start time while Running, finish time once Pass/Fail/Stale.
     pub at: jiff::Timestamp,
     /// Worktree HEAD the gate ran on; a result is only valid while HEAD still equals it.
     pub sha: String,
@@ -388,6 +391,22 @@ pub struct UsageEntry {
     pub unpriced_tokens: u64,
 }
 
+/// The newest changes round a worker run was reopened for: the durable identity a reused
+/// conversation is told about and the attention it raises when it answers without reporting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangesRound {
+    /// 1 for the first changes round of the run, then one more per request.
+    pub n: u32,
+    pub at: Timestamp,
+    /// Review attempt that returned the changes and its callback ID, when a review preceded them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callback: Option<String>,
+    /// The candidate the changes were requested against.
+    pub sha: String,
+}
+
 /// A foreign foreground process observed by the watchdog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StuckProcess {
@@ -527,6 +546,9 @@ pub struct LaunchReservation {
 /// One agent session working on a task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
+    /// Harness session selected for this worker or reviewer; absent on legacy runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<crate::RoleSession>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::ExecutionSnapshot>,
     /// Fixed at launch; runs predating inbox adapters retain legacy delivery.
@@ -624,6 +646,9 @@ pub struct Run {
     /// The run has looked idle for `[sync] idle_after_secs` without `corral done` (board warning badge).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub idle_no_report: bool,
+    /// Set when a changes request reopened this run's conversation; None before the first one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_round: Option<ChangesRound>,
     /// Latest review (`corral review-run` / `corral verdict`) of this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewRecord>,
@@ -753,9 +778,24 @@ pub struct TaskResult {
     pub spec_digest: String,
 }
 
+/// Actual base advancement, recorded with the successful owner or automatic landing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LandingReceipt {
+    pub run: String,
+    pub sha: String,
+}
+
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub park: Option<crate::Park>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<LandingReceipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub infra_wait: Option<crate::InfraWait>,
+    #[serde(default, skip_serializing_if = "crate::AttentionLedger::is_empty")]
+    pub attention: crate::AttentionLedger,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dashboard: Option<crate::DashboardSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -775,6 +815,9 @@ pub struct Task {
     pub id: String,
     pub title: String,
     pub status: Status,
+    /// When the current status was persisted; unknown on legacy tasks until a status change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_since: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Optional task classification shared by outcome statistics and model routing.
@@ -782,8 +825,11 @@ pub struct Task {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<crate::TaskSize>,
+    /// Reasoning difficulty, not implementation volume; absent keeps legacy routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<crate::TaskDifficulty>,
     /// "P0".."P3", default "P2".
-    #[serde(default = "default_priority")]
+    #[serde(default = "crate::hints::default_priority")]
     pub priority: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<String>,
@@ -833,6 +879,10 @@ pub struct Task {
     pub approved_scope_revision: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approved_scope_history: Vec<crate::ApprovedScopeRevision>,
+    /// Membership move counter; existing Plans start at zero. Part of the operating contract, so
+    /// proof bound to an earlier membership stays stale even when the member list is restored.
+    #[serde(default, skip_serializing_if = "crate::plan::is_scope_revision_zero")]
+    pub membership_revision: u64,
     /// Owner member-gate records by member ID; outside the operating contract revision.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub member_gates: std::collections::BTreeMap<String, crate::MemberGateRecord>,
@@ -873,10 +923,6 @@ pub struct Task {
     pub path: PathBuf,
 }
 
-fn default_priority() -> String {
-    "P2".to_string()
-}
-
 fn is_zero(n: &u32) -> bool {
     *n == 0
 }
@@ -903,9 +949,9 @@ impl Task {
         let worker = planning.map_or_else(
             || {
                 self.status.holds_slot()
-                    && self
-                        .current_run()
-                        .is_none_or(|r| r.outcome != Some(RunOutcome::Failed))
+                    && self.current_run().is_none_or(|r| {
+                        r.outcome != Some(RunOutcome::Failed) && !r.releases_slot(&self.id)
+                    })
                     && !(self.current_run().is_none_or(|r| r.outcome.is_some())
                         && self.plans.last().is_some_and(|p| {
                             p.approval.is_none()

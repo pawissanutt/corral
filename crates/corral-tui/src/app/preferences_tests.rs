@@ -73,7 +73,7 @@ fn display_preferences_change_rendered_board_when_loaded() {
         let buffer = term.backend().buffer();
         let text = buffer_text(buffer);
         // Then hidden columns/WIP are absent and accent cells have changed.
-        assert!(!text.contains("Running") && !text.contains("Needs me") && !text.contains("Done"));
+        assert!(!text.contains("Running") && !text.contains("Blocked") && !text.contains("Done"));
         assert!(!text.contains("slots"));
         assert!(text.contains("Backlog") && text.contains("Ready"));
         assert!(!buffer.content.iter().any(|cell| cell.fg == theme::CYAN));

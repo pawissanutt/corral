@@ -167,21 +167,31 @@ fn projection(ctx: &Ctx, id: &str) -> Result<(Projection, bool)> {
     Ok((projection, false))
 }
 
-/// Read one coherent board snapshot without reconciling or accepting the Plan.
+/// Read one coherent board view without reconciling or accepting the Plan.
+///
+/// This advisory view does not take the dispatch lock: workers may be updating the
+/// board, and a later refresh will pick up their changes. Membership validation
+/// still reports real errors; this projection never authorizes a mutation.
 ///
 /// # Errors
 /// Rejects non-trackers, missing members or dependencies, cycles, and invalid membership.
 pub fn plan_progress(ctx: &Ctx, id: &str) -> Result<PlanProgress> {
-    let _board = ctx
-        .store
-        .try_lock("dispatch")?
-        .context("board is being updated; retry Plan progress")?;
-    let store = if ctx.store.is_snapshot() {
-        ctx.store.clone()
+    plan_progress_in(ctx, &plan_board(ctx)?, id)
+}
+
+/// The board [`plan_progress`] reads: freshly opened, then frozen, so one read answers every
+/// member, dependency and membership lookup instead of decoding the board for each (T-547).
+pub fn plan_board(ctx: &Ctx) -> Result<Store> {
+    if ctx.store.is_snapshot() {
+        Ok(ctx.store.clone())
     } else {
-        // Live callers historically refresh config as well as task data.
-        Store::open_unobserved(ctx.store.root())?.read_only_snapshot()?
-    };
+        Store::open_unobserved(ctx.store.root())?.read_only_snapshot()
+    }
+}
+
+/// [`plan_progress`] over a [`plan_board`] shared by every tracker of one refresh.
+pub fn plan_progress_in(ctx: &Ctx, store: &Store, id: &str) -> Result<PlanProgress> {
+    let store = store.clone();
     let fresh = Ctx {
         store,
         ..ctx.clone()
