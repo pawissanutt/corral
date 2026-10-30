@@ -7,10 +7,9 @@
 //! - an artifact row change arrives with its `artifact-keys` record, so only that row is read
 //!   (writers that bypass those records fall back to the task's artifact rows);
 //! - events are read after the index's own durable event position;
-//! - a run or plan change re-derives every run and plan review document of that task from
-//!   its run, review-child, plan and plan-review rows, never the full task: the feed names
-//!   families, not rows, so this keeps containers demoted since the cursor correct. Reading
-//!   only the changed rows needs per-row change records (follow-up).
+//! - current container changes and a single demotion use bounded projections and keyed rows;
+//!   history edits or multiple demotions re-derive run and plan review documents from rows.
+//!   The feed names families, not rows, so history edits still require that fallback.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
@@ -199,18 +198,29 @@ fn task(
     {
         current_records(ident, &head, documents, records);
         // A run demoted since the cursor keeps its last state: only it, the run before the
-        // current one, is re-derived with its children.
+        // current one, and its last child can have changed.
         if changed.demoted
             && let Some(previous) = corral_core::TaskRef::previous_run_head(&head)?
         {
             documents.remove(&format!("{id}:{}:summary", previous.id));
             documents.remove(&format!("{id}:{}:review", previous.id));
             run_records(ident, &previous, &previous.id, records);
-            for (i, child) in head.review_children(&previous.id)?.iter().enumerate() {
+            // Older child summaries use the task timestamp, just as re-derivation does;
+            // review documents instead use the review's own timestamp.
+            let prefix = format!("{id}:{}:reviewer:", previous.id);
+            for (key, document) in documents.iter_mut() {
+                if key.starts_with(&prefix) && key.ends_with(":summary") {
+                    document.updated = fields.updated;
+                }
+            }
+            // Older children cannot change without a history edit (handled below).
+            // Only the last child can have changed while this run was current.
+            if let Some(child) = head.latest_review_child(&previous.id)? {
+                let i = previous.facts.children.saturating_sub(1);
                 let key = format!("{}:reviewer:{i}", previous.id);
                 documents.remove(&format!("{id}:{key}:summary"));
                 documents.remove(&format!("{id}:{key}:review"));
-                run_records(ident, child, &key, records);
+                run_records(ident, &child, &key, records);
             }
         }
     } else if [
