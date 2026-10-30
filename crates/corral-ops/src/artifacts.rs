@@ -52,7 +52,7 @@ pub fn add_artifact(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Target::Current, path, kind, title, None).map(|(a, _)| a)
+    add_artifact_inner(ctx, id, Target::Current, path, kind, title, None, None).map(|(a, _)| a)
 }
 
 /// Which run an artifact attaches to.
@@ -75,7 +75,7 @@ pub(crate) fn add_artifact_to_run(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Target::Named(run), path, kind, title, None).map(|(a, _)| a)
+    add_artifact_inner(ctx, id, Target::Named(run), path, kind, title, None, None).map(|(a, _)| a)
 }
 
 /// The Pi-native `artifact` op: attaches to the requester's run (a reviewer's parent run)
@@ -94,7 +94,7 @@ pub fn add_artifact_request(
         .as_deref()
         .map_or(Target::Current, Target::Expected);
     effects::swept(ctx, origin, effects::Home::of(origin), || {
-        add_artifact_inner(ctx, id, run, path, kind, title, Some(origin)).map(|(_, r)| r)
+        add_artifact_inner(ctx, id, run, path, kind, title, Some(origin), None).map(|(_, r)| r)
     })
 }
 
@@ -106,9 +106,42 @@ pub(crate) fn add_artifact_for_run(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Target::Expected(run), path, kind, title, None).map(|(a, _)| a)
+    add_artifact_inner(
+        ctx,
+        id,
+        Target::Expected(run),
+        path,
+        kind,
+        title,
+        None,
+        None,
+    )
+    .map(|(a, _)| a)
 }
 
+/// Attach an already frozen transcript while preserving its original source path.
+pub(crate) fn add_transcript_bytes(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    path: &Path,
+    bytes: &[u8],
+    title: &str,
+) -> Result<Artifact> {
+    add_artifact_inner(
+        ctx,
+        id,
+        Target::Named(run),
+        path,
+        Some(ArtifactKind::Log),
+        Some(title),
+        None,
+        Some(bytes),
+    )
+    .map(|(a, _)| a)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn add_artifact_inner(
     ctx: &Ctx,
     id: &str,
@@ -117,6 +150,7 @@ fn add_artifact_inner(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
     origin: Option<&RequestOrigin>,
+    frozen: Option<&[u8]>,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
     let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
@@ -132,7 +166,14 @@ fn add_artifact_inner(
             meta.len()
         );
     }
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = match frozen {
+        Some(bytes) => bytes.to_vec(),
+        None => std::fs::read(path).with_context(|| format!("reading {}", path.display()))?,
+    };
+    anyhow::ensure!(
+        u64::try_from(bytes.len())? <= max,
+        "artifact exceeds max_bytes {max}"
+    );
     let sha = sha256_hex(&bytes);
     let file_name = path
         .file_name()

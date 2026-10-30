@@ -190,6 +190,16 @@ fn f5_a_headless_sync_runs_the_lifecycle_pass() {
 /// A Done task with a main and a nested review transcript in its sessions directory.
 fn terminal_sessions(fx: &Fx) -> (String, PathBuf, PathBuf) {
     let (id, _) = fx.finished(Status::Running);
+    fx.ctx
+        .store
+        .update(&id, |t| {
+            let mut child = t.runs[0].clone();
+            child.id = "R1-review1".into();
+            child.review_runs.clear();
+            t.runs[0].review_runs.push(child);
+            Ok(())
+        })
+        .unwrap();
     let sessions = fx.ctx.store.dir().join("agent/sessions").join(&id);
     std::fs::create_dir_all(sessions.join("R1/R1-review1")).unwrap();
     let main = sessions.join("R1/session.jsonl");

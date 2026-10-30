@@ -62,6 +62,7 @@ struct Entry {
     artifact: Artifact,
     identity: Option<String>,
     len: u64,
+    transcript: bool,
 }
 
 fn identity(meta: &fs::Metadata, path: &str) -> String {
@@ -109,6 +110,7 @@ fn entries(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Entry>> {
             };
             entries.push(Entry {
                 task_id: t.id.clone(),
+                transcript: !crate::transcripts::owners(ctx, &t.id, a)?.is_empty(),
                 artifact: a.clone(),
                 identity,
                 len,
@@ -217,6 +219,14 @@ enum Operation {
 
 /// Applies workspace-wide dedup before retention. Protected snapshots are never replaced or removed.
 pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
+    gc(ctx, dry_run, false)
+}
+
+pub(crate) fn transcript_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
+    gc(ctx, dry_run, true)
+}
+
+fn gc(ctx: &Ctx, dry_run: bool, transcripts_only: bool) -> Result<GcReport> {
     // A dry run must not even create a lock/state file.
     let _lock = if dry_run {
         None
@@ -234,7 +244,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     // Protected copies are preferred as canonical sources, but never destinations.
     let mut order: Vec<_> = (0..entries.len()).collect();
     order.sort_by_key(|&i| !protected.contains(&entries[i].artifact.path));
-    for i in order {
+    for i in order.into_iter().filter(|_| !transcripts_only) {
         let e = &entries[i];
         if e.identity.is_none() {
             continue;
@@ -273,7 +283,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     }
     for i in 0..entries.len() {
         let e = &entries[i];
-        if e.identity.is_none() || protected.contains(&e.artifact.path) {
+        if transcripts_only || e.identity.is_none() || protected.contains(&e.artifact.path) {
             continue;
         }
         let task = tasks
@@ -298,7 +308,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         match rule.action {
             RetentionAction::Keep => {}
             // Only transcript retention may purge a transcript (owner decision, plan section 10).
-            RetentionAction::Purge if is_transcript_in(ctx.store.dir(), &e.artifact) => {}
+            RetentionAction::Purge if e.transcript => {}
             RetentionAction::Purge => {
                 entries[i].identity = None;
                 entries[i].len = 0;
@@ -351,7 +361,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
                 .filter(|t| matches!(t.status, Status::Done | Status::Dropped))
                 .and_then(|t| finishes.get(&t.id));
             if entry.identity.is_none()
-                || !is_transcript_in(ctx.store.dir(), &entry.artifact)
+                || !entry.transcript
                 || protected.contains(&entry.artifact.path)
                 || kept.contains(entry.artifact.sha256.as_str())
                 || finished.is_none_or(|f| now.duration_since(f.at) <= retention)
@@ -376,7 +386,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
             fs::remove_dir_all(&cache).context("invalidating decoded artifact cache")?;
         }
         crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
-        if let GcRun::Done(report) = ctx.store.blob_gc(&clock)? {
+        if !transcripts_only && let GcRun::Done(report) = ctx.store.blob_gc(&clock)? {
             blobs_deleted = u64::try_from(report.deleted.len() + report.completed.len())?;
             blob_bytes_freed = report.freed_bytes;
         }
@@ -390,18 +400,6 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         blobs_deleted,
         blob_bytes_freed,
     })
-}
-
-/// Raw agent, reviewer and Pi-session transcripts: log snapshots whose file name carries a
-/// `transcript` segment (`<child>.transcript.log` from review capture), or whose source is a
-/// Pi session under `.corral/agent/sessions`. Titles never classify evidence.
-fn is_transcript_in(dir: &std::path::Path, a: &Artifact) -> bool {
-    let named = corral_core::snapshot_name(a)
-        .to_ascii_lowercase()
-        .split('.')
-        .any(|segment| segment == "transcript");
-    let session = std::path::Path::new(&a.source).starts_with(dir.join("agent").join("sessions"));
-    a.kind == corral_core::ArtifactKind::Log && (named || session)
 }
 
 fn action(e: &Entry, kind: &str) -> GcAction {

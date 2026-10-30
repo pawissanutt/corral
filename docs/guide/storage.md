@@ -534,7 +534,11 @@ files older than the grace period are adopted and removed.
 - **Transcripts** follow `[storage] transcript_retention_days`. Absent means keep forever. With a
   value, raw agent, reviewer and Pi-session transcripts are purged that many days after the task
   became Done or Dropped, unless pinned or referenced by a keep-tier artifact; a stub row remains.
-  Reopening a task resets eligibility.
+  Reopening a task resets eligibility. Run-end capture promotes raw worker transcripts and retained
+  Pi sessions to blob-backed artifacts without deleting provider-owned files. Reviewer captures
+  record their child-run owner. Retention uses explicit task/run/content ownership, never filenames
+  or titles; generic artifact purge cannot purge owned transcripts. Both `corral storage gc --dry-run`
+  and `corral storage gc --yes` include this transcript pass (as does `artifact gc`).
 - **Finished worktrees** follow [cleanup](cleanup.md#finished-worktrees-at-sync).
 - **The cache root** can be deleted at any time; only timing changes.
 

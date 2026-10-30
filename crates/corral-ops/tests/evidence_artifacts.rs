@@ -47,6 +47,47 @@ impl Fixture {
         add_artifact(&self.ctx, task, &path, Some(kind), None).unwrap()
     }
 
+    fn session(&self, task: &str, name: &str, bytes: &[u8]) -> Artifact {
+        self.ctx
+            .store
+            .update(task, |t| {
+                if t.runs.is_empty() {
+                    t.runs.push(
+                        serde_json::from_value(json!({
+                            "id":"R1", "agent":"pi-native", "harness":"pi-native",
+                            "worktree":"/fixture", "branch":"test", "base":"main", "base_sha":"abc",
+                            "started":"2026-09-01T00:00:00Z"
+                        }))
+                        .unwrap(),
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        let dir = self
+            .ctx
+            .store
+            .dir()
+            .join("agent/sessions")
+            .join(task)
+            .join("R1");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(name), bytes).unwrap();
+        // Use the lifecycle's closed-container view; the caller may then model reopening.
+        let mut closed = self.ctx.store.get(task).unwrap();
+        closed.status = Status::Done;
+        corral_ops::agent::hooks::cleanup::run_end(&self.ctx, &closed).unwrap();
+        let sha = corral_core::agent::paths::sha256_hex(bytes);
+        self.ctx
+            .store
+            .get(task)
+            .unwrap()
+            .artifacts
+            .into_iter()
+            .find(|a| a.sha256 == sha)
+            .unwrap()
+    }
+
     fn current(&self, task: &str, a: &Artifact) -> Artifact {
         let task = self.ctx.store.get(task).unwrap();
         task.artifacts
@@ -197,35 +238,20 @@ fn gc_purges_rows_to_stubs_and_blob_gc_frees_bytes_only_after_the_horizon() {
 
 fn transcripts(f: &Fixture) -> (String, String, [Artifact; 3], Artifact) {
     let done = f.task(Status::Done);
-    let plain = f.add(
-        &done,
-        "R1-r1.transcript.log",
-        b"raw reviewer transcript",
-        ArtifactKind::Log,
-    );
-    let pinned = f.add(
-        &done,
-        "agent.transcript.log",
-        b"pinned agent transcript",
-        ArtifactKind::Log,
-    );
+    let plain = f.session(&done, "ordinary.jsonl", b"raw Pi transcript");
+    let pinned = f.session(&done, "pinned.jsonl", b"pinned agent transcript");
     f.ctx
         .store
         .pin(&Fixture::reference(&done, &pinned), None, false)
         .unwrap();
     let shared = b"pi session transcript kept by a report";
-    let kept = f.add(&done, "session.transcript.jsonl", shared, ArtifactKind::Log);
+    let kept = f.session(&done, "shared.jsonl", shared);
     // A keep-tier report elsewhere holds the same blob.
     let reporter = f.task(Status::Ready);
     f.add(&reporter, "session-report.md", shared, ArtifactKind::Report);
     f.finish_days_ago(&done, 40);
     let reopened = f.task(Status::Done);
-    let open = f.add(
-        &reopened,
-        "R2.transcript.log",
-        b"reopened transcript",
-        ArtifactKind::Log,
-    );
+    let open = f.session(&reopened, "reopened.jsonl", b"reopened transcript");
     f.finish_days_ago(&reopened, 40);
     f.ctx
         .store
@@ -499,9 +525,8 @@ fn generic_purge_never_purges_transcripts_and_transcript_retention_decides_alone
         let transcripts: Vec<_> = [&open, &recent, &dropped]
             .into_iter()
             .map(|task| {
-                let name = "R1-r1.transcript.log";
                 let bytes = format!("{task} transcript");
-                (task, f.add(task, name, bytes.as_bytes(), ArtifactKind::Log))
+                (task, f.session(task, "ordinary.jsonl", bytes.as_bytes()))
             })
             .collect();
         let plain = f.add(&recent, "run.log", b"plain log", ArtifactKind::Log);

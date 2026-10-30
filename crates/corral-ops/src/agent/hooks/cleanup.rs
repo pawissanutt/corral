@@ -1,6 +1,7 @@
 //! Run-end cleanup seam (integration-seams; recovery reclassifies sessions on discard). A
 //! terminal worker run or closed review child loses only its runtime directory; its
-//! `.corral/agent/sessions/` stay as a terminal transcript. A lost (resumable) run or an open
+//! `.corral/agent/sessions/` stay, promoted to owned blob-backed transcripts first. A lost
+//! (resumable) run or an open
 //! review child keeps both.
 use std::path::{Path, PathBuf};
 
@@ -48,13 +49,14 @@ fn ended(task: &Task) -> Vec<Recipient> {
     out
 }
 
-/// Removes the runtime directory of every ended pi-native container; returns what it removed.
+/// Promotes ended containers' transcripts, then removes ended Pi runtimes (not sessions).
 pub fn run_end(ctx: &Ctx, task: &Task) -> Result<Vec<PathBuf>> {
     run_end_in(ctx, task, &super::super::launch::runtime_root())
 }
 
 /// `run_end` under an explicit runtime root.
 pub fn run_end_in(ctx: &Ctx, task: &Task, root: &Path) -> Result<Vec<PathBuf>> {
+    crate::transcripts::run_end(ctx, task)?;
     let mut removed = Vec::new();
     for recipient in ended(task) {
         consulted("cleanup");
