@@ -5,8 +5,12 @@ use anyhow::{Context, Result, ensure};
 use corral_core::{OperatingPreview, OperatingSelection, Store};
 
 /// Whether this process runs in an agent or assistant shell (`AI_AGENT`, `PI_CODING_AGENT` or
-/// `CORRAL_ASSISTANT`). Owner guards refuse every such entry, whatever attribution flags say.
+/// `CORRAL_ASSISTANT`). Owner guards refuse every such entry, whatever attribution flags say,
+/// unless the process claimed a receipted owner action (`OwnerAuthority::ViaAssistant`).
 pub fn agent_entry() -> bool {
+    if owner_action_claimed() {
+        return false;
+    }
     ["AI_AGENT", "PI_CODING_AGENT", "CORRAL_ASSISTANT"]
         .iter()
         .any(|key| std::env::var_os(key).is_some())
@@ -16,9 +20,16 @@ pub fn agent_entry() -> bool {
 /// Like other local owner controls, this trusts the owner's OS session, not a CLI flag.
 pub fn require_automation_owner(store: &Store) -> Result<()> {
     let agent = agent_entry();
-    let pm = std::env::var("CORRAL_PM").as_deref() == Ok("1");
+    let pm = !owner_action_claimed() && std::env::var("CORRAL_PM").as_deref() == Ok("1");
     let cwd = std::env::current_dir().context("reading automation control directory")?;
     require_owner_entry(store, &cwd, agent, pm)
+}
+
+fn owner_action_claimed() -> bool {
+    matches!(
+        crate::assistant::owner_action::authority(),
+        crate::assistant::owner_action::OwnerAuthority::ViaAssistant(_)
+    )
 }
 
 pub(crate) fn require_owner_entry(store: &Store, cwd: &Path, agent: bool, pm: bool) -> Result<()> {

@@ -1,0 +1,504 @@
+//! owner-authority (T-544 C3, confirm-class table): every owner-action kind is one real corral
+//! command with flags that command takes, and an owner action's command child acts for the
+//! owner via its assistant: attributed and carrying the owner message, past the owner guards,
+//! exactly once, and only as the direct child of the reserving executor.
+use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
+
+use std::io::Write;
+
+use corral_core::Store;
+use corral_core::agent::{RequestReceipt, paths};
+use corral_core::assistant::{NewOwnerInput, OwnerInputSource};
+use corral_ops::agent::{BindTarget, open_generation, payload_sha256, tool_request_id};
+use corral_ops::assistant::owner_action::kinds::{self, Class, KINDS, Target};
+use serde_json::{Value, json};
+
+struct Fixture {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+    home: PathBuf,
+}
+
+impl Fixture {
+    /// A workspace with project `corral`, Backlog task T-001 and assistant session A-1.
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        let fx = Self {
+            _dir: dir,
+            root,
+            home,
+        };
+        fx.ok(&["init"], &[]);
+        let config = fx.root.join(".corral/corral.toml");
+        let mut text = std::fs::read_to_string(&config).unwrap();
+        text.push_str("\n[projects.corral]\npath = '.'\n");
+        std::fs::write(&config, text).unwrap();
+        fx.ok(&["new", "Existing task", "-p", "corral"], &[]);
+        fx.ok(&["assistant", "create"], &[]);
+        fx
+    }
+
+    /// `corral <args>` at the workspace root with a cleared environment plus `env`.
+    fn command(&self, program: &str, args: &[&str], env: &[(&str, &str)]) -> Command {
+        let mut cmd = Command::new(program);
+        cmd.env_clear()
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.home.join("bin").display()),
+            )
+            .env("HOME", &self.home)
+            .env("XDG_CONFIG_HOME", self.home.join("config"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("XDG_STATE_HOME", self.home.join("state"))
+            .env("XDG_CACHE_HOME", self.home.join("cache"))
+            .env("HERDR_BIN_PATH", "/nonexistent/herdr")
+            .envs(env.iter().copied())
+            .args(args)
+            .current_dir(&self.root)
+            .stdin(Stdio::null());
+        cmd
+    }
+
+    fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let corral = env!("CARGO_BIN_EXE_corral");
+        self.command(corral, args, env).output().unwrap()
+    }
+
+    fn ok(&self, args: &[&str], env: &[(&str, &str)]) -> String {
+        let out = self.run(args, env);
+        assert!(out.status.success(), "{args:?}: {}", text(&out));
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn store(&self) -> Store {
+        Store::open(&self.root).unwrap()
+    }
+
+    fn status(&self) -> String {
+        let shown: Value =
+            serde_json::from_str(&self.ok(&["show", "T-001", "--json"], &[])).unwrap();
+        shown["status"].as_str().unwrap().to_owned()
+    }
+
+    /// The owner typed `text` into A-1's pane; returns its journal ID.
+    fn journal(&self, text: &str) -> String {
+        let input = NewOwnerInput {
+            generation: 1,
+            turn: None,
+            source: OwnerInputSource::Pane,
+            sha256: paths::sha256_hex(text.as_bytes()),
+            text: text.into(),
+            truncated: false,
+            command: None,
+            request: "ev-1-1".into(),
+        };
+        let store = self.store();
+        store
+            .update_assistant_container("A-1", |container| {
+                Ok(container.journal_owner_input("A-1", input).id)
+            })
+            .unwrap()
+    }
+
+    /// A reservation of `argv` citing `input`, held by this test process as its executor.
+    fn reserve(&self, request: &str, argv: &[&str], input: &str) {
+        let store = self.store();
+        let executor = corral_ops::agent::effects::executor().unwrap();
+        let receipt: RequestReceipt = serde_json::from_value(json!({
+            "version": 1, "request_id": request, "op": "owner_action", "payload_sha256": "00",
+            "identity": {"store": paths::store_id(&store), "project": "", "role": "assistant",
+                "assistant": "A-1", "session_id": "s", "generation": 1},
+            "state": "reserved", "executor": executor, "at": "2026-10-30T00:00:00Z",
+            "result": {"kind": argv[0], "argv": argv, "input": input, "sha256": "ab",
+                "confirmed": false, "outcome": "reserved"},
+        }))
+        .unwrap();
+        store
+            .update_assistant_container("A-1", |container| {
+                container.state.receipts.push(receipt);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn events(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.root.join(".corral/events.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
+fn text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+#[test]
+fn every_owner_action_kind_is_a_real_command_with_its_flags_and_a_fixed_class() {
+    let fx = Fixture::new();
+    for spec in &KINDS {
+        let choices: &[&str] = match spec.target {
+            Target::Choice(choices) => choices,
+            Target::Task | Target::Key => &[""],
+        };
+        let mut help = String::new();
+        for choice in choices {
+            let mut args: Vec<&str> = spec.words.to_vec();
+            args.extend((!choice.is_empty()).then_some(*choice));
+            args.push("--help");
+            help.push_str(&fx.ok(&args, &[]));
+        }
+        let revision = spec.revision.then_some(("--expected-revision", true));
+        for (flag, _) in spec.flags.iter().copied().chain(revision) {
+            assert!(help.contains(flag), "{} lacks {flag}:\n{help}", spec.kind);
+        }
+    }
+    let class = |kind: &str, target: &str, args: &[&str]| {
+        let args: Vec<String> = args.iter().map(|a| (*a).to_owned()).collect();
+        kinds::resolve(kind, Some(target), &args, None).unwrap()
+    };
+    for (kind, target, args, expected, command) in [
+        (
+            "move",
+            "T-003",
+            &["dropped"][..],
+            Class::Confirm,
+            "corral move T-003 dropped",
+        ),
+        (
+            "move",
+            "T-003",
+            &["ready", "--force"],
+            Class::Confirm,
+            "corral move T-003 ready --force",
+        ),
+        (
+            "discard",
+            "T-003",
+            &[],
+            Class::Confirm,
+            "corral discard T-003",
+        ),
+        (
+            "discard",
+            "T-003",
+            &["--keep-branch"],
+            Class::Confirm,
+            "corral discard T-003 --keep-branch",
+        ),
+        (
+            "config_set",
+            "limits.running",
+            &["3"],
+            Class::Confirm,
+            "corral config set limits.running 3",
+        ),
+        (
+            "mode",
+            "autopilot",
+            &["--confirm", "pv-1"],
+            Class::Confirm,
+            "corral mode autopilot --confirm pv-1",
+        ),
+        (
+            "approve",
+            "T-005",
+            &[],
+            Class::Ordinary,
+            "corral approve T-005",
+        ),
+        (
+            "dispatch",
+            "T-009",
+            &[],
+            Class::Ordinary,
+            "corral dispatch T-009",
+        ),
+        (
+            "queue",
+            "T-009",
+            &[],
+            Class::Ordinary,
+            "corral queue add T-009",
+        ),
+        (
+            "move",
+            "T-003",
+            &["review"],
+            Class::Ordinary,
+            "corral move T-003 review",
+        ),
+        (
+            "verdict",
+            "T-005",
+            &["approve", "--notes", "ok"],
+            Class::Ordinary,
+            "corral verdict T-005 approve --notes ok",
+        ),
+        (
+            "review_run",
+            "T-005",
+            &[],
+            Class::Ordinary,
+            "corral review-run T-005",
+        ),
+        (
+            "plan_accept",
+            "T-007",
+            &["--attempt", "pa-1"],
+            Class::Ordinary,
+            "corral plan accept T-007 --attempt pa-1",
+        ),
+    ] {
+        let action = class(kind, target, args);
+        assert_eq!(
+            (action.class, action.command.as_str()),
+            (expected, command),
+            "{kind} {args:?}"
+        );
+    }
+}
+
+#[test]
+fn an_owner_action_child_acts_for_the_owner_via_its_assistant_exactly_once() {
+    // Given A-1 journaled the owner's instruction, and its shell may not move tasks itself.
+    let fx = Fixture::new();
+    let message = "move T-001 to ready please";
+    let input = fx.journal(message);
+    let shell = fx.run(&["move", "T-001", "ready"], &[("CORRAL_ASSISTANT", "A-1")]);
+    assert_eq!(shell.status.code(), Some(2), "{}", text(&shell));
+    assert!(text(&shell).contains("assistant_refused"));
+    // When the reserving executor (this test) runs the reserved command as its direct child.
+    fx.reserve("rq-move", &["move", "T-001", "ready"], &input);
+    let env = [
+        ("CORRAL_ASSISTANT", "A-1"),
+        ("CORRAL_OWNER_ACTION", "A-1:rq-move"),
+    ];
+    fx.ok(&["move", "T-001", "ready"], &env);
+    // Then the task moved, and its events name the owner via A-1 and carry the owner message.
+    assert_eq!(fx.status(), "ready");
+    let events: Vec<Value> = fx
+        .events()
+        .into_iter()
+        .filter(|event| event["detail"]["owner_authority"].is_object())
+        .collect();
+    assert!(!events.is_empty());
+    for event in &events {
+        assert_eq!(
+            (event["actor"].as_str(), event["via"].as_str()),
+            (Some("owner"), Some("assistant:A-1"))
+        );
+        let authority = &event["detail"]["owner_authority"];
+        assert_eq!(authority["owner_message"], message);
+        assert_eq!(authority["input"], input.as_str());
+        assert_eq!(authority["session"], "A-1");
+        assert_eq!(authority["generation"], 1);
+        assert_eq!(authority["request"], "rq-move");
+    }
+    // And the same reservation never runs a second command.
+    let again = fx.run(&["move", "T-001", "ready"], &env);
+    assert!(
+        text(&again).contains("owner_action_unclaimed"),
+        "{}",
+        text(&again)
+    );
+    // A process the command started in turn (here through a shell) is not the claimed child:
+    // it is the assistant's shell again and is refused.
+    fx.reserve("rq-back", &["move", "T-001", "backlog"], &input);
+    let corral = env!("CARGO_BIN_EXE_corral");
+    let nested = fx
+        .command(
+            "sh",
+            &["-c", &format!("'{corral}' move T-001 backlog; exit $?")],
+            &[
+                ("CORRAL_ASSISTANT", "A-1"),
+                ("CORRAL_OWNER_ACTION", "A-1:rq-back"),
+            ],
+        )
+        .output()
+        .unwrap();
+    assert_eq!(nested.status.code(), Some(2), "{}", text(&nested));
+    assert_eq!(fx.status(), "ready");
+    // And an owner guard that refuses every assistant shell accepts a claimed owner action.
+    fx.reserve("rq-mode", &["mode", "assist"], &input);
+    let refused = fx.run(&["mode", "assist"], &[("CORRAL_ASSISTANT", "A-1")]);
+    assert_eq!(refused.status.code(), Some(2), "{}", text(&refused));
+    fx.ok(
+        &["mode", "assist"],
+        &[
+            ("CORRAL_ASSISTANT", "A-1"),
+            ("CORRAL_OWNER_ACTION", "A-1:rq-mode"),
+        ],
+    );
+}
+
+/// A-1's host as corral sees it: generation 1 bound by hello, and its `corral agent call`s.
+struct Host<'a> {
+    fx: &'a Fixture,
+    identity: Value,
+    seq: u64,
+}
+
+impl<'a> Host<'a> {
+    fn bind(fx: &'a Fixture) -> Self {
+        let store = fx.store();
+        let target = BindTarget::Assistant {
+            session: "A-1".into(),
+        };
+        let grant = open_generation(&store, &target, "p1").unwrap();
+        let identity = json!({"store": paths::store_id(&store), "project": "", "role": "assistant",
+            "assistant": "A-1", "session_id": "s", "generation": grant.generation});
+        let mut host = Self {
+            fx,
+            identity,
+            seq: 0,
+        };
+        let me = corral_ops::agent::effects::executor().unwrap();
+        let sessions = paths::container_sessions_dir(&store, &grant.container);
+        let hello = json!({"ctl_cap_sha256": paths::sha256_hex("c".repeat(64).as_bytes()),
+            "session_file": sessions.join("s.jsonl"), "pid": me.pid, "start_time": me.start_time,
+            "pane": "p1"});
+        let bound = host.call("hello", "ev-1-0", hello, Some(&grant.bind_nonce));
+        assert_eq!(bound["state"], "committed", "{bound}");
+        host
+    }
+
+    fn call(&mut self, op: &str, request: &str, payload: Value, nonce: Option<&str>) -> Value {
+        let mut auth = json!({"host_cap": "h".repeat(64)});
+        if let Some(nonce) = nonce {
+            auth["bind_nonce"] = json!(nonce);
+        }
+        let envelope = json!({"version": 1, "op": op, "request_id": request,
+            "payload_sha256": payload_sha256(&payload), "identity": self.identity, "auth": auth,
+            "payload": payload});
+        let corral = env!("CARGO_BIN_EXE_corral");
+        let mut child = self
+            .fx
+            .command(
+                corral,
+                &["agent", "call", "--op", op],
+                &[("CORRAL_ASSISTANT", "A-1")],
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(envelope.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{op}: {}", text(&out));
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
+
+    /// The owner typed `text` (or answered a confirmation of `command`) in the pane.
+    fn journal(&mut self, text: &str, command: Option<&str>) -> String {
+        self.seq += 1;
+        let source = if command.is_some() {
+            "confirmation"
+        } else {
+            "pane"
+        };
+        let mut payload = json!({"kind": "owner_input", "source": source, "text": text,
+            "sha256": paths::sha256_hex(text.as_bytes())});
+        if let Some(command) = command {
+            payload["command"] = json!(command);
+        }
+        let request = format!("ev-1-{}", self.seq);
+        let receipt = self.call("event", &request, payload, None);
+        receipt["result"]["input"].as_str().unwrap().to_owned()
+    }
+
+    /// `corral_owner_action` for the model's tool call `call`.
+    fn act(&mut self, call: &str, payload: Value) -> Value {
+        let request = tool_request_id("s", call);
+        self.call("owner_action", &request, payload, None)
+    }
+}
+
+#[test]
+fn owner_actions_run_through_the_real_agent_call_and_child_once() {
+    // Given A-1 bound by hello, and the owner's "do it" after it proposed moving T-001 to Ready.
+    let fx = Fixture::new();
+    let mut host = Host::bind(&fx);
+    let input = host.journal("do it", None);
+    assert_eq!(input, "A-1/g1/i1");
+    // When the model cites a PM outcome notice, nothing runs; citing "do it" moves the task once.
+    let wake = host.act(
+        "rq-wake",
+        json!({"kind": "move", "target": "T-001", "args": ["ready"],
+        "input": "pmi:PMI-1:2"}),
+    );
+    assert_eq!(wake["result"]["code"], "not_owner_input", "{wake}");
+    assert_eq!(fx.status(), "backlog");
+    let payload = json!({"kind": "move", "target": "T-001", "args": ["ready"], "input": input});
+    let moved = host.act("rq-move", payload.clone());
+    assert_eq!(
+        (moved["state"].as_str(), moved["result"]["outcome"].as_str()),
+        (Some("committed"), Some("executed")),
+        "{moved}"
+    );
+    assert_eq!(fx.status(), "ready");
+    let carried: Vec<Value> = fx
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event["detail"]["owner_authority"]["request"] == tool_request_id("s", "rq-move")
+        })
+        .collect();
+    assert!(!carried.is_empty());
+    for event in &carried {
+        assert_eq!(
+            (event["actor"].as_str(), event["via"].as_str()),
+            (Some("owner"), Some("assistant:A-1"))
+        );
+        assert_eq!(event["detail"]["owner_authority"]["owner_message"], "do it");
+    }
+    // And a replay returns the first receipt without a second effect.
+    let replay = host.act("rq-move", payload);
+    assert_eq!(replay["replayed"], true);
+    assert_eq!(replay["committed_at"], moved["committed_at"]);
+    let after: Vec<Value> = fx
+        .events()
+        .into_iter()
+        .filter(|event| {
+            event["detail"]["owner_authority"]["request"] == tool_request_id("s", "rq-move")
+        })
+        .collect();
+    assert_eq!(after.len(), carried.len());
+    // When the owner says to set limits.running to 3, the host must first show the command.
+    let set = host.journal("set limits.running to 3", None);
+    let config =
+        json!({"kind": "config_set", "target": "limits.running", "args": ["3"], "input": set});
+    let asked = host.act("rq-ask", config.clone());
+    assert_eq!(asked["result"]["code"], "confirmation_required");
+    let command = asked["result"]["command"].as_str().unwrap().to_owned();
+    assert_eq!(command, "corral config set limits.running 3");
+    let toml = || std::fs::read_to_string(fx.root.join(".corral/corral.toml")).unwrap();
+    let before = toml();
+    // N records a declined receipt and leaves corral.toml unchanged; y sets it once.
+    let mut no = config.clone();
+    no["confirmation"] = json!(host.journal("n", Some(&command)));
+    let declined = host.act("rq-no", no);
+    assert_eq!(declined["result"]["outcome"], "declined", "{declined}");
+    assert_eq!(toml(), before);
+    let mut yes = config;
+    yes["confirmation"] = json!(host.journal("y", Some(&command)));
+    let done = host.act("rq-yes", yes);
+    assert_eq!(done["result"]["outcome"], "executed", "{done}");
+    assert_eq!(fx.ok(&["config", "get", "limits.running"], &[]).trim(), "3");
+}

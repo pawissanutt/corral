@@ -130,6 +130,9 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
     if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("auxiliary") {
         return super::auxiliary::auxiliary(ctx, envelope);
     }
+    if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("owner_input") {
+        return super::owner_input::journal(ctx, envelope);
+    }
     let payload: EventPayload = super::payload(
         envelope,
         "kind, turn, origin?, class?, owner_input?, cancelled?",

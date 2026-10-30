@@ -111,7 +111,9 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
             BindTarget::Planner { .. } | BindTarget::PlanReviewer { .. } => {
                 json!(["hello", "event", "receipt_lookup"])
             }
-            BindTarget::Assistant { .. } => json!(["hello", "event", "receipt_lookup", "todo"]),
+            BindTarget::Assistant { .. } => {
+                json!(["hello", "event", "receipt_lookup", "todo", "owner_action"])
+            }
             BindTarget::Pm { .. } => json!([
                 "hello",
                 "event",

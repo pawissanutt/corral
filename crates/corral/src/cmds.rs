@@ -344,15 +344,18 @@ pub fn run(cli: Cli, matches: &clap::ArgMatches) -> Result<()> {
         session: None,
         yes: false,
     });
-    let entry = crate::entry::Entry::new(&cmd, matches)?;
+    let entry = crate::entry::Entry::new(&cmd, matches, &start_dir(&root)?)?;
     let open = |root: &Option<PathBuf>| entry.open(&start_dir(root)?);
     match cmd {
         Cmd::Mode(args) => crate::mode_cmd::run(open(&root)?, args),
         Cmd::Inbox(args) => crate::inbox_cmd::run(&open(&root)?.store, args),
         Cmd::Attention(args) => {
             let root = corral_core::Store::find_root(&start_dir(&root)?)?;
-            let ctx = Ctx::from_store(corral_core::Store::open_unobserved(&root)?);
-            crate::attention_cmd::run(&ctx, args)
+            let store = corral_core::Store::open_unobserved(&root)?;
+            if entry.owner_action() {
+                entry.apply(&store)?;
+            }
+            crate::attention_cmd::run(&Ctx::from_store(store), args)
         }
         Cmd::Agent(args) => crate::agent_cmd::run(&start_dir(&root)?, args, &entry),
         Cmd::Pi(args) => crate::pi_cmd::run(&start_dir(&root)?, args, &entry),

@@ -11,6 +11,10 @@ use crate::agent::{
 use crate::{Store, Usage, store::atomic_write};
 
 pub const ASSISTANT_VERSION: u32 = 1;
+/// Owner inputs a container keeps; older ones leave the journal and can no longer be cited.
+pub const OWNER_INPUTS_MAX: usize = 64;
+/// Bytes of one journaled owner input's text; a longer input keeps its full digest.
+pub const OWNER_INPUT_TEXT_MAX: usize = 16 * 1024;
 
 /// `[assistant]`: launch defaults. `max_live` is soft: `corral pi --over-cap` opens one more.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +94,93 @@ pub struct AssistantContainer {
     pub herdr_socket: Option<PathBuf>,
     pub workspace: PathBuf,
     pub state: AgentRunState,
+    /// The owner-input journal, oldest first: the only inputs an owner action may cite.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub owner_inputs: Vec<OwnerInput>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerInputSource {
+    /// Typed into the session's pane by the owner (Pi input source `interactive`).
+    Pane,
+    /// The owner's answer to an owner-action confirmation the host rendered.
+    Confirmation,
+}
+
+/// OwnerInput journal entry v1. Only the assistant host's `event` op writes one, before the
+/// text reaches the model; corral wakes, inbox deliveries, PM outcomes and recovery notices
+/// never become one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerInput {
+    /// `A-<n>/g<generation>/i<seq>`.
+    pub id: String,
+    pub generation: u32,
+    pub seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
+    pub source: OwnerInputSource,
+    /// SHA-256 of the complete input; `text` keeps at most `OWNER_INPUT_TEXT_MAX` bytes of it.
+    pub sha256: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+    /// Confirmations only: the exact command line the host showed the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The host's `event` request that journaled it.
+    pub request: String,
+    pub at: Timestamp,
+}
+
+/// What a host journals; the container assigns its ID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewOwnerInput {
+    pub generation: u32,
+    pub turn: Option<u64>,
+    pub source: OwnerInputSource,
+    pub sha256: String,
+    pub text: String,
+    pub truncated: bool,
+    pub command: Option<String>,
+    pub request: String,
+}
+
+impl AssistantContainer {
+    pub fn owner_input(&self, id: &str) -> Option<&OwnerInput> {
+        self.owner_inputs.iter().find(|input| input.id == id)
+    }
+
+    /// Journals `input` as session `session`'s next `i<seq>` of its generation, dropping the
+    /// oldest entries beyond `OWNER_INPUTS_MAX`. The newest entry is never the one dropped, so
+    /// sequence numbers never repeat within a generation.
+    pub fn journal_owner_input(&mut self, session: &str, input: NewOwnerInput) -> OwnerInput {
+        let seq = self
+            .owner_inputs
+            .iter()
+            .filter(|entry| entry.generation == input.generation)
+            .map(|entry| entry.seq)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let entry = OwnerInput {
+            id: format!("{session}/g{}/i{seq}", input.generation),
+            generation: input.generation,
+            seq,
+            turn: input.turn,
+            source: input.source,
+            sha256: input.sha256,
+            text: input.text,
+            truncated: input.truncated,
+            command: input.command,
+            request: input.request,
+            at: Timestamp::now(),
+        };
+        self.owner_inputs.push(entry.clone());
+        let excess = self.owner_inputs.len().saturating_sub(OWNER_INPUTS_MAX);
+        self.owner_inputs.drain(..excess);
+        entry
+    }
 }
 
 pub fn validate_id(id: &str) -> Result<()> {
@@ -207,6 +298,7 @@ impl Store {
                 callback: None,
                 closing: false,
             }),
+            owner_inputs: Vec::new(),
         };
         self.write_assistant_container(&session.id, &container)?;
         self.write_assistant(&session)?;

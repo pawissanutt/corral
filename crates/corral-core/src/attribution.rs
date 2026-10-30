@@ -33,6 +33,8 @@ struct Attribution {
 #[derive(Debug, Default)]
 pub(crate) struct AttributionContext {
     default: OnceLock<Attribution>,
+    /// One detail field every event of this store carries, such as an owner action's authority.
+    detail: OnceLock<(String, serde_json::Value)>,
 }
 
 struct Scope {
@@ -78,6 +80,18 @@ impl Store {
             .map_err(|_| anyhow!("store attribution default is already set"))
     }
 
+    /// Adds `key: value` to the detail of every event this Store and its clones log, unless an
+    /// event names that key itself: one process acting for one recorded authority.
+    ///
+    /// # Errors
+    /// Returns an error if the detail has already been set.
+    pub fn set_attribution_detail(&self, key: &str, value: serde_json::Value) -> Result<()> {
+        self.attribution
+            .detail
+            .set((key.to_owned(), value))
+            .map_err(|_| anyhow!("store attribution detail is already set"))
+    }
+
     /// Overrides the actor for operations on this thread, restoring it on drop.
     pub fn attribute(&self, actor: Actor) -> AttributionGuard {
         let scope = Rc::new(Scope {
@@ -92,8 +106,16 @@ impl Store {
         &self,
         task: Option<&str>,
         kind: &str,
-        detail: serde_json::Value,
+        mut detail: serde_json::Value,
     ) -> Result<Event> {
+        if let Some((key, value)) = self.attribution.detail.get() {
+            if detail.is_null() {
+                detail = serde_json::json!({});
+            }
+            if let Some(fields) = detail.as_object_mut() {
+                fields.entry(key.clone()).or_insert_with(|| value.clone());
+            }
+        }
         let default = self.attribution.default.get();
         let scoped = SCOPES.with(|scopes| {
             scopes

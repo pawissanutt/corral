@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{ArgMatches, parser::ValueSource};
 use corral_core::{Actor, Store};
 use corral_ops::Ctx;
+use corral_ops::assistant::owner_action::ViaAssistant;
 
 use crate::Cmd;
 use crate::pm_cmd::PmCmd;
@@ -31,10 +32,21 @@ pub struct Entry {
     actor: Option<Actor>,
     via: &'static str,
     assistant: Option<String>,
+    owner_action: Option<ViaAssistant>,
 }
 
 impl Entry {
-    pub fn new(cmd: &Cmd, matches: &ArgMatches) -> Result<Self> {
+    /// `start` locates the store only when this process is an owner action's command child,
+    /// which claims its reservation here, before the command runs.
+    pub fn new(cmd: &Cmd, matches: &ArgMatches, start: &Path) -> Result<Self> {
+        if let Some(via) = corral_ops::assistant::owner_action::claim_from_env(start)? {
+            return Ok(Self {
+                actor: Some(Actor::Owner),
+                via: "owner_action",
+                assistant: None,
+                owner_action: Some(via),
+            });
+        }
         if let Some(session) = std::env::var_os("CORRAL_ASSISTANT") {
             return Self::assistant(cmd, matches, session);
         }
@@ -72,6 +84,7 @@ impl Entry {
             actor,
             via,
             assistant: None,
+            owner_action: None,
         })
     }
 
@@ -89,7 +102,13 @@ impl Entry {
             actor: Some(Actor::Assistant),
             via: "assistant",
             assistant: Some(session),
+            owner_action: None,
         })
+    }
+
+    /// Whether this process executes an assistant's receipted owner action.
+    pub fn owner_action(&self) -> bool {
+        self.owner_action.is_some()
     }
 
     pub fn open(&self, start: &Path) -> Result<Ctx> {
@@ -106,10 +125,17 @@ impl Entry {
 
     pub fn apply(&self, store: &Store) -> Result<()> {
         let (actor, via) = self.resolve(store)?;
-        store.set_attribution(actor, &via)
+        store.set_attribution(actor, &via)?;
+        if let Some(authority) = &self.owner_action {
+            store.set_attribution_detail("owner_authority", serde_json::to_value(authority)?)?;
+        }
+        Ok(())
     }
 
     fn resolve(&self, store: &Store) -> Result<(Actor, String)> {
+        if let Some(authority) = &self.owner_action {
+            return Ok((Actor::Owner, format!("assistant:{}", authority.session)));
+        }
         if let Some(session) = &self.assistant {
             return Ok((Actor::Assistant, format!("assistant:{session}")));
         }
