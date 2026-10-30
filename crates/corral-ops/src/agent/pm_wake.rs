@@ -1,6 +1,7 @@
 //! The keyed PM wake outbox: one `question_wake` per question transition into the Pi-native PM
 //! inbox, reposted after a crash and deduplicated by key. Owner: T-252 child pm-role.
 use anyhow::{Context, Result, ensure};
+use corral_core::TaskRef;
 use corral_core::agent::{
     self, AgentPm, AgentQuestion, HostHealth, OutboxState, QuestionWakeRoute, pm_state,
 };
@@ -36,15 +37,18 @@ pub fn repost(ctx: &Ctx) -> Result<usize> {
     };
     let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
     let mut posted = 0;
-    for task in ctx.store.list()? {
+    for task in ctx.store.unfinished_native_heads()? {
         if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
             continue;
         }
-        for view in crate::questions::views(&task).into_iter().filter(|v| {
-            v.pending
-                && v.question.wake.route == QuestionWakeRoute::PmInbox
-                && v.question.wake.state == OutboxState::Pending
-        }) {
+        for view in crate::questions::recorded_pending_views_ref(&task)?
+            .into_iter()
+            .filter(|v| {
+                v.pending
+                    && v.question.wake.route == QuestionWakeRoute::PmInbox
+                    && v.question.wake.state == OutboxState::Pending
+            })
+        {
             posted += usize::from(post_one(ctx, &inbox, &pm, &view)?);
         }
     }
@@ -71,14 +75,16 @@ fn post_one(
     let Some(current_pm) = pm_state::load(&ctx.store)?.filter(healthy) else {
         return Ok(false);
     };
-    let task = ctx.store.get(&view.task)?;
+    let task = ctx.store.head(&view.task)?;
+    let container = crate::questions::QuestionKey::parse(&view.question.key)?.container;
+    let fresh = task.agent_question(&container, &view.question.key)?;
     if !same_pm(pm, &current_pm)
         || task.project.as_deref() != Some(current_pm.state.binding.project.as_str())
-        || !crate::questions::views(&task).iter().any(|fresh| {
-            fresh.pending
-                && fresh.question.key == view.question.key
-                && fresh.question.revision == view.question.revision
-                && fresh.question.wake == view.question.wake
+        || agent::container_closure_ref(&task, &container)?.is_some()
+        || !fresh.is_some_and(|question| {
+            question.recorded_pending()
+                && question.revision == view.question.revision
+                && question.wake == view.question.wake
         })
     {
         return Ok(false);
@@ -95,7 +101,7 @@ fn acknowledge(
     view: &crate::questions::QuestionView,
     message: &Message,
 ) -> Result<bool> {
-    let saved = ctx.store.try_update(&view.task, |task| {
+    let saved = ctx.store.try_update_head(&view.task, |task| {
         let Some(current_pm) = pm_state::load(&ctx.store)?.filter(healthy) else {
             return Ok(false);
         };
@@ -105,12 +111,10 @@ fn acknowledge(
             return Ok(false);
         }
         let container = crate::questions::QuestionKey::parse(&view.question.key)?.container;
-        if agent::container_closure(task, &container).is_some() {
+        if agent::container_closure_ref(task, &container)?.is_some() {
             return Ok(false);
         }
-        let Some(question) = agent::container_state_mut(task, &container)
-            .and_then(|s| s.questions.iter_mut().find(|q| q.key == view.question.key))
-        else {
+        let Some(mut question) = task.agent_question(&container, &view.question.key)? else {
             return Ok(false);
         };
         // A delayed snapshot cannot acknowledge a newer transition's outbox.
@@ -122,6 +126,7 @@ fn acknowledge(
         }
         question.wake.state = OutboxState::Posted;
         question.wake.message_id = Some(message.id.clone());
+        task.put_agent_record(&container, agent::NativeRecord::Question(question))?;
         Ok(true)
     })?;
     Ok(saved.is_some())
@@ -190,7 +195,7 @@ fn in_scope(ctx: &Ctx, message: &Message, project: &str) -> Result<bool> {
         .as_str()
         .context("question wake has no key")?;
     let parsed = crate::questions::QuestionKey::parse(key)?;
-    Ok(ctx.store.get(parsed.task())?.project.as_deref() == Some(project))
+    Ok(ctx.store.head(parsed.task())?.project.as_deref() == Some(project))
 }
 
 impl DeliveryAdapter for ScopedPm {
@@ -211,7 +216,7 @@ impl DeliveryAdapter for ScopedPm {
                 healthy(current) && same_pm(&self.0, current),
                 "PM binding changed"
             );
-            for message in inbox.messages()? {
+            for message in inbox.pending_messages()? {
                 if inbox
                     .receipt(message.seq, ReceiptLevel::Observed)?
                     .is_none()
