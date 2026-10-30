@@ -5,22 +5,34 @@
 //! - `decision:<task>@<plan-id>#<n>`: the n-th decision (1-based) of that plan's document
 //! - `decision:<task>/<run>/<decision-id>`: a registered run decision
 //! - `comment:<task>#<n>`: the n-th comment (1-based) on the task
-use anyhow::Result;
-use corral_core::Task;
-
 use crate::Ctx;
+use anyhow::Result;
+use corral_core::{TaskHead, TaskRef};
 
-fn task_of<'a>(
-    ctx: &Ctx,
-    asking: &'a Task,
-    id: &str,
-) -> Result<std::borrow::Cow<'a, Task>, String> {
-    if asking.id == id {
-        return Ok(std::borrow::Cow::Borrowed(asking));
+#[cfg(test)]
+#[path = "basis_tests.rs"]
+mod tests;
+
+enum BasisTask<'a> {
+    Asking(&'a dyn TaskRef),
+    Stored(Box<TaskHead>),
+}
+impl BasisTask<'_> {
+    fn data(&self) -> &dyn TaskRef {
+        match self {
+            Self::Asking(task) => *task,
+            Self::Stored(task) => task.as_ref(),
+        }
+    }
+}
+
+fn task_of<'a>(ctx: &Ctx, asking: &'a dyn TaskRef, id: &str) -> Result<BasisTask<'a>, String> {
+    if asking.id() == id {
+        return Ok(BasisTask::Asking(asking));
     }
     ctx.store
-        .get(id)
-        .map(std::borrow::Cow::Owned)
+        .head(id)
+        .map(|task| BasisTask::Stored(Box::new(task)))
         .map_err(|_| format!("task {id} not found"))
 }
 
@@ -32,8 +44,9 @@ fn index(text: &str, len: usize) -> Result<usize, String> {
         .ok_or_else(|| format!("#{text} is outside 1..={len}"))
 }
 
-/// Resolves one ref; `Err` carries why it does not.
-pub(super) fn resolve(ctx: &Ctx, asking: &Task, reference: &str) -> Result<(), String> {
+/// Resolves one ref; `Err` carries why it does not. The asking view is retained so basis
+/// validation inside a mutation sees its uncommitted draft; other tasks are keyed heads.
+pub(super) fn resolve(ctx: &Ctx, asking: &dyn TaskRef, reference: &str) -> Result<(), String> {
     let (scheme, rest) = reference
         .split_once(':')
         .ok_or("expected <scheme>:<target>")?;
@@ -44,8 +57,8 @@ pub(super) fn resolve(ctx: &Ctx, asking: &Task, reference: &str) -> Result<(), S
                 .ok_or("expected spec:<task>@<revision>")?;
             let task = task_of(ctx, asking, id)?;
             let current = [
-                crate::progress_spec_revision(&task),
-                crate::plan_spec_revision(&task),
+                crate::progress_spec_revision(task.data()),
+                crate::plan_spec_revision(task.data()),
             ];
             if current.iter().any(|r| r.as_deref().ok() == Some(revision)) {
                 Ok(())
@@ -60,9 +73,9 @@ pub(super) fn resolve(ctx: &Ctx, asking: &Task, reference: &str) -> Result<(), S
                 .split_once('@')
                 .ok_or("expected plan:<task>@<plan-id>")?;
             let task = task_of(ctx, asking, id)?;
-            task.plans
-                .iter()
-                .any(|p| p.id == plan)
+            task.data()
+                .has_plan(plan)
+                .map_err(|e| e.to_string())?
                 .then_some(())
                 .ok_or_else(|| format!("{id} has no plan {plan}"))
         }
@@ -73,9 +86,9 @@ pub(super) fn resolve(ctx: &Ctx, asking: &Task, reference: &str) -> Result<(), S
                     .ok_or("expected decision:<task>@<plan-id>#<n>")?;
                 let task = task_of(ctx, asking, id)?;
                 let record = task
-                    .plans
-                    .iter()
-                    .find(|p| p.id == plan)
+                    .data()
+                    .plan_head(plan)
+                    .map_err(|e| e.to_string())?
                     .ok_or_else(|| format!("{id} has no plan {plan}"))?;
                 index(n, record.document.decisions.len()).map(|_| ())
             } else {
@@ -86,15 +99,17 @@ pub(super) fn resolve(ctx: &Ctx, asking: &Task, reference: &str) -> Result<(), S
                     return Err("expected decision:<task>/<run>/<decision-id>".into());
                 };
                 let task = task_of(ctx, asking, id)?;
-                task.runs
-                    .iter()
-                    .find(|r| r.id == run)
-                    .is_some_and(|r| {
-                        r.obligations
-                            .decisions
-                            .iter()
-                            .any(|d| d.request.id == decision)
-                    })
+                let exists = task
+                    .data()
+                    .run_head(run)
+                    .map_err(|e| e.to_string())?
+                    .is_some()
+                    && task
+                        .data()
+                        .decision(run, decision)
+                        .map_err(|e| e.to_string())?
+                        .is_some();
+                exists
                     .then_some(())
                     .ok_or_else(|| format!("{id}/{run} has no decision {decision}"))
             }
@@ -102,7 +117,7 @@ pub(super) fn resolve(ctx: &Ctx, asking: &Task, reference: &str) -> Result<(), S
         "comment" => {
             let (id, n) = rest.split_once('#').ok_or("expected comment:<task>#<n>")?;
             let task = task_of(ctx, asking, id)?;
-            index(n, task.comments.len()).map(|_| ())
+            index(n, task.data().comments_len().map_err(|e| e.to_string())?).map(|_| ())
         }
         other => Err(format!(
             "unknown scheme {other:?}; use spec, plan, decision or comment"

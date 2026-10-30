@@ -1,7 +1,7 @@
 //! Top-level receipted todo commands over server-selected worker/PM progress.
 use anyhow::{Context, Result};
 use corral_core::agent::{AgentRole, ReceiptEffect, TodoAction};
-use corral_core::{RunProgress, Task};
+use corral_core::{RunProgress, TaskRef};
 use serde_json::json;
 
 use super::super::admission::{self, Admission, Mode};
@@ -25,15 +25,15 @@ fn committed(progress: &RunProgress) -> Commit {
     }
 }
 
-fn worker_progress(task: &Task, action: &TodoAction) -> Result<RunProgress> {
-    let run = task.current_run().context("missing_run")?;
+fn worker_progress<T: TaskRef + ?Sized>(task: &T, action: &TodoAction) -> Result<RunProgress> {
+    let run = task.current_run_head()?.context("missing_run")?;
     let spec = crate::progress_spec_revision(task)?;
     let progress = action.apply(run.progress.as_ref(), &spec).map_err(bad)?;
     for step in progress.steps() {
         let mut seen = std::collections::HashSet::new();
         for id in &step.criteria {
             if !seen.insert(id)
-                || !task.completion.as_ref().is_some_and(|manifest| {
+                || !task.completion().as_ref().is_some_and(|manifest| {
                     manifest
                         .criteria
                         .iter()
@@ -67,7 +67,7 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         .into());
     }
     match envelope.identity.role {
-        AgentRole::Worker => receipts::commit_with_task(ctx, &admitted, |task| {
+        AgentRole::Worker => receipts::commit_head(ctx, &admitted, |task| {
             let progress = worker_progress(task, &action)?;
             let commit = committed(&progress);
             let run = task.current_run_mut().context("missing_run")?;

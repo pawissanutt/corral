@@ -5,7 +5,7 @@ use std::io::Read;
 use anyhow::{Context, Result, bail};
 use corral_core::{
     Artifact, ArtifactKind, Checkpoint, CheckpointRecord, CheckpointUpdate, ProgressReadback,
-    ProgressUpdate, Run, RunProgress, Status, StepState, Task,
+    ProgressUpdate, Run, RunProgress, Status, StepState, Task, TaskFieldsRef,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -14,15 +14,15 @@ use crate::Ctx;
 use crate::agent::effects::{self, Receipted};
 use corral_core::agent::{RequestOrigin, RequestReceipt};
 
-pub fn progress_spec_revision(task: &Task) -> Result<String> {
+pub fn progress_spec_revision<T: TaskFieldsRef + ?Sized>(task: &T) -> Result<String> {
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&(
-            &task.id,
-            &task.title,
-            &task.project,
-            &task.body,
-            &task.completion,
+            task.id(),
+            task.title(),
+            task.project(),
+            task.body(),
+            task.completion(),
         ))?)
     ))
 }

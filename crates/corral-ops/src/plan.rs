@@ -15,7 +15,7 @@ pub(crate) mod member_move;
 pub(crate) mod scope_gate;
 
 /// Revision of the task contract, including T-052 criterion IDs and dependencies.
-pub fn plan_spec_revision(task: &Task) -> Result<String> {
+pub fn plan_spec_revision<T: corral_core::TaskFieldsRef + ?Sized>(task: &T) -> Result<String> {
     corral_core::plan_contract_revision(task)
 }
 
