@@ -497,7 +497,13 @@ fn session_paths(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<PathB
                 relative.to_string_lossy().replace(['/', '\\', ':'], "-")
             )
         });
-    for entry in fs::read_dir(root).with_context(|| format!("reading {}", root.display()))? {
+    let listing = match fs::read_dir(root) {
+        Ok(listing) => listing,
+        // A supported harness need not have produced a session (or even its root) yet.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(paths),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
+    };
+    for entry in listing {
         let entry = entry.context("reading session directory entry")?;
         let kind = entry.file_type().context("reading session file type")?;
         if kind.is_file() && entry.path().extension().is_some_and(|e| e == "jsonl") {

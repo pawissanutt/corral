@@ -127,6 +127,14 @@ fn pi_run_end_promotes_worker_and_child_without_removing_sessions() {
 }
 
 #[test]
+fn an_absent_provider_session_is_not_a_failed_capture() {
+    let f = fx(false);
+    finish(&f, Status::Dropped, 31);
+    run_end(&f.ctx, &f.ctx.store.get(&f.task).unwrap()).unwrap();
+    assert!(live(&f).is_empty());
+}
+
+#[test]
 fn raw_worker_capture_uses_provider_window_and_never_removes_provider_files() {
     let mut f = fx(false);
     let dir = f
