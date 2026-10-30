@@ -391,6 +391,103 @@ fn a_member_fixing_the_expected_failure_lets_plan_verify_pass_and_main_receive_t
 }
 
 #[test]
+fn published_plan_added_member_dispatches_with_default_quick_gate() {
+    let mut fx = Fx::new(Suite::Green, |_| {});
+    let design = fx
+        .ctx
+        .store
+        .create("Design", Some("app"), Status::Ready, "Build it")
+        .unwrap()
+        .id;
+    let path = fx.tmp.path().join("design.md");
+    std::fs::write(&path, format!("---\ngoal: Ship feature\nnon_goals: []\ndecisions: []\naffected_paths: [src/**]\ncontracts: []\ndelivery_target: {{kind: integration, branch: {TARGET}}}\ndependencies:\n  - task: Original\n    write_scope: [src/original.rs]\n    depends_on: []\n  - task: Other\n    write_scope: [src/other.rs]\n    depends_on: []\nacceptance:\n  - scenario: feature works\n    expected: pass\nverification: [test]\nowner_decisions: []\n---\nPlan details.\n")).unwrap();
+    let plan = corral_ops::plan_submit(&fx.ctx, &design, &path).unwrap();
+    let policy_digest =
+        corral_core::plan_policy::policy_digest(&fx.ctx.store.config, &fx.task(&design)).unwrap();
+    fx.ctx
+        .store
+        .update(&design, |task| {
+            task.plans[0].reviews.push(corral_core::PlanReview {
+                agent_host: None,
+                delivery: corral_core::inbox::DeliveryMode::Legacy,
+                inbox: Default::default(),
+                route: None,
+                id: "PR1".into(),
+                reviewer: "rev".into(),
+                policy_digest: policy_digest.clone(),
+                verdict: None,
+                notes: None,
+                at: now(),
+                herdr: None,
+                pending_reply: None,
+            });
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::plan_verdict(
+        &fx.ctx,
+        &design,
+        &corral_ops::PlanVerdict {
+            plan: &plan.id,
+            attempt: Some("PR1"),
+            verdict: Verdict::Approve,
+            notes: "Reviewed",
+        },
+    )
+    .unwrap();
+    corral_ops::plan_verdict(
+        &fx.ctx,
+        &design,
+        &corral_ops::PlanVerdict {
+            plan: &plan.id,
+            attempt: None,
+            verdict: Verdict::Approve,
+            notes: "Approved",
+        },
+    )
+    .unwrap();
+    let original = fx.task(&design).children[0].clone();
+    let tracker = fx
+        .ctx
+        .store
+        .execution_plan(&fx.task(&original))
+        .unwrap()
+        .unwrap()
+        .id;
+    let added = fx
+        .ctx
+        .store
+        .create("Fix", Some("app"), Status::Ready, "Fix it")
+        .unwrap()
+        .id;
+    fx.ctx
+        .store
+        .update(&added, |task| {
+            task.profile = Some("fake".into());
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::plan_add_member(&fx.ctx, &tracker, &added).unwrap();
+    let gate = &fx.task(&tracker).member_gates[&added].gate;
+    assert_eq!(gate.tier, "quick");
+    assert!(gate.expected_failures.is_empty());
+    fx.grant(&[&tracker]);
+    dispatch(&fx, &added);
+    let receipt = work(
+        &fx,
+        &added,
+        "quick",
+        &Round {
+            files: &[("fix.txt", "fix\n")],
+            summary: "Fix.\nVerified: quick gate\nNot verified: none\n",
+        },
+    );
+    let binding = receipt.identity.unwrap().gate_tier.unwrap();
+    assert_eq!(binding.tier, "quick");
+    assert_eq!(binding.source, format!("member-gate:{tracker}@1"));
+}
+
+#[test]
 fn one_plan_recovers_from_a_failed_full_verify_by_adding_and_landing_a_fixing_member() {
     // Given a Plan whose full verification failed, so acceptance is refused and main stays put.
     let mut p = plan(false);
