@@ -184,6 +184,21 @@ mod tests {
     }
 
     #[test]
+    fn head_transition_uses_the_same_timestamp_for_status_and_update() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let task = store.create("Status", None, Status::Ready, "").unwrap();
+        let changed = store
+            .update_head(&task.id, |head| {
+                head.status = Status::Running;
+                head.status_since = Some(Timestamp::from_second(1).unwrap());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(changed.status_since, Some(changed.updated));
+    }
+
+    #[test]
     fn legacy_save_and_attention_writes_do_not_invent_status_time() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::init(root.path()).unwrap();
