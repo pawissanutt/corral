@@ -7,6 +7,9 @@ use anyhow::Result;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+mod blocked_ref;
+pub use blocked_ref::blocked_ref;
+
 /// Stable identity of one canonical condition, independent of display precedence.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -173,8 +176,8 @@ pub fn blocked<'a>(task: &crate::Task, assessment: &'a Assessment) -> Option<&'a
     {
         return None;
     }
-    let stopping = |condition: &&Condition| {
-        if condition.kind == "question_open"
+    select_blocked(task.status, assessment, |condition| {
+        condition.kind == "question_open"
             && task.current_run().is_some_and(|run| {
                 std::iter::once(run)
                     .chain(&run.review_runs)
@@ -188,7 +191,16 @@ pub fn blocked<'a>(task: &crate::Task, assessment: &'a Assessment) -> Option<&'a
                             })
                     })
             })
-        {
+    })
+}
+
+fn select_blocked<'a>(
+    status: crate::Status,
+    assessment: &'a Assessment,
+    nonblocking: impl Fn(&Condition) -> bool,
+) -> Option<&'a Condition> {
+    let stopping = |condition: &&Condition| {
+        if nonblocking(condition) {
             return false;
         }
         if matches!(
@@ -198,7 +210,7 @@ pub fn blocked<'a>(task: &crate::Task, assessment: &'a Assessment) -> Option<&'a
             return false;
         }
         assessment.progress.is_none()
-            || task.status == Status::NeedsMe
+            || status == crate::Status::NeedsMe
             || matches!(
                 condition.kind.as_str(),
                 "obligation_wait"

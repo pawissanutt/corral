@@ -603,6 +603,16 @@ impl TaskRef for Task {
         Ok(None)
     }
 
+    fn run_question_by_key(&self, run: &str, key: &str) -> Result<Option<AgentQuestion>> {
+        Ok(find_run(self, run)
+            .into_iter()
+            .flat_map(|parent| std::iter::once(parent).chain(&parent.review_runs))
+            .filter_map(|owner| owner.agent_host.as_deref())
+            .flat_map(|host| &host.questions)
+            .find(|question| question.key == key)
+            .cloned())
+    }
+
     fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
         Ok(crate::agent::container_state(self, container)
             .map(|s| {

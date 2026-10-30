@@ -306,7 +306,7 @@ pub(super) fn board_snapshot(
                     title: task.title.clone(),
                     project: task.project.clone(),
                     status: task.status,
-                    blocked: corral_core::attention::blocked(task, &assessment).cloned(),
+                    blocked: corral_core::attention::blocked_ref(&head, &assessment)?.cloned(),
                     assessment,
                 })
             })
