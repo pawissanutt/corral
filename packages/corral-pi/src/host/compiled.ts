@@ -19,6 +19,7 @@ import reviewerContract from "../../assets/reviewer-contract.md" with { type: "t
 import workerContract from "../../assets/worker-contract.md" with { type: "text" };
 import workerSkill from "../roles/worker/skills/corral-worker/SKILL.md" with { type: "text" };
 import { restrictEnvironment } from "./restrict.ts";
+import { piDocs } from "./pi-docs-macro.ts" with { type: "macro" };
 // Bun embeds .wasm imports as readable files. Use the pinned SDK's asset setter only:
 // importing its whole Bun runtime setup would also change provider registration.
 import quickjsWasmPath from "quickjs-wasi/quickjs.wasm";
@@ -36,6 +37,11 @@ export const INSTALL_FILES: Readonly<Record<string, string>> = {
 };
 
 function writeInstall(dir: string): void {
+  for (const [relative, encoded] of Object.entries(piDocs())) {
+    const path = join(dir, relative);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, Buffer.from(encoded, "base64"), { mode: 0o644 });
+  }
   for (const [relative, text] of Object.entries(INSTALL_FILES)) {
     const path = join(dir, relative);
     mkdirSync(dirname(path), { recursive: true });
@@ -70,6 +76,8 @@ registerBunOAuthFlows();
 const [command, operand] = process.argv.slice(2);
 if (command === "--version") {
   process.stdout.write(`corral-pi-host pi ${compat.pi.version} bun ${process.versions.bun}\n`);
+} else if (command === "--check-codemode") {
+  await (await import("./codemode-check.ts")).checkCodemode();
 } else if (command === "--write-install") {
   if (!operand) {
     process.stderr.write("corral-pi-host: --write-install needs a directory\n");
