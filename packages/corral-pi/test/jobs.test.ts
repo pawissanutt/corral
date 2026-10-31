@@ -138,6 +138,21 @@ test("a refused monitor reports no match; a refused prepare never spawns", async
   expect(refused.state).toBe("refused");
 });
 
+test("shutdown waits for all jobs, including a SIGTERM-ignoring process", async () => {
+  const fx = fixture();
+  const ready = fx.fifo("ready");
+  const normal = await fx.runtime.start("sleep 30", "normal");
+  const stubborn = await fx.runtime.start(`trap '' TERM; echo ready > ${ready}; exec sleep 30`, "stubborn");
+  await readFile(ready, "utf8");
+  expect(startTimeOf(normal.pid as number)).toBeDefined();
+  expect(startTimeOf(stubborn.pid as number)).toBeDefined();
+  await fx.runtime.shutdown();
+  for (const item of [normal, stubborn]) {
+    expect(startTimeOf(item.pid as number)).toBeUndefined();
+    expect(processGroup(item.pid as number, fx.identity(item.job as string).start).members).toBe(0);
+  }
+});
+
 test("job_kill stops the whole process group and its exit carries the signal", async () => {
   // Given a job whose shell started a child process.
   const fx = fixture();

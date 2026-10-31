@@ -434,8 +434,13 @@ export class JobRuntime {
     return { job: id, state: job.state, exit_code: job.exitCode, signal: job.signal, group_clear: job.groupClear };
   }
 
-  shutdown(): void {
-    for (const job of this.jobs.values()) if (!job.groupClear) this.groupSignal(job, "SIGKILL");
+  async shutdown(): Promise<void> {
+    await Promise.all([...this.jobs.values()].filter((job) => !job.groupClear).map(async (job) => {
+      this.groupSignal(job, "SIGTERM");
+      job.cancelKill?.();
+      job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);
+      await job.closed;
+    }));
   }
 
   state(): Record<string, unknown>[] {
