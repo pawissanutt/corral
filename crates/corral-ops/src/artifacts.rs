@@ -332,8 +332,7 @@ fn attach(
                 receipt = Some(artifact_receipt(t, origin, &existing, revived)?);
             }
             if revived && origin.is_none() {
-                ctx.store
-                    .log_event(Some(&t.id), "artifact", artifact_detail(&existing))?;
+                buffer_artifact_event(ctx, &t.id, &existing)?;
             }
             result = Some((existing, revived));
             return Ok(());
@@ -377,8 +376,7 @@ fn attach(
             effects::failpoint("swept_before_commit");
         }
         if origin.is_none() {
-            ctx.store
-                .log_event(Some(&t.id), "artifact", artifact_detail(&artifact))?;
+            buffer_artifact_event(ctx, &t.id, &artifact)?;
         }
         result = Some((artifact, true));
         Ok(())
@@ -432,8 +430,7 @@ fn attach_head(
                     *a = existing.clone();
                     Ok(())
                 })?;
-                ctx.store
-                    .log_event(Some(&t.id), "artifact", artifact_detail(&existing))?;
+                buffer_artifact_event(ctx, &t.id, &existing)?;
             }
             rows.iter_mut()
                 .filter(|(i, _)| *i == index)
@@ -476,12 +473,18 @@ fn attach_head(
         crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
         rows.push((index, artifact.clone()));
         crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, true)?;
-        ctx.store
-            .log_event(Some(&t.id), "artifact", artifact_detail(&artifact))?;
+        buffer_artifact_event(ctx, &t.id, &artifact)?;
         result = Some(artifact);
         Ok(true)
     })?;
     Ok(result)
+}
+
+/// Called inside the same task operation that publishes the artifact registration.
+fn buffer_artifact_event(ctx: &Ctx, task: &str, artifact: &Artifact) -> Result<()> {
+    effects::failpoint("artifact_event");
+    ctx.store
+        .log_event(Some(task), "artifact", artifact_detail(artifact))
 }
 
 fn artifact_detail(artifact: &Artifact) -> serde_json::Value {
