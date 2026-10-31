@@ -100,7 +100,7 @@ fn is_zero(n: &u32) -> bool {
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunHead {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "ObligationsHead::is_empty")]
     pub obligations: ObligationsHead,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<crate::RoleSession>,
@@ -201,6 +201,14 @@ pub struct RunHead {
 pub struct ObligationsHead {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot_wait: Option<crate::SlotWait>,
+}
+
+impl ObligationsHead {
+    // Match the canonical full-run codec: an absent slot wait has no obligations object.
+    // Serializing an empty object would turn unchanged head edits into stored-row changes.
+    fn is_empty(&self) -> bool {
+        self.slot_wait.is_none()
+    }
 }
 
 /// A usage record without its per-response entries.
