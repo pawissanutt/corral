@@ -425,6 +425,7 @@ fn next_generation(
         todo: capabilities.enabled("todo"),
         capabilities: Some(capabilities.clone()),
         capability_transition: transition,
+        assets_sha256: None,
     });
     state.binding.generation = n;
     state.binding.health = HostHealth::Unbound;

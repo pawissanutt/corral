@@ -1,5 +1,6 @@
 //! Assistant-session operations that run from the CLI rather than the agent host channel.
 mod focus;
+pub mod host;
 pub mod owner_action;
 pub mod scratch;
 

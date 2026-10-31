@@ -33,6 +33,9 @@ pub struct Finish<'a> {
     pub review: Option<CoworkReview>,
     pub into: Option<&'a str>,
     pub note: Option<&'a str>,
+    /// The candidate commit the owner was shown: the finish refuses `stale_candidate` unless the
+    /// scratch HEAD is still that commit (a hex prefix of at least 7 digits).
+    pub expected_head: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -295,6 +298,20 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
     if work.commits.is_empty() {
         bail!("scratch_empty: {session}/{slug} has no commit beyond its base; nothing finished");
     }
+    let candidate = corral_git::rev_sha(&scratch.path, "HEAD")?;
+    if let Some(expected) = opts.expected_head {
+        let hex =
+            (7..=64).contains(&expected.len()) && expected.bytes().all(|b| b.is_ascii_hexdigit());
+        if !hex {
+            bail!("--expected-head takes a commit SHA of 7 to 64 hex digits, not {expected:?}");
+        }
+        if !candidate.starts_with(&expected.to_ascii_lowercase()) {
+            bail!(
+                "stale_candidate: {session}/{slug} is at {}, not the candidate {expected} the owner was shown; show the owner the current candidate and ask again; nothing finished",
+                candidate.get(..12).unwrap_or(&candidate)
+            );
+        }
+    }
     let into = match opts.into {
         Some(id) => {
             let task = ctx.store.get(id)?;
@@ -380,7 +397,8 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         Some(&task.id),
         "cowork_finished",
         json!({"session": session, "slug": slug, "run": run, "branch": scratch.branch,
-            "head": head, "base": base, "review": review, "into": into.is_some()}),
+            "head": head, "candidate": candidate, "base": base, "review": review,
+            "into": into.is_some()}),
     )?;
     snapshot_diff(ctx, &task.id, &scratch.path, &base_sha)?;
     let gate = gate(ctx, &task.id);
