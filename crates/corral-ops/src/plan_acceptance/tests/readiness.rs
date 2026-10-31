@@ -2,6 +2,11 @@ use super::*;
 use corral_core::work::{self, Counter, HotScope};
 use corral_core::{ArtifactKind, Task};
 
+fn snapshot_path(f: &Fixture, artifact: &corral_core::Artifact) -> std::path::PathBuf {
+    let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+    f.ctx.store.blob_store().unwrap().path_of(&hash)
+}
+
 fn one_member(delivery: Delivery) -> Fixture {
     let mut f = Fixture::new(delivery, &["true"]);
     f.ctx.resource_probe = std::sync::Arc::new(crate::resources::PinnedReadingsProbe::admitting());
@@ -192,7 +197,7 @@ fn verification_publishes_integrity_failure_and_recovery_to_readiness() {
         ..f.ctx.clone()
     };
     let artifact = f.ctx.store.get(&f.members[0]).unwrap().artifacts[0].clone();
-    let path = f.ctx.store.dir().join(&artifact.path);
+    let path = snapshot_path(&f, &artifact);
     let bytes = std::fs::read(&path).unwrap();
     std::fs::write(&path, "changed outside corral\n").unwrap();
     // Readback deliberately does not discover filesystem corruption before a check.
@@ -237,11 +242,7 @@ fn acceptance_rechecks_no_code_bytes_and_publishes_the_exact_blocker() {
     add(&f, 0..1);
     let attempt = f.reviewed();
     let artifact = f.ctx.store.get(&f.members[0]).unwrap().artifacts[0].clone();
-    std::fs::write(
-        f.ctx.store.dir().join(&artifact.path),
-        "changed after review\n",
-    )
-    .unwrap();
+    std::fs::write(snapshot_path(&f, &artifact), "changed after review\n").unwrap();
 
     // When acceptance rechecks the real proof, rather than trusting readiness metadata.
     let error = message(plan_accept(&f.ctx, &f.plan, &attempt.id, false));
@@ -259,11 +260,7 @@ fn refused_acceptance_prepare_keeps_its_integrity_observation() {
     add(&f, 0..1);
     let attempt = plan_verify(&f.ctx, &f.plan).unwrap();
     let artifact = f.ctx.store.get(&f.members[0]).unwrap().artifacts[0].clone();
-    std::fs::write(
-        f.ctx.store.dir().join(&artifact.path),
-        "changed during prepare\n",
-    )
-    .unwrap();
+    std::fs::write(snapshot_path(&f, &artifact), "changed during prepare\n").unwrap();
     let before = f.plan();
 
     // When the full acceptance check refuses inside the task's buffered update unit.
@@ -298,11 +295,7 @@ fn readiness_keeps_registration_order_between_purge_and_integrity_blockers() {
             })
             .unwrap();
         let child = f.ctx.store.get(&f.members[0]).unwrap();
-        std::fs::write(
-            f.ctx.store.dir().join(&child.artifacts[changed].path),
-            "corrupt\n",
-        )
-        .unwrap();
+        std::fs::write(snapshot_path(&f, &child.artifacts[changed]), "corrupt\n").unwrap();
 
         // When a real boundary observes the first failure in registration order.
         assert!(plan_verify(&f.ctx, &f.plan).is_err());
@@ -335,7 +328,7 @@ fn warm_whole_plan_progress_includes_preparation_and_integrity_observations() {
         add(&f, range);
         let child = f.ctx.store.get(&f.members[0]).unwrap();
         let artifact = &child.artifacts[0];
-        std::fs::write(f.ctx.store.dir().join(&artifact.path), "corrupt snapshot\n").unwrap();
+        std::fs::write(snapshot_path(&f, artifact), "corrupt snapshot\n").unwrap();
         assert!(plan_verify(&f.ctx, &f.plan).is_err());
         let observed = corral_core::records::RecordArea::<
             corral_core::accepted_proof::IntegrityCheck,
