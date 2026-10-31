@@ -196,7 +196,7 @@ pub fn move_task_with_decision(
         Ok(())
     })?;
     if to == Status::Dropped {
-        crate::cleanup::cleanup(ctx, &task, crate::cleanup::Cleanup::Task);
+        let _ = crate::cleanup::cleanup_report(ctx, &task, crate::cleanup::Cleanup::Task);
     }
     Ok(task)
 }

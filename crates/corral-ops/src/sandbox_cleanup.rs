@@ -10,32 +10,69 @@ use crate::Ctx;
 mod tests;
 
 pub(crate) fn reap(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
-    let path = crate::launch_exit::receipt(ctx, task, run).with_extension("owner");
-    let dir = path.parent().context("sandbox owner directory missing")?;
-    let prefix = format!("{task}-{run}");
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
+    reap_scope(ctx, task, Some(run))
+}
+
+pub(crate) fn reap_task(ctx: &Ctx, task: &str) -> Result<()> {
+    reap_scope(ctx, task, None)
+}
+
+fn reap_scope(ctx: &Ctx, task: &str, run: Option<&str>) -> Result<()> {
+    // Inventory actual cleanup debt, never every retained owner file or task/run history.
+    // A label alone grants no authority: each opaque marker must have its canonical issuer.
+    let output = match Command::new("podman")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            "label=corral.load-sandbox=true",
+            "--format",
+            "{{.Label \"corral.run-owner\"}}",
+        ])
+        .stdin(Stdio::null())
+        .output()
+    {
+        Ok(output) => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).context("listing sandbox owners"),
     };
+    ensure!(
+        output.status.success(),
+        "listing sandbox owners: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if output.stdout.is_empty() {
+        return Ok(());
+    }
+    let mut read = ctx.clone();
+    read.store = ctx.store.read_only_snapshot()?;
+    let prefix = run.map(|run| format!("{task}-{run}"));
+    let task_prefix = format!("{task}-R");
+    let markers: std::collections::BTreeSet<_> = std::str::from_utf8(&output.stdout)
+        .context("invalid sandbox ownership listing")?
+        .lines()
+        .collect();
     let mut errors = Vec::new();
-    for entry in entries {
-        let entry = entry.context("reading sandbox owner entry")?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str().and_then(|s| s.strip_suffix(".owner")) else {
+    for marker in markers {
+        let Some(receipt) = crate::launch_exit::process_receipt(&read, marker.as_bytes())? else {
             continue;
         };
-        if name != prefix
-            && !name
-                .strip_prefix(&prefix)
-                .is_some_and(|s| s.starts_with('-'))
-        {
+        let Some(name) = receipt.file_stem().and_then(|name| name.to_str()) else {
             continue;
-        }
-        let result = std::fs::read_to_string(entry.path())
-            .context("reading sandbox owner")
-            .and_then(|marker| reap_with("podman", &marker));
-        if let Err(error) = result {
+        };
+        let selected = match &prefix {
+            Some(prefix) => {
+                name == prefix.as_str()
+                    || name
+                        .strip_prefix(prefix)
+                        .is_some_and(|tail| tail.starts_with('-'))
+            }
+            None => name.strip_prefix(&task_prefix).is_some_and(|tail| {
+                let n = tail.split('-').next().unwrap_or_default();
+                !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+            }),
+        };
+        if selected && let Err(error) = reap_with("podman", marker) {
             errors.push(format!("{name}: {error:#}"));
         }
     }
