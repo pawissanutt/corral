@@ -196,6 +196,9 @@ pub fn move_task_with_decision(
         json!({ "from": from.as_str(), "to": to.as_str(), "force": force,
             "task_updated": task.updated, "reason": reason, "actor": actor }),
     )?;
+    if to == Status::Dropped {
+        crate::cleanup::cleanup(ctx, &task, crate::cleanup::Cleanup::Task);
+    }
     Ok(task)
 }
 

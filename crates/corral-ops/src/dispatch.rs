@@ -774,6 +774,13 @@ fn retry_with(
         Ok(())
     })?;
     cleanup(ctx, &task, Cleanup::Round);
+    if let Err(error) = crate::sandbox_cleanup::reap(ctx, &task.id, &prev.id) {
+        let _ = ctx.store.log_event(
+            Some(&task.id),
+            "cleanup_failed",
+            json!({"resource": "sandbox", "error": format!("{error:#}")}),
+        );
+    }
     ctx.store.log_event(
         Some(&task.id),
         "superseded",

@@ -63,7 +63,14 @@ if [[ -n $bun_binary ]]; then
 fi
 # No host PID namespace, sockets, privileges, or writable toolchains. Cargo caches and
 # build artifacts are container-local; only the selected worktree is writable.
-podman create --name "$name" --label corral.load-sandbox=true \
+labels=(--label corral.load-sandbox=true)
+if [[ ${CORRAL_PROCESS_OWNER:-} =~ ^[0-9a-f]{64}$ ]]; then
+    labels+=(--label "corral.run-owner=$CORRAL_PROCESS_OWNER")
+    if [[ ${CORRAL_SANDBOX_TASK:-} =~ ^T-[0-9]+$ && ${CORRAL_SANDBOX_RUN:-} =~ ^R[0-9]+$ ]]; then
+        labels+=(--label "corral.task=$CORRAL_SANDBOX_TASK" --label "corral.run=$CORRAL_SANDBOX_RUN")
+    fi
+fi
+podman create --name "$name" "${labels[@]}" \
     --cpus "$cpus" --memory "$memory" --memory-swap "$memory" --pids-limit "$pids" \
     --userns keep-id --cap-drop ALL --security-opt no-new-privileges \
     "${mounts[@]}" --workdir "$root" \

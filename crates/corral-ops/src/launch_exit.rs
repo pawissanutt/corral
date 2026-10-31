@@ -44,8 +44,20 @@ pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
     }
     let marker = ownership_marker(receipt)?;
     let path = crate::prompt::sh_escape(&crate::prompt::shell_path(receipt));
+    let identity = receipt
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.rsplit_once("-R"))
+        .filter(|(task, run)| {
+            task.strip_prefix("T-")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                && !run.is_empty()
+                && run.bytes().all(|b| b.is_ascii_digit())
+        })
+        .map(|(task, run)| format!("CORRAL_SANDBOX_TASK='{task}' CORRAL_SANDBOX_RUN='R{run}' "))
+        .unwrap_or_default();
     let script = format!(
-        "CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
+        "{identity}CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
     );
     Ok(format!(
         "/bin/sh -c {} corral-launch {}",
