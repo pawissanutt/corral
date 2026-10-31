@@ -155,7 +155,7 @@ if [ -e "$dir/block-$phase" ]; then cat "$dir/$phase.fifo" > /dev/null; fi
     { toolCalls: [{ callId: "call_grep", name: "grep", arguments: { pattern: "needle", path: "." } }] },
     { text: "Done for now" },
   ]));
-  assets = buildFixtureInstall({ parent: workspace, omit: ["role", "delivery"] });
+  assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, omit: ["role", "delivery"] });
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const auth = join(assets.dir, "src/auth");
   copyFileSync(join(auth, "index.ts"), join(auth, "fixture-auth.ts"));

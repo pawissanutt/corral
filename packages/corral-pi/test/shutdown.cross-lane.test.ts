@@ -16,7 +16,7 @@ const frame = (command: string) => ({ version: 1, id: command, ctl_cap: cap, gen
 for (const mode of ["normal", "throw", "emit"]) test(`interactive worker shutdown: ${mode}`, async () => {
   if (!isolated) { console.log("skipped: requires private herdr"); return; }
   const dir = mkdtempSync(join(privateRoot() ?? "", "pi-shutdown-"));
-  const assets = buildFixtureInstall({ parent: dir });
+  const assets = buildFixtureInstall({ parent: dir, isolatePiState: true });
   let workspace = "";
   try {
     const main = join(assets.dir, "src/host/main.ts");

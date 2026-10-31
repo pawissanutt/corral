@@ -2,7 +2,7 @@
 // compat.json, the package's installed node_modules linked in, and (with overlays) fixture.json
 // plus the fixture role, auth and delivery modules copied to their fixed module paths. Fixture
 // modules exist only inside that temp directory, never in the package's own src/.
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,8 @@ export interface FixtureOptions {
   /** Fixture modules to leave out, for single-module refusal tests. */
   readonly omit?: readonly ("role" | "delivery" | "auth")[];
   readonly parent?: string;
+  /** Give the fixture host a private upstream Pi state directory, including crashes.json. */
+  readonly isolatePiState?: boolean;
 }
 
 export interface FixtureInstall {
@@ -56,6 +58,15 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
   const dir = mkdtempSync(join(options.parent ?? tmpdir(), "corral-pi-assets-"));
   for (const file of ["package.json", "bun.lock", "compat.json"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
   copy(join(PACKAGE_ROOT, "src"), join(dir, "src"));
+  if (options.isolatePiState) {
+    const main = join(dir, "src/host/main.ts");
+    const source = readFileSync(main, "utf8");
+    const restrict = "  restrictEnvironment(process.env, provider);";
+    if (source.split(restrict).length !== 2) throw new Error("fixture host environment hook not found");
+    const state = join(dir, "pi-state");
+    mkdirSync(state);
+    writeFileSync(main, source.replace(restrict, `${restrict}\n  process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(state)};`));
+  }
   symlinkSync(join(PACKAGE_ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   if (options.overlays ?? true) {
     const omit = new Set(options.omit ?? []);

@@ -73,7 +73,7 @@ beforeAll(() => {
   skill(join(home, ".agents/skills"), "xl-home", "XL-HOME-BODY");
   skill(join(home, ".agents/skills"), "corral-worker", "HOME-IMPOSTOR");
   cli("init");
-  install = buildFixtureInstall({ parent: workspace });
+  install = buildFixtureInstall({ parent: workspace, isolatePiState: true });
   for (const tree of ["src/roles", "src/extensions", "assets"]) {
     cpSync(join(PACKAGE_ROOT, tree), join(install.dir, tree), { recursive: true });
   }
