@@ -26,8 +26,7 @@ impl Inbox<'_> {
                 inbox: InboxHead,
             }
             return Ok(self
-                .store
-                .record::<PmHead>(area, key)?
+                .standalone_record::<PmHead>(area, key)?
                 .unwrap_or_default()
                 .inbox);
         }
@@ -88,7 +87,7 @@ impl Inbox<'_> {
                 .observe_cursor(&self.recipient, adapter, binding)?
                 .map(|stream| stream.cursor)),
             None => Ok(self
-                .pm_state()?
+                .standalone_state()?
                 .inbox
                 .observe_cursors
                 .into_iter()
@@ -100,8 +99,38 @@ impl Inbox<'_> {
     pub fn effect_applied(&self, seq: u64) -> Result<bool> {
         match self.recipient.task() {
             Some(task) => self.store.head(task)?.effect_applied(&self.recipient, seq),
-            None => Ok(self.pm_state()?.inbox.effects_applied.contains(&seq)),
+            None => Ok(self
+                .standalone_state()?
+                .inbox
+                .effects_applied
+                .contains(&seq)),
         }
+    }
+
+    pub(super) fn standalone_record<T: DeserializeOwned>(
+        &self,
+        area: &str,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let _cost = crate::work::followup("T-669", "standalone_inbox_load");
+        self.store.record(area, key)
+    }
+
+    pub(super) fn save_standalone_record(
+        &self,
+        area: &str,
+        key: &str,
+        value: &impl Serialize,
+    ) -> Result<()> {
+        let _cost = crate::work::followup("T-669", "standalone_inbox_save");
+        self.store.save_record(area, key, value)
+    }
+
+    pub(super) fn standalone_state(&self) -> Result<PmInbox> {
+        let (area, key) = self
+            .standalone_state_key()
+            .context("standalone inbox required")?;
+        Ok(self.standalone_record(area, key)?.unwrap_or_default())
     }
 
     pub fn record<T: DeserializeOwned>(&self, kind: &str, key: &str) -> Result<Option<T>> {

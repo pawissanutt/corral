@@ -1,7 +1,7 @@
 //! Reservation outcome keeps first-append semantics, not newest matching-plan semantics.
 mod store_support;
 use corral_core::{
-    TaskMut, TaskRef,
+    TaskRef,
     work::{self, Counter, HotScope},
 };
 

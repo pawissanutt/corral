@@ -182,6 +182,10 @@ pub fn task_fields(task: &Task) -> Result<TaskFields> {
             kind: "plan".to_owned(),
             other: plan.split('@').next().unwrap_or(plan).to_owned(),
         }))
+        .chain(task.agent_origin.iter().map(|origin| TaskEdge {
+            kind: "agent_origin".to_owned(),
+            other: origin.request_id.clone(),
+        }))
         .collect();
     let mut seen = BTreeSet::new();
     edges.retain(|edge| seen.insert(edge.clone()));

@@ -166,12 +166,16 @@ fn same_pm(expected: &AgentPm, current: &AgentPm) -> bool {
 /// Caller serializes outbox reposts; Inbox owns publication and its own lock. The durable
 /// subject is the dedupe record if the executor dies before acknowledging the question.
 fn publish(inbox: &Inbox<'_>, question: &AgentQuestion, project: &str) -> Result<Message> {
-    if let Some(message) = inbox.messages()?.into_iter().find(|m| {
-        m.kind == "question_wake"
-            && m.subject
-                .as_ref()
-                .is_some_and(|s| s["key"] == question.wake.key)
-    }) {
+    let existing = {
+        let _cost = corral_core::work::followup("T-669", "pm_wake_subject_lookup");
+        inbox.messages()?.into_iter().find(|m| {
+            m.kind == "question_wake"
+                && m.subject
+                    .as_ref()
+                    .is_some_and(|s| s["key"] == question.wake.key)
+        })
+    };
+    if let Some(message) = existing {
         return Ok(message);
     }
     let body = format!(
@@ -300,6 +304,10 @@ impl DeliveryAdapter for ScopedPm {
 }
 
 #[cfg(all(test, unix))]
+#[path = "pm_wake_known_cost_tests.rs"]
+mod known_cost_tests;
+
+#[cfg(all(test, unix))]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::{UnixListener, UnixStream};
@@ -314,7 +322,7 @@ mod tests {
     use crate::agent::BindTarget;
     use crate::agent::test_support::{self as ts, Fx};
 
-    fn pm(fx: &Fx) -> (ts::Host, AgentPm) {
+    pub(super) fn pm(fx: &Fx) -> (ts::Host, AgentPm) {
         let host = ts::bind(
             fx,
             &BindTarget::Pm {
@@ -327,7 +335,7 @@ mod tests {
         (host, pm_state::load(&fx.ctx.store).unwrap().unwrap())
     }
 
-    fn question(fx: &Fx) -> crate::questions::QuestionView {
+    pub(super) fn question(fx: &Fx) -> crate::questions::QuestionView {
         let id = ts::worker_task(fx, "worker");
         let host = ts::bind(
             fx,
