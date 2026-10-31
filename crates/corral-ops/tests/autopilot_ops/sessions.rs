@@ -67,7 +67,7 @@ fn automatic_gone_worker_resumes_its_exact_session_in_the_same_run() {
         serde_json::from_value(json!({"harness":"owned"})).unwrap(),
     );
     fx.ctx.store.save_config().unwrap();
-    let directory = fx.ctx.store.state_dir().join("worker-context");
+    let directory = fx.ctx.store.root().join("worker-context");
     std::fs::create_dir_all(&directory).unwrap();
     let transcript = directory.join("conversation.jsonl");
     std::fs::write(

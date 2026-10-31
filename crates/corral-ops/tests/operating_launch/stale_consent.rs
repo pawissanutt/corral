@@ -28,21 +28,17 @@ fn base_format_revision(fx: &Fx) -> String {
 
 /// Rewrite every persisted copy of an owner approval the way the base binary wrote it.
 fn seed_base_format(fx: &Fx, id: &str) -> corral_core::ActionAuthorization {
-    let path = fx
-        .ctx
-        .store
-        .state_dir()
-        .join("action-authorizations")
-        .join(format!("{id}.json"));
-    let mut record: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut record = serde_json::to_value(fx.ctx.store.authorized_submission(id).unwrap()).unwrap();
     let revision = base_format_revision(fx);
     assert_ne!(
         record["authorization"]["policy_revision"],
         revision.as_str()
     );
     record["authorization"]["policy_revision"] = revision.into();
-    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    fx.ctx
+        .store
+        .fixture_save_submission(&serde_json::from_value(record.clone()).unwrap())
+        .unwrap();
     let seeded: corral_core::ActionAuthorization =
         serde_json::from_value(record["authorization"].clone()).unwrap();
     let task = &seeded.action.task;

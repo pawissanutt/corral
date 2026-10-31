@@ -110,7 +110,7 @@ fn latched_process_resumes_sync_through_the_installed_executable() {
         ),
         resource_probe: corral_ops::resources::FixedResourceProbe::arc(),
     };
-    let marker = ctx.store.state_dir().join("schema-version");
+    let marker = ctx.store.dir().join("state").join("schema-version");
     let current = std::fs::read(&marker).ok();
     std::fs::write(&marker, "999\n").unwrap();
     let refused = corral_ops::sync(&ctx).unwrap_err();

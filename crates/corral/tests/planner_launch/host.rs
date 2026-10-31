@@ -153,8 +153,9 @@ fn main() {
         "launch": message, "hello": bound, "nonce_reuse": reused, "read_only": read_only,
         "plan_ops": plan_ops,
     });
+    std::fs::create_dir_all(Path::new(&root).join("engine")).unwrap();
     std::fs::write(
-        Path::new(&root).join(format!(".corral/state/planner-launch-{role}.json")),
+        Path::new(&root).join(format!("engine/planner-launch-{role}.json")),
         serde_json::to_vec(&proof).unwrap(),
     )
     .unwrap();

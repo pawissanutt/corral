@@ -16,7 +16,8 @@ fn missing_reviewer_records_attempt_exit_and_allows_retry() {
     let child = run.review_runs.last().unwrap();
     let receipt = ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{id}-{}-{}.exited", run.id, child.id));
     let _ = std::fs::remove_file(&receipt);

@@ -58,7 +58,8 @@ fn missing_reviewer_pane_records_exit_and_allows_another_review() {
     let receipt = fx
         .ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{}-P1-{}.exited", fx.id, first.id));
     let _ = std::fs::remove_file(&receipt);

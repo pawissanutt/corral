@@ -211,7 +211,8 @@ impl Fixture {
     fn proof(&self, role: &str) -> Value {
         let path = self
             .store
-            .state_dir()
+            .root()
+            .join("engine")
             .join(format!("planner-launch-{role}.json"));
         let bytes = std::fs::read(&path).unwrap_or_else(|error| {
             panic!(
@@ -364,7 +365,8 @@ fn native_plan_reviewer_executes_bootstrap_and_binds_the_stored_review() {
         "P1",
         Some("PR1"),
         fx.store
-            .prompts_dir()
+            .scratch_path(&format!("plan-reviews/{}-P1-PR1", fx.task))
+            .unwrap()
             .join(format!("{}-P1-PR1-plan-review.md", fx.task)),
     );
     assert!(task.runs.is_empty());

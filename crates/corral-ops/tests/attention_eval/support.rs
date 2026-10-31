@@ -19,15 +19,18 @@ pub fn stats(fx: &Fx, end: i64) -> Stats {
 
 /// A live PM pane: the fake engine reports any pane as present and working.
 pub fn pm_live(fx: &Fx) {
-    std::fs::write(
-        fx.ctx.store.state_dir().join("pm.json"),
-        r#"{"pane_id":"pm:p1"}"#,
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("pm")
+        .save(
+            &fx.ctx.store,
+            "state",
+            &serde_json::json!({"pane_id":"pm:p1"}),
+        )
+        .unwrap();
 }
 
 pub fn pm_gone(fx: &Fx) {
-    std::fs::remove_file(fx.ctx.store.state_dir().join("pm.json")).unwrap();
+    assert!(fx.ctx.store.record_row("pm", "state").unwrap().is_some());
+    fx.ctx.store.delete_record("pm", "state").unwrap();
 }
 
 pub fn sync(fx: &Fx, seconds: i64) {
