@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_core::{
-    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, GateTierReceipt,
-    HerdrRef, Run, RunHead, TaskRef,
+    ArtifactKind, CandidateIdentity, CommandReceipt, GateRecord, GateResult, GateTierReceipt, Run,
+    RunHead, TaskRef,
 };
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -260,40 +260,8 @@ pub(crate) fn prepare_owner(path: &Path) -> Result<()> {
         .context("writing gate owner token")
 }
 
-/// Opens a `label` tab in the run's herdr workspace when it still exists, else a new workspace "<id> <label>";
-/// both start in the run's worktree.
-pub(crate) fn open_run_pane<T: TaskRef + ?Sized>(
-    ctx: &Ctx,
-    task: &T,
-    run: &RunHead,
-    label: &str,
-) -> Result<HerdrRef> {
-    let workspace = run.herdr.as_ref().map(|h| h.workspace_id.clone());
-    if let Some(ws) = workspace
-        && ctx.herdr.workspace_list()?.iter().any(|(id, _)| *id == ws)
-    {
-        let created = ctx.herdr.tab_create(&ws, &run.worktree, label, false)?;
-        return Ok(HerdrRef {
-            workspace_id: created.workspace_id,
-            pane_id: created.pane_id,
-            socket: Some(ctx.herdr.socket_path()?),
-        });
-    }
-    let label: String = format!("{} {label}", task.id()).chars().take(40).collect();
-    let created = ctx.herdr.workspace_create(&run.worktree, &label, false)?;
-    crate::cleanup::record_run_workspace(
-        ctx,
-        task.id(),
-        &run.id,
-        &created.pane_id,
-        &created.workspace_id,
-    )?;
-    Ok(HerdrRef {
-        workspace_id: created.workspace_id,
-        pane_id: created.pane_id,
-        socket: Some(ctx.herdr.socket_path()?),
-    })
-}
+mod pane;
+pub(crate) use pane::{open_run_pane, open_run_pane_published};
 
 /// Starts the effective gate (`Config::review_policy`) for the task's current run in a herdr pane and records
 /// `gate: {result: running, sha, pane}` on the run. The worktree must be clean so the result belongs to HEAD.

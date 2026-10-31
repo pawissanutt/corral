@@ -126,11 +126,12 @@ fn send_changes(
         }
         _ => text.to_string(),
     };
-    let restarted = continuation.prepare_legacy(ctx, &task, text, notice.as_deref())?;
+    let restarted = continuation.prepare_legacy(ctx, &task, &head, text, notice.as_deref())?;
+    let basis = restarted.as_ref().map_or(&head, |prepared| &prepared.basis);
     // Reopening Review reserves shared capacity before contacting the composer.
     // Pending text and Running status survive a launcher crash without freeing its slot.
     let prepare = |store: &corral_core::Store, current: &mut TaskHeadMut| {
-        crate::queue::check_snapshot_head(ctx, store, &head, current.head())?;
+        crate::queue::check_snapshot_head(ctx, store, basis, current.head())?;
         let shell = current.shell_task()?;
         if let Some(reason) = crate::queue::blocked_reason(ctx, store, &shell, false)? {
             bail!("cannot request changes for {}: {reason}", current.id);
