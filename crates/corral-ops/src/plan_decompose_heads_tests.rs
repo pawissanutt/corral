@@ -51,6 +51,7 @@ fn published(ctx: &Ctx, id: &str) -> Vec<serde_json::Value> {
 #[test]
 fn automatic_multi_scope_publication_reads_the_parent_as_a_head() {
     use corral_core::work::{self, Counter, HotScope};
+    corral_core::clock::pin_thread(Some("2026-10-18T08:00:00Z".parse().unwrap()));
     let mut measured = Vec::new();
     for n in [1, 10] {
         // Given the same accepted two-scope plan on two stores with the same parent history.

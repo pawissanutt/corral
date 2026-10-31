@@ -42,6 +42,7 @@ const STATUSES: [Status; 5] = [
 fn board(root: &std::path::Path, seed: u64, terminal: usize, events: usize) -> Ctx {
     let mut rng = Lcg(seed);
     let ctx = Ctx::from_store(Store::init(root).unwrap());
+    ctx.store.fixture_pin_now(at(0)).unwrap();
     for n in 0..12 {
         let status = STATUSES[rng.next(5) as usize];
         let mut task = ctx
