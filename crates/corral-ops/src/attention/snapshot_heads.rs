@@ -53,7 +53,7 @@ fn dependencies(store: &Store, roots: &[TaskHead]) -> Result<BTreeSet<String>> {
         if let Some(parent) = task.current_run.as_deref() {
             if parent.outcome.is_none() {
                 for wait in task
-                    .unreceipted_obligations(&parent.id)?
+                    .attention_obligations(&parent.id)?
                     .waits
                     .into_iter()
                     .filter(|wait| wait.receipt.is_none())
@@ -67,7 +67,7 @@ fn dependencies(store: &Store, roots: &[TaskHead]) -> Result<BTreeSet<String>> {
                 .filter(|run| run.outcome.is_none() && run.ended.is_none())
             {
                 for wait in task
-                    .unreceipted_review_obligations(&parent.id, &child.id)?
+                    .attention_review_obligations(&parent.id, &child.id)?
                     .waits
                     .into_iter()
                     .filter(|wait| wait.receipt.is_none())

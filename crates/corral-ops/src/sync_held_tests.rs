@@ -67,7 +67,7 @@ fn held_run_reconciliation_closes_only_gone_or_idle_backlog_runs() {
             );
         }
         let events = ctx.store.events().unwrap().len();
-        close_held_run(&ctx, &task, &panes, now).unwrap();
+        close_held_run(&ctx, &ctx.store.head(&task.id).unwrap(), &panes, now).unwrap();
         let saved = ctx.store.get(&task.id).unwrap();
         let run = saved.current_run().unwrap();
         assert_eq!(run.outcome == Some(RunOutcome::Abandoned), closes);
@@ -76,7 +76,7 @@ fn held_run_reconciliation_closes_only_gone_or_idle_backlog_runs() {
             ctx.store.events().unwrap().len(),
             events + usize::from(closes)
         );
-        close_held_run(&ctx, &saved, &panes, now).unwrap();
+        close_held_run(&ctx, &ctx.store.head(&saved.id).unwrap(), &panes, now).unwrap();
         assert_eq!(
             ctx.store.events().unwrap().len(),
             events + usize::from(closes)

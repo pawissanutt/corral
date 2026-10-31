@@ -5,10 +5,8 @@ use std::borrow::Cow;
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
-use serde::de::DeserializeOwned;
 
 use super::codec::{Rows, SELF, attempt_rows, child_key, plan_rows, plan_run_rows, seq, split_run};
-use super::head::projection;
 use super::{AttemptHead, PlanHead, PlanReviewHead, PlanRunHead, RunHead};
 use crate::agent::{
     AgentGeneration, AgentQuestion, AgentReport, AgentTurn, ContainerRef, RequestReceipt,
@@ -22,31 +20,8 @@ use crate::{
     TaskComment, TaskRef, WaitRecord,
 };
 
-pub(crate) trait WithFacts {
-    fn with_facts(&mut self, facts: crate::ContainerFacts);
-}
-
-macro_rules! with_facts {
-    ($($ty:ty),*) => {
-        $(impl WithFacts for $ty {
-            fn with_facts(&mut self, facts: crate::ContainerFacts) {
-                self.facts = facts;
-            }
-        })*
-    };
-}
-
-with_facts!(RunHead, PlanRunHead, PlanHead, AttemptHead);
-
-fn decode<T: DeserializeOwned + WithFacts>(rows: &Rows, part: TaskPart, key: &str) -> Result<T> {
-    let row = rows
-        .0
-        .get(&(part, key.to_owned()))
-        .with_context(|| format!("a split container has no {part:?} row {key}"))?;
-    let (mut value, facts): (T, crate::ContainerFacts) = projection(&row.doc)?;
-    value.with_facts(facts);
-    Ok(value)
-}
+mod decode;
+use decode::decode;
 
 pub(crate) fn run_projection(task: &Task, i: usize, with_child: bool) -> Result<RunHead> {
     let run = task.runs.get(i).context("no such run")?;

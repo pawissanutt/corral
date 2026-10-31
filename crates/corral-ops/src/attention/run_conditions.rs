@@ -60,9 +60,9 @@ fn one_ref(
         Vec::new()
     };
     let obligations = match container {
-        ContainerRef::Worker { run, .. } => task.unreceipted_obligations(run)?,
+        ContainerRef::Worker { run, .. } => task.attention_obligations(run)?,
         ContainerRef::Reviewer { run, review, .. } => {
-            task.unreceipted_review_obligations(run, review)?
+            task.attention_review_obligations(run, review)?
         }
         ContainerRef::Planner { .. }
         | ContainerRef::PlanReviewer { .. }

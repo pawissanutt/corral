@@ -18,12 +18,9 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
-fn messages(world: &OmoWorld) -> Vec<Message> {
-    Inbox::new(&world.ctx.store, world.recipient())
-        .unwrap()
-        .messages()
-        .unwrap()
-}
+#[path = "owner_test_messages.rs"]
+mod message_helpers;
+use message_helpers::messages;
 
 /// Caller paths resolve the production adapter, which test builds never find: posting
 /// must still succeed and the composer must stay untouched.

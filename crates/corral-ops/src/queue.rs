@@ -81,16 +81,8 @@ pub fn enqueue(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<Task> {
     Ok(task)
 }
 
-fn check_dequeue(task: &Task) -> Result<()> {
-    if !matches!(task.status, Status::Idea | Status::Backlog | Status::Ready) {
-        bail!(
-            "{} is {}; dequeue only applies to Idea, Backlog or Ready work",
-            task.id,
-            task.status.label()
-        );
-    }
-    Ok(())
-}
+mod dequeue_check;
+use dequeue_check::check_dequeue;
 
 /// Remove authorization, including project admission, until explicitly enqueued again.
 pub fn dequeue(ctx: &Ctx, id: &str) -> Result<Task> {
@@ -732,7 +724,7 @@ pub fn dispatch_queue(ctx: &Ctx) -> Result<Vec<QueueEntry>> {
         if let Some(run) = task.runs.last_mut() {
             // Parked/woken queue membership only consumes receipt-free waits/decisions.
             // Stale renderings with receipts belong to obligation reconciliation, not this read.
-            run.obligations = head.unreceipted_obligations(&run.id)?;
+            run.obligations = head.attention_obligations(&run.id)?;
         }
         board.push(task);
     }

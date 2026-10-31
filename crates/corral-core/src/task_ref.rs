@@ -553,6 +553,17 @@ pub trait TaskRef: TaskFieldsRef {
     /// Only waits/decisions without a receipt, excluding stale rendered settled rows.
     fn unreceipted_obligations(&self, run: &str) -> Result<RunObligations>;
     fn unreceipted_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations>;
+    /// Receipt-free attention conditions, excluding settled operational job exits.
+    fn attention_obligations(&self, run: &str) -> Result<RunObligations> {
+        let mut obligations = self.unreceipted_obligations(run)?;
+        obligations.waits.retain(|wait| !wait.settled_job_exit());
+        Ok(obligations)
+    }
+    fn attention_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations> {
+        let mut obligations = self.unreceipted_review_obligations(run, review)?;
+        obligations.waits.retain(|wait| !wait.settled_job_exit());
+        Ok(obligations)
+    }
     /// Open observations of one named review child, never its worker's obligation rows.
     fn open_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations>;
     /// Checkpoint metadata of `run`, newest first, read as the caller consumes it.

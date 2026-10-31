@@ -13,12 +13,30 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{Artifact, ArtifactKind, AutoStage, Config, Status, Task, TaskHead};
 
+pub(crate) fn settled_job_exit_doc(doc: &serde_json::Value) -> bool {
+    let handle = &doc["request"]["handle"];
+    let channel = (handle["kind"] == "channel")
+        .then(|| handle["channel_id"].as_str())
+        .flatten();
+    crate::obligations::settled_job_exit_parts(
+        channel,
+        doc["request"]["condition"].as_str().unwrap_or_default(),
+        doc["observation"]["state"].as_str().unwrap_or_default(),
+    )
+}
+
+/// Receipt-free attention input, excluding operational job exits that have settled.
+pub(crate) fn attention_obligation_visible(kind: &str, doc: &serde_json::Value) -> bool {
+    doc["receipt"].is_null() && (kind != "wait" || !settled_job_exit_doc(doc))
+}
+
 /// The baseline card predicate, also used to maintain the card-obligation row index.
 pub(crate) fn card_obligation_visible(kind: &str, doc: &serde_json::Value) -> bool {
     let state = doc["observation"]["state"].as_str();
     match kind {
         "wait" => {
-            state != Some("cancelled")
+            !settled_job_exit_doc(doc)
+                && state != Some("cancelled")
                 && !(state == Some("ready") && doc["receipt"]["delivery"] == "acknowledged")
         }
         "decision" => doc["receipt"].is_null() || state == Some("delivery_unknown"),

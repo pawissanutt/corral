@@ -421,6 +421,9 @@ impl TaskHeadMut {
             .chain(receipt.map(|r| format!("receipt:{r}")))
             .chain(receipt.is_none().then(|| "receipt:absent".into()))
             .collect();
+        if crate::card::attention_obligation_visible(kind, &row.doc) {
+            row.index.push("attention".into());
+        }
         if crate::card::card_obligation_visible(kind, &row.doc) {
             row.index.push("card".into());
         }
@@ -445,6 +448,7 @@ impl TaskHeadMut {
         facts.dependency_waits += parking.0;
         facts.nondependency_waits += parking.1;
         facts.waits += 1;
+        facts.settled_job_exits += u64::from(wait.settled_job_exit());
         facts.obligations_rev += 1;
         facts.pending_waits += u64::from(wait.observation.state == WaitState::Pending);
         facts.open_obligations += u64::from(wait.receipt.is_none());

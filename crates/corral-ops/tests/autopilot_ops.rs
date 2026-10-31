@@ -863,11 +863,6 @@ fn without_a_review_section_nothing_lands_or_merges() {
     assert_eq!(fx.herdr_log("notify.log"), "");
 }
 
-/// The materialized dispatch prompt of `task`'s run `run`, from the run's prompt record.
-fn dispatch_prompt(store: &corral_core::Store, task: &str, run: &str) -> std::path::PathBuf {
-    let record = store
-        .record_row("run-prompts", &format!("{task}/{run}"))
-        .unwrap()
-        .expect("dispatch rendered no prompt");
-    record.doc["file"].as_str().unwrap().into()
-}
+#[path = "support/autopilot_prompt.rs"]
+mod prompt_record;
+use prompt_record::dispatch_prompt;
