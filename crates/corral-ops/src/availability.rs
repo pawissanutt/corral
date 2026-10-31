@@ -8,7 +8,7 @@ use corral_core::records::RecordArea;
 use corral_core::{
     AttemptFailure, AvailabilityClass, AvailabilityEpisode, CandidateBinding, Config,
     ExecutionCandidate, ProfileChoice, ProfileMetadata, ProfileRole, ResolvedProfile,
-    RouteDecision, Run, Selection, SkippedCandidate, Task,
+    RouteDecision, Run, Selection, SkippedCandidate,
 };
 use jiff::Timestamp;
 use serde_json::json;
@@ -515,9 +515,9 @@ fn apply(decision: &mut RouteDecision, resolved: &ResolvedProfile, binding: Cand
 
 /// Binds a route to its approved candidate: a selected continuation, a before-start fallback,
 /// or the preferred candidate. Read-only; explicit model/effort choices are exact pins.
-pub(crate) fn bind_route(
+pub(crate) fn bind_route<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     role: ProfileRole,
     choice: &ProfileChoice,
     decision: &mut RouteDecision,
@@ -531,13 +531,19 @@ pub(crate) fn bind_route(
         return Ok(());
     }
     if role == ProfileRole::Implementation
-        && let Some(previous) = task.current_run()
-        && let Some(episode) = load(ctx, &run_episode(&task.id, previous))?
+        && let Some(previous) = task.current_run_head()?
+        && let Some(episode) = load(ctx, &run_episode_head(task.id(), &previous))?
         && episode.profile == decision.profile
         && let Some(next) = episode.current().filter(|attempt| {
             attempt.run.is_none()
                 && attempt.failures.is_empty()
-                && binding(previous).map(|b| &b.candidate) != Some(&attempt.candidate)
+                && previous
+                    .execution
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.candidate.as_ref())
+                    .filter(|binding| !binding.pinned)
+                    .map(|binding| &binding.candidate)
+                    != Some(&attempt.candidate)
         })
     {
         let candidate = config.execution_candidate(&decision.profile, &next.candidate)?;

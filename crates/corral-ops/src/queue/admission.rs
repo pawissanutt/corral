@@ -42,7 +42,7 @@ pub(crate) fn enqueue_ready(ctx: &Ctx, id: &str, opts: &DispatchOpts) -> Result<
     } else {
         crate::approved_plan(ctx, &head)?
     };
-    let plan = resolve_plan(ctx, &task, opts)?;
+    let plan = resolve_plan(ctx, &head, opts)?;
     let (head, ()) = ctx.store.dispatch_update_head(&head.id, |store, current| {
         check_snapshot_head(ctx, store, &head, current.head())?;
         if !planning {

@@ -368,9 +368,9 @@ pub(crate) fn route_task(ctx: &Ctx, task: &Task, choice: &ProfileChoice) -> Resu
     route_task_for_role(ctx, task, choice, ProfileRole::Implementation)
 }
 
-pub(crate) fn route_task_for_role(
+pub(crate) fn route_task_for_role<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,
-    task: &Task,
+    task: &T,
     choice: &ProfileChoice,
     role: ProfileRole,
 ) -> Result<RouteDecision> {
@@ -379,7 +379,7 @@ pub(crate) fn route_task_for_role(
     let selection = selections
         .iter()
         .rev()
-        .find(|selection| selection.task == task.id && selection.role == role);
+        .find(|selection| &selection.task == task.id() && selection.role == role);
     let mut catalogs = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut check = |profile: &ResolvedProfile| {

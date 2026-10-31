@@ -222,13 +222,8 @@ pub(crate) fn ready_reason<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Opti
     }
 }
 
-pub(crate) fn queued_plan_requested<T: TaskRef + ?Sized>(task: &T) -> bool {
-    *task.queued()
-        && task
-            .dispatch_plan()
-            .as_ref()
-            .is_some_and(|p| p.explicit_plan)
-}
+mod plan_intent;
+pub(crate) use plan_intent::queued_plan_requested;
 
 /// Only the latest submission for the current task contract can hold admission.
 pub(crate) fn pending_plan_reason(task: &Task) -> Result<Option<String>> {
@@ -285,15 +280,19 @@ pub(crate) fn check_snapshot_head(
     Ok(())
 }
 
-pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Result<DispatchPlan> {
+pub(crate) fn resolve_plan<T: corral_core::TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    opts: &DispatchOpts,
+) -> Result<DispatchPlan> {
     crate::tracker::check_action(task, "route tracker")?;
     if opts.profile.is_none()
         && opts.model.is_none()
         && opts.effort.is_none()
         && opts.base.is_none()
-        && let Some(plan) = &task.dispatch_plan
+        && let Some(plan) = task.dispatch_plan()
     {
-        if task.launch.is_some() {
+        if task.launch().is_some() {
             // A reserved run already owns an immutable execution identity.
             return Ok(plan.clone());
         }
@@ -362,7 +361,9 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
             } else {
                 if matches!(plan.route.route, corral_core::RouteSource::Retry { .. }) {
                     if plan.route.profile != selected.profile {
-                        let origin = task.current_run().context("queued retry has no run")?;
+                        let origin = task
+                            .current_run_head()?
+                            .context("queued retry has no run")?;
                         plan.choice.switch = (origin.agent != selected.profile).then(|| {
                             corral_core::ProfileSwitch {
                                 from: origin.agent.clone(),
@@ -439,15 +440,16 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
                 } else {
                     corral_core::ProfileRole::Implementation
                 },
-                task.project.as_deref(),
+                task.project().as_deref(),
                 plan.route.route.requires_automatic_eligibility(),
             )?;
         }
         validate_plan(ctx, &plan)?;
         return Ok(plan);
     }
-    let previous = task
-        .current_run()
+    let previous_run = task.current_run_head()?;
+    let previous = previous_run
+        .as_ref()
         .filter(|r| r.outcome == Some(RunOutcome::Superseded));
     let retry = previous.and_then(|r| r.retry.as_ref());
     let choice = ProfileChoice {
@@ -495,7 +497,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
     {
         route.warnings.push(warning);
     }
-    let project = task.project.as_ref().context("task has no project")?;
+    let project = task.project().as_ref().context("task has no project")?;
     let config = ctx
         .store
         .config
@@ -504,7 +506,7 @@ pub(crate) fn resolve_plan(ctx: &Ctx, task: &Task, opts: &DispatchOpts) -> Resul
         .context("unknown task project")?;
     Ok(DispatchPlan {
         authorization: task
-            .dispatch_plan
+            .dispatch_plan()
             .as_ref()
             .and_then(|plan| plan.authorization.clone()),
         plan: crate::plan_dispatch::needed(ctx, task, opts),

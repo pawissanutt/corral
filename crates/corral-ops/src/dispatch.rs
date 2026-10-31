@@ -206,7 +206,7 @@ fn dispatch_with(
         return crate::plan_dispatch::dispatch(ctx, &head, opts, &admission);
     }
     let approved_plan = crate::approved_plan(ctx, &*head)?;
-    let plan = crate::queue::resolve_plan(ctx, &task, opts)?;
+    let plan = crate::queue::resolve_plan(ctx, &*head, opts)?;
     check_plan(ctx, &*head, &plan.route, approved_plan.as_ref())?;
     let resolved = &plan.route;
     for warning in &resolved.warnings {

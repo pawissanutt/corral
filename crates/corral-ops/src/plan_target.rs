@@ -40,7 +40,7 @@ fn path(repo: &Path, branch: &str) -> Result<PathBuf> {
     Ok(directory(repo)?.join(format!("{key}.json")))
 }
 
-pub(crate) fn branch(store: &Store, task: &Task) -> Result<Option<String>> {
+pub(crate) fn branch<T: TaskRef + ?Sized>(store: &Store, task: &T) -> Result<Option<String>> {
     Ok(store.execution_plan_ref(task)?.and_then(|plan| {
         plan.approved_scope
             .clone()
