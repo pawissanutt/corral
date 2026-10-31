@@ -7,6 +7,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PassThrough } from "node:stream";
 
 import {
   type JobCall, type JobReceipt, JobRuntime, type Schedule, processGroup, startTimeOf,
@@ -241,19 +242,58 @@ const PIDFD_WAIT = "import os, select, sys\nfd = os.pidfd_open(int(sys.argv[1]))
 
 function lines(stream: NodeJS.ReadableStream): (pattern: RegExp) => Promise<string> {
   let buffer = "";
-  const waiting: { pattern: RegExp; resolve: (value: string) => void }[] = [];
+  const complete: string[] = [];
+  let ended: Error | undefined;
+  const waiting: { pattern: RegExp; resolve: (value: string) => void; reject: (error: Error) => void }[] = [];
   const check = () => {
     for (const entry of [...waiting]) {
-      const match = buffer.split("\n").map((line) => entry.pattern.exec(line)).find((found) => found);
-      if (match) {
+      const match = complete.map((line) => entry.pattern.exec(line)).find((found) => found);
+      if (match || ended) {
         waiting.splice(waiting.indexOf(entry), 1);
-        entry.resolve(match[1] ?? match[0]);
+        if (match) entry.resolve(match[1] ?? match[0]);
+        else if (ended) entry.reject(ended);
       }
     }
   };
-  stream.on("data", (chunk: Buffer) => { buffer += chunk.toString("utf8"); check(); });
-  return (pattern) => new Promise((resolve) => { waiting.push({ pattern, resolve }); check(); });
+  stream.on("data", (chunk: Buffer) => {
+    buffer += chunk.toString("utf8");
+    const parts = buffer.split("\n");
+    buffer = parts.pop() ?? "";
+    complete.push(...parts);
+    check();
+  });
+  const end = (error?: Error) => {
+    ended = error ?? new Error(`handshake ended before a matching line: ${JSON.stringify([...complete, buffer])}`);
+    check();
+  };
+  stream.once("end", () => end());
+  stream.once("error", end);
+  stream.once("close", () => end());
+  return (pattern) => new Promise((resolve, reject) => { waiting.push({ pattern, resolve, reject }); check(); });
 }
+
+test("crash handshakes wait for the complete identity line, not a chunk ending in digits", async () => {
+  const stream = new PassThrough();
+  const next = lines(stream);
+  const identity = next(/^STARTED (\d+)$/);
+  stream.write("STARTED 12");
+  stream.write("345\n");
+  expect(await identity).toBe("12345");
+  stream.end();
+});
+
+test("crash handshakes reject a truncated identity or a failed peer instead of hanging", async () => {
+  const stream = new PassThrough();
+  const next = lines(stream);
+  const identity = next(/^STARTED (\d+)$/);
+  stream.end("STARTED 12");
+  await expect(identity).rejects.toThrow("handshake ended");
+  await expect(next(/^(ARMED)$/)).rejects.toThrow("handshake ended");
+  const failed = new PassThrough();
+  const armed = lines(failed)(/^(ARMED)$/);
+  failed.destroy(new Error("peer failed"));
+  await expect(armed).rejects.toThrow("peer failed");
+});
 
 test("a host killed between spawn and the identity commit leaves no command running", async () => {
   // Given a host stalled inside the started commit of a job whose command would leave a marker.
@@ -263,18 +303,38 @@ test("a host killed between spawn and the identity commit leaves no command runn
   const runtimeDir = join(dir, "runtime");
   const fixturePath = fileURLToPath(new URL("./fixtures/jobs/crash-host.ts", import.meta.url));
   const host = spawn(process.execPath, [fixturePath, runtimeDir, marker], { stdio: ["ignore", "pipe", "inherit"] });
-  const pid = await lines(host.stdout)(/^STARTED (\d+)$/);
-  const waiter = spawn("python3", ["-I", "-c", PIDFD_WAIT, pid], { stdio: ["ignore", "pipe", "inherit"] });
-  const next = lines(waiter.stdout);
-  expect(await next(/^(ARMED)$/)).toBe("ARMED");
-  // When the host is killed in that window and its runtime files are removed.
+  // Arm exit observations at spawn, before waiting on either peer's handshake.
   const gone = new Promise((resolve) => host.once("close", resolve));
-  host.kill("SIGKILL");
-  await gone;
-  rmSync(runtimeDir, { recursive: true, force: true });
-  // Then the gated launcher exits by itself and the command never ran.
-  expect(await next(/^(EXITED|TIMEOUT)$/)).toBe("EXITED");
-  expect(existsSync(marker)).toBeFalse();
+  let waiter: ReturnType<typeof spawn> | undefined;
+  let waiterGone: Promise<unknown> | undefined;
+  let pid: number | undefined;
+  let start: string | undefined;
+  try {
+    pid = Number(await lines(host.stdout)(/^STARTED (\d+)$/));
+    start = startTimeOf(pid);
+    expect(start).toBeDefined();
+    waiter = spawn("python3", ["-I", "-c", PIDFD_WAIT, String(pid)], { stdio: ["ignore", "pipe", "inherit"] });
+    waiterGone = new Promise((resolve) => waiter?.once("close", resolve));
+    const next = lines(waiter.stdout!);
+    expect(await next(/^(ARMED)$/)).toBe("ARMED");
+    // When the host is killed in that window and its runtime files are removed.
+    host.kill("SIGKILL");
+    await gone;
+    rmSync(runtimeDir, { recursive: true, force: true });
+    // Then the gated launcher exits by itself and the command never ran.
+    expect(await next(/^(EXITED|TIMEOUT)$/)).toBe("EXITED");
+    await waiterGone;
+    expect(startTimeOf(pid)).toBeUndefined();
+    expect(existsSync(marker)).toBeFalse();
+  } finally {
+    host.kill("SIGKILL");
+    waiter?.kill("SIGKILL");
+    await Promise.all([gone, waiterGone]);
+    // Only on failure: never leave a gated launcher behind after a broken handshake.
+    if (pid !== undefined && start !== undefined && startTimeOf(pid) === start) {
+      try { process.kill(pid, "SIGKILL"); } catch { /* already exited */ }
+    }
+  }
 });
 
 test("only the recorded leader anchors a group; a leaderless or stale identity is never owned", async () => {
