@@ -5,7 +5,7 @@
 // cancellation settles idle; a graceful shutdown over the bridge releases the pane and clears the
 // metadata while the pane and its shell stay.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { HostIdentity, Role } from "../src/roles/types.ts";
@@ -13,7 +13,7 @@ import { type TestClient, connect } from "./support/bridge-client.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
 import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
-import { fileAppears, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
 
 const isolated = privateHerdr();
 let assets: FixtureInstall | undefined;
@@ -24,6 +24,24 @@ const CTL = "c".repeat(48);
 const herdr = (...args: string[]): any => JSON.parse(ok(["herdr", "--session", "corral-test", ...args])).result;
 const frame = (command: string, args: Record<string, unknown> = {}) =>
   ({ version: 1, id: `hx-${command}-${Math.random().toString(36).slice(2, 10)}`, ctl_cap: CTL, generation: 1, command, args });
+
+// The host sends hello only after startBridge has completed its listen callback. A socket
+// pathname alone can appear between bind and listen and is not a readiness signal.
+async function bridgeReady(dir: string): Promise<void> {
+  let watcher: ReturnType<typeof watch> | undefined;
+  const ready = new Promise<void>((resolve) => {
+    const check = () => {
+      const calls = join(dir, "calls.jsonl");
+      if (!existsSync(calls)) return;
+      const lines = readFileSync(calls, "utf8").split("\n");
+      lines.pop(); // Ignore any concurrent partial append.
+      if (lines.some((line) => JSON.parse(JSON.parse(line).stdin).op === "hello")) resolve();
+    };
+    watcher = watch(dir, check);
+    check();
+  });
+  await within(ready, 90_000, "the host bridge to listen and send hello").finally(() => watcher?.close());
+}
 
 async function untilBound(client: TestClient): Promise<void> {
   for (;;) if ((await client.request(frame("hello"))).result?.bound === true) return;
@@ -99,7 +117,7 @@ for (const { identity, display } of cases) {
     workspaces.push(created.workspace.workspace_id);
     const pane: string = created.root_pane.pane_id;
     const runtime = launch(dir, pane, identity);
-    await fileAppears(runtime, "host.sock");
+    await bridgeReady(dir);
     const client = await connect(join(runtime, "host.sock"));
     await within(untilBound(client), 60_000, "the host to bind");
     const session = ((await client.request(frame("get_state"))).result?.session as { bound_id: string }).bound_id;
