@@ -19,11 +19,26 @@ fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
         .records(&RecordQuery::default(), PageReq::first(128))
         .unwrap();
     assert!(state.next.is_none(), "fixture record page was truncated");
-    // Evidence references need their blob rows, which the disposable database lacks.
-    let state_records: Vec<_> = state
-        .items
+    // Reconstruct the real canonical evidence too: no mirror snapshot can stand in for
+    // a blob row/reference when the interrupted authorization is replayed.
+    use std::io::Read;
+    let state_records = state.items;
+    let hashes: std::collections::BTreeSet<_> = state_records
+        .iter()
+        .flat_map(|record| corral_core::blob_ref::scan(&record.doc))
+        .collect();
+    let evidence: std::collections::BTreeMap<_, _> = hashes
         .into_iter()
-        .filter(|record| corral_core::blob_ref::scan(&record.doc).is_empty())
+        .map(|hash| {
+            let mut bytes = Vec::new();
+            ctx.store
+                .blob_reader(&hash)
+                .unwrap()
+                .unwrap()
+                .read_to_end(&mut bytes)
+                .unwrap();
+            (hash, bytes)
+        })
         .collect();
     let events = ctx
         .store
@@ -75,7 +90,19 @@ fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
     // Reconstruct only the interrupted receipt, not a different workspace grant.
     // Replay record versions before opening the store so config observation sees
     // the exact original state, including its confirmation and revocation records.
+    let blobs = corral_core::blob::FsBlobStore::open(&corral).unwrap();
+    let clock = corral_core::backend::SystemClock;
     for record in &state_records {
+        let reservations: Vec<_> = corral_core::blob_ref::scan(&record.doc)
+            .into_iter()
+            .map(|hash| {
+                corral_core::blob::Putter::new(&backend, &blobs, &clock)
+                    .unwrap()
+                    .put(&mut evidence[&hash].as_slice(), &mut |_| Ok(()))
+                    .unwrap()
+                    .reservation
+            })
+            .collect();
         for version in 0..record.version {
             backend
                 .apply(Operation::PutRecords(PutRecords {
@@ -87,7 +114,11 @@ fn replace_proof(ctx: Ctx, replacement: &AuthorizedSubmission) -> Ctx {
                         updated: record.updated,
                     }],
                     events: vec![],
-                    reservations: vec![],
+                    reservations: if version == 0 {
+                        reservations.clone()
+                    } else {
+                        Vec::new()
+                    },
                 }))
                 .unwrap();
         }

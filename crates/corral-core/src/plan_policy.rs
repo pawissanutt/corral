@@ -27,6 +27,24 @@ pub fn read_plan(store: &Store, path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn read_plan_snapshot(store: &Store, artifact: &crate::Artifact, legacy: &Path) -> Result<Vec<u8>> {
+    if let Ok(hash) = crate::blob_ref::BlobHash::parse(&artifact.sha256)
+        && let Some(reader) = store.blob_reader(&hash)?
+    {
+        let max = store.config.artifacts.max_bytes;
+        let mut bytes = Vec::new();
+        reader
+            .take(max.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .context("reading stored plan blob")?;
+        if u64::try_from(bytes.len())? > max {
+            bail!("plan exceeds artifacts.max_bytes ({max})");
+        }
+        return Ok(bytes);
+    }
+    read_plan(store, legacy)
+}
+
 pub fn expected_reviewer(config: &Config, task: &Task) -> Result<String> {
     let planner = planner(task)?.map(PlannerProfile::from);
     let family =
@@ -406,11 +424,16 @@ pub fn fresh(store: &Store, task: &Task, plan: &PlanRecord) -> Result<()> {
             plan.id
         );
     }
-    for path in [
-        store.dir().join(&plan.artifact.path),
-        Path::new(&plan.artifact.source).to_path_buf(),
+    for (snapshot, path) in [
+        (true, store.dir().join(&plan.artifact.path)),
+        (false, Path::new(&plan.artifact.source).to_path_buf()),
     ] {
-        let bytes = read_plan(store, &path).with_context(|| {
+        let bytes = (if snapshot {
+            read_plan_snapshot(store, &plan.artifact, &path)
+        } else {
+            read_plan(store, &path)
+        })
+        .with_context(|| {
             format!(
                 "stale plan {}: restore its source or submit a new plan",
                 plan.id

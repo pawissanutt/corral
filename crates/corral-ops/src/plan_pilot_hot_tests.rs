@@ -19,6 +19,7 @@ enum State {
 
 fn at_state(state: State) -> (tempfile::TempDir, Ctx, String) {
     let (tmp, ctx, id, _) = fixture();
+    ctx.store.fixture_pin_now(ctx.store.now()).unwrap();
     match state {
         State::Reviewing => advance(&ctx, &id, Timestamp::now()).unwrap(),
         State::AwaitingOwner | State::Attached => {
@@ -156,6 +157,8 @@ fn status_change(ctx: &Ctx, id: &str) -> Vec<(&'static str, u64)> {
 #[test]
 fn the_planner_state_change_is_a_head_write_that_does_not_grow() {
     let (_tmp, ctx, id, _) = fixture();
+    // Keep timestamp precision identical; only retained history differs between variants.
+    ctx.store.fixture_pin_now(ctx.store.now()).unwrap();
     grow(&ctx, &id, 1);
     blocked_planner(&ctx, &id);
     let base = status_change(&ctx, &id);

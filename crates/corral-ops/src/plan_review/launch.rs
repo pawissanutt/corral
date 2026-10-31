@@ -259,6 +259,7 @@ pub(super) fn review_with_origin(
             })?;
         }
         if !cancelled
+            && !plan::published_design_head(t.head())
             && (run_id.is_some()
                 || t.head().current_run.as_ref().is_none_or(|r| r.outcome.is_some()))
         {

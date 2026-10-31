@@ -668,6 +668,8 @@ pub(crate) fn may_resume(task: &Task) -> Result<bool> {
 }
 
 pub(crate) fn resume_prepared(ctx: &Ctx, head: &TaskHead) -> Result<bool> {
+    let current = ctx.store.head(&head.id)?;
+    let head = &current;
     let task = &head.shell_task()?;
     if task.park.is_some()
         || task.dispatch_hold
