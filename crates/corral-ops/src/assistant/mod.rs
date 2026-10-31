@@ -2,6 +2,7 @@
 mod focus;
 pub mod host;
 pub mod owner_action;
+pub mod permissions;
 pub mod scratch;
 
 pub use focus::{BRIEF_BYTES, task_brief};

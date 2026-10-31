@@ -111,9 +111,14 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
             BindTarget::Planner { .. } | BindTarget::PlanReviewer { .. } => {
                 json!(["hello", "event", "receipt_lookup"])
             }
-            BindTarget::Assistant { .. } => {
-                json!(["hello", "event", "receipt_lookup", "todo", "owner_action"])
-            }
+            BindTarget::Assistant { .. } => json!([
+                "hello",
+                "event",
+                "receipt_lookup",
+                "todo",
+                "owner_action",
+                "write_permission"
+            ]),
             BindTarget::Pm { .. } => json!([
                 "hello",
                 "event",
@@ -428,6 +433,36 @@ fn a_fence_between_admission_and_commit_refuses_and_the_missing_receipt_is_final
                 .receipt(&event_request_id(1, 1))
                 .is_none()
         );
+    }
+}
+
+#[test]
+fn an_assistant_event_still_replays_its_receipt_after_its_generation_is_fenced() {
+    // Given A-1 journaled an owner input in generation 1.
+    let fx = fx();
+    let session = fx
+        .ctx
+        .store
+        .create_assistant("pi", None, Some("a-pane"), None)
+        .unwrap();
+    let target = BindTarget::Assistant {
+        session: session.id.clone(),
+    };
+    let host = bind(&fx, &target, "a-pane", "s-a1");
+    committed(&hello(&fx, &host));
+    let payload = json!({"kind": "owner_input", "source": "pane", "text": "hi",
+        "sha256": paths::sha256_hex(b"hi")});
+    let input = envelope(&host, "event", &event_request_id(1, 1), payload, false);
+    let stored = committed(&send(&fx, &input, "event"));
+    // When a resume fences generation 1 and its host resends the event.
+    assert!(fence_generation(&fx.ctx.store, &target.container(), 1, "resume").unwrap());
+    // Then the stored receipt replays: only a write_permission decide rechecks liveness.
+    match send(&fx, &input, "event") {
+        CallResponse::Receipt {
+            receipt,
+            replayed: true,
+        } => assert_eq!(receipt, stored),
+        other => panic!("expected the stored receipt, got {other:?}"),
     }
 }
 
