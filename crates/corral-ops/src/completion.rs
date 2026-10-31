@@ -186,7 +186,21 @@ pub(crate) fn snapshot_hashes_with(
             }
         }
         let bytes = crate::artifact_storage::artifact_read_confined_limited(ctx, &artifact, max)
-            .with_context(|| format!("reading artifact {reference}"))?;
+            .map_err(|error| {
+                // Canonical verification may reject corruption before returning decoded bytes.
+                // Preserve the same evidence-boundary diagnoses as the explicit checks below.
+                let kind = error.chain().find_map(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .map(std::io::Error::kind)
+                });
+                let label = match kind {
+                    Some(std::io::ErrorKind::NotFound) => "missing_artifact",
+                    Some(std::io::ErrorKind::InvalidData) => "artifact_tampered",
+                    _ => "reading artifact",
+                };
+                error.context(format!("{label}: {reference}"))
+            })?;
         let hash = verification::digest(&bytes);
         if u64::try_from(bytes.len())? != artifact.bytes || hash != artifact.sha256 {
             bail!("artifact_tampered: {reference}");

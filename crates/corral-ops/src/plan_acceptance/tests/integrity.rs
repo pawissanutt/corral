@@ -164,7 +164,8 @@ fn tampered_missing_or_stale_evidence_snapshots_invalidate_proof() {
     let fresh = capture(&f, &f.plan, "fresh.txt");
     observe_with(&f, &attempt.id, "C2-fresh", &[&fresh]).unwrap();
     f.review(&attempt.id, Verdict::Approve).unwrap();
-    let snapshot = f.ctx.store.dir().join(&fresh.path);
+    let hash = corral_core::blob_ref::BlobHash::parse(&fresh.sha256).unwrap();
+    let snapshot = f.ctx.store.blob_store().unwrap().path_of(&hash);
     let original = std::fs::read(&snapshot).unwrap();
     // When the stored snapshot bytes change after the approving review.
     std::fs::write(&snapshot, "replaced bytes\n").unwrap();
