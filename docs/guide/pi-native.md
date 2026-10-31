@@ -525,6 +525,27 @@ by the existing 8 KiB receipt-result limit. Worker progress appears in board car
 `corral show`; the PM ledger appears in `corral agent state --pm` and its JSON output.
 The compact host transcript shows the operation, step and resulting revision.
 
+PM and assistant sessions keep one request plan at a time (T-679). Their contracts ask for a
+phased plan on every multi-step request and an update as each step changes; with `todo` off
+they say so instead. Each plan has an identity (`P1`, `P2`, ...) that the Todo widget header
+shows beside its revision. `init` is refused while the current plan has open steps; once
+every step is done or dropped, the next `init` keeps the old plan in history and opens the
+next one. `append` with a new `phase` and a `label` opens a phase for a mid-request
+correction. `{"op":"wait","step":"land","on":{"kind":"event","event":"T-12 lands"}}` or
+`"on":{"kind":"owner","question":"..."}` marks a step as waiting; starting or finishing it
+clears that. Updates may name `"plan":"P2"`, and one that names an older plan is refused.
+
+The host restores the ledger at startup and resume and gives every model request a bounded
+summary of the current plan (identity, revision, outstanding steps, waits and the next
+action), rebuilt at each turn and after compaction and never written into Pi's session
+file. When a turn ends with an actionable step, corral may grant one continuation per plan
+revision. The host starts it only while the pane is idle, and only after re-reading the
+ledger and finding the same plan revision. A cancelled, aborted or failed turn is never
+continued, and neither is a turn waiting on an event or the owner. A continued turn that
+changes nothing stops continuation, and so does a run of 8; the stop is shown in the pane.
+Board activity alone never starts a continuation. `corral agent state --pm` shows the
+request record as `todo_requests`.
+
 ### Background jobs
 
 Worker generations with `background_shell` expose `job_start`, `job_output`, `job_kill` and

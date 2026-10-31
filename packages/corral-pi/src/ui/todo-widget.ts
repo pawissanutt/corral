@@ -9,6 +9,13 @@ const Status = z.discriminatedUnion("state", [
   z.object({ state: z.literal("done") }),
   z.object({ state: z.literal("dropped"), reason: z.string() }),
 ]);
+const Wait = z.object({
+  step: z.string(),
+  on: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("event"), event: z.string() }),
+    z.object({ kind: z.literal("owner"), question: z.string() }),
+  ]),
+});
 export const ProgressSchema = z.object({
   revision: z.number().int().nonnegative(),
   spec_revision: z.string(),
@@ -19,6 +26,9 @@ export const ProgressSchema = z.object({
       criteria: z.array(z.string()).default([]),
     })),
   })),
+  /** PM and assistant plans only: the plan identity the model's request summary names. */
+  plan: z.string().optional(),
+  waits: z.array(Wait).optional(),
 });
 export type TodoProgress = z.infer<typeof ProgressSchema>;
 type Step = TodoProgress["phases"][number]["steps"][number];
@@ -82,7 +92,7 @@ export class TodoWidget implements Component {
     const dropped = steps.filter((step) => step.status.state === "dropped").length;
     const active = steps.find((step) => step.status.state === "in_progress");
     const next = steps.find((step) => step.status.state === "pending");
-    const head = `${this.expanded ? "▾" : "▸"} Todo`;
+    const head = `${this.expanded ? "▾" : "▸"} Todo${progress?.plan ? ` ${label(progress.plan)} r${progress.revision}` : ""}`;
     const counts = progress ? `  ${theme.fg("success", "✓")} ${done}/${steps.length}` +
       (dropped ? `  ${theme.fg("warning", "–")} ${dropped}` : "") : "";
     const status = this.stale ? theme.fg("warning", progress ? " · stale" : " · unavailable") : "";
@@ -106,6 +116,11 @@ export class TodoWidget implements Component {
         wrap(`${mark(step.status, theme)} ${label(step.label)} ${theme.fg("dim", `[${label(step.id)}]`)}`, 4);
         if (step.criteria.length) wrap(theme.fg("dim", `Criteria: ${step.criteria.map(label).join(", ")}`), 6);
         if (step.status.state === "dropped") wrap(theme.fg("warning", `Reason: ${label(step.status.reason)}`), 6);
+        const wait = progress.waits?.find((entry) => entry.step === step.id)?.on;
+        if (wait) {
+          wrap(theme.fg("warning", wait.kind === "owner" ? `Waits on the owner: ${label(wait.question)}`
+            : `Waits on: ${label(wait.event)}`), 6);
+        }
       }
     }
     // Keep most of the terminal available for conversation and input, even in small panes.

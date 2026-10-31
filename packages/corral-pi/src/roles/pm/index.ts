@@ -2,7 +2,7 @@
 import { assetPath, assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import type { CorralOp, RoleModule } from "../types.ts";
 import { pmTools } from "./tools.ts";
-import { todoTool } from "../common/todo.ts";
+import { requestContract, sessionTodoTool } from "../common/todo.ts";
 
 export const CONTEXT_ASSET = "assets/pm-context.md";
 export const SKILL_ASSET = "src/roles/pm/skills/corral-pm/SKILL.md";
@@ -14,8 +14,9 @@ export function pmRole(root: string): RoleModule {
     // Owner direction 2026-10-30: the PM can read, edit and run commands like an assistant.
     upstreamTools: ["read", "edit", "write", "grep", "find", "ls", "bash"],
     corralOps: OPS,
-    tools: (context) => context.todo === true ? [...pmTools, todoTool] : pmTools,
-    contract: (context) => renderContract(readAsset(root, CONTEXT_ASSET), context.identity),
+    tools: (context) => context.todo === true ? [...pmTools, sessionTodoTool] : pmTools,
+    contract: (context) => `${renderContract(readAsset(root, CONTEXT_ASSET), context.identity)}\n\n`
+      + requestContract(root, context.todo),
     extend(pi) {
       const skill = assetPath(root, SKILL_ASSET);
       pi.on("resources_discover", () => ({ skillPaths: [skill] }));

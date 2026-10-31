@@ -26,6 +26,8 @@ export interface FakeTransport {
   readonly requests: number;
   readonly aborted: number;
   readonly failures: number;
+  /** The last user text of each request, oldest first: what the model was given to answer. */
+  readonly prompts: readonly string[];
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -63,6 +65,7 @@ export function fakeCodexTransport(): FakeTransport {
     for (const waiter of holdWaiters.splice(0)) waiter();
   };
   let requests = 0;
+  const prompts: string[] = [];
   let aborted = 0;
   let failures = 0;
   let holdNext = false;
@@ -73,6 +76,7 @@ export function fakeCodexTransport(): FakeTransport {
   const send: Fetch = async (_input, init) => {
     const sequence = ++requests;
     const body = requestBody(init);
+    prompts.push(lastUserText(body));
     if (failNext) {
       failNext = false;
       failures++;
@@ -143,5 +147,6 @@ export function fakeCodexTransport(): FakeTransport {
     get requests() { return requests; },
     get aborted() { return aborted; },
     get failures() { return failures; },
+    get prompts() { return prompts; },
   };
 }

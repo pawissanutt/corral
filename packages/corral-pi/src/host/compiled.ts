@@ -16,6 +16,8 @@ import compat from "../../compat.json" with { type: "json" };
 import assistantContract from "../../assets/assistant-contract.md" with { type: "text" };
 import pmContext from "../../assets/pm-context.md" with { type: "text" };
 import pmSkill from "../roles/pm/skills/corral-pm/SKILL.md" with { type: "text" };
+import requestExecution from "../../assets/request-execution.md" with { type: "text" };
+import requestExecutionOff from "../../assets/request-execution-off.md" with { type: "text" };
 import reviewerContract from "../../assets/reviewer-contract.md" with { type: "text" };
 import workerContract from "../../assets/worker-contract.md" with { type: "text" };
 import workerSkill from "../roles/worker/skills/corral-worker/SKILL.md" with { type: "text" };
@@ -33,6 +35,8 @@ export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "assets/assistant-contract.md": assistantContract,
   "assets/pm-context.md": pmContext,
   "src/roles/pm/skills/corral-pm/SKILL.md": pmSkill,
+  "assets/request-execution.md": requestExecution,
+  "assets/request-execution-off.md": requestExecutionOff,
   "assets/reviewer-contract.md": reviewerContract,
   "assets/worker-contract.md": workerContract,
   "src/roles/worker/skills/corral-worker/SKILL.md": workerSkill,
