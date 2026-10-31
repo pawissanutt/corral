@@ -89,7 +89,26 @@ fn returned_for_changes(policy: SessionPolicy, change_candidate: bool) {
     assert_eq!(fx.run(&id).review, before.review);
     let starts = fx.events(&id, "gate_started");
     assert_eq!(starts.len(), 2);
-    assert_eq!(starts[0]["identity"], serde_json::json!(receipt.identity));
+    let first_identity = receipt.identity.as_ref().unwrap();
+    assert_eq!(starts[0]["attempt"], first_identity.attempt);
+    let first_attempt = fx
+        .ctx
+        .store
+        .gate_attempt(&id, &before.id, &first_identity.attempt)
+        .unwrap()
+        .unwrap();
+    let original: corral_core::CandidateIdentity = serde_json::from_slice(
+        &fx.ctx
+            .store
+            .blob_bytes(&first_attempt.identity)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        &original, first_identity,
+        "the first receipt identity remains byte-backed canonical evidence"
+    );
 }
 
 #[test]
