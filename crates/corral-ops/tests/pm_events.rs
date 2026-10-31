@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use corral_core::agent::{AgentRole, RequestIdentity, paths};
-use corral_core::{EventCursor, EventReader, Status, Store};
+use corral_core::{EventCursor, Status, Store, records::RecordArea};
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
 use corral_ops::agent::{
@@ -535,10 +535,11 @@ fn question_opened_on_a_fixture_run_reaches_the_live_pm_once_and_saves_the_curso
     let prompts = fx.log("prompts");
     assert_eq!(prompts, format!("pm:p1|[corral] {task} question_opened\n"));
     // And the saved cursor is past it, so nothing remains to deliver:
-    let state = fx.ctx.store.state_dir().join("pm-events.json");
-    let cursor: EventCursor = serde_json::from_slice(&std::fs::read(&state).unwrap()).unwrap();
-    let path = fx.ctx.store.dir().join("events.jsonl");
-    let mut rest = EventReader::open(&path, Some(cursor)).unwrap();
+    let cursor = RecordArea::<EventCursor>::new("pm-events")
+        .load(&fx.ctx.store, "state")
+        .unwrap()
+        .unwrap();
+    let mut rest = fx.ctx.store.events_since(Some(cursor)).unwrap();
     while let Some((event, _)) = rest.next_event().unwrap() {
         assert!(!opened(&event), "{event:?}");
     }

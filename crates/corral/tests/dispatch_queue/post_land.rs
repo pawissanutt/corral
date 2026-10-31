@@ -68,13 +68,9 @@ fn post_land_hook_running_corral_completes_during_sync() {
             reason: None,
         }],
     };
-    let dir = f.ctx.store.state_dir().join("post-land");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join(format!("{}.json", op.key)),
-        serde_json::to_vec_pretty(&op).unwrap(),
-    )
-    .unwrap();
+    corral_core::records::RecordArea::new("post-land")
+        .save(&f.ctx.store, &op.key, &op)
+        .unwrap();
 
     // When a real sync process reconciles the operation.
     f.ok(&["sync"]);

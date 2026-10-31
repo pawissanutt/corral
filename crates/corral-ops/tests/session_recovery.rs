@@ -165,7 +165,8 @@ impl Fixture {
     fn receipt(&self) -> PathBuf {
         self.ctx
             .store
-            .state_dir()
+            .scratch_tmp()
+            .unwrap()
             .join("launch-exits")
             .join(format!("{}-R1.exited", self.id))
     }

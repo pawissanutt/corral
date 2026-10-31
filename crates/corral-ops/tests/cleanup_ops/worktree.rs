@@ -10,7 +10,8 @@ impl Fx {
         let path = self
             .ctx
             .store
-            .state_dir()
+            .scratch_path("tmp")
+            .unwrap()
             .join("launch-exits")
             .join(format!("{}-{}.owner", self.id, run.id));
         std::fs::read_to_string(path).unwrap()
@@ -174,7 +175,8 @@ fn verdict_reaps_reviewer_resident_before_landing() {
     let marker_path = fx
         .ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
     let marker = std::fs::read_to_string(marker_path).unwrap();
@@ -202,7 +204,8 @@ fn landing_reaps_reviewer_orphan_left_after_verdict() {
     let path = fx
         .ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
     let marker = std::fs::read_to_string(path).unwrap();
@@ -225,7 +228,8 @@ fn sync_waits_for_verdict_event_before_reaping_reviewer() {
     let path = fx
         .ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
     let marker = std::fs::read_to_string(path).unwrap();
@@ -271,7 +275,8 @@ fn sync_reaps_abandoned_reviewer() {
     let path = fx
         .ctx
         .store
-        .state_dir()
+        .scratch_path("tmp")
+        .unwrap()
         .join("launch-exits")
         .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
     let marker = std::fs::read_to_string(path).unwrap();

@@ -241,8 +241,9 @@ fn concurrent_syncs_attempt_an_unchanged_refusal_once() {
         .unwrap();
     f.grant(&[&task.id]);
 
-    // When one sync process stops right after opening the refusal state, before its attempt,
-    let refusals = f.ctx.store.state_dir().join("queue-refusals.json");
+    // When one sync process stops after opening the drain lease, before claiming it,
+    // its competitor must commit the refusal before this process takes its fresh view.
+    let refusals = f.ctx.store.dir().join("lock/queue-drain.lock");
     let refusals = refusals.to_str().unwrap();
     let stop = "inject=openat:signal=SIGSTOP:when=1";
     let mut stopped = Traced::sync(
