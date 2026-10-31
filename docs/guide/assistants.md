@@ -583,8 +583,10 @@ The owner's one land-now answer covers both the finish and the approve after it.
 else is relaxed: the approve takes the landing lock and runs the integration, size, freshness
 and gate checks of any approval, and a failed gate stops before it. When the scratch moved
 after the report, the finish refuses `stale_candidate` and changes nothing, and the assistant
-reports the new candidate and asks again. The decision is asked in plain chat; corral exposes
-no structured question dialog to assistants.
+reports the new candidate and asks again. Plain chat works for both decisions. When the
+generation exposes `ask_user`, the assistant can offer the same choices in its structured
+dialog; a completed answer carries an owner input ID, while cancellation or timeout
+authorizes nothing. Older generations without that tool use plain chat.
 
 ## Which host a session runs
 

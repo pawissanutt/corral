@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,10 +9,9 @@ import { loadModules, modulePaths } from "../../host/modules.ts";
 import { CorralClient } from "../../tools/corral.ts";
 import { snapshotProgress } from "../../ui/todo.ts";
 import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
-import { completionChoices, implementNowQuestion } from "../../../test/support/assistant-workflow.ts";
 import type { HostIdentity } from "../types.ts";
 import { GENERATION_ENV, SESSION_ENV, exportAssistantSession } from "./env.ts";
-import assistant, { UPSTREAM, assistantRole } from "./index.ts";
+import assistant, { CONTRACT_ASSET, UPSTREAM, assistantRole } from "./index.ts";
 import { OWNER_ACTION_TIMEOUT_MS, ownerActionTool, ownerInputText, utf8Prefix } from "./owner-action.ts";
 import { confirmationCommand, defineCorralTool } from "../../tools/define.ts";
 import { type CorralCall, type CorralReceipt, canonicalJson, sha256Hex } from "../../tools/corral.ts";
@@ -129,15 +128,10 @@ test("the contract tells the model to cite the tagged owner input and route uncl
   expect(contract).toContain("corral pm inbox show PMI-<n>");
 });
 
-test("the contract asks implement-now or queue once and binds the completion choices to the reported candidate", () => {
+test("the loaded assistant contract equals the shipped asset with its bound identity", () => {
   const contract = assistantRole(PACKAGE_ROOT).contract(context);
-  expect(implementNowQuestion(contract)).toBeDefined();
-  expect(completionChoices(contract)).toHaveLength(4);
-  for (const command of ["git -C <scratch> rev-parse HEAD", "git -C <scratch> diff --stat <base>",
-    "--expected-head <the commit you reported>", "--review required", "corral assistant scratch discard <slug>",
-    "stale_candidate", "corral assistant show A-3"]) {
-    expect(contract).toContain(command);
-  }
+  const shipped = readFileSync(join(PACKAGE_ROOT, CONTRACT_ASSET), "utf8");
+  expect(contract).toBe(shipped.replaceAll("{{assistant}}", identity.assistant ?? ""));
 });
 
 /**
