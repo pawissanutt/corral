@@ -8,6 +8,17 @@ use std::process::Stdio;
 const CALL_DEADLINE: Duration = Duration::from_secs(60);
 const HOOK_WRITERS: usize = 4;
 const ACQUIRED: &str = "artifact_storage_held";
+
+/// A child forked by a parallel test briefly shares a released lock handle until it execs;
+/// a holder on the paused pass never releases. Confirms the hold with a bounded acquisition.
+fn still_held(other: std::fs::File) -> bool {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = other.lock();
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(Duration::from_secs(5)).is_err()
+}
 /// A pass's task read, artifact event, index build and PM event push.
 const PHASES: [&str; 4] = [
     "sync_tasks_read",
@@ -98,6 +109,69 @@ fn done_and_verdict_finish_while_hook_writers_hold_artifact_storage() {
 }
 
 #[test]
+fn gc_and_an_index_build_owning_the_index_both_finish() {
+    // Given an artifact add parked in its eager index build, owning the index lock with an
+    // uncached snapshot still to read,
+    let fx = Fixture::new(2);
+    let id = fx.task();
+    let source = fx.tmp.path().join("uncached.log");
+    std::fs::write(&source, "indexed after GC took storage\n").unwrap();
+    let (finished_tx, finished) = mpsc::channel();
+    let (owned_tx, owned) = mpsc::channel();
+    let (advance, advanced) = mpsc::channel::<()>();
+    let (ctx, tx) = (fx.ctx.clone(), finished_tx.clone());
+    std::thread::spawn(move || {
+        let mut parked = false;
+        crate::agent::FAILPOINT.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |point| {
+                if point != "content_index_build" || std::mem::replace(&mut parked, true) {
+                    return;
+                }
+                owned_tx.send(()).unwrap();
+                let _ = advanced.recv_timeout(CALL_DEADLINE);
+            }));
+        });
+        let added = crate::artifacts::add_artifact(&ctx, &id, &source, None, None);
+        tx.send(("index build", added.map(drop))).unwrap();
+    });
+    owned
+        .recv_timeout(CALL_DEADLINE)
+        .expect("the build never owned the index lock");
+
+    // When GC takes exclusive storage while that build owns the index,
+    let (locked_tx, locked) = mpsc::channel();
+    let ctx = fx.ctx.clone();
+    std::thread::spawn(move || {
+        crate::agent::FAILPOINT.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |point| {
+                if point == "artifact_storage_exclusive" {
+                    let _ = locked_tx.send(());
+                }
+            }));
+        });
+        let collected = crate::artifact_gc(&ctx, false);
+        finished_tx.send(("gc", collected.map(drop))).unwrap();
+    });
+    locked
+        .recv_timeout(CALL_DEADLINE)
+        .expect("GC never took artifact storage");
+    // and the build advances to read its uncached snapshot.
+    advance.send(()).unwrap();
+
+    // Then both finish within one agent-call deadline, with no lock cycle,
+    for _ in 0..2 {
+        let (who, result) = finished
+            .recv_timeout(CALL_DEADLINE)
+            .expect("GC and the index build deadlocked");
+        result.unwrap_or_else(|error| panic!("{who}: {error:#}"));
+    }
+    // and the index holds the new artifact's text.
+    let index = fx.ctx.store.state_dir().join("content-search.json");
+    let index = std::fs::read_to_string(index).unwrap();
+    assert!(index.contains("indexed after GC took storage"));
+}
+
+#[test]
 fn hook_pass_holds_artifact_storage_only_around_artifact_writes() {
     // Given a finished gate the pass must collect and attach,
     let fx = Fixture::new(2);
@@ -142,8 +216,13 @@ exec "$dir/herdr-fake" "$@"
                 .write(true)
                 .open(&probe)
                 .unwrap();
-            let held = matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock));
             let here = crate::artifact_storage::held_here();
+            let held = match other.try_lock() {
+                Ok(()) => false,
+                Err(std::fs::TryLockError::WouldBlock) if point != ACQUIRED => still_held(other),
+                Err(std::fs::TryLockError::WouldBlock) => true,
+                Err(std::fs::TryLockError::Error(error)) => panic!("{error}"),
+            };
             seen.borrow_mut().push((point.to_owned(), held, here));
         }));
     });
