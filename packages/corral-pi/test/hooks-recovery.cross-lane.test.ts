@@ -15,8 +15,9 @@ import { type TestClient, connect } from "./support/bridge-client.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
 import {
-  EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
+  corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
 } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir } from "./support/canonical-store.ts";
 
 const isolated = privateHerdr();
 let corral = "";
@@ -56,7 +57,7 @@ async function untilBound(client: TestClient, cap: string, generation: number): 
 /** Kills generation `n`'s host while its pane stays, then lets sync record the loss. */
 async function kill(n: number): Promise<void> {
   const host = show("T-001").runs.at(-1).agent_host.generations[n - 1];
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   mkdirSync(exits, { recursive: true });
   const exited = fileAppears(exits, "T-001-R1.exited");
   process.kill(host.bound.pid, "SIGKILL");
@@ -120,7 +121,7 @@ async function interruptInside(phase: string, invocation: string, recorded: Retu
   return barrier;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("hooks recovery cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -216,7 +217,7 @@ name = "end"
 argv = ${argv("end")}
 `);
   cli("new", "Pi host killed inside its hooks", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {

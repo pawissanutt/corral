@@ -3,7 +3,8 @@ import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { EventFollower, corralBinary, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { corralBinary, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower } from "./support/canonical-store.ts";
 
 const PLAN = `---
 goal: Make the widget spin
@@ -66,7 +67,7 @@ test("launched pi-native plan reviewer records a fixture verdict", async () => {
     const plan = join(workspace, "plan.md");
     writeFileSync(plan, PLAN);
     cli("plan", "submit", "T-001", plan);
-    events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+    events = await EventFollower.open(workspace);
     const verdict = events.next((event) => event.task === "T-001" && event.kind === "plan_verdict");
     cli("plan", "review", "T-001", "--reviewer", "pi");
     const started = JSON.parse(cli("show", "T-001", "--json"));

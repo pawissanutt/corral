@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { connect } from "./support/bridge-client.ts";
 import { within } from "./support/wait.ts";
-import { EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir } from "./support/canonical-store.ts";
 
 // This preceding real pane crashes after InteractiveMode has installed its crash handler.
 // Its record must not become the next fixture's startup warning on the same herdr server.
@@ -34,7 +35,7 @@ test("a preceding Pi pane records a crash in its own fixture state", async () =>
     cli("dispatch", "T-001", "--profile", "pi", "--force");
     const launched = JSON.parse(cli("show", "T-001", "--json")).runs.at(-1);
     workspaceId = launched.herdr.workspace_id;
-    const exits = join(workspace, ".corral/state/launch-exits");
+    const exits = launchExitDir(workspace);
     await fileAppears(exits, "T-001-R1.exited");
     expect(readFileSync(join(exits, "T-001-R1.exited"), "utf8").trim()).not.toBe("0");
     expect(readFileSync(join(state, "crashes.json"), "utf8")).toContain("setRawMode failed: deliberate fixture crash");
@@ -75,7 +76,7 @@ export default { ...auth, transport() { const transport = fixtureTransport(); re
     const config = join(workspace, ".corral/corral.toml");
     writeFileSync(config, `${readFileSync(config, "utf8")}\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n`);
     cli("new", "Finish fixture worker", "-p", "app", "--ready");
-    events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+    events = await EventFollower.open(workspace);
     const kickoff = events.next(e => e.kind === "agent_turn_ended" && e.task === "T-001", 90_000, "kickoff");
     cli("dispatch", "T-001", "--profile", "pi", "--force");
     const show = () => JSON.parse(cli("show", "T-001", "--json"));
@@ -113,7 +114,7 @@ export default { ...auth, transport() { const transport = fixtureTransport(); re
     const closed = client.closed();
     await client.request({ version: 1, id: "shutdown", ctl_cap: cap, generation: 1, command: "shutdown", args: {} });
     await within(closed, 30_000, "completed worker shutdown");
-    const exits = join(workspace, ".corral/state/launch-exits");
+    const exits = launchExitDir(workspace);
     await within((async () => { const { fileAppears } = await import("./support/workspace.ts"); await fileAppears(exits, "T-001-R1.exited"); })(), 30_000, "worker process exit");
     const exitCode = readFileSync(join(exits, "T-001-R1.exited"), "utf8").trim();
     const screen = ok(["herdr", "--session", "corral-test", "pane", "read", pane, "--source", "recent", "--lines", "400"]);

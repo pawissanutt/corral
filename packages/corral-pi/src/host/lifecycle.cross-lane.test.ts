@@ -15,8 +15,9 @@ import { type TestClient, connect } from "../../test/support/bridge-client.ts";
 import { type FixtureInstall, buildFixtureInstall } from "../../test/support/fixture-install.ts";
 import { within } from "../../test/support/wait.ts";
 import {
-  EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run, sha256,
+  corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run, sha256,
 } from "../../test/support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir, inboxEnvelopes, inboxReceipt, requireReceipt, inboxMessages } from "../../test/support/canonical-store.ts";
 
 const isolated = privateHerdr();
 let corral = "";
@@ -62,7 +63,7 @@ async function heldTurn(client: TestClient, cap: string, n: number): Promise<voi
 
 const pad = (seq: number) => String(seq).padStart(6, "0");
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("recovery cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -91,7 +92,7 @@ effort = "high"
 assets_dir = ${JSON.stringify(assets.dir)}
 `);
   cli("new", "Pi host recovery", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
@@ -156,7 +157,7 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   const lostGeneration = show("T-001").runs.at(-1).agent_host.generations[0];
 
   // When the host process is killed while its pane stays, and sync runs:
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   mkdirSync(exits, { recursive: true });
   const exited = fileAppears(exits, "T-001-R1.exited");
   process.kill(lostGeneration.bound.pid, "SIGKILL");
@@ -202,16 +203,13 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   const resumedEnded = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
     && event.detail?.generation === 2, 90_000, "generation 2 resumed agent_turn_ended");
   cli("sync");
-  const envelopes = join(workspace, ".corral/inbox/T-001_R1/envelopes");
-  const latest = readdirSync(envelopes).filter((name) => name.endsWith(".payload")).sort().at(-1) ?? "";
-  const payload = readFileSync(join(envelopes, latest), "utf8");
+  const envelope = inboxEnvelopes(workspace, "T-001_R1").at(-1)!;
+  const payload = envelope.payload;
   const notice = payload.indexOf(" recovery_notice]");
   expect(notice).toBeGreaterThan(-1);
   expect(payload.indexOf("Queued while the host was lost.")).toBeGreaterThan(notice);
-  const envelope = JSON.parse(readFileSync(join(envelopes, latest.replace(".payload", ".json")), "utf8"));
-  const inbox = join(workspace, ".corral/inbox/T-001_R1");
-  const [noticeSeq = -1] = envelope.members as number[];
-  const admitted = JSON.parse(readFileSync(join(inbox, `${pad(noticeSeq)}.receipt.admitted.json`), "utf8"));
+  const [noticeSeq = -1] = envelope.members;
+  const admitted = requireReceipt(workspace, "T-001_R1", noticeSeq, "admitted");
   expect([admitted.detail.generation, admitted.binding.session]).toEqual([2, fenced.bound.session_id]);
 
   // And once the turn it started ends, generation 2's delivery module has recorded that envelope,
@@ -245,12 +243,11 @@ test("cancel never fences, and a host killed inside a turn resumes on its Pi ses
   // When sync runs again, then corral observes the notice from that entry, the killed turn of
   // generation 1 is still recorded open, and generation 2's silent turn gets its one nudge:
   cli("sync");
-  expect(existsSync(join(inbox, `${pad(noticeSeq)}.receipt.observed.json`))).toBeTrue();
+  expect(inboxReceipt(workspace, "T-001_R1", noticeSeq)).toBeDefined();
   state = show("T-001").runs.at(-1).agent_host;
   const killed = state.turns.find((t: any) => t.generation === 1 && t.seq === 3);
   expect([killed?.started === undefined, killed?.ended]).toEqual([false, undefined]);
-  const nudges = readdirSync(inbox).filter((name) => /^\d{6}\.md$/.test(name))
-    .map((name) => readFileSync(join(inbox, name), "utf8")).filter((text) => text.includes(" turn_nudge]"));
+  const nudges = inboxMessages(workspace, "T-001_R1").filter(message => message.kind === "turn_nudge");
   expect(nudges).toHaveLength(1);
-  expect(nudges[0]).toContain("generation: 2");
+  expect(nudges[0]?.subject?.generation).toBe(2);
 }, 600_000);

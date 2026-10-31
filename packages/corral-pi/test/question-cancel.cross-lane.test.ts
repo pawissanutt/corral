@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 import { connect } from "./support/bridge-client.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower } from "./support/canonical-store.ts";
 
 test("CLI cancel releases a live worker's blocking question without another turn or inbox message", async () => {
   if (!privateHerdr()) {
@@ -55,7 +56,7 @@ assets_dir = ${JSON.stringify(assets.dir)}
     writeFileSync(main, readFileSync(main, "utf8").replace('  session.markAttached("interactive");',
       `  session.markAttached("interactive");\n  (await import("node:fs")).writeFileSync(${JSON.stringify(join(root, "attached"))}, "ready");`));
     cli("new", "Cancellation readback", "-p", "app", "--ready");
-    follower = new EventFollower(join(root, ".corral/events.jsonl"));
+    follower = await EventFollower.open(root);
     const bound = follower.next((event) => event.kind === "agent_bound", 90_000, "worker hello");
     cli("dispatch", "T-001", "--profile", "pi", "--force");
     const record = show().runs.at(-1);

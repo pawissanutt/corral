@@ -9,8 +9,9 @@ import { isAbsolute, join } from "node:path";
 import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
 import { connect } from "./support/bridge-client.ts";
 import {
-  EventFollower, fileAppears, generationDir, ok, privateHerdr, privateRoot, probeBinary, corralBinary, run, secretLeaks, sha256,
+  fileAppears, generationDir, ok, privateHerdr, privateRoot, probeBinary, corralBinary, run, secretLeaks, sha256,
 } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir, artifactText } from "./support/canonical-store.ts";
 
 const isolated = privateHerdr();
 const herdrRoot = privateRoot() ?? "";
@@ -42,7 +43,7 @@ function configure(assets: string): void {
   writeFileSync(path, `${config}\n[agent]\nassets_dir = ${JSON.stringify(assets)}\n`);
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -78,7 +79,7 @@ effort = "high"
   writeFileSync(join(badBun.dir, "compat.json"), `${JSON.stringify({ ...compat, bun: { range: "0.0.1", tested: ["0.0.1"] } })}\n`);
   configure(good.dir);
   cli("new", "Pi host bridge", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
@@ -222,7 +223,7 @@ test("a launch whose Bun is outside the GO range is refused before exec, fails t
   cli("new", "Pi bad bun", "-p", "app", "--ready");
   cli("dispatch", "T-002", "--profile", "pi", "--force");
   workspaces.push(show("T-002").runs.at(-1).herdr.workspace_id);
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   await fileAppears(exits, "T-002-R1.exited");
   expect(readFileSync(join(exits, "T-002-R1.exited"), "utf8").trim()).not.toBe("0");
   const dir = generationDir(workspace, "T-002", "R1", 1);
@@ -236,6 +237,6 @@ test("a launch whose Bun is outside the GO range is refused before exec, fails t
   expect(attempt.agent_host.generations[0].bound).toBeUndefined();
   const log = (task.artifacts as { title?: string; path: string }[]).find((artifact) => artifact.title === "Agent launch failure");
   expect(log).toBeDefined();
-  expect(readFileSync(isAbsolute(log!.path) ? log!.path : join(workspace, ".corral", log!.path), "utf8"))
+  expect(artifactText(workspace, log!.path))
     .toContain("bun_version_unsupported");
 }, 300_000);

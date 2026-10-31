@@ -10,7 +10,8 @@ import { dirname, join } from "node:path";
 
 import { connect } from "./support/bridge-client.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
-import { EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { corralBinary, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower, artifactText } from "./support/canonical-store.ts";
 
 const isolated = privateHerdr();
 const herdrRoot = privateRoot() ?? "";
@@ -52,7 +53,7 @@ function exportsOf(task: string): { path: string; title?: string; kind?: string 
     .filter((artifact) => /session-[0-9a-f]{16}\.html$/.test(artifact.path));
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("guidance-export cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -88,7 +89,7 @@ effort = "high"
 assets_dir = ${JSON.stringify(install.dir)}
 `);
   cli("new", "Guidance and export", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
@@ -185,8 +186,7 @@ test("/corral-export attaches one artifact per snapshot through corral's artifac
     const once = exportsOf("T-001");
     expect(once).toHaveLength(1);
     expect(once[0]?.kind).toBe("log");
-    const stored = once[0]!.path.startsWith("/") ? once[0]!.path : join(workspace, ".corral", once[0]!.path);
-    const html = readFileSync(stored, "utf8");
+    const html = artifactText(workspace, once[0]!.path);
     expect(html).toContain("<html");
     expect(html).not.toMatch(/<(script|link|img)[^>]+(src|href)=["']https?:/i);
     // When the session gains a turn and is exported again:

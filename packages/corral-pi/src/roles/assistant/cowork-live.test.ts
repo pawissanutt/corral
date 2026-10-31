@@ -16,6 +16,7 @@ import { fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.t
 import { exportAssistantSession } from "./env.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { corralBinary, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
+import { storeEvents as canonicalEvents } from "../../../test/support/canonical-store.ts";
 
 function syntheticAccess(): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -111,8 +112,7 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     const tasks = () => JSON.parse(ok([corral, "list", "--json"], { cwd: workspace })) as { id: string }[];
     const record = () => JSON.parse(ok([corral, "assistant", "show", fixture.session, "--json"], { cwd: workspace })).session;
     const kinds = () => Object.fromEntries((record().scratch as { slug: string; kind: string }[]).map((s) => [s.slug, s.kind]));
-    const storeEvents = (): StoreEvent[] => readFileSync(join(workspace, ".corral/events.jsonl"), "utf8").trim().split("\n")
-      .map((l) => JSON.parse(l) as StoreEvent);
+    const storeEvents = (): StoreEvent[] => canonicalEvents(corral, workspace);
 
     // C10: the assistant's shell offers the unattended spike for landing; corral refuses it.
     await turn("offer spike-idea for landing", [

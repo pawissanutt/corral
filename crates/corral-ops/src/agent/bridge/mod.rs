@@ -20,6 +20,8 @@ pub const OWNER: &str = "host-bridge";
 
 #[cfg(all(test, target_os = "linux"))]
 pub(crate) mod fixture;
+#[cfg(all(test, target_os = "linux"))]
+mod fixture_store_probe;
 #[cfg(test)]
 mod interrupted_tests;
 #[cfg(all(test, target_os = "linux"))]
