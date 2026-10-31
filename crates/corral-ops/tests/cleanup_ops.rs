@@ -19,8 +19,6 @@ use serde_json::{Value, json};
 mod lifecycle;
 #[path = "cleanup_ops/plan_review.rs"]
 mod plan_review;
-#[path = "cleanup_ops/sandbox.rs"]
-mod sandbox;
 #[path = "cleanup_ops/worktree.rs"]
 mod worktree;
 
