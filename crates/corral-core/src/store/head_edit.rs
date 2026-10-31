@@ -298,7 +298,7 @@ impl TaskMut for TaskHeadMut {
                         .and_then(|p| p.current_review.as_mut())
                         .filter(|r| r.id == *review)
                         .map(|r| &mut r.inbox),
-                    Recipient::Pm => None,
+                    Recipient::Pm | Recipient::Assistant { .. } => None,
                 };
                 edit(
                     inbox.context(

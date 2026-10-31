@@ -1,6 +1,5 @@
 //! Capability framework (T-563): one resolved snapshot per generation, adaptive explicit
 //! resume, legacy records and an older installed host, through the real dispatch path.
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use corral_core::agent::{AgentRole, CapabilityChange, SnapshotPreset};
@@ -130,8 +129,7 @@ impl Fixture {
 
     fn message(&self, bootstrap: &Bootstrap) -> Value {
         let bun = self.tmp.path().join("bun");
-        write(&bun, "#!/bin/sh\necho 1.4.2\n");
-        std::fs::set_permissions(&bun, std::fs::Permissions::from_mode(0o700)).unwrap();
+        super::test_support::write_executable(&bun, "#!/bin/sh\necho 1.4.2\n");
         let dir = generation_dir(&self.ctx.store, &self.recipient(), bootstrap.generation).unwrap();
         let ready = check_with(bootstrap, &dir, None, Some(bun)).unwrap();
         serde_json::from_slice(
@@ -209,6 +207,71 @@ fn explicit_resume_adapts_changed_settings_and_keeps_each_generation_snapshot() 
             .unwrap()
             .capabilities,
         None
+    );
+}
+
+#[test]
+fn a_headless_worker_names_its_mode_and_keeps_it_and_its_identity_across_resume() {
+    // Given a host that implements headless and a worker opted into it.
+    let mut fx = fixture(Some(&["todo", "headless"]));
+    fx.ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set(AgentRole::Worker, "headless", true)
+        .unwrap();
+    // When the run opens and is then explicitly resumed under the same settings.
+    let first = fx.open().unwrap();
+    assert_eq!(fx.state()["mode"], "headless");
+    let second = fx.open().unwrap();
+    // Then both launch messages ask the host for headless, state names the mode, and the
+    // resumed generation keeps the container, pane and session directory without a change.
+    for bootstrap in [&first, &second] {
+        let enabled = fx.message(bootstrap)["capabilities"]["enabled"].clone();
+        assert_eq!(enabled, json!(["headless", "todo"]));
+    }
+    assert_eq!(
+        (second.generation, second.pane.as_str(), &second.session_dir),
+        (2, "p1", &first.session_dir)
+    );
+    assert_eq!(
+        (second.task.as_deref(), second.run.as_deref()),
+        (Some(fx.task.as_str()), Some("R1"))
+    );
+    let host = fx.host();
+    assert!(host.generation(2).unwrap().capability("headless"));
+    assert!(host.generation(2).unwrap().capability_transition.is_none());
+    let state = fx.state();
+    assert_eq!(
+        (state["mode"].as_str(), state["generation"].as_u64()),
+        (Some("headless"), Some(2))
+    );
+    // And without the override the next generation is interactive, with the change recorded.
+    fx.ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .set(AgentRole::Worker, "headless", false)
+        .unwrap();
+    fx.open().unwrap();
+    assert_eq!(fx.state()["mode"], "interactive");
+    let change = fx
+        .host()
+        .generation(3)
+        .unwrap()
+        .capability_transition
+        .clone()
+        .unwrap();
+    assert_eq!(
+        change.changes,
+        vec![CapabilityChange {
+            key: "headless".into(),
+            from: Some(true),
+            to: Some(false),
+            settings: false,
+        }]
     );
 }
 
@@ -431,8 +494,8 @@ fn disabled_unsupported_and_historical_web_settings_are_omitted_from_launch() {
 }
 
 #[test]
-fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
-    // Given a registered project and a PM launched at the workspace root for it.
+fn the_workspace_pm_bootstrap_names_workspace_root_for_guidance() {
+    // Given a registered project and a workspace-bound PM, not a project-bound PM.
     let mut fx = fixture(Some(&["todo"]));
     let app = fx.tmp.path().join("app");
     std::fs::create_dir_all(&app).unwrap();
@@ -445,7 +508,7 @@ fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
         "export default {};\n",
     );
     let pm = BindTarget::Pm {
-        project: "corral".into(),
+        project: String::new(),
     };
     let spec = HostSpec {
         cwd: fx.tmp.path().to_path_buf(),
@@ -455,9 +518,11 @@ fn the_pm_bootstrap_names_its_selected_project_checkout_for_guidance() {
     let prepared = prepare_bootstrap(&fx.ctx, &pm, "p1", &spec).unwrap();
     let bootstrap = consume_bootstrap(&prepared.bootstrap).unwrap();
     let worker = fx.open().unwrap();
-    // Then only the PM names the project checkout, separately from its workspace cwd.
+    // Then the PM loads workspace guidance, never the registered project's checkout.
+    assert!(bootstrap.project.is_empty());
     assert_eq!(bootstrap.cwd, fx.tmp.path());
-    assert_eq!(bootstrap.project_dir.as_deref(), Some(app.as_path()));
+    assert_eq!(bootstrap.project_dir.as_deref(), Some(fx.tmp.path()));
+    assert_ne!(bootstrap.project_dir.as_deref(), Some(app.as_path()));
     assert_eq!(bootstrap.capabilities.unwrap().project_text, Some(true));
     // The worker's launch message pins "project_dir": null in the exact-message test above.
     assert_eq!(worker.project_dir, None);

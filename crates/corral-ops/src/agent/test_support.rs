@@ -11,6 +11,23 @@ use serde_json::{Value, json};
 use super::*;
 use crate::Ctx;
 
+/// Only the short-lived `install` child opens the executable for writing. Other
+/// test threads can fork without inheriting a writable descriptor to its inode.
+#[cfg(unix)]
+pub(crate) fn write_executable(path: &std::path::Path, contents: &str) {
+    use std::io::Write;
+
+    let mut source = tempfile::NamedTempFile::new_in(path.parent().unwrap()).unwrap();
+    source.write_all(contents.as_bytes()).unwrap();
+    let status = std::process::Command::new("install")
+        .args(["-m", "0700"])
+        .arg(source.path())
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
 thread_local! {
     static DATA_ROOT: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
@@ -162,16 +179,24 @@ pub(crate) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> H
             Some(callback),
         ),
         BindTarget::Pm { .. } => (AgentRole::Pm, None, None, None, None),
+        BindTarget::Assistant { .. } => (AgentRole::Assistant, None, None, None, None),
     };
+    // An assistant session names no project; its identity carries the session instead.
+    let assistant = grant.container.assistant().map(str::to_owned);
     Host {
         identity: RequestIdentity {
             store: paths::store_id(&fx.ctx.store),
-            project: "corral".into(),
+            project: match target {
+                BindTarget::Pm { project } => project.clone(),
+                _ if assistant.is_some() => String::new(),
+                _ => "corral".into(),
+            },
             role,
             task: task.cloned(),
             run: run.cloned(),
             review: review.cloned(),
             callback: callback.cloned(),
+            assistant,
             session_id: session.into(),
             generation: grant.generation,
             turn: None,
@@ -269,7 +294,10 @@ pub(crate) fn state(fx: &Fx, container: &ContainerRef) -> AgentRunState {
                 .unwrap()
                 .clone()
         }
-        None => pm_state::load(&fx.ctx.store).unwrap().unwrap().state,
+        None => match container.assistant() {
+            Some(id) => fx.ctx.store.get_assistant_container(id).unwrap().state,
+            None => pm_state::load(&fx.ctx.store).unwrap().unwrap().state,
+        },
     }
 }
 

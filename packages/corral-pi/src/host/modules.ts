@@ -18,6 +18,7 @@ const ROLE_OWNERS: Record<Role, string> = {
   pm: "pm-role",
   planner: "plan-roles",
   plan_reviewer: "plan-roles",
+  assistant: "assistant-role",
 };
 
 /** The role module's directory under src/roles; Rust's `AgentRole::module_dir` matches it. */
@@ -97,6 +98,9 @@ function checkRole(value: unknown, module: string, role: Role): RoleModule {
   }
   if (typeof candidate.tools !== "function" || typeof candidate.contract !== "function") {
     throw new ModuleInvalid(module, "needs tools() and contract()");
+  }
+  if (candidate.shellRefusal !== undefined && typeof candidate.shellRefusal !== "function") {
+    throw new ModuleInvalid(module, "shellRefusal must be a function");
   }
   checkLocalTools(candidate, module);
   return candidate as unknown as RoleModule;

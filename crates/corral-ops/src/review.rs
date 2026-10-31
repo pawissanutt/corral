@@ -3,8 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    Artifact, ArtifactKind, CandidateIdentity, GateRecord, GateResult, Reviewer, Run, RunHead,
-    RunOutcome, Status, Task, TaskRef, Verdict,
+    Artifact, ArtifactKind, CandidateIdentity, CoworkReview, GateRecord, GateResult, ReviewPolicy,
+    Reviewer, Run, RunHead, RunOutcome, Status, Task, TaskRef, Verdict,
 };
 use corral_git::{DiffStat, MergeStrategy};
 use jiff::Timestamp;
@@ -247,6 +247,7 @@ fn done_inner(
             r.completion.audit = Some(audit.clone());
             r.summary = Some(summary.to_string());
             r.ended = Some(corral_core::clock::now());
+            r.agent_state = Some("done".into());
             r.outcome = Some(RunOutcome::Done);
             crate::usage::collect(r, &ctx.store);
         }
@@ -412,6 +413,13 @@ pub(crate) fn landing_gate_passed<T: TaskRef + ?Sized>(
     }
 }
 
+/// A review must approve the candidate: the policy names a reviewer, or the owner finished the
+/// current co-work run with review required, which binds whatever the reviewer resolves to.
+fn review_needed<T: TaskRef + ?Sized>(policy: &ReviewPolicy, task: &T) -> bool {
+    policy.reviewer != Reviewer::None
+        || (task.cowork_run()).is_some_and(|cowork| cowork.review == CoworkReview::Required)
+}
+
 /// The reduced tier an approval is bound to while the current receipt is a failed full one.
 fn quick_approval_on_full_fail(run: &RunHead) -> Option<&str> {
     let gate = run
@@ -453,10 +461,16 @@ fn require_manual_receipts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<(
             task.id()
         );
     }
-    if policy.reviewer != Reviewer::None
+    if review_needed(&policy, task)
         && (!verification::review_fresh(ctx, task, run)?
             || run.review.as_ref().and_then(|r| r.verdict).is_none())
     {
+        if policy.reviewer == Reviewer::None {
+            bail!(
+                "review_required: {0} was finished with review required, but no reviewer resolves for it; run `corral review-run {0} --reviewer <profile>`, then `corral approve {0}` after its verdict",
+                task.id()
+            );
+        }
         if let Some(tier) = quick_approval_on_full_fail(run) {
             bail!(
                 "stale_retry: the approval is bound to the {tier} receipt and promotion needs a full PASS, but the full landing gate failed; run `corral review-run {}` to review the failed full receipt, then `corral approve {}` after its verdict",
@@ -592,7 +606,7 @@ pub(crate) fn approve_landed(
             let policy = verification::policy(ctx, t)?;
             if verification::identity(ctx, t, current, expected)? != *expected
                 || (!policy.gate.is_empty() && !landing_gate_passed(ctx, t, current)?)
-                || (policy.reviewer != Reviewer::None && (!verification::review_fresh(ctx, t, current)?
+                || (review_needed(&policy, t) && (!verification::review_fresh(ctx, t, current)?
                     || current.review.as_ref().and_then(|r| r.verdict) != Some(Verdict::Approve)))
                 || !crate::completion::evidence_failures(ctx, t, current)?.is_empty()
             {
@@ -775,6 +789,9 @@ pub(crate) fn approve_landed(
         json!({ "run": run.id, "strategy": strategy_name, "sha": sha, "previous_sha":previous_sha, "base":run.base, "project":task.project, "branch": run.branch, "worktree_removed": removed, "branch_deleted": branch_deleted, "reason": reason, "cleanup": { "v": 1, "remove_worktree": remove_worktree }, "acceptance_mode": if expected.is_some() {"autonomous"} else {"owner_override"}, "identity":expected, "started":started }),
     )?;
     ctx.store.clear_condition(Some(&task.id), "landing_stale")?;
+    if strategy != ApproveStrategy::KeepBranch {
+        crate::assistant::scratch::record_landing(ctx, &task, &run, previous_sha.as_deref(), &sha);
+    }
     Ok((
         sha,
         format!("{action}; worktree {worktree_note}; {branch_note}{operational_note}"),
@@ -849,5 +866,6 @@ pub fn discard_with_decision(
             "branch_deleted": branch_deleted, "keep_branch": keep_branch, "warnings": warnings,
             "task_updated": task.updated, "reason": reason, "actor": actor }),
     )?;
+    crate::assistant::scratch::release_discarded(ctx, &task);
     Ok(task)
 }

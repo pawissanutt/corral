@@ -176,7 +176,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
     let resting = match container {
         ContainerRef::Worker { .. } | ContainerRef::Planner { .. } => Status::Running,
         ContainerRef::Reviewer { .. } | ContainerRef::PlanReviewer { .. } => Status::Review,
-        ContainerRef::Pm => return false,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return false,
     };
     let waiting = agent::container_state(task, container).and_then(|state| {
         state
@@ -200,7 +200,7 @@ fn apply_needs_me(task: &mut Task, container: &ContainerRef, needs_me: &NeedsMe)
             };
             (&mut state.question_hold, false)
         }
-        ContainerRef::Pm => return false,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return false,
     };
     let (raised, next) =
         slot_transition(status, resting, slot, decision_pending, needs_me, waiting);
@@ -386,6 +386,7 @@ pub(super) fn transact(
     let mut posted: Option<Message> = None;
     let mut raised: Option<&'static str> = None;
     let mut notice = None;
+    let mut transitioned = false;
     ctx.store.try_update(parsed.task(), |task| {
         if let Some(pm) = actor.pm_request() {
             if let Some(stored) = pm_replay(ctx, task, pm.origin)? {
@@ -411,6 +412,7 @@ pub(super) fn transact(
             return Ok(false);
         };
         let mut question = change.question;
+        transitioned = question.revision != current.revision;
         super::bound_triage(&ctx.store, &mut question)?;
         let message = match (&inbox, change.message) {
             (Some(inbox), Some((kind, body))) => {
@@ -427,7 +429,7 @@ pub(super) fn transact(
                                 | ContainerRef::Planner { run, .. } => Some(run.clone()),
                                 ContainerRef::Reviewer { review, .. }
                                 | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
-                                ContainerRef::Pm => None,
+                                ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
                             },
                             // Not question-bound: that convention marks an OmO native answer
                             // (`dispatch/inbox_reply.rs`) which the inbox never packs. A triage
@@ -483,6 +485,10 @@ pub(super) fn transact(
     if applied.is_some() {
         super::events::reconcile_question(&ctx.store, key)?;
     }
+    // The asking host's herdr projection follows escalations and cancellations it did not make.
+    if transitioned && matches!(applied, Some(Applied::Fresh { .. })) {
+        crate::agent::herdr_status::push_after_transition(ctx, &container, key);
+    }
     if let (Some(reason), Some(Applied::Fresh { outcome, .. })) = (raised, &applied) {
         crate::obligations::transition_with_notice(
             ctx,
@@ -499,7 +505,10 @@ pub(super) fn transact(
 fn container_run(container: &ContainerRef) -> Option<&str> {
     match container {
         ContainerRef::Worker { run, .. } | ContainerRef::Reviewer { run, .. } => Some(run),
-        ContainerRef::Pm | ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } => None,
+        ContainerRef::Pm
+        | ContainerRef::Assistant { .. }
+        | ContainerRef::Planner { .. }
+        | ContainerRef::PlanReviewer { .. } => None,
     }
 }
 
@@ -567,9 +576,9 @@ pub(super) fn answer_body(question: &AgentQuestion, answer: &QuestionAnswer, kin
     body
 }
 
-/// OD7: the PM answers only clarification and technical_choice questions that are still open,
-/// citing at least one resolvable basis ref and a scope note. The owner answers any pending
-/// question and may supersede an answer, which queues a `question_correction`.
+/// The PM answers any pending question of any kind, citing at least one resolvable basis ref and a
+/// scope note. The owner answers without them and may supersede an answer, which queues a
+/// `question_correction`.
 pub fn answer(
     ctx: &Ctx,
     key: &str,
@@ -593,29 +602,11 @@ pub fn answer(
                 QuestionState::Answered | QuestionState::Expired
             );
             if pm {
-                if !matches!(
-                    current.kind,
-                    QuestionKind::Clarification | QuestionKind::TechnicalChoice
-                ) {
-                    return Err(rule(format!(
-                        "{} is {:?}: owner_only and permission questions always escalate",
-                        current.key, current.kind
-                    )));
-                }
-                match current.state {
-                    QuestionState::Open => {}
-                    QuestionState::Escalated => {
-                        return Err(rule(format!(
-                            "{} is escalated; only the owner answers it",
-                            current.key
-                        )));
-                    }
-                    _ => {
-                        return Err(state_error(
-                            current,
-                            "the PM answers open questions; only the owner supersedes",
-                        ));
-                    }
+                if !current.state.pending() {
+                    return Err(state_error(
+                        current,
+                        "the PM answers pending questions; only the owner supersedes",
+                    ));
                 }
                 if input.basis_refs.is_empty() {
                     return Err(rule("a PM answer cites at least one basis ref"));

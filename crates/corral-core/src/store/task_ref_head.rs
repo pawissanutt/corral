@@ -217,6 +217,13 @@ macro_rules! keyed_reads {
         fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
             self.$reads()?.pending_agent_questions(container)
         }
+        fn selected_agent_questions(
+            &self,
+            container: &ContainerRef,
+            named: &[&str],
+        ) -> Result<Vec<AgentQuestion>> {
+            self.$reads()?.selected_agent_questions(container, named)
+        }
         fn agent_wake(
             &self,
             container: &ContainerRef,

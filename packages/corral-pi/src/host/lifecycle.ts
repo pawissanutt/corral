@@ -27,6 +27,7 @@ export class SessionResumeRefused extends Error {
 
 export function openSession(
   sdk: SessionSdk, cwd: string, sessionDir: string, generation: number, resumeSession?: string, freshSession = false,
+  resumeLeaf?: string,
 ): SessionManager {
   if (freshSession) return sdk.SessionManager.create(cwd, sessionDir);
   if (resumeSession !== undefined) {
@@ -53,6 +54,11 @@ export function openSession(
       }
       const session = sdk.SessionManager.open(resumeSession, sessionDir, cwd);
       if (session.getSessionId() !== sessionId) throw new Error("the recorded Pi session was not opened");
+      // A rewind continues from its checkpoint's entry; the abandoned turns stay in the file.
+      if (resumeLeaf !== undefined) {
+        if (!session.getEntry(resumeLeaf)) throw new Error(`the rewind's session entry ${resumeLeaf} is not in the session`);
+        session.branch(resumeLeaf);
+      }
       return session;
     } catch (error) {
       throw new SessionResumeRefused(resumeSession, error);

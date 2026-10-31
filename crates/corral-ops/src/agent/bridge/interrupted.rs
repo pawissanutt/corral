@@ -21,7 +21,14 @@ pub const HOOK_ENTRY: &str = "corral_hook";
 const HOOK_PHASES: [&str; 3] = ["pre_tool", "post_tool", "turn_end"];
 const DETAIL_MAX_BYTES: usize = 512;
 /// Two-phase operations: without a reservation nothing ran.
-const TWO_PHASE: [&str; 5] = ["gate", "capture", "reply", "plan_submit", "plan_verdict"];
+const TWO_PHASE: [&str; 6] = [
+    "gate",
+    "capture",
+    "reply",
+    "plan_submit",
+    "plan_verdict",
+    "owner_action",
+];
 // Web tools are GET-only; tool_search reads only the host's local cached catalog; job_output
 // reads the host's output cache.
 const NO_EFFECT: [&str; 8] = [

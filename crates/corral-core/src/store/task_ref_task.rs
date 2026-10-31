@@ -252,7 +252,7 @@ pub(crate) fn inbox_state<'a>(task: &'a Task, recipient: &Recipient) -> Option<&
                 .find(|r| r.id == *review)?
                 .inbox,
         ),
-        Recipient::Pm => None,
+        Recipient::Pm | Recipient::Assistant { .. } => None,
     }
 }
 
@@ -696,6 +696,24 @@ impl TaskRef for Task {
             .cloned())
     }
 
+    fn selected_agent_questions(
+        &self,
+        container: &ContainerRef,
+        named: &[&str],
+    ) -> Result<Vec<AgentQuestion>> {
+        Ok(crate::agent::container_state(self, container)
+            .map(|state| {
+                state
+                    .questions
+                    .iter()
+                    .filter(|question| {
+                        question.recorded_pending() || named.contains(&question.key.as_str())
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
     fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>> {
         Ok(crate::agent::container_state(self, container)
             .map(|s| {

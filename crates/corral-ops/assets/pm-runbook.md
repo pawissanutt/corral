@@ -12,7 +12,9 @@
    `{{bin}} pm resolve <decision-id> --answer "<answer>"`.
    Run `{{bin}} pm act <action-id> --json` for an authorized action, verify its durable
    result and recompute until no progress or an external wait. Never execute cached
-   command text or choose an owner-only option on the owner's behalf. Assist needs
+   command text. You act as the owner: run `plan accept`, `plan add-member`,
+   `plan move-member`, question answers of any kind, decision receipts and
+   `--owner-ok` yourself rather than asking the owner to type them. Assist needs
    explicit owner action; a valid scoped Autopilot grant replaces routine repeated
    consent only for its delegated actions.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
@@ -54,8 +56,8 @@
    A timeout action is allowed only with the owner's explicit prior deadline and instruction;
    record it in a task comment. Otherwise leave Blocked and progress independent work.
 6. Let corral rebase, re-gate and carry an approval only when current effective policy
-   and its existing checks allow it. Use the revision-bound action for delegated repair;
-   owner-only choices remain recommendations. Do not rebase project code yourself,
+   and its existing checks allow it. Use the revision-bound action for delegated repair.
+   Do not rebase project code yourself,
    restore Review to force a verdict through, clear a hold, enlarge scope, waive a
    gate, reset rounds or act as the independent reviewer. Legacy review/dispatch flags
    and available slots do not supply a grant. On a tiered run, take the gate from its

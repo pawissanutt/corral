@@ -303,7 +303,7 @@ fn web_policy_accepts_transport_boundaries_and_independent_search_endpoint() {
     );
 }
 
-const ALL: [AgentRole; 5] = ROLES;
+const ALL: [AgentRole; 6] = ROLES;
 
 #[test]
 fn guidance_and_session_keys_follow_the_role_matrix() {
@@ -318,17 +318,17 @@ fn guidance_and_session_keys_follow_the_role_matrix() {
             // When the role resolves its snapshot.
             let snapshot = config.resolve(role, None);
             // Then optional text is off only in strict, compaction keeps upstream's default
-            // on, lessons stay on, and PM has neither lessons nor export.
+            // on, lessons stay on, and neither PM nor assistant has lessons or export.
             let optional = index > 0;
             for key in ["context_files", "skills", "prompt_templates"] {
                 assert_eq!(snapshot.enabled(key), optional, "{role:?} {key}");
             }
             assert!(snapshot.enabled("compaction"));
-            let pm = role == AgentRole::Pm;
-            assert_eq!(snapshot.features.contains_key("lessons"), !pm);
-            assert_eq!(snapshot.enabled("lessons"), !pm);
-            assert_eq!(snapshot.enabled("session_export"), optional && !pm);
-            assert_eq!(snapshot.features.contains_key("session_export"), !pm);
+            let unbound = matches!(role, AgentRole::Pm | AgentRole::Assistant);
+            assert_eq!(snapshot.features.contains_key("lessons"), !unbound);
+            assert_eq!(snapshot.enabled("lessons"), !unbound);
+            assert_eq!(snapshot.enabled("session_export"), optional && !unbound);
+            assert_eq!(snapshot.features.contains_key("session_export"), !unbound);
         }
     }
     // And a ceiling-disallowed override is a configuration error.
@@ -579,7 +579,8 @@ fn hooks_and_bash_rules_follow_full_preset_ceilings_and_record_effective_setting
 
 #[test]
 fn background_shell_is_worker_only_with_recorded_bounds() {
-    // Given each preset, then only the worker resolves background_shell, off in strict.
+    // Given each preset, then only workers resolve background_shell, off in strict; assistant
+    // jobs wait for session-owned job semantics.
     for (index, preset) in [Preset::Strict, Preset::Standard, Preset::Full]
         .into_iter()
         .enumerate()
@@ -742,7 +743,7 @@ mod llama_cpp_tests {
             );
             let snapshot = config.resolve(role, None);
             assert!(snapshot.enabled("llama_cpp.enabled"));
-            assert_eq!(snapshot.catalog, 5);
+            assert_eq!(snapshot.catalog, crate::agent::CAPABILITY_CATALOG_VERSION);
             assert_eq!(
                 snapshot.llama_cpp.unwrap(),
                 LlamaCppSettings {

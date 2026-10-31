@@ -56,6 +56,9 @@ pub struct Bootstrap {
     pub review: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback: Option<String>,
+    /// Assistant only: the session `A-<n>` the host is bound to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<String>,
     pub generation: u32,
     pub bind_nonce: String,
     pub pane: String,
@@ -68,6 +71,9 @@ pub struct Bootstrap {
     pub resume_session: Option<PathBuf>,
     #[serde(default)]
     pub fresh_session: bool,
+    /// A restored rewind's session entry: the host branches `resume_session` there (T-575).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_leaf: Option<String>,
     pub model: String,
     /// The Pi provider whose credential the host loads; absent means `openai-codex`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,8 +144,21 @@ impl Bootstrap {
                     .context("the bootstrap names no review")?,
             },
             AgentRole::Pm => Recipient::Pm,
+            AgentRole::Assistant => anyhow::bail!("an assistant session has no inbox recipient"),
         })
     }
+
+    /// The key of the container's runtime directory: its recipient's, or the assistant session's.
+    pub fn runtime_key(&self) -> Result<String> {
+        match (self.role, &self.assistant) {
+            (AgentRole::Assistant, Some(session)) => Ok(assistant_key(session)),
+            _ => self.recipient()?.key(),
+        }
+    }
+}
+
+fn assistant_key(session: &str) -> String {
+    format!("assistant_{session}")
 }
 
 /// A launch refused before exec: a stable code and what is wrong. No secret exists yet.
@@ -297,6 +316,7 @@ pub fn prepare_bootstrap(
     let mut session_dir = paths::container_sessions_dir(&ctx.store, &container);
     let mut resume_session = None;
     let mut fresh_session = false;
+    let mut resume_leaf = None;
     let latest_bound = |state: &AgentRunState| {
         state
             .generations
@@ -306,10 +326,17 @@ pub fn prepare_bootstrap(
             .map(|(_, bound)| bound.session_file.clone())
     };
     let (project, recovery) = match target {
-        BindTarget::Pm { project } => (
-            project.clone(),
-            pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state)),
-        ),
+        BindTarget::Pm { project } => {
+            let file = pm_state::load(&ctx.store)?.and_then(|pm| latest_bound(&pm.state));
+            let file =
+                super::ops::pm::recovery_session(file, &mut session_dir, &mut fresh_session)?;
+            (project.clone(), file)
+        }
+        BindTarget::Assistant { session } => {
+            let file = super::ops::assistant::continued_session(ctx, session)?;
+            fresh_session = file.is_none();
+            (String::new(), file)
+        }
         BindTarget::Worker { .. } | BindTarget::Reviewer { .. } => {
             let task = ctx.store.get(
                 container
@@ -330,6 +357,9 @@ pub fn prepare_bootstrap(
                 {
                     resume_session = session.transcript.clone();
                 }
+            }
+            if let Some(state) = run.agent_host.as_deref() {
+                resume_leaf = super::rewind::owed_cursor(ctx, &container, state)?;
             }
             (
                 task.project
@@ -381,10 +411,10 @@ pub fn prepare_bootstrap(
         ContainerRef::PlanReviewer { task, plan, review } => {
             (Some(task.clone()), Some(plan.clone()), Some(review.clone()))
         }
-        ContainerRef::Pm => (None, None, None),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => (None, None, None),
     };
     let project_dir = match target {
-        BindTarget::Pm { .. } => ctx.store.project_path(&project).ok(),
+        BindTarget::Pm { .. } => Some(ctx.store.root().to_path_buf()),
         _ => None,
     };
     let bootstrap = Bootstrap {
@@ -392,13 +422,7 @@ pub fn prepare_bootstrap(
         root: ctx.store.root().to_path_buf(),
         store: paths::store_id(&ctx.store),
         project,
-        role: match target {
-            BindTarget::Worker { .. } => AgentRole::Worker,
-            BindTarget::Reviewer { .. } => AgentRole::Reviewer,
-            BindTarget::Planner { .. } => AgentRole::Planner,
-            BindTarget::PlanReviewer { .. } => AgentRole::PlanReviewer,
-            BindTarget::Pm { .. } => AgentRole::Pm,
-        },
+        role: target.role(),
         task,
         run,
         review,
@@ -406,6 +430,7 @@ pub fn prepare_bootstrap(
             BindTarget::Reviewer { callback, .. } => Some(callback.clone()),
             _ => None,
         },
+        assistant: container.assistant().map(str::to_owned),
         generation: grant.generation,
         bind_nonce: grant.bind_nonce,
         pane: pane.into(),
@@ -416,6 +441,7 @@ pub fn prepare_bootstrap(
         session_dir,
         resume_session,
         fresh_session,
+        resume_leaf,
         model: spec.model.clone(),
         provider: spec.provider.clone(),
         aws,
@@ -426,7 +452,8 @@ pub fn prepare_bootstrap(
         capabilities: Some(grant.capabilities),
         project_dir,
     };
-    let dir = generation_dir(&ctx.store, &bootstrap.recipient()?, grant.generation)?;
+    let dir = runtime_dir_for(&ctx.store, &bootstrap.runtime_key()?)
+        .join(format!("g{}", grant.generation));
     let path = write_bootstrap(&dir, &bootstrap)?;
     Ok(Prepared {
         bootstrap: path,
@@ -450,14 +477,26 @@ pub fn runtime_dir(store: &Store, recipient: &Recipient) -> Result<PathBuf> {
 
 /// `runtime_dir` under an explicit root.
 pub fn runtime_dir_in(root: &Path, store: &Store, recipient: &Recipient) -> Result<PathBuf> {
-    container_dir(root, &paths::store_id(store), recipient)
+    Ok(container_dir(
+        root,
+        &paths::store_id(store),
+        &recipient.key()?,
+    ))
 }
 
-fn container_dir(root: &Path, store_id: &str, recipient: &Recipient) -> Result<PathBuf> {
-    let key = recipient.key()?;
-    Ok(root
-        .join(store_id)
-        .join(&paths::sha256_hex(key.as_bytes())[..16]))
+/// The runtime directory of the container whose runtime key is `key`.
+pub fn runtime_dir_for(store: &Store, key: &str) -> PathBuf {
+    container_dir(&runtime_root(), &paths::store_id(store), key)
+}
+
+/// The runtime directory of an assistant session: it has no inbox recipient.
+pub fn assistant_runtime_dir(store: &Store, session: &str) -> PathBuf {
+    runtime_dir_for(store, &assistant_key(session))
+}
+
+fn container_dir(root: &Path, store_id: &str, key: &str) -> PathBuf {
+    root.join(store_id)
+        .join(&paths::sha256_hex(key.as_bytes())[..16])
 }
 
 /// `g<n>/` of a container: its bootstrap, `ctl.cap` and `host.sock`.
@@ -599,7 +638,7 @@ pub fn consume_bootstrap(path: &Path) -> Result<Bootstrap> {
     if bootstrap.version != BOOTSTRAP_VERSION {
         return Err(refuse("bootstrap_invalid", "unsupported bootstrap version").into());
     }
-    let tail = container_dir(Path::new(""), &bootstrap.store, &bootstrap.recipient()?)?
+    let tail = container_dir(Path::new(""), &bootstrap.store, &bootstrap.runtime_key()?)
         .join(format!("g{}", bootstrap.generation));
     let dir = path.parent().unwrap_or(Path::new(""));
     let root = dir
@@ -781,6 +820,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "version": 1, "store": bootstrap.store, "project": bootstrap.project,
         "role": bootstrap.role.as_str(), "task": bootstrap.task, "run": bootstrap.run,
         "review": bootstrap.review, "callback": bootstrap.callback,
+        "assistant": bootstrap.assistant,
         "generation": bootstrap.generation,
         "secrets": {"host_cap": secrets.host_cap, "ctl_cap": secrets.ctl_cap,
                     "bind_nonce": bootstrap.bind_nonce},
@@ -788,7 +828,7 @@ pub fn launch_message(bootstrap: &Bootstrap, ready: &Ready, secrets: &Secrets) -
         "corral": bootstrap.corral, "assets": ready.assets,
         "runtime_dir": ready.generation_dir, "session_dir": bootstrap.session_dir,
         "resume_session": bootstrap.resume_session,
-        "fresh_session": bootstrap.fresh_session,
+        "fresh_session": bootstrap.fresh_session, "resume_leaf": bootstrap.resume_leaf,
         "model": bootstrap.model, "provider": bootstrap.provider, "effort": bootstrap.effort,
         "aws": bootstrap.aws,
         "prompt_file": bootstrap.prompt_file, "ui": bootstrap.ui.as_str(),
@@ -869,40 +909,5 @@ pub fn host_command(
 mod tests;
 
 #[cfg(test)]
-mod llama_cpp_tests {
-    use super::*;
-
-    #[test]
-    fn launch_payload_includes_local_settings_only_when_effective() {
-        // Given recorded settings, including a disabled snapshot with stale settings.
-        for enabled in [false, true] {
-            let mut bootstrap: Bootstrap = serde_json::from_str(include_str!(
-                "../../../../packages/corral-pi/test/fixtures/llama-bootstrap.json"
-            ))
-            .unwrap();
-            let snapshot = bootstrap.capabilities.as_mut().unwrap();
-            let feature = snapshot.features.get_mut("llama_cpp.enabled").unwrap();
-            feature.enabled = enabled;
-            let local = snapshot.llama_cpp.clone().unwrap();
-            bootstrap.provider = host_provider(Some("llama.cpp"), "openai/x");
-            let ready = Ready {
-                assets: "/fixture/assets".into(),
-                bun: "/fixture/bun".into(),
-                bun_version: "1.4.2".into(),
-                generation_dir: "/fixture/g1".into(),
-            };
-            let secrets = Secrets::generate().unwrap();
-            // When serialized, then only effective local settings cross the launch boundary.
-            let message: serde_json::Value =
-                serde_json::from_slice(&launch_message(&bootstrap, &ready, &secrets).unwrap())
-                    .unwrap();
-            assert_eq!(
-                message["capabilities"].get("llama_cpp"),
-                enabled.then(|| json!(local)).as_ref()
-            );
-            assert_eq!(message["provider"], "llama.cpp");
-            assert!(message["aws"].is_null());
-            assert!(super::super::credentials::provider_for_vendor("llama.cpp").is_none());
-        }
-    }
-}
+#[path = "launch_llama_cpp_tests.rs"]
+mod llama_cpp_tests;

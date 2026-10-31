@@ -184,7 +184,21 @@ pub(crate) fn request_id(value: &str, generation: u32) -> Result<(), Rejection> 
 
 fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
     token("identity.store", &identity.store, 64, "-")?;
-    token("identity.project", &identity.project, 128, "._-")?;
+    // An assistant is workspace-scoped: it names its session and no project.
+    match (identity.role, identity.assistant.as_deref()) {
+        (AgentRole::Assistant, Some(session)) => {
+            corral_core::assistant::validate_id(session)
+                .map_err(|_| bad("identity.assistant must be A-<n>"))?;
+            if !identity.project.is_empty() {
+                return Err(bad("an assistant identity names no project"));
+            }
+        }
+        (AgentRole::Assistant, None) => return Err(bad("identity.assistant is required")),
+        (_, Some(_)) => return Err(bad("identity.assistant is for the assistant role only")),
+        // Workspace PMs carry no project; older project-bound sessions remain valid.
+        (AgentRole::Pm, None) if identity.project.is_empty() => {}
+        (_, None) => token("identity.project", &identity.project, 128, "._-")?,
+    }
     token("identity.session_id", &identity.session_id, 128, "._:-")?;
     if identity.generation == 0 {
         return Err(bad("identity.generation starts at 1"));
@@ -206,6 +220,9 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
             task.is_some() && run.is_some() && review.is_some() && callback.is_none()
         }
         AgentRole::Pm => task.is_none() && run.is_none() && review.is_none() && callback.is_none(),
+        AgentRole::Assistant => {
+            task.is_none() && run.is_none() && review.is_none() && callback.is_none()
+        }
     };
     if !shaped {
         return Err(bad(format!(
@@ -216,6 +233,7 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
                 AgentRole::Reviewer => "task, run, review and callback",
                 AgentRole::PlanReviewer => "task, plan in run, and review only",
                 AgentRole::Pm => "no task, run, review or callback",
+                AgentRole::Assistant => "its session and no task, run, review or callback",
             }
         )));
     }
@@ -229,7 +247,7 @@ fn identity(identity: &RequestIdentity) -> Result<(), Rejection> {
     let prefix = match identity.role {
         AgentRole::Planner => 'D',
         AgentRole::PlanReviewer => 'P',
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm => 'R',
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm | AgentRole::Assistant => 'R',
     };
     if let Some(run) = run
         && !run

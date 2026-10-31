@@ -3,11 +3,14 @@
 //! closure predicate. Every shape, bound and storage class is listed in
 //! docs/records/pi-native-records.md for T-253, which owns their schema and migration.
 
+mod auxiliary;
 mod browser;
+mod budget;
 mod capabilities;
 mod jobs;
 mod live;
 mod local_controls;
+mod lsp;
 pub(crate) mod native_inputs;
 mod native_record;
 pub mod paths;
@@ -15,11 +18,15 @@ pub mod pm_state;
 mod question;
 mod records;
 pub mod rejections;
+mod rewind;
 #[cfg(test)]
 mod tests;
 mod todo;
+mod usage;
 
+pub use auxiliary::{ExploreSettings, OracleSettings};
 pub use browser::canonical_origin;
+pub use budget::*;
 pub use capabilities::*;
 pub use jobs::*;
 pub use live::*;
@@ -28,4 +35,6 @@ pub use native_record::NativeRecord;
 pub use pm_state::AgentPm;
 pub use question::*;
 pub use records::*;
+pub use rewind::*;
 pub use todo::*;
+pub use usage::*;

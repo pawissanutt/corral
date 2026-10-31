@@ -478,6 +478,29 @@ fn shipped_generic_fixture_helper_records_a_current_checkpoint() {
     let read = value(root, &["run", "checkpoint", &task.id, "--json"]);
     assert_eq!(read["checkpoint_status"], "compatible");
     assert_eq!(read["checkpoints"][0]["checkpoint"]["input"]["run"], "R1");
+
+    // Simulate an older checkpoint that captured settled waits before compaction existed.
+    let waits: Vec<corral_core::WaitRecord> = ["ready", "failed", "expired", "pending"]
+        .iter().map(|state| serde_json::from_value(json!({
+            "request":{"version":1,"id":state,"run":"R1","condition":format!("job {state} exits"),"owner":"worker","source":"worker","handle":{"kind":"channel","channel_id":format!("job:{state}"),"capability":"wait_v1"}},
+            "registered_at":"2026-10-15T00:00:00Z","observation":{"at":"2026-10-15T00:00:00Z","state":state,"detail":""}
+        })).unwrap()).collect();
+    store
+        .update(&task.id, |t| {
+            let run = t.current_run_mut().unwrap();
+            run.obligations.waits = waits.clone();
+            run.checkpoints[0].checkpoint.run_obligations.waits = waits.clone();
+            Ok(())
+        })
+        .unwrap();
+    let show = ok(root, &["show", &task.id]);
+    assert!(show.contains("jobs: 3 settled"), "{show}");
+    assert!(show.contains("captured jobs: 3 settled"), "{show}");
+    assert!(show.contains("job pending exits"), "{show}");
+    assert!(show.contains("captured wait pending [pending]"), "{show}");
+    for state in ["ready", "failed", "expired"] {
+        assert!(!show.contains(&format!("job {state} exits")), "{show}");
+    }
     assert_eq!(
         store.get(&task.id).unwrap().status,
         corral_core::Status::Running

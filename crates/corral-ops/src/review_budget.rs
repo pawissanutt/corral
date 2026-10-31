@@ -610,7 +610,7 @@ pub(crate) fn reconcile(
                     )?
                 {
                     let mut release_reason = None;
-                    ctx.store.try_update_head(&head.id, |task| {
+                    let released = ctx.store.try_update_head(&head.id, |task| {
                         if !crate::session_scope::owns_head(ctx, task.head())? {
                             return Ok(false);
                         }
@@ -644,6 +644,14 @@ pub(crate) fn reconcile(
                             "Reviewer launch failure",
                             &reason,
                         )?;
+                    } else if released.is_some()
+                        && kind == Kind::Reviewer
+                        && let Some(child) = run.current_child.as_deref()
+                    {
+                        let attempt = format!("{}-{}", run.id, child.id);
+                        crate::launch_exit::record_missing(&crate::launch_exit::receipt(
+                            ctx, &head.id, &attempt,
+                        )?)?;
                     }
                 }
             }

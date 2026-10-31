@@ -152,7 +152,9 @@ pub fn reconcile(ctx: &Ctx, recipient: &Recipient, handler: &dyn EffectHandler) 
                             .context("effect review child disappeared")?
                             .pending_reply
                     }
-                    Recipient::Pm => anyhow::bail!("PM has no task-local effects"),
+                    Recipient::Pm | Recipient::Assistant { .. } => {
+                        anyhow::bail!("{} has no task-local effects", recipient.key()?)
+                    }
                 };
                 pending.clone_from(&view);
                 if wakes
@@ -265,6 +267,6 @@ fn current(
             is_current
                 && corral_core::agent::container_closure(&head.to_shell_task()?, &child).is_none()
         }
-        Recipient::Pm => true,
+        Recipient::Pm | Recipient::Assistant { .. } => true,
     })
 }

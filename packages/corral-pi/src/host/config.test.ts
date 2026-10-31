@@ -12,6 +12,13 @@ const message = {
   assets: "/assets", runtime_dir: "/runtime", session_dir: "/sessions", model: "gpt-6.1-sol",
 };
 
+test("workspace PM launch has no project while legacy PM launches remain readable", () => {
+  const pm = { ...message, role: "pm", task: undefined, run: undefined, review: undefined, callback: undefined };
+  expect(parseLaunchMessage(JSON.stringify({ ...pm, project: "" })).identity.project).toBe("");
+  expect(parseLaunchMessage(JSON.stringify(pm)).identity.project).toBe("demo");
+  expect(() => parseLaunchMessage(JSON.stringify({ ...message, project: "" }))).toThrow(LaunchMessageInvalid);
+});
+
 test("todo is enabled only by a boolean launch snapshot and defaults off for legacy launches", () => {
   expect(parseLaunchMessage(JSON.stringify(message)).todo).toBeFalse();
   for (const todo of [true, false]) {

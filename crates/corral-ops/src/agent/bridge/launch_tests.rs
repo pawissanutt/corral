@@ -123,7 +123,7 @@ fn fixture(modules: &[&str], fixture: bool) -> Fixture {
 
 fn fake_bun(dir: &Path, version: &str) -> PathBuf {
     let path = dir.join(format!("bun-{version}"));
-    write(
+    crate::agent::test_support::write_executable(
         &path,
         &format!(
             "#!/bin/sh\nif [ \"$1\" = --version ]; then echo {version}; exit 0; fi\n\
@@ -131,7 +131,6 @@ fn fake_bun(dir: &Path, version: &str) -> PathBuf {
              pwd > \"$out/cwd\"\ncat \"/proc/self/fd/$4\" > \"$out/message\"\n"
         ),
     );
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
     path
 }
 

@@ -30,13 +30,15 @@ export const STATUS_ALERTS = "corral-2-alerts";
 
 const ROLE_LABEL: Record<Role, string> = {
   worker: "WORKER", reviewer: "REVIEWER", pm: "PM", planner: "PLANNER", plan_reviewer: "PLAN REVIEWER",
+  assistant: "ASSISTANT",
 };
 const ROLE_COLOR: Record<Role, "accent" | "warning" | "success"> = {
   worker: "accent", reviewer: "warning", pm: "success", planner: "accent", plan_reviewer: "warning",
+  assistant: "success",
 };
 
 export function target(identity: HostIdentity): string {
-  if (!identity.task) return identity.project;
+  if (!identity.task) return identity.assistant ?? identity.project;
   const run = identity.review ?? identity.run;
   return run ? `${identity.task} · ${run}` : identity.task;
 }
@@ -89,6 +91,10 @@ export function installChrome(
   };
   events.on((event) => {
     if (countAlert(alerts, event) || event.kind === "bound") refresh();
+  });
+  pi.on("model_select", (event) => {
+    info = { ...info, provider: event.model.provider, model: event.model.id };
+    refresh();
   });
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return;

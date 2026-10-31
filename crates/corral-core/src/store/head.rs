@@ -246,6 +246,7 @@ impl TaskHead {
         let mut task: TaskHeadFields = serde_json::from_value(Value::Object(head_object(&doc)?))
             .context("decoding the task head")?;
         task.body = super::assemble::head_body(&doc);
+        task.current_run_id = current_run.as_ref().map(|run| run.id.clone());
         Ok(Some(TaskHead {
             num,
             rev: doc.header.rev,

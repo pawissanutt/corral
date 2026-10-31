@@ -46,7 +46,10 @@ flags_of = {}
 for c, h in top.items():
     text = h
     for s in nested[c]:
-        text += help_text(c, s) or ""
+        sub = help_text(c, s) or ""
+        text += sub
+        for t in subcommands(sub):
+            text += help_text(c, s, t) or ""
     flags_of[c] = set(re.findall(r"--[a-z][a-z0-9-]*", text)) | {"--root", "--help"}
     all_flags |= flags_of[c]
 all_flags |= {"--version", "--help"}

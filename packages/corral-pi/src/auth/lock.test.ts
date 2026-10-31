@@ -35,6 +35,18 @@ interface Child {
   output(): string;
 }
 
+function hasCompleteLine(output: string, text: string): boolean {
+  // A data event may end at any byte, including just before the newline or
+  // halfway through a longer line with the expected text as its prefix.
+  return output.split("\n").slice(0, -1).includes(text);
+}
+
+test("child readiness requires a complete line, not a chunk ending at its prefix", () => {
+  expect(hasCompleteLine("prior\nA_IN", "A_IN")).toBeFalse();
+  expect(hasCompleteLine("prior\nA_IN_PROGRESS\n", "A_IN")).toBeFalse();
+  expect(hasCompleteLine("prior\nA_IN\npartial", "A_IN")).toBeTrue();
+});
+
 function child(script: string, env: Record<string, string> = {}): Child {
   const proc = spawn(process.execPath, ["--no-env-file", "-e", script], {
     cwd: join(HERE, "../.."),
@@ -58,7 +70,7 @@ function child(script: string, env: Record<string, string> = {}): Child {
     process: proc,
     async line(text) {
       const deadline = Date.now() + DEADLINE_MS;
-      while (!out.split("\n").includes(text)) {
+      while (!hasCompleteLine(out, text)) {
         if (proc.exitCode !== null) throw new Error(`child exited before ${text}:\n${out}`);
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error(`no ${text} within ${DEADLINE_MS} ms:\n${out}`);

@@ -94,10 +94,9 @@ fn stale_approval_of_a_decomposed_done_design_is_refreshed_without_reopening_it(
     };
     approval(&ctx).unwrap();
 
-    // When a reviewer policy change makes that approval stale for the children.
+    // When reviewer policy changes, the published approval remains valid.
     register(&mut ctx, "reviewer-2");
-    let error = approval(&ctx).unwrap_err();
-    assert!(format!("{error:#}").contains("stale plan approval"));
+    approval(&ctx).unwrap();
 
     // And the plan is re-reviewed, then re-accepted by the owner.
     rereview(&ctx, &id, &plan, "reviewer-2");

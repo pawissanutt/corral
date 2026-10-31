@@ -41,6 +41,10 @@ const cases = [
   } },
   { name: "reply", op: "reply", payload: { task: "T-007", text: "Continue within scope." } },
   { name: "comment", op: "comment", payload: { task: "T-007", text: "Evidence recorded." } },
+  { name: "inbox_read", op: "inbox_read", payload: { id: "PMI-1", offset: 0, limit: 512 } },
+  { name: "inbox_resolve", op: "inbox_resolve", payload: {
+    id: "PMI-1", expected_revision: 1, action: "resolve", outcome: "done", text: "Filed T-9.", refs: ["T-9"],
+  } },
   { name: "capture", op: "capture", payload: {
     project: "demo", title: "Follow-up", body: "Investigate the adapter.", status: "backlog",
   } },
@@ -103,7 +107,7 @@ test("the PM exposes only its scoped operations and requires the installed conte
   // Given the production role, when constructing its tools and contract:
   const tools = pm.tools(context);
   // Then neither lifecycle-only operations nor owner authority become model tools.
-  expect(pm.upstreamTools).toEqual([]);
+  expect(pm.upstreamTools).toEqual(["read", "edit", "write", "grep", "find", "ls", "bash"]);
   expect(tools.map((item) => item.name)).toEqual(names);
   expect([...pm.corralOps].sort()).toEqual(["hello", "event", "receipt_lookup", ...cases.map(({ op }) => op), "todo"].sort());
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-pm-noassets-"));
@@ -137,6 +141,10 @@ const invalidCases: readonly (readonly [string, Record<string, unknown>])[] = [
   ["reply", { task: "T-007", message: "wrong field" }],
   ["comment", { text: "missing task" }],
   ["capture", { project: "demo", title: "x", body: "y", status: "ready" }],
+  ["inbox_read", { state: "stale" }],
+  ["inbox_resolve", { id: "PMI-1", action: "claim" }],
+  ["inbox_resolve", { id: "PMI-1", expected_revision: 0, action: "approve" }],
+  ["inbox_resolve", { id: "PMI-1", expected_revision: 1, action: "resolve", outcome: "landed" }],
 ];
 for (const [index, [name, payload]] of invalidCases.entries()) test(`the ${name} schema refuses invalid case ${index}`, () => {
   // Given malformed input, when checking the schema, then it cannot reach the client.
@@ -150,8 +158,9 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     if (stage === "reload") await host.session.reload();
     if (stage === "refused replacement") await expectReplacementsRefused(host, events);
     const state = host.state();
-    expect(host.session.getActiveToolNames().sort()).toEqual([...names].sort());
-    expect(state.loadout).toEqual(names);
+    const upstream = ["read", "edit", "write", "grep", "find", "ls", "bash"];
+    expect(host.session.getActiveToolNames().sort()).toEqual([...upstream, ...names].sort());
+    expect(state.loadout).toEqual([...upstream, ...names]);
     const resources = host.runtime.services.resourceLoader;
     expect(resources.getSkills().skills).toHaveLength(0);
     expect(resources.getPrompts().prompts).toHaveLength(0);
@@ -162,8 +171,6 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
     // When the offline model calls each permitted tool and attempts forbidden ones:
     const target = join(cwd, `forbidden-${stage}`);
     const forbidden = [
-      { callId: "write", name: "write", arguments: { path: target, content: "forbidden" } },
-      { callId: "bash", name: "bash", arguments: { command: `touch ${target}` } },
       { callId: "act", name: "corral_pm_act", arguments: {} },
       { callId: "deadline", name: "corral_question_deadline", arguments: {} },
       { callId: "mcp", name: "mcp__leak", arguments: {} },
@@ -200,7 +207,7 @@ for (const stage of ["startup", "reload", "refused replacement"]) test(
       expect(call.identity.task).toBeUndefined();
       expect(call.identity.run).toBeUndefined();
     }
-    expect(calls).toHaveLength(14);
+    expect(calls).toHaveLength(cases.length);
     const results = host.session.messages.filter((message) => message.role === "toolResult");
     for (const { name } of forbidden) {
       expect(results.findLast((message) => message.toolName === name)?.isError).toBeTrue();

@@ -10,6 +10,9 @@ mod artifact_search;
 mod artifact_server;
 mod artifact_storage;
 mod artifacts;
+pub mod assistant;
+mod assistant_artifacts;
+pub use assistant_artifacts::add_session_artifact;
 pub mod attention;
 mod automation_controls;
 mod automation_status;
@@ -77,6 +80,7 @@ pub mod pm_bench;
 mod pm_decisions;
 mod pm_events;
 mod pm_health;
+pub mod pm_inbox;
 mod pm_next;
 mod pm_policy;
 mod pm_questions;
@@ -162,7 +166,9 @@ pub use artifacts::{
     ArtifactRow, Preview, add_artifact, all_artifacts, artifact_document, artifact_preview,
     scan_artifacts,
 };
-pub use automation_controls::{automation_confirm, automation_preview, require_automation_owner};
+pub use automation_controls::{
+    agent_entry, automation_confirm, automation_preview, require_automation_owner,
+};
 pub use automation_status::{automation_blocker, automation_blocker_head, automation_summary};
 pub use comments::comment;
 pub use completion::{
@@ -213,11 +219,11 @@ pub use messages::{Message, MessageGuard, capture_messages, report as report_mes
 pub use obligations::{ResumeTarget, register_decision, register_wait, resume_run};
 pub use phases::{CommandSpan, Phase, Span, task_phases};
 #[doc(hidden)]
-pub use plan::member_add::{PlanMemberAdded, plan_add_member, plan_add_member_from};
+pub use plan::member_add::{PlanMemberAdded, plan_add_member};
 pub use plan::member_gate::plan_member_gate_from;
 pub use plan::member_gate::{MemberGateOutcome, MemberGateRequest, OwnerEntry, plan_member_gate};
 #[doc(hidden)]
-pub use plan::member_move::{MoveGate, PlanMemberMoved, plan_move_member, plan_move_member_from};
+pub use plan::member_move::{MoveGate, PlanMemberMoved, plan_move_member};
 pub use plan::{approved_plan, plan_policy_set, plan_spec_revision, plan_submit};
 pub use plan_lifecycle::plan_cancel;
 pub use plan_review::{
@@ -296,7 +302,10 @@ pub use sprint::{
     SprintChange, SprintDecision, SprintNumbers, SprintReview, SprintSections, SprintTask,
     SprintTotals, collect_sprint_review, review_sprint,
 };
-pub use stats::{StatsBy, StatsRow, stats};
+pub use stats::{
+    AssistantRoleStats, AssistantStats, StatsBy, StatsRow, assistant_role_stats, assistant_stats,
+    stats,
+};
 pub use sync::{Change, sync, sync_at, sync_at_with_processes, sync_hook, sync_with_attention};
 pub use sync_installed::sync_installed;
 pub use tasks::{
@@ -309,6 +318,8 @@ pub use tracker::{
     PlanCoverage, PlanPrerequisite, PlanProgress, PlanWork, PlanWorkCounts, PlanWorkState,
     plan_board, plan_progress, plan_progress_in,
 };
+pub use usage::assistant_usage;
+pub use usage::pages::transcript_page;
 pub use usage::{refresh_active_usage, refresh_usage};
 pub use viewers::{Opened, open_artifact, open_artifact_live, open_path};
 pub use watchdog::{ProcessControl, ProcessSnapshot, SystemProcesses, unstick, unstick_with};

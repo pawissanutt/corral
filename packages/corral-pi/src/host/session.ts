@@ -15,28 +15,33 @@ import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import { getApiProvider } from "@earendil-works/pi-ai/compat";
 
 import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
+import { RunBudget } from "../capabilities/budget.ts";
 import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
 import { codemode } from "../capabilities/codemode.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
+import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
 import type { AuthContext } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
-import type { SubmitInput, SubmitResult } from "../bridge/protocol.ts";
+import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { corralRenderers } from "../ui/render.ts";
+import { installTodo } from "../ui/todo.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
+import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
-import { type GuardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
+import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
+import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
@@ -48,6 +53,14 @@ import { JOB_MONITOR_TOOL, jobTools } from "../extensions/jobs/index.ts";
 import { JobRuntime } from "../extensions/jobs/runtime.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { toolRequestId } from "../tools/corral.ts";
+import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
+import { auxiliarySettings } from "../extensions/subagent/settings.ts";
+import { exploreTool } from "../extensions/subagent/index.ts";
+import { oracleTool } from "../extensions/oracle/index.ts";
+import { runAuxiliarySession } from "../extensions/subagent/session.ts";
+import { executionRefusal } from "../roles/common/execution.ts";
+import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
+import type { ConfirmUi } from "../tools/define.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -81,6 +94,8 @@ export interface HostSessionOptions {
   readonly events: EventLog;
   readonly network: GuardedFetch;
   readonly sessionManager: SessionManager;
+  /** The pane's herdr projection; absent for a headless host or one outside its bound pane. */
+  readonly herdr?: HerdrLifecycle;
 }
 
 type TurnOrigin = { kind: "bridge"; idempotency_key: string } | { kind: "owner_terminal" } | { kind: "unknown" };
@@ -90,6 +105,8 @@ const STATE_SECTION_MAX_BYTES = 8 * 1024;
 /** A lifecycle report keeps its request ID, so retrying it is safe; back off from contention. */
 const REPORT_ATTEMPTS = 6;
 const REPORT_BACKOFF_MS = 250;
+/** Withdraw refusals that mean corral already holds the question as not pending. */
+const NOT_PENDING = new Set(["question_withdrawn", "question_state", "question_closed", "question_not_found"]);
 
 /** A module's own readback, replaced by its size once it could crowd a bridge frame. */
 function bounded(value: Record<string, unknown> | null): Record<string, unknown> | null {
@@ -233,18 +250,40 @@ export class HostSession {
   private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
   private sessionsCreated = 0;
-  private interactive = false;
+  /** How the bound host is attached: InteractiveMode in its pane, or headless (T-577). */
+  private attached: "interactive" | "headless" | undefined;
   private guidance: Guidance = { skillPaths: [], promptPaths: [], contextFiles: [] };
   private readonly settings: ReturnType<typeof restrictedSettings> & ReturnType<typeof compactionSettings>;
   private readonly controls: HostControls;
   private readonly hooks: Hooks | undefined;
   private readonly additionalLsp: LspToolkit | undefined;
   private readonly permissions: BashPermissions | undefined;
+  private readonly checkpoints: Checkpoints | undefined;
+  private readonly auxiliary: AuxiliaryRuntime | undefined;
+  private auxiliaryModels: Models | undefined;
+  private readonly budget: RunBudget;
 
   readonly provider: ProviderId;
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.budget = new RunBudget({
+      unbounded: PROVIDERS[this.provider].lane !== undefined,
+      record: async (payload) => {
+        if (!this.bound) throw new Error("host_not_bound");
+        await this.drained();
+        const event = options.events.emit("budget", payload);
+        const receipt = await options.client.call("event", {
+          requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+        });
+        if (receipt.state !== "committed") throw new Error(`budget record refused: ${JSON.stringify(receipt.result)}`);
+        return (receipt.result ?? {}) as Record<string, unknown>;
+      },
+      onStop: () => {
+        if (this.open) this.report("budget_exhausted", { budget: this.budget.state() });
+      },
+      cancel: () => { void this.cancel(this.currentTurn()); void this.auxiliary?.cancelAll(); },
+    });
     this.roleContext = {
       identity: options.identity, cwd: options.cwd, model: options.model,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
@@ -276,9 +315,33 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp) });
     }
     this.jobs = this.jobRuntime();
+    const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
+    if (auxiliary.explore || auxiliary.oracle) {
+      this.auxiliary = new AuxiliaryRuntime({
+        settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
+        sessionId: () => this.sessionId(),
+        record: async (payload) => {
+          if (!this.bound) throw new Error("host_not_bound");
+          await this.drained();
+          const event = options.events.emit("auxiliary", payload);
+          const receipt = await options.client.call("event", {
+            requestId: eventRequestId(options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+          });
+          if (receipt.state !== "committed") throw new Error(`auxiliary record refused: ${JSON.stringify(receipt.result)}`);
+          return receipt.result as Record<string, unknown>;
+        },
+        execute: (invocation, signal) => {
+          if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
+          return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
+            cwd: options.cwd, agentDir: options.agentDir, parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
+        },
+      });
+    }
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
       ...(this.jobs ? jobTools(this.jobs) : []),
+      ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
+      ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd }) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
@@ -305,6 +368,14 @@ export class HostSession {
       record: (entry) => this.session.sessionManager.appendCustomEntry(HOOK_ENTRY, entry),
     });
     this.permissions = this.controls.bashRules && new BashPermissions();
+    const run = options.identity.run;
+    if (options.capabilities?.enabled.includes("checkpoints") === true) {
+      if (options.identity.role !== "worker" || !run) throw new Error("module_invalid: checkpoints needs a worker run");
+      this.checkpoints = new Checkpoints({
+        cwd: options.cwd, generation: options.identity.generation, run,
+        record: (entry) => this.session.sessionManager.appendCustomEntry(CHECKPOINT_ENTRY, entry),
+      });
+    }
   }
 
   /**
@@ -359,16 +430,32 @@ export class HostSession {
       throw new Error("module_invalid: llama.cpp requires its explicit generation-bound capability");
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const models = localModels?.models ?? await createModelCatalog(options.modules.auth.credentials(authContext(route.id)), {
-      providers: [route.id],
+    const subscriptions = await subscriptionRoutes(options.modules.auth, route.id, options.identity.role);
+    const models = localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
+      providers: subscriptions.providers,
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const model = localModels?.model ?? models.getModel(route.id, modelId);
     if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    if (!localModels) {
-      restrictProvider(models, route.id, options.network.fetch as typeof globalThis.fetch,
-        { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+    for (const id of subscriptions.providers) {
+      if (!localModels) {
+        const fetch = PROVIDERS[id].auth === "oauth"
+          ? guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch
+          : options.network.fetch;
+        restrictProvider(models, id, fetch as typeof globalThis.fetch,
+          { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd }, options.aws);
+      }
+      const restricted = models.getProvider(id);
+      if (!restricted) throw new Error("budget: approved provider is unavailable");
+      if ((options.capabilities?.catalog ?? 0) >= 7) {
+        const unbounded = PROVIDERS[id].lane !== undefined;
+        models.registerNativeProvider({ ...restricted,
+          stream: host.budget.wrap(restricted.stream.bind(restricted), unbounded),
+          streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted), unbounded),
+        });
+      }
     }
+    host.auxiliaryModels = models;
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);
@@ -391,8 +478,9 @@ export class HostSession {
       const result = await sdk.createAgentSessionFromServices({
         services, sessionManager, model, tools: [...host.baseLoadout, ...host.mcp?.authorizedNames() ?? []],
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
-        ...(thinkingLevel ? { thinkingLevel, scopedModels: [{ model, thinkingLevel }] } : { scopedModels: [{ model }] }),
+        ...(thinkingLevel ? { thinkingLevel } : {}),
       });
+      if (!localModels) installModelSelection(result.session, models, subscriptions.providers);
       result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
       host.sessionsCreated++;
@@ -443,6 +531,9 @@ export class HostSession {
       const tool = defineCorralTool(spec, {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
         sessionId: () => this.sessionId(), currentTurn: () => this.currentTurn(),
+        ...(this.options.identity.role === "assistant"
+          ? { confirm: (command: string, context: ConfirmUi, requestId: string) =>
+            this.confirmOwnerAction(command, context, requestId) } : {}),
       });
       pi.registerTool(rich ? { ...tool, ...corralRenderers(tool.name) } : tool);
     }
@@ -451,6 +542,9 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
+      if (this.loadout.includes("corral_todo")) {
+        installTodo(pi, this.options.identity, () => this.options.client.todoSnapshot());
+      }
     }
     for (const tool of this.localTools) pi.registerTool(tool);
     // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
@@ -458,17 +552,18 @@ export class HostSession {
     pi.on("tool_call", (event) => {
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
-      if (allowed.has(event.toolName) && !(nested && corral.has(event.toolName))) return undefined;
+      const reason = executionRefusal(event.toolName, nested, allowed, corral);
+      if (!reason) return undefined;
       this.deniedTools++;
       this.options.events.emit("tool_denied", { tool: event.toolName, ...(nested ? { nested: true } : {}) });
       return {
         block: true,
-        reason: allowed.has(event.toolName)
-          ? `${event.toolName} is a corral operation; call it directly, not from another tool`
-          : `${event.toolName} is not in the ${this.options.identity.role} loadout`,
+        reason,
       };
     });
+    const fixed = this.options.modules.role.shellRefusal;
     installToolControls(pi, {
+      ...(fixed ? { fixed } : {}),
       ...(this.hooks ? { hooks: this.hooks } : {}),
       ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
       ...(this.permissions ? { permissions: this.permissions } : {}),
@@ -509,16 +604,66 @@ export class HostSession {
         },
       });
     }
-    pi.on("input", (event) => {
+    pi.on("tool_result", (event) => {
+      if (event.parentToolCallId === undefined) this.observeQuestion(event.toolName, event.input, event.details);
+    });
+    pi.on("input", async (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
-      return { action: "continue" as const };
+      // Only text the owner typed into this pane is journaled, before the model sees it.
+      if (event.source !== "interactive" || this.options.identity.role !== "assistant" || event.text.startsWith("/")) {
+        return { action: "continue" as const };
+      }
+      const id = await this.journalOwnerInput("pane", event.text);
+      return id === undefined
+        ? { action: "continue" as const }
+        : { action: "transform" as const, text: ownerInputText(event.text, id) };
     });
     this.options.modules.role.extend?.(pi, this.roleContext);
     // Registered after the role's own handler: upstream keeps the first skill of each name, so
     // a home or repository skill can never replace the role's packaged one (corral-worker).
     pi.on("resources_discover", () => ({ skillPaths: [...this.guidance.skillPaths] }));
-    pi.on("session_shutdown", () => this.jobs?.shutdown());
+    pi.on("session_shutdown", async (event) => {
+      if (event.reason === "reload") await this.auxiliary?.cancelAll(); else await this.auxiliary?.close();
+      await this.jobs?.shutdown();
+    });
+  }
+
+  /**
+   * Records owner text (typed into the pane, or the owner's y/n to a confirmation) in the
+   * session's owner-input journal and returns its ID; undefined when it was not journaled,
+   * so an owner action cannot cite it.
+   */
+  private async journalOwnerInput(
+    source: "pane" | "confirmation", text: string, command?: string, answers?: string,
+  ): Promise<string | undefined> {
+    if (!this.bound) return undefined;
+    const sha256 = sha256Hex(text);
+    const kept = utf8Prefix(text, OWNER_INPUT_TEXT_MAX);
+    const event = this.options.events.emit("owner_input", { source, sha256, bytes: Buffer.byteLength(text) });
+    const payload = {
+      kind: "owner_input", source, text: kept, sha256,
+      ...(kept !== text ? { truncated: true } : {}), ...(command !== undefined ? { command } : {}),
+      ...(answers !== undefined ? { answers } : {}),
+    };
+    try {
+      const receipt = await this.options.client.call("event", {
+        requestId: eventRequestId(this.options.identity.generation, event.seq), payload, turn: this.currentTurn(),
+      });
+      const id = (receipt.result as { input?: unknown } | undefined)?.input;
+      if (receipt.state === "committed" && typeof id === "string") return id;
+      this.options.events.emit("owner_input_unjournaled", { seq: event.seq, result: JSON.stringify(receipt.result).slice(0, 256) });
+    } catch (error) {
+      this.options.events.emit("owner_input_unjournaled", { seq: event.seq, reason: (error instanceof Error ? error.message : String(error)).slice(0, 256) });
+    }
+    return undefined;
+  }
+
+  /** Shows the owner a confirm-class command in the pane and journals the answer for the request. */
+  private async confirmOwnerAction(command: string, context: ConfirmUi, requestId: string): Promise<boolean> {
+    if (!context.hasUI) return false;
+    const yes = await context.ui.confirm("corral: confirm owner action", command);
+    return await this.journalOwnerInput("confirmation", yes ? "y" : "n", command, requestId) !== undefined;
   }
 
   private watch(session: AgentSession): void {
@@ -529,7 +674,8 @@ export class HostSession {
       else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
-        this.providerError(providerErrorClass(event.message.errorMessage ?? ""));
+        const message = event.message.errorMessage ?? "";
+        if (!message.includes("budget_exhausted") || !this.budget.state().stopped) this.providerError(providerErrorClass(message));
       }
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
@@ -543,7 +689,33 @@ export class HostSession {
     this.nextTurnOrigin = undefined;
     this.lastInputSource = undefined;
     this.ownerInput = false;
-    this.report("turn_started", { origin });
+    // Before the prompt is recorded: its parent is the cursor a rewind to this turn restores.
+    if (this.bound) this.checkpoint("start");
+    this.report("turn_started", { origin, provider: this.session.model?.provider, model: this.session.model?.id });
+    if (this.budget.state().stopped) this.report("budget_exhausted", { budget: this.budget.state() });
+    this.options.herdr?.turnStarted();
+  }
+
+  /** Only corral's receipts open or settle a question in the herdr projection. */
+  private observeQuestion(tool: string, input: Record<string, unknown>, details: unknown): void {
+    const receipt = details as Partial<CorralReceipt> | undefined;
+    const result = (receipt?.result ?? {}) as { key?: unknown; blocking?: unknown; code?: unknown; revision?: unknown };
+    const revision = typeof result.revision === "number" ? result.revision : undefined;
+    if (tool === "corral_ask" && receipt?.state === "committed" && receipt.replayed !== true &&
+        typeof result.key === "string" && typeof input.kind === "string") {
+      const blocking = typeof result.blocking === "boolean" ? result.blocking : input.blocking === true;
+      this.options.herdr?.asked({ key: result.key, kind: input.kind, blocking, revision: revision ?? 1 });
+    }
+    if (tool !== "corral_withdraw" || typeof input.key !== "string") return;
+    if (receipt?.state === "committed") this.options.herdr?.resolved(input.key, revision);
+    else if (receipt?.state === "rejected" && NOT_PENDING.has(String(result.code))) this.options.herdr?.resolved(input.key);
+  }
+
+  /** Bridge `questions`: corral's question states, including transitions this host did not make. */
+  questionsChanged(updates: readonly QuestionUpdate[]): Record<string, unknown> {
+    if (!this.options.herdr) return { applied: false };
+    this.options.herdr.apply(updates);
+    return { applied: true, blocked_on: this.options.herdr.readback().blocked_on };
   }
 
   private turnEnded(aborted: boolean): void {
@@ -553,20 +725,36 @@ export class HostSession {
     this.cancelRequested = undefined;
     const ownerInput = this.ownerInput;
     this.ownerInput = false;
+    if (this.bound) this.checkpoint("end");
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
+    this.options.herdr?.turnEnded();
+  }
+
+  private checkpoint(phase: "start" | "end"): void {
+    if (!this.checkpoints) return;
+    const leaf = phase === "start" ? this.session.sessionManager.getLeafId() : undefined;
+    const entry = this.checkpoints.capture(phase, this.turn, leaf);
+    this.options.events.emit(entry.error ? "checkpoint_failed" : "checkpoint", {
+      id: entry.id, phase, ...(entry.commit ? { commit: entry.commit } : {}), ...(entry.error ? { error: entry.error } : {}),
+    });
   }
 
   private providerError(errorClass: string): void {
     this.report("provider_error", { class: errorClass });
   }
 
-  private report(kind: "turn_started" | "turn_ended" | "provider_error", data: Record<string, unknown>): void {
+  private report(kind: "turn_started" | "turn_ended" | "provider_error" | "budget_exhausted", data: Record<string, unknown>): void {
     const turn = this.turn;
     const event = this.options.events.emit(kind, { turn, ...data });
     if (!this.bound) return;
     const payload: Record<string, unknown> = { kind, turn };
-    if (kind === "turn_started") payload.origin = data.origin;
+    if (kind === "turn_started") {
+      payload.origin = data.origin;
+      payload.provider = data.provider;
+      payload.model = data.model;
+    }
     if (kind === "provider_error") payload.class = data.class;
+    if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
@@ -596,9 +784,9 @@ export class HostSession {
     this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
   }
 
-  markInteractive(): void {
-    this.interactive = true;
-    this.options.events.emit("interactive");
+  markAttached(mode: "interactive" | "headless"): void {
+    this.attached = mode;
+    this.options.events.emit(mode);
   }
 
   drained(): Promise<unknown> {
@@ -606,8 +794,14 @@ export class HostSession {
   }
 
   async close(): Promise<void> {
+    const released = this.options.herdr?.close();
+    // Stop the parent's follow-up loop before cancelled children can return tool results.
+    const aborted = this.session.abort();
+    await this.auxiliary?.close();
+    await aborted;
     await this.mcp?.close();
     this.session.dispose();
+    await released;
   }
 
   async hello(bindNonce: string, pane: string, ctlCapSha256: string): Promise<CorralReceipt> {
@@ -634,6 +828,9 @@ export class HostSession {
       bind_nonce_sha256: sha256Hex(bindNonce),
     });
     this.boundSessionId = sessionId;
+    const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
+    this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
+    if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     return receipt;
   }
@@ -660,6 +857,9 @@ export class HostSession {
     // Only a corral inbox delivery can carry the owner's answer to a bound permission question.
     const permission = input.origin === "corral-inbox" ? this.permissions?.observeAnswer(input.text) : undefined;
     if (permission) this.options.events.emit("bash_permission_answer", { decision: permission });
+    if (input.origin === "corral-inbox") {
+      for (const { key, revision } of answeredKeys(input.text)) this.options.herdr?.resolved(key, revision);
+    }
     return new Promise<SubmitResult>((resolve) => {
       let settled = false;
       const settle = (result: SubmitResult) => {
@@ -706,7 +906,8 @@ export class HostSession {
       mcp: this.mcp?.state() ?? null,
       generation: this.options.identity.generation,
       bound: this.bound,
-      interactive: this.interactive,
+      interactive: this.attached === "interactive",
+      mode: this.attached ?? null,
       session: { bound_id: this.boundSessionId ?? null, current_id: session.sessionId, file: session.sessionFile ?? null,
         created: this.sessionsCreated },
       streaming: session.isStreaming,
@@ -723,6 +924,9 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       jobs: this.jobs?.state() ?? null,
+      checkpoints: this.checkpoints !== undefined,
+      auxiliary: this.auxiliary?.state() ?? null,
+      budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : { unavailable: "legacy generation predates budget accounting" },
       guidance: {
         project_text: this.options.guidance?.projectText ?? false,
         skill_paths: [...this.guidance.skillPaths], prompt_paths: [...this.guidance.promptPaths],
@@ -736,6 +940,7 @@ export class HostSession {
         ...this.options.network.ledger(),
       },
       corral_calls: { ...this.stats },
+      herdr: this.options.herdr?.readback() ?? null,
       delivery: bounded(this.options.modules.delivery.state?.() ?? null),
       auth: bounded(this.options.modules.auth.state?.() ?? null),
     };

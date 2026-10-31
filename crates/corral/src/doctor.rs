@@ -15,6 +15,7 @@ mod gates;
 mod opener;
 mod pricing;
 mod resources;
+mod scratch;
 mod terminal_runs;
 
 #[derive(Debug, Serialize)]
@@ -200,6 +201,7 @@ pub fn inspect(
     )];
     if let Some(store) = &store {
         checks.push(terminal_worktrees(store)?);
+        checks.push(scratch::check(store)?);
         checks.push(terminal_runs::check(store)?);
         checks.push(pricing::check(store, jiff::Timestamp::now())?);
         checks.extend(gates::checks(store));

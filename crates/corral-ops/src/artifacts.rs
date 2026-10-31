@@ -55,6 +55,18 @@ pub fn add_artifact(
     add_artifact_inner(ctx, id, Target::Current, path, kind, title, None).map(|(a, _)| a)
 }
 
+/// An assistant's scratch promotion attaches the spike diff to the Backlog task it just filed;
+/// the shell's session-only artifact rule still applies to every other task artifact.
+pub(crate) fn add_promotion_artifact(
+    ctx: &Ctx,
+    id: &str,
+    path: &Path,
+    title: &str,
+) -> Result<Artifact> {
+    let kind = Some(ArtifactKind::Diff);
+    add_artifact_inner(ctx, id, Target::Promotion, path, kind, Some(title), None).map(|(a, _)| a)
+}
+
 /// Which run an artifact attaches to.
 #[derive(Debug, Clone, Copy)]
 enum Target<'a> {
@@ -64,6 +76,8 @@ enum Target<'a> {
     Expected(&'a str),
     /// This run, current or historical: an owed effect of a named container.
     Named(&'a str),
+    /// The current run of a task an assistant just filed by promoting its scratch.
+    Promotion,
 }
 
 /// Attaches to the named run even after a newer run started; never to the current one.
@@ -118,6 +132,9 @@ fn add_artifact_inner(
     title: Option<&str>,
     origin: Option<&RequestOrigin>,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
+    if !matches!(target, Target::Promotion) {
+        crate::assistant_artifacts::check_owner(None)?;
+    }
     let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
@@ -238,7 +255,7 @@ fn attach(
                 bail!("run {run} does not exist on {}", t.id);
             }
             Target::Expected(run) | Target::Named(run) => run.to_string(),
-            Target::Current => t
+            Target::Current | Target::Promotion => t
                 .plan_runs
                 .last()
                 .filter(|r| r.state != corral_core::PlanRunState::Approved)
@@ -355,7 +372,7 @@ fn attach_head(
                 bail!("run {run} does not exist on {}", t.id);
             }
             Target::Expected(run) | Target::Named(run) => run.to_string(),
-            Target::Current => planning
+            Target::Current | Target::Promotion => planning
                 .filter(|(_, state)| *state != corral_core::PlanRunState::Approved)
                 .map(|(id, _)| id)
                 .or(current)
@@ -490,7 +507,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
 pub fn all_artifacts(ctx: &Ctx) -> Result<Vec<ArtifactRow>> {
     let mut rows: Vec<ArtifactRow> = ctx
         .store
-        .list()?
+        .artifact_owners()?
         .into_iter()
         .flat_map(|t| {
             let (id, title, project) = (t.id, t.title, t.project);

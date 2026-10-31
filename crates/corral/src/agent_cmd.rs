@@ -13,11 +13,11 @@ use crate::entry::Entry;
 #[derive(Args)]
 pub struct AgentArgs {
     #[command(subcommand)]
-    cmd: AgentCmd,
+    pub(crate) cmd: AgentCmd,
 }
 
 #[derive(Subcommand)]
-enum AgentCmd {
+pub(crate) enum AgentCmd {
     /// Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on stdout
     Call {
         /// Enumerated v1 operation; must equal the envelope's op
@@ -82,10 +82,31 @@ enum AgentCmd {
         #[arg(long)]
         replace: bool,
     },
+    /// Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
+    Rewind {
+        /// Task of the worker run
+        task: String,
+        /// Run ID (default: the task's current run)
+        #[arg(long)]
+        run: Option<String>,
+        /// Checkpoint to restore (`g<generation>-t<turn>`, see --list); without it, continue
+        /// the pending rewind
+        #[arg(long, conflicts_with_all = ["list", "abort"])]
+        to: Option<String>,
+        /// List the run's checkpoints and rewinds
+        #[arg(long, conflicts_with = "abort")]
+        list: bool,
+        /// Abandon the pending rewind, putting back any files it restored
+        #[arg(long)]
+        abort: bool,
+        /// Replace a host that is still alive after verifying its pid, start time and command
+        #[arg(long, conflicts_with_all = ["list", "abort"])]
+        replace: bool,
+    },
 }
 
 #[derive(Args)]
-struct TargetArgs {
+pub(crate) struct TargetArgs {
     /// Task of the worker run or review child
     #[arg(required_unless_present = "pm", conflicts_with = "pm")]
     task: Option<String>,
@@ -173,6 +194,27 @@ pub fn run(start: &Path, args: AgentArgs, entry: &Entry) -> Result<()> {
             &entry.open(start)?,
             &cli::ResumeArgs {
                 target: target.target(),
+                replace,
+            },
+        ),
+        AgentCmd::Rewind {
+            task,
+            run,
+            to,
+            list,
+            abort,
+            replace,
+        } => corral_ops::agent::rewind::rewind(
+            &entry.open(start)?,
+            &corral_ops::agent::rewind::RewindArgs {
+                target: AgentTarget::Task {
+                    task,
+                    run,
+                    review: None,
+                },
+                to,
+                list,
+                abort,
                 replace,
             },
         ),

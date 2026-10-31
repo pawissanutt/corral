@@ -1,5 +1,6 @@
 //! Read-only, deterministic PM policy. Observations contain facts, never model recommendations.
 pub(crate) mod heads;
+pub(crate) mod inbox;
 pub(crate) mod observe;
 mod plan;
 mod questions;
@@ -152,6 +153,8 @@ pub enum PmActionKind {
     Wait,
     AgentQuestion,
     OwnerQuestion,
+    /// An open or claimed PM inbox item.
+    Inbox,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

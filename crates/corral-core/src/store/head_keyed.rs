@@ -131,7 +131,7 @@ impl TaskHead {
                     None => self.plan_review(plan, review)?.map(|r| r.inbox),
                 }
             }
-            Recipient::Pm => None,
+            Recipient::Pm | Recipient::Assistant { .. } => None,
         })
     }
 
@@ -170,7 +170,7 @@ impl TaskHead {
                 .pop()
                 .map(|row| format!("plan_review:{}", row.key))
             }
-            ContainerRef::Pm => None,
+            ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
         };
         Ok(owner)
     }
@@ -340,6 +340,31 @@ impl TaskHead {
         key: &str,
     ) -> Result<Option<AgentQuestion>> {
         self.agent_record(container, "questions", format!("key:{key}"))
+    }
+
+    /// Pending plus explicitly named question rows, in their original append order.
+    pub fn selected_agent_questions(
+        &self,
+        container: &ContainerRef,
+        named: &[&str],
+    ) -> Result<Vec<AgentQuestion>> {
+        let mut rows = self
+            .agent_rows(container, "questions", None, true)?
+            .into_iter()
+            .map(|row| (row.key.clone(), row))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for key in named {
+            if rows
+                .values()
+                .any(|row| row.doc["key"].as_str() == Some(*key))
+            {
+                continue;
+            }
+            for row in self.agent_rows(container, "questions", Some(format!("key:{key}")), false)? {
+                rows.insert(row.key.clone(), row);
+            }
+        }
+        decode_all(rows.into_values().map(|row| row.doc).collect())
     }
 
     /// The pending questions of `container`: its open page.

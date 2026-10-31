@@ -94,6 +94,10 @@ error. The catalog today, as strict / standard / full:
 | `background_shell` | worker off / on / on; not available to PM | not available |
 | `role_enabled` | not available | planner and plan reviewer off / on / on; not available to reviewer |
 | `browser` | worker off / on / on; not available to PM | not available |
+| `checkpoints` | worker off / off / on; not available to PM | not available |
+| `headless` | worker off / off / off; not available to PM | reviewer off / off / off; not available to planning roles |
+
+`headless` is never a preset default; set it per role (see [Headless runs](#headless-runs)).
 
 A compound key also takes a table with an optional `enabled` and its settings:
 
@@ -137,13 +141,14 @@ Under standard and full every role loads, as text only:
 - the `AGENTS.md`/`CLAUDE.md` context files from the working directory up to the corral
   workspace root, in that order, where a linked worktree's file replaces its main checkout's.
 
-Workers and reviewers read project text from their worktree. The PM runs at the workspace root, so
-corral also passes it its selected project's checkout, and the PM's project context, skills and
-templates come from there.
+Workers and reviewers read project text from their worktree. The PM loads guidance from the
+workspace root only, including its AGENTS.md chain, not from any project's checkout. Project
+instructions remain reachable by reading files as needed; they are not preloaded.
 
 Project files (context files, `.agents/skills`, `.agents/prompts`) load only when the task's
 project is in `trusted_projects`; the decision is recorded in the generation's snapshot as
-`project_text`. Home directories do not depend on it. Pi's own discovery stays off: nothing is
+`project_text`. The workspace PM records trust for the workspace root's own guidance instead;
+this does not trust or preload its project checkouts. Home directories do not depend on it. Pi's own discovery stays off: nothing is
 read from `~/.pi` or a project's `.pi` (settings, extensions, MCP, skills, prompts), and no
 ambient extension, MCP server or theme loads. The worker keeps its packaged corral-worker skill in every
 preset; a home or repository skill with the same name is skipped (the pane shows the conflict). `corral agent state` lists the selected paths under `guidance`.
@@ -466,13 +471,16 @@ before any browser starts:
 ```toml
 [agent.capabilities.worker.browser]
 origins = ["http://127.0.0.1:5173"]   # default []: worktree HTML only; scheme://host[:port], no path
-timeout_ms = 30000                    # default; per call, 1..600000
+timeout_ms = 30000                    # default; bounds start-up, then the page, 1..600000
 # executable = "/usr/bin/chromium"    # default: google-chrome, chromium or chrome on PATH
 ```
 
 Each call starts one headless Chrome or Chromium with a fresh temporary profile and HOME, so
 no owner cookies, logins or extensions are visible and nothing carries over between calls.
-It waits for the page's load event, then checks the URL it landed on: a redirect or scripted
+Start-up and the page are bounded separately by `timeout_ms`: the browser must answer its first
+DevTools command within it, and the page's budget starts only then, so a slow launch on a
+loaded host does not use up the page's time. It waits for the page's load event, then checks
+the URL it landed on: a redirect or scripted
 navigation to a target outside the allowed set fails the call without returning the page.
 `browser_navigate` returns the final URL, title and visible text (64 KiB, with `truncated`).
 `browser_screenshot` returns a PNG inline (optional `width`, `height`, `full_page`); with
@@ -550,11 +558,99 @@ or `job_kill` as `outcome_unknown` and `job_output` as `interrupted_no_effect`. 
 records live in the run's `agent_host.jobs`; the host's bridge state lists its live jobs and
 emits `job_started` and `job_exited` events.
 
+### Checkpoints and rewind
+
+Worker generations with `checkpoints` snapshot the worktree twice per turn: when the turn
+starts, before its prompt is recorded or any request is sent, and when it settles. A snapshot
+commits every non-ignored file (staged, unstaged and untracked) over HEAD through a private
+index, so the worktree's own index is untouched, and points a per-worktree ref at it
+(`refs/worktree/corral/checkpoints/<run>/g<generation>-t<turn>-<start|end>`; other worktrees and
+the main checkout never see it). The host then appends one `corral_checkpoint` entry to its
+bound Pi session; a start entry also names the last session entry before the turn. Ignored
+files (build output, `node_modules`) are not in snapshots and are never restored. A snapshot
+that fails is recorded with its error and the turn goes on; it cannot be a rewind target.
+
+`corral agent rewind <task> [--run <id>] --list` lists the run's checkpoints on its current
+timeline and its rewinds. `corral agent rewind <task> --to g<n>-t<m> [--replace]` puts the
+worktree and the Pi session back to the start of that turn:
+
+1. It refuses, changing nothing, a run that is not a worker in a linked worktree
+   (`not_worker`, `not_isolated`), an unknown checkpoint or one whose ref moved
+   (`checkpoint_unknown`, `checkpoint_missing`), and a conflict (`rewind_conflict`). Only paths
+   the agent changed in its turns since the checkpoint are restored. Changes between two turns,
+   or after the last turn ended, are not the agent's: they stay, and a path changed both ways,
+   or a HEAD moved outside the agent's turns, refuses the rewind with the paths named. A turn
+   with no end checkpoint (its host died inside it) counts as the agent's up to the rewind.
+2. It records the rewind `prepared`, then runs `corral agent resume`'s path: the old host must
+   be dead or `--replace` stops it (a refusal here, such as `host_alive`, closes the record
+   `aborted`), the generation is fenced with reason `rewind`, executors drain and the lost
+   generation's calls are classified for the `recovery_notice` exactly as on a resume.
+3. `fenced`: the fenced generation's background jobs are reaped. `saved`: the worktree as the
+   fence left it is committed under `refs/worktree/corral/rewind/<run>/<rewind>`.
+   `restoring`: removals run first, deepest path first, then writes, so a file and a directory
+   can replace each other. Each planned path is checked before it is changed: one already
+   restored is skipped, and one that changed since the save is left as it is and listed as
+   `kept`, as is a directory that still holds something else. One still as saved is replaced
+   without a window for an owner edit: its replacement is materialized first, then the path is
+   atomically moved aside and what was moved is compared with the save. Only then is the
+   replacement linked in, and never over a file that appeared meanwhile (a removal also removes
+   the parent directories it leaves empty). A path edited at that moment is put back and listed
+   `kept`, and every displaced byte is kept under the worktree's git directory
+   (`corral-rewind/`), so nothing an owner saved is lost. The moved-aside copy uses a fixed
+   hidden sibling name (`.<name>.corral-rewind-displaced`): if a restore stops between moving a
+   path aside and replacing it, the next attempt (continuing or aborting) first puts that copy
+   back when the path is empty, or keeps it when something is there, and then judges the path
+   afresh, so the restore finishes instead of reporting its own displacement as an edit. HEAD moves back by compare-and-swap of the branch only from the saved HEAD, and the
+   restored paths' index entries are reset to it. `restored`: the next generation's launch
+   continues the same Pi session file from the checkpoint's entry (Pi branches there; the
+   abandoned turns stay in the file); the generation it opens is recorded on the rewind before its
+   host can run. `launched`: the rewind is closed with that generation. The cursor stays owed until
+   the session file shows a host of that generation or a later one bound on a branch from the
+   checkpoint's entry (`applied`): a relaunch whose host died first, including a plain
+   `corral agent resume`, is given the same cursor again, and a rewind continued after its
+   controller stopped before `launched` honors the same evidence instead of replaying the cursor.
+   Each stage commits before the next starts.
+
+An interrupted rewind leaves its stage recorded, and `corral agent resume` refuses
+`rewind_pending` until it is settled: `corral agent rewind <task>` (no `--to`, or the same one)
+continues from the recorded stage, and `--abort` abandons it, putting each restored file back
+from the saved snapshot first. Nothing a rewind does rolls back records: receipts, turns,
+questions, delivered messages, usage (read from the whole session file, abandoned turns
+included) and approvals stay, and the saved snapshot keeps the pre-rewind worktree. Bash
+children the dead host started that are not background jobs are not stopped, as on a resume.
+
 Capability settings are frozen for an active generation and resolved again on explicit resume.
 Ledgers and drop reasons survive host loss and resume; disabling todo does not delete
 them or invalidate old receipts. Legacy generations and launch messages without a todo
 setting keep the tool disabled. Todo is progress bookkeeping, never gate or acceptance
 evidence and never permission to finish a Corral task.
+
+### Headless runs
+
+```toml
+[agent.capabilities.worker]
+headless = true
+
+[agent.capabilities.reviewer]
+headless = true
+```
+
+A headless worker or reviewer host does not start Pi's interactive terminal and never reads
+what is typed into its pane. Everything reaches it the way an interactive host's automatic
+input already does: its kickoff turn starts when it binds, and answers, gate wakes, nudges and
+recovery notices arrive from its durable inbox through the authenticated bridge when `corral
+sync` delivers them. Its `corral_*` calls are receipted exactly as before, and its questions go
+to the board, `corral question`, the PM wake and Needs me as usual. The pane shows only a plain
+log: the headless notice, each turn's start and end, denied tools and refused network calls.
+
+The host still runs in the run's herdr pane, which remains the process container: pane loss,
+the launch-exit record, `corral agent resume` into the same pane, and closing the run work
+unchanged. `corral agent state` shows `mode: headless` (JSON `mode`), and the bridge `get_state`
+result reports `mode: "headless"` with `interactive: false`. Because each generation resolves
+its settings anew, an explicit resume keeps the run's container, pane and bound session and
+stays headless while the setting is on; turning it off makes the next generation interactive
+and records the change. The setting is read at dispatch and resume, so it applies to hosts
+launched after the change.
 
 `[agent] ui` sets how the run pane looks (default `"rich"`). In rich mode the pane uses the
 Dracula palette (a dark theme; on a light terminal background use `plain`) and shows a
@@ -644,6 +740,20 @@ API-key or other paid fallback for them: the host drops Pi's Anthropic API-key h
 after a `/logout` or a removed credential the provider has no auth rather than a paid key, and
 any Anthropic request without the subscription OAuth token is refused before it is sent. corral
 never reads or writes `~/.codex`, `~/.pi`, `~/.claude` or another harness's store.
+
+Assistant and PM sessions launched on a subscription provider also discover the other usable
+subscription login at startup. `/model` lists both OpenAI Codex and Anthropic models when both
+are logged in; selecting a model infers its provider without replacing the session, history or
+corral identity. Model switches refresh credentials and check compatibility before committing;
+a missing login or incompatible model leaves the current selection unchanged. Each route keeps
+its own guarded transport (Claude model traffic still belongs only to its subprocess lane).
+Workers, reviewers, Bedrock and local-inference sessions keep their launch provider.
+Corral records the active provider and model on each turn, not just on the initial launch.
+
+For assistant/PM launches, `corral pi --provider anthropic` retains an already-compatible profile
+model or defaults to `claude-opus-5-5`; `corral pi --provider openai-codex` similarly uses
+`gpt-6.1-sol`. An explicitly incompatible `--provider`/`--model` pair is refused before launch,
+with a corrected command. A model-only override infers the provider for known model families.
 
 Anthropic profiles run on your Claude Pro/Max subscription through the official Claude Agent SDK
 (`@anthropic-ai/claude-agent-sdk`, pinned in `package.json` and `compat.json`). Pi keeps the
@@ -744,8 +854,77 @@ configured:
 | `pi_native_question_wake` | Where a new question's wake goes: the bound Pi-native PM's inbox, the OmO PM push (when `pm.push_kinds` includes `question_opened`), or nowhere, in which case a waiting question reaches Blocked after `question_unattended_secs`. |
 
 `corral agent state <task> [--run <id>] [--review <id>] [--json]` (or `--pm`) shows one
-container's binding: harness, role, host health, current generation, generation, receipt and
-turn counts, open question keys, and the same installation summary.
+container's binding: harness, role, mode (`interactive` or `headless`), host health, current
+generation, generation, receipt and turn counts, open question keys, and the same installation
+summary.
+
+## herdr status
+
+Every bound host, whatever its role, reports itself to the herdr server of its pane as the agent
+`corral-pi`, so herdr's sidebar, `herdr agent list` and `herdr agent wait` show it without reading
+the screen. One adapter in the host does this for all six roles. It reports only from inside herdr
+and only for the pane corral bound it to (`HERDR_ENV=1` and `HERDR_PANE_ID` equal to the bound
+pane), by running `$HERDR_BIN_PATH` with arguments, never a shell. A headless host and plain
+`corral pi --bare` report nothing.
+
+| herdr field | What the host reports |
+|---|---|
+| `agent` | `corral-pi`, from the reporting source `custom:corral-pi` |
+| `display_agent` | `corral-pi <role> <identity> g<generation>`, for example `corral-pi worker T-12/R1 g2`, `corral-pi reviewer T-12/R1 review1 g1`, `corral-pi pm app g1` or `corral-pi assistant A-3 g1` |
+| `tokens` | `corral_role`, `corral_generation`, `corral_session` (the bound Pi session ID) and whichever of `corral_project`, `corral_task`, `corral_run`, `corral_review` and `corral_assistant` the binding has |
+| `agent_status` | `working`, `idle` or `blocked`, below |
+
+Each state report also gives herdr the bound session's ID and file as the agent's session
+reference, never a session guessed from the provider. herdr 0.9.5 keeps but does not
+display a custom source's session reference, so the `corral_session` token is the readable one.
+The host reports no resume command: after a herdr restart, recovery stays with
+`corral agent resume`.
+
+| State | When |
+|---|---|
+| `working` | A turn is running. |
+| `idle` | The turn settled and no question holds the host. herdr shows `done` until the pane is looked at. |
+| `blocked` | The host has a pending question that is blocking or goes to the owner (`owner_only`, `permission`, or escalated). The report's message names it. |
+
+Only corral decides when a question opens or settles: a committed `corral_ask` receipt opens it,
+and the inbox delivering its answer or correction, or a committed `corral_withdraw` receipt,
+settles it. A turn that ends, fails at the provider or is cancelled, and a nested tool call, never
+clear `blocked`, and a settled turn never stays `working`. A resumed host starts from the pending
+questions its hello receipt names. When the PM or owner escalates, cancels or answers a question,
+corral sends the asking host, over its authenticated bridge (`questions`), the state of every
+pending question of the container and of the one that changed, however old, with no message to
+the model and no new turn: an escalation blocks, a cancellation releases only that question. Each question keeps its newest revision, so a late or repeated
+update cannot undo a newer fact. Should that push fail, sync's next probe of the host sends the
+pending questions and every question the host still holds, until it shows the blocking questions
+corral holds.
+
+One report is in flight at a time, and changes that arrive meanwhile are sent once, as the latest
+state; an unchanged state sends nothing. Sequence numbers fence generations: at hello corral
+allocates the binding an epoch that is at least its hello time in milliseconds and above every
+epoch it allocated before for this user (the high-water mark is kept in the runtime directory all
+of the user's stores share), records it with the generation, and names it in the hello receipt
+(`herdr_seq_epoch_ms`). The host numbers its reports from that epoch shifted left 20 bits, and
+herdr ignores a report that is not above the last one it accepted from `custom:corral-pi` for the
+pane, so a later binding in the same pane reports above an earlier one even after the wall clock
+stepped back or within one millisecond. If no epoch can be allocated, the host reports nothing.
+
+- **Graceful exit.** When the owner quits or corral shuts the host down over the bridge, the host
+  releases the pane (`pane release-agent`) and clears its display name and tokens, so the shell
+  that returns is not shown as `corral-pi`.
+- **Host loss.** Sync probes the bound host of every role (worker, reviewer, planner, plan
+  reviewer, PM and assistant). When it records `agent_lost` on that container, corral releases
+  the generation's report and clears its metadata with the last number of the generation's range,
+  so no stale `working` or `blocked` state stays. herdr itself also drops an agent whose pane is
+  back at its shell prompt.
+- **Resume and replacement.** The next generation names itself and its state as soon as hello
+  binds it, with numbers above every number of the generation before. A late report or cleanup
+  from the older generation is ignored and cannot overwrite or clear it.
+
+Neither path closes the pane or types into it. herdr status is display only: corral never takes it
+as evidence that a gate passed, a question was answered or a run completed. A report herdr refuses
+is recorded as a `herdr_report_failed` host event and in the `herdr` section of the host's bridge
+`get_state` result, and changes nothing else; `herdr_reporting_off` names why a host does not
+report at all.
 
 ## What is checked before a run starts
 
@@ -800,7 +979,7 @@ never on a command line, in the environment or in `.corral/`. The host refuses a
 release other than the ones `compat.json` pins, loads the role, delivery and auth modules from
 their fixed paths, starts its bridge socket and binds the generation by calling
 `corral agent call --op hello`. Then it hands the pane to Pi's own interactive terminal, where
-you can watch and type.
+you can watch and type, unless the generation is headless (see Headless runs).
 
 ### What the host leaves out
 
@@ -999,16 +1178,19 @@ Blocked at once with `turn_ended_without_report`, as the idle watchdog would aft
 ## The PM role
 
 OmO remains the default PM; explicitly select a `pi-native` profile as `pm.agent` to opt in.
-Opening a Pi PM requires an approved operating scope selecting exactly one project. Its
-`AgentPm` binding is separate from task runs, with null task and run, one current PM and one
-authorized project. Mutations check that binding and the target project again at commit.
+Opening a Pi PM requires an approved operating scope selecting one or more projects. Its
+`AgentPm` binding is workspace-level, separate from task runs, with null task and run and an
+empty project identity. Mutations check that binding and the current approved project set again
+at commit. Adding or dropping approved projects does not change the PM session on resume.
+An empty or unapproved scope refuses with the `corral mode autopilot --project <project>`
+preview command; review the preview and repeat it with `--confirm <digest>`.
 
 The PM gets typed read-only tools for brief, next, show, list, search, route, artifacts and
 lessons, plus receipted question answer, escalate and cancel, reply, comment and capture.
 There is no shell, edit, MCP, skills, `pm act`, owner answer, deadline or acceptance tool.
-Reload and session replacement retain this loadout. Clarification and technical-choice
-answers need a cited basis within the approved write scope and acceptance; owner-only and
-permission questions escalate, and the owner may supersede any PM answer.
+Reload and session replacement retain this loadout. PM answers to any kind of pending question
+need a cited basis within the approved write scope and acceptance, and the owner may supersede
+any PM answer.
 
 PM tools never run sync or `pm_workset`. A separate board/sync loop is required for wakes:
 keep the board running or run `corral sync --watch` outside the PM. A healthy scoped Pi PM
@@ -1019,8 +1201,8 @@ the same logical message instead of posting another. The Pi inbox adapter then s
 to the host, starting an idle turn. Enqueueing alone is not delivery, and observation still
 requires the host's `corral_delivery` entry.
 
-PM replacement and project changes are rechecked before publication and at the delivery
-boundary, so an old project's wake is never sent to a new project's PM. OmO question push
+PM replacement and the current approved project set are rechecked before publication and at the
+delivery boundary, so wakes for projects removed from scope are not delivered. OmO question push
 keeps its existing opt-in configuration; without triage, waiting questions still reach
 Blocked after `question_unattended_secs`. See [the PM loop](pm.md) for authority and handover.
 
@@ -1063,13 +1245,25 @@ hosts relaunch through the plan pipeline, not `corral agent resume`.
 
 ## Starting Pi yourself: `corral pi`
 
-`corral pi` starts the Pi-native host from your own shell, the way `pi` starts plain Pi. It has
-two modes.
+`corral pi` starts the Pi-native host from your own shell, the way `pi` starts plain Pi. Which
+host it starts depends on where it runs and its flags:
 
-**Bound PM in this pane.** `corral pi [--model M] [--provider P] [--effort E]`, run in a herdr
-pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
+| Command | Opens |
+|---|---|
+| `corral pi` in a herdr pane inside a workspace | a new [assistant session](assistants.md) in this pane |
+| `corral pi --resume A-<n>` | that assistant's next generation in this pane |
+| `corral pi --pm` | the PM in this pane (below) |
+| `corral pi` outside a workspace, or `corral pi --bare` | plain Pi; outside a workspace with a one-line notice |
+
+The launch line names what opened (`assistant A-1 (role assistant) in pane ...`). `--pm`,
+`--resume` and `--over-cap` outside a workspace refuse `not_in_workspace`; `--bare`, `--pm`
+and `--resume` exclude one another. Assistants, their soft cap and their resume are described
+in [assistant sessions](assistants.md).
+
+**Bound PM in this pane.** `corral pi --pm [--model M] [--provider P] [--effort E]`, run in a
+herdr pane inside a corral workspace, makes that pane the PM pane. corral resolves `pm.agent` through
 the same checks as `corral pm` and `corral agent resume --pm` (a pi-native profile, an
-approved scope with exactly one project, the asset installation, the provider's login); the
+approved scope with one or more projects, the asset installation, the provider's login); the
 flags replace the profile's model, provider (`openai-codex` or `anthropic`) and effort for this
 launch. It then opens the PM's next generation in this pane, writes the one-shot bootstrap and
 launches it in-process: the same consume, check and exec `corral agent launch` performs, so the
@@ -1087,7 +1281,7 @@ It refuses, before writing anything, with:
 | `unsupported_platform` | Not Unix. |
 
 The launch itself then refuses exactly as `corral agent launch` does. When the bound PM is dead,
-`corral pi` does not open a rival generation: it takes the PM over with `corral agent resume
+`corral pi --pm` does not open a rival generation: it takes the PM over with `corral agent resume
 --pm` semantics (the lost generation is fenced, its calls drained and reconciled, one
 `recovery_notice` posted), and generation n+1 opens in this pane. A changed approved project is
 refused `out_of_scope`, as resume refuses it.
@@ -1095,12 +1289,13 @@ refused `out_of_scope`, as resume refuses it.
 The pane stays yours: see [session ownership](../session-ownership.md). corral never closes it,
 treats it as the PM pane only while its bound host is verifiably running, and never types into
 it once that host is gone, so `corral agent resume --pm` refuses `pane_adopted` then; run
-`corral pi` there again, or `corral pm` for a corral-owned pane. `--replace` still replaces
+`corral pi --pm` there again, or `corral pm` for a corral-owned pane. `--replace` still replaces
 a live host after verifying its pid, start time and command. Opening the PM in another pane
 (`corral pm` after the pane is gone) ends the adoption.
 
 **Plain Pi: `corral pi --bare`.** This starts unbound Pi in the current directory, inside or
-outside herdr and a corral workspace. There is no bootstrap, generation, nonce, bridge socket,
+outside herdr and a corral workspace. Plain `corral pi` outside any workspace does the same
+after printing a one-line notice that no corral workspace was found. There is no bootstrap, generation, nonce, bridge socket,
 hello, role or delivery module, and no `corral_*` tool: only Pi's own read, edit, write, bash,
 grep, find and ls. It runs the installed assets' pinned Pi SDK: a release installation's compiled
 host runs its own bare mode (`corral-pi-host bare`) with its embedded Bun and bundled auth module,
@@ -1119,10 +1314,58 @@ is written to `.corral/`. It refuses `assets_unavailable` without an installatio
 `bare_unavailable` when a source installation predates `corral pi` (reinstall with `corral
 agent install`), and `credentials_unavailable` without the provider's login.
 
+## Explore children and oracle
+
+`explore` researches one prompt in a separate read-only session. Concurrent calls are FIFO queued
+above `subagents.max_parallel` (default 3). Standard enables it for workers and native planning
+roles; reviewers need full or an explicit override, and PM cannot use it. Children inherit only
+parent-enabled read/grep/find/ls and read LSP/web tools. They have no shell, writes, MCP, hooks,
+Corral operations or recursive delegation. Both direct and nested calls use the final execution
+check. Each result names its request and initiating generation; output is capped at 32,768
+characters. Turn cancellation, host shutdown and parent fencing cancel outstanding work.
+
+`oracle` is a single tool-free consultation, full-only by default for every role. It requires a
+configured model; an absent model gives setup guidance without a provider request. Both tools
+reuse the parent's restricted provider runtime and credentials, not ambient Pi settings or another
+harness's credential store. Model selection is limited to the bound provider's existing catalog;
+select a stronger model there rather than introducing another credential route.
+
+```toml
+[agent.capabilities.worker.subagents]
+max_parallel = 3       # 1..16
+max_turns = 12         # 1..64
+timeout_secs = 120     # 1..600, includes queue time
+# model = "gpt-6.1-sol" # absent: parent's configured model
+
+[agent.capabilities.worker.oracle]
+enabled = true
+model = "gpt-6.1-sol"
+timeout_secs = 120
+```
+
+Before execution, a host lifecycle receipt stores a parent-generation `usage_sessions` reference
+under the container's canonical auxiliary path. Starts and terminal outcomes are receipted too;
+a request is not silently replayed after a crash. `prepared` means work was not yet admitted;
+`running` without a terminal record and `uncertain` both retain possible billable spend. Cancellation
+can stop local work without establishing a provider's final charge. Completed partial usage remains
+in the auxiliary transcript and the existing collector deduplicates responses across collections;
+an absent response is **not** proof of zero spending. Budgets/reservations are a separate capability.
+These are in-process children, not Corral runs, worker dispatches or new role authority.
+
 ## What else already applies
 
-- **Usage.** A pi-native run's usage note reads `pi-native usage collector not installed`
-  until the collector lands; no cost is estimated for it.
+- **Usage.** The installed collector reads each generation's bound Pi transcript when task
+  usage is refreshed, including review children and recorded compaction/branch-summary requests.
+  Repeated collections and copied/resumed sessions deduplicate by session/response identity.
+  `estimated_usd` is API-equivalent catalog pricing (including subscription models), not an invoice;
+  Pi's own cost remains `reported_usd`. Unknown models retain `unpriced_tokens`, not a zero-dollar
+  estimate. Missing/unwritten transcripts do not imply a free request.
+  The shared `agent::usage::collect_container` readback also supports durable PM/planning records;
+  these are separate from implementation task totals. Auxiliary producers can persist
+  `AgentRunState.usage_sessions` with parent generation and launcher-selected session references.
+  Explore and oracle use this seam before launching billable work; it does not provide a
+  PM/planning cost CLI.
+  See [the early checkpoint](../records/pi-native-capabilities.md#early-usage-checkpoint-t-570).
 - **Messages.** Messages to a pi-native run or review child use inbox delivery through the
   `pi_native` adapter, and every sync gives each open one a delivery pass. They are never typed
   into the pane.
@@ -1162,7 +1405,9 @@ with its reason:
 | `host_mismatch` | The socket answers for another generation or session. |
 
 A lost host never ends its run. The run keeps its questions, messages and receipts, and messages
-for it stay queued, unsent, for the next generation. A live worker's task moves to Blocked with
+for it stay queued, unsent, for the next generation. A worker or reviewer host that exits to its
+pane shell after hello is such a loss (`host_exited`): sync consumes the pane wrapper's exit
+record, so it is never treated as a launch failure or a closed review. A live worker's task moves to Blocked with
 an excerpt that starts `Pi-native host lost:` and names the three ways on: `corral agent resume`,
 `corral retry` or `corral discard`. A lost reviewer whose pane stays keeps its review open and
 its child live: the review watchdog never times it out on its idle pane, and the task moves to
@@ -1177,7 +1422,7 @@ hold the next generation's nudges or provider retries.
 
 **`corral agent resume <task> [--run <id>] [--review <id>] [--replace]`** starts the next host
 generation of an open run or review child in the same pane. `corral agent resume --pm`
-resumes the PM's host in its saved pane, retaining its project scope and durable records.
+resumes the PM's host in its saved pane, retaining its workspace identity and durable records.
 
 1. It refuses a closed run or review child (`container_closed`) and a pane that is gone
    (`pane_gone`: retry or discard the run; a review child whose pane is gone is closed by the
@@ -1269,6 +1514,45 @@ restarted after the login. There is no automatic paid fallback outside the confi
 `provider_retry`), and once those are used up the task goes to Blocked with the reason
 (`provider_escalated`). A retry's turn that is still running keeps the episode and the retries it
 spent; a turn that ends without a provider error ends the stall (`provider_recovered`).
+
+## Cumulative model budgets
+
+For any Pi role, configure limits in its capability table (for example):
+
+```toml
+[agent.capabilities.worker.budget]
+max_tokens = 2000000
+max_usd = 25.0
+```
+
+Supplying either positive limit enables enforcement in strict, standard and full. `enabled = false`
+explicitly disables enforcement, not accounting. An enabled budget needs at least one limit.
+Catalog-7 hosts account main requests, retries, compaction/branch-summary requests, explore and oracle
+through one provider wrapper, even without limits. No new model tool can change these values.
+
+Reservations commit in the bound container before transport starts. Admission conservatively reserves
+**the model's full context window plus its bounded output**, with highest configured model price tiers
+for USD (API-equivalent, not subscription billing). Small limits can therefore refuse a request even
+when its likely actual usage would fit. Zero-priced nonlocal models are a pricing gap: a USD cap
+refuses them and also refuses new calls if earlier unpriced usage exists. Local llama.cpp can have
+explicit zero USD while still consuming tokens. Unbounded/invalid model metadata is refused.
+The Claude Agent SDK subprocess lane can make hidden additional requests and does not bind an output
+cap; it is explicitly unbounded, so hard-budget admission refuses it rather than claiming enforcement.
+Uncapped lane usage is still recorded, and interrupted unbounded usage prevents later hard-cap admission.
+
+Successful, nonzero terminal usage replaces its reservation once by provider/model/response identity.
+Interrupted, errored, deferred or missing-usage calls retain their reservation; copies and rewinds do
+not clear it. A refused admission or exhausted balance stops the host and cancels active providers,
+parent work and children. Cancellation is best effort: provider billing may lag, so this is not a
+zero-overrun billing guarantee. Inspect the host's `budget` state for cumulative tokens/nanodollars,
+uncertain request count, pricing gaps, active requests and stop status.
+
+Edit configuration and explicitly resume to apply new limits in the new generation's snapshot. Spent
+and uncertain reservations remain; an unchanged exhausted cap stays stopped. Editing configuration
+under an active host does not change its limits. Generations before catalog 7 have no reservation
+history: state labels that limitation, and a hard cap on a container with such bound history refuses
+admission rather than pretending earlier usage was zero. Use a new run for a fully enforced budget.
+The offline usage collector remains separate and can report historical usage without amending limits.
 
 ## Rollback
 

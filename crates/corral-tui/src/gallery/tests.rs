@@ -116,6 +116,60 @@ fn following_pin_marks_latest_version_and_unpins_its_anchor() {
 }
 
 #[test]
+fn session_artifact_pin_marks_latest_visual_and_survives_pinned_only_filter() {
+    let fixture = fixture();
+    fixture
+        .ctx
+        .store
+        .create_assistant("pi", None, None, None)
+        .unwrap();
+    picture(&fixture, "task.png", 50);
+    let path = fixture.root.join("session.png");
+    ::image::RgbImage::from_pixel(32, 16, ::image::Rgb([30, 80, 180]))
+        .save(&path)
+        .unwrap();
+    let first = corral_ops::add_session_artifact(
+        &fixture.ctx,
+        "A-1",
+        &path,
+        Some(ArtifactKind::Screenshot),
+        None,
+    )
+    .unwrap();
+    let anchor = PinRef::of_artifact("A-1", &first).to_string();
+    fixture.ctx.store.pin(&anchor, None, true).unwrap();
+    ::image::RgbImage::from_pixel(32, 16, ::image::Rgb([210, 80, 180]))
+        .save(&path)
+        .unwrap();
+    let latest = corral_ops::add_session_artifact(
+        &fixture.ctx,
+        "A-1",
+        &path,
+        Some(ArtifactKind::Screenshot),
+        None,
+    )
+    .unwrap();
+
+    let mut view = GalleryView::new(&fixture.ctx).unwrap();
+    assert_eq!(view.tile().unwrap().row.artifact.path, latest.path);
+    assert_eq!(view.tile().unwrap().pin.as_deref(), Some(anchor.as_str()));
+    assert!(view.tiles.iter().all(|tile| tile.image.is_ok()));
+    view.on_key(code(KeyCode::Tab), &fixture.ctx);
+    assert_eq!(view.matches.len(), 1);
+    assert_eq!(view.tile().unwrap().row.task_id, "A-1");
+    assert_eq!(view.tile().unwrap().row.artifact.path, latest.path);
+    let screen = draw(&mut view, &fixture.ctx, 80, 24);
+    assert!(screen.contains("session.png"), "{screen}");
+    assert!(!screen.contains("task.png"), "{screen}");
+
+    // Toggling the followed session visual removes its stored anchor, not a second pin.
+    view.on_key(key('*'), &fixture.ctx);
+    assert!(fixture.ctx.store.pins().unwrap().is_empty());
+    view.refresh(&fixture.ctx);
+    assert!(view.matches.is_empty());
+}
+
+#[test]
 fn remapped_gallery_key_replaces_default_without_intercepting_filter_text() {
     // Given a persisted-compatible gallery remap and a visual artifact.
     let mut fixture = fixture();

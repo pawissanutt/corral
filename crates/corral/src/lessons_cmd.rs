@@ -16,11 +16,11 @@ pub struct LessonsArgs {
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
-    cmd: Option<LessonsCmd>,
+    pub(crate) cmd: Option<LessonsCmd>,
 }
 
 #[derive(Subcommand)]
-enum LessonsCmd {
+pub(crate) enum LessonsCmd {
     /// File one bounded spike on the configured strong profile; does not dispatch
     Distill {
         #[arg(long)]

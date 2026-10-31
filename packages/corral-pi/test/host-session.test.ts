@@ -85,7 +85,7 @@ test("idle input starts a turn, reported to corral as turn_started and turn_ende
   await host.drained();
   const lifecycle = corral.calls().filter((call) => call.envelope.op === "event").map((call) => call.envelope.payload);
   expect(lifecycle).toEqual([
-    { kind: "turn_started", turn: 1, origin: { kind: "bridge", idempotency_key: "k1" } },
+    { kind: "turn_started", turn: 1, origin: { kind: "bridge", idempotency_key: "k1" }, provider: "openai-codex", model: "gpt-6.1-sol" },
     { kind: "turn_ended", turn: 1 },
   ]);
 });

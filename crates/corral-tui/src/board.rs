@@ -38,6 +38,8 @@ mod drop_tests;
 mod empty;
 mod index;
 mod input;
+#[cfg(test)]
+mod job_wait_tests;
 mod menu;
 mod mouse;
 mod overlay;

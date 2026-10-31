@@ -4,7 +4,8 @@ use super::{AgentRole, CapabilitySettings};
 use crate::config::agent_capabilities::validate_http_endpoint;
 
 /// Browser: exact `http(s)://host[:port]` dev `origins` (default none: worktree HTML only), a
-/// per-call `timeout_ms` (default 30000) and an optional absolute Chrome/Chromium `executable`.
+/// `timeout_ms` (default 30000) bounding browser start-up and then the page separately, and an
+/// optional absolute Chrome/Chromium `executable`.
 pub(crate) fn browser_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
     let mut effective = CapabilitySettings::new();
     let mut origins = Vec::new();
@@ -111,6 +112,7 @@ fn whatwg_ipv6(ip: std::net::Ipv6Addr) -> String {
 pub(super) fn browser_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker => Some([false, true, true]),
+        AgentRole::Assistant => Some([false, false, true]),
         AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }

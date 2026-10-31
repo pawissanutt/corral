@@ -203,6 +203,20 @@ impl TaskHead {
         })
     }
 
+    /// Every recorded-pending plan-review pane, including superseded pending attempts.
+    /// Cleanup must not close these panes merely because another review replaced them.
+    pub fn pending_plan_review_panes(&self) -> Result<std::collections::BTreeSet<String>> {
+        let query = crate::backend::RowQuery::part(crate::backend::TaskPart::PlanReview).open();
+        self.query(&query, u32::MAX, Counter::NestedRowDecodes)?
+            .into_iter()
+            .map(|row| {
+                let review: crate::PlanReviewHead = serde_json::from_value(row.doc)?;
+                Ok(review.herdr.map(|pane| pane.pane_id))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(|panes| panes.into_iter().flatten().collect())
+    }
+
     /// One plan revision, projected without its review history.
     pub fn plan_by_id(&self, id: &str) -> Result<Option<super::PlanHead>> {
         if let Some(plan) = self.last_plan.as_ref().filter(|p| p.id == id) {

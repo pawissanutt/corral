@@ -12,11 +12,11 @@ use crate::automation_cmd::SelectionArgs;
 #[derive(Args)]
 pub struct ModeArgs {
     #[command(subcommand)]
-    cmd: ModeCmd,
+    pub(crate) cmd: ModeCmd,
 }
 
 #[derive(Subcommand)]
-enum ModeCmd {
+pub(crate) enum ModeCmd {
     /// Read effective mode, finite scope, authority, blockers and shared progress
     Status {
         #[arg(long)]

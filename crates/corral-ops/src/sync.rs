@@ -9,6 +9,10 @@ use serde_json::json;
 
 use crate::{Ctx, ProcessControl, SystemProcesses, omo};
 
+#[cfg(test)]
+#[path = "sync_held_tests.rs"]
+mod held_tests;
+
 /// One status transition made by sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
@@ -313,7 +317,7 @@ fn sync_scoped(
             });
         }
         let current = reconciled.to_shell_task()?;
-        if let Some(change) = crate::launch_exit::plan_review(ctx, &current)? {
+        if let Some(change) = crate::launch_exit::plan_review(ctx, &current, snapshot, now)? {
             changes.push(change);
         }
         crate::plan_acceptance::reconcile_exit(ctx, &current)?;
@@ -331,6 +335,7 @@ fn sync_scoped(
         };
         let shell = head.to_shell_task()?;
         let agent_healthy = agent.current_worker_healthy(&shell);
+        close_held_run(ctx, &head, &panes, now)?;
         if !crate::plan_pilot::handles(&shell) && head.status.holds_slot() && head.launch.is_none()
         {
             if let Some(change) = crate::provider_stall::advance_agent(ctx, &head, &panes, now)? {
@@ -357,6 +362,7 @@ fn sync_scoped(
         }
     }
     crate::delivery::owner::reconcile_all(ctx)?;
+    crate::pm_inbox::sweep(ctx)?;
     crate::agent::hooks::sync::pass(ctx)?;
     crate::review_budget::reconcile(ctx, snapshot, now)?;
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
@@ -385,6 +391,59 @@ fn sync_scoped(
 /// The open board's heads on one view.
 fn open_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
     ctx.store.heads(&HeadQuery::Open { project: None })
+}
+
+/// A held card has relinquished dispatch authority. Preserve its pane for inspection;
+/// membership moves remain permitted and do not themselves terminate a live worker.
+fn close_held_run(
+    ctx: &Ctx,
+    task: &TaskHead,
+    panes: &HashMap<String, PaneInfo>,
+    now: Timestamp,
+) -> Result<()> {
+    if task.status != Status::Backlog || !task.dispatch_hold || task.park.is_some() {
+        return Ok(());
+    }
+    let Some(run) = task
+        .current_run
+        .as_deref()
+        .filter(|run| run.outcome.is_none())
+    else {
+        return Ok(());
+    };
+    let Some(pane_id) = run.herdr.as_ref().map(|h| &h.pane_id) else {
+        return Ok(());
+    };
+    let reason = match panes.get(pane_id) {
+        None => "gone",
+        Some(pane) if matches!(pane.status, AgentStatus::Idle | AgentStatus::Done) => "idle",
+        _ => return Ok(()),
+    };
+    let run_id = run.id.clone();
+    let mut closed = false;
+    let _attribution = ctx.store.attribute(corral_core::Actor::System);
+    ctx.store.update_head(&task.id, |current| {
+        if current.status == Status::Backlog
+            && current.dispatch_hold
+            && current.park.is_none()
+            && let Some(run) = current
+                .current_run_mut()
+                .filter(|r| r.id == run_id && r.outcome.is_none())
+        {
+            run.outcome = Some(RunOutcome::Abandoned);
+            run.ended = Some(now);
+            closed = true;
+        }
+        Ok(())
+    })?;
+    if closed {
+        ctx.store.log_event(
+            Some(&task.id),
+            "run_abandoned",
+            json!({"run": run_id, "reason": reason}),
+        )?;
+    }
+    Ok(())
 }
 
 fn reconcile_attention(

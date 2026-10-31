@@ -11,11 +11,11 @@ use corral_ops::Ctx;
 #[derive(Args)]
 pub struct AutomationArgs {
     #[command(subcommand)]
-    cmd: AutomationCmd,
+    pub(crate) cmd: AutomationCmd,
 }
 
 #[derive(Subcommand)]
-enum AutomationCmd {
+pub(crate) enum AutomationCmd {
     /// Show the exact finite policy, constraints and confirmation digest without granting authority
     Preview(SelectionArgs),
     /// Recheck the same selection and require the owner to type the full digest at the terminal

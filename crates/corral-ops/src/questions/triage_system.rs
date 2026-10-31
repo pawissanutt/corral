@@ -53,7 +53,7 @@ pub(in crate::questions) fn transact_system(
                     }
                     ContainerRef::Reviewer { review, .. }
                     | ContainerRef::PlanReviewer { review, .. } => Some(review.clone()),
-                    ContainerRef::Pm => None,
+                    ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
                 };
                 let message = inbox.reserve_in_head(
                     task,

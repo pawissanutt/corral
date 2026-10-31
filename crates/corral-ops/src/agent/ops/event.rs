@@ -20,6 +20,7 @@ enum EventKind {
     TurnStarted,
     TurnEnded,
     ProviderError,
+    BudgetExhausted,
 }
 
 #[derive(Deserialize)]
@@ -30,7 +31,13 @@ struct EventPayload {
     #[serde(default)]
     origin: Option<TurnOrigin>,
     #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
     class: Option<String>,
+    #[serde(default)]
+    budget: Option<serde_json::Value>,
     /// turn_ended only: the owner typed into the pane while this turn was open.
     #[serde(default)]
     owner_input: bool,
@@ -66,8 +73,24 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     if payload.origin.is_some() && payload.kind != EventKind::TurnStarted {
         return Err(bad("only turn_started carries an origin"));
     }
+    if payload.provider.is_some() != payload.model.is_some()
+        || ((payload.provider.is_some() || payload.model.is_some())
+            && payload.kind != EventKind::TurnStarted)
+        || payload.provider.as_ref().is_some_and(|p| !word(p, 64))
+        || payload
+            .model
+            .as_ref()
+            .is_some_and(|m| m.is_empty() || m.len() > 1024 || m.chars().any(char::is_control))
+    {
+        return Err(bad(
+            "only turn_started carries a provider/model pair of bounded identifiers",
+        ));
+    }
     if payload.owner_input && payload.kind != EventKind::TurnEnded {
         return Err(bad("only turn_ended carries owner_input"));
+    }
+    if payload.budget.is_some() && payload.kind != EventKind::BudgetExhausted {
+        return Err(bad("only budget_exhausted carries budget state"));
     }
     if payload.cancelled && payload.kind != EventKind::TurnEnded {
         return Err(bad("only turn_ended carries cancelled"));
@@ -83,7 +106,9 @@ fn validate(envelope: &Envelope, payload: &EventPayload) -> Result<()> {
     }
     match (&payload.class, payload.kind) {
         (Some(class), EventKind::ProviderError) if word(class, 64) => Ok(()),
-        (None, EventKind::TurnStarted | EventKind::TurnEnded) => Ok(()),
+        (None, EventKind::TurnStarted | EventKind::TurnEnded | EventKind::BudgetExhausted) => {
+            Ok(())
+        }
         _ => Err(bad(
             "provider_error needs a class of [A-Za-z0-9._:-]; other events carry none",
         )),
@@ -111,10 +136,21 @@ fn turn(generation: u32, seq: u64) -> AgentTurn {
         ended: None,
         class: None,
         provider_error: None,
+        provider: None,
+        model: None,
     }
 }
 
 pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
+    if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("budget") {
+        return super::budget::budget(ctx, envelope);
+    }
+    if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("auxiliary") {
+        return super::auxiliary::auxiliary(ctx, envelope);
+    }
+    if envelope.payload.get("kind").and_then(|v| v.as_str()) == Some("owner_input") {
+        return super::owner_input::journal(ctx, envelope);
+    }
     let payload: EventPayload = super::payload(
         envelope,
         "kind, turn, origin?, class?, owner_input?, cancelled?",
@@ -132,7 +168,10 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         kind,
         turn: seq,
         origin,
+        provider,
+        model,
         class,
+        budget,
         owner_input,
         cancelled,
     } = payload;
@@ -150,6 +189,8 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             (EventKind::TurnStarted, None) => {
                 let mut started = turn(n, seq);
                 started.started = Some(now);
+                started.provider = provider.clone();
+                started.model = model.clone();
                 if let Some(origin) = origin {
                     started.origin = origin;
                 }
@@ -162,7 +203,7 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 if owner_input {
                     state.turns[i].origin.kind = TurnOriginKind::OwnerTerminal;
                 }
-                if cancelled {
+                if cancelled && state.turns[i].class != Some(TurnClass::BudgetExhausted) {
                     state.turns[i].class = Some(TurnClass::Cancelled);
                 }
                 crate::agent::turns::classify_ended(state, closure, i);
@@ -172,6 +213,14 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 return Err(bad(
                     "turn_ended must name a started turn that is still open",
                 ));
+            }
+            (EventKind::BudgetExhausted, index) => {
+                let i = index.unwrap_or_else(|| {
+                    state.turns.push(turn(n, seq));
+                    state.turns.len() - 1
+                });
+                state.turns[i].class = Some(TurnClass::BudgetExhausted);
+                post_pending.push("event:agent_budget_exhausted".into());
             }
             (EventKind::ProviderError, index) => {
                 let i = index.unwrap_or_else(|| {
@@ -196,7 +245,8 @@ pub(crate) fn event(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         Ok(Commit {
             result: json!({
                 "kind": kind_name, "turn": seq, "generation": n,
-                "class": class, "fenced": closes,
+                "class": if kind == EventKind::BudgetExhausted { Some("budget_exhausted") } else { class.as_deref() }, "fenced": closes,
+                "budget": budget, "provider": provider, "model": model,
             }),
             effect: Some(ReceiptEffect {
                 kind: "turn".into(),
@@ -213,6 +263,7 @@ impl EventPayload {
             EventKind::TurnStarted => "turn_started",
             EventKind::TurnEnded => "turn_ended",
             EventKind::ProviderError => "provider_error",
+            EventKind::BudgetExhausted => "budget_exhausted",
         }
     }
 }

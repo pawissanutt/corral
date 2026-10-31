@@ -10,8 +10,9 @@ import { canonicalJson, sha256Hex } from "../tools/corral.ts";
 import type { EventLog } from "./events.ts";
 import { FrameInvalid, FrameTooLarge, LineReader } from "./framing.ts";
 import {
-  BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT, type RequestFrame,
-  SUBMISSIONS_MAX, type SubmitInput, type SubmitResult, frameId, parseFrame, parseSeq, parseSubmitInput, parseTurn,
+  BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT, type QuestionUpdate,
+  type RequestFrame, SUBMISSIONS_MAX, type SubmitInput, type SubmitResult, frameId, parseFrame, parseQuestions, parseSeq,
+  parseSubmitInput, parseTurn,
 } from "./protocol.ts";
 
 export interface BridgeHandlers {
@@ -21,6 +22,8 @@ export interface BridgeHandlers {
   submit(input: SubmitInput, requestId: string): Promise<SubmitResult>;
   cancel(turn: number | undefined): Promise<Record<string, unknown>>;
   shutdown(): void;
+  /** Corral's current states of the container's questions; absent, the host keeps no projection. */
+  questions?(updates: readonly QuestionUpdate[]): Record<string, unknown>;
 }
 
 export interface BridgeServerOptions {
@@ -159,6 +162,10 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "shutdown":
         setImmediate(() => options.handlers.shutdown());
         return { shutting_down: true };
+      case "questions": {
+        const updates = parseQuestions(frame.args);
+        return options.handlers.questions?.(updates) ?? { applied: false };
+      }
     }
   };
 

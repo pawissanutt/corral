@@ -25,6 +25,11 @@ export const McpSettingsSchema = z.object({
 export type McpSettings = z.infer<typeof McpSettingsSchema>;
 export type McpServer = z.infer<typeof McpServerSchema>;
 
+/** A project-bound role sees servers enabled for its project; a workspace-scoped assistant sees all. */
+export function serverVisible(server: McpServer, role: string, project: string): boolean {
+  return role === "assistant" || server.projects.includes(project);
+}
+
 export class McpDenied extends Error {
   readonly code = "mcp_denied";
   constructor(reason: string) { super(`mcp_denied: ${reason}`); }

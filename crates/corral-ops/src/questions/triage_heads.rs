@@ -14,7 +14,7 @@ pub(in crate::questions) fn apply_needs_me_ref<T: TaskMut + ?Sized>(
     let resting = match container {
         ContainerRef::Worker { .. } | ContainerRef::Planner { .. } => Status::Running,
         ContainerRef::Reviewer { .. } | ContainerRef::PlanReviewer { .. } => Status::Review,
-        ContainerRef::Pm => return Ok(false),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return Ok(false),
     };
     let waiting = if task.agent_head(container)?.is_some() {
         task.pending_agent_questions(container)?
@@ -40,7 +40,7 @@ pub(in crate::questions) fn apply_needs_me_ref<T: TaskMut + ?Sized>(
             };
             (host.question_hold, false)
         }
-        ContainerRef::Pm => return Ok(false),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => return Ok(false),
     };
     let before = slot.clone();
     let (raised, next) = slot_transition(
@@ -63,7 +63,7 @@ pub(in crate::questions) fn apply_needs_me_ref<T: TaskMut + ?Sized>(
                     host.question_hold = slot;
                     Ok(())
                 })?,
-            ContainerRef::Pm => return Ok(false),
+            ContainerRef::Pm | ContainerRef::Assistant { .. } => return Ok(false),
         }
     }
     if let Some(next) = next {

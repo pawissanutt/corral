@@ -85,6 +85,109 @@ pub struct StatsRow {
     pub cost_basis: Option<CostBasis>,
 }
 
+/// Workspace sessions are separate from task cohorts and never affect acceptance rates.
+#[derive(Debug, Serialize)]
+pub struct AssistantStats {
+    pub session: String,
+    pub created: Timestamp,
+    pub ended: Option<Timestamp>,
+    pub focus: String,
+    pub profile: String,
+    pub pane: Option<String>,
+    /// Open with a verifiably running host in its pane.
+    pub live: bool,
+    pub scratch: usize,
+    pub inbox_items: usize,
+    /// Co-work tasks of this session that landed.
+    pub landed: usize,
+    pub usage: Option<corral_core::Usage>,
+    pub cost: String,
+}
+
+/// Owner-instructed co-work finishes in the window, by the time they finished.
+#[derive(Debug, Default, Serialize)]
+pub struct CoworkStats {
+    pub finished: u32,
+    /// Finished with review none: the one acceptance path without a semantic review.
+    pub review_none: u32,
+    pub landed: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssistantRoleStats {
+    pub group: &'static str,
+    pub role: &'static str,
+    pub sessions: Vec<AssistantStats>,
+    pub usage: Option<corral_core::Usage>,
+    pub cost: String,
+    pub cowork: CoworkStats,
+}
+
+pub fn assistant_stats(store: &Store, since: Option<Timestamp>) -> Result<Vec<AssistantStats>> {
+    store
+        .list_assistants()?
+        .into_iter()
+        .filter(|session| since.is_none_or(|since| session.created >= since))
+        .map(|session| {
+            let container = store.get_assistant_container(&session.id)?;
+            let usage = crate::usage::assistant_usage(store, &session)?;
+            let live = session.ended.is_none() && crate::agent::pi::host_alive(&container.state)?;
+            let cost = usage
+                .as_ref()
+                .map(|u| u.summary())
+                .unwrap_or_else(|| "unknown".into());
+            Ok(AssistantStats {
+                session: session.id,
+                created: session.created,
+                ended: session.ended,
+                focus: session.focus,
+                profile: session.profile,
+                pane: container.pane,
+                live,
+                scratch: session.scratch.len(),
+                inbox_items: session.inbox_items.len(),
+                landed: session.landed.len(),
+                usage,
+                cost,
+            })
+        })
+        .collect()
+}
+
+pub fn assistant_role_stats(store: &Store, since: Option<Timestamp>) -> Result<AssistantRoleStats> {
+    let sessions = assistant_stats(store, since)?;
+    let usage = corral_core::Usage::combine(sessions.iter().filter_map(|s| s.usage.clone()));
+    let known = sessions.iter().filter(|s| s.usage.is_some()).count();
+    let cost = match usage.as_ref() {
+        Some(usage) if known == sessions.len() => usage.summary(),
+        Some(usage) => format!(
+            "{} (partial; {known}/{} sessions known)",
+            usage.summary(),
+            sessions.len()
+        ),
+        None => "unknown".into(),
+    };
+    let mut cowork = CoworkStats::default();
+    for task in store.list()? {
+        let Some(record) = &task.cowork else { continue };
+        let run = task.runs.iter().find(|run| run.id == record.run);
+        if run.is_none_or(|run| since.is_some_and(|since| run.ended.is_none_or(|at| at < since))) {
+            continue;
+        }
+        cowork.finished += 1;
+        cowork.review_none += u32::from(record.review == corral_core::CoworkReview::None);
+        cowork.landed += u32::from(task.landed.as_ref().is_some_and(|l| l.run == record.run));
+    }
+    Ok(AssistantRoleStats {
+        group: "assistant",
+        role: "assistant",
+        sessions,
+        usage,
+        cost,
+        cowork,
+    })
+}
+
 #[derive(Default)]
 struct Totals {
     analytics: crate::analytics::FacetTotals,

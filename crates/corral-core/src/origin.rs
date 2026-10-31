@@ -11,6 +11,8 @@ pub enum Origin {
     Owner,
     Pm,
     Agent,
+    /// Materialized by an owner-instructed co-work finish of an assistant scratch.
+    Assistant,
 }
 
 impl Origin {
@@ -19,6 +21,7 @@ impl Origin {
             Self::Owner => "owner",
             Self::Pm => "pm",
             Self::Agent => "agent",
+            Self::Assistant => "assistant",
         }
     }
 }

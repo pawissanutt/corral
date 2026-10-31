@@ -49,11 +49,14 @@ pub enum AgentOp {
     ReadRoute,
     ReadArtifacts,
     ReadLessons,
+    InboxRead,
+    InboxResolve,
     Job,
     JobMonitor,
     PlanWrite,
     PlanSubmit,
     PlanVerdict,
+    OwnerAction,
 }
 
 const ALL_ROLES: &[AgentRole] = &[
@@ -62,6 +65,7 @@ const ALL_ROLES: &[AgentRole] = &[
     AgentRole::Planner,
     AgentRole::PlanReviewer,
     AgentRole::Pm,
+    AgentRole::Assistant,
 ];
 const AGENTS: &[AgentRole] = &[AgentRole::Worker, AgentRole::Reviewer];
 const ASKERS: &[AgentRole] = &[
@@ -76,10 +80,11 @@ const PLAN_REVIEWER: &[AgentRole] = &[AgentRole::PlanReviewer];
 const WORKER: &[AgentRole] = &[AgentRole::Worker];
 const REVIEWER: &[AgentRole] = &[AgentRole::Reviewer];
 const PM: &[AgentRole] = &[AgentRole::Pm];
-const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm];
+const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
+const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 33] = [
+    pub const ALL: [AgentOp; 36] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -108,11 +113,14 @@ impl AgentOp {
         AgentOp::ReadRoute,
         AgentOp::ReadArtifacts,
         AgentOp::ReadLessons,
+        AgentOp::InboxRead,
+        AgentOp::InboxResolve,
         AgentOp::Job,
         AgentOp::JobMonitor,
         AgentOp::PlanWrite,
         AgentOp::PlanSubmit,
         AgentOp::PlanVerdict,
+        AgentOp::OwnerAction,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -145,11 +153,14 @@ impl AgentOp {
             AgentOp::ReadRoute => "read_route",
             AgentOp::ReadArtifacts => "read_artifacts",
             AgentOp::ReadLessons => "read_lessons",
+            AgentOp::InboxRead => "inbox_read",
+            AgentOp::InboxResolve => "inbox_resolve",
             AgentOp::Job => "job",
             AgentOp::JobMonitor => "job_monitor",
             AgentOp::PlanWrite => "plan_write",
             AgentOp::PlanSubmit => "plan_submit",
             AgentOp::PlanVerdict => "plan_verdict",
+            AgentOp::OwnerAction => "owner_action",
         }
     }
 
@@ -170,6 +181,7 @@ impl AgentOp {
             AgentOp::PlanWrite => PLANNING,
             AgentOp::PlanSubmit => PLANNER,
             AgentOp::PlanVerdict => PLAN_REVIEWER,
+            AgentOp::OwnerAction => ASSISTANT,
             _ => PM,
         }
     }
@@ -191,7 +203,7 @@ impl AgentOp {
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
-            AgentOp::Todo | AgentOp::Job | AgentOp::JobMonitor => None,
+            AgentOp::Todo | AgentOp::Job | AgentOp::JobMonitor | AgentOp::OwnerAction => None,
             AgentOp::Ask | AgentOp::Withdraw => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
@@ -215,7 +227,9 @@ impl AgentOp {
             | AgentOp::ReadSearch
             | AgentOp::ReadRoute
             | AgentOp::ReadArtifacts
-            | AgentOp::ReadLessons => Some(Route::Pm),
+            | AgentOp::ReadLessons
+            | AgentOp::InboxRead
+            | AgentOp::InboxResolve => Some(Route::Pm),
             AgentOp::PlanWrite | AgentOp::PlanSubmit | AgentOp::PlanVerdict => {
                 Some(Route::Planning)
             }
@@ -265,6 +279,14 @@ pub enum RejectCode {
     QuestionState,
     QuestionRule,
     QuestionLimit,
+    /// owner_action: the cited input is not a journaled owner input of this session.
+    NotOwnerInput,
+    /// owner_action: the kind is not one of the closed owner-action kinds, or has not landed.
+    UnsupportedAction,
+    /// owner_action: autopilot, another approval or a landing holds the target.
+    ConflictInFlight,
+    /// owner_action: a confirm-class action waits for the owner's answer in the pane.
+    ConfirmationRequired,
 }
 
 impl RejectCode {
@@ -292,6 +314,10 @@ impl RejectCode {
             RejectCode::QuestionState => "question_state",
             RejectCode::QuestionRule => "question_rule",
             RejectCode::QuestionLimit => "question_limit",
+            RejectCode::NotOwnerInput => "not_owner_input",
+            RejectCode::UnsupportedAction => "unsupported_action",
+            RejectCode::ConflictInFlight => "conflict_in_flight",
+            RejectCode::ConfirmationRequired => "confirmation_required",
         }
     }
 }
@@ -302,6 +328,9 @@ pub struct Rejection {
     pub code: RejectCode,
     pub reason: String,
     pub owner: Option<&'static str>,
+    /// Machine-readable fields the response carries beside code and reason, e.g. the command
+    /// a confirmation shows. Never input bytes that could hold a secret.
+    pub detail: Option<Value>,
 }
 
 impl Rejection {
@@ -310,7 +339,13 @@ impl Rejection {
             code,
             reason: reason.into(),
             owner: None,
+            detail: None,
         }
+    }
+
+    pub fn with_detail(mut self, detail: Value) -> Self {
+        self.detail = Some(detail);
+        self
     }
 }
 
@@ -441,6 +476,11 @@ impl CallResponse {
                 if let Some(owner) = rejection.owner {
                     result["owner"] = json!(owner);
                 }
+                if let Some(Value::Object(fields)) = &rejection.detail {
+                    for (key, value) in fields {
+                        result[key.as_str()] = value.clone();
+                    }
+                }
                 json!({
                     "version": AGENT_RECORD_VERSION, "request_id": request_id, "op": op,
                     "identity": identity, "state": "rejected", "stored": false,
@@ -482,6 +522,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
             AgentOp::Job | AgentOp::JobMonitor => super::ops::jobs::call(ctx, &envelope, op),
+            AgentOp::OwnerAction => super::ops::owner_action::call(ctx, &envelope),
             AgentOp::Ask => ask(ctx, &envelope),
             AgentOp::Withdraw => withdraw(ctx, &envelope),
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {
@@ -666,7 +707,11 @@ fn pm_question(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRespon
             Rejection::new(RejectCode::ContainerNotFound, "no Pi-native PM is bound")
         })?;
         admission::recheck_pm(&pm, generation)?;
-        if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+        if !super::hooks::pm::contains(
+            &ctx.store,
+            &pm.state.binding.project,
+            task.project.as_deref(),
+        )? {
             return Err(Rejection::new(
                 RejectCode::OutOfScope,
                 format!("{} lies outside the PM's project scope", task.id),

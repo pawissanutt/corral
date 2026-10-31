@@ -624,7 +624,9 @@ impl TaskHeadMut {
                     .filter(|p| &p.id == plan)
                     .and(head.seqs.plan),
             ),
-            Recipient::Pm => anyhow::bail!("the recipient has no inbox on this task"),
+            Recipient::Pm | Recipient::Assistant { .. } => {
+                anyhow::bail!("the recipient has no inbox on this task")
+            }
         };
         let key = match current {
             Some(s) => seq(s),
@@ -644,7 +646,9 @@ impl TaskHeadMut {
             Recipient::PlanRun { .. } => return Ok(format!("plan_run:{key}")),
             Recipient::ReviewRun { review, .. } => (TaskPart::ReviewRun, review, "run"),
             Recipient::PlanReview { review, .. } => (TaskPart::PlanReview, review, "plan_review"),
-            Recipient::Pm => anyhow::bail!("the recipient has no inbox on this task"),
+            Recipient::Pm | Recipient::Assistant { .. } => {
+                anyhow::bail!("the recipient has no inbox on this task")
+            }
         };
         let row = self
             .rows_now(

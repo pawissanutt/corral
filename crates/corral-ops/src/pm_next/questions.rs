@@ -64,24 +64,18 @@ pub(super) fn card(observation: &PmObservation, bin: &str) -> PmAction {
                     format!("{bin} question escalate {} --rev {revision}", q(key)),
                     false,
                 );
-                let pm_answerable =
-                    matches!(question_kind.as_str(), "clarification" | "technical_choice");
-                let options = if pm_answerable {
-                    vec![
-                        option(
-                            "answer",
-                            "Answer with a cited basis inside the approved scope",
-                            format!(
-                                "{bin} question answer {} --rev {revision} --text <answer> --basis <ref> --scope-note <note>",
-                                q(key)
-                            ),
-                            false,
+                let options = vec![
+                    option(
+                        "answer",
+                        "Answer with a cited basis inside the approved scope",
+                        format!(
+                            "{bin} question answer {} --rev {revision} --text <answer> --basis <ref> --scope-note <note>",
+                            q(key)
                         ),
-                        escalate,
-                    ]
-                } else {
-                    vec![escalate]
-                };
+                        false,
+                    ),
+                    escalate,
+                ];
                 (
                     PmActionKind::AgentQuestion,
                     task,
@@ -93,7 +87,7 @@ pub(super) fn card(observation: &PmObservation, bin: &str) -> PmAction {
                         "A Pi-native agent asked a {}{question_kind} question.",
                         if *blocking { "blocking " } else { "" }
                     ),
-                    "Answer only clarification and technical_choice questions, citing resolvable basis refs and a scope note; escalate owner_only and permission questions.",
+                    "Answer any kind, citing resolvable basis refs and a scope note; escalate only what needs the owner's own judgment.",
                     options,
                     false,
                 )

@@ -51,6 +51,19 @@ pub enum PinRef {
 impl PinRef {
     /// Parses "T-042" / "42" or "T-042:R1:<file>"; the task id is normalized, the run upper-cased.
     pub fn parse(s: &str) -> Result<PinRef> {
+        if let Some((session, file)) = s.trim().split_once(':')
+            && session.starts_with("A-")
+        {
+            crate::assistant::validate_id(session)?;
+            if file.trim().is_empty() || file.contains(':') {
+                bail!("invalid session artifact ref (expected A-<n>:<file>)");
+            }
+            return Ok(PinRef::Artifact {
+                task: session.into(),
+                run: String::new(),
+                file: file.trim().into(),
+            });
+        }
         let mut parts = s.trim().splitn(3, ':');
         let task = Store::normalize_id(parts.next().unwrap_or(""))?;
         match (parts.next(), parts.next()) {
@@ -102,6 +115,9 @@ impl fmt::Display for PinRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PinRef::Task(t) => write!(f, "{t}"),
+            PinRef::Artifact { task, run, file } if run.is_empty() && task.starts_with("A-") => {
+                write!(f, "{task}:{file}")
+            }
             PinRef::Artifact { task, run, file } => write!(f, "{task}:{run}:{file}"),
         }
     }
@@ -255,7 +271,14 @@ impl Store {
         follow_latest: bool,
     ) -> Result<(usize, Pin)> {
         let r = PinRef::parse(target)?;
-        let task = self.get(r.task())?;
+        let task = if r.task().starts_with("A-") {
+            self.artifact_owners()?
+                .into_iter()
+                .find(|t| t.id == r.task())
+                .context("artifact session not found")?
+        } else {
+            self.get(r.task())?
+        };
         let canonical = match &r {
             PinRef::Task(_) if follow_latest => {
                 bail!("--follow-latest needs an artifact ref (T-042:R1:<file>)")
@@ -364,7 +387,7 @@ impl Store {
     /// Every pin with its current target, in order.
     pub fn resolved_pins(&self) -> Result<Vec<(Pin, PinTarget)>> {
         let pins = self.pins()?;
-        let tasks = self.list()?;
+        let tasks = self.artifact_owners()?;
         Ok(pins
             .into_iter()
             .map(|p| {

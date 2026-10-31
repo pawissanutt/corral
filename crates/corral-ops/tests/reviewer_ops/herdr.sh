@@ -11,7 +11,13 @@ case "$1 $2" in
   "pane list")
     status=idle
     [ -f "$dir/status" ] && status="$(< "$dir/status")"
-    ok "{\"panes\":[{\"pane_id\":\"w1:p2\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t2\",\"agent_status\":\"$status\"}]}" ;;
+    if [ -f "$dir/gone" ]; then
+      ok '{"panes":[{"pane_id":"w1:p1","workspace_id":"w1","tab_id":"w1:t1","agent_status":"idle"}]}'
+    elif [ -f "$dir/gone-test" ]; then
+      ok "{\"panes\":[{\"pane_id\":\"w1:p1\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t1\",\"agent_status\":\"idle\"},{\"pane_id\":\"w1:p2\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t2\",\"agent_status\":\"$status\"}]}"
+    else
+      ok "{\"panes\":[{\"pane_id\":\"w1:p2\",\"workspace_id\":\"w1\",\"tab_id\":\"w1:t2\",\"agent_status\":\"$status\"}]}"
+    fi ;;
   "pane run")
     # A live agent never returns; exit regressions opt into running the receipt too.
     bash -c "$4" >/dev/null 2>&1

@@ -163,6 +163,36 @@ fn pinned_cards_show_a_star_and_a_pinned_done_task_stays_on_the_board() {
 }
 
 #[test]
+fn session_artifact_pin_resolves_on_board_without_becoming_a_task_row() {
+    let fx = seeded();
+    fx.ctx
+        .store
+        .create_assistant("pi", None, None, None)
+        .unwrap();
+    let report = fx.ctx.store.root().join("session-report.md");
+    std::fs::write(&report, "Session finding\n").unwrap();
+    let artifact =
+        corral_ops::add_session_artifact(&fx.ctx, "A-1", &report, None, Some("Session report"))
+            .unwrap();
+    fx.ctx
+        .store
+        .pin("A-1:session-report.md", None, false)
+        .unwrap();
+
+    let mut board = fx.board();
+    assert_eq!(board.tasks.len(), 7);
+    assert!(board.tasks.iter().all(|task| task.id.starts_with("T-")));
+    assert!(matches!(&board.pins[0].target,
+        corral_core::PinTarget::Artifact { task, artifact: resolved, .. }
+            if task == "A-1" && resolved.path == artifact.path));
+    let (screen, _) = render(&mut board, &fx);
+    let strip = screen.lines().next().unwrap();
+    assert!(strip.contains("1 ◆ Session report"), "{strip}");
+    assert!(!strip.contains('⚠'), "{strip}");
+    assert_eq!(board.on_key(key('1'), &fx.ctx), Action::OpenPin(0));
+}
+
+#[test]
 fn star_key_toggles_the_selected_card_pin() {
     let fx = seeded();
     let mut b = fx.board();

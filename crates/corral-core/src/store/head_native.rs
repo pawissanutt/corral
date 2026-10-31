@@ -38,7 +38,7 @@ fn current_host<'a>(
             .and_then(|p| p.current_review.as_mut())
             .filter(|r| r.id == *review)
             .map(|r| (&mut r.agent_host, None)),
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     }
 }
 fn coordinates(container: &ContainerRef, owner: &str) -> Result<(TaskPart, String)> {
@@ -67,6 +67,9 @@ fn coordinates(container: &ContainerRef, owner: &str) -> Result<(TaskPart, Strin
                 .into(),
         ),
         ContainerRef::Pm => anyhow::bail!("PM state does not belong to a task"),
+        ContainerRef::Assistant { .. } => {
+            anyhow::bail!("assistant state does not belong to a task")
+        }
     })
 }
 fn facts(record: &NativeRecord) -> (u64, u64) {
@@ -119,7 +122,7 @@ impl TaskHeadMut {
                 .and_then(|plan| plan.current_review.as_mut())
                 .filter(|child| child.id == *review)
                 .map(|child| &mut child.inbox),
-            ContainerRef::Pm => None,
+            ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
         };
         if let Some(inbox) = inbox {
             if inbox.settled.is_some() {

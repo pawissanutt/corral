@@ -155,8 +155,8 @@ test("bridge input and owner terminal input are attributed per turn ID", async (
   const started = corral.calls().map((call) => call.envelope.payload)
     .filter((payload) => payload.kind === "turn_started" && [2, 3].includes(payload.turn as number));
   expect(started).toEqual([
-    { kind: "turn_started", turn: 2, origin: { kind: "bridge", idempotency_key: "k-bridge" } },
-    { kind: "turn_started", turn: 3, origin: { kind: "owner_terminal" } },
+    { kind: "turn_started", turn: 2, origin: { kind: "bridge", idempotency_key: "k-bridge" }, provider: "openai-codex", model: "gpt-6.1-sol" },
+    { kind: "turn_started", turn: 3, origin: { kind: "owner_terminal" }, provider: "openai-codex", model: "gpt-6.1-sol" },
   ]);
 });
 
@@ -212,7 +212,7 @@ test("in a real host the kickoff turn starts after hello, when extensions bind, 
   expect(text).toBe(kickoff({ identity, cwd: "/tmp", model: "m", promptFile }));
   const lifecycle = fake.calls().map((call) => call.envelope).filter((envelope) => envelope.op === "event").map((envelope) => envelope.payload);
   expect(lifecycle).toEqual([
-    { kind: "turn_started", turn: 1, origin: { kind: "unknown" } },
+    { kind: "turn_started", turn: 1, origin: { kind: "unknown" }, provider: "openai-codex", model: "gpt-6.1-sol" },
     { kind: "turn_ended", turn: 1 },
   ]);
 });

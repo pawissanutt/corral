@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{BridgeClient, BridgeError, events_since_recorded};
 use crate::agent::effects::executor_gone;
-use crate::agent::launch::{SOCKET_FILE, generation_dir};
+use crate::agent::launch::{SOCKET_FILE, assistant_runtime_dir, generation_dir};
 
 /// At most this many `events_since` pages per probe; a longer backlog continues next pass.
 const PAGES_MAX: usize = 16;
@@ -131,6 +131,7 @@ pub fn probe(
         container,
         state.binding.health,
         generation,
+        |client, reply| crate::agent::herdr_status::sync_questions(client, state, reply),
     )
 }
 
@@ -153,6 +154,9 @@ pub(crate) fn probe_ref<T: TaskRef + ?Sized>(
         container,
         host.binding.health,
         &generation,
+        |client, reply| {
+            crate::agent::herdr_status::sync_questions_ref(client, task, container, reply)
+        },
     )
 }
 
@@ -162,6 +166,7 @@ fn probe_generation(
     container: &ContainerRef,
     health: HostHealth,
     generation: &agent::AgentGeneration,
+    sync_questions: impl Fn(&mut BridgeClient, &Value) -> Result<()>,
 ) -> Result<Probe> {
     let healthy = health == HostHealth::Healthy && generation.fenced.is_none();
     let Some(bound) = generation.bound.as_ref().filter(|_| healthy) else {
@@ -186,7 +191,12 @@ fn probe_generation(
         );
         return lost(LossReason::HostExited, detail);
     }
-    let dir = generation_dir(store, recipient, n)?;
+    let dir = match container {
+        ContainerRef::Assistant { session } => {
+            assistant_runtime_dir(store, session).join(format!("g{n}"))
+        }
+        _ => generation_dir(store, recipient, n)?,
+    };
     let mut client = match BridgeClient::connect_dir(&dir, n) {
         Ok(client) => client,
         Err(error) => {
@@ -219,6 +229,11 @@ fn probe_generation(
             reply["generation"], reply["session"]["bound_id"], bound.session_id
         );
         return lost(LossReason::HostMismatch, detail);
+    }
+    // A question transition the host missed (its push failed) reaches its herdr projection here.
+    if let Err(error) = sync_questions(&mut client, &reply) {
+        let reason = format!("syncing {}'s questions: {error:#}", container.key());
+        crate::messages::report(container.task(), "agent herdr status", reason);
     }
     let mut seq = generation.event_seq;
     for _ in 0..PAGES_MAX {
@@ -263,8 +278,8 @@ fn apply(state: &mut AgentRunState, probe: &Probe) -> bool {
 /// Persists a probe: a loss turns the still-healthy current generation `lost` and logs
 /// `agent_lost` once; a healthy answer advances the saved event sequence. True when it wrote.
 pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<bool> {
-    let changed = match container.task() {
-        Some(id) => store
+    let changed = match (container.task(), container) {
+        (Some(id), _) => store
             .try_update_head(id, |task| match probe {
                 Probe::Lost { generation, .. } => {
                     let Some(host) = task.agent_head(container)? else {
@@ -295,7 +310,11 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
                 Probe::Busy | Probe::Skip => Ok(false),
             })?
             .is_some(),
-        None => pm_state::update(store, |pm| {
+        (None, ContainerRef::Assistant { session }) => store
+            .update_assistant_container(session, |assistant| {
+                Ok(apply(&mut assistant.state, probe))
+            })?,
+        (None, _) => pm_state::update(store, |pm| {
             let changed = pm.as_mut().is_some_and(|pm| apply(&mut pm.state, probe));
             Ok((changed, changed))
         })?,

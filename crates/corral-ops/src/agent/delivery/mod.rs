@@ -70,6 +70,9 @@ fn container(recipient: &Recipient) -> Option<ContainerRef> {
             review: review.clone(),
         }),
         Recipient::Pm => Some(ContainerRef::Pm),
+        Recipient::Assistant { session } => Some(ContainerRef::Assistant {
+            session: session.clone(),
+        }),
         Recipient::PlanRun { task, plan_run } => Some(ContainerRef::Planner {
             task: task.clone(),
             run: plan_run.clone(),
@@ -89,6 +92,19 @@ fn target(ctx: &Ctx, recipient: &Recipient) -> Result<Result<Target, String>> {
             "pi_native delivery serves worker runs, review children and the PM".into(),
         ));
     };
+    if let ContainerRef::Assistant { session } = &container {
+        if !ctx.store.assistant_exists(session)? {
+            return Ok(Err(format!("host_unbound: no assistant session {session}")));
+        }
+        let ended = ctx.store.get_assistant(session)?.ended.is_some();
+        let state = ctx.store.get_assistant_container(session)?.state;
+        let generation = state.current_generation().cloned();
+        return Ok(Ok(Target {
+            binding: state.binding,
+            generation,
+            closed: ended.then_some("assistant_ended"),
+        }));
+    }
     match container.task() {
         Some(id) => {
             let task = ctx.store.head(id)?;

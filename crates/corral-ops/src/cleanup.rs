@@ -10,6 +10,9 @@ use serde_json::json;
 
 use crate::Ctx;
 
+mod reap;
+pub(crate) use reap::reap_closed_reviews;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Cleanup {
     Task,
@@ -100,6 +103,9 @@ pub(crate) fn sweep_inventory(ctx: &Ctx, board: &corral_core::Board, live: &[Pan
 /// The sweep over an explicit task list, as tests drive it.
 #[cfg(test)]
 pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
+    for task in tasks {
+        reap_closed_reviews(ctx, task);
+    }
     let terminal: Vec<&Task> = tasks
         .iter()
         .filter(|task| matches!(task.status, Status::Done | Status::Dropped))
@@ -212,6 +218,13 @@ fn clean_listed(
     // Workspace debts name no pane: each stays with its own owner, outside the pane map.
     let mut debts: Vec<(usize, corral_core::CleanupPane)> = Vec::new();
     for (i, (task, head)) in owners.iter().enumerate() {
+        if !crate::session_scope::owns_head(ctx, head)? {
+            warnings.push(
+                "pane cleanup refused: selected herdr session does not own task panes".into(),
+            );
+            continue;
+        }
+        let pending_reviews = head.pending_plan_review_panes()?;
         // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
         if crate::agent::hooks::task_is_pi_native(task)
             && let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task)
@@ -235,6 +248,9 @@ fn clean_listed(
             }
         }
         for pane in rows {
+            if pending_reviews.contains(&pane.pane) {
+                continue;
+            }
             if scope == Cleanup::Round
                 && head
                     .current_run
@@ -244,7 +260,10 @@ fn clean_listed(
             {
                 continue;
             }
-            let tool = matches!(pane.kind.as_str(), "gate" | "review" | "workspace");
+            let tool = matches!(
+                pane.kind.as_str(),
+                "gate" | "review" | "plan_review" | "workspace"
+            );
             if scope == Cleanup::Round && !tool {
                 continue;
             }
@@ -285,11 +304,21 @@ fn clean_listed(
             Some(_) => {
                 // A successful explicit close is stronger evidence than a listing miss.
                 // Release only the slots that owned this pane in our cleanup snapshot.
-                match ctx
-                    .herdr
-                    .pane_close(pane)
-                    .and_then(|()| release_round(ctx, task, pane))
-                {
+                let exits = crate::cleanup_worktree::pane_exits(ctx, pane);
+                match ctx.herdr.pane_close(pane).and_then(|()| {
+                    crate::cleanup_worktree::wait_pane_exits(&exits);
+                    if rows
+                        .iter()
+                        .any(|row| matches!(row.kind.as_str(), "review" | "plan_review"))
+                    {
+                        ctx.store.log_event(
+                            Some(&task.id),
+                            "cleanup_review_closed",
+                            json!({"pane": pane}),
+                        )?;
+                    }
+                    release_round(ctx, task, pane)
+                }) {
                     Ok(()) => done.extend(rows.iter().map(|r| (*i, r.clone()))),
                     Err(error) => {
                         failed(ctx, &task.id, pane, &error);

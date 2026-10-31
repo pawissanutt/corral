@@ -7,13 +7,16 @@
 //! session, yields the same `Usage`. `openai-codex/<model>` is priced as `<model>` through corral
 //! pricing; the API-equivalent figure is `estimated_usd` and Pi's own reported cost stays in
 //! `reported_usd`. PM sessions are bound to the `AgentPm` record, never to a run, so they are
-//! attributed to no task and are excluded from the Pi-native vs OmO comparison.
+//! attributed to no implementation task and are excluded from the Pi-native vs OmO comparison.
+//! The shared container readback also covers PM/planning, plus durable auxiliary references;
+//! references never authorize another host or replace a bound transcript.
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use corral_core::agent::{self, AgentRunState, ContainerRef, pm_state};
 use corral_core::{Run, Store, Usage, UsageEntry};
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -37,19 +40,58 @@ pub fn collect(run: &Run, store: &Store) -> Result<Usage> {
         .agent_host
         .as_deref()
         .context("no bound Pi session: the run has no host binding")?;
+    collect_state(state, run.model.as_deref(), store)
+}
+
+/// Read a named container without attributing PM/planning cost to implementation runs.
+/// This is an offline readback; it grants no role or session replacement authority.
+pub fn collect_container(container: &ContainerRef, store: &Store) -> Result<Usage> {
+    if let Some(task) = container.task() {
+        let task = store.get(task)?;
+        let state = agent::container_state(&task, container).context("no bound Pi container")?;
+        let model = match container {
+            ContainerRef::Planner { run, .. } => task
+                .plan_runs
+                .iter()
+                .find(|candidate| candidate.id == *run)
+                .and_then(|run| run.model.as_deref()),
+            _ => agent::container_run(&task, container).and_then(|run| run.model.as_deref()),
+        };
+        collect_state(state, model, store)
+    } else {
+        let pm = pm_state::load(store)?.context("no bound Pi PM")?;
+        collect_state(&pm.state, None, store)
+    }
+}
+
+/// Shared accounting for worker, reviewer, PM, planner and plan-reviewer records. The caller
+/// selects the durable container, never a directory scan. All generations and auxiliary requests
+/// share one response identity map, so copies/resumes cannot multiply spending.
+pub fn collect_state(state: &AgentRunState, model: Option<&str>, store: &Store) -> Result<Usage> {
     // Generations that resumed the same file are read once; copies are deduplicated by key.
-    let mut files: BTreeMap<&Path, &str> = BTreeMap::new();
+    let mut files: BTreeMap<&Path, (&str, Option<&str>)> = BTreeMap::new();
     for bound in state.generations.iter().filter_map(|g| g.bound.as_ref()) {
         files
             .entry(bound.session_file.as_path())
-            .or_insert(bound.session_id.as_str());
+            .or_insert((bound.session_id.as_str(), model));
+    }
+    for session in &state.usage_sessions {
+        if state.generation(session.generation).is_none() {
+            bail!(
+                "usage session references absent generation {}",
+                session.generation
+            );
+        }
+        files
+            .entry(session.session_file.as_path())
+            .or_insert((session.session_id.as_str(), session.model.as_deref()));
     }
     if files.is_empty() {
         bail!("no bound Pi session");
     }
     let mut entries = BTreeMap::new();
-    for (path, session_id) in files {
-        read_session(path, session_id, run.model.as_deref(), &mut entries)?;
+    for (path, (session_id, model)) in files {
+        read_session(path, session_id, model, &mut entries)?;
     }
     if entries.is_empty() {
         bail!("no assistant usage found in the bound Pi sessions");
@@ -185,7 +227,7 @@ fn read_session(
             bail!("invalid usage cost at line {number} of {display}");
         }
         let response = match (response_id, entry.id) {
-            (Some(response), _) => response,
+            (Some(response), _) => format!("response:{response}"),
             (None, Some(id)) => format!("entry:{id}"),
             (None, None) => format!("line:{number}"),
         };

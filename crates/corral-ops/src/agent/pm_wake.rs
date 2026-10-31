@@ -21,7 +21,7 @@ use super::delivery::PiNativeAdapter;
 /// The T-252 child that lands the outbox.
 pub const OWNER: &str = "pm-role";
 
-fn healthy(pm: &AgentPm) -> bool {
+pub(crate) fn healthy(pm: &AgentPm) -> bool {
     pm.state.binding.health == HostHealth::Healthy
         && super::admission::recheck_pm(pm, pm.state.binding.generation).is_ok()
 }
@@ -38,7 +38,11 @@ pub fn repost(ctx: &Ctx) -> Result<usize> {
     let inbox = Inbox::new(&ctx.store, Recipient::Pm)?;
     let mut posted = 0;
     for task in ctx.store.unfinished_native_heads()? {
-        if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+        if !super::hooks::pm::contains(
+            &ctx.store,
+            &pm.state.binding.project,
+            task.project.as_deref(),
+        )? {
             continue;
         }
         for view in crate::questions::recorded_pending_views_ref(&task)?
@@ -79,7 +83,11 @@ fn post_one(
     let container = crate::questions::QuestionKey::parse(&view.question.key)?.container;
     let fresh = task.agent_question(&container, &view.question.key)?;
     if !same_pm(pm, &current_pm)
-        || task.project.as_deref() != Some(current_pm.state.binding.project.as_str())
+        || !super::hooks::pm::contains(
+            &ctx.store,
+            &current_pm.state.binding.project,
+            task.project.as_deref(),
+        )?
         || agent::container_closure_ref(&task, &container)?.is_some()
         || !fresh.is_some_and(|question| {
             question.recorded_pending()
@@ -91,7 +99,13 @@ fn post_one(
     }
     // The question's outbox was committed before this post. A PM/project change here may
     // leave a stale queued wake, which ScopedPm refuses; it must never ack a new transition.
-    let message = publish(inbox, &view.question, &current_pm.state.binding.project)?;
+    let message = publish(
+        inbox,
+        &view.question,
+        task.project
+            .as_deref()
+            .context("question task has no project")?,
+    )?;
     acknowledge(ctx, pm, view, &message)
 }
 
@@ -106,7 +120,11 @@ fn acknowledge(
             return Ok(false);
         };
         if !same_pm(pm, &current_pm)
-            || task.project.as_deref() != Some(current_pm.state.binding.project.as_str())
+            || !super::hooks::pm::contains(
+                &ctx.store,
+                &current_pm.state.binding.project,
+                task.project.as_deref(),
+            )?
         {
             return Ok(false);
         }
@@ -188,14 +206,16 @@ fn in_scope(ctx: &Ctx, message: &Message, project: &str) -> Result<bool> {
         .subject
         .as_ref()
         .context("question wake has no scope")?;
-    if subject["project"] != project {
+    if !super::hooks::pm::contains(&ctx.store, project, subject["project"].as_str())? {
         return Ok(false);
     }
     let key = subject["question"]
         .as_str()
         .context("question wake has no key")?;
     let parsed = crate::questions::QuestionKey::parse(key)?;
-    Ok(ctx.store.head(parsed.task())?.project.as_deref() == Some(project))
+    let task = ctx.store.head(parsed.task())?;
+    Ok(task.project.as_deref() == subject["project"].as_str()
+        && super::hooks::pm::contains(&ctx.store, project, task.project.as_deref())?)
 }
 
 impl DeliveryAdapter for ScopedPm {

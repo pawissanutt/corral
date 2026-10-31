@@ -39,10 +39,23 @@ impl<'a> Inbox<'a> {
         self.store.lock(&format!("deliver-{}", self.key))
     }
 
-    pub fn state(&self) -> Result<InboxState> {
+    /// Non-task inboxes are canonical records, never legacy state files.
+    pub(super) fn standalone_state_key(&self) -> Option<(&'static str, &str)> {
         match &self.recipient {
-            Recipient::Pm => Ok(self.pm_state()?.inbox),
-            _ => {
+            Recipient::Pm => Some(("pm-inbox", "current")),
+            Recipient::Assistant { session } => Some(("assistant-inbox", session)),
+            _ => None,
+        }
+    }
+
+    pub fn state(&self) -> Result<InboxState> {
+        match self.standalone_state_key() {
+            Some((area, key)) => Ok(self
+                .store
+                .record::<PmInbox>(area, key)?
+                .unwrap_or_default()
+                .inbox),
+            None => {
                 let mut task = self
                     .store
                     .get(self.recipient.task().context("task recipient")?)?;
@@ -60,17 +73,16 @@ impl<'a> Inbox<'a> {
 
     /// Caller must hold the inbox lock (and deliver lock for envelope changes).
     pub fn update_state<T>(&self, f: impl FnOnce(&mut InboxState) -> Result<T>) -> Result<T> {
-        match &self.recipient {
-            Recipient::Pm => self.store.records_transaction(|| {
-                let mut pm = self.pm_state()?;
-                let result = f(&mut pm.inbox)?;
-                self.store.save_record("pm-inbox", "current", &pm)?;
+        match self.standalone_state_key() {
+            Some((area, key)) => self.store.records_transaction(|| {
+                let mut side = self.store.record::<PmInbox>(area, key)?.unwrap_or_default();
+                let result = f(&mut side.inbox)?;
+                self.store.save_record(area, key, &side)?;
                 Ok(result)
             }),
-            _ => {
+            None => {
                 let id = self.recipient.task().context("task recipient")?;
-                // A current container's inbox is a projection: its scalars are edited in place
-                // and applied effects or cursors become keyed rows, so no history is read.
+                // Task inbox history stays in its existing keyed rows.
                 let mut f = Some(f);
                 let mut result = None;
                 self.store.try_update_head(id, |head| {
@@ -127,7 +139,7 @@ impl<'a> Inbox<'a> {
         let cap = post.max_payload.min(MAX_PAYLOAD);
         // Reserve worst-case u64 header space, so every future envelope still fits.
         let overhead = format!(
-            "[corral envelope {}@env{}]\n\n[corral {}#{} {}]\n",
+            "[corral envelope {}@env{}]\n[corral framing escaped-v1]\n\n[corral {}#{} {}]\n",
             self.key,
             u64::MAX,
             self.key,
@@ -138,7 +150,8 @@ impl<'a> Inbox<'a> {
         ensure!(
             post.body
                 .len()
-                .checked_add(overhead)
+                .checked_add(post.body.matches("\n\n[corral ").count())
+                .and_then(|n| n.checked_add(overhead))
                 .is_some_and(|n| n <= cap),
             "message size {} bytes plus {} header bytes exceeds payload cap {} bytes",
             post.body.len(),
@@ -243,16 +256,18 @@ impl<'a> Inbox<'a> {
         let _lock = self.lock()?;
         let nested = self.store.has_record_unit();
         let message = match &self.recipient {
-            Recipient::Pm => self.store.records_transaction(|| {
-                let message = self.update_state(|state| self.build(state, post))?;
-                reserving(&message)?;
-                #[cfg(test)]
-                super::header::checkpoint("post_reservation_commit")?;
-                if nested {
-                    self.write_message(&message)?;
-                }
-                Ok(message)
-            })?,
+            Recipient::Pm | Recipient::Assistant { .. } => {
+                self.store.records_transaction(|| {
+                    let message = self.update_state(|state| self.build(state, post))?;
+                    reserving(&message)?;
+                    #[cfg(test)]
+                    super::header::checkpoint("post_reservation_commit")?;
+                    if nested {
+                        self.write_message(&message)?;
+                    }
+                    Ok(message)
+                })?
+            }
             _ => {
                 let mut message = None;
                 self.store
@@ -646,6 +661,7 @@ pub(super) fn state_mut<'a>(
             .context("inbox review child not found")?
             .inbox),
         Recipient::Pm => anyhow::bail!("PM has no task state"),
+        Recipient::Assistant { .. } => anyhow::bail!("an assistant session has no task state"),
     }
 }
 
@@ -675,6 +691,6 @@ fn current_inbox<'h>(
             .and_then(|p| p.current_review.as_mut())
             .filter(|r| &r.id == review)
             .map(|r| &mut r.inbox),
-        Recipient::Pm => None,
+        Recipient::Pm | Recipient::Assistant { .. } => None,
     }
 }

@@ -55,6 +55,8 @@ pub fn class_at_end(
         TurnClass::Completed
     } else if cancelled(turn) {
         TurnClass::Cancelled
+    } else if turn.class == Some(TurnClass::BudgetExhausted) {
+        TurnClass::BudgetExhausted
     } else if turn.provider_error.is_some() {
         TurnClass::ProviderFailed
     } else if turn.origin.kind == TurnOriginKind::OwnerTerminal {
@@ -73,7 +75,9 @@ pub fn classify_ended(state: &mut AgentRunState, closure: Option<ClosureReason>,
     let class = match state.binding.role {
         AgentRole::Worker => class_at_end(state, closure, &state.turns[index]),
         AgentRole::Reviewer => super::hooks::review::classify(state, closure, &state.turns[index]),
-        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => return,
+        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer | AgentRole::Assistant => {
+            return;
+        }
     };
     state.turns[index].class = Some(class);
 }

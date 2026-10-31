@@ -19,7 +19,7 @@ pub(super) struct MessageRecord {
 impl Inbox<'_> {
     /// Inbox scalars without decoding applied effects or scoped cursor history.
     pub fn state_head(&self) -> Result<InboxHead> {
-        if self.recipient == Recipient::Pm {
+        if let Some((area, key)) = self.standalone_state_key() {
             #[derive(Default, Deserialize)]
             struct PmHead {
                 #[serde(default)]
@@ -27,7 +27,7 @@ impl Inbox<'_> {
             }
             return Ok(self
                 .store
-                .record::<PmHead>("pm-inbox", "current")?
+                .record::<PmHead>(area, key)?
                 .unwrap_or_default()
                 .inbox);
         }
@@ -59,7 +59,9 @@ impl Inbox<'_> {
                     .context("inbox plan review not found")?
                     .inbox);
             }
-            Recipient::Pm => anyhow::bail!("PM has no task recipient"),
+            Recipient::Pm | Recipient::Assistant { .. } => {
+                anyhow::bail!("standalone inbox has no task recipient")
+            }
         };
         let row = head
             .query(

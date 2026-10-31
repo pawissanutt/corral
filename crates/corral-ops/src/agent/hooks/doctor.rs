@@ -302,6 +302,7 @@ fn capabilities_check(ctx: &Ctx, assets: Option<&Path>) -> DoctorCheck {
         AgentRole::Pm,
         AgentRole::Planner,
         AgentRole::PlanReviewer,
+        AgentRole::Assistant,
     ]
     .into_iter()
     .map(|role| {

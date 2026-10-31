@@ -188,6 +188,7 @@ fn launch(fx: &ts::Fx, id: &str) -> (String, Host) {
             run: bootstrap.run.clone(),
             review: bootstrap.review.clone(),
             callback: bootstrap.callback.clone(),
+            assistant: None,
             session_id: session.clone(),
             generation: bootstrap.generation,
             turn: None,

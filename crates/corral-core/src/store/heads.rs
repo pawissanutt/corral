@@ -508,6 +508,11 @@ pub struct TaskHeadFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::Origin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cowork: Option<crate::Cowork>,
+    /// Ephemeral policy context; the current-container row, not this field, is authoritative.
+    #[serde(skip)]
+    pub current_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idea_decision: Option<crate::IdeaDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<crate::CriteriaManifest>,

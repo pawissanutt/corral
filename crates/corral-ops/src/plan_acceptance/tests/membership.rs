@@ -1,14 +1,6 @@
 //! T-506: the owner moves unstarted, held members between tracker Plans.
 use super::*;
-use crate::{OwnerEntry, plan_add_member_from, plan_move_member_from};
-
-fn owner(f: &Fixture) -> OwnerEntry {
-    OwnerEntry {
-        agent: false,
-        pm: false,
-        cwd: f._dir.path().to_path_buf(),
-    }
-}
+use crate::{plan_add_member, plan_move_member};
 
 /// A second tracker Plan in the same project with one required member.
 fn later_plan(f: &Fixture) -> (String, String) {
@@ -39,7 +31,7 @@ fn held_member(f: &Fixture) -> String {
             Ok(())
         })
         .unwrap();
-    plan_add_member_from(&f.ctx, &f.plan, &id, &owner(f)).unwrap();
+    plan_add_member(&f.ctx, &f.plan, &id).unwrap();
     id
 }
 
@@ -67,7 +59,7 @@ fn held_abandoned_and_parked_runs_move_unchanged() {
     history(&f, &held);
     let (later, _) = later_plan(&f);
     let before = f.ctx.store.get(&held).unwrap();
-    plan_move_member_from(&f.ctx, &f.plan, &held, &later, None, &owner(&f)).unwrap();
+    plan_move_member(&f.ctx, &f.plan, &held, &later, None).unwrap();
     let after = f.ctx.store.get(&held).unwrap();
     assert_eq!(after.runs, before.runs);
     assert_eq!(after.parent.as_deref(), Some(later.as_str()));
@@ -143,14 +135,7 @@ fn live_or_landed_history_refuses_without_writes() {
             f.ctx.store.get(&later).unwrap(),
             f.ctx.store.get(&held).unwrap(),
         );
-        let error = message(plan_move_member_from(
-            &f.ctx,
-            &f.plan,
-            &held,
-            &later,
-            None,
-            &owner(&f),
-        ));
+        let error = message(plan_move_member(&f.ctx, &f.plan, &held, &later, None));
         if case != "queued" {
             let run = if matches!(case, "running" | "needs_me" | "review") {
                 "R2"
@@ -190,7 +175,7 @@ fn moving_a_held_member_updates_both_plans_and_stales_the_earlier_attempt() {
     let (later, later_member) = later_plan(&f);
 
     // When the owner moves the held member to the second Plan.
-    let moved = plan_move_member_from(&f.ctx, &f.plan, &held, &later, None, &owner(&f)).unwrap();
+    let moved = plan_move_member(&f.ctx, &f.plan, &held, &later, None).unwrap();
 
     // Then both Plans record the new membership and the task keeps its ID, hold and dependency.
     assert_eq!(moved.from_children, f.members);
@@ -239,40 +224,21 @@ fn refused_moves_write_nothing_and_an_interrupted_move_completes_once() {
         .unwrap();
     let (later, _) = later_plan(&f);
     let before = (f.plan(), f.ctx.store.get(&later).unwrap());
-    let to_later = |member: &str, entry: &OwnerEntry| {
-        plan_move_member_from(&f.ctx, &f.plan, member, &later, None, entry)
-    };
+    let to_later = |member: &str| plan_move_member(&f.ctx, &f.plan, member, &later, None);
 
-    // When the started member, an agent or PM author, a non-member or the same Plan is named.
-    let error = message(to_later(&started, &owner(&f)));
+    // When the started member, a non-member or the same Plan is named.
+    let error = message(to_later(&started));
     assert!(error.contains("R1") && error.contains("landed"), "{error}");
-    for (agent, pm) in [(true, false), (false, true)] {
-        let entry = OwnerEntry {
-            agent,
-            pm,
-            ..owner(&f)
-        };
-        let error = message(to_later(&held, &entry));
-        assert!(error.contains("owner-only"), "{error}");
-    }
-    let error = message(plan_move_member_from(
-        &f.ctx,
-        &later,
-        &held,
-        &f.plan,
-        None,
-        &owner(&f),
-    ));
+    let error = message(plan_move_member(&f.ctx, &later, &held, &f.plan, None));
     assert!(error.contains("is not a member of"), "{error}");
-    assert!(plan_move_member_from(&f.ctx, &f.plan, &held, &f.plan, None, &owner(&f)).is_err());
+    assert!(plan_move_member(&f.ctx, &f.plan, &held, &f.plan, None).is_err());
     let later_member = before.1.children[0].clone();
-    let error = message(plan_move_member_from(
+    let error = message(plan_move_member(
         &f.ctx,
         &later,
         &later_member,
         &f.plan,
         None,
-        &owner(&f),
     ));
     assert!(error.contains("last member"), "{error}");
 
@@ -291,10 +257,10 @@ fn refused_moves_write_nothing_and_an_interrupted_move_completes_once() {
         })
         .unwrap();
     // When the owner reruns it, then it completes once.
-    let moved = to_later(&held, &owner(&f)).unwrap();
+    let moved = to_later(&held).unwrap();
     assert!(!moved.from_children.contains(&held));
     assert_eq!(moved.to_children.last(), Some(&held));
-    assert!(to_later(&held, &owner(&f)).is_err());
+    assert!(to_later(&held).is_err());
     assert_eq!(moved_events(&f), 1);
     let plans = (f.plan(), f.ctx.store.get(&later).unwrap());
     assert_eq!(

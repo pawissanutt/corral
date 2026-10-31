@@ -10,6 +10,9 @@ impl Inbox<'_> {
     pub fn recipient_ended_ref<T: TaskRef + ?Sized>(&self, task: &T) -> Result<bool> {
         match &self.recipient {
             Recipient::Pm => Ok(false),
+            Recipient::Assistant { session } => {
+                Ok(self.store.get_assistant(session)?.ended.is_some())
+            }
             Recipient::Run { task: id, run } => {
                 let current = task.current_run_head()?;
                 if current.as_ref().is_some_and(|record| {

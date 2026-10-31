@@ -25,6 +25,7 @@ pub enum AgentRole {
     Planner,
     PlanReviewer,
     Pm,
+    Assistant,
 }
 
 impl AgentRole {
@@ -35,6 +36,7 @@ impl AgentRole {
             AgentRole::Planner => "planner",
             AgentRole::PlanReviewer => "plan_reviewer",
             AgentRole::Pm => "pm",
+            AgentRole::Assistant => "assistant",
         }
     }
 
@@ -87,6 +89,15 @@ pub struct AgentRunState {
     /// when it moved the task to Needs me. Worker runs keep theirs in `Run.blocked_excerpt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_hold: Option<String>,
+    /// Owner rewinds to a turn checkpoint and how far each got (T-575).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rewinds: Vec<super::RewindRecord>,
+    /// Recovery-critical references for billable auxiliary sessions, retained across resumes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub usage_sessions: Vec<super::UsageSession>,
+    /// Cumulative reservations and settled usage; never rewind with a session cursor.
+    #[serde(default)]
+    pub budget: super::BudgetLedger,
 }
 
 impl AgentRunState {
@@ -103,6 +114,9 @@ impl AgentRunState {
             todo: None,
             jobs: Vec::new(),
             question_hold: None,
+            rewinds: Vec::new(),
+            usage_sessions: Vec::new(),
+            budget: super::BudgetLedger::default(),
         }
     }
 
@@ -199,6 +213,10 @@ pub struct GenerationBound {
     pub start_time: String,
     pub request_id: String,
     pub at: Timestamp,
+    /// The herdr sequence epoch hello allocated: the host reports from `epoch << 20`, and corral
+    /// releases a lost generation at the end of that range. Absent before T-605.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_seq_epoch: Option<u64>,
 }
 
 /// A fence is permanent: a fenced generation is never unfenced.
@@ -223,6 +241,9 @@ pub struct RequestIdentity {
     pub review: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback: Option<String>,
+    /// Assistant only: the launcher-bound session `A-<n>`; every other role leaves it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant: Option<String>,
     pub session_id: String,
     pub generation: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -364,6 +385,7 @@ pub enum TurnClass {
     Completed,
     Cancelled,
     ProviderFailed,
+    BudgetExhausted,
     OwnerEngaged,
     AwaitingAnswer,
     WaitingExternal,
@@ -386,6 +408,11 @@ pub struct AgentTurn {
     pub class: Option<TurnClass>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_error: Option<String>,
+    /// Active selection at the start of this turn (legacy hosts omit it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

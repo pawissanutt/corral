@@ -27,6 +27,23 @@ never join `state_dir()` themselves, so T-253 can move these areas without editi
 `paths::store_id` is `st-` plus 16 hex digits of the SHA-256 of the canonical `.corral`
 directory. Envelopes name the store by this ID.
 
+## Usage attribution references (T-570)
+
+`AgentRunState.usage_sessions` is a serde-default, omitted-when-empty canonical list, shared
+by implementation, PM and planning containers. Each `UsageSession` records initiating
+`generation`, `kind` (`explore`, `oracle`, `summary`), `session_id`, `session_file`, and optional
+fallback `model`. Producers persist the reference before launching a billable request and
+retain it through resume/rewind. This is an accounting seam, not a shipped child launcher or
+an alternative authoritative transcript. There is no model-callable operation to register it.
+
+Use `paths::usage_session_file(store, container, request_key)` for auxiliary transcripts:
+`<container sessions>/auxiliary/<sha256(request_key)>.jsonl`. Open-container files are
+recovery-critical, not runtime caches. Future producers own admission/count bounds; the
+collector rejects references to absent generations and applies its existing per-file byte cap.
+`agent::usage::collect_state` combines all generation/auxiliary references with a common
+session/response identity map, and `collect_container` selects PM/planning records without
+adding their usage to implementation totals. Pricing provenance/gaps follow `UsageEntry`.
+
 ## Canonical records
 
 ### `Run.agent_host`: AgentRunState v1
@@ -89,6 +106,7 @@ containers too.
 | `reports` | AgentReport[] | ≤ 64 (`REPORTS_MAX`) | op-receipts |
 | `todo` | RunProgress? | PM-only canonical ledger; absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
 | `jobs` | JobRecord[] | worker only; ≤ 64 (`JOBS_MAX`), the oldest ended job evicted first, live jobs never | background-shell |
+| `rewinds` | RewindRecord[] | worker only; ≤ 32 (`REWINDS_MAX`), the oldest finished rewind evicted first, a pending one never | checkpoints-rewind |
 
 `JobRecord` holds `id`, the owning `generation`, `command` (≤ 4 KiB), `state`
 (`prepared`, `running`, `exited`, `reaped`, `lost`), the process-group leader `pid` and its kernel
@@ -223,6 +241,28 @@ result and every invocation that never completed (at most 256, else scan limit `
 A recorded hook, or a pre/post hook in the lost generation's `hooks` snapshot settings that
 wraps the tool, makes that call `outcome_unknown`; unfinished hooks are listed
 `outcome_unknown`. Nothing is replayed.
+
+### `corral_checkpoint` session entry and RewindRecord (T-575)
+
+`corral_checkpoint` is a Pi custom entry the worker host appends to its bound session file after
+each turn-start and turn-end snapshot. Storage class: recovery-critical, in the container's
+session file, read by `corral agent rewind` (lines over 64 KiB are skipped, at most 4096 entries)
+and never written by corral. Fields: `id` (`g<generation>-t<turn>`), `phase` (`start` | `end`),
+`generation`, `turn`, and either `commit` (the snapshot), `head` (its parent), `ref` (its private
+`refs/worktree/` ref) and, on a start, `leaf` (the last session entry before the turn), or
+`error` (≤ 512 characters). The timeline drops the checkpoints a launched rewind abandoned.
+
+`RewindRecord` (`AgentRunState.rewinds`) holds `id` (`rw-<n>`), `checkpoint`, its `commit`,
+`head` and `leaf`, `from_generation`, `stage` (`prepared`, `fenced`, `saved`, `restoring`,
+`restored`, `launched`, `aborted`), the saved `before` commit and `before_ref`, the
+`generation` first opened on its cursor (recorded at stage `restored`, before its host can run),
+`applied` (when a host of that generation or later was seen bound on a branch from
+`leaf`), `restored` (≤ 64 paths, `REWIND_PATHS_MAX`) with `restored_count`, `kept`, `detail`,
+`at` and `updated`. Storage class: canonical. Writer: checkpoints-rewind. At most one rewind is
+unfinished per container. Launch gives its `leaf` as bootstrap `resume_leaf` at stage `restored`,
+and for the last `launched` rewind, until `applied` is set: every relaunch after the first checks the bound
+session for a `corral_host_bound` entry of the launched generation or later that descends from
+`leaf`, and records `applied` when it finds one.
 
 ### AgentTurn, TurnOrigin, TurnClass
 
@@ -359,6 +399,26 @@ authority. Storage class: canonical (state journal). Owner: op-receipts
   on discard, retry, drop or landing. A review child closes on its verdict (`review_closed`),
   `Superseded` or no longer being last (`review_superseded`), any other outcome or
   `process_lost` (`review_interrupted`), or a closed parent (`run_ended`).
+
+## Model budget reservations (catalog 7)
+
+`AgentRunState.budget` is canonical recovery-critical container data, beside receipts and auxiliary
+references, not a Pi-session custom entry or runtime cache. Its `requests` retain request UUID,
+generation, cumulative token/nanodollar charge, pricing availability, unbounded-transport flag and optional settled response
+identity. Absence of a response means reserved/uncertain. Recovery, transcript copying, cursor rewind
+and generation replacement never delete these entries. Old records default to an empty ledger; bound
+pre-catalog-7 history is explicitly a usage gap and cannot silently acquire a hard cap.
+
+Host-only `event` payloads with `kind=budget` support `reserve`, `settle` and `state`, using lifecycle
+request IDs. Existing authentication, liveness, fencing, atomic container transactions and receipt
+replay apply; there is no model-callable amendment operation. The current generation's immutable
+`budget` settings determine limits on every admission. `reserve` commits either an admission or a
+refusal; parallel main/summary/explore/oracle requests share the same balance. `settle` reconciles one
+request once and deduplicates known provider/model/response identities across generations. Unknown
+spend keeps its reservation. USD rates are captured in the request charge rather than repriced on
+resume. A ledger with unpriced history cannot claim USD enforcement; a new unbounded request or
+uncertain unbounded history cannot claim either hard cap. Explicit resume resolves new
+limits without resetting charges or reservations. Ledger/receipt capacity failures fail closed.
 
 ## Events (slim)
 
