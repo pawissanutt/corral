@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -82,6 +82,27 @@ pub(super) fn read(path: &Path) -> Result<Option<String>> {
     String::from_utf8(bytes)
         .with_context(|| format!("memory {} is not UTF-8", path.display()))
         .map(Some)
+}
+
+/// Use an exclusively created regular file in the destination directory. Never
+/// open the predictable `<entry>.md.tmp` path: it may be a symlink, hard link or
+/// FIFO planted by another writer. NamedTempFile cleans up on every error path;
+/// persist atomically replaces the destination without following its contents.
+pub(super) fn atomic_write(path: &Path, content: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .context("memory entry requires a parent directory")?;
+    let mut temp = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "exclusively creating temporary memory in {}",
+            parent.display()
+        )
+    })?;
+    temp.write_all(content.as_bytes())
+        .with_context(|| format!("writing temporary memory for {}", path.display()))?;
+    temp.persist(path)
+        .with_context(|| format!("atomically replacing memory {}", path.display()))?;
+    Ok(())
 }
 
 pub(super) fn check_hash(path: &Path, expected: Option<&str>) -> Result<()> {

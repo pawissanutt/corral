@@ -227,7 +227,7 @@ impl Store {
         let _lock = self.lock("memory")?;
         let path = io::entry_path(self, selector, true)?;
         io::check_hash(&path, expected_hash)?;
-        crate::store::atomic_write(&path, &text)?;
+        io::atomic_write(&path, &text)?;
         Ok(MemoryItem {
             metadata: entry.metadata,
             hash: hash(&text),
