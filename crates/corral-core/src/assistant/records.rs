@@ -31,6 +31,7 @@ pub(super) fn session(store: &Store, id: &str) -> Result<AssistantSession> {
 pub(super) fn sessions(store: &Store) -> Result<Vec<AssistantSession>> {
     let mut sessions = Vec::new();
     for row in store.record_rows(SESSIONS)? {
+        validate_id(&row.key)?;
         let record: SessionRecord =
             serde_json::from_value(row.doc).context("decoding assistant record")?;
         if record.session.version != ASSISTANT_VERSION || record.session.id != row.key {
@@ -114,6 +115,7 @@ pub(super) fn materialize_session(store: &Store, id: &str) -> Result<std::path::
     let path = dir.join(format!("{id}.md"));
     let yaml = serde_yaml_ng::to_string(&session).context("rendering assistant metadata")?;
     crate::store::atomic_write(&path, &format!("---\n{yaml}---\n{}", session.body))?;
+    read_only(&path)?;
     Ok(path)
 }
 
@@ -129,7 +131,16 @@ pub(super) fn materialize_container(store: &Store, id: &str) -> Result<std::path
         &path,
         &serde_json::to_string_pretty(&container).context("rendering assistant container")?,
     )?;
+    read_only(&path)?;
     Ok(path)
+}
+
+fn read_only(path: &std::path::Path) -> Result<()> {
+    let mut permissions = std::fs::metadata(path)
+        .context("reading assistant readback permissions")?
+        .permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(path, permissions).context("protecting assistant readback")
 }
 
 impl Store {
