@@ -265,7 +265,7 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
     let (store, plan) = fixture(&root, &reviewer, &out);
     let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
     assert_eq!(attempt["gate"]["result"], "pass", "{attempt}");
-    let captured = plan_capture::capture_time(&attempt, jiff::Timestamp::now());
+    let captured = plan_capture::capture_time(&attempt);
     let attempt = attempt["id"].as_str().unwrap().to_owned();
     observe(&root, &plan, &attempt, captured, "C1", "pass");
     observe(&root, &plan, &attempt, captured, "C2", "pass together");

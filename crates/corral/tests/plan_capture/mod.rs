@@ -3,9 +3,8 @@
 use jiff::Timestamp;
 use serde_json::Value;
 
-/// Clamp the fixture's wall clock to the gate boundary. Clocks in different processes
-/// can step backwards between verification and observation.
-pub fn capture_time(attempt: &Value, now: Timestamp) -> Timestamp {
-    let gate: Timestamp = attempt["gate"]["at"].as_str().unwrap().parse().unwrap();
-    now.max(gate)
+/// Use the persisted boundary, never a cross-process wall-clock reading that can
+/// step either before the gate or into the validation process's future.
+pub fn capture_time(attempt: &Value) -> Timestamp {
+    attempt["gate"]["at"].as_str().unwrap().parse().unwrap()
 }

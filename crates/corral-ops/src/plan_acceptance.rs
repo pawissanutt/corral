@@ -335,8 +335,11 @@ pub fn plan_evidence(
             bail!("gate_incomplete");
         }
         let earliest = earliest(stored);
+        // The gate was already persisted before this process began. A backward host
+        // clock step must not put that known boundary in the validation clock's future.
         ensure!(
-            observation.captured >= earliest && observation.captured <= corral_core::clock::now(),
+            observation.captured >= earliest
+                && observation.captured <= corral_core::clock::now().max(earliest),
             "capture_outside_attempt"
         );
         let artifact_hashes = snapshots(ctx, task, stored, &observation.artifacts)?;
