@@ -529,8 +529,8 @@ fn terminal_history(status: Status) {
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().runs.len(), 2);
     // Model resources left behind by a previous process/version, without changing ownership records.
     fx.restore_inventory(&inventory);
-    corral_ops::move_task(&fx.ctx, &fx.id, status, true).unwrap();
     fx.reset_calls();
+    corral_ops::move_task(&fx.ctx, &fx.id, status, true).unwrap();
     fx.sync();
     let current = fx.run();
     for pane in &owned {
