@@ -1,7 +1,7 @@
 //! Authorization and explanations for the existing queued dispatch drain.
 use anyhow::{Context, Result, bail};
 use corral_core::{
-    DispatchPlan, ProfileChoice, RetryPlan, RunOutcome, Status, Store, Task, TaskHead, TaskRef,
+    DispatchPlan, ProfileChoice, RetryPlan, RunOutcome, Status, Store, Task, TaskRef,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -246,39 +246,8 @@ pub(crate) fn pending_plan_reason(task: &Task) -> Result<Option<String>> {
     )))
 }
 
-pub(crate) fn check_snapshot(
-    ctx: &Ctx,
-    store: &Store,
-    expected: &Task,
-    current: &Task,
-) -> Result<()> {
-    corral_core::Park::require_unparked(current)?;
-    crate::tracker::check_action(current, "dispatch tracker")?;
-    if expected != current || ctx.store.config != store.config {
-        bail!(
-            "{} or dispatch configuration changed; retry with the current state",
-            current.id
-        );
-    }
-    Ok(())
-}
-
-/// [`check_snapshot`] of a head: any committed change of the task advances its revision.
-pub(crate) fn check_snapshot_head(
-    ctx: &Ctx,
-    store: &Store,
-    expected: &TaskHead,
-    current: &TaskHead,
-) -> Result<()> {
-    crate::tracker::check_action(current, "dispatch tracker")?;
-    if expected != current || ctx.store.config != store.config {
-        bail!(
-            "{} or dispatch configuration changed; retry with the current state",
-            current.id
-        );
-    }
-    Ok(())
-}
+mod snapshot;
+pub(crate) use snapshot::{check_snapshot, check_snapshot_head};
 
 pub(crate) fn resolve_plan<T: corral_core::TaskRef + ?Sized>(
     ctx: &Ctx,

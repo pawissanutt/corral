@@ -18,8 +18,19 @@ fn push(fx: &mut Fx, extra: &[&str]) {
 fn isolated_single_question_gets_one_raw_push_and_two_attention_levels() {
     // Given push enabled, a live PM and one non-blocking question.
     let mut fx = Fx::new();
+    fx.ctx.store.fixture_pin_now(crate::fixture::at(0)).unwrap();
     push(&mut fx, &[]);
     let task = fx.questions(1);
+    // Imported fixture facts alone do not publish an ask. Exercise the real durable
+    // post-commit producer (and replay), just as the native ask operation does.
+    assert_eq!(
+        corral_ops::questions::reconcile_events(&fx.ctx.store, &task.id).unwrap(),
+        1
+    );
+    assert_eq!(
+        corral_ops::questions::reconcile_events(&fx.ctx.store, &task.id).unwrap(),
+        0
+    );
     // When passes run through the re-wake and owner bounds.
     for seconds in [0, 900, 1800, 2700] {
         sync(&fx, seconds);
