@@ -4,6 +4,7 @@ use super::action_budget_fixture::{Kind, Variant, build, settle};
 
 #[test]
 fn start_attempt_width_explains_worker_and_plan_scope_byte_drift() {
+    let mut failures = Vec::new();
     for (kind, expected) in [(Kind::Worker, 35), (Kind::AcceptPlanScopes, 63)] {
         let mut samples = Vec::new();
         for nonce in ["start-fixture-000", "start-fixture-0000"] {
@@ -12,12 +13,20 @@ fn start_attempt_width_explains_worker_and_plan_scope_byte_drift() {
             crate::operating::pin_start_attempt(Some(nonce));
             let sample = measure(&bench, kind);
             assert!(sample.failures.is_empty(), "{:?}", sample.failures);
+            println!(
+                "NONCE INPUTS {kind:?} {nonce}: {}",
+                serde_json::to_value(&sample).unwrap()["inputs"]
+            );
             samples.push(sample);
         }
         let [short, long] = samples.try_into().unwrap();
         let key = "decoded_doc_bytes.unattributed";
         let difference = long.cells[key] - short.cells[key];
-        assert_eq!(difference, expected, "{kind:?}: one nonce byte");
+        if difference != expected {
+            failures.push(format!(
+                "{kind:?}: one nonce byte: actual {difference}, expected {expected}"
+            ));
+        }
         for (cell, value) in unattributed(&short.cells) {
             if cell != key {
                 assert_eq!(Some(value), long.cells.get(cell), "{kind:?}: {cell}");
@@ -27,4 +36,5 @@ fn start_attempt_width_explains_worker_and_plan_scope_byte_drift() {
             "{kind:?}: one action.attempt nonce byte adds {difference} unattributed decoded bytes; other cells unchanged"
         );
     }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
 }
