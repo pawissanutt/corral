@@ -56,6 +56,17 @@ fn native_probe_and_record_match_full_with_fixed_work_and_one_loss_event() {
             };
             let mut expected = state;
             assert!(apply(&mut expected, &probe));
+            if case == "lost" {
+                // An actual backend event-publication fault must roll back the health edit,
+                // not leave lost state without its recovery evidence. Do this before metering.
+                let saved = store.get(&task.id).unwrap();
+                let seq = store.view().unwrap().seq();
+                store.fixture_break_events().unwrap();
+                assert!(record(&store, &container, &probe).is_err());
+                store.fixture_restore_events().unwrap();
+                assert_eq!(store.get(&task.id).unwrap(), saved);
+                assert_eq!(store.view().unwrap().seq(), seq);
+            }
             let before = work::snapshot();
             let hot = HotScope::enter();
             assert_eq!(

@@ -278,6 +278,24 @@ fn apply(state: &mut AgentRunState, probe: &Probe) -> bool {
 /// Persists a probe: a loss turns the still-healthy current generation `lost` and logs
 /// `agent_lost` once; a healthy answer advances the saved event sequence. True when it wrote.
 pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<bool> {
+    let log_lost = || -> Result<()> {
+        if let Probe::Lost {
+            generation,
+            reason,
+            detail,
+        } = probe
+        {
+            store.log_event(
+                container.task(),
+                "agent_lost",
+                json!({
+                    "container": container.key(), "generation": generation,
+                    "reason": reason.as_str(), "detail": detail,
+                }),
+            )?;
+        }
+        Ok(())
+    };
     let changed = match (container.task(), container) {
         (Some(id), _) => store
             .try_update_head(id, |task| match probe {
@@ -294,6 +312,7 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
                         host.binding.health = HostHealth::Lost;
                         Ok(())
                     })?;
+                    log_lost()?;
                     Ok(true)
                 }
                 Probe::Healthy { generation, seq } => {
@@ -310,30 +329,24 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
                 Probe::Busy | Probe::Skip => Ok(false),
             })?
             .is_some(),
-        (None, ContainerRef::Assistant { session }) => store
-            .update_assistant_container(session, |assistant| {
-                Ok(apply(&mut assistant.state, probe))
-            })?,
-        (None, _) => pm_state::update(store, |pm| {
-            let changed = pm.as_mut().is_some_and(|pm| apply(&mut pm.state, probe));
-            Ok((changed, changed))
+        (None, ContainerRef::Assistant { session }) => store.records_transaction(|| {
+            store.update_assistant_container(session, |assistant| {
+                let changed = apply(&mut assistant.state, probe);
+                if changed {
+                    log_lost()?;
+                }
+                Ok(changed)
+            })
+        })?,
+        (None, _) => store.records_transaction(|| {
+            pm_state::update(store, |pm| {
+                let changed = pm.as_mut().is_some_and(|pm| apply(&mut pm.state, probe));
+                if changed {
+                    log_lost()?;
+                }
+                Ok((changed, changed))
+            })
         })?,
     };
-    if changed
-        && let Probe::Lost {
-            generation,
-            reason,
-            detail,
-        } = probe
-    {
-        store.log_event(
-            container.task(),
-            "agent_lost",
-            json!({
-                "container": container.key(), "generation": generation,
-                "reason": reason.as_str(), "detail": detail,
-            }),
-        )?;
-    }
     Ok(changed)
 }

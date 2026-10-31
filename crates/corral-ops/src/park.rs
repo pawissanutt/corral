@@ -63,7 +63,7 @@ fn park_as(
         ready_at: None,
     };
     park.validate()?;
-    let (saved, ()) = ctx.store.dispatch_update(id, |_, task| {
+    ctx.store.dispatch_update(id, |_, task| {
         ensure!(
             Park::supports(task.status),
             "{} is {}; cannot park",
@@ -82,10 +82,10 @@ fn park_as(
         )?;
         park.revision = previous.checked_add(1).context("park revision exhausted")?;
         task.park = Some(park.clone());
+        ctx.store
+            .log_event(Some(&task.id), "parked", json!({"park": park, "by": by}))?;
         Ok(())
     })?;
-    ctx.store
-        .log_event(Some(&saved.id), "parked", json!({"park": park, "by": by}))?;
     Ok(park)
 }
 
@@ -100,7 +100,7 @@ pub fn unpark(ctx: &Ctx, id: &str, expected_revision: u64) -> Result<()> {
 }
 
 fn unpark_as(ctx: &Ctx, id: &str, expected_revision: u64, by: Responsible) -> Result<()> {
-    let (saved, ()) = ctx.store.dispatch_update(id, |_, task| {
+    ctx.store.dispatch_update(id, |_, task| {
         let park = task.park.as_ref().context("task is not parked")?;
         ensure!(
             park.revision == expected_revision,
@@ -112,13 +112,13 @@ fn unpark_as(ctx: &Ctx, id: &str, expected_revision: u64, by: Responsible) -> Re
             "owner_park: PM cannot unpark an owner park"
         );
         task.park = None;
+        ctx.store.log_event(
+            Some(&task.id),
+            "unparked",
+            json!({"by": by, "revision": expected_revision}),
+        )?;
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&saved.id),
-        "unparked",
-        json!({"by": by, "revision": expected_revision}),
-    )?;
     Ok(())
 }
 

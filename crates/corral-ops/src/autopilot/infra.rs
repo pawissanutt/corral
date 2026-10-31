@@ -136,21 +136,20 @@ impl Pilot<'_> {
             }
             Err(error) => Err(error),
             Ok(()) => {
-                let written = self.ctx.store.try_update_head(self.id(), |task| {
+                self.ctx.store.try_update_head(self.id(), |task| {
                     if task.status != Status::Review || task.infra_wait.as_ref() != Some(wait) {
                         return Ok(false);
                     }
                     task.infra_wait = None;
+                    if wait.held_at.is_some() {
+                        self.ctx.store.log_event(
+                            Some(self.id()), "infra_hold_cleared",
+                            json!({"run": self.run.id, "first_seen": wait.first_seen,
+                                "duration_secs": self.now.duration_since(wait.first_seen).as_secs()}),
+                        )?;
+                    }
                     Ok(true)
                 })?;
-                if written.is_some() && wait.held_at.is_some() {
-                    self.ctx.store.log_event(
-                        Some(self.id()),
-                        "infra_hold_cleared",
-                        json!({"run": self.run.id, "first_seen": wait.first_seen,
-                            "duration_secs": self.now.duration_since(wait.first_seen).as_secs()}),
-                    )?;
-                }
                 Ok(None)
             }
         }

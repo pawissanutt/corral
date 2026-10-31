@@ -102,32 +102,29 @@ fn relaunch(
     review: &ReviewRecord,
     now: Timestamp,
 ) -> Result<Option<Change>> {
-    let saved = ctx.store.try_update_head(id, |current| {
-        if current.status != Status::Review {
-            return Ok(false);
-        }
-        let Some(_parent) = current
-            .current_run_mut()
-            .filter(|r| r.id == run.id && r.review.as_ref() == Some(review))
-        else {
-            return Ok(false);
-        };
-        super::supersede_review_head(current, now)?;
-        Ok(true)
-    })?;
+    let notes = notes_of(ctx, id, &corral_core::RunHead::of(run)?)?;
+    let saved =
+        ctx.store.try_update_head(id, |current| {
+            if current.status != Status::Review {
+                return Ok(false);
+            }
+            let Some(_parent) = current
+                .current_run_mut()
+                .filter(|r| r.id == run.id && r.review.as_ref() == Some(review))
+            else {
+                return Ok(false);
+            };
+            super::supersede_review_head(current, now)?;
+            ctx.store.log_event(Some(id), "review_relaunched", json!({
+            "run": run.id, "reviewer": review.reviewer,
+            "reason": "main moved during review; the candidate is unchanged", "notes": notes,
+        }))?;
+            Ok(true)
+        })?;
     let Some(saved) = saved else {
         return Ok(None);
     };
     cleanup_head(ctx, &saved, Cleanup::Round);
-    ctx.store.log_event(
-        Some(id),
-        "review_relaunched",
-        json!({
-            "run": run.id, "reviewer": review.reviewer,
-            "reason": "main moved during review; the candidate is unchanged",
-            "notes": super::review_notes_path(ctx, id, &run.id)?,
-        }),
-    )?;
     Ok(None)
 }
 
