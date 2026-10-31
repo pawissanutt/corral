@@ -98,6 +98,7 @@ pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<Stri
 /// recorded, and only Done or Dropped owners are read and cleaned, with one inventory for the
 /// whole sweep.
 pub(crate) fn sweep_inventory(ctx: &Ctx, board: &corral_core::Board, live: &[PaneInfo]) {
+    reap::reap_current_reviews(ctx);
     let result = leaked_owners(ctx, board, live).and_then(|terminal| {
         let heads = terminal
             .iter()

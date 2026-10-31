@@ -40,6 +40,10 @@ struct Resident(Child);
 
 impl Resident {
     fn start(dir: &Path, name: &str) -> Resident {
+        Self::with_marker(dir, name, None)
+    }
+
+    fn with_marker(dir: &Path, name: &str, marker: Option<&str>) -> Resident {
         let mut child = Command::new("python3")
             .args([
                 "-c",
@@ -47,6 +51,9 @@ impl Resident {
             ])
             .arg0(name)
             .current_dir(dir)
+            .env_remove("HERDR_PANE_ID")
+            .env_remove("CORRAL_PROCESS_OWNER")
+            .envs(marker.map(|marker| ("CORRAL_PROCESS_OWNER", marker)))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .spawn()
@@ -172,6 +179,7 @@ fn fixture(children: usize, terminal: usize) -> Fx {
         ],
     );
     let mut subject = run("R1", &worktree, "coder", true);
+    subject["branch"] = json!("corral/subject");
     subject["review_runs"] = (0..children)
         .map(|n| {
             let mut child = run(
@@ -264,7 +272,10 @@ fn live_and_finished_pane_harnesses_are_protected_without_reading_finished_tasks
 #[test]
 fn an_unprotected_resident_is_stopped_and_the_worktree_removed() {
     let fx = fixture(1, 1);
-    let mut stray = Resident::start(&fx.worktree, "stray-tool");
+    let receipt = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1").unwrap();
+    crate::launch_exit::arm(&fx.ctx, "true", &receipt).unwrap();
+    let marker = std::fs::read_to_string(receipt.with_extension("owner")).unwrap();
+    let mut stray = Resident::with_marker(&fx.worktree, "stray-tool", Some(&marker));
     let head = fx.ctx.store.head(&fx.id).unwrap();
     remove(
         &fx.ctx,
@@ -276,6 +287,18 @@ fn an_unprotected_resident_is_stopped_and_the_worktree_removed() {
     .unwrap();
     assert!(!stray.alive());
     assert!(!fx.worktree.exists());
+}
+
+#[test]
+fn an_unmarked_resident_remains_protected() {
+    let fx = fixture(1, 1);
+    let mut stray = Resident::start(&fx.worktree, "stray-tool");
+    let (error, _) = attempt(&fx);
+    assert!(
+        error.contains(&format!("protected process {}", stray.0.id())),
+        "{error}"
+    );
+    assert!(stray.alive() && fx.worktree.exists());
 }
 
 #[test]
