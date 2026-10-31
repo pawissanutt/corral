@@ -23,9 +23,10 @@ needs no plan.
   Ask the owner the question in your reply as well. A waiting step blocks only itself: keep
   working on every step that nothing waits on.
 
-Each turn you receive a `[corral request ...]` summary of the current plan: its identity and
-revision, the outstanding steps, their waits and the next action. It is the canonical ledger
-and replaces older `corral_todo` results in the transcript.
+Every model request carries a `[corral request ...]` summary of the current plan, updated as
+soon as a `corral_todo` call commits: its identity and revision, the outstanding steps, their
+waits and the next action. It is the canonical ledger and replaces older `corral_todo`
+results in the transcript.
 
 When a turn ends with actionable steps left, corral may start one `[corral continuation ...]`
 turn for that plan revision. A continuation is a reminder from corral. It is not an owner

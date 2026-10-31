@@ -1,7 +1,8 @@
 // PM and assistant request execution (T-679). Every model request carries a bounded summary of
-// the session's canonical plan, frozen at turn start and after compaction, so neither a resume
-// nor a compacted transcript loses the outstanding steps. Corral decides continuation when a
-// turn ends; this module only reads that decision, once per continuation key.
+// the session's canonical plan, built from the latest accepted ledger right before that request,
+// so neither a resume, a compacted transcript nor a todo update earlier in the same turn leaves
+// the model behind the widget. Corral decides continuation when a turn ends; this module only
+// reads that decision, once per continuation key.
 import type { ContextEvent, ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { z } from "zod";
 
@@ -127,19 +128,16 @@ function prefixed(message: ContextMessage, text: string): ContextMessage {
 }
 
 export class RequestContext {
-  private frozen: string | undefined;
   private readonly acted = new Set<string>();
   private readonly reported = new Set<string>();
   private ui: ExtensionUIContext | undefined;
 
   constructor(private readonly ledger: TodoLedger) {}
 
-  get summary(): string | undefined { return this.frozen; }
-
-  /** The current plan as the model sees it, rebuilt from the ledger at each turn and compaction. */
-  freeze(): void {
+  /** The current plan as the model sees it now: the ledger the widget renders. */
+  summary(): string | undefined {
     const summary = summarize(this.ledger.current, this.ledger.continued);
-    this.frozen = summary ? summaryText(summary) : undefined;
+    return summary ? summaryText(summary) : undefined;
   }
 
   extend(pi: ExtensionAPI): void {
@@ -147,12 +145,9 @@ export class RequestContext {
       this.ui = ctx.ui;
       // Startup and resume read the canonical ledger before the first model request.
       await this.ledger.restore().catch(() => false);
-      this.freeze();
     });
-    pi.on("before_agent_start", () => { this.freeze(); });
-    pi.on("session_compact", () => { this.freeze(); });
     pi.on("context", (event) => {
-      const text = this.frozen;
+      const text = this.summary();
       if (text === undefined) return undefined;
       let at = event.messages.length - 1;
       while (at >= 0 && !("role" in event.messages[at]! && event.messages[at]!.role === "user")) at--;

@@ -273,6 +273,8 @@ export class HostSession {
   private ledger: TodoLedger | undefined;
   /** PM and assistant with todo on: the request summary and continuation (T-679). */
   private request: RequestContext | undefined;
+  /** Continuation rechecks, kept off `calls` so lifecycle reports and budget records never wait on one. */
+  private continuations: Promise<void> = Promise.resolve();
   private closing = false;
 
   readonly provider: ProviderId;
@@ -823,7 +825,7 @@ export class HostSession {
           this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
         } else {
           this.stats.committed++;
-          if (payload.kind === "turn_ended" && receipt.state === "committed") this.turnRecorded(receipt.result);
+          if (payload.kind === "turn_ended" && receipt.state === "committed") this.turnRecorded(receipt.result, turn);
         }
         return;
       } catch (error) {
@@ -835,8 +837,8 @@ export class HostSession {
     this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
   }
 
-  /** Corral's request decision for an ended turn: a stop is shown, a due continuation queued. */
-  private turnRecorded(result: unknown): void {
+  /** Corral's request decision for ended turn `turn`: a stop is shown, a due continuation queued. */
+  private turnRecorded(result: unknown, turn: number): void {
     const stopped = this.request?.stopped(result);
     if (stopped) {
       this.options.events.emit("continuation_stopped", { reason: stopped });
@@ -844,41 +846,42 @@ export class HostSession {
         + "the plan still has open steps.");
     }
     const due = this.request?.due(result);
-    if (due) this.calls = this.calls.then(() => this.continueRequest(due));
+    if (due) this.continuations = this.continuations.then(() => this.continueRequest(due, turn));
   }
 
   /**
-   * Starts the continuation turn only while the pane is idle and the canonical plan is still the
-   * revision corral granted it for; anything newer, a failed recheck or a busy pane drops it.
+   * Starts the continuation that ended turn `granted` earned, only while that turn is still the
+   * latest, the pane is idle, the budget holds and the canonical plan is still the granted
+   * revision, each checked again after the ledger read: a turn that started (and perhaps was
+   * cancelled or failed) meanwhile voids it.
    */
-  private async continueRequest(due: DueContinuation): Promise<void> {
+  private async continueRequest(due: DueContinuation, granted: number): Promise<void> {
     const key = due.continuation.key;
     const skip = (reason: string) => { this.options.events.emit("continuation_skipped", { key, reason }); };
-    if (this.closing || !this.ledger) return skip("closing");
-    if (this.open) return skip("busy");
-    if (this.budget.state().stopped) return skip("budget_exhausted");
+    const ledger = this.ledger;
+    const blocked = () => this.closing ? "closing" : this.open ? "busy"
+      : this.budget.state().stopped ? "budget_exhausted" : this.turn !== granted ? "superseded_by_turn" : undefined;
+    const before = ledger ? blocked() : "closing";
+    if (before || !ledger) return skip(before ?? "closing");
     try {
-      await this.ledger.restore();
+      await ledger.restore();
     } catch {
       return skip("recheck_failed");
     }
-    const current = this.ledger.current;
+    const after = blocked();
+    if (after) return skip(after);
+    const current = ledger.current;
     if (current?.plan !== due.plan || current.revision !== due.revision) return skip("superseded");
-    if (this.open || this.closing) return skip("busy");
     this.options.events.emit("continuation", { key, attempt: due.continuation.attempt, plan: due.plan,
       revision: due.revision });
-    await new Promise<void>((resolve) => {
-      this.session.prompt(continuationText(due), {
-        source: "rpc",
-        preflightResult: (disposition) => {
-          if (disposition === "started") this.nextTurnOrigin = { kind: "continuation", idempotency_key: key };
-          else skip(disposition);
-          resolve();
-        },
-      }).then(() => resolve(), (error: unknown) => {
-        skip(`refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 128)}`);
-        resolve();
-      });
+    this.session.prompt(continuationText(due), {
+      source: "rpc",
+      preflightResult: (disposition) => {
+        if (disposition === "started") this.nextTurnOrigin = { kind: "continuation", idempotency_key: key };
+        else skip(disposition);
+      },
+    }).catch((error: unknown) => {
+      skip(`refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 128)}`);
     });
   }
 
@@ -889,6 +892,11 @@ export class HostSession {
 
   drained(): Promise<unknown> {
     return this.calls;
+  }
+
+  /** Every continuation recheck queued so far has decided (and, if due, submitted its prompt). */
+  continued(): Promise<void> {
+    return this.continuations;
   }
 
   async close(): Promise<void> {
@@ -1005,6 +1013,8 @@ export class HostSession {
     return {
       role: this.options.identity.role,
       todo: this.loadout.includes("corral_todo"),
+      // The plan the widget renders and the model summary names: one host ledger.
+      ledger: this.ledger?.current ? { plan: this.ledger.current.plan ?? null, revision: this.ledger.current.revision } : null,
       capabilities: this.options.capabilities ?? null,
       mcp: this.mcp?.state() ?? null,
       generation: this.options.identity.generation,
