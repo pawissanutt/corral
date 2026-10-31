@@ -171,6 +171,23 @@ impl App {
                     .map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "gallery");
             }
+            Action::OpenAssistants => {
+                let v = crate::assistants::AssistantsView::new(&self.ctx)
+                    .map(|v| Box::new(v) as Box<dyn View>);
+                self.push(v, "assistants");
+            }
+            Action::OpenAssistant(id) => match crate::assistants::open_task(&self.ctx, &id) {
+                Ok(pane) => self.toast(Toast::new(
+                    Tone::Info,
+                    "Assistant opened",
+                    format!("asst · {id} · {pane}"),
+                )),
+                Err(e) => self.toast(Toast::new(
+                    Tone::Bad,
+                    "Could not open assistant",
+                    corral_herdr::friendly_error(&e),
+                )),
+            },
             Action::OpenHistory => {
                 let v = HistoryView::new(&self.ctx).map(|v| Box::new(v) as Box<dyn View>);
                 self.push(v, "history");

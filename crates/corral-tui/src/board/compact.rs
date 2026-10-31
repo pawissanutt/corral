@@ -107,7 +107,12 @@ impl Compact<'_> {
                 Span::styled(progress, Style::new().fg(theme::CYAN)),
             ]);
         }
-        let star = if self.pinned { "★ " } else { "" };
+        let star = match (self.pinned, t.cowork.is_some()) {
+            (true, true) => "★ asst ",
+            (false, true) => "asst ",
+            (true, false) => "★ ",
+            (false, false) => "",
+        };
         let first_min = if self.cfg.fields_for(t.status).first() == Some(&CardField::Profile) {
             self.first_field_min_width().min(width.saturating_sub(4))
         } else {
