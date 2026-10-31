@@ -71,11 +71,13 @@ fn decision(id: &str, deadline: Option<i64>, answered: bool) -> Value {
 /// Open waits and decisions with deadlines across the sampled window, behind `finals` final
 /// waits and answered decisions.
 fn store(root: &std::path::Path, finals: usize, normalized: bool) -> (Ctx, String) {
+    corral_core::clock::pin_thread(Some(at(0)));
     let ctx = Ctx {
         store: Store::init(root).unwrap(),
         herdr: corral_herdr::Herdr::with_bin(root.join("no-herdr"), None),
         resource_probe: crate::resources::FixedResourceProbe::arc(),
     };
+    ctx.store.fixture_pin_now(at(0)).unwrap();
     let task = ctx
         .store
         .create("Waits", None, Status::Running, "")

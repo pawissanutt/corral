@@ -363,6 +363,7 @@ fn owner_change_reads_only_its_approval_when_unrelated_history_grows_tenfold() {
         let (_dir, base) = store();
         let backend = SqliteBackend::open(base.dir(), SqliteOptions::default()).unwrap();
         let store = base.with_backend(Box::new(backend.handle().unwrap()));
+        store.fixture_pin_now(at(0)).unwrap();
         let idea = store
             .create_initialized(
                 "Owner idea",

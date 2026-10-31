@@ -1,4 +1,5 @@
-//! The pre-T-591 full-task done algorithm, retained as a differential oracle.
+//! The full-task done algorithm, retained as a differential oracle.
+//! Includes incoming-main 38ad5f53's terminal agent-state publication.
 //! Artifact publication helpers are shared; the legacy reads and final full-task update are not.
 use crate::Ctx;
 use anyhow::{Context, Result, bail};
@@ -94,6 +95,7 @@ pub(super) fn legacy(ctx: &Ctx, id: &str, summary: &str, result: Option<&str>) -
             r.completion.audit = Some(audit.clone());
             r.summary = Some(summary.to_string());
             r.ended = Some(corral_core::clock::now());
+            r.agent_state = Some("done".into());
             r.outcome = Some(RunOutcome::Done);
             crate::usage::collect(r, &ctx.store);
         }
@@ -122,6 +124,35 @@ fn refuse(task: &Task, run: &str) -> Result<()> {
         run: run.into(),
     };
     crate::agent::effects::refuse_pending(task, &container, "open_questions")
+}
+
+/// Diagnostic only: the oracle still requires exact full-document equality.
+fn differing_fields(a: &serde_json::Value, b: &serde_json::Value, path: &str) -> Vec<String> {
+    if a == b {
+        return vec![];
+    }
+    match (a, b) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) => a
+            .keys()
+            .chain(b.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .flat_map(|key| {
+                differing_fields(
+                    a.get(key).unwrap_or(&serde_json::Value::Null),
+                    b.get(key).unwrap_or(&serde_json::Value::Null),
+                    &format!("{path}.{key}"),
+                )
+            })
+            .collect(),
+        (serde_json::Value::Array(a), serde_json::Value::Array(b)) if a.len() == b.len() => a
+            .iter()
+            .zip(b)
+            .enumerate()
+            .flat_map(|(i, (a, b))| differing_fields(a, b, &format!("{path}[{i}]")))
+            .collect(),
+        _ => vec![format!("{path}: actual={a}, expected={b}")],
+    }
 }
 
 #[test]
@@ -175,10 +206,12 @@ fn done_matches_the_legacy_full_task_transition() {
                     .map_err(|e| format!("{e:#}"));
                 assert_eq!(actual, expected);
                 let actual_task = fx.ctx.store.get(&id).unwrap();
-                assert_eq!(
-                    serde_json::to_value(actual_task).unwrap(),
-                    serde_json::to_value(expected_task).unwrap(),
-                    "x{n} stale={stale} result={result:?}"
+                let actual_doc = serde_json::to_value(actual_task).unwrap();
+                let expected_doc = serde_json::to_value(expected_task).unwrap();
+                assert!(
+                    actual_doc == expected_doc,
+                    "x{n} stale={stale} result={result:?}: {}",
+                    differing_fields(&actual_doc, &expected_doc, "task").join(", ")
                 );
             }
         }
