@@ -32,6 +32,38 @@ impl SqliteBackend {
         Ok(())
     }
 
+    /// A real record-publication failure visible to independently opened fixture processes.
+    /// Triggers affect only the named row, never reads; production has no routing/fault mode.
+    pub(crate) fn fixture_block_record(&self, area: &str, key: &str, blocked: bool) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let tag = format!("{:x}", Sha256::digest(serde_json::to_vec(&(area, key))?));
+        let mut conn = self.writer();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .context("begin fixture record publication fault")?;
+        let quoted_area: String = tx
+            .query_row("SELECT quote(?1)", params![area], |row| row.get(0))
+            .context("quote fixture record area")?;
+        let quoted_key: String = tx
+            .query_row("SELECT quote(?1)", params![key], |row| row.get(0))
+            .context("quote fixture record key")?;
+        for event in ["INSERT", "UPDATE"] {
+            let name = format!("fixture_record_fault_{tag}_{event}");
+            tx.execute_batch(&format!("DROP TRIGGER IF EXISTS {name}"))
+                .context("restore fixture record publication")?;
+            if blocked {
+                tx.execute_batch(&format!(
+                    "CREATE TRIGGER {name} BEFORE {event} ON records
+                    WHEN NEW.area={quoted_area} AND NEW.key={quoted_key}
+                    BEGIN SELECT RAISE(ABORT, 'fixture_record_publication_blocked'); END"
+                ))
+                .context("block exact fixture record publication")?;
+            }
+        }
+        tx.commit()
+            .context("commit fixture record publication fault")
+    }
+
     pub(crate) fn fixture_break_events(&self) -> Result<()> {
         let mut pending = self
             .fixture_event_input

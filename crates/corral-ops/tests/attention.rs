@@ -758,11 +758,13 @@ fn hot_board_reads_ignore_event_git_and_settled_history_growth() {
     let ctx = Ctx::from_store(store.clone());
     let grow_history = |tasks: std::ops::Range<u32>, messages: std::ops::Range<u64>| {
         for index in messages {
-            std::fs::write(
-                inbox.message_path(index),
-                b"history is deliberately not decodable",
-            )
-            .unwrap();
+            inbox
+                .save_record(
+                    "messages",
+                    &format!("{index:020}"),
+                    &json!("history is deliberately not decodable"),
+                )
+                .unwrap();
         }
         for index in tasks {
             let mut done = task.clone();
@@ -789,9 +791,7 @@ fn hot_board_reads_ignore_event_git_and_settled_history_growth() {
         .find(|row| row.task == task.id)
         .unwrap()
         .clone();
-    let event_path = ctx.store.dir().join("events.jsonl");
-    std::fs::remove_file(&event_path).unwrap();
-    std::fs::create_dir(&event_path).unwrap();
+    ctx.store.fixture_break_events().unwrap();
     // Growth occurs before warm counting; task-list parsing itself remains the Store's responsibility.
     // Historical inbox files are not reachable from the retained header.
     grow_history(101..110, 200..1100);
