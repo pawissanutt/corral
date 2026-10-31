@@ -537,7 +537,17 @@ fn reconcile(
     );
     // A parked worker is deliberately idle, not blocked by its foreground launcher.
     // Do not suppress a slot_wait alone: expired/withdrawn waits must expose stuck work again.
-    let stuck = if run.parked_on(&task.id).is_empty()
+    let parked = facts.owner_task == task.id
+        && facts.parked_on_dependencies()
+        && !run
+            .gate
+            .as_ref()
+            .is_some_and(corral_core::GateRecord::holds_slot)
+        && !run
+            .review
+            .as_ref()
+            .is_some_and(corral_core::ReviewRecord::holds_slot);
+    let stuck = if !parked
         && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
     {
         match ctx
