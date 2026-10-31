@@ -250,6 +250,8 @@ fn progress_inner(
             revision,
             spec_revision: input.spec_revision.clone(),
             phases: input.phases.clone(),
+            plan: None,
+            waits: Vec::new(),
         });
         run.checkpoint_required = true;
         if let Some(origin) = origin {

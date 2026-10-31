@@ -82,6 +82,9 @@ pub struct AgentRunState {
     /// PM's own progress; workers use the existing Run.progress instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub todo: Option<crate::RunProgress>,
+    /// PM and assistant: the request lifecycle around `todo` (T-679).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todo_requests: Option<super::request::RequestLedger>,
     /// Worker background jobs: durable process identity and monitor subscriptions (T-565).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jobs: Vec<super::JobRecord>,
@@ -112,6 +115,7 @@ impl AgentRunState {
             wakes: Vec::new(),
             reports: Vec::new(),
             todo: None,
+            todo_requests: None,
             jobs: Vec::new(),
             question_hold: None,
             rewinds: Vec::new(),
@@ -352,6 +356,8 @@ pub enum TurnOriginKind {
     Bridge,
     OwnerTerminal,
     Unknown,
+    /// A PM or assistant host continuing its plan on a due continuation receipt (T-679).
+    Continuation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

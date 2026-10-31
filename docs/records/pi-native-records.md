@@ -104,7 +104,8 @@ containers too.
 | `turns` | AgentTurn[] | ≤ 512 (`TURNS_MAX`); the oldest ended turns are evicted first, open turns never | request-receipts (facts), worker-role and reviewer-role (`class`) |
 | `wakes` | WakeSubscription[] | ≤ 256 (`WAKES_MAX`) | op-receipts, worker-role |
 | `reports` | AgentReport[] | ≤ 64 (`REPORTS_MAX`) | op-receipts |
-| `todo` | RunProgress? | PM-only canonical ledger; absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
+| `todo` | RunProgress? | PM and assistant canonical ledger (the current request plan); absent by default; bounded by the 8 KiB receipt result on mutation | todo-tool |
+| `todo_requests` | RequestLedger? | PM and assistant only (T-679); absent until the session keeps a plan; ≤ 16 closed plans (`PLAN_HISTORY_MAX`) | todo-tool, request-turns |
 | `jobs` | JobRecord[] | worker only; ≤ 64 (`JOBS_MAX`), the oldest ended job evicted first, live jobs never | background-shell |
 | `rewinds` | RewindRecord[] | worker only; ≤ 32 (`REWINDS_MAX`), the oldest finished rewind evicted first, a pending one never | checkpoints-rewind |
 
@@ -131,6 +132,30 @@ Both ledgers retain terminal states and drop reasons. Each top-level `todo` oper
 commits the new revision with its canonical receipt and owes a `progress_updated` event.
 An identical request returns the original receipt even after a fence; it never reapplies
 the command. No separate runtime file is needed to recover the ledger.
+
+A PM or assistant ledger is one request plan at a time (T-679). Its `RunProgress.plan` is
+`P<n>` and `RunProgress.waits` lists open steps that wait on a named `event` or an `owner`
+answer; worker progress carries neither. `init` over a plan with open steps refuses
+`todo_plan_open`; over a plan whose steps are all done or dropped it rolls that plan into
+`RequestLedger.history` (`plan`, final `revision`, step counts, `closed`) and opens
+`P<n+1>` at the next revision, so revisions never move backwards. An update that names any
+plan but the current one refuses `stale_todo_plan`. A ledger written before plan identities
+is `P1`.
+
+`RequestLedger` also records how the latest turn ended for the current request (`turn`:
+`generation`, `turn`, `plan`, `revision`, `end` of `normal`, `cancelled`, `provider_failed`
+or `budget_exhausted`, the `disposition` and the `continuation` decision) and the latest
+continuation corral granted (`continued`: `key`, `plan`, `revision`, `attempt`, `stopped`).
+The `turn_ended` op computes both in the transaction that ends the turn and returns them as
+the receipt's `request`. The disposition is `complete`, `actionable` (the next step nothing
+waits on), `awaiting_owner` or `waiting_event`; an owner wait blocks only its own step. A
+normal turn that ends `actionable` gets `due` with key `continue:<plan>:<revision>` at most
+once per plan revision; the host starts that turn with a `continuation` origin carrying the
+key. A continued turn that leaves the revision unchanged stops it (`no_progress`), and more
+than 8 continuations in a row (`CONTINUATIONS_MAX`, reset by any turn the owner or corral
+starts) stop it (`limit`); each stop owes one `todo_continuation_stopped` event. Cancelled,
+aborted, failed and budget-exhausted turns are `held`. Only the session's own plan decides;
+board state never does, and a session without a plan gets no `todo_requests` written.
 
 AgentBinding: launcher-bound, never model-supplied.
 
@@ -267,8 +292,11 @@ session for a `corral_host_bound` entry of the launched generation or later that
 ### AgentTurn, TurnOrigin, TurnClass
 
 AgentTurn is `{generation, seq, origin, started?, ended?, class?, provider_error?}`, keyed
-by `(generation, seq)`. TurnOrigin is `{kind: bridge|owner_terminal|unknown, idempotency_key?}`
-(key ≤ 128). TurnClass is one of `completed`, `cancelled`, `provider_failed`,
+by `(generation, seq)`. TurnOrigin is
+`{kind: bridge|owner_terminal|unknown|continuation, idempotency_key?}` (key ≤ 128; a
+`continuation` origin carries its `continue:<plan>:<revision>` key). A PM or assistant
+`turn_ended` may carry `aborted` (the run was aborted in the pane), which holds it like
+`cancelled`. TurnClass is one of `completed`, `cancelled`, `provider_failed`,
 `owner_engaged`, `awaiting_answer`, `waiting_external`, `no_report` and `no_verdict`.
 `turn_ended` must name a turn of its generation that started and is still open. Corral never
 creates a turn from an ending. Storage class: canonical. Shape and facts: request-receipts

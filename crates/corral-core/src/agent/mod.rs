@@ -16,6 +16,7 @@ pub mod pm_state;
 mod question;
 mod records;
 pub mod rejections;
+pub mod request;
 mod rewind;
 #[cfg(test)]
 mod tests;
