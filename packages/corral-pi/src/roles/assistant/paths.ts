@@ -102,10 +102,12 @@ export function scopeCandidates(target: string, home = homedir()): { shown: stri
     if (p === dirname(p)) break;
   }
   const directory = dirname(target);
+  const canonicalTarget = real(target);
   const candidates = [directory, dirname(directory), dirname(dirname(directory)), ...(root ? [root] : [])];
   return [...new Set(candidates)].filter((p) => !root || within(p, root)).flatMap((shown) => {
     const canonical = real(shown);
-    return canonical && scopeLimit(shown, home) && scopeLimit(canonical, home) ? [{ shown, canonical }] : [];
+    return canonical && canonicalTarget && within(canonicalTarget, canonical)
+      && scopeLimit(shown, home) && scopeLimit(canonical, home) ? [{ shown, canonical }] : [];
   });
 }
 

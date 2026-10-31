@@ -60,8 +60,8 @@ export class PermissionBroker {
     // Serialize the entire check/ask/decide. Queued invocations check only after the previous
     // decision; the uncontended path makes exactly one check, never a redundant second one.
     const previous = this.queue;
-    let release!: () => void;
-    this.queue = new Promise<void>((resolve) => { release = resolve; });
+    const { promise, resolve: release } = Promise.withResolvers<void>();
+    this.queue = promise;
     try {
       await previous;
       if (turn.signal.aborted) return block("aborted");
