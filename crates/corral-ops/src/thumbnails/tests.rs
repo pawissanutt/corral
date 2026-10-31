@@ -41,15 +41,40 @@ fn html_capture_is_cached_and_missing_preview_is_explicit() {
     let browser = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/thumbnail-browser.sh");
     // When completion captures the page.
     capture(&ctx, &artifact, &browser).unwrap();
+    // Same HTML under a different owner may have different relative assets, so it
+    // must not inherit the first owner's screenshot merely through blob deduplication.
+    let other = ctx
+        .store
+        .create("Other report", None, Status::Backlog, "")
+        .unwrap();
+    let other_artifact = crate::add_artifact(&ctx, &other.id, &source, None, None).unwrap();
+    assert_eq!(artifact.sha256, other_artifact.sha256);
+    assert_eq!(artifact_thumbnail(&ctx, &other_artifact).unwrap(), None);
+    assert!(capture(&ctx, &other_artifact, Path::new("/nonexistent/browser")).is_err());
     // Then its cached PNG is available, survives source deletion, and needs no new browser process.
     std::fs::remove_file(source).unwrap();
     let path = artifact_thumbnail(&ctx, &artifact).unwrap().unwrap();
     assert!(
-        std::fs::read(path)
+        std::fs::read(&path)
             .unwrap()
             .starts_with(b"\x89PNG\r\n\x1a\n")
     );
+    assert!(path.starts_with(ctx.store.cache_root().unwrap()));
+    assert!(
+        !ctx.store.dir().join(&artifact.path).exists()
+            && !ctx
+                .store
+                .dir()
+                .join(format!("{}.thumbnail.png", artifact.path))
+                .exists(),
+        "neither artifact mirror nor thumbnail sibling exists"
+    );
     capture(&ctx, &artifact, Path::new("/nonexistent/browser")).unwrap();
+    // Losing every derived byte must still rebuild from the canonical body, without source.
+    std::fs::remove_dir_all(ctx.store.cache_root().unwrap()).unwrap();
+    assert_eq!(artifact_thumbnail(&ctx, &artifact).unwrap(), None);
+    capture(&ctx, &artifact, &browser).unwrap();
+    assert_eq!(artifact_thumbnail(&ctx, &artifact).unwrap(), Some(path));
 }
 
 #[test]

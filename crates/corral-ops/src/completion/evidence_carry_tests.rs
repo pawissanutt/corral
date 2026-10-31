@@ -298,7 +298,18 @@ fn carry_never_hides_a_later_defect() {
         (
             "artifact bytes edited",
             |fx| {
-                std::fs::write(fx.ctx.store.dir().join(&fx.artifact), "tampered!!!!!\n").unwrap();
+                let task = fx.task();
+                let artifact = task
+                    .artifacts
+                    .iter()
+                    .find(|artifact| artifact.path == fx.artifact)
+                    .unwrap();
+                let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+                std::fs::write(
+                    fx.ctx.store.blob_store().unwrap().path_of(&hash),
+                    "tampered!!!!!\n",
+                )
+                .unwrap();
             },
             "evidence_artifact_invalid:C1",
             true,

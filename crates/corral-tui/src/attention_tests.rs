@@ -54,10 +54,21 @@ fn attention_lifecycle_board_renders_only_actionable_rows_and_the_projection_cou
     let projection = corral_ops::attention::board(&fx.ctx, fx.now.get()).unwrap();
     let tasks = fx.ctx.store.list().unwrap();
     let snapshot = attention::load(&fx.ctx, fx.now.get()).unwrap();
+    // The cold oracle includes this explicitly settled empty terminal row; the hot UI
+    // must not discover unrelated retired history. Every other oracle row remains exact.
+    let settled = projection
+        .tasks
+        .iter()
+        .find(|row| row.task == "T-007")
+        .unwrap();
+    assert_eq!(settled.status, Status::Done);
+    assert!(settled.assessment.conditions.is_empty());
+    assert!(!snapshot.contains_key(&settled.task));
     assert_eq!(
         projection
             .tasks
             .iter()
+            .filter(|row| row.task != settled.task)
             .map(|row| (&row.task, &row.assessment))
             .collect::<Vec<_>>(),
         snapshot.iter().collect::<Vec<_>>(),
@@ -73,19 +84,18 @@ fn attention_lifecycle_board_renders_only_actionable_rows_and_the_projection_cou
         Some("overdue 2".into()),
     );
     for task in &tasks {
-        let row = attention::card_line(
-            &snapshot[&task.id],
-            task,
-            &fx.ctx.store.config,
-            28,
-            fx.now.get(),
-        );
+        let assessment = if task.id == settled.task {
+            &settled.assessment
+        } else {
+            &snapshot[&task.id]
+        };
+        let row = attention::card_line(assessment, task, &fx.ctx.store.config, 28, fx.now.get());
         assert_eq!(
             row.is_some(),
             ["T-004", "T-005", "T-006"].contains(&task.id.as_str()),
             "{}: {:?}",
             task.id,
-            snapshot[&task.id],
+            assessment,
         );
         if let Some(row) = row {
             assert!(row.width() <= 28);
