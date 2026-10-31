@@ -17,9 +17,10 @@ import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts"
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
-  "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
+  "budget", "todo", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
-  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled",
+  "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled", "checkpoints", "subagents", "oracle",
+  "headless",
 ];
 const LAUNCH_MAX_BYTES = 64 * 1024;
 
@@ -47,6 +48,8 @@ export interface HostConfig {
   readonly sessionDir: string;
   readonly resumeSession?: string;
   readonly freshSession?: boolean;
+  /** A restored rewind's session entry; the resumed session branches there (T-575). */
+  readonly resumeLeaf?: string;
   readonly todo?: boolean;
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
@@ -212,17 +215,34 @@ export function parseLaunchMessage(text: string): HostConfig {
       throw new LaunchMessageInvalid("background_shell requires its resolved settings");
     }
   }
+  if (capabilities?.enabled.includes("checkpoints") && role !== "worker") {
+    throw new LaunchMessageInvalid(`checkpoints is not available to the ${role} role`);
+  }
+  const resumeLeaf = optional(message, "resume_leaf", /^[A-Za-z0-9._:-]{1,128}$/);
+  if (resumeLeaf !== undefined && message.resume_session == null) {
+    throw new LaunchMessageInvalid("resume_leaf requires resume_session");
+  }
   const ui = message.ui === undefined || message.ui === null ? undefined : message.ui;
   if (ui !== undefined && ui !== "rich" && ui !== "plain") throw new LaunchMessageInvalid("ui must be rich or plain");
+  // An assistant is bound to its session `A-<n>` and to no project; no other role names a session.
+  const assistant = optional(message, "assistant", /^A-[1-9][0-9]{0,18}$/);
+  if ((role === "assistant") !== (assistant !== undefined)) {
+    throw new LaunchMessageInvalid("assistant names the session of the assistant role only, and that role needs it");
+  }
+  if (role === "assistant" && message.project !== "" && message.project != null) {
+    throw new LaunchMessageInvalid("an assistant names no project");
+  }
   return {
     identity: {
       store: field(message, "store", TOKEN, 64),
-      project: field(message, "project", TOKEN, 128),
+      project: role === "assistant" || (role === "pm" && message.project === "")
+        ? "" : field(message, "project", TOKEN, 128),
       role: role as Role,
       task: optional(message, "task", TOKEN),
       run: optional(message, "run", TOKEN),
       review: optional(message, "review", TOKEN),
       callback: optional(message, "callback", TOKEN),
+      ...(assistant ? { assistant } : {}),
       generation,
     },
     secrets: parsed,
@@ -235,6 +255,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     sessionDir: path(message, "session_dir"),
     resumeSession: message.resume_session === undefined || message.resume_session === null ? undefined : path(message, "resume_session"),
     freshSession: message.fresh_session === true,
+    ...(resumeLeaf ? { resumeLeaf } : {}),
     todo: capabilities ? capabilities.enabled.includes("todo") : message.todo === true,
     ...(capabilities ? { capabilities } : {}),
     ...(guidance ? { guidance } : {}),

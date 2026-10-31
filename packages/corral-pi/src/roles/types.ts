@@ -7,9 +7,9 @@ import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
 
-export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer";
+export type Role = "worker" | "reviewer" | "pm" | "planner" | "plan_reviewer" | "assistant";
 
-export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer"];
+export const ROLES: readonly Role[] = ["worker", "reviewer", "pm", "planner", "plan_reviewer", "assistant"];
 
 /** The native planning roles: each runs only while its `role_enabled` capability is on. */
 export const PLANNING_ROLES: readonly Role[] = ["planner", "plan_reviewer"];
@@ -27,15 +27,17 @@ export type CorralOp =
   | "checkpoint" | "evidence" | "artifact" | "gate" | "done" | "verdict" | "todo"
   | "question_answer" | "question_escalate" | "question_cancel" | "reply" | "comment"
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
-  | "read_route" | "read_artifacts" | "read_lessons" | "job" | "job_monitor"
-  | "plan_write" | "plan_submit" | "plan_verdict";
+  | "read_route" | "read_artifacts" | "read_lessons" | "inbox_read" | "inbox_resolve"
+  | "job" | "job_monitor"
+  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
   "evidence", "artifact", "gate", "done", "verdict", "question_answer", "question_escalate",
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
-  "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "todo", "job", "job_monitor",
-  "plan_write", "plan_submit", "plan_verdict",
+  "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "inbox_read", "inbox_resolve",
+  "todo", "job", "job_monitor",
+  "plan_write", "plan_submit", "plan_verdict", "owner_action",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
@@ -47,6 +49,8 @@ export interface HostIdentity {
   readonly run?: string;
   readonly review?: string;
   readonly callback?: string;
+  /** Assistant only: the session `A-<n>`; an assistant names no project (`project` is empty). */
+  readonly assistant?: string;
   readonly generation: number;
 }
 
@@ -74,7 +78,7 @@ export interface RoleContext {
   readonly capabilities?: CapabilitySet;
   /** LSP server settings resolved for this generation. */
   readonly lspSettings?: Readonly<Record<string, unknown>>;
-  /** The worktree (worker, reviewer) or workspace root (pm) Pi works in. */
+  /** The worktree (worker, reviewer) or workspace root (pm, assistant) Pi works in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */
   readonly promptFile?: string;
@@ -91,6 +95,8 @@ export interface CorralToolSpec<P = Record<string, unknown>> {
   readonly parameters: TSchema;
   /** The canonical payload sent for validated tool parameters. */
   payload(params: P): Record<string, unknown>;
+  /** A deadline longer than the client's default, for an op that runs a whole corral command. */
+  readonly timeoutMs?: number;
 }
 
 export interface RoleModule {
@@ -110,6 +116,11 @@ export interface RoleModule {
   localTools?(context: RoleContext): readonly ToolDefinition[];
   /** The role's contract, appended to the system prompt. */
   contract(context: RoleContext): string;
+  /**
+   * The role's fixed shell refusals: checked for every bash call, top-level or nested, before any
+   * configured bash rule, and never disabled by capability settings. A reason refuses the call.
+   */
+  readonly shellRefusal?: (command: string) => string | undefined;
   /** Optional role commands (slash commands). Tools registered here are never activated. */
   extend?(pi: ExtensionAPI, context: RoleContext): void;
 }

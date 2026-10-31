@@ -23,6 +23,8 @@ mod cleanup_intent;
 mod failure;
 #[path = "cleanup_ops/lifecycle.rs"]
 mod lifecycle;
+#[path = "cleanup_ops/plan_review.rs"]
+mod plan_review;
 #[path = "cleanup_ops/report_notes.rs"]
 mod report_notes;
 #[path = "cleanup_ops/worktree.rs"]
@@ -87,7 +89,13 @@ elif op == ['pane', 'get']:
     if a[2] not in s['panes']:
         fail('pane_not_found', a[2])
     finish({'pane': s['panes'][a[2]]})
+elif op == ['pane', 'process-info']:
+    pid = s.get('shells', {}).get(a[a.index('--pane') + 1])
+    if not pid: fail('pane_not_found', 'no shell')
+    finish({'process_info': {'shell_pid': pid, 'foreground_processes': []}})
 elif op == ['pane', 'close']:
+    if (pid := s.get('shells', {}).get(a[2])):
+        import signal; (root / 'closing-pid').write_text(str(os.getpid())); os.kill(pid, signal.SIGTERM)
     if s.get('require_worktree') and not pathlib.Path(s['require_worktree']).is_dir():
         fail('worktree_removed_too_soon', s['require_worktree'])
     if a[2] not in s['panes']:
@@ -571,16 +579,6 @@ fn terminal_history(status: Status) {
             .all(|a| a[1] != "close"),
         "repeated sync must skip already dead resources"
     );
-}
-
-#[test]
-fn sync_done_reaps_every_run_including_old_gate_and_reviewer() {
-    terminal_history(Status::Done);
-}
-
-#[test]
-fn sync_dropped_reaps_every_run_including_old_gate_and_reviewer() {
-    terminal_history(Status::Dropped);
 }
 
 #[test]

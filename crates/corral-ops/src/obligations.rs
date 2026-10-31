@@ -9,7 +9,7 @@ use serde_json::json;
 
 use crate::Ctx;
 use crate::agent::effects::{self, Receipted};
-use corral_core::agent::{RequestOrigin, RequestReceipt};
+use corral_core::agent::{RequestOrigin, RequestReceipt, WakeKind, WakeState, WakeSubscription};
 
 fn identity(version: u32, id: &str) -> Result<()> {
     ensure!(version == 1, "unsupported obligation version {version}");
@@ -229,7 +229,9 @@ pub enum ResumeTarget<'a> {
     Decision(&'a str),
 }
 
-/// Persists an event receipt only. This never launches, replays, sends a reply or kills a process.
+/// Persists an event receipt and wakes the run's worker: a newly recorded receipt is delivered to
+/// its session as a prompt, so an idle or parked worker continues without anyone typing into its
+/// pane. This never launches, replays or kills a process.
 pub fn resume_run(
     ctx: &Ctx,
     id: &str,
@@ -237,16 +239,85 @@ pub fn resume_run(
     receipt: ResumeReceipt,
     now: Timestamp,
 ) -> Result<Task> {
+    let (task, recorded) = record_receipt(ctx, id, target, &receipt, now)?;
+    if recorded {
+        wake_worker(ctx, &task, target, &receipt);
+    }
+    Ok(task)
+}
+
+/// Prompts the worker of a still-running run; one queued for a coding slot is told to wait for it.
+/// A failed delivery keeps the receipt and is reported.
+fn wake_worker(ctx: &Ctx, task: &Task, target: ResumeTarget<'_>, receipt: &ResumeReceipt) {
+    let Some(run) = task
+        .current_run()
+        .filter(|r| task.status == Status::Running && r.id == receipt.run && r.outcome.is_none())
+    else {
+        return;
+    };
+    // A native worker's armed wake for this wait is posted by sync; never prompt it twice.
+    let native = |wake: &WakeSubscription| {
+        wake.kind == WakeKind::Wait
+            && wake.state == WakeState::Armed
+            && matches!(target, ResumeTarget::Wait(wait) if wake.target == wait)
+    };
+    if run
+        .agent_host
+        .as_deref()
+        .is_some_and(|s| s.wakes.iter().any(native))
+    {
+        return;
+    }
+    let event = match target {
+        ResumeTarget::Wait(wait) => format!("wait `{wait}` resolved: {:?}", receipt.outcome),
+        ResumeTarget::Decision(decision) => format!(
+            "decision `{decision}` answered: {}",
+            receipt.answer.as_deref().unwrap_or_default()
+        ),
+    };
+    let next = match &run.obligations.slot_wait {
+        Some(slot) => format!(
+            "Do not resume work until `corral wait --for slot_reacquired --task {} --since {}` returns, then continue.",
+            task.id, slot.since
+        ),
+        None => "Continue the run.".into(),
+    };
+    let message = format!(
+        "corral: {} {} {event} (receipt {}). {next}",
+        task.id, run.id, receipt.id
+    );
+    if let Err(error) = crate::reply(ctx, &task.id, &message) {
+        crate::messages::report(
+            Some(&task.id),
+            "resume",
+            format!("receipt recorded; waking the worker failed: {error:#}"),
+        );
+    }
+}
+
+fn record_receipt(
+    ctx: &Ctx,
+    id: &str,
+    target: ResumeTarget<'_>,
+    receipt: &ResumeReceipt,
+    now: Timestamp,
+) -> Result<(Task, bool)> {
     identity(receipt.version, &receipt.id)?;
     let written = ctx.store.try_update(id, |t| {
         let own = t.id.clone();
-        let run = live_run(t, &receipt.run)?;
+        let finished_decision = matches!(target, ResumeTarget::Decision(_))
+            && t.current_run().is_some_and(|r| r.id == receipt.run && r.outcome.is_some());
+        let run = if finished_decision {
+            t.current_run_mut().context("run disappeared")?
+        } else {
+            live_run(t, &receipt.run)?
+        };
         let parked = run.parked_on(&own);
         let existing = run.obligations.waits.iter().filter_map(|w| w.receipt.as_ref())
             .chain(run.obligations.decisions.iter().filter_map(|d| d.receipt.as_ref()))
             .find(|r| r.id == receipt.id).cloned();
         if let Some(existing) = &existing {
-            ensure!(existing == &receipt, "conflicting receipt id {}", receipt.id);
+            ensure!(existing == receipt, "conflicting receipt id {}", receipt.id);
         }
         let (registered, slot, observation) = match target {
             ResumeTarget::Wait(wait) => {
@@ -263,24 +334,29 @@ pub fn resume_run(
             }
         };
         if let Some(old) = slot {
-            ensure!(old == &receipt, "conflicting terminal receipt");
+            ensure!(old == receipt, "conflicting terminal receipt");
             return Ok(false);
         }
         ensure!(existing.is_none(), "receipt id is already used by another obligation");
         ensure!(receipt.observed_at >= registered && receipt.observed_at <= now, "receipt observation is outside this registration's lifetime");
-        *observation = receipt_observation(&receipt, now);
+        *observation = receipt_observation(receipt, now);
         *slot = Some(receipt.clone());
         run.obligations.settle_parking(&parked, &own, now);
-        if let Some(pending) = run.obligations.pending_decision() {
-            run.blocked_excerpt = Some(format!("{}\nAction: {}", pending.request.question, pending.request.requested_action));
-            t.status = Status::NeedsMe;
-        } else if t.status == Status::NeedsMe {
-            t.status = Status::Running;
-            let run = t.current_run_mut().context("run disappeared")?;
+        if !finished_decision {
+            if let Some(pending) = run.obligations.pending_decision() {
+                run.blocked_excerpt = Some(format!("{}\nAction: {}", pending.request.question, pending.request.requested_action));
+                t.status = Status::NeedsMe;
+            } else if t.status == Status::NeedsMe {
+                t.status = Status::Running;
+                let run = t.current_run_mut().context("run disappeared")?;
+                run.blocked_excerpt = None;
+            }
+        } else if run.obligations.pending_decision().is_none() {
             run.blocked_excerpt = None;
         }
         Ok(true)
     })?;
+    let recorded = written.is_some();
     if let Some(task) = written {
         transition(
             ctx,
@@ -289,9 +365,11 @@ pub fn resume_run(
             json!({"run":receipt.run,"receipt":receipt.id,"outcome":receipt.outcome,"delivery":receipt.delivery,
                 "decision":match target { ResumeTarget::Decision(decision) => Some(decision), ResumeTarget::Wait(_) => None }}),
         )?;
-        crate::parked::reacquire(ctx, &task.id)?;
+        if task.current_run().is_some_and(|run| run.outcome.is_none()) {
+            crate::parked::reacquire(ctx, &task.id)?;
+        }
     }
-    ctx.store.get(id)
+    Ok((ctx.store.get(id)?, recorded))
 }
 
 pub(crate) fn answer_reply(
@@ -319,15 +397,17 @@ pub(crate) fn answer_reply(
 }
 
 /// Commits an exact, previously journaled answer. Replaying the identical receipt is a no-op,
-/// so an interrupted inbox effect can finish without generating a second answer.
+/// so an interrupted inbox effect can finish without generating a second answer. The reply that
+/// carries the answer is the worker's prompt, so this records without a separate wake.
 pub(crate) fn answer_reply_with(ctx: &Ctx, id: &str, receipt: &ResumeReceipt) -> Result<Task> {
-    resume_run(
+    record_receipt(
         ctx,
         id,
         ResumeTarget::Decision(&receipt.id),
-        receipt.clone(),
+        &receipt,
         corral_core::clock::now(),
     )
+    .map(|(task, _)| task)
 }
 
 pub(crate) use corral_core::receipt_observation;

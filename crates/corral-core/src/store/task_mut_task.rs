@@ -168,7 +168,7 @@ fn inbox_state_mut<'a>(task: &'a mut Task, recipient: &Recipient) -> Result<&'a 
             .find(|r| r.id == *review)
             .ok_or_else(missing)?
             .inbox),
-        Recipient::Pm => Err(missing()),
+        Recipient::Pm | Recipient::Assistant { .. } => Err(missing()),
     }
 }
 

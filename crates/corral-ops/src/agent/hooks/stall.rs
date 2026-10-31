@@ -26,7 +26,9 @@ fn run_key(task: &str, container: &ContainerRef) -> Result<String> {
     let run = match container {
         ContainerRef::Worker { run, .. } | ContainerRef::Planner { run, .. } => run,
         ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => review,
-        ContainerRef::Pm => anyhow::bail!("provider stalls require a task container"),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => {
+            anyhow::bail!("provider stalls require a task container")
+        }
     };
     Ok(format!("{task}-{run}"))
 }
@@ -167,7 +169,7 @@ fn retry<T: TaskRef + ?Sized>(
         ContainerRef::Reviewer { review, .. } | ContainerRef::PlanReviewer { review, .. } => {
             Some(review.clone())
         }
-        ContainerRef::Pm => None,
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     };
     let key = format!("provider-retry:{}:{generation}:{attempt}", container.key());
     let mut posted = None;

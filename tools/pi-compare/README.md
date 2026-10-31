@@ -18,6 +18,61 @@ Exit 0 means a complete, valid, measured comparison met every owner threshold;
 exit 2 means no pass (incomplete, synthetic, invalid, budget stop, or threshold
 failure); exit 1 means the input could not be parsed or measured.
 
+## Early capability smoke (T-570)
+
+The T-313 six-pair workflow parser below is not reused to turn a tiny capability smoke into
+an experimental pass. The separate early checkpoint is documented in
+`docs/records/pi-native-capabilities.md` (repository root). Static raw profiles come from
+`packages/corral-pi/test/usage-baseline.test.ts`; `usage-smoke.test.ts` tests admission controls
+without inference. All five roles have static records, with unshipped native planning roles
+explicitly not runnable rather than zero-cost successes.
+
+The explicitly invoked runner lives beside the pinned host imports at
+`packages/corral-pi/src/host/usage-smoke.ts`. It consumes the static log, refuses an existing
+output directory, and records admissions/payloads/results for at most W/R × strict/standard.
+It uses Corral's subscription-only credential/provider path, SSE, no retries, and a 1,024-token
+wire cap. Do not run it without a fresh finite owner allowance: its T-570 authorization flag
+is an acknowledgement, not reusable permission. Keep controls, full payloads, raw responses
+and a qualified summary as artifacts. Error-path SDK zeros are unknown usage, not $0 work.
+The T-570 run stopped after three requests when the reviewer strict arm was overloaded;
+the reviewer standard arm was not run. That partial smoke is not a workflow comparison.
+
+## Final standard capability profile (T-579)
+
+The final record is in `docs/records/pi-native-capabilities.md`. It measures current host
+prompt/schema overhead for all five roles, separately from this tool's historical T-313
+workflow pass criteria. The live cohort is a **capability-cost smoke**, not a workflow
+comparison. No tool is executed by the live requests; static MCP activation and auxiliary
+captures use fake inference and private fixtures only.
+
+Reproduce offline captures from the repository root (after frozen installs in both
+`packages/corral-pi` and this directory):
+
+```sh
+python3 tools/pi-compare/resolver/build.py tools/pi-compare/records/resolver-build TARGET_DIR
+bun tools/pi-compare/capture/static.ts RESOLVER_BINARY NEW_STATIC_DIR
+bun tools/pi-compare/capture/auxiliary.ts STATIC_DIR NEW_AUXILIARY_DIR
+bun tools/pi-compare/capture/audit.ts STATIC_DIR SMOKE_DIR NEW_REPORT_JSON
+```
+
+`RESOLVER_BINARY` is the executable Cargo built (respect the repo's target-dir setting).
+The standalone research adapter links the production Rust catalog; it has no preset
+matrix of its own. `build.py` generates its manifest in the new ignored build directory,
+so it cannot be mistaken for a repository workspace member by quick-gate discovery. `capture/tsconfig.json` uses the host's compiler conventions because
+these adapters import host source; check it with this directory's `tsc -p capture/tsconfig.json`.
+Normal `bun run typecheck` checks the standalone offline analysis/tests.
+
+`capture/smoke.ts` requires a **fresh finite allowance** before execution. Its T-579
+acknowledgement flag is not reusable permission. It refuses an existing output directory,
+preregisters all 16 eligible requests (W/R/P strict/standard, PL/PR standard, each with
+inert/configured resources), caps the wire at 1,024 output tokens, disables retries and
+stops on errors. The first capture's raw API-equivalent fields were null due to a local
+nested-SDK-cost validation bug; `capture/audit.ts` recomputes them offline from preserved
+usage without rewriting records or spending more inference. Unknown usage remains null.
+Never use static heuristic tokens as billable tokens or treat disabled strict planning
+trials as zero-cost successes. The raw T-579 evidence is attached as an archive rather
+than checked into source.
+
 ## Capture contract
 
 Before any live pair, preregister the seed, six task IDs, expected **pair** tokens,

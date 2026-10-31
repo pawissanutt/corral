@@ -134,9 +134,10 @@ impl Store {
                     ),
                     "cannot refresh authority after a submission attempt"
                 );
-                // A fresh explicit owner request is fresh consent to the current contract.
-                // Automatic authority can also re-prepare a base-only drift before submission;
-                // retain the single submission slot and archive the superseded authorization.
+                // A fresh explicit owner request is fresh consent to the current contract, and
+                // fresh automatic authority replaces a stale automatic candidate before
+                // submission under the same task contract; retain the single submission slot
+                // and archive the superseded authorization.
                 let owner_renewal = matches!(
                     (&record.authorization.origin, &authorization.origin),
                     (
@@ -155,15 +156,9 @@ impl Store {
                         ),
                     "cannot change the action's authorization origin"
                 );
-                let base_refresh = !owner_renewal
-                    && record
-                        .authorization
-                        .action
-                        .only_integration_base_changed(&authorization.action);
                 ensure!(
                     record.authorization.workspace == authorization.workspace
-                        && (owner_renewal || record.authorization.member == authorization.member)
-                        && (record.authorization.action == authorization.action || base_refresh),
+                        && (owner_renewal || record.authorization.member == authorization.member),
                     "cannot refresh a changed prepared action identity"
                 );
                 record.authorization_history.push(AuthorizationRevision {

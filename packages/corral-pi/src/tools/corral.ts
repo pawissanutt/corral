@@ -1,6 +1,6 @@
 // Host-to-corral calls: one fresh `corral agent call --op <op>` process per request, with
 // envelope v1 on stdin and one JSON receipt on stdout. Secrets travel only on stdin.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import type { CorralOp, HostIdentity } from "../roles/types.ts";
@@ -67,6 +67,8 @@ export interface CorralCall {
   readonly payload: Record<string, unknown>;
   readonly turn?: number;
   readonly bindNonce?: string;
+  /** Overrides the client's deadline for this one call. */
+  readonly timeoutMs?: number;
 }
 
 export interface CorralClientOptions {
@@ -83,6 +85,32 @@ export interface CorralClientOptions {
 export class CorralClient {
   constructor(private readonly options: CorralClientOptions) {}
 
+  /** Read the bound ledger on startup/resume without creating a mutation receipt. */
+  todoSnapshot(): Promise<unknown> {
+    const { identity, corral, root } = this.options;
+    const args = identity.role === "pm"
+      ? ["agent", "state", "--pm", "--json"]
+      : identity.role === "assistant"
+        ? ["assistant", "show", identity.assistant ?? "", "--json"]
+        : ["show", identity.task ?? "", "--json"];
+    return new Promise((resolve, reject) => {
+      const child = execFile(corral, args, {
+        cwd: root, timeout: CALL_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024,
+      }, (error, stdout) => {
+        if (error) {
+          reject(new CorralCallError("todo_read", error.message));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout));
+        } catch (error) {
+          reject(new CorralCallError("todo_read", error instanceof Error ? error.message : String(error)));
+        }
+      });
+      child.stdin?.end();
+    });
+  }
+
   envelope(op: CorralOp, call: CorralCall): string {
     const { identity } = this.options;
     const text = JSON.stringify({
@@ -98,6 +126,7 @@ export class CorralClient {
         run: identity.run,
         review: identity.review,
         callback: identity.callback,
+        assistant: identity.assistant,
         session_id: this.options.sessionId(),
         generation: identity.generation,
         turn: call.turn,
@@ -132,7 +161,7 @@ export class CorralClient {
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         finish(new CorralCallError("call_timeout", `corral agent call --op ${op} exceeded its deadline`));
-      }, this.options.timeoutMs ?? CALL_TIMEOUT_MS);
+      }, call.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS);
       const collect = (into: Buffer[]) => (chunk: Buffer) => {
         size += chunk.length;
         if (size > RESPONSE_MAX_BYTES) {

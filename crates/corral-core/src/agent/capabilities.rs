@@ -11,6 +11,7 @@ use serde_json::Value;
 use super::AgentRole;
 use super::browser::{browser_defaults, browser_settings};
 use super::local_controls::{bash_rule_settings, hook_settings};
+use super::lsp::{lsp_defaults, lsp_settings};
 use super::paths::sha256_hex;
 use crate::config::agent_capabilities::{
     compaction_settings, job_settings, skill_settings, template_settings,
@@ -23,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 5;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 7;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -39,6 +40,13 @@ pub struct CapabilityDef {
 
 /// Every capability Corral resolves. Each later member registers its own implemented key here.
 pub const CATALOG: &[CapabilityDef] = &[
+    CapabilityDef {
+        key: "budget",
+        summary: "cumulative model token/USD admission limits",
+        defaults: |_| Some([false, false, false]),
+        host: true,
+        settings: Some(super::budget::budget_settings),
+    },
     CapabilityDef {
         key: "todo",
         summary: "corral_todo progress ledger",
@@ -84,7 +92,9 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "lessons",
         summary: "project lessons in the dispatch prompt",
-        defaults: |role| (role != AgentRole::Pm).then_some([true, true, true]),
+        defaults: |role| {
+            (!matches!(role, AgentRole::Pm | AgentRole::Assistant)).then_some([true, true, true])
+        },
         host: false,
         settings: None,
     },
@@ -98,7 +108,10 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "session_export",
         summary: "/corral-export offline HTML session artifact",
-        defaults: |role| (role != AgentRole::Pm).then_some([false, true, true]),
+        // Assistant exports need session artifacts (assistant-artifacts member).
+        defaults: |role| {
+            (!matches!(role, AgentRole::Pm | AgentRole::Assistant)).then_some([false, true, true])
+        },
         host: true,
         settings: None,
     },
@@ -165,97 +178,74 @@ pub const CATALOG: &[CapabilityDef] = &[
         host: true,
         settings: None,
     },
+    CapabilityDef {
+        key: "subagents",
+        summary: "bounded read-only explore children",
+        defaults: |role| match role {
+            AgentRole::Worker
+            | AgentRole::Assistant
+            | AgentRole::Planner
+            | AgentRole::PlanReviewer => Some([false, true, true]),
+            AgentRole::Reviewer => Some([false, false, true]),
+            AgentRole::Pm => None,
+        },
+        host: true,
+        settings: Some(super::auxiliary::explore_settings),
+    },
+    CapabilityDef {
+        key: "oracle",
+        summary: "tool-free consultation using a configured model",
+        defaults: |_| Some([false, false, true]),
+        host: true,
+        settings: Some(super::auxiliary::oracle_settings),
+    },
+    CapabilityDef {
+        key: "checkpoints",
+        summary: "worker turn checkpoints for owner rewinds",
+        // Assistant checkpoints are scratch-worktree only (scratch-worktrees member).
+        defaults: |role| (role == AgentRole::Worker).then_some([false, false, true]),
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
+        key: "headless",
+        summary: "host runs without its terminal UI; input arrives only through the bridge",
+        defaults: headless_defaults,
+        host: true,
+        settings: None,
+    },
 ];
 
-/// Validates configured servers and preserves their generation-bound settings.
-fn lsp_settings(table: &CapabilitySettings) -> Result<CapabilitySettings, String> {
-    let mut extensions = std::collections::BTreeSet::new();
-    for (key, value) in table {
-        if key != "languages" {
-            return Err(format!("has no setting {key} (known: languages)"));
-        }
-        let servers = value.as_object().ok_or("languages must be a table")?;
-        for (id, value) in servers {
-            let spec = value.as_object().ok_or("language server must be a table")?;
-            if id.is_empty()
-                || spec.keys().any(|k| {
-                    !["command", "args", "extensions", "root_markers"].contains(&k.as_str())
-                })
-            {
-                return Err(format!("invalid language server {id}"));
-            }
-            if !spec
-                .get("command")
-                .and_then(|v| v.as_str())
-                .is_some_and(|v| !v.trim().is_empty() && !v.contains('\0'))
-            {
-                return Err(format!("{id}: command must be a nonempty string"));
-            }
-            for key in ["args", "root_markers"] {
-                if let Some(value) = spec.get(key) {
-                    let items = value
-                        .as_array()
-                        .ok_or_else(|| format!("{id}: {key} must be a list"))?;
-                    if items.iter().any(|v| {
-                        !v.as_str().is_some_and(|s| {
-                            !s.contains('\0')
-                                && (key != "root_markers"
-                                    || (!s.is_empty() && s != "." && s != ".." && !s.contains('/')))
-                        })
-                    }) {
-                        return Err(format!("{id}: invalid {key}"));
-                    }
-                }
-            }
-            let mappings = spec
-                .get("extensions")
-                .and_then(|v| v.as_object())
-                .ok_or_else(|| format!("{id}: extensions must be a table"))?;
-            if mappings.is_empty() {
-                return Err(format!("{id}: extensions must not be empty"));
-            }
-            for (ext, language) in mappings {
-                if !ext.starts_with('.')
-                    || ext.len() < 2
-                    || ext.contains('/')
-                    || !extensions.insert(ext.clone())
-                    || language.as_str().is_none_or(|s| s.trim().is_empty())
-                {
-                    return Err(format!("{id}: invalid or duplicate extension {ext}"));
-                }
-            }
-        }
-    }
-    Ok(table.clone())
-}
-
-fn lsp_defaults(role: AgentRole) -> Option<[bool; 3]> {
-    match role {
-        AgentRole::Worker => Some([true, true, true]),
-        AgentRole::Reviewer => Some([false, false, true]),
-        AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
-        AgentRole::Pm => None,
-    }
-}
-
+// Assistant hooks run in scratch roots only, which the scratch-worktrees member adds.
 fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker => Some([false, false, true]),
-        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+        AgentRole::Reviewer
+        | AgentRole::Pm
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => None,
     }
 }
 
 fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Reviewer => Some([false, false, true]),
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Assistant => {
+            Some([false, false, true])
+        }
         AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 
+// Session-owned assistant jobs (killed at session end) are not implemented yet.
 fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Worker => Some([false, true, true]),
-        AgentRole::Reviewer | AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+        AgentRole::Reviewer
+        | AgentRole::Pm
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => None,
     }
 }
 
@@ -269,7 +259,8 @@ fn mcp_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::Reviewer
         | AgentRole::Pm
         | AgentRole::Planner
-        | AgentRole::PlanReviewer => Some([false, true, true]),
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => Some([false, true, true]),
     }
 }
 
@@ -279,7 +270,8 @@ fn llama_cpp_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::Reviewer
         | AgentRole::Pm
         | AgentRole::Planner
-        | AgentRole::PlanReviewer => Some([false; 3]),
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => Some([false; 3]),
     }
 }
 
@@ -309,9 +301,11 @@ impl Default for LlamaCppSettings {
 
 fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => {
-            Some([false, true, true])
-        }
+        AgentRole::Worker
+        | AgentRole::Reviewer
+        | AgentRole::Planner
+        | AgentRole::PlanReviewer
+        | AgentRole::Assistant => Some([false, true, true]),
         AgentRole::Pm => None,
     }
 }
@@ -375,7 +369,7 @@ pub enum McpToolAccess {
 // The exhaustive match is the role seam: a new role (T-544's assistant) must decide each entry.
 fn todo_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Pm => Some([false, true, true]),
+        AgentRole::Worker | AgentRole::Pm | AgentRole::Assistant => Some([false, true, true]),
         AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
@@ -384,7 +378,16 @@ fn todo_defaults(role: AgentRole) -> Option<[bool; 3]> {
 fn plan_role_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
         AgentRole::Planner | AgentRole::PlanReviewer => Some([false, true, true]),
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm => None,
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Pm | AgentRole::Assistant => None,
+    }
+}
+
+// An operational choice, never a preset default (T-577): `full` leaves it off too.
+fn headless_defaults(role: AgentRole) -> Option<[bool; 3]> {
+    match role {
+        AgentRole::Worker | AgentRole::Reviewer => Some([false, false, false]),
+        // Assistants are interactive by definition (docs/plans/assistant-sessions.md).
+        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer | AgentRole::Assistant => None,
     }
 }
 

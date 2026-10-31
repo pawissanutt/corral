@@ -78,6 +78,31 @@ fn review_star_pins_the_focused_artifact_and_unpins_it() {
 }
 
 #[test]
+fn session_artifact_pin_opens_the_followed_snapshot_in_a_preview() {
+    let fx = fixture();
+    fx.ctx
+        .store
+        .create_assistant("pi", None, None, None)
+        .unwrap();
+    let report = fx.root.join("session-report.md");
+    std::fs::write(&report, "Old session finding\n").unwrap();
+    corral_ops::add_session_artifact(&fx.ctx, "A-1", &report, None, None).unwrap();
+    fx.ctx
+        .store
+        .pin("A-1:session-report.md", None, true)
+        .unwrap();
+    std::fs::write(&report, "Latest session finding\n").unwrap();
+    corral_ops::add_session_artifact(&fx.ctx, "A-1", &report, None, None).unwrap();
+
+    let super::Opening::Preview(mut preview) = super::open(&fx.ctx, 0).unwrap() else {
+        panic!("session text pin should open a preview");
+    };
+    let screen = render(preview.as_mut(), &fx.ctx);
+    assert!(screen.contains("Latest session finding"), "{screen}");
+    assert!(!screen.contains("Old session finding"), "{screen}");
+}
+
+#[test]
 fn history_star_pins_the_selected_finished_task() {
     let fx = fixture();
     fx.ctx

@@ -1,4 +1,4 @@
-//! Adding an unstarted task to a tracker Plan's required members, or moving one between tracker
+//! Adding a task to a tracker Plan's required members, or moving one between tracker
 //! Plans. Membership is part of the Plan's operating contract, so grants and member runs bound to
 //! the old contract are refused afterwards; the caller decides which member states may be stranded.
 use anyhow::{Context, Result, bail, ensure};
@@ -79,6 +79,8 @@ impl Store {
             let _lock = fresh.lock(&member)?;
             let mut task = task;
             task.parent = Some(plan.id.clone());
+            // A started member's queued dispatch named its old base; the next run starts from the Plan's.
+            task.dispatch_plan = None;
             fresh.save_held(&held_member, &task)?;
         }
         if let Some(held_design) = design.filter(|held| !held.task().children.contains(&member)) {
@@ -90,7 +92,16 @@ impl Store {
         let _lock = fresh.lock(&plan.id)?;
         let mut plan = plan;
         plan.children.push(member.clone());
-        let saved = fresh.save_held(&held_plan, &plan)?;
+        if !plan.member_gates.contains_key(&member) {
+            let gate = ScopeGate {
+                tier: "quick".into(),
+                tests: Vec::new(),
+                expected_failures: Vec::new(),
+            };
+            let record = next_record(None, &gate, "default for added member", "system")?;
+            plan.member_gates.insert(member.clone(), record);
+        }
+        let saved = fresh.save_held_scoped(&held_plan, &plan, ScopeWrite::MemberGate)?;
         fresh.log_event(
             Some(&saved.id),
             "plan_member_added",

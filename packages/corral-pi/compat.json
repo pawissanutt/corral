@@ -50,6 +50,7 @@
     "llama.cpp"
   ],
   "capabilities": [
+    "budget",
     "todo",
     "web.enabled",
     "context_files",
@@ -66,6 +67,10 @@
     "role_enabled",
     "lsp",
     "browser",
-    "llama_cpp.enabled"
+    "llama_cpp.enabled",
+    "checkpoints",
+    "subagents",
+    "oracle",
+    "headless"
   ]
 }

@@ -558,7 +558,7 @@ fn replaced_plan_rejects_old_callback_and_preserves_history() {
 fn manual_owner_cannot_impersonate_policy_reviewer() {
     let (_tmp, ctx, id, path) = fixture();
     let plan = plan_submit(&ctx, &id, &path).unwrap();
-    let verdict = plan_verdict(
+    let error = plan_verdict(
         &ctx,
         &id,
         &PlanVerdict {
@@ -568,9 +568,9 @@ fn manual_owner_cannot_impersonate_policy_reviewer() {
             notes: "Owner call",
         },
     )
-    .unwrap();
-    assert_eq!(verdict.verdict, Some(Verdict::Escalate));
-    assert_eq!(verdict.reviewer, "owner");
+    .unwrap_err();
+    assert!(error.to_string().contains("independent review"));
+    assert!(ctx.store.get(&id).unwrap().plans[0].reviews.is_empty());
     let task = ctx.store.get(&id).unwrap();
     assert_eq!(task.review, None);
     assert!(task.runs.is_empty());
@@ -578,7 +578,7 @@ fn manual_owner_cannot_impersonate_policy_reviewer() {
 }
 
 #[test]
-fn unresolved_owner_decision_escalates_even_manual_owner_approval() {
+fn unresolved_owner_decision_refuses_manual_owner_approval() {
     let (_tmp, mut ctx, id, path) = fixture();
     ctx.store.config.review.reviewer = Some("none".into());
     ctx.store.save_config().unwrap();
@@ -588,7 +588,7 @@ fn unresolved_owner_decision_escalates_even_manual_owner_approval() {
     )
     .unwrap();
     let plan = plan_submit(&ctx, &id, &path).unwrap();
-    let verdict = plan_verdict(
+    let error = plan_verdict(
         &ctx,
         &id,
         &PlanVerdict {
@@ -598,8 +598,9 @@ fn unresolved_owner_decision_escalates_even_manual_owner_approval() {
             notes: "Approve",
         },
     )
-    .unwrap();
-    assert_eq!(verdict.verdict, Some(Verdict::Escalate));
+    .unwrap_err();
+    assert!(error.to_string().contains("resolve decisions"));
+    assert!(ctx.store.get(&id).unwrap().plans[0].reviews.is_empty());
 }
 
 #[test]

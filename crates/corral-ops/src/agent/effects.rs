@@ -243,7 +243,11 @@ pub fn recheck(store: &Store, task: &Task, origin: &RequestOrigin, home: &Home) 
                 }
             }
             admission::recheck_pm(&pm, origin.binding.generation)?;
-            if task.project.as_deref() != Some(pm.state.binding.project.as_str()) {
+            if !super::hooks::pm::contains(
+                store,
+                &pm.state.binding.project,
+                task.project.as_deref(),
+            )? {
                 return Err(reject(
                     RejectCode::OutOfScope,
                     "the task is outside the PM's project scope",
@@ -838,6 +842,9 @@ pub fn reconcile_pm(ctx: &Ctx, request: &str) -> Result<RequestReceipt> {
             ),
             None => (ReceiptState::Abandoned, json!({"outcome": "not_started"})),
         }
+    } else if kind == Some("pm_inbox") {
+        let item = receipt.effect.as_ref().map_or("", |e| e.reference.as_str());
+        crate::pm_inbox::reconciled(ctx, request, item)?
     } else {
         let reason = "a legacy pane send leaves no marker";
         (

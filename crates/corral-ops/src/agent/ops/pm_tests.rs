@@ -37,6 +37,137 @@ fn task(fx: &ts::Fx, project: &str, body: &str) -> Task {
 }
 
 #[test]
+fn inbox_tools_claim_and_resolve_at_revisions_and_refuse_a_stale_claim() {
+    // Given a bound Pi-native PM and owner item PMI-1 at revision 0.
+    let (fx, host) = fixture();
+    fx.ctx
+        .store
+        .pm_inbox_post(corral_core::pm_inbox::NewPmItem {
+            from: "owner".into(),
+            kind: corral_core::pm_inbox::ItemKind::Question,
+            subject: "Which cache?".into(),
+            body: "Context for the PM.".into(),
+            refs: vec![],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let resolve = |id: &str, payload: Value| send(&fx, &host, "inbox_resolve", id, payload);
+    // When it reads the open page, claims at 0 (and replays that call), resolves at 1 and
+    // then claims at revision 0 again.
+    let page = send(&fx, &host, "inbox_read", "page", json!({}));
+    let claim = json!({"id":"PMI-1","expected_revision":0,"action":"claim"});
+    let claimed = resolve("claim", claim.clone());
+    let replayed = resolve("claim", claim.clone());
+    let resolved = resolve(
+        "resolve",
+        json!({"id":"PMI-1","expected_revision":1,"action":"resolve",
+            "outcome":"done","text":"Filed T-9.","refs":["T-9"]}),
+    );
+    let stale = resolve("stale", claim);
+    let shown = send(&fx, &host, "inbox_read", "show", json!({"id":"PMI-1"}));
+    // Then the page lists the item, the claim and resolve commit revisions 1 and 2 once each,
+    // and the stale claim is a rejected stale_revision receipt that changed nothing.
+    assert_eq!(ts::committed(&page).result["items"][0]["id"], "PMI-1");
+    assert_eq!(ts::committed(&claimed).result["revision"], 1);
+    assert_eq!(claimed.receipt(), replayed.receipt());
+    assert_eq!(ts::committed(&resolved).result["revision"], 2);
+    let stale = stale.receipt().unwrap();
+    assert_eq!(stale.state, ReceiptState::Rejected);
+    assert_eq!(stale.result["code"], "stale_revision");
+    let item = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    assert_eq!(item.revision, 2);
+    let requests: Vec<_> = item.history.iter().map(|t| t.request.clone()).collect();
+    assert_eq!(
+        requests,
+        [
+            Some(claimed.receipt().unwrap().request_id.clone()),
+            Some(resolved.receipt().unwrap().request_id.clone())
+        ]
+    );
+    let shown = ts::committed(&shown).result;
+    assert_eq!(shown["item"]["state"], "resolved");
+    assert_eq!(shown["outcome"], "done");
+    let content: Value = serde_json::from_str(shown["content_json"].as_str().unwrap()).unwrap();
+    assert_eq!(content["outcome"]["text"], "Filed T-9.");
+    assert_eq!(content["body"], "Context for the PM.");
+}
+
+#[test]
+fn inbox_reads_fit_one_frame_for_the_largest_accepted_item() {
+    use corral_core::pm_inbox::{ItemKind, NewPmItem, RequestedAction, Resolution, owner_words};
+    // Given the review's F2 item: 32 refs of 191 bytes, a 33-word requested command, a quote
+    // and a body that JSON-escapes and spans pages, resolved with a 4096-byte outcome and refs.
+    let (fx, host) = fixture();
+    fx.ctx
+        .store
+        .create_assistant("pi", None, None, None)
+        .unwrap();
+    let refs: Vec<String> = (0..32).map(|i| format!("{i}{}", "r".repeat(190))).collect();
+    let words: Vec<String> = (0..31).map(|i| format!("{i}{}", "a".repeat(190))).collect();
+    let action = RequestedAction::parse(&format!("approve T-1 {}", words.join(" "))).unwrap();
+    let body = "\"\u{fc}".repeat(1500);
+    fx.ctx
+        .store
+        .pm_inbox_post(NewPmItem {
+            from: "assistant:A-1".into(),
+            kind: ItemKind::ActionRequest,
+            subject: "Batch request".into(),
+            body: body.clone(),
+            refs: refs.clone(),
+            requested_action: Some(action.clone()),
+            owner_words: Some(owner_words("q".repeat(1000), None)),
+            key: None,
+        })
+        .unwrap();
+    fx.ctx.store.pm_inbox_claim("PMI-1", 0, None).unwrap();
+    let text = "x".repeat(4096);
+    fx.ctx
+        .store
+        .pm_inbox_resolve("PMI-1", 1, (Resolution::Done, &text, refs.clone()), None)
+        .unwrap();
+    // When the PM lists one item per page, then reads the item by ID page by page.
+    let page = send(
+        &fx,
+        &host,
+        "inbox_read",
+        "page",
+        json!({"state":"resolved","limit":1}),
+    );
+    let mut content = String::new();
+    let mut offset = 0;
+    loop {
+        let read = send(
+            &fx,
+            &host,
+            "inbox_read",
+            &format!("show-{offset}"),
+            json!({"id":"PMI-1","offset":offset}),
+        );
+        let result = ts::committed(&read).result;
+        content.push_str(result["content_json"].as_str().unwrap());
+        match result["next_offset"].as_u64() {
+            Some(next) => offset = usize::try_from(next).unwrap(),
+            None => break,
+        }
+    }
+    // Then every page fits one result frame, the summary counts every ref, and the pages
+    // reassemble the complete item.
+    let listed = &ts::committed(&page).result["items"][0];
+    assert_eq!(
+        (listed["id"].as_str(), listed["refs_total"].as_u64()),
+        (Some("PMI-1"), Some(32))
+    );
+    let full: Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(full["body"], body);
+    assert_eq!(full["refs"], json!(refs));
+    assert_eq!(full["requested_action"], json!(action));
+    assert_eq!(full["outcome"]["text"], text);
+    assert_eq!(full["outcome"]["refs"], json!(refs));
+}
+
+#[test]
 fn comment_replays_after_fencing_without_a_second_effect() {
     // Given a bound PM and a task in its scope.
     let (fx, host) = fixture();

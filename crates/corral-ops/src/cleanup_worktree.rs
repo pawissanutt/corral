@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Run, RunHead, StuckProcess, TaskRef};
+use corral_core::{Run, RunHead, StuckProcess, Task, TaskRef};
 
 use crate::Ctx;
 use crate::watchdog::{ProcessControl, SystemProcesses, protected};
@@ -193,6 +193,184 @@ fn process_marker(_process: &StuckProcess) -> Option<Vec<u8>> {
     None
 }
 
+/// Reap a closed reviewer outside the task-store transaction. A verdict can be submitted
+/// from inside the reviewer, so preserve our ancestors and let the next sync reap them.
+#[cfg(target_os = "linux")]
+pub(crate) fn reap_review(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<()> {
+    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{}", run.id, child.id))?;
+    let Ok(marker) = std::fs::read(receipt.with_extension("owner")) else {
+        return Ok(());
+    };
+    if marker.len() != 64 {
+        return Ok(());
+    }
+    let protected = protected_pids()?;
+    for entry in std::fs::read_dir("/proc").context("listing reviewer processes")? {
+        let entry = entry?;
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if protected.contains(&pid) {
+            continue;
+        }
+        // A cheap hint avoids inspecting every process for each historical review. The
+        // marker is read again after capturing identity, before any signal.
+        let matching = std::fs::read(entry.path().join("environ"))
+            .ok()
+            .is_some_and(|env| {
+                env.split(|b| *b == 0).any(|value| {
+                    value.strip_prefix(b"CORRAL_PROCESS_OWNER=") == Some(marker.as_slice())
+                })
+            });
+        if !matching {
+            continue;
+        }
+        let Some(snapshot) = SystemProcesses.inspect(pid)? else {
+            continue;
+        };
+        let process = StuckProcess {
+            pid,
+            argv: snapshot.argv,
+            started: snapshot.started,
+        };
+        if process_marker(&process).as_deref() != Some(marker.as_slice()) {
+            continue;
+        }
+        if let Err(error) = SystemProcesses.terminate(&process)
+            && SystemProcesses
+                .inspect(pid)?
+                .is_some_and(|p| p.started == process.started)
+        {
+            return Err(error).context("terminating reviewer process");
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn reap_review(_ctx: &Ctx, _task: &Task, _run: &Run, _child: &Run) -> Result<()> {
+    Ok(())
+}
+
+// Pin the pane's actual processes before closing it, then wait for kernel exit
+// notifications rather than racing the terminal server's asynchronous teardown.
+#[cfg(target_os = "linux")]
+pub(crate) fn pane_exits(ctx: &Ctx, pane: &str) -> Vec<rustix::fd::OwnedFd> {
+    use rustix::process::{Pid, PidfdFlags, pidfd_open};
+    let Ok(info) = ctx.herdr.pane_process_info(pane) else {
+        return Vec::new();
+    };
+    std::iter::once(info.shell_pid)
+        .chain(info.foreground_processes.into_iter().map(|p| p.pid))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|pid| Pid::from_raw(i32::try_from(pid).ok()?))
+        .filter_map(|pid| pidfd_open(pid, PidfdFlags::empty()).ok())
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn wait_pane_exits(exits: &[rustix::fd::OwnedFd]) {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    for fd in exits {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let timeout = Timespec {
+            tv_sec: remaining.as_secs() as _,
+            tv_nsec: remaining.subsec_nanos() as _,
+        };
+        let _ = poll(&mut [PollFd::new(fd, PollFlags::IN)], Some(&timeout));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn pane_exits(_ctx: &Ctx, _pane: &str) -> Vec<()> {
+    Vec::new()
+}
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn wait_pane_exits(_exits: &[()]) {}
+
+#[cfg(target_os = "linux")]
+fn pane_marker(process: &StuckProcess) -> Option<String> {
+    let env = std::fs::read(format!("/proc/{}/environ", process.pid)).ok()?;
+    let value = env
+        .split(|b| *b == 0)
+        .find_map(|entry| entry.strip_prefix(b"HERDR_PANE_ID="))?;
+    std::str::from_utf8(value)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+#[cfg(not(target_os = "linux"))]
+fn pane_marker(_process: &StuckProcess) -> Option<String> {
+    None
+}
+
+fn recorded_panes(ctx: &Ctx, task: &Task) -> Result<BTreeSet<String>> {
+    if !crate::session_scope::owns_task(ctx, task)? {
+        return Ok(BTreeSet::new());
+    }
+    fn collect(run: &Run, panes: &mut BTreeSet<String>) {
+        if let Some(pane) = run.gate.as_ref().and_then(|g| g.pane.as_ref()) {
+            panes.insert(pane.clone());
+        }
+        if let Some(review) = &run.review
+            && review.reviewer != "pm"
+            && let Some(pane) = &review.pane
+        {
+            panes.insert(pane.clone());
+        }
+        for child in &run.review_runs {
+            // Child herdr references can be PM accounting, not pane ownership.
+            collect(child, panes);
+        }
+    }
+    let mut panes = BTreeSet::new();
+    for run in &task.runs {
+        if let Some(h) = &run.herdr {
+            panes.insert(h.pane_id.clone());
+        }
+        collect(run, &mut panes);
+    }
+    for event in ctx
+        .store
+        .events_shared()?
+        .iter()
+        .filter(|e| e.task.as_deref() == Some(&task.id))
+    {
+        if !task
+            .runs
+            .iter()
+            .any(|run| event.detail["run"].as_str() == Some(&run.id))
+        {
+            continue;
+        }
+        if (event.kind == "gate_started"
+            || event.kind == "run_workspace_created"
+            || (event.kind == "review_started"
+                && event.detail["reviewer"].as_str().is_some_and(|r| r != "pm")))
+            && let Some(pane) = event.detail["pane"].as_str()
+        {
+            panes.insert(pane.to_owned());
+        }
+    }
+    for review in task
+        .plans
+        .iter()
+        .flat_map(|plan| &plan.reviews)
+        .filter(|r| r.verdict.is_none())
+    {
+        if let Some(h) = &review.herdr {
+            panes.remove(&h.pane_id);
+        }
+    }
+    Ok(panes)
+}
+
 fn may_terminate(linux: bool, owned: bool) -> bool {
     linux && owned
 }
@@ -335,8 +513,11 @@ pub(crate) fn remove<T: TaskRef + ?Sized>(
     let protected_set = protected_pids()?;
     // Harness processes and residents lacking an exact ownership marker stay protected.
     let mut runs = None;
+    let panes = recorded_panes(ctx, task)?;
     let mut warnings = Vec::new();
     for process in residents(&path)? {
+        let pane = pane_marker(&process);
+        let pane_owned = pane.as_ref().is_some_and(|p| panes.contains(p));
         if protected_set.contains(&process.pid)
             || !may_terminate(cfg!(target_os = "linux"), owned(ctx, task, run, &process)?)
             || {
@@ -348,8 +529,10 @@ pub(crate) fn remove<T: TaskRef + ?Sized>(
             }
         {
             warnings.push(format!(
-                "protected process {} still uses worktree",
-                process.pid
+                "protected process {} still uses worktree (HERDR_PANE_ID={}, recorded={})",
+                process.pid,
+                pane.as_deref().unwrap_or("unknown"),
+                pane_owned
             ));
             continue;
         }
@@ -395,5 +578,97 @@ pub(crate) fn discard_branch(repo: &Path, run: &Run) -> Result<()> {
         bail!("refusing to delete integration branch");
     }
     git(repo, &["branch", "-D", "--", &run.branch])?;
+    Ok(())
+}
+
+/// Whether this command and its ancestors count as occupying a scratch worktree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Callers {
+    /// An assistant disposing of its own scratch may run from inside it.
+    Exempt,
+    /// GC keeps a scratch that the shell or process running it still uses.
+    Occupy,
+}
+
+/// Processes using a scratch worktree. Corral launched none of them, so scratch residents
+/// are reported and never signalled.
+pub(crate) fn scratch_residents(path: &Path, callers: Callers) -> Result<Vec<u32>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let path = path.canonicalize().context("resolving scratch worktree")?;
+    let exempt = match callers {
+        Callers::Exempt => protected_pids()?,
+        Callers::Occupy => BTreeSet::new(),
+    };
+    Ok(residents(&path)?
+        .into_iter()
+        .map(|process| process.pid)
+        .filter(|pid| !exempt.contains(pid))
+        .collect())
+}
+
+/// Removes an assistant scratch worktree and force-deletes its branch, after the caller has
+/// preserved its work. Only a recorded `<repo>/.worktrees/A-<n>-<slug>` on a `corral/A-<n>/`
+/// branch is accepted, and a scratch a resident process still uses is refused.
+pub(crate) fn remove_scratch(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    callers: Callers,
+) -> Result<()> {
+    let repo = repo
+        .canonicalize()
+        .context("resolving scratch repository")?;
+    let expected = repo.join(".worktrees");
+    let named = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("A-"));
+    if path.parent() != Some(expected.as_path())
+        || !named
+        || !branch.starts_with("corral/A-")
+        || std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    {
+        bail!(
+            "refusing scratch cleanup outside {}: {} ({branch})",
+            expected.display(),
+            path.display()
+        );
+    }
+    if path.exists() && path.canonicalize().context("resolving scratch worktree")? != path {
+        bail!("refusing aliased scratch worktree {}", path.display());
+    }
+    let busy = scratch_residents(path, callers)?;
+    if !busy.is_empty() {
+        bail!(
+            "scratch_busy: processes {busy:?} still use {}; leave the directory and retry",
+            path.display()
+        );
+    }
+    if registered(&repo, path)? {
+        match corral_git::worktree_remove(&repo, path, true) {
+            Ok(()) => {}
+            Err(error) if registered(&repo, path)? => return Err(error),
+            // Git can unregister successfully before failing to unlink the directory.
+            Err(_) => {}
+        }
+    }
+    if path.exists() {
+        std::fs::remove_dir_all(path)
+            .with_context(|| format!("removing leftover {}", path.display()))?;
+    }
+    let reference = format!("refs/heads/{branch}");
+    let exists = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["show-ref", "--verify", "--quiet", &reference])
+        .stdin(Stdio::null())
+        .status()
+        .context("checking scratch branch")?
+        .success();
+    if exists {
+        git(&repo, &["branch", "-D", "--", branch])?;
+    }
     Ok(())
 }

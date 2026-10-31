@@ -64,7 +64,10 @@ fn one_ref(
         ContainerRef::Reviewer { run, review, .. } => {
             task.unreceipted_review_obligations(run, review)?
         }
-        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => {
+        ContainerRef::Planner { .. }
+        | ContainerRef::PlanReviewer { .. }
+        | ContainerRef::Pm
+        | ContainerRef::Assistant { .. } => {
             bail!("run conditions need a coding container")
         }
     };
@@ -188,7 +191,7 @@ fn project(
         .obligations
         .waits
         .iter()
-        .filter(|wait| wait.receipt.is_none())
+        .filter(|wait| wait.receipt.is_none() && !wait.settled_job_exit())
     {
         let mut condition = row(
             task,

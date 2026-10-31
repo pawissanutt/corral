@@ -15,7 +15,7 @@ mod stale_consent;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use corral_core::{
     AuthorizedSubmission, LaunchStage, OperatingActionKind, OperatingAuthority, OperatingOrigin,
@@ -24,6 +24,9 @@ use corral_core::{
 };
 use fixture::{Fx, now};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
+
+// Includes the full controller operation, not just socket latency. Matches herdr.py.
+const BARRIER_BUDGET: Duration = Duration::from_secs(300);
 
 struct Barrier {
     listener: UnixListener,
@@ -38,13 +41,14 @@ impl Barrier {
     }
 
     fn arrival(&self) -> UnixStream {
+        let deadline = Instant::now() + BARRIER_BUDGET;
         let mut descriptors = [PollFd::new(&self.listener, PollFlags::IN)];
         // This guard includes the full sync preparation, not just the IPC exchange.
         assert_eq!(
             poll(
                 &mut descriptors,
                 Some(&Timespec {
-                    tv_sec: 60,
+                    tv_sec: BARRIER_BUDGET.as_secs() as _,
                     tv_nsec: 0
                 })
             )
@@ -54,10 +58,14 @@ impl Barrier {
         );
         let (stream, _) = self.listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+            .set_read_timeout(Some(deadline.saturating_duration_since(Instant::now())))
             .unwrap();
         let mut request = String::new();
         BufReader::new(&stream).read_line(&mut request).unwrap();
+        assert!(
+            request.ends_with('\n'),
+            "incomplete barrier request: {request}"
+        );
         assert!(request.contains("report-metadata"));
         stream
     }

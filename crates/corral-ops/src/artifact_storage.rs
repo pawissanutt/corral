@@ -138,6 +138,14 @@ fn keyed(ctx: &Ctx, path: &str) -> Result<Option<Artifact>> {
 /// The artifact stored at `path`: by its key record, else (an artifact attached before keyed
 /// lookups) from its run's rows.
 fn by_path(ctx: &Ctx, path: &str) -> Result<Option<Artifact>> {
+    if let Some(owner) = task_of(path).filter(|owner| owner.starts_with("A-")) {
+        return Ok(ctx
+            .store
+            .get_assistant(owner)?
+            .artifacts
+            .into_iter()
+            .find(|artifact| artifact.path == path));
+    }
     if let Some(a) = keyed(ctx, path)? {
         return Ok(Some(a));
     }
@@ -154,6 +162,22 @@ fn by_path(ctx: &Ctx, path: &str) -> Result<Option<Artifact>> {
 /// The artifact `task:run:file` names: the exact snapshot, else the newest `<sha8>-<file>`, each
 /// by its record; only artifacts attached before keyed lookups fall back to the run's rows.
 fn by_reference(ctx: &Ctx, task: &str, run: &str, file: &str) -> Result<Option<Artifact>> {
+    if task.starts_with("A-") {
+        let session = ctx.store.get_assistant(task)?;
+        let exact = session
+            .artifacts
+            .iter()
+            .find(|artifact| corral_core::snapshot_name(artifact) == file);
+        return Ok(exact
+            .or_else(|| {
+                session
+                    .artifacts
+                    .iter()
+                    .rev()
+                    .find(|artifact| unprefixed(corral_core::snapshot_name(artifact)) == Some(file))
+            })
+            .cloned());
+    }
     if let Some(a) = keyed(ctx, &format!("artifacts/{task}/{run}/{file}"))? {
         return Ok(Some(a));
     }
@@ -176,6 +200,16 @@ fn by_reference(ctx: &Ctx, task: &str, run: &str, file: &str) -> Result<Option<A
 
 /// The newest artifact of `task` sharing `anchor`'s title or source (a followed pin).
 fn newest_like(ctx: &Ctx, task: &str, anchor: &Artifact) -> Result<Artifact> {
+    if task.starts_with("A-") {
+        return Ok(ctx
+            .store
+            .get_assistant(task)?
+            .artifacts
+            .into_iter()
+            .rev()
+            .find(|artifact| artifact.title == anchor.title || artifact.source == anchor.source)
+            .unwrap_or_else(|| anchor.clone()));
+    }
     let lookup = |kind: &str, value: &str| {
         ctx.store
             .record::<RowDoc>(ARTIFACT_LATEST, &format!("{task}/{kind}/{value}"))
@@ -196,10 +230,14 @@ fn newest_like(ctx: &Ctx, task: &str, anchor: &Artifact) -> Result<Artifact> {
 
 /// The task an artifact belongs to, from its `artifacts/<task>/<run>/<file>` path.
 pub(crate) fn task_of(path: &str) -> Option<&str> {
-    path.strip_prefix("artifacts/")?
-        .split('/')
-        .next()
-        .filter(|task| !task.is_empty())
+    let relative = path.strip_prefix("artifacts/")?;
+    let mut parts = relative.split('/');
+    let first = parts.next()?;
+    if first == "assistant" {
+        parts.next().filter(|owner| owner.starts_with("A-"))
+    } else {
+        (!first.is_empty()).then_some(first)
+    }
 }
 
 fn blob_reader(ctx: &Ctx, a: &Artifact) -> Result<Option<Box<dyn Read + Send>>> {
@@ -584,9 +622,12 @@ pub fn artifact_path(ctx: &Ctx, a: &Artifact) -> Result<PathBuf> {
     ctx.store.with_blob_lease(|| {
         let siblings: Vec<Artifact> = if report {
             let task = task_of(&a.path).context("artifact path names no task")?;
-            ctx.store
-                .artifact_rows(task, Some(&a.run))?
-                .into_iter()
+            let rows = if task.starts_with("A-") {
+                ctx.store.get_assistant(task)?.artifacts
+            } else {
+                ctx.store.artifact_rows(task, Some(&a.run))?
+            };
+            rows.into_iter()
                 .filter(|s| s.purged_at.is_none() && Path::new(&s.path).parent() == parent)
                 .collect()
         } else {
@@ -642,6 +683,12 @@ pub fn set_artifact_tier(ctx: &Ctx, reference: &str, tier: ArtifactTier) -> Resu
     let _lock = storage_lock(ctx)?;
     let artifact = resolve_artifact(ctx, reference)?;
     let task = task_of(&artifact.path).context("artifact task not found")?;
+    crate::assistant_artifacts::check_owner(Some(task))?;
+    if task.starts_with("A-") {
+        return crate::assistant_artifacts::update(ctx, task, &artifact.path, |artifact| {
+            artifact.tier_override = Some(tier)
+        });
+    }
     let mut result = None;
     ctx.store.update(task, |t| {
         let index = t
@@ -697,11 +744,22 @@ pub fn resolve_artifact(ctx: &Ctx, reference: &str) -> Result<Artifact> {
     let PinRef::Artifact { task, run, file } = PinRef::parse(reference)? else {
         bail!("expected an artifact reference (task:run:file)");
     };
-    let task = Store::normalize_id(&task)?;
+    let task = if task.starts_with("A-") {
+        corral_core::assistant::validate_id(&task)?;
+        task
+    } else {
+        Store::normalize_id(&task)?
+    };
     let a = match by_reference(ctx, &task, &run, &file)? {
         Some(a) => a,
         None => {
-            ctx.store.head(&task).context("artifact task not found")?;
+            if task.starts_with("A-") {
+                ctx.store
+                    .get_assistant(&task)
+                    .context("artifact session not found")?;
+            } else {
+                ctx.store.head(&task).context("artifact task not found")?;
+            }
             bail!("artifact reference not found");
         }
     };
@@ -720,7 +778,25 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
         })
         .map(|a| a.path.clone())
         .collect();
+    for session in ctx.store.list_assistants()? {
+        paths.extend(
+            session
+                .artifacts
+                .into_iter()
+                .filter(|artifact| {
+                    artifact.tier() == ArtifactTier::Keep
+                        || artifact.kind == corral_core::ArtifactKind::Screenshot
+                })
+                .map(|artifact| artifact.path),
+        );
+    }
     for pin in ctx.store.pins()? {
+        if pin.target.starts_with("A-") {
+            if let Ok(artifact) = resolve_artifact(ctx, &pin.target) {
+                paths.insert(artifact.path);
+            }
+            continue;
+        }
         if let PinTarget::Artifact { artifact, .. } =
             corral_core::resolve_pin(&pin, tasks, ctx.store.dir())
         {
@@ -738,6 +814,19 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
         }
     }
     Ok(paths)
+}
+
+/// Publishes session artifact bytes through the same canonical blob store as task evidence.
+pub(crate) fn snapshot(
+    ctx: &Ctx,
+    dest: &Path,
+    bytes: &[u8],
+    artifact: &Artifact,
+) -> Result<Option<u64>> {
+    let owner = task_of(&artifact.path).context("artifact owner missing")?;
+    store_blob(ctx, owner, &artifact.sha256, bytes)?;
+    replace(dest, bytes)?;
+    Ok(None)
 }
 
 /// Writes the legacy copy at the artifact's stored path (see the module comment).

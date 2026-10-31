@@ -262,12 +262,14 @@ macro_rules! head_fields {
         /// One accessor per non-history task field, served by the full task and by heads.
         pub trait TaskFieldsRef {
             $(fn $name(&self) -> &$ty;)*
+            fn cowork_run(&self) -> Option<&crate::Cowork>;
         }
 
         /// Copies every non-history field of `task` into head fields.
         pub fn task_head_fields(task: &Task) -> TaskHeadFields {
             TaskHeadFields {
                 $($name: task.$name.clone(),)*
+                current_run_id: task.current_run().map(|run| run.id.clone()),
                 member_gates: task
                     .member_gates
                     .iter()
@@ -294,18 +296,22 @@ macro_rules! head_fields {
 
         impl TaskFieldsRef for Task {
             $(fn $name(&self) -> &$ty { &self.$name })*
+            fn cowork_run(&self) -> Option<&crate::Cowork> { Task::cowork_run(self) }
         }
 
         impl TaskFieldsRef for TaskHeadFields {
             $(fn $name(&self) -> &$ty { &self.$name })*
+            fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| Some(cowork.run.as_str()) == self.current_run_id.as_deref()) }
         }
 
         impl TaskFieldsRef for TaskHead {
             $(fn $name(&self) -> &$ty { &self.task.$name })*
+            fn cowork_run(&self) -> Option<&crate::Cowork> { self.cowork.as_ref().filter(|cowork| self.current_run.as_ref().is_some_and(|run| run.id == cowork.run)) }
         }
 
         impl TaskFieldsRef for TaskHeadMut {
             $(fn $name(&self) -> &$ty { &self.head().task.$name })*
+            fn cowork_run(&self) -> Option<&crate::Cowork> { TaskFieldsRef::cowork_run(self.head()) }
         }
     };
 }
@@ -320,6 +326,7 @@ head_fields! {
     membership_revision: u64,
     dashboard: Option<crate::DashboardSchedule>,
     origin: Option<crate::Origin>,
+    cowork: Option<crate::Cowork>,
     idea_decision: Option<crate::IdeaDecision>,
     completion: Option<crate::CriteriaManifest>,
     result: Option<crate::TaskResult>,
@@ -445,7 +452,7 @@ pub trait TaskRef: TaskFieldsRef {
             ContainerRef::PlanReviewer { plan, review, .. } => self
                 .plan_review(plan, review)?
                 .and_then(|r| r.agent_host.map(|h| *h)),
-            ContainerRef::Pm => None,
+            ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
         })
     }
 
@@ -511,6 +518,12 @@ pub trait TaskRef: TaskFieldsRef {
     fn run_question_by_key(&self, run: &str, key: &str) -> Result<Option<AgentQuestion>>;
     /// The questions of `container` still waiting for an answer.
     fn pending_agent_questions(&self, container: &ContainerRef) -> Result<Vec<AgentQuestion>>;
+    /// Pending and named questions, preserving full-state append order without other history.
+    fn selected_agent_questions(
+        &self,
+        container: &ContainerRef,
+        named: &[&str],
+    ) -> Result<Vec<AgentQuestion>>;
     /// The wake subscription of request `request_id` of `container`.
     fn agent_wake(
         &self,

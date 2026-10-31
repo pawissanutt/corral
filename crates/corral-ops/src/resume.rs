@@ -412,7 +412,11 @@ fn checkpoint_current(
     {
         reasons.push("progress_changed".into());
     }
-    if *obligations != record.checkpoint.run_obligations {
+    let mut current = obligations.clone();
+    let mut captured = record.checkpoint.run_obligations.clone();
+    current.waits.retain(|wait| wait.unresolved());
+    captured.waits.retain(|wait| wait.unresolved());
+    if current != captured {
         reasons.push("obligations_changed".into());
     }
     if !reasons.is_empty() {

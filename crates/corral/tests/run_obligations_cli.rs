@@ -330,7 +330,7 @@ fn unknown_delivery_duplicate_and_malformed_receipts_have_explicit_cli_results()
         "--file",
         file.to_str().unwrap(),
     ]);
-    // Then uncertainty persists, malformed input is rejected and no work is resent.
+    // Then uncertainty persists, malformed input is rejected and only the first recording wakes.
     assert!(!rejected.status.success());
     assert_eq!(
         before["runs"][0]["obligations"],
@@ -349,6 +349,8 @@ fn unknown_delivery_duplicate_and_malformed_receipts_have_explicit_cli_results()
             .count(),
         1
     );
-    assert!(!fx.store.root().join("replies").exists());
+    let replies = std::fs::read_to_string(fx.store.root().join("replies")).unwrap();
+    assert_eq!(replies.lines().count(), 1, "{replies}");
+    assert!(replies.contains("wait `ci` resolved"), "{replies}");
     fx.evidence("cli-receipts");
 }

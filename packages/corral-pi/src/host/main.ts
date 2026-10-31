@@ -1,6 +1,7 @@
 // The Bun host entry point, exec'd by `corral agent launch` with `--launch-fd <n>`. It reads
 // the launch message from that inherited pipe, refuses an unpinned runtime or a missing module,
-// starts the bridge, binds the generation with hello and hands the pane to InteractiveMode.
+// starts the bridge, binds the generation with hello and hands the pane to InteractiveMode, or,
+// when the generation enables headless, attaches without a terminal UI (`./headless.ts`).
 // A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
 // tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
@@ -19,8 +20,14 @@ import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts
 import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
+import { attachHeadless, headlessEnabled } from "./headless.ts";
+import { herdrLifecycle } from "./herdr.ts";
 import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
+import { serverVisible } from "./mcp-settings.ts";
+import { exportAssistantSession } from "../roles/assistant/env.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
+import { subscriptionRoutes } from "./subscriptions.ts";
+import { guardTerminalStop } from "./terminal-stop.ts";
 
 function launchFd(argv: readonly string[]): number {
   const index = argv.indexOf("--launch-fd");
@@ -35,12 +42,14 @@ async function main(): Promise<void> {
   const config = readLaunchMessage(launchFd(process.argv));
   const provider = config.provider ?? "openai-codex";
   restrictEnvironment(process.env, provider);
+  exportAssistantSession(process.env, config.identity);
   const compat = readCompat(config.assets);
   if (compiledBundle()) checkCompiledRuntime(compat);
   else checkRuntime(config.assets, compat);
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
+  const subscriptions = await subscriptionRoutes(modules.auth, provider, config.identity.role);
   const send = modules.auth.transport?.(authContext(provider)) ?? rawFetch;
   let aws: AwsRoute | undefined;
   let rules: readonly DestinationRule[] | undefined;
@@ -60,11 +69,12 @@ async function main(): Promise<void> {
     rules = hostRules(provider, bedrockRoute(config.aws, model, await resolver.profile()));
     aws = { binding: config.aws, resolver };
   }
-  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), provider, rules,
+  const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), subscriptions.providers, rules,
     config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined,
     config.capabilities?.mcp ? {
       origins: Object.values(config.capabilities.mcp.servers)
-        .flatMap((server) => server.projects.includes(config.identity.project) && server.url ? [new URL(server.url).origin] : []),
+        .flatMap((server) => serverVisible(server, config.identity.role, config.identity.project) && server.url
+          ? [new URL(server.url).origin] : []),
       send: rawFetch,
     } : undefined);
   if (aws) {
@@ -94,7 +104,9 @@ async function main(): Promise<void> {
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
-    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession),
+    ...herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)),
+    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
+      config.resumeLeaf),
   });
   const session = host;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
@@ -109,11 +121,12 @@ async function main(): Promise<void> {
       hello: () => ({
         protocol: 1, generation: config.identity.generation, role: config.identity.role,
         bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown"],
+        commands: ["hello", "get_state", "submit_input", "cancel", "events_since", "shutdown", "questions"],
       }),
       state: () => session.state(),
       submit: (input, requestId) => session.submit(input, requestId),
       cancel: (turn) => session.cancel(turn),
+      questions: (updates) => session.questionsChanged(updates),
       shutdown: () => {
         events.emit("shutdown");
         terminal?.stop();
@@ -122,9 +135,14 @@ async function main(): Promise<void> {
     },
   });
   await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
+  if (headlessEnabled(config.capabilities)) {
+    await attachHeadless(session, events, (line) => process.stdout.write(line));
+    return;
+  }
   terminal = new sdk.InteractiveMode(session.runtime, { verbose: false });
+  guardTerminalStop(terminal, process.stdin);
   await terminal.init();
-  session.markInteractive();
+  session.markAttached("interactive");
   try { await terminal.run(); }
   finally { await session.close(); await bridge.close(); }
 }

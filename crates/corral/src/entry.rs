@@ -1,20 +1,55 @@
 //! Attribution established before a command starts producing events.
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{ArgMatches, parser::ValueSource};
 use corral_core::{Actor, Store};
 use corral_ops::Ctx;
+use corral_ops::assistant::owner_action::ViaAssistant;
 
 use crate::Cmd;
+use crate::pm_cmd::PmCmd;
+
+mod class;
+
+/// An assistant shell ran a command outside its Read and File classes; the CLI exits 2.
+#[derive(Debug)]
+pub struct AssistantRefused(String);
+
+impl std::fmt::Display for AssistantRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "assistant_refused: {} needs the owner; use corral_owner_action or corral pm inbox post",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for AssistantRefused {}
 
 pub struct Entry {
     actor: Option<Actor>,
     via: &'static str,
+    assistant: Option<String>,
+    owner_action: Option<ViaAssistant>,
 }
 
 impl Entry {
-    pub fn new(cmd: &Cmd, matches: &ArgMatches) -> Result<Self> {
+    /// `start` locates the store only when this process is an owner action's command child,
+    /// which claims its reservation here, before the command runs.
+    pub fn new(cmd: &Cmd, matches: &ArgMatches, start: &Path) -> Result<Self> {
+        if let Some(via) = corral_ops::assistant::owner_action::claim_from_env(start)? {
+            return Ok(Self {
+                actor: Some(Actor::Owner),
+                via: "owner_action",
+                assistant: None,
+                owner_action: Some(via),
+            });
+        }
+        if let Some(session) = std::env::var_os("CORRAL_ASSISTANT") {
+            return Self::assistant(cmd, matches, session);
+        }
         let explicit = matches.subcommand().and_then(|(_, args)| {
             ["author", "origin"].into_iter().find_map(|key| {
                 (args.try_contains_id(key).unwrap_or(false)
@@ -33,7 +68,9 @@ impl Entry {
             .context("parsing command event author")?;
         let (actor, via) = match cmd {
             Cmd::Hook | Cmd::Plugin { .. } | Cmd::FocusBoard => (Some(Actor::System), "hook"),
-            Cmd::Pm { .. } => (Some(Actor::Pm), "pm"),
+            Cmd::Pm { cmd } if !cmd.as_ref().is_some_and(PmCmd::acts_as_caller) => {
+                (Some(Actor::Pm), "pm")
+            }
             Cmd::Board { .. }
             | Cmd::Capture { .. }
             | Cmd::Artifacts { .. }
@@ -43,7 +80,35 @@ impl Entry {
             }
             _ => (actor, "cli"),
         };
-        Ok(Self { actor, via })
+        Ok(Self {
+            actor,
+            via,
+            assistant: None,
+            owner_action: None,
+        })
+    }
+
+    /// An assistant shell outranks the PM marker, a run worktree cwd and explicit author flags.
+    fn assistant(cmd: &Cmd, matches: &ArgMatches, session: std::ffi::OsString) -> Result<Self> {
+        let session = session
+            .into_string()
+            .map_err(|_| anyhow!("CORRAL_ASSISTANT is not valid UTF-8"))?;
+        corral_core::assistant::validate_id(&session)
+            .context("CORRAL_ASSISTANT must name this shell's assistant session")?;
+        if class::of(cmd, &session) == class::CommandClass::Refused {
+            return Err(AssistantRefused(command_path(matches)).into());
+        }
+        Ok(Self {
+            actor: Some(Actor::Assistant),
+            via: "assistant",
+            assistant: Some(session),
+            owner_action: None,
+        })
+    }
+
+    /// Whether this process executes an assistant's receipted owner action.
+    pub fn owner_action(&self) -> bool {
+        self.owner_action.is_some()
     }
 
     pub fn open(&self, start: &Path) -> Result<Ctx> {
@@ -60,10 +125,20 @@ impl Entry {
 
     pub fn apply(&self, store: &Store) -> Result<()> {
         let (actor, via) = self.resolve(store)?;
-        store.set_attribution(actor, &via)
+        store.set_attribution(actor, &via)?;
+        if let Some(authority) = &self.owner_action {
+            store.set_attribution_detail("owner_authority", serde_json::to_value(authority)?)?;
+        }
+        Ok(())
     }
 
     fn resolve(&self, store: &Store) -> Result<(Actor, String)> {
+        if let Some(authority) = &self.owner_action {
+            return Ok((Actor::Owner, format!("assistant:{}", authority.session)));
+        }
+        if let Some(session) = &self.assistant {
+            return Ok((Actor::Assistant, format!("assistant:{session}")));
+        }
         if self.via != "cli" {
             return Ok((self.actor.unwrap_or(Actor::Owner), self.via.into()));
         }
@@ -73,16 +148,40 @@ impl Entry {
         Ok((self.actor.unwrap_or(Actor::Owner), "cli".into()))
     }
 
+    /// The PM inbox author this invocation acts as: `owner`, `assistant:A-<n>` or its actor.
+    pub fn inbox_author(&self, store: &Store) -> Result<String> {
+        let (actor, via) = self.resolve(store)?;
+        Ok(match actor {
+            Actor::Assistant => via,
+            _ => self.decision_author(store)?.into(),
+        })
+    }
+
     pub fn decision_author(&self, store: &Store) -> Result<&'static str> {
         Ok(match self.resolve(store)?.0 {
             Actor::Owner => "owner",
             Actor::Pm => "pm",
             Actor::Agent => "agent",
+            Actor::Assistant => "assistant",
             Actor::Autopilot => "autopilot",
             Actor::Reviewer => "reviewer",
             Actor::System => "system",
         })
     }
+}
+
+fn command_path(matches: &ArgMatches) -> String {
+    if matches.subcommand().is_none() {
+        return "corral up".into();
+    }
+    let mut path = String::from("corral");
+    let mut current = matches;
+    while let Some((name, sub)) = current.subcommand() {
+        path.push(' ');
+        path.push_str(name);
+        current = sub;
+    }
+    path
 }
 
 fn run_from_cwd(store: &Store, cwd: &Path) -> Result<Option<String>> {

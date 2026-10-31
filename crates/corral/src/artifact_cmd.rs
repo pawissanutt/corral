@@ -38,6 +38,7 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
         ArtifactCmd::Add {
             id,
             path,
+            session,
             kind,
             title,
         } => {
@@ -47,8 +48,17 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                     ArtifactKind::parse(k).ok_or_else(|| anyhow!("unknown artifact kind '{k}'"))
                 })
                 .transpose()?;
-            let path = std::path::absolute(&path).unwrap_or(path);
-            let a = corral_ops::add_artifact(ctx, &id, &path, kind, title.as_deref())?;
+            let a = if let Some(session) = session {
+                if path.is_some() {
+                    bail!("artifact add --session takes one file path, not a task ID");
+                }
+                let path = std::path::absolute(&id).context("resolving artifact path")?;
+                corral_ops::add_session_artifact(ctx, &session, &path, kind, title.as_deref())?
+            } else {
+                let path = path.context("task artifact add requires a task ID and file path")?;
+                let path = std::path::absolute(&path).unwrap_or(path);
+                corral_ops::add_artifact(ctx, &id, &path, kind, title.as_deref())?
+            };
             println!(
                 "{} {} {} {}",
                 a.run,
@@ -89,8 +99,16 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                 print_gc(&report);
             }
         }
-        ArtifactCmd::List { task, json, tier } => {
-            let want = task.as_deref().map(Store::normalize_id).transpose()?;
+        ArtifactCmd::List {
+            task,
+            session,
+            json,
+            tier,
+        } => {
+            if let Some(id) = &session {
+                ctx.store.get_assistant(id)?;
+            }
+            let want = session.or(task.as_deref().map(Store::normalize_id).transpose()?);
             let tier = tier
                 .as_deref()
                 .map(|t| {
@@ -109,7 +127,9 @@ pub fn run(ctx: &Ctx, cmd: ArtifactCmd) -> Result<()> {
                     .iter()
                     .map(|r| {
                         serde_json::json!({
-                            "task": r.task_id, "task_title": r.task_title, "project": r.project,
+                            "task": (!r.task_id.starts_with("A-")).then_some(&r.task_id),
+                            "session": r.task_id.starts_with("A-").then_some(&r.task_id),
+                            "task_title": r.task_title, "project": r.project,
                             "tier": r.artifact.tier(), "artifact": r.artifact,
                         })
                     })
@@ -208,8 +228,20 @@ fn print_gc(report: &corral_ops::GcReport) {
 
 pub fn storage(ctx: &Ctx, json: bool) -> Result<()> {
     let stats = corral_ops::storage_stats(ctx)?;
+    let scratch = corral_ops::assistant::scratch::storage(ctx)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
+        #[derive(serde::Serialize)]
+        struct Report<'a> {
+            #[serde(flatten)]
+            artifacts: &'a corral_ops::StorageStats,
+            #[serde(skip_serializing_if = "<[_]>::is_empty")]
+            scratch: &'a [corral_ops::assistant::scratch::ScratchStorage],
+        }
+        let report = Report {
+            artifacts: &stats,
+            scratch: &scratch,
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         println!(
             "{:<12} {:>16} {:>16}",
@@ -228,6 +260,24 @@ pub fn storage(ctx: &Ctx, json: bool) -> Result<()> {
         println!("Workspace stored totals count shared content once.");
         for warning in &stats.warnings {
             println!("warning: {warning}");
+        }
+        if !scratch.is_empty() {
+            println!();
+            println!(
+                "{:<24} {:>16} {:>16}  PATH",
+                "SCRATCH", "BYTES", "DEPENDENCY BYTES"
+            );
+            for row in &scratch {
+                let bound = if row.measured.truncated { "+" } else { "" };
+                println!(
+                    "{:<24} {:>16} {:>16}  {}{}",
+                    format!("{}/{}", row.session, row.slug),
+                    format!("{}{bound}", row.measured.bytes),
+                    format!("{}{bound}", row.measured.dependency_bytes),
+                    row.path.display(),
+                    if row.missing { " (missing)" } else { "" }
+                );
+            }
         }
     }
     Ok(())

@@ -326,57 +326,6 @@ pub struct ReviewRecord {
     pub route: Option<Box<crate::ReviewRoute>>,
 }
 
-/// Token evidence and separately labelled reported / API-equivalent costs.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Usage {
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-    #[serde(default)]
-    pub reported_usd: Option<f64>,
-    #[serde(default)]
-    pub estimated_usd: Option<f64>,
-    #[serde(default)]
-    pub unpriced_tokens: u64,
-    #[serde(default)]
-    pub cost_basis: Option<CostBasis>,
-    /// Per-response evidence permits repricing model switches without rereading transcripts.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<UsageEntry>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CostBasis {
-    Reported,
-    Estimated,
-    Mixed,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct UsageEntry {
-    /// Response timestamp from the transcript, absent for legacy evidence.
-    #[serde(default)]
-    pub at: Option<Timestamp>,
-    /// Elapsed milliseconds since the triggering transcript input.
-    #[serde(default)]
-    pub latency_ms: Option<u64>,
-    pub model: Option<String>,
-    pub input: u64,
-    pub output: u64,
-    pub cache_read: u64,
-    pub cache_write: u64,
-    pub reported_usd: Option<f64>,
-    pub estimated_usd: Option<f64>,
-    /// Rate provenance, absent on unpriced or not-yet-refreshed legacy evidence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub price_source: Option<String>,
-    pub unpriced_tokens: u64,
-}
-
 /// The newest changes round a worker run was reopened for: the durable identity a reused
 /// conversation is told about and the attention it raises when it answers without reporting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -642,7 +591,7 @@ pub struct Run {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub review_runs: Vec<Run>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<Usage>,
+    pub usage: Option<crate::Usage>,
     /// Why usage is unavailable; collection never prevents finishing a run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_note: Option<String>,
@@ -733,7 +682,7 @@ impl ArtifactKind {
     }
 }
 
-/// A snapshotted output of a run. The file lives at `<store dir>/<path>`.
+/// A snapshotted output of a run or assistant session. The file lives at `<store dir>/<path>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -742,7 +691,7 @@ pub struct Artifact {
     pub compressed_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub purged_at: Option<Timestamp>,
-    /// Run id ("R1").
+    /// Run id ("R1"); empty for a session artifact, which has no coding run.
     pub run: String,
     pub kind: ArtifactKind,
     pub title: String,
@@ -771,6 +720,23 @@ pub struct LandingReceipt {
     pub sha: String,
 }
 
+/// An owner-instructed co-work finish: the assistant scratch run `run` came from and the owner's
+/// review choice. The choice and owner-only landing apply only while `run` is the current run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cowork {
+    pub session: String,
+    pub scratch: String,
+    pub run: String,
+    pub review: CoworkReview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoworkReview {
+    None,
+    Required,
+}
+
 /// A task file: `.corral/tasks/<id>-<slug>.md` = YAML frontmatter (this struct minus `body`/`path`) + markdown body.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
@@ -786,6 +752,8 @@ pub struct Task {
     pub dashboard: Option<crate::DashboardSchedule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<crate::Origin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cowork: Option<Cowork>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idea_decision: Option<crate::IdeaDecision>,
     /// Owner context does not participate in spec or verification identities.
@@ -954,6 +922,14 @@ impl Task {
     /// The most recent run, if any.
     pub fn current_run(&self) -> Option<&Run> {
         self.runs.last()
+    }
+
+    /// The co-work finish whose run is the current run.
+    pub fn cowork_run(&self) -> Option<&Cowork> {
+        let current = self.current_run()?;
+        self.cowork
+            .as_ref()
+            .filter(|cowork| cowork.run == current.id)
     }
 
     pub fn current_run_mut(&mut self) -> Option<&mut Run> {

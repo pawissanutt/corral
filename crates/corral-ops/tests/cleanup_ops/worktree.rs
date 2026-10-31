@@ -70,6 +70,35 @@ fn approval_closes_every_pane_before_removing_worktree() {
     fx.assert_closed(&panes, &run.herdr.unwrap().workspace_id);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn landing_waits_for_recorded_shell_after_pane_close() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let pane = &run.herdr.as_ref().unwrap().pane_id;
+    let close_pid = fx.state.parent().unwrap().join("closing-pid");
+    let mut child = crate::support::command("python3", &run.worktree)
+        .current_dir(&run.worktree)
+        .env_remove("CORRAL_PROCESS_OWNER")
+        .env_remove("HERDR_PANE_ID")
+        .env("CLOSE_PID", close_pid)
+        .args(["-c", "import os,signal,select;\ndef close(*_):\n p=int(open(os.environ['CLOSE_PID']).read()); fd=os.pidfd_open(p); poll=select.poll(); poll.register(fd,select.POLLIN); poll.poll(); os._exit(0)\nsignal.signal(signal.SIGTERM,close); print('ready',flush=True); signal.pause()"])
+        .stdin(Stdio::null()).stdout(Stdio::piped()).spawn().unwrap();
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "ready");
+    fx.edit(|s| s["shells"] = json!({pane: child.id()}));
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    child.wait().unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
 #[test]
 fn approval_protects_unowned_nested_cwd_and_outside_process() {
     let fx = Fx::new();
@@ -119,6 +148,182 @@ fn owned_orphan_daemon_is_removed_after_landing() {
     assert!(!still_alive);
     assert!(!run.worktree.exists());
     assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn gate_commands_inherit_run_ownership_marker() {
+    let mut fx = Fx::new();
+    let observed = fx.app.join("gate-marker");
+    fx.ctx.store.config.review.gate = Some(vec![format!(
+        "printf '%s' \"$CORRAL_PROCESS_OWNER\" > '{}'",
+        observed.display()
+    )]);
+    fx.ctx.store.save_config().unwrap();
+    fx.review();
+    assert_eq!(std::fs::read_to_string(observed).unwrap(), fx.marker());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn verdict_reaps_reviewer_resident_before_landing() {
+    let fx = Fx::new();
+    fx.review();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let marker_path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(marker_path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    corral_ops::verdict(&fx.ctx, &fx.id, Verdict::Approve, "Checked.").unwrap();
+    assert!(
+        resident.0.try_wait().unwrap().is_some(),
+        "reviewer survived verdict"
+    );
+    fx.sync();
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn landing_reaps_reviewer_orphan_left_after_verdict() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(resident.0.try_wait().unwrap().is_some());
+    assert!(!run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sync_waits_for_verdict_event_before_reaping_reviewer() {
+    let fx = Fx::new();
+    fx.review();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            let run = task.current_run_mut().unwrap();
+            let now = jiff::Timestamp::now();
+            let review = run.review.as_mut().unwrap();
+            review.verdict = Some(Verdict::Approve);
+            review.at = now;
+            let child = run.review_runs.last_mut().unwrap();
+            child.ended = Some(now);
+            child.review = Some(review.clone());
+            Ok(())
+        })
+        .unwrap();
+    fx.sync();
+    assert!(
+        resident.0.try_wait().unwrap().is_none(),
+        "sync killed the unfinished verdict command"
+    );
+    fx.ctx
+        .store
+        .log_event(
+            Some(&fx.id),
+            "verdict",
+            json!({"run":run.id,"reviewer":"rev"}),
+        )
+        .unwrap();
+    fx.sync();
+    assert!(resident.0.try_wait().unwrap().is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn sync_reaps_abandoned_reviewer() {
+    let fx = Fx::new();
+    fx.review();
+    let run = fx.run();
+    let reviewer = run.review_runs.last().unwrap();
+    let path = fx
+        .ctx
+        .store
+        .state_dir()
+        .join("launch-exits")
+        .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
+    let marker = std::fs::read_to_string(path).unwrap();
+    let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    corral_ops::review_run(&fx.ctx, &fx.id, Some("rev")).unwrap();
+    fx.sync();
+    assert!(resident.0.try_wait().unwrap().is_some());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn foreign_resident_with_recorded_pane_id_is_protected() {
+    let fx = Fx::new();
+    fx.owner_ready();
+    let run = fx.run();
+    let pane = run.herdr.as_ref().unwrap().pane_id.clone();
+    let spawn = |name: &str| {
+        let mut child = crate::support::command("python3", &run.worktree)
+            .current_dir(&run.worktree)
+            .env_remove("CORRAL_PROCESS_OWNER")
+            .env("HERDR_PANE_ID", name)
+            .args([
+                "-c",
+                "import signal; print('ready',flush=True); signal.pause()",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line.trim(), "ready");
+        Resident(child)
+    };
+    let mut matching = spawn(&pane);
+    let mut foreign = spawn("foreign:p1");
+    let line =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(
+        line.contains("HERDR_PANE_ID=foreign:p1, recorded=false"),
+        "{line}"
+    );
+    assert!(
+        line.contains(&format!("HERDR_PANE_ID={pane}, recorded=true")),
+        "{line}"
+    );
+    assert!(matching.0.try_wait().unwrap().is_none());
+    assert!(foreign.0.try_wait().unwrap().is_none());
+    assert!(run.worktree.exists());
+    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
 }
 
 #[test]

@@ -161,6 +161,18 @@ pub fn receipt_observation(receipt: &ResumeReceipt, now: Timestamp) -> WaitObser
     }
 }
 
+impl WaitRecord {
+    /// Job exit monitors are operational results, not external blockers once settled.
+    pub fn settled_job_exit(&self) -> bool {
+        matches!(&self.request.handle, WaitHandle::Channel { channel_id, .. } if channel_id.starts_with("job:"))
+            && self.request.condition.ends_with(" exits")
+            && matches!(
+                self.observation.state,
+                WaitState::Ready | WaitState::Failed | WaitState::Expired
+            )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub request: DecisionRequest,
@@ -210,7 +222,11 @@ impl RunObligations {
                 ));
             }
         }
-        for w in &self.waits {
+        let settled_jobs = self.waits.iter().filter(|w| w.settled_job_exit()).count();
+        if settled_jobs > 0 {
+            lines.push(format!("jobs: {settled_jobs} settled"));
+        }
+        for w in self.waits.iter().filter(|w| !w.settled_job_exit()) {
             lines.push(format!(
                 "wait {} [{}] ({}): {}",
                 w.request.id,

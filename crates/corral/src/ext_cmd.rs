@@ -21,6 +21,7 @@ pub const PREFIX: &str = "corral-ext-";
 /// cannot change meaning when the built-in lands.
 pub const RESERVED: &[&str] = &[
     // Built-in subcommands, in `Cmd` order.
+    "assistant",
     "mode",
     "inbox",
     "attention",

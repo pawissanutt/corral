@@ -29,10 +29,11 @@ export function readAsset(root: string, relative: string): string {
   return readFileSync(assetPath(root, relative), "utf8");
 }
 
-/** Fills `{{task}}`, `{{run}}`, `{{review}}` and `{{project}}` from the launcher-bound identity. */
+/** Fills `{{task}}`, `{{run}}`, `{{review}}`, `{{project}}` and `{{assistant}}` from the launcher-bound identity. */
 export function renderContract(template: string, identity: HostIdentity): string {
   const values: Record<string, string> = {
     task: identity.task ?? "", run: identity.run ?? "", review: identity.review ?? "", project: identity.project,
+    assistant: identity.assistant ?? "",
   };
-  return template.replace(/\{\{(task|run|review|project)\}\}/g, (_match, key: string) => values[key] ?? "");
+  return template.replace(/\{\{(task|run|review|project|assistant)\}\}/g, (_match, key: string) => values[key] ?? "");
 }

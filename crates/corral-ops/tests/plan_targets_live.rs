@@ -136,8 +136,23 @@ fn isolated_real_herdr_dispatches_gates_and_lands_serial_plan_candidates() {
     submit(&ctx, b, "b.txt");
     let old_gate = run(&ctx, b).gate.unwrap();
 
-    // When the first exact candidate lands, the sibling must re-gate on its new base.
+    // The recorded worker's herdr-owned shell is still resident in the worktree.
+    let worker = first.herdr.as_ref().unwrap();
+    let _shell = ctx
+        .herdr
+        .pane_process_info(&worker.pane_id)
+        .unwrap()
+        .shell_pid;
+    #[cfg(target_os = "linux")]
+    assert_eq!(
+        std::fs::read_link(format!("/proc/{_shell}/cwd")).unwrap(),
+        first.worktree
+    );
+    // When the first exact candidate lands, close that pane before removing its worktree.
     corral_ops::approve(&ctx, a, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(ctx.herdr.pane_get(&worker.pane_id).unwrap().is_none());
+    assert!(!first.worktree.exists());
+    assert!(corral_git::rev_sha(&repo, &first.branch).is_err());
     let first_head = corral_git::rev_sha(&repo, "feature/live-plan").unwrap();
     corral_ops::approve(&ctx, b, ApproveStrategy::Rebase, true, false).unwrap();
     let new_gate = run(&ctx, b).gate.unwrap();

@@ -8,6 +8,7 @@ use corral_core::agent::{
     RESULT_MAX_BYTES, ReceiptEffect, ReceiptState, RequestOrigin, RequestReceipt, paths, pm_state,
     rejections,
 };
+use corral_core::assistant::AssistantContainer;
 use corral_core::{Store, TaskRef};
 use serde_json::{Value, json};
 
@@ -96,6 +97,9 @@ pub(crate) fn commit(
     let origin = &admitted.origin;
     let container = &origin.binding.container;
     let mut outcome: Option<(RequestReceipt, bool)> = None;
+    if container.assistant().is_some() {
+        return commit_assistant(ctx, admitted, |assistant| apply(&mut assistant.state, None));
+    }
     match container.task() {
         None => pm_state::update(&ctx.store, |pm| {
             let pm = pm.as_mut().ok_or_else(|| {
@@ -162,6 +166,32 @@ pub(crate) fn commit_head(
         Ok(true)
     })?;
     let (receipt, replayed) = outcome.context("the head commit produced no receipt")?;
+    respond(ctx, container, receipt, replayed)
+}
+
+/// `commit` for an assistant session whose op also changes its container beyond the run state,
+/// such as the owner-input journal, in the same transaction as its receipt.
+pub(crate) fn commit_assistant(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    apply: impl FnOnce(&mut AssistantContainer) -> Result<Commit>,
+) -> Result<CallResponse> {
+    let origin = &admitted.origin;
+    let container = &origin.binding.container;
+    let id = container
+        .assistant()
+        .context("an assistant commit names an assistant session")?;
+    let (receipt, replayed) = ctx
+        .store
+        .settle_assistant_container(id, |assistant, ended| {
+            if let Some(stored) = assistant.state.receipt(&origin.request_id) {
+                admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                return Ok((stored.clone(), true));
+            }
+            admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
+            let commit = apply(assistant)?;
+            Ok((append(&mut assistant.state, origin, commit)?, false))
+        })?;
     respond(ctx, container, receipt, replayed)
 }
 
@@ -253,8 +283,8 @@ fn event_detail(container: &ContainerRef, receipt: &RequestReceipt) -> Value {
         "request_id": receipt.request_id, "op": receipt.op, "container": container.key(),
         "role": receipt.identity.role.as_str(), "generation": receipt.identity.generation,
     });
-    for key in ["kind", "turn", "class"] {
-        if let Some(value) = receipt.result.get(key) {
+    for key in ["kind", "turn", "class", "budget"] {
+        if let Some(value) = receipt.result.get(key).filter(|value| !value.is_null()) {
             detail[key] = value.clone();
         }
     }
@@ -292,12 +322,15 @@ fn complete_post_pending(
             stored.post_pending.len() != before
         })
     };
-    match container.task() {
-        None => pm_state::update(store, |pm| {
+    match (container.assistant(), container.task()) {
+        (Some(id), _) => {
+            store.settle_assistant_container(id, |assistant, _| Ok(clear(&mut assistant.state)))?;
+        }
+        (None, None) => pm_state::update(store, |pm| {
             let changed = pm.as_mut().is_some_and(|pm| clear(&mut pm.state));
             Ok(((), changed))
         })?,
-        Some(task_id) => {
+        (None, Some(task_id)) => {
             store.try_update_head(task_id, |task| {
                 let Some(mut stored) = task.agent_receipt(container, &receipt.request_id)? else {
                     return Ok(false);

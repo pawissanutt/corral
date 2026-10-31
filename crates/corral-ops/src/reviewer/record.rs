@@ -202,11 +202,15 @@ pub(super) fn record_verdict(
         }
     }
     if report.is_some() {
+        // The agent effect emits the verdict event later; sync reaps after that event.
         return Ok((record, receipt));
     }
     let saved = ctx.store.get(&task.id)?;
     if let Some(run) = saved.current_run() {
         crate::watch::capture_review(ctx, &saved, &corral_core::RunHead::of(run)?);
     }
+    // The verdict and its event committed together above. Only now signal reviewers;
+    // caller/ancestor protection and later sync reaping remain unchanged.
+    crate::cleanup::reap_closed_reviews(ctx, &saved);
     Ok((record, None))
 }

@@ -246,11 +246,7 @@ fn reclassify<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T, container: &ContainerRef
 /// event sequence. A failed probe is reported and retried next pass, never fatal to sync.
 fn probe_hosts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
     for container in task.unfinished_native_containers()? {
-        if !matches!(
-            container,
-            ContainerRef::Worker { .. } | ContainerRef::Reviewer { .. }
-        ) || corral_core::agent::container_closure_ref(task, &container)?.is_some()
-        {
+        if corral_core::agent::container_closure_ref(task, &container)?.is_some() {
             continue;
         }
         let Some(host) = task.agent_head(&container)? else {
@@ -271,7 +267,15 @@ fn probe_hosts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
         let probed =
             super::super::bridge::liveness::probe_ref(&ctx.store, task, &recipient, &container)
                 .and_then(|probe| {
-                    super::super::bridge::liveness::record(&ctx.store, &container, &probe)
+                    let recorded =
+                        super::super::bridge::liveness::record(&ctx.store, &container, &probe)?;
+                    if recorded
+                        && let Probe::Lost { generation, .. } = probe
+                        && let Some(lost) = task.agent_generation(&container, generation)?
+                    {
+                        super::super::herdr_status::release_after_loss(ctx, &container, &lost);
+                    }
+                    Ok(recorded)
                 });
         if let Err(error) = probed {
             crate::messages::report(
@@ -284,17 +288,20 @@ fn probe_hosts<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<()> {
     Ok(())
 }
 
-/// A worker host that exits leaves its pane wrapper's launch-exit receipt. For a generation that
-/// completed hello that is a host loss, resumable, not a launch failure: the receipt is consumed
-/// into `agent_lost`, so sync's launch-exit rule never ends the run. A generation that exited
+/// A worker or reviewer host that exits leaves its pane wrapper's launch-exit receipt. For a
+/// generation that completed hello that is a host loss, resumable, not a launch failure: the
+/// receipt is consumed into `agent_lost`, so neither sync's launch-exit rule nor the review
+/// slot's reviewer-exit rule ends the run or closes the review child. A generation that exited
 /// before hello keeps its receipt and fails at launch as before.
 fn consume_exit<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     source: &T,
     container: &ContainerRef,
 ) -> Result<()> {
-    let ContainerRef::Worker { task, run } = container else {
-        return Ok(());
+    let (task, attempt) = match container {
+        ContainerRef::Worker { task, run } => (task, run.clone()),
+        ContainerRef::Reviewer { task, run, review } => (task, format!("{run}-{review}")),
+        _ => return Ok(()),
     };
     let Some(host) = source.agent_head(container)? else {
         return Ok(());
@@ -305,7 +312,7 @@ fn consume_exit<T: TaskRef + ?Sized>(
     else {
         return Ok(());
     };
-    let receipt = crate::launch_exit::receipt(ctx, task, run)?;
+    let receipt = crate::launch_exit::receipt(ctx, task, &attempt)?;
     let status = match std::fs::read_to_string(&receipt) {
         Ok(status) => status,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -319,7 +326,9 @@ fn consume_exit<T: TaskRef + ?Sized>(
             status.trim()
         ),
     };
-    super::super::bridge::liveness::record(&ctx.store, container, &loss)?;
+    if super::super::bridge::liveness::record(&ctx.store, container, &loss)? {
+        super::super::herdr_status::release_after_loss(ctx, container, &generation);
+    }
     match std::fs::remove_file(&receipt) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -333,25 +342,50 @@ fn probe_one(ctx: &Ctx, recipient: &Recipient, container: &ContainerRef, state: 
     }
     consulted("sync");
     let probed = super::super::bridge::liveness::probe(&ctx.store, recipient, container, state)
-        .and_then(|probe| super::super::bridge::liveness::record(&ctx.store, container, &probe));
-    if let Err(error) = probed {
-        crate::messages::report(
+        .and_then(|probe| {
+            let recorded = super::super::bridge::liveness::record(&ctx.store, container, &probe)?;
+            Ok((recorded, probe))
+        });
+    match probed {
+        Ok((true, Probe::Lost { generation, .. })) => {
+            if let Some(lost) = state.generation(generation) {
+                super::super::herdr_status::release_after_loss(ctx, container, lost);
+            }
+        }
+        Ok(_) => {}
+        Err(error) => crate::messages::report(
             container.task(),
             "agent liveness",
             format!("probing {} failed: {error:#}", container.key()),
-        );
+        ),
     }
 }
 
-/// Once per sync pass: the PM wake outbox, only while a Pi-native PM record exists.
+/// Once per sync pass: the PM wake outbox and the PM's host, while a Pi-native PM record exists,
+/// and the host of every open assistant session.
 pub fn pass(ctx: &Ctx) -> Result<()> {
-    if pm_state::load(&ctx.store)?.is_none() {
-        return Ok(());
+    if pm_state::load(&ctx.store)?.is_some() {
+        consulted("sync");
+        super::super::pm_wake::repost(ctx)?;
+        if let Some(pm) = pm_state::load(&ctx.store)? {
+            probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
+        }
     }
-    consulted("sync");
-    super::super::pm_wake::repost(ctx)?;
-    if let Some(pm) = pm_state::load(&ctx.store)? {
-        probe_one(ctx, &Recipient::Pm, &ContainerRef::Pm, &pm.state);
+    for session in ctx.store.active_assistant_ids()? {
+        let container = ContainerRef::Assistant {
+            session: session.clone(),
+        };
+        match ctx.store.get_assistant_container(&session) {
+            Ok(assistant) => {
+                let recipient = Recipient::Assistant { session };
+                probe_one(ctx, &recipient, &container, &assistant.state);
+            }
+            Err(error) => crate::messages::report(
+                None,
+                "agent liveness",
+                format!("reading {}: {error:#}", container.key()),
+            ),
+        }
     }
     Ok(())
 }

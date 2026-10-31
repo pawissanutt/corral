@@ -43,7 +43,7 @@ fn pm_task_receipt(
         Err(error) if format!("{error}").ends_with("not found") => return Ok(None),
         Err(error) => return Err(error),
     };
-    if task.project.as_deref() != Some(scope) {
+    if !super::super::hooks::pm::contains(&ctx.store, scope, task.project.as_deref())? {
         return Err(reject(
             RejectCode::OutOfScope,
             "the task is outside the PM's project scope",
@@ -68,7 +68,10 @@ pub(crate) fn receipt_lookup(ctx: &Ctx, envelope: &Envelope) -> Result<CallRespo
     let container = &admitted.origin.binding.container;
     let found = match (&admitted.resolved, payload.task.as_deref()) {
         (Resolved::Task(task), None) => task.agent_receipt(container, &payload.request_id)?,
-        (Resolved::Task(_), Some(_)) => {
+        (Resolved::Assistant(assistant, _), None) => {
+            assistant.state.receipt(&payload.request_id).cloned()
+        }
+        (Resolved::Task(_) | Resolved::Assistant(..), Some(_)) => {
             return Err(reject(
                 RejectCode::BadRequest,
                 "payload.task applies only to PM lookups",

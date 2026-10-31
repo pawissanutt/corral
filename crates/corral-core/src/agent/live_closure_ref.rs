@@ -10,7 +10,7 @@ pub fn container_closure_ref<T: TaskRef + ?Sized>(
 ) -> Result<Option<ClosureReason>> {
     let closed = |reason| Ok(Some(reason));
     match container {
-        ContainerRef::Pm => Ok(None),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => Ok(None),
         ContainerRef::Planner { task: id, run } => {
             if task.id() != id || *task.status() == Status::Dropped {
                 return closed(ClosureReason::RunEnded);

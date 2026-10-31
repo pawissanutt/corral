@@ -11,11 +11,12 @@ Project management control plane for agentic coding, inside herdr
 Usage: corral [OPTIONS] [COMMAND]
 
 Commands:
+  assistant       Inspect and manage durable assistant sessions (no coding slot)
   mode            Select Assist or explicitly confirm scoped Autopilot for this workspace
   inbox           Inspect and durably manage agent inbox messages without delivering them
   attention       Inspect current task conditions and progress without changing state
   agent           Pi-native agent host: authenticated host calls, launch, install and recovery
-  pi              Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+  pi              Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
   question        Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
   automation      Preview, explicitly confirm, or inspect finite operating authority
   selection       Read current selection guidance or save a validated Auto receipt; JSON output
@@ -91,6 +92,234 @@ Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
   -V, --version      Print version
+```
+
+## `corral assistant`
+
+```text
+Inspect and manage durable assistant sessions (no coding slot)
+
+Usage: corral assistant [OPTIONS] <COMMAND>
+
+Commands:
+  create   Allocate a session record and unbound container, without a task or coding slot
+  list     List assistant sessions: live (host running), open (resumable) or ended
+  show     Show a session, its durable container and usage
+  end      End a session (stopping a running host), keeping its record and transcript references
+  summary  Replace a session's Markdown summary from a UTF-8 file
+  scratch  Scratch worktrees for spikes and co-work
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant create`
+
+```text
+Allocate a session record and unbound container, without a task or coding slot
+
+Usage: corral assistant create [OPTIONS]
+
+Options:
+      --profile <PROFILE>            [default: pi]
+      --root <ROOT>                  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --focus <FOCUS>                
+      --pane <PANE>                  
+      --herdr-socket <HERDR_SOCKET>  
+      --json                         
+  -h, --help                         Print help
+```
+
+### `corral assistant list`
+
+```text
+List assistant sessions: live (host running), open (resumable) or ended
+
+Usage: corral assistant list [OPTIONS]
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant show`
+
+```text
+Show a session, its durable container and usage
+
+Usage: corral assistant show [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant end`
+
+```text
+End a session (stopping a running host), keeping its record and transcript references
+
+Usage: corral assistant end [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+### `corral assistant summary`
+
+```text
+Replace a session's Markdown summary from a UTF-8 file
+
+Usage: corral assistant summary [OPTIONS] --file <FILE> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --file <FILE>  
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json         
+  -h, --help         Print help
+```
+
+### `corral assistant scratch`
+
+```text
+Scratch worktrees for spikes and co-work
+
+Usage: corral assistant scratch [OPTIONS] <COMMAND>
+
+Commands:
+  new      Create a scratch worktree at <repo>/.worktrees/A-<n>-<slug> on corral/A-<n>/<slug>
+  list     List scratch worktrees (all sessions for the owner unless --session)
+  discard  Remove a scratch and its branch, saving any work as a session diff artifact first
+  promote  File a Backlog task with the scratch diff attached; the scratch stays unchanged
+  finish   Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
+  gc       Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral assistant scratch new`
+
+```text
+Create a scratch worktree at <repo>/.worktrees/A-<n>-<slug> on corral/A-<n>/<slug>
+
+Usage: corral assistant scratch new [OPTIONS] --project <PROJECT>
+
+Options:
+  -p, --project <PROJECT>  
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --slug <SLUG>        Lowercase letters, digits and hyphens; default scratch-<k>
+      --base <BASE>        Ref to branch from; default the project's base, else its current branch
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch list`
+
+```text
+List scratch worktrees (all sessions for the owner unless --session)
+
+Usage: corral assistant scratch list [OPTIONS]
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch discard`
+
+```text
+Remove a scratch and its branch, saving any work as a session diff artifact first
+
+Usage: corral assistant scratch discard [OPTIONS] <SLUG>
+
+Arguments:
+  <SLUG>  
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch promote`
+
+```text
+File a Backlog task with the scratch diff attached; the scratch stays unchanged
+
+Usage: corral assistant scratch promote [OPTIONS] --title <TITLE> <SLUG>
+
+Arguments:
+  <SLUG>  
+
+Options:
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --title <TITLE>          
+  -p, --project <PROJECT>      Project for the task; default the scratch's project
+      --body-file <BODY_FILE>  
+      --session <SESSION>      
+      --json                   
+  -h, --help                   Print help
+```
+
+#### `corral assistant scratch finish`
+
+```text
+Finish a scratch into a task on the owner's instruction, gate it and review it only on request (owner)
+
+Usage: corral assistant scratch finish [OPTIONS] <SLUG>
+
+Arguments:
+  <SLUG>  
+
+Options:
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --title <TITLE>      Title of the new task
+  -p, --project <PROJECT>  Project for the task; default the scratch's project
+      --kind <KIND>        
+      --size <SIZE>        
+      --review <REVIEW>    none, or required to run the normal reviewer after a passing gate [default: none] [possible values: none, required]
+      --into <INTO>        Add the run to this existing task instead; refused while it has a live run
+      --note <NOTE>        Context for the run summary and a new task's body
+      --session <SESSION>  
+      --json               
+  -h, --help               Print help
+```
+
+#### `corral assistant scratch gc`
+
+```text
+Collect idle scratch of ended sessions, saving work as diff artifacts first (owner)
+
+Usage: corral assistant scratch gc [OPTIONS]
+
+Options:
+      --dry-run      List what would be collected without changing anything
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --yes          Collect; required for a real run
+      --json         
+  -h, --help         Print help
 ```
 
 ## `corral mode`
@@ -204,14 +433,6 @@ Options:
 ```
 
 ### `corral mode turbo`
-
-Turbo disables autopilot's change-round limit for all tasks, including plan members;
-this is independent of gate tiers and review scope. `corral mode` shows whether it
-is enabled. Autopilot events retain `max_rounds` as the configured review-policy
-budget and report `effective_max_rounds` (null means unlimited) plus
-`round_limit_source`: `automation.turbo` when unlimited, otherwise
-`task_review_policy.max_rounds` (the resolved task/project/workspace policy).
-Turning turbo off restores the cap on the next sync; rounds already spent still count.
 
 ```text
 Land, accept plans and repair without owner stops or round limits until `--off`
@@ -508,6 +729,7 @@ Commands:
   state    Show a Pi-native binding: generations, host health, receipts, questions and turns
   cancel   Cancel a Pi-native host turn; the run, its questions and receipts stay live
   resume   Fence a lost Pi-native generation and start the next one in the same pane
+  rewind   Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -523,7 +745,7 @@ Run one Pi-native host request: a JSON envelope on stdin, one JSON receipt on st
 Usage: corral agent call [OPTIONS] --op <OP>
 
 Options:
-      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons]
+      --op <OP>      Enumerated v1 operation; must equal the envelope's op [possible values: hello, event, receipt_lookup, ask, withdraw, wait, progress, todo, checkpoint, evidence, artifact, gate, done, verdict, question_answer, question_escalate, question_cancel, reply, comment, capture, read_brief, read_next, read_show, read_list, read_search, read_route, read_artifacts, read_lessons, inbox_read, inbox_resolve, job, job_monitor, plan_write, plan_submit, plan_verdict, owner_action]
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
 ```
@@ -641,19 +863,43 @@ Options:
   -h, --help             Print help
 ```
 
+### `corral agent rewind`
+
+```text
+Rewind a worker's isolated worktree and Pi session to the start of an earlier turn
+
+Usage: corral agent rewind [OPTIONS] <TASK>
+
+Arguments:
+  <TASK>  Task of the worker run
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --run <RUN>    Run ID (default: the task's current run)
+      --to <TO>      Checkpoint to restore (`g<generation>-t<turn>`, see --list); without it, continue the pending rewind
+      --list         List the run's checkpoints and rewinds
+      --abort        Abandon the pending rewind, putting back any files it restored
+      --replace      Replace a host that is still alive after verifying its pid, start time and command
+  -h, --help         Print help
+```
+
 ## `corral pi`
 
 ```text
-Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
 
 Usage: corral pi [OPTIONS]
 
 Options:
       --bare                 Plain unbound Pi in the current directory: no store, binding or corral tools
       --root <ROOT>          Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --model <MODEL>        Model to run instead of the PM profile's (bare: Pi's default for the provider)
+      --pm                   Open the workspace PM in this pane, or take over a dead one (plain `corral pi` opens an assistant)
+      --resume <A-N>         Resume assistant session A-<n> in this pane, fencing its previous generation
+      --over-cap             Open an assistant even when assistant.max_live assistants are already live
+      --task <TASK-ID>       Preload bounded read-only context for this task in a new assistant
+      --model <MODEL>        Model to run instead of the profile's (bare: Pi's default for the provider)
       --provider <PROVIDER>  Provider whose `corral agent login` runs the session (bare default: openai-codex) [possible values: openai-codex, anthropic]
-      --effort <EFFORT>      Reasoning effort instead of the PM profile's
+      --effort <EFFORT>      Reasoning effort instead of the profile's
   -h, --help                 Print help
 ```
 
@@ -1380,9 +1626,9 @@ Commands:
   show               Inspect current and historical plan snapshots and verdicts
   review             Review a plan without starting implementation or taking a coding slot
   verdict            Record a plan-only verdict; callbacks must include their exact attempt
-  member-gate        Amend a published integration-Plan member's gate (owner only, revision-guarded)
-  add-member         Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
-  move-member        Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+  member-gate        Amend a published integration-Plan member's gate (owner or PM, revision-guarded)
+  add-member         Add a task whose runs never landed to a tracker Plan's required members, e.g. a fix after a failed verify
+  move-member        Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another
   policy             Set the task's plan requirement, or inherit workspace/project review policy
   help               Print this message or the help of the given subcommand(s)
 
@@ -1603,7 +1849,7 @@ Options:
 ### `corral plan member-gate`
 
 ```text
-Amend a published integration-Plan member's gate (owner only, revision-guarded)
+Amend a published integration-Plan member's gate (owner or PM, revision-guarded)
 
 Usage: corral plan member-gate [OPTIONS] --file <FILE> --expected-revision <EXPECTED_REVISION> --reason <REASON> <MEMBER>
 
@@ -1630,7 +1876,7 @@ Options:
 ### `corral plan add-member`
 
 ```text
-Add an unstarted task to a tracker Plan's required members, e.g. a fix after a failed verify (owner only)
+Add a task whose runs never landed to a tracker Plan's required members, e.g. a fix after a failed verify
 
 Usage: corral plan add-member [OPTIONS] <TRACKER> <MEMBER>
 
@@ -1647,7 +1893,7 @@ Options:
 ### `corral plan move-member`
 
 ```text
-Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another (owner only)
+Move an unstarted member, e.g. one held in Backlog, from one tracker Plan to another
 
 Usage: corral plan move-member [OPTIONS] --to <TO> <TRACKER> <MEMBER>
 
@@ -1761,9 +2007,10 @@ Persist run progress, checkpoints, waits, decisions and resume receipts
 Usage: corral run [OPTIONS] <COMMAND>
 
 Commands:
+  transcript  Read a bounded JSONL transcript page (context only, no run authority)
   wait        Register an explicit event wait (version 1 JSON); never executes monitor commands
   decision    Ask the owner an exact question with a requested action (version 1 JSON)
-  resume      Record an event or answered decision receipt; never resends or relaunches work
+  resume      Record an event or answered decision receipt and prompt the worker to continue; never relaunches work
   progress    Read identity and state, or replace execution progress from a JSON file
   checkpoint  Read identity and state, or save a guarded checkpoint from a JSON file
   help        Print this message or the help of the given subcommand(s)
@@ -1771,6 +2018,24 @@ Commands:
 Options:
       --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help         Print help
+```
+
+### `corral run transcript`
+
+```text
+Read a bounded JSONL transcript page (context only, no run authority)
+
+Usage: corral run transcript [OPTIONS] <ID> <RUN>
+
+Arguments:
+  <ID>   
+  <RUN>  
+
+Options:
+      --review <REVIEW>  One-based review child number
+      --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --lines <LINES>    Inclusive one-based range, at most 200 lines and 24 KiB per page [default: 1-200]
+  -h, --help             Print help
 ```
 
 ### `corral run wait`
@@ -1808,7 +2073,7 @@ Options:
 ### `corral run resume`
 
 ```text
-Record an event or answered decision receipt; never resends or relaunches work
+Record an event or answered decision receipt and prompt the worker to continue; never relaunches work
 
 Usage: corral run resume [OPTIONS] --file <FILE> <ID>
 
@@ -2286,18 +2551,18 @@ Arguments:
 Options:
       --origin <ORIGIN>          Who filed this task; PMs and agents should pass their own origin [default: owner]
       --root <ROOT>              Workspace root (the directory containing .corral/); default: discovered from the current dir
-  -p, --project <PROJECT>      
-      --idea                   
-      --ready                  
-      --body <BODY>            
-      --body-file <BODY_FILE>  
+  -p, --project <PROJECT>        
+      --idea                     
+      --ready                    
+      --body <BODY>              
+      --body-file <BODY_FILE>    
       --profile <PROFILE>        Preferred profile for dispatch [alias: --agent]
-      --depends <DEPENDS>      
-      --priority <PRIORITY>    
+      --depends <DEPENDS>        
+      --priority <PRIORITY>      
       --kind <KIND>              Task category used by routing rules
       --size <SIZE>              Estimated work volume, independent of reasoning difficulty
       --difficulty <DIFFICULTY>  Reasoning difficulty, independent of task size: routine, standard or hard
-      --design                  Route the idea or task through design planning before implementation [alias: --plan-required]
+      --design                   Route the idea or task through design planning before implementation [alias: --plan-required]
       --label <LABELS>           Task labels; owner-only excludes Ideas from automatic promotion
   -h, --help                     Print help
 ```
@@ -2777,7 +3042,7 @@ Usage: corral artifact [OPTIONS] <COMMAND>
 Commands:
   set-tier  Override an artifact's inferred importance tier
   gc        Deduplicate artifacts and apply the configured retention policy
-  add       Snapshot a file as a task artifact
+  add       Snapshot a file as a task or assistant session artifact
   list      List artifacts, most important first (keep, normal, transient)
   serve     Serve an artifact (or the HTML/Markdown index) from the loopback live server and open it in a browser
   show      Print an artifact formatted for reading (Markdown, JSON, TOML, logs, diffs, CSV)
@@ -2822,19 +3087,20 @@ Options:
 ### `corral artifact add`
 
 ```text
-Snapshot a file as a task artifact
+Snapshot a file as a task or assistant session artifact
 
-Usage: corral artifact add [OPTIONS] <ID> <PATH>
+Usage: corral artifact add [OPTIONS] <ID> [PATH]
 
 Arguments:
-  <ID>    
-  <PATH>  
+  <ID>    Task ID, or the file path when --session is supplied
+  [PATH]  File path for a task artifact
 
 Options:
-      --kind <KIND>    
-      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --title <TITLE>  
-  -h, --help           Print help
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --session <SESSION>  
+      --kind <KIND>        
+      --title <TITLE>      
+  -h, --help               Print help
 ```
 
 ### `corral artifact list`
@@ -2845,11 +3111,12 @@ List artifacts, most important first (keep, normal, transient)
 Usage: corral artifact list [OPTIONS]
 
 Options:
-      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
-      --task <TASK>  
-      --json         
-      --tier <TIER>  Only this importance tier: keep, normal or transient
-  -h, --help         Print help
+      --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --task <TASK>        
+      --session <SESSION>  
+      --json               
+      --tier <TIER>        Only this importance tier: keep, normal or transient
+  -h, --help               Print help
 ```
 
 ### `corral artifact serve`
@@ -3120,6 +3387,7 @@ Commands:
   act      Revalidate a revision-bound action and run the existing authorized executors
   present  Acknowledge presentation, not resolution, of an exact owner decision
   resolve  Record an actual owner answer to a workspace coordination decision
+  inbox    The PM inbox: requests from assistants and the owner, each with a recorded outcome
   help     Print this message or the help of the given subcommand(s)
 
 Options:
@@ -3216,6 +3484,150 @@ Options:
       --answer <ANSWER>  
       --root <ROOT>      Workspace root (the directory containing .corral/); default: discovered from the current dir
   -h, --help             Print help
+```
+
+### `corral pm inbox`
+
+```text
+The PM inbox: requests from assistants and the owner, each with a recorded outcome
+
+Usage: corral pm inbox [OPTIONS] <COMMAND>
+
+Commands:
+  post      File a request for the PM: an action request, question, handoff or routed owner request
+  list      List open and claimed items, oldest first
+  show      Show one item with its body, history and outcome
+  claim     The PM claims an open item at its current revision
+  resolve   The PM resolves its claimed item; an assistant author receives the outcome once
+  withdraw  The author or the owner withdraws an open or claimed item
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm inbox post`
+
+```text
+File a request for the PM: an action request, question, handoff or routed owner request
+
+Usage: corral pm inbox post [OPTIONS] --kind <KIND> --subject <SUBJECT>
+
+Options:
+      --kind <KIND>            action_request, question, handoff or routing
+      --root <ROOT>            Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --subject <SUBJECT>      One line naming the request
+      --body-file <BODY_FILE>  The author's reading and context (Markdown, at most 32 KiB)
+      --ref <REFS>             A task ID or artifact ref the item concerns; repeatable
+      --action <ACTION>        The corral command the item asks for, such as "approve T-5"
+      --quote <QUOTE>          The owner's verbatim words behind the request (evidence of intent, not authority)
+      --input <INPUT>          The owner input the quote comes from
+      --key <KEY>              Retry key: posting again with the same key returns the earlier item
+      --json                   
+  -h, --help                   Print help
+```
+
+#### `corral pm inbox list`
+
+```text
+List open and claimed items, oldest first
+
+Usage: corral pm inbox list [OPTIONS]
+
+Options:
+      --root <ROOT>    Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --state <STATE>  Only items in this state: open, claimed, resolved or withdrawn
+      --all            Include resolved and withdrawn items
+      --json           
+  -h, --help           Print help
+```
+
+#### `corral pm inbox show`
+
+```text
+Show one item with its body, history and outcome
+
+Usage: corral pm inbox show [OPTIONS] <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --json         
+      --root <ROOT>  Workspace root (the directory containing .corral/); default: discovered from the current dir
+  -h, --help         Print help
+```
+
+#### `corral pm inbox claim`
+
+```text
+The PM claims an open item at its current revision
+
+Usage: corral pm inbox claim [OPTIONS] --expected-revision <EXPECTED_REVISION> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+          
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --json
+          
+  -h, --help
+          Print help
+```
+
+#### `corral pm inbox resolve`
+
+```text
+The PM resolves its claimed item; an assistant author receives the outcome once
+
+Usage: corral pm inbox resolve [OPTIONS] --expected-revision <EXPECTED_REVISION> --outcome <OUTCOME> --text <TEXT> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+          
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --outcome <OUTCOME>
+          done, declined or escalated_to_owner
+      --text <TEXT>
+          The outcome the author reads (at most 4 KiB)
+      --ref <REFS>
+          A task ID or artifact ref the outcome produced; repeatable
+      --json
+          
+  -h, --help
+          Print help
+```
+
+#### `corral pm inbox withdraw`
+
+```text
+The author or the owner withdraws an open or claimed item
+
+Usage: corral pm inbox withdraw [OPTIONS] --expected-revision <EXPECTED_REVISION> <ID>
+
+Arguments:
+  <ID>  
+
+Options:
+      --expected-revision <EXPECTED_REVISION>
+          
+      --root <ROOT>
+          Workspace root (the directory containing .corral/); default: discovered from the current dir
+      --reason <REASON>
+          [default: ""]
+      --json
+          
+  -h, --help
+          Print help
 ```
 
 ## `corral focus-board`
@@ -3366,7 +3778,7 @@ Write or refresh every corral role skill in agent skill dirs (default: every har
 Usage: corral skill install [OPTIONS]
 
 Options:
-      --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents]
+      --harness <HARNESS>  Harness to install for; repeatable [possible values: omo, omp, claude, agents, pi-native]
       --root <ROOT>        Workspace root (the directory containing .corral/); default: discovered from the current dir
       --dir <DIR>          Install into this skills directory instead
       --force              Replace role skill files that corral did not write

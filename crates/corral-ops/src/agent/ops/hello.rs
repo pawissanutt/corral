@@ -14,6 +14,7 @@ use crate::Ctx;
 use crate::agent::admission::{self, Admission, Mode};
 use crate::agent::call::{AgentOp, CallResponse, RejectCode, Rejection};
 use crate::agent::envelope::{self, Envelope};
+use crate::agent::herdr_status;
 use crate::agent::receipts::{self, Commit};
 
 #[derive(Deserialize)]
@@ -65,7 +66,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             }
             _ => None,
         },
-        admission::Resolved::Pm(_) => None,
+        admission::Resolved::Pm(_) | admission::Resolved::Assistant(..) => None,
     };
     let sessions = selected
         .as_ref()
@@ -101,7 +102,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         .into());
     }
     let role = envelope.identity.role;
-    let bound = GenerationBound {
+    let mut bound = GenerationBound {
         host_cap_sha256: paths::sha256_hex(envelope.auth.host_cap.as_bytes()),
         ctl_cap_sha256: payload.ctl_cap_sha256,
         session_id: envelope.identity.session_id.clone(),
@@ -110,8 +111,21 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         start_time: payload.start_time,
         request_id: envelope.request_id.clone(),
         at: corral_core::clock::now(),
+        herdr_seq_epoch: None,
     };
     let key = container.key();
+    bound.herdr_seq_epoch = match herdr_status::allocate_epoch(bound.at) {
+        Ok(epoch) => Some(epoch),
+        Err(error) => {
+            crate::messages::report(
+                container.task(),
+                "agent herdr status",
+                format!("allocating {key}'s herdr sequence epoch: {error:#}"),
+            );
+            None
+        }
+    };
+    let epoch = bound.herdr_seq_epoch;
     if container.task().is_some() {
         return receipts::commit_head(ctx, &admitted, move |task| {
             let mut generation = task
@@ -131,10 +145,20 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 head.binding.health = HostHealth::Healthy;
                 Ok(())
             })?;
-            Ok(bound_commit(n, role, &key, todo))
+            let questions = task.pending_agent_questions(&container)?;
+            Ok(bound_commit(
+                n,
+                role,
+                &key,
+                todo,
+                epoch,
+                herdr_status::question_snapshot_rows(questions.iter(), &[]),
+            ))
         });
     }
     receipts::commit(ctx, &admitted, move |state, _| {
+        // A resumed host projects its still-pending questions from the start.
+        let questions = herdr_status::question_snapshot(state, &[]);
         let generation = state
             .generation_mut(n)
             .context("the generation disappeared")?;
@@ -148,16 +172,24 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
         generation.bound = Some(bound);
         let todo = generation.todo;
         state.binding.health = HostHealth::Healthy;
-        Ok(bound_commit(n, role, &key, todo))
+        Ok(bound_commit(n, role, &key, todo, epoch, questions))
     })
 }
 
-fn bound_commit(n: u32, role: AgentRole, key: &str, todo: bool) -> Commit {
+fn bound_commit(
+    n: u32,
+    role: AgentRole,
+    key: &str,
+    todo: bool,
+    epoch: Option<u64>,
+    questions: Vec<serde_json::Value>,
+) -> Commit {
     Commit {
         result: json!({
             "generation": n, "container": key, "role": role.as_str(),
             "ops": AgentOp::implemented_for(role).into_iter()
                 .filter(|op| *op != "todo" || todo).collect::<Vec<_>>(),
+            "herdr_seq_epoch_ms": epoch, "questions": questions,
         }),
         effect: Some(ReceiptEffect {
             kind: "generation_bound".into(),

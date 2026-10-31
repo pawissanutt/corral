@@ -210,6 +210,17 @@ fn sources(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Record>> {
     for task in tasks {
         task_records(ctx, task, &mut records)?;
     }
+    for session in ctx.store.list_assistants()? {
+        for artifact in session
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.purged_at.is_none())
+        {
+            if crate::artifact_storage::content_available(ctx, artifact)? {
+                records.push(Record::artifact(&session.id, artifact));
+            }
+        }
+    }
     events::records(&ctx.store, &mut records)?;
     records.sort_by(|a, b| {
         b.document

@@ -1,6 +1,7 @@
 mod agent_cmd;
 mod artifact_cmd;
 mod artifact_show;
+mod assistant_cmd;
 mod attention_cmd;
 mod automation_cmd;
 mod cmds;
@@ -27,6 +28,7 @@ mod pins;
 mod plan_cmd;
 mod plugin;
 mod pm_cmd;
+mod pm_inbox_cmd;
 mod pricing_cmd;
 mod question_cmd;
 mod queue;
@@ -71,6 +73,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Cmd {
+    /// Inspect and manage durable assistant sessions (no coding slot)
+    Assistant(assistant_cmd::AssistantArgs),
     /// Select Assist or explicitly confirm scoped Autopilot for this workspace
     Mode(mode_cmd::ModeArgs),
     /// Inspect and durably manage agent inbox messages without delivering them
@@ -79,7 +83,7 @@ pub enum Cmd {
     Attention(attention_cmd::AttentionArgs),
     /// Pi-native agent host: authenticated host calls, launch, install and recovery
     Agent(agent_cmd::AgentArgs),
-    /// Start Pi-native here: a bound PM in this herdr pane, or plain unbound Pi with --bare
+    /// Start Pi-native here: an assistant in this herdr pane, the PM with --pm, or plain Pi with --bare
     Pi(pi_cmd::PiArgs),
     /// Triage Pi-native agent questions by key and revision: list, show, answer, escalate, cancel, deadline
     Question(question_cmd::QuestionArgs),
@@ -694,10 +698,14 @@ pub enum ArtifactCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Snapshot a file as a task artifact
+    /// Snapshot a file as a task or assistant session artifact
     Add {
+        /// Task ID, or the file path when --session is supplied
         id: String,
-        path: PathBuf,
+        /// File path for a task artifact
+        path: Option<PathBuf>,
+        #[arg(long)]
+        session: Option<String>,
         #[arg(long)]
         kind: Option<String>,
         #[arg(long)]
@@ -705,8 +713,10 @@ pub enum ArtifactCmd {
     },
     /// List artifacts, most important first (keep, normal, transient)
     List {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "session")]
         task: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
         #[arg(long)]
         json: bool,
         /// Only this importance tier: keep, normal or transient
@@ -813,9 +823,19 @@ fn main() {
             .map(|args| (cmd.name(), args.id.clone())),
         _ => None,
     };
-    if let Err(err) = cmds::run(cli, &matches) {
+    let result = cmds::run(cli, &matches);
+    // An owner action's command child records how its command ended before it exits.
+    let failure = result.as_ref().err().map(|err| format!("{err:#}"));
+    if let Err(error) = corral_ops::assistant::owner_action::finish(failure.as_deref()) {
+        eprintln!("warning: recording the owner action's completion: {error:#}");
+    }
+    if let Err(err) = result {
         if err.is::<wait_cmd::WaitTimeout>() {
             std::process::exit(124);
+        }
+        if err.is::<entry::AssistantRefused>() {
+            eprintln!("error: {err}");
+            std::process::exit(2);
         }
         if let Some(command) = selection_json {
             eprintln!(

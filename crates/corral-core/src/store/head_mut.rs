@@ -398,6 +398,7 @@ impl TaskHeadMut {
             }
         }
         self.put_task_panes(&split_panes_of_run(n, &run));
+        self.head.task.current_run_id = Some(head.id.clone());
         self.head.current_run = Some(Box::new(head));
         self.head.seqs.run = Some(n);
         *self.seen = self.head.clone();

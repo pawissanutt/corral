@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -85,6 +84,54 @@ fn bound_mode_refuses_profile_and_scope_failures_before_any_state() {
 }
 
 #[test]
+fn provider_only_anthropic_launch_writes_an_anthropic_model() {
+    let fx = fixture();
+    owner_pane(&fx);
+    std::fs::write(
+        fx.root().join("assets/compat.json"),
+        r#"{"verdict":"GO","providers":["openai","anthropic"]}"#,
+    )
+    .unwrap();
+    let prepared = adopt(
+        &f::ctx_at(fx.root()),
+        PANE,
+        &Overrides {
+            provider: Some("anthropic".into()),
+            ..Overrides::default()
+        },
+    )
+    .unwrap();
+    let bootstrap: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(prepared.bootstrap).unwrap()).unwrap();
+    assert_eq!(bootstrap["provider"], "anthropic");
+    assert_eq!(bootstrap["model"], "claude-opus-5-5");
+}
+
+#[test]
+fn incompatible_cli_pair_refuses_before_opening_a_generation() {
+    let fx = fixture();
+    owner_pane(&fx);
+    let error = adopt(
+        &f::ctx_at(fx.root()),
+        PANE,
+        &Overrides {
+            provider: Some("anthropic".into()),
+            model: Some("gpt-6.1-sol".into()),
+            ..Overrides::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("corral pi --provider anthropic --model claude-opus-5-5"),
+        "{error}"
+    );
+    assert!(pm_state::load(&fx.ctx.store).unwrap().is_none());
+    assert!(fx.calls("pane run").is_empty());
+}
+
+#[test]
 fn a_fresh_store_adopts_the_owner_pane_as_generation_one() {
     let fx = fixture();
     owner_pane(&fx);
@@ -145,6 +192,48 @@ fn a_dead_pm_is_taken_over_with_resume_fencing_and_its_recovery_never_types_into
     assert!(fx.calls("pane run").is_empty());
 }
 
+#[test]
+fn dead_pm_recovery_selects_written_or_fresh_session_for_both_entry_points() {
+    for takeover in [true, false] {
+        for written in [false, true] {
+            let fx = fixture();
+            owner_pane(&fx);
+            let mut host = HostProc::spawn(true);
+            let bound = fx.bind(&pm_target(), "pm-pane", &host);
+            let file = f::session_file(&bound);
+            if written {
+                f::write_session(&bound, "session contents\n");
+            }
+            host.kill();
+            if takeover {
+                adopt(&f::ctx_at(fx.root()), PANE, &Overrides::default()).unwrap();
+            } else {
+                crate::agent::recovery::resume_container(
+                    &f::ctx_at(fx.root()),
+                    &ContainerRef::Pm,
+                    false,
+                )
+                .unwrap();
+            }
+            let path = generation_dir(&fx.ctx.store, &Recipient::Pm, 2)
+                .unwrap()
+                .join(BOOTSTRAP_FILE);
+            let bootstrap: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert_eq!(bootstrap["fresh_session"], !written, "takeover={takeover}");
+            assert_eq!(
+                bootstrap["session_dir"],
+                file.parent().unwrap().to_str().unwrap()
+            );
+            if written {
+                assert_eq!(bootstrap["resume_session"], file.to_str().unwrap());
+            } else {
+                assert!(bootstrap["resume_session"].is_null(), "{bootstrap}");
+            }
+        }
+    }
+}
+
 fn approve(fx: &Fx, task: &str) {
     let selection = corral_core::OperatingSelection {
         tasks: [task.to_owned()].into(),
@@ -188,10 +277,14 @@ fn a_refused_takeover_keeps_the_original_pane_adopted_and_resume_never_types_int
         )
         .unwrap();
     approve(&fx, &other.id);
-    // When `corral pi` in pane B is refused by recovery.
+    // A scope change is valid now; use a missing role asset to refuse pane B's takeover.
+    let asset = fx.root().join("assets/src/roles/pm/index.ts");
+    let module = std::fs::read(&asset).unwrap();
+    std::fs::remove_file(&asset).unwrap();
     std::fs::write(fx.root().join("w1:p8"), "").unwrap();
     let error = adopt(&f::ctx_at(fx.root()), "w1:p8", &Overrides::default()).unwrap_err();
-    assert!(error.to_string().starts_with("out_of_scope"), "{error}");
+    assert!(error.to_string().contains("role_unavailable"), "{error}");
+    std::fs::write(asset, module).unwrap();
     // Then pane A is still the adopted PM pane.
     let pm = pm_state::load(&fx.ctx.store).unwrap().unwrap();
     assert_eq!(pm.pane, PANE);
@@ -219,15 +312,13 @@ fn fake_bun(dir: &Path) -> std::path::PathBuf {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let path = bin.join("bun");
-    std::fs::write(
+    crate::agent::test_support::write_executable(
         &path,
         "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 1.4.2; exit 0; fi\n\
          out=\"$CORRAL_FAKE_BUN_OUT\"\nprintf '%s\\n' \"$@\" > \"$out/argv\"\n\
          ls -A \"$CORRAL_FAKE_BUN_GEN\" > \"$out/generation\"\n\
          cat \"/proc/self/fd/$4\" > \"$out/message\"\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    );
     bin
 }
 

@@ -128,7 +128,10 @@ fn pi_native_adapter(ctx: &Ctx, recipient: &Recipient) -> Option<Box<dyn Deliver
     let run = match recipient {
         Recipient::Run { run, .. } => task.run_head(run).ok()?,
         Recipient::ReviewRun { run, review, .. } => task.review_child(run, review).ok()?,
-        Recipient::PlanRun { .. } | Recipient::PlanReview { .. } | Recipient::Pm => None,
+        Recipient::PlanRun { .. }
+        | Recipient::PlanReview { .. }
+        | Recipient::Pm
+        | Recipient::Assistant { .. } => None,
     }?;
     (run.agent_host.is_some()
         || run
@@ -404,7 +407,7 @@ pub(crate) fn ended(task: &Task, recipient: &Recipient) -> bool {
             .find(|p| &p.id == plan)
             .and_then(|p| p.reviews.last())
             .is_none_or(|r| &r.id != review || r.verdict.is_some()),
-        Recipient::Pm => true,
+        Recipient::Pm | Recipient::Assistant { .. } => true,
     }
 }
 

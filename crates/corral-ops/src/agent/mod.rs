@@ -9,8 +9,14 @@
 mod admission;
 #[cfg(test)]
 mod admission_tests;
+#[cfg(test)]
+mod auxiliary_tests;
 pub mod aws_profile;
 pub mod bridge;
+#[cfg(test)]
+mod budget_gap_tests;
+#[cfg(test)]
+mod budget_tests;
 mod call;
 #[cfg(all(test, unix))]
 mod capabilities_tests;
@@ -24,6 +30,7 @@ mod effects_stat_tests;
 mod effects_tests;
 mod envelope;
 pub(crate) mod gate_queue;
+pub mod herdr_status;
 pub mod hooks;
 pub mod install;
 pub mod jobs;
@@ -45,8 +52,9 @@ pub(crate) mod native_test_support;
 #[cfg(test)]
 mod receipts_tests;
 pub mod recovery;
+pub mod rewind;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod todo_tests;
 mod turn_evidence;

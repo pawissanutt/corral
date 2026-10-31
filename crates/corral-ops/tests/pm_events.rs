@@ -152,6 +152,7 @@ impl Fx {
             run: Some("R1".into()),
             review: None,
             callback: None,
+            assistant: None,
             session_id: "s-w".into(),
             generation: grant.generation,
             turn: None,

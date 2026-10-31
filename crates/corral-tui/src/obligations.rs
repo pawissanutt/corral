@@ -47,7 +47,8 @@ pub(crate) fn open_waits(run: &Run) -> impl Iterator<Item = &WaitRecord> {
             .receipt
             .as_ref()
             .is_some_and(|r| r.delivery == ResumeDelivery::Acknowledged);
-        !(w.observation.state == WaitState::Cancelled
+        !(w.settled_job_exit()
+            || w.observation.state == WaitState::Cancelled
             || w.observation.state == WaitState::Ready && delivered)
     })
 }
@@ -95,8 +96,17 @@ pub(crate) fn card_lines_from(
             ]));
         }
     }
+    let settled_jobs = obligations
+        .waits
+        .iter()
+        .filter(|wait| wait.settled_job_exit())
+        .count();
+    if settled_jobs > 0 {
+        out.push(Line::from(format!("jobs: {settled_jobs} settled")));
+    }
     for w in obligations.waits.iter().filter(|w| {
-        !(w.observation.state == WaitState::Cancelled
+        !(w.settled_job_exit()
+            || w.observation.state == WaitState::Cancelled
             || w.observation.state == WaitState::Ready
                 && w.receipt
                     .as_ref()

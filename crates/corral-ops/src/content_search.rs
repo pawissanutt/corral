@@ -119,7 +119,7 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         .as_deref()
         .map(|s| cutoff(s, now))
         .transpose()?;
-    let tasks = ctx.store.list()?;
+    let tasks = ctx.store.artifact_owners()?;
     let by_id: HashMap<_, _> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let snapshot = content_index::snapshot(ctx, &tasks, options.reindex)?;
