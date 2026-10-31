@@ -198,7 +198,7 @@ export function writeRefusal(
 export function installWriteGuard(pi: ExtensionAPI, context: RoleContext): void {
   const session = context.identity.assistant;
   const broker = new PermissionBroker(context);
-  pi.on("session_start", (_event, ctx) => { context.writePermission?.onBound(() => broker.notice(ctx)); });
+  pi.on("session_start", async (_event, ctx) => { await context.writePermission?.onBound(() => broker.notice(ctx)); });
   pi.on("tool_call", async (event, ctx) => {
     if (!WRITE_TOOLS.has(event.toolName)) return undefined;
     const path = (event.input as Record<string, unknown>).path;

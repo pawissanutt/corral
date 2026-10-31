@@ -219,10 +219,10 @@ fn the_listing_shows_every_grant_state_and_each_allow_entry_resolution() {
     let allow = settings["allow"].as_array().unwrap();
     assert_eq!(allow[0]["canonical"], json!(fx.home.join(".agents/skills")));
     assert_eq!(allow[1]["canonical"], json!(fx.home.join("real")));
-    assert_eq!(
-        allow[2]["ignored"],
-        "does not resolve to an existing directory"
-    );
+    // A future directory resolves through its existing ancestor without creating it.
+    assert_eq!(allow[2]["canonical"], json!(fx.home.join("missing")));
+    assert!(allow[2].get("ignored").is_none());
+    assert!(!fx.home.join("missing").exists());
     // And the saved configuration's registered defaults differ from this generation.
     assert_eq!(
         listing["saved_settings"],

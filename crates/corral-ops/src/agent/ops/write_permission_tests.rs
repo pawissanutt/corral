@@ -146,6 +146,51 @@ fn fence(s: &S, generation: u32) {
 }
 
 #[test]
+fn a_new_skill_scope_resolves_without_creation_and_keeps_symlink_and_directory_checks() {
+    let s = session();
+    let scope = s.home.join(".agents/skills/example");
+    let target = scope.join("SKILL.md");
+    assert!(!scope.exists());
+    let receipt = decide(&s, 1, "hour", &target, Some(&scope));
+    assert_eq!(receipt.result["authorized"], true);
+    assert!(
+        !scope.exists(),
+        "authorization must not create the directory"
+    );
+    assert_eq!(
+        granted(&s.fx, &s.host, &target).unwrap(),
+        Some("G-1".into())
+    );
+    std::fs::create_dir_all(&scope).unwrap();
+    std::fs::write(&target, "# Example\n").unwrap();
+    assert_eq!(
+        granted(&s.fx, &s.host, &target).unwrap(),
+        Some("G-1".into())
+    );
+    assert_eq!(
+        granted(&s.fx, &s.host, &scope.join(".git/config")),
+        Err("fixed_rule")
+    );
+    // The nearest existing ancestor must be a directory; dangling symlinks stay refused.
+    assert_eq!(permissions::resolve_dir(&target.join("child")), None);
+    let dangling = s.home.join("dangling");
+    std::os::unix::fs::symlink(s.home.join("absent"), &dangling).unwrap();
+    assert_eq!(permissions::resolve_dir(&dangling.join("child")), None);
+    // A symlinked ancestor resolves to its actual destination, including absent descendants.
+    let link = s.home.join("linked-skills");
+    std::os::unix::fs::symlink(&scope, &link).unwrap();
+    assert_eq!(
+        permissions::resolve_dir(&link.join("new/deep")),
+        Some(scope.join("new/deep"))
+    );
+    // Replacing the granted root with a link does not widen the recorded grant.
+    std::fs::remove_file(&target).unwrap();
+    std::fs::remove_dir(&scope).unwrap();
+    std::os::unix::fs::symlink(&s.proj, &scope).unwrap();
+    assert_eq!(granted(&s.fx, &s.host, &target).unwrap(), None);
+}
+
+#[test]
 fn a_once_decision_replays_only_to_its_live_generation_and_is_consumed() {
     // Given A-1 generation 1 decided Allow once.
     let s = session();

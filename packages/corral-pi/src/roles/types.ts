@@ -80,7 +80,7 @@ export interface RoleContext {
   readonly lspSettings?: Readonly<Record<string, unknown>>;
   readonly writePermission?: {
     readonly settings: import("./assistant/paths.ts").WriteSettings;
-    onBound(notice: () => Promise<void>): void;
+    onBound(notice: () => Promise<void>): Promise<void>;
     sessionId(): string;
     turn(): { id: number | undefined; signal: AbortSignal };
     call(requestId: string, payload: Record<string, unknown>): Promise<import("../tools/corral.ts").CorralReceipt>;

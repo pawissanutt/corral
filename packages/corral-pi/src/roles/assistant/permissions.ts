@@ -99,15 +99,17 @@ export class PermissionBroker {
         : { kind: existsSync(current.shown) ? "overwrite" : "new_file" };
       const preview = utf8Prefix((tool === "write" ? String(input.content ?? "") : JSON.stringify(input.edits ?? input)).split("\n").slice(0, 40).join("\n"), 4096);
       const choices = candidates.length ? Object.values(CHOICES) : [CHOICES.once, CHOICES.deny];
-      const answer = await ctx.ui.select(`${tool} ${current.shown}\n${operation.kind.replace("_", " ")}${"replacements" in operation ? ` (${operation.replacements} replacements)` : ""}\n${preview}`, choices, { signal: turn.signal, timeout: 300_000 });
+      const destination = current.canonical === current.shown ? "" : `\nResolved destination: ${current.canonical}`;
+      const answer = await ctx.ui.select(`${tool} ${current.shown}${destination}\n${operation.kind.replace("_", " ")}${"replacements" in operation ? ` (${operation.replacements} replacements)` : ""}\n${preview}`, choices, { signal: turn.signal, timeout: 300_000 });
       if (turn.signal.aborted) return block("aborted");
       const choice = (Object.keys(CHOICES) as (keyof typeof CHOICES)[]).find((key) => CHOICES[key] === answer);
       if (!choice || !choices.includes(CHOICES[choice])) return block("no_answer");
       let scope: { shown: string; canonical: string } | undefined;
       if (choice === "hour" || choice === "session") {
-        const selected = await ctx.ui.select("Directory scope", candidates.map((c) => c.shown), { signal: turn.signal, timeout: 300_000 });
+        const label = (c: { shown: string; canonical: string }) => c.shown === c.canonical ? c.shown : `${c.shown} → ${c.canonical}`;
+        const selected = await ctx.ui.select("Directory scope", candidates.map(label), { signal: turn.signal, timeout: 300_000 });
         if (turn.signal.aborted) return block("aborted");
-        scope = candidates.find((c) => c.shown === selected);
+        scope = candidates.find((c) => label(c) === selected);
         if (!scope) return block("no_answer");
       }
       if (!unchanged()) return block("target_changed");
