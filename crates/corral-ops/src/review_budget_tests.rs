@@ -904,6 +904,8 @@ fn gate_without_socket_is_unknown_but_local_receipt_is_unscoped() {
 
 #[path = "review_budget/inventory_tests.rs"]
 mod inventory;
+#[path = "review_budget/unknown_inventory_tests.rs"]
+mod unknown_inventory;
 
 #[path = "review_budget/auxiliary_tests.rs"]
 mod auxiliary;

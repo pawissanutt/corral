@@ -263,12 +263,12 @@ fn sync_scoped(
         // not authenticated completion receipts. Use a receipt-only ownership
         // lease here; the healthy path already owns one through inventory.
         if let Some(_ownership) = ctx.store.try_begin_session_pass()? {
-            let tasks = ctx.store.list()?;
+            let board = ctx.store.board(None)?;
             let source_owned = source
-                .map(|source| crate::session_scope::owns_tasks(source, &ctx.store, &tasks))
+                .map(|source| crate::session_scope::owns_board(source, &ctx.store, &board))
                 .transpose()?
                 .unwrap_or(true);
-            if source_owned && crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
+            if source_owned && crate::session_scope::owns_board(ctx, &ctx.store, &board)? {
                 crate::gate::collect_finished(ctx, now)?;
             }
         }
