@@ -381,7 +381,7 @@ fn marked_report_is_snapshotted_and_pinned_before_watermark_advances() {
     // Then artifact bytes match, the mark contains the collection cutoff, and history is excluded.
     assert_eq!(first.artifact.kind, ArtifactKind::Report);
     assert_eq!(
-        std::fs::read_to_string(ctx.store.dir().join(&first.artifact.path)).unwrap(),
+        String::from_utf8(corral_ops::artifact_read(&ctx, &first.artifact).unwrap()).unwrap(),
         first.markdown
     );
     let pinned = ctx

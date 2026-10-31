@@ -55,11 +55,7 @@ fn isolated_sync_delivers_changes_after_main_moves_without_regating() {
         .iter()
         .find(|a| a.title == "Autopilot changes (round 1)")
         .unwrap();
-    assert!(
-        std::fs::read_to_string(store.dir().join(&artifact.path))
-            .unwrap()
-            .contains(notes)
-    );
+    assert!(canonical_text(&store, artifact).contains(notes));
     let events = store.events().unwrap();
     let delivered = events
         .iter()
