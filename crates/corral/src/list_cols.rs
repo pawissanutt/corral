@@ -102,12 +102,31 @@ pub fn print(ctx: &Ctx, tasks: &[Task], columns: &[String]) -> Result<()> {
 }
 
 pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String]) -> Result<()> {
-    let tasks = heads
-        .iter()
-        .map(corral_core::TaskHead::to_shell_task)
-        .collect::<Result<Vec<_>>>()?;
     if columns.is_empty() {
-        return print(ctx, &tasks, columns);
+        let assessments: BTreeMap<_, _> = corral_ops::attention::board_hot(ctx, Timestamp::now())?
+            .tasks
+            .into_iter()
+            .map(|row| (row.task, row.assessment))
+            .collect();
+        for head in heads {
+            let blocked = assessments
+                .get(&head.id)
+                .map(|assessment| corral_core::attention::blocked_ref(head, assessment))
+                .transpose()?
+                .flatten();
+            println!(
+                "{:<7} {:<9} {:<3} {:<14} {}{}",
+                head.id,
+                blocked.map_or(head.status.label(), |_| "Blocked"),
+                head.priority,
+                head.project.as_deref().unwrap_or("-"),
+                head.title,
+                blocked
+                    .map(|condition| format!("  [{}]", blocked_text(condition)))
+                    .unwrap_or_default()
+            );
+        }
+        return Ok(());
     }
     if let Some(bad) = columns
         .iter()
@@ -152,10 +171,12 @@ pub fn print_heads(ctx: &Ctx, heads: &[corral_core::TaskHead], columns: &[String
         BTreeMap::new()
     };
     let mut rows = Vec::new();
-    for (head, task) in heads.iter().zip(&tasks) {
+    for head in heads {
         let blocked = assessments
             .get(&head.id)
-            .and_then(|assessment| corral_core::attention::blocked(task, assessment));
+            .map(|assessment| corral_core::attention::blocked_ref(head, assessment))
+            .transpose()?
+            .flatten();
         rows.push(
             columns
                 .iter()
