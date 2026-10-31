@@ -1,12 +1,21 @@
 //! Historical observations, not prescribed lessons.
 //!
 //! Limits: the latest 256 tasks by persisted update time (ID breaks ties),
-//! the last 4 MiB of complete event lines, and deterministic prefixes of
-//! 64 KiB per artifact (compressed and decoded), 1 MiB total textual context,
-//! 256 clusters, 32 evidence references and 64 values per metadata field.
+//! the last 4 MiB of complete event lines, 64 KiB logical text per artifact (recent raw-log
+//! tail or capped prefix), 1 MiB total context, 256 clusters, 32 evidence references and 64
+//! values per metadata field. The legacy gzip input cap is retained. Cold selected canonical
+//! bodies stream through verification up to their declared raw length plus an overflow
+//! sentinel, exposing consumed bytes as selected_artifact_bytes_read; this is not an
+//! ordinary head-discovery reader.
 //! Text and keys retain at most 512 characters. Missing/purged/unsafe artifacts
 //! contribute no content. No current checkout files or current clock are consulted.
 //! Per task: latest 128 events, 32 artifacts, 32 runs, one landed Git range.
+
+#[path = "lesson_signals/body.rs"]
+mod body;
+#[cfg(test)]
+#[path = "lesson_signals/canonical_tests.rs"]
+mod canonical_tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
@@ -407,8 +416,20 @@ fn artifact_text(
     artifact: &corral_core::Artifact,
     cap: usize,
 ) -> Result<Option<String>> {
-    if artifact.purged_at.is_some() {
+    if artifact.purged_at.is_some() || cap == 0 {
         return Ok(None);
+    }
+    if Path::new(&artifact.path).as_os_str().is_empty()
+        || !Path::new(&artifact.path)
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    {
+        return Ok(None);
+    }
+    if let Ok(hash) = corral_core::blob_ref::BlobHash::parse(&artifact.sha256)
+        && let Some(row) = ctx.store.blob_row(&hash)?
+    {
+        return body::canonical(ctx, artifact, &hash, row.raw_bytes, cap);
     }
     let read_cap = if artifact.compressed_bytes.is_some() {
         cap.saturating_add(1)
