@@ -31,6 +31,7 @@ pub mod inbox;
 pub mod infra_wait;
 mod json_path;
 pub mod lessons;
+pub mod memory;
 pub mod messages;
 pub mod model;
 pub mod model_family;
