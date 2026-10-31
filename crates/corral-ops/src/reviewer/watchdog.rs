@@ -348,6 +348,22 @@ pub(crate) fn reconcile_review_sampled_at(
                 at: now,
             });
             current.status = Status::NeedsMe;
+            if stalled.is_some() {
+                ctx.store.log_event(
+                    Some(id),
+                    "review_interrupted",
+                    json!({
+                        "run": run.id, "reviewer": review.reviewer, "reason": reason,
+                    }),
+                )?;
+            }
+            ctx.store.log_event(
+                Some(id),
+                "review_escalated",
+                json!({
+                    "run": run.id, "reason": reason, "notes": notes,
+                }),
+            )?;
             batch = Some(crate::owner_notice::record_stage_head(
                 ctx,
                 current,
