@@ -235,13 +235,38 @@ fn registered_pi_capability_does_not_raise_stuck() {
     assert_eq!(fx.events("stuck"), 0);
     assert!(fx.notifications().is_empty());
 
-    // An unregistered tool child of the same host still alerts, even with an LSP present.
+    // A registered background supervisor is not a stuck command; its command child is.
+    std::fs::write(
+        &registry,
+        json!([
+            { "pid": 46, "started": "start-46" }, { "pid": 48, "started": "start-48" }
+        ])
+        .to_string(),
+    )
+    .unwrap();
     pi_native_pane(
         &fx,
         &processes,
-        &[(46, 44, &["rust-analyzer"]), (47, 44, &["sleep", "9999"])],
+        &[(46, 44, &["rust-analyzer"]), (48, 44, &["supervisor"])],
     );
-    let task = sync(&fx, &processes, 600);
+    assert!(
+        sync(&fx, &processes, 600)
+            .current_run()
+            .unwrap()
+            .stuck
+            .is_none()
+    );
+    assert_eq!(fx.events("stuck"), 0);
+    pi_native_pane(
+        &fx,
+        &processes,
+        &[
+            (46, 44, &["rust-analyzer"]),
+            (48, 44, &["supervisor"]),
+            (47, 48, &["sleep", "9999"]),
+        ],
+    );
+    let task = sync(&fx, &processes, 900);
     assert_eq!(task.current_run().unwrap().stuck.as_ref().unwrap().pid, 47);
     assert_eq!(fx.events("stuck"), 1);
 }

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
-import { capabilityRegistry } from "./registry.ts";
+import { capabilityRegistry } from "../registry.ts";
 import { DEFAULT_SERVERS, LSP_TOOL_NAMES, LspError, type LspServerSpec, MAX_ITEMS, MAX_OUTPUT_BYTES, configuredServers, lspToolkit } from "./index.ts";
 
 const FAKE = fileURLToPath(new URL("./testing/fake-server.ts", import.meta.url));

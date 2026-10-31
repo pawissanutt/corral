@@ -9,6 +9,7 @@ import { delimiter, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import { BrowserError } from "./target.ts";
+import type { RegisterCapability } from "../registry.ts";
 
 const CANDIDATES = ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"];
 
@@ -49,6 +50,7 @@ export interface LaunchOptions {
   readonly signal: AbortSignal;
   /** Parent of the temporary profile; tests point it at a private directory. */
   readonly tmpRoot?: string;
+  readonly registerCapability?: RegisterCapability;
 }
 
 export class Browser {
@@ -93,6 +95,18 @@ export class Browser {
       },
     });
     const browser = new Browser(child, root, child.stdio[3] as Writable, child.stdio[4] as Readable);
+    // Detached browsers normally do not appear in the pane foreground, but register the
+    // host-owned leader in case an engine includes them in its inventory.
+    if (child.pid !== undefined && options.registerCapability) {
+      try {
+        const remove = options.registerCapability(child.pid);
+        child.once("exit", remove);
+      } catch (error) {
+        browser.kill();
+        void browser.exited.then(() => rmSync(root, { recursive: true, force: true }));
+        throw error;
+      }
+    }
     const abort = () => browser.fail(options.signal.reason instanceof Error ? options.signal.reason : new Error(String(options.signal.reason)));
     if (options.signal.aborted) abort();
     else options.signal.addEventListener("abort", abort, { once: true });

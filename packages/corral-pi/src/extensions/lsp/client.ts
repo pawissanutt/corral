@@ -7,7 +7,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
-import type { RegisterCapability } from "./registry.ts";
+import type { RegisterCapability } from "../registry.ts";
 
 export interface LspServerSpec {
   /** Stable name used in tool output and errors, for example `rust-analyzer`. */

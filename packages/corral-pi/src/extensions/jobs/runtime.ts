@@ -12,6 +12,7 @@ import { constants } from "node:os";
 import { join } from "node:path";
 
 import type { JobSettings } from "./settings.ts";
+import type { RegisterCapability } from "../registry.ts";
 
 export const OUTPUT_READ_DEFAULT = 16 * 1024;
 export const OUTPUT_READ_MAX = 64 * 1024;
@@ -60,6 +61,7 @@ export interface JobRuntimeOptions {
   readonly call: JobCall;
   readonly shell?: string;
   readonly schedule?: Schedule;
+  readonly registerCapability?: RegisterCapability;
   /** Bridge events: `job_started` once identity is recorded, `job_exited` once the exit is. */
   readonly onEvent?: (kind: "job_started" | "job_exited", data: Record<string, unknown>) => void;
 }
@@ -233,6 +235,15 @@ export class JobRuntime {
       closeSync(fd);
       await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
       throw new JobError(`job ${id} did not start: ${spawned?.message ?? "no pid"}`);
+    }
+    try {
+      const remove = this.options.registerCapability?.(child.pid);
+      if (remove) child.once("exit", remove);
+    } catch (error) {
+      child.kill("SIGKILL");
+      closeSync(fd);
+      await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
+      throw error;
     }
     let finish!: () => void;
     let close!: () => void;
