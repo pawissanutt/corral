@@ -59,6 +59,7 @@ fn run(id: &str, worktree: &str, started: i64, ended: Option<i64>) -> serde_json
 /// before each current run, `terminal` Done tasks and `events` unrelated events.
 fn board(root: &Path, omo: &Path, earlier: usize, terminal: usize, events: usize) -> Store {
     let mut store = Store::init(root).unwrap();
+    store.fixture_pin_now(at(0)).unwrap();
     store.config.sync.omo_agent_dir = Some(omo.to_path_buf());
     store.save_config().unwrap();
     let mut legacy = None;
