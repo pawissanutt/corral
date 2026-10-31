@@ -216,6 +216,12 @@ pub(super) fn followup_failures(
 ) -> Vec<String> {
     let mut failures = Vec::new();
     let get = |cell: &str| cells.get(cell).copied().unwrap_or(0);
+    let body_io = get("selected_artifact_bytes_read.total");
+    if body_io != 0 {
+        failures.push(format!(
+            "{variant}/{key}: cold selected-artifact body I/O entered hot path: {body_io}"
+        ));
+    }
     for site in ["likely_files", "sample"] {
         let calls = get(&format!("calls.FU-3.{site}"));
         let cell = |counter: &str| get(&format!("{counter}.followup.FU-3.{site}"));

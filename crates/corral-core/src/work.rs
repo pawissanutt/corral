@@ -170,10 +170,12 @@ pub enum Counter {
     Processes,
     TranscriptLinesAggregated,
     TranscriptBytesRead,
+    /// Decoded input consumed by cold, already-selected canonical artifact signal readers.
+    SelectedArtifactBytesRead,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 13] = [
+    pub const ALL: [Counter; 14] = [
         Counter::TaskHeadDecodes,
         Counter::HistoryRowDecodes,
         Counter::RunDecodes,
@@ -187,6 +189,7 @@ impl Counter {
         Counter::Processes,
         Counter::TranscriptLinesAggregated,
         Counter::TranscriptBytesRead,
+        Counter::SelectedArtifactBytesRead,
     ];
 
     /// The decode counters: each decoded document adds one to exactly one of them.
@@ -214,6 +217,7 @@ impl Counter {
             Counter::Processes => "processes",
             Counter::TranscriptLinesAggregated => "transcript_lines_aggregated",
             Counter::TranscriptBytesRead => "transcript_bytes_read",
+            Counter::SelectedArtifactBytesRead => "selected_artifact_bytes_read",
         }
     }
 }
@@ -406,7 +410,8 @@ pub fn hydrated_at(location: &'static std::panic::Location<'static>) {
 }
 
 /// Counts `n` events of a counter that only a follow-up scope can claim (views, file stats,
-/// processes), or transcript work, which an own-record scope also claims.
+/// processes, selected-artifact input bytes), or transcript work, which an own-record scope
+/// also claims. Selected-body I/O receives no new exemption or own-record classification.
 pub fn counted(counter: Counter, n: u64) {
     with_ledger(|ledger| {
         if ledger.hot == 0 {
