@@ -318,7 +318,7 @@ impl Store {
 
     pub fn assistant_exists(&self, id: &str) -> Result<bool> {
         validate_id(id)?;
-        Ok(self.record_row("assistant-sessions", id)?.is_some())
+        records::exists(self, id)
     }
 
     pub fn get_assistant(&self, id: &str) -> Result<AssistantSession> {

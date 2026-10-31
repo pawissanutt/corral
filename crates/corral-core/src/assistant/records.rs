@@ -3,7 +3,7 @@
 use super::{ASSISTANT_VERSION, AssistantContainer, AssistantSession, validate_id};
 use crate::Store;
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 const SESSIONS: &str = "assistant-sessions";
 const CONTAINERS: &str = "assistant-containers";
@@ -15,10 +15,32 @@ struct SessionRecord {
     body: String,
 }
 
+// T-671 covers only these opaque canonical documents. Live keys, identities, callbacks
+// and host work remain ordinary work; task-native sharding does not normalize these roots.
+fn document<T: DeserializeOwned>(
+    store: &Store,
+    area: &str,
+    id: &str,
+    site: &str,
+) -> Result<Option<T>> {
+    let _cost = crate::work::followup("T-671", site);
+    store.record(area, id)
+}
+
+fn save_document(
+    store: &Store,
+    area: &str,
+    id: &str,
+    value: &impl Serialize,
+    site: &str,
+) -> Result<()> {
+    let _cost = crate::work::followup("T-671", site);
+    store.save_record(area, id, value)
+}
+
 pub(super) fn session(store: &Store, id: &str) -> Result<AssistantSession> {
     validate_id(id)?;
-    let record: SessionRecord = store
-        .record(SESSIONS, id)?
+    let record: SessionRecord = document(store, SESSIONS, id, "assistant_session_load")?
         .with_context(|| format!("assistant {id} not found"))?;
     let mut session = record.session;
     if session.version != ASSISTANT_VERSION || session.id != id {
@@ -28,9 +50,17 @@ pub(super) fn session(store: &Store, id: &str) -> Result<AssistantSession> {
     Ok(session)
 }
 
+pub(super) fn exists(store: &Store, id: &str) -> Result<bool> {
+    Ok(document::<serde_json::Value>(store, SESSIONS, id, "assistant_session_load")?.is_some())
+}
+
 pub(super) fn sessions(store: &Store) -> Result<Vec<AssistantSession>> {
     let mut sessions = Vec::new();
-    for row in store.record_rows(SESSIONS)? {
+    let rows = {
+        let _cost = crate::work::followup("T-671", "assistant_session_enumeration");
+        store.record_rows(SESSIONS)?
+    };
+    for row in rows {
         validate_id(&row.key)?;
         let record: SessionRecord =
             serde_json::from_value(row.doc).context("decoding assistant record")?;
@@ -47,8 +77,7 @@ pub(super) fn sessions(store: &Store) -> Result<Vec<AssistantSession>> {
 
 pub(super) fn container(store: &Store, id: &str) -> Result<AssistantContainer> {
     validate_id(id)?;
-    let value: AssistantContainer = store
-        .record(CONTAINERS, id)?
+    let value: AssistantContainer = document(store, CONTAINERS, id, "assistant_container_load")?
         .with_context(|| format!("assistant container {id} not found"))?;
     if value.version != ASSISTANT_VERSION
         || value.state.binding.role != crate::agent::AgentRole::Assistant
@@ -61,13 +90,15 @@ pub(super) fn container(store: &Store, id: &str) -> Result<AssistantContainer> {
 pub(super) fn save_session(store: &Store, session: &AssistantSession) -> Result<()> {
     validate_id(&session.id)?;
     store.records_transaction(|| {
-        store.save_record(
+        save_document(
+            store,
             SESSIONS,
             &session.id,
             &SessionRecord {
                 session: session.clone(),
                 body: session.body.clone(),
             },
+            "assistant_session_save",
         )?;
         if session.ended.is_none() {
             store.save_record(LIVE, &session.id, &true)
@@ -79,7 +110,7 @@ pub(super) fn save_session(store: &Store, session: &AssistantSession) -> Result<
 
 pub(super) fn save_container(store: &Store, id: &str, value: &AssistantContainer) -> Result<()> {
     validate_id(id)?;
-    store.save_record(CONTAINERS, id, value)
+    save_document(store, CONTAINERS, id, value, "assistant_container_save")
 }
 
 /// Dispatch serializes the counter. Reserve it before the publication unit, retaining real gaps.
@@ -92,9 +123,8 @@ pub(super) fn reserve(store: &Store) -> Result<u64> {
         .context("assistant counter overflow")?;
     loop {
         let id = format!("A-{next}");
-        if store.record::<serde_json::Value>(SESSIONS, &id)?.is_none()
-            && store
-                .record::<serde_json::Value>(CONTAINERS, &id)?
+        if document::<serde_json::Value>(store, SESSIONS, &id, "assistant_session_load")?.is_none()
+            && document::<serde_json::Value>(store, CONTAINERS, &id, "assistant_container_load")?
                 .is_none()
         {
             break;
