@@ -4,14 +4,14 @@
 // role, its task/run or assistant session and the bound session; a held turn reads working and its
 // cancellation settles idle; a graceful shutdown over the bridge releases the pane and clears the
 // metadata while the pane and its shell stay.
-import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, watch, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { HostIdentity, Role } from "../src/roles/types.ts";
 import { type TestClient, connect } from "./support/bridge-client.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
-import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
+import { type FixtureInstall, buildFixtureInstall, clearFixturePiStates } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
 import { ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
 
@@ -20,6 +20,7 @@ let assets: FixtureInstall | undefined;
 let root = "";
 const workspaces: string[] = [];
 const CTL = "c".repeat(48);
+let workerState = "";
 
 const herdr = (...args: string[]): any => JSON.parse(ok(["herdr", "--session", "corral-test", ...args])).result;
 const frame = (command: string, args: Record<string, unknown> = {}) =>
@@ -80,6 +81,10 @@ beforeAll(() => {
   assets = buildFixtureInstall({ parent: root, isolatePiState: true });
 }, 120_000);
 
+afterEach(() => {
+  if (assets) clearFixturePiStates(assets);
+});
+
 afterAll(() => {
   for (const id of workspaces) run(["herdr", "--session", "corral-test", "workspace", "close", id]);
   if (root) rmSync(root, { recursive: true, force: true });
@@ -121,6 +126,21 @@ for (const { identity, display } of cases) {
     const client = await connect(join(runtime, "host.sock"));
     await within(untilBound(client), 60_000, "the host to bind");
     const session = ((await client.request(frame("get_state"))).result?.session as { bound_id: string }).bound_id;
+    const stateDirs = readdirSync(assets!.dir).filter((name) => name.startsWith("pi-state-"));
+    expect(stateDirs).toHaveLength(1);
+    if (identity.role === "worker") {
+      workerState = stateDirs[0]!;
+      writeFileSync(join(assets!.dir, stateDirs[0]!, "crashes.json"), JSON.stringify([
+        { timestamp: new Date().toISOString(), message: "herdr prior role crash marker" },
+      ]));
+    }
+    if (identity.role === "reviewer") {
+      expect(workerState).not.toBe("");
+      expect(stateDirs[0]).not.toBe(workerState);
+      expect(existsSync(join(assets!.dir, workerState))).toBeFalse();
+      const screen = ok(["herdr", "--session", "corral-test", "pane", "read", pane, "--source", "recent", "--lines", "400"]);
+      expect(screen).not.toContain("herdr prior role crash marker");
+    }
 
     // Then herdr's readbacks name corral-pi, this role's identity and the bound session, idle:
     let seq = await within(untilReported(client, "idle", 0), 30_000, "the idle report");

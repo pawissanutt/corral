@@ -13,7 +13,7 @@ test("a preceding Pi pane records a crash in its own fixture state", async () =>
   if (!privateHerdr()) { console.log("skipped: requires private herdr"); return; }
   const workspace = mkdtempSync(join(privateRoot()!, "pi-crash-"));
   const app = join(workspace, "app"); mkdirSync(app);
-  const assets = buildFixtureInstall({ parent: workspace, isolatePiState: true });
+  const assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, retainPiState: true });
   let workspaceId = "";
   try {
     for (const args of [["init", "-q", "-b", "main"], ["config", "user.name", "test"], ["config", "user.email", "test@example.invalid"]]) ok(["git", "-C", app, ...args]);
