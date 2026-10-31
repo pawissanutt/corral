@@ -9,7 +9,7 @@ use corral_ops::{Ctx, open_pm, pm_policy_health, reconcile_pm_policy};
 use serde_json::{Value, json};
 
 const ENGINE: &str = r#"#!/usr/bin/env python3
-import json, pathlib, sys
+import json, os, pathlib, subprocess, sys
 root = pathlib.Path(__file__).parent
 args = sys.argv[1:]
 if args[:1] == ["--session"]:
@@ -21,10 +21,16 @@ def result(value):
 def fail(code):
     print(json.dumps({"error": {"code": code, "message": "fixture refusal"}}))
     sys.exit(1)
+def canonical_records():
+    env = dict(os.environ, CORRAL_FIXTURE_PM_RECORD_ROOT=str(root))
+    observed = subprocess.check_output([(root / "observer-exe").read_text(),
+        "--exact", "observe_canonical_pm_records", "--nocapture"], env=env, text=True)
+    return json.loads(next(line.split("CORRAL_PM_RECORDS:", 1)[1]
+        for line in observed.splitlines() if line.startswith("CORRAL_PM_RECORDS:")))
 verb = args[:2]
 if verb == ["workspace", "create"]:
     if (root / "pi-check").exists():
-        assert not (root / ".corral/state/agent-pm.json").exists()
+        assert canonical_records()["agent_pm"] is None
     result({"workspace": {"workspace_id": "pm"}, "root_pane":
         {"workspace_id": "pm", "tab_id": "pm:t1", "pane_id": "pm:p1"}})
 elif verb == ["pane", "get"]:
@@ -46,10 +52,8 @@ elif verb == ["agent", "prompt"]:
     result({})
 elif verb == ["pane", "run"]:
     if (root / "pi-check").exists():
-        state = root / ".corral/state"
-        pm = json.loads((state / "agent-pm.json").read_text())
-        saved = json.loads((state / "pm.json").read_text())
-        policy = json.loads((state / "pm-policy.json").read_text())
+        observed = canonical_records()
+        pm, saved, policy = observed["agent_pm"], observed["pm"], observed["policy"]
         assert pm["pane"] == args[2] == saved["pane_id"]
         assert policy["panes"][args[2]]["disposition"] == "submitting"
         (root / "launch-observed.json").write_text(json.dumps(pm))
@@ -60,6 +64,25 @@ elif verb in [["pane", "report-metadata"],
 else:
     fail("unexpected_call")
 "#;
+
+/// The fake engine reopens the real canonical store at the exact external effect boundary.
+/// No mirror, SQL coupling, observer writer or cached expected state participates.
+#[test]
+fn observe_canonical_pm_records() {
+    let Some(root) = std::env::var_os("CORRAL_FIXTURE_PM_RECORD_ROOT") else {
+        return;
+    };
+    let store = Store::open_unobserved(std::path::Path::new(&root))
+        .unwrap()
+        .read_only_snapshot()
+        .unwrap();
+    let value = json!({
+        "agent_pm": store.record::<Value>("agent-pm", "current").unwrap(),
+        "pm": corral_core::records::RecordArea::<Value>::new("pm").load(&store, "state").unwrap(),
+        "policy": corral_core::records::RecordArea::<Value>::new("pm-policy").load(&store, "state").unwrap(),
+    });
+    println!("\nCORRAL_PM_RECORDS:{value}");
+}
 
 struct Fx {
     tmp: tempfile::TempDir,
@@ -82,6 +105,11 @@ impl Fx {
         store.save_config().unwrap();
         let bin = tmp.path().join("herdr");
         std::fs::write(&bin, ENGINE).unwrap();
+        std::fs::write(
+            tmp.path().join("observer-exe"),
+            std::env::current_exe().unwrap().to_str().unwrap(),
+        )
+        .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
         let ctx = Ctx {
             store,
