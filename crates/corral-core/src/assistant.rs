@@ -228,12 +228,33 @@ impl Store {
     /// Read-only artifact-owner projection for shared pin/search/retention readers.
     /// These records are never task files and never enter scheduling or the board.
     pub fn artifact_owners(&self) -> Result<Vec<crate::ArtifactOwner>> {
-        let mut owners: Vec<_> = self
-            .list()?
-            .into_iter()
-            .map(crate::ArtifactOwner::from)
-            .collect();
-        owners.extend(self.assistant_artifact_owners()?);
+        let store = self.read_only_snapshot()?;
+        let headers = {
+            let view = store.reader()?;
+            Self::headers_on(&*view)?
+        };
+        let mut owners = Vec::new();
+        for header in headers {
+            let head = store.head(&header.id)?;
+            let artifacts = store.artifact_rows(&head.id, None)?;
+            // The selected owner's historical query/retention model remains complete.
+            // T-672 does not cover discovery, ordinary metadata or artifact output rows.
+            let task = {
+                let _cost = crate::work::followup("T-672", "catalog_task_metadata");
+                store.get(&head.id)?
+            };
+            owners.push(crate::ArtifactOwner {
+                id: head.id.clone(),
+                title: head.title.clone(),
+                project: head.project.clone(),
+                status: head.status,
+                created: head.created,
+                updated: head.updated,
+                artifacts,
+                source: crate::ArtifactOwnerSource::Task(Box::new(task)),
+            });
+        }
+        owners.extend(store.assistant_artifact_owners()?);
         Ok(owners)
     }
 
