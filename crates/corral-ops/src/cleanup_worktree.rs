@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
-use corral_core::{Run, RunHead, StuckProcess, Task, TaskRef};
+use corral_core::{Run, RunHead, StuckProcess, TaskRef};
 
 use crate::Ctx;
 use crate::watchdog::{ProcessControl, SystemProcesses, protected};
@@ -196,8 +196,8 @@ fn process_marker(_process: &StuckProcess) -> Option<Vec<u8>> {
 /// Reap a closed reviewer outside the task-store transaction. A verdict can be submitted
 /// from inside the reviewer, so preserve our ancestors and let the next sync reap them.
 #[cfg(target_os = "linux")]
-pub(crate) fn reap_review(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Result<()> {
-    let receipt = crate::launch_exit::receipt(ctx, &task.id, &format!("{}-{}", run.id, child.id))?;
+pub(crate) fn reap_review(ctx: &Ctx, task: &str, run: &str, child: &str) -> Result<()> {
+    let receipt = crate::launch_exit::receipt(ctx, task, &format!("{run}-{child}"))?;
     let Ok(marker) = std::fs::read(receipt.with_extension("owner")) else {
         return Ok(());
     };
@@ -252,7 +252,7 @@ pub(crate) fn reap_review(ctx: &Ctx, task: &Task, run: &Run, child: &Run) -> Res
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn reap_review(_ctx: &Ctx, _task: &Task, _run: &Run, _child: &Run) -> Result<()> {
+pub(crate) fn reap_review(_ctx: &Ctx, _task: &str, _run: &str, _child: &str) -> Result<()> {
     Ok(())
 }
 

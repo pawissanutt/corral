@@ -466,7 +466,7 @@ pub(crate) fn quiet(frame: &Value) -> Value {
     let generation = frame["generation"].clone();
     match frame["command"].as_str() {
         Some("get_state") => json!({"ok": true, "result": {
-            "generation": generation, "session": {"bound_id": SESSION}}}),
+            "generation": generation, "session": {"bound_id": SESSION}, "herdr": {"blocked_on": []}}}),
         Some("events_since") => {
             let after = frame["args"]["seq"].clone();
             json!({"ok": true, "result": {"generation": generation, "events": [],
@@ -485,7 +485,7 @@ pub(crate) fn quiet(frame: &Value) -> Value {
 pub(crate) fn healthy(frame: &Value) -> Value {
     match frame["command"].as_str() {
         Some("get_state") => json!({"ok": true, "result": {
-            "generation": frame["generation"], "session": {"bound_id": SESSION}}}),
+            "generation": frame["generation"], "session": {"bound_id": SESSION}, "herdr": {"blocked_on": []}}}),
         Some("events_since") => {
             let after = frame["args"]["seq"].as_u64().unwrap();
             let events: Vec<Value> = (after + 1..=3)
