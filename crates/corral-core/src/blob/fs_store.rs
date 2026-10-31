@@ -317,6 +317,10 @@ impl BlobStore for FsBlobStore {
 
     fn get(&self, hash: &BlobHash) -> Result<VerifiedReader> {
         let path = self.path_of(hash);
+        #[cfg(unix)]
+        let file = crate::fs_guard::open_regular_nofollow(&path)
+            .with_context(|| format!("open blob {hash} at {}", path.display()))?;
+        #[cfg(not(unix))]
         let file =
             File::open(&path).with_context(|| format!("open blob {hash} at {}", path.display()))?;
         let decoder = zstd::stream::read::Decoder::new(file)
