@@ -111,8 +111,8 @@ fn identical_bytes_on_two_tasks_are_one_blob_with_two_rows_and_events() {
     }
     let events = f.ctx.store.events_of(None, &["artifact"]).unwrap();
     assert_eq!(events.len(), 2);
-    // And reads print the original bytes from the blob, without the legacy copy.
-    fs::remove_file(f.ctx.store.dir().join(&a.path)).unwrap();
+    // New publication never creates a legacy copy; reads use the canonical blob.
+    assert!(!f.ctx.store.dir().join(&a.path).exists());
     assert_eq!(artifact_read(&f.ctx, &a).unwrap(), bytes);
     assert_eq!(artifact_read(&f.ctx, &b).unwrap(), bytes);
 }
@@ -547,7 +547,7 @@ fn blob_only_artifacts_serve_gc_stats_and_search() {
         b"blobonlyprobe text",
         ArtifactKind::Evidence,
     );
-    fs::remove_file(f.ctx.store.dir().join(&a.path)).unwrap();
+    assert!(!f.ctx.store.dir().join(&a.path).exists());
     // When retention, storage totals and search run.
     artifact_gc(&f.ctx, true).unwrap();
     artifact_gc(&f.ctx, false).unwrap();

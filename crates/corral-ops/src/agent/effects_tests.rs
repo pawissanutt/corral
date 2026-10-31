@@ -466,13 +466,29 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
     fault_matrix(&|fx| fx.reviewer(), verdict, &recorded, "verdict");
 }
 
-/// Snapshot files of R1 whose names end with `suffix`.
+/// Distinct live canonical blobs registered on R1 for the named output, not mirrors.
 fn blobs(fx: &Fx, suffix: &str) -> usize {
-    let dir = fx.ctx.store.dir().join("artifacts").join(&fx.id).join("R1");
-    let names = std::fs::read_dir(dir).into_iter().flatten().flatten();
-    names
-        .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))
-        .count()
+    let task = fx.task();
+    let mut hashes = std::collections::BTreeSet::new();
+    for artifact in task
+        .artifacts
+        .iter()
+        .filter(|a| a.run == "R1" && a.path.ends_with(suffix))
+    {
+        let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+        assert!(
+            fx.ctx
+                .store
+                .blob_row(&hash)
+                .unwrap()
+                .is_some_and(|row| row.state == corral_core::backend::BlobState::Live)
+        );
+        let bytes = crate::artifact_read(&fx.ctx, artifact).unwrap();
+        assert_eq!(corral_core::blob_ref::BlobHash::of(&bytes), hash);
+        assert!(!fx.ctx.store.dir().join(&artifact.path).exists());
+        hashes.insert(hash);
+    }
+    hashes.len()
 }
 
 /// Registers criterion C1 (audited or not) and returns a passing no-gate observation of R1.

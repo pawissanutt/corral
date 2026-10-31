@@ -1,6 +1,5 @@
 //! Criterion registration, assertion ledger, and read-only completion intake.
 use std::collections::HashSet;
-use std::io::Read;
 use std::path::{Component, Path};
 use std::process::Command;
 
@@ -135,18 +134,8 @@ pub(crate) fn snapshot_hashes_with(
     refs: &[String],
     artifact: &dyn Fn(&str) -> Result<Option<corral_core::Artifact>>,
 ) -> Result<Vec<String>> {
-    let allowed = crate::artifact_storage::snapshot_dir(ctx.store.dir(), task, run);
-    let allowed = allowed
-        .canonicalize()
-        .context("missing artifact snapshot directory")?;
-    let root = ctx
-        .store
-        .dir()
-        .canonicalize()
-        .context("resolving store directory")?;
-    if allowed != crate::artifact_storage::snapshot_dir(&root, task, run) {
-        bail!("artifact_directory_escape");
-    }
+    let relative = Path::new("artifacts").join(task).join(run);
+    let allowed = ctx.store.dir().join(&relative);
     let mut hashes = Vec::new();
     let mut seen = HashSet::new();
     for reference in refs {
@@ -158,30 +147,45 @@ pub(crate) fn snapshot_hashes_with(
             bail!("invalid_artifact_path: {reference}");
         }
         let artifact = artifact(reference)?
-            .filter(|a| a.run == run)
+            .filter(|a| a.run == run && a.purged_at.is_none())
             .with_context(|| format!("unknown_or_wrong_run_artifact: {reference}"))?;
         if artifact.added < earliest {
             bail!("artifact_before_attempt: {reference}");
         }
-        let path = ctx
-            .store
-            .dir()
-            .join(reference)
-            .canonicalize()
-            .with_context(|| format!("missing_artifact: {reference}"))?;
-        if !path.starts_with(&allowed) {
+        if !Path::new(reference).starts_with(&relative) {
             bail!("artifact_path_escape: {reference}");
         }
-        let metadata = std::fs::metadata(&path).context("reading artifact metadata")?;
+        let path = ctx.store.dir().join(reference);
         let max = ctx.store.config.artifacts.max_bytes;
-        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max {
+        if artifact.bytes == 0 || artifact.bytes > max {
             bail!("invalid_artifact_size: {reference}");
         }
-        let file =
-            std::fs::File::open(&path).with_context(|| format!("opening artifact {reference}"))?;
-        let mut bytes = Vec::new();
-        file.take(max.saturating_add(1))
-            .read_to_end(&mut bytes)
+        // Imported copies retain their original confinement checks. Canonical blobs need
+        // neither a legacy directory nor a materialized snapshot to validate their bytes.
+        if path.try_exists().context("inspecting legacy artifact")? {
+            let root = ctx
+                .store
+                .dir()
+                .canonicalize()
+                .context("resolving store directory")?;
+            let canonical_allowed = allowed
+                .canonicalize()
+                .context("resolving artifact directory")?;
+            if canonical_allowed != root.join(&relative) {
+                bail!("artifact_directory_escape");
+            }
+            let canonical = path
+                .canonicalize()
+                .with_context(|| format!("missing_artifact: {reference}"))?;
+            if !canonical.starts_with(&canonical_allowed) {
+                bail!("artifact_path_escape: {reference}");
+            }
+            let metadata = std::fs::metadata(&canonical).context("reading artifact metadata")?;
+            if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max {
+                bail!("invalid_artifact_size: {reference}");
+            }
+        }
+        let bytes = crate::artifact_storage::artifact_read_confined_limited(ctx, &artifact, max)
             .with_context(|| format!("reading artifact {reference}"))?;
         let hash = verification::digest(&bytes);
         if u64::try_from(bytes.len())? != artifact.bytes || hash != artifact.sha256 {

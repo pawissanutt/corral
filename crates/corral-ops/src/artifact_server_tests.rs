@@ -208,6 +208,7 @@ fn requests_outside_recorded_artifacts_or_without_the_token_are_refused() {
         .join("artifacts")
         .join(&task.id)
         .join("R0");
+    std::fs::create_dir_all(&run_dir).unwrap();
     std::fs::write(run_dir.join("secret.txt"), b"nope").unwrap();
     let tok = &s.info.token;
     let good = artifact_url_path(&a).unwrap();
@@ -541,7 +542,11 @@ fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() 
         None,
     );
     let snapshot = s.ctx.store.dir().join(&file.path);
-    std::fs::remove_file(&snapshot).unwrap();
+    assert!(
+        !snapshot.exists(),
+        "new publications have no legacy snapshot"
+    );
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(root.join("outside.txt"), &snapshot).unwrap();
     #[cfg(windows)]
@@ -560,6 +565,9 @@ fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() 
         .join(&other.id)
         .join("R0");
     let outside_dir = root.join("outside-run");
+    // Explicit retained-directory attack fixture, not a publication mirror.
+    std::fs::create_dir_all(&run_dir).unwrap();
+    std::fs::write(s.ctx.store.dir().join(&dir_art.path), b"<p>dir</p>").unwrap();
     std::fs::rename(&run_dir, &outside_dir).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&outside_dir, &run_dir).unwrap();
@@ -579,7 +587,9 @@ fn symlinked_snapshots_and_run_directories_never_leak_files_outside_the_store() 
     );
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     enc.write_all(b"<p>packed body</p>").unwrap();
-    std::fs::write(s.ctx.store.dir().join(&gz.path), enc.finish().unwrap()).unwrap();
+    let legacy_gzip = s.ctx.store.dir().join(&gz.path);
+    std::fs::create_dir_all(legacy_gzip.parent().unwrap()).unwrap();
+    std::fs::write(legacy_gzip, enc.finish().unwrap()).unwrap();
     s.ctx
         .store
         .update(&packed.id, |t| {

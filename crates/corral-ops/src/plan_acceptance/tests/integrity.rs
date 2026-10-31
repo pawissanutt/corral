@@ -192,7 +192,12 @@ fn no_code_plan_refuses_changed_accepted_artifact_versions() {
     let report = capture(&f, &f.members[0], "report.md");
     let main = f.main();
     // When the accepted snapshot is changed before verification.
-    std::fs::write(f.ctx.store.dir().join(&report.path), "rewritten\n").unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&report.sha256).unwrap();
+    std::fs::write(
+        f.ctx.store.blob_store().unwrap().path_of(&hash),
+        "rewritten\n",
+    )
+    .unwrap();
     // Then verification and readiness name the changed delivery instead of binding it.
     let error = message(plan_verify(&f.ctx, &f.plan));
     assert!(error.contains("is missing or changed"), "{error}");
