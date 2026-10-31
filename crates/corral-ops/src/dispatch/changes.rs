@@ -115,11 +115,9 @@ fn send_changes(
     if let Some(expected) = expected {
         expected.check(&ctx.store.head(&task.id)?.shell_task()?)?;
     }
-    let changes_round = (continuation.session.policy != corral_core::SessionPolicy::Fresh)
-        .then(|| crate::round_notice::next_round(previous, ctx.store.now()));
-    let notice = changes_round
-        .as_ref()
-        .map(|next| crate::round_notice::changes(&task, previous, next, round));
+    let changes_round = crate::round_notice::next_round(previous, ctx.store.now());
+    let notice = (continuation.session.policy != corral_core::SessionPolicy::Fresh)
+        .then(|| crate::round_notice::changes(&task, previous, &changes_round, round));
     let text = &match &notice {
         Some(notice) if !crate::round_notice::has_changes_notice(text) => {
             format!("{notice} {text}")
@@ -156,9 +154,7 @@ fn send_changes(
         }
         run.pending_reply = Some(text.to_string());
         run.session = Some(continuation.session.clone());
-        if let Some(round) = &changes_round {
-            run.changes_round = Some(round.clone());
-        }
+        run.changes_round = Some(changes_round.clone());
         if let Some(restarted) = &restarted {
             run.herdr = Some(restarted.herdr.clone());
         }
