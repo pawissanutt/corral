@@ -28,7 +28,7 @@ beforeAll(() => {
   ok(["git", "-C", app, "add", "main.fk"]);
   ok(["git", "-C", app, "commit", "-q", "-m", "fixture"]);
   cli("init");
-  assets = buildFixtureInstall({ parent: workspace, omit: ["role", "delivery"] });
+  assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, omit: ["role", "delivery"] });
   // Preserve the production role and add only a deterministic fixture command which scripts
   // the synthetic provider to invoke its actual LSP tool on the next turn.
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });

@@ -66,7 +66,7 @@ beforeAll(() => {
       kind: "clarification", text: "Which adapter should the reply use?", blocking: true, options: ["inbox", "pane"],
     } }] },
   ]));
-  assets = buildFixtureInstall({ parent: workspace, omit: ["role", "delivery"] });
+  assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, omit: ["role", "delivery"] });
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const auth = join(assets.dir, "src/auth");
   copyFileSync(join(auth, "index.ts"), join(auth, "fixture-auth.ts"));

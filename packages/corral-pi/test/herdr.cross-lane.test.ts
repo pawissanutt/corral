@@ -77,7 +77,7 @@ beforeAll(() => {
     return;
   }
   root = mkdtempSync(join(privateRoot() ?? "", "pi-herdr-"));
-  assets = buildFixtureInstall({ parent: root });
+  assets = buildFixtureInstall({ parent: root, isolatePiState: true });
 }, 120_000);
 
 afterAll(() => {
