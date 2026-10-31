@@ -147,7 +147,7 @@ test("default-resolved PM and assistant hosts have the same capability tools and
   const capabilityTools = (session: HostSession) => session.session.getActiveToolNames()
     .filter((name) => !name.startsWith("corral_") || name === "corral_todo").sort();
   expect(capabilityTools(pmHost)).toEqual(capabilityTools(assistantHost));
-  for (const name of ["corral_todo", "job_start", "job_output", "job_kill", "web_fetch", "web_search", "lsp_diagnostics", "lsp_definition", "lsp_references", "explore", "mcp_connect", "tool_search", "codemode"]) {
+  for (const name of ["ask_user", "corral_todo", "job_start", "job_output", "job_kill", "web_fetch", "web_search", "lsp_diagnostics", "lsp_definition", "lsp_references", "explore", "mcp_connect", "tool_search", "codemode"]) {
     expect(capabilityTools(pmHost)).toContain(name);
   }
   expect(pmHost.session.getActiveToolNames()).not.toContain("corral_job_monitor");
