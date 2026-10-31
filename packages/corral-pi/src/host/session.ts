@@ -35,7 +35,8 @@ import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { corralRenderers } from "../ui/render.ts";
-import { installTodo } from "../ui/todo.ts";
+import { TodoLedger, installTodo } from "../ui/todo.ts";
+import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserEnabled, askUserTool } from "./ask-user.ts";
@@ -101,7 +102,8 @@ export interface HostSessionOptions {
   readonly herdr?: HerdrLifecycle;
 }
 
-type TurnOrigin = { kind: "bridge"; idempotency_key: string } | { kind: "owner_terminal" } | { kind: "unknown" };
+type TurnOrigin = { kind: "bridge" | "continuation"; idempotency_key: string } | { kind: "owner_terminal" }
+  | { kind: "unknown" };
 
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
 const STATE_SECTION_MAX_BYTES = 8 * 1024;
@@ -268,6 +270,10 @@ export class HostSession {
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private auxiliaryModels: Models | undefined;
   private readonly budget: RunBudget;
+  private ledger: TodoLedger | undefined;
+  /** PM and assistant with todo on: the request summary and continuation (T-679). */
+  private request: RequestContext | undefined;
+  private closing = false;
 
   readonly provider: ProviderId;
 
@@ -559,6 +565,12 @@ export class HostSession {
     const specs = this.options.modules.role.tools(this.roleContext);
     const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
     const rich = this.options.ui !== "plain";
+    const role = this.options.identity.role;
+    this.ledger = this.loadout.includes("corral_todo")
+      ? new TodoLedger(this.options.identity, () => this.options.client.todoSnapshot()) : undefined;
+    this.ledger?.extend(pi);
+    this.request = this.ledger && (role === "pm" || role === "assistant") ? new RequestContext(this.ledger) : undefined;
+    this.request?.extend(pi);
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
         client: this.options.client, allowedOps: this.options.modules.role.corralOps,
@@ -574,9 +586,7 @@ export class HostSession {
         identity: this.options.identity, provider: this.provider, model: this.options.model,
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
-      if (this.loadout.includes("corral_todo")) {
-        installTodo(pi, this.options.identity, () => this.options.client.todoSnapshot());
-      }
+      if (this.ledger) installTodo(pi, this.ledger, this.request === undefined);
     }
     for (const tool of this.localTools) pi.registerTool(tool);
     // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
@@ -795,6 +805,8 @@ export class HostSession {
     if (kind === "budget_exhausted") payload.budget = data.budget;
     if (kind === "turn_ended" && data.owner_input === true) payload.owner_input = true;
     if (kind === "turn_ended" && data.cancelled === true) payload.cancelled = true;
+    const role = this.options.identity.role;
+    if (kind === "turn_ended" && data.aborted === true && (role === "pm" || role === "assistant")) payload.aborted = true;
     const requestId = eventRequestId(this.options.identity.generation, event.seq);
     this.calls = this.calls.then(() => this.send(requestId, payload, turn));
   }
@@ -811,6 +823,7 @@ export class HostSession {
           this.stats.lastError = JSON.stringify(receipt.result).slice(0, 256);
         } else {
           this.stats.committed++;
+          if (payload.kind === "turn_ended" && receipt.state === "committed") this.turnRecorded(receipt.result);
         }
         return;
       } catch (error) {
@@ -820,6 +833,53 @@ export class HostSession {
     }
     this.stats.failed++;
     this.stats.lastError = last instanceof Error ? last.message.slice(0, 256) : String(last);
+  }
+
+  /** Corral's request decision for an ended turn: a stop is shown, a due continuation queued. */
+  private turnRecorded(result: unknown): void {
+    const stopped = this.request?.stopped(result);
+    if (stopped) {
+      this.options.events.emit("continuation_stopped", { reason: stopped });
+      this.request?.notify(`corral: automatic continuation stopped (${stopped.replace("_", " ")}); `
+        + "the plan still has open steps.");
+    }
+    const due = this.request?.due(result);
+    if (due) this.calls = this.calls.then(() => this.continueRequest(due));
+  }
+
+  /**
+   * Starts the continuation turn only while the pane is idle and the canonical plan is still the
+   * revision corral granted it for; anything newer, a failed recheck or a busy pane drops it.
+   */
+  private async continueRequest(due: DueContinuation): Promise<void> {
+    const key = due.continuation.key;
+    const skip = (reason: string) => { this.options.events.emit("continuation_skipped", { key, reason }); };
+    if (this.closing || !this.ledger) return skip("closing");
+    if (this.open) return skip("busy");
+    if (this.budget.state().stopped) return skip("budget_exhausted");
+    try {
+      await this.ledger.restore();
+    } catch {
+      return skip("recheck_failed");
+    }
+    const current = this.ledger.current;
+    if (current?.plan !== due.plan || current.revision !== due.revision) return skip("superseded");
+    if (this.open || this.closing) return skip("busy");
+    this.options.events.emit("continuation", { key, attempt: due.continuation.attempt, plan: due.plan,
+      revision: due.revision });
+    await new Promise<void>((resolve) => {
+      this.session.prompt(continuationText(due), {
+        source: "rpc",
+        preflightResult: (disposition) => {
+          if (disposition === "started") this.nextTurnOrigin = { kind: "continuation", idempotency_key: key };
+          else skip(disposition);
+          resolve();
+        },
+      }).then(() => resolve(), (error: unknown) => {
+        skip(`refused: ${(error instanceof Error ? error.message : String(error)).slice(0, 128)}`);
+        resolve();
+      });
+    });
   }
 
   markAttached(mode: "interactive" | "headless"): void {
@@ -832,6 +892,7 @@ export class HostSession {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
     this.writeAbort.abort();

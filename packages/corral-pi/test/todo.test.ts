@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Check } from "typebox/value";
 
-import { todoTool } from "../src/roles/common/todo.ts";
+import { sessionTodoTool, todoTool } from "../src/roles/common/todo.ts";
 import worker from "../src/roles/worker/index.ts";
 import pm from "../src/roles/pm/index.ts";
 import reviewer from "../src/roles/reviewer/index.ts";
@@ -48,7 +48,8 @@ for (const role of [worker, pm, reviewer] satisfies readonly RoleModule[]) {
       };
       const tools = role.tools(context);
       const enabled = todo === true && role.role !== "reviewer";
-      expect(tools.filter((tool) => tool.name === "corral_todo")).toEqual(enabled ? [todoTool] : []);
+      const spec = role.role === "pm" ? sessionTodoTool : todoTool;
+      expect(tools.filter((tool) => tool.name === "corral_todo")).toEqual(enabled ? [spec] : []);
       expect(tools.every((tool) => role.corralOps.includes(tool.op))).toBeTrue();
     });
   }

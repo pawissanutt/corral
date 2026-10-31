@@ -4,7 +4,7 @@
 // commands the owner asks for go through corral_owner_action (owner-action.ts).
 import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
-import { todoTool } from "../common/todo.ts";
+import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
 import { ownerActionTool } from "./owner-action.ts";
@@ -19,9 +19,10 @@ export function assistantRole(root: string): RoleModule {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => context.todo === true ? [ownerActionTool, todoTool] : [ownerActionTool],
+    tools: (context) => context.todo === true ? [ownerActionTool, sessionTodoTool] : [ownerActionTool],
     contract: (context) => {
-      const contract = renderContract(readAsset(root, CONTRACT_ASSET), context.identity);
+      const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
+        + requestContract(root, context.todo);
       if (!context.promptFile) return contract;
       // The Rust launcher writes this read-only task brief, not a worker prompt. Bound the
       // read again here so a replaced file cannot grow the model's system context.
