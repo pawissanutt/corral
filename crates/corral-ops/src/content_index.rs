@@ -304,13 +304,42 @@ pub(crate) fn refresh_snapshot(ctx: &Ctx, tasks: &[Task]) -> Result<Snapshot> {
     build_snapshot(ctx, tasks, Update::Refresh)
 }
 
+/// An artifact writer's eager update, skipped while another build holds the index: the next
+/// refresh or search picks the change up, so a writer never queues behind a build (T-659).
+pub(crate) fn snapshot_if_idle(ctx: &Ctx) -> Result<()> {
+    let lock = index_lock(ctx)?;
+    match lock.try_lock() {
+        Ok(()) => build_locked(ctx, &ctx.store.list()?, Update::Incremental).map(drop),
+        Err(fs::TryLockError::WouldBlock) => Ok(()),
+        Err(fs::TryLockError::Error(error)) => Err(error).context("locking search index"),
+    }
+}
+
 enum Update {
     Incremental,
     Refresh,
     Reindex,
 }
 
+fn index_lock(ctx: &Ctx) -> Result<File> {
+    let dir = ctx.store.state_dir();
+    fs::create_dir_all(&dir).context("creating search state directory")?;
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("content-search.lock"))
+        .context("opening search index lock")
+}
+
 fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
+    let lock = index_lock(ctx)?;
+    lock.lock().context("locking search index")?;
+    build_locked(ctx, tasks, update)
+}
+
+/// The caller holds `content-search.lock`.
+fn build_locked(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
     let (reindex, inspect_artifacts) = match update {
         Update::Incremental => (false, false),
         Update::Refresh => (false, true),
@@ -319,14 +348,6 @@ fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot>
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
     let dir = ctx.store.state_dir();
-    fs::create_dir_all(&dir).context("creating search state directory")?;
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(dir.join("content-search.lock"))
-        .context("opening search index lock")?;
-    lock.lock().context("locking search index")?;
     let inputs = inspect_artifacts
         .then(|| crate::content_refresh::fingerprint(ctx, tasks))
         .transpose()?;

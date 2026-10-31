@@ -14,8 +14,8 @@ thread_local! {
     static HELD: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Exclusive artifact-storage access. Nested acquisitions on the holding thread reuse it, so a
-/// caller can hold storage across work that attaches artifacts (T-505).
+/// Artifact-storage access. Nested acquisitions on the holding thread reuse it, so a caller
+/// can hold storage across work that attaches artifacts (T-505).
 pub(crate) struct StorageGuard {
     _file: Option<fs::File>,
 }
@@ -48,23 +48,49 @@ fn open_lock(ctx: &Ctx) -> Result<fs::File> {
         .context("opening artifact storage lock")
 }
 
+/// Shared access for artifact writers and readers. A writer only adds new snapshots, each
+/// atomically before its task's metadata names it, and the task lock serializes that metadata,
+/// so writers never wait for one another: a done or verdict cannot starve behind hooks (T-659).
 pub(crate) fn storage_lock(ctx: &Ctx) -> Result<StorageGuard> {
     if held_here() {
         return Ok(StorageGuard::enter(None));
     }
     let file = open_lock(ctx)?;
     crate::agent::effects::failpoint("artifact_storage_wait");
+    file.lock_shared().context("locking artifact storage")?;
+    crate::agent::effects::failpoint("artifact_storage_held");
+    Ok(StorageGuard::enter(Some(file)))
+}
+
+/// Exclusive access for GC, the only operation that rewrites or removes existing snapshots.
+pub(crate) fn storage_exclusive(ctx: &Ctx) -> Result<StorageGuard> {
+    if held_here() {
+        bail!("artifact storage is already held on this thread");
+    }
+    let file = open_lock(ctx)?;
     file.lock().context("locking artifact storage")?;
     Ok(StorageGuard::enter(Some(file)))
 }
 
-/// None while another holder has artifact storage.
+/// Waits until no exclusive holder (GC) has artifact storage, without keeping access: a pass
+/// calls it before taking a lease its artifact writes must not park (T-505).
+pub(crate) fn await_storage(ctx: &Ctx) -> Result<()> {
+    if held_here() {
+        return Ok(());
+    }
+    let file = open_lock(ctx)?;
+    crate::agent::effects::failpoint("artifact_storage_wait");
+    file.lock_shared().context("waiting for artifact storage")?;
+    file.unlock().context("releasing artifact storage")
+}
+
+/// None while GC has artifact storage.
 pub(crate) fn try_storage_lock(ctx: &Ctx) -> Result<Option<StorageGuard>> {
     if held_here() {
         return Ok(Some(StorageGuard::enter(None)));
     }
     let file = open_lock(ctx)?;
-    match file.try_lock() {
+    match file.try_lock_shared() {
         Ok(()) => Ok(Some(StorageGuard::enter(Some(file)))),
         Err(fs::TryLockError::WouldBlock) => Ok(None),
         Err(fs::TryLockError::Error(error)) => Err(error).context("locking artifact storage"),

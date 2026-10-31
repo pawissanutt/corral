@@ -211,9 +211,10 @@ fn sync_scoped(
         crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
         return Ok(changes);
     }
-    // Wait for artifact storage before taking the reconciliation lease every finishing launch
-    // needs: a long search then delays this pass, never the launches (T-505).
-    let storage = crate::artifact_storage::storage_lock(ctx)?;
+    // Wait out GC's exclusive storage before taking the reconciliation lease every finishing
+    // launch needs, so a write in this pass never parks it (T-505). The pass holds no storage:
+    // each artifact write shares it only around itself (T-659).
+    crate::artifact_storage::await_storage(ctx)?;
     let Some(inventory) = crate::pane_liveness::inventory(ctx) else {
         // Inventory contention/UNKNOWN must stop pane decisions and new launches,
         // not authenticated completion receipts. Use a receipt-only ownership
@@ -320,7 +321,6 @@ fn sync_scoped(
     // Launching queued/autopilot work must acquire an exclusive ownership claim.
     // No consumer below this point receives the sampled pane IDs.
     drop(inventory);
-    drop(storage);
     // Post-land hooks run commands that may call corral: never under storage or the lease (T-509).
     crate::hooks::reconcile_post_land(ctx)?;
     crate::agent::gate_queue::advance_tasks(ctx, &tasks)?;

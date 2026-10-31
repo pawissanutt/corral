@@ -502,7 +502,7 @@ fn run_effect(
             _ => Ok(false),
         },
         "effect:content_index" => {
-            crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
+            crate::content_index::snapshot_if_idle(ctx)?;
             Ok(true)
         }
         other => bail!("unknown owed effect {other}"),
