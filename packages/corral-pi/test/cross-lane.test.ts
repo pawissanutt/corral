@@ -64,7 +64,7 @@ model = "gpt-6.1-sol"
 vendor = "openai"
 effort = "high"
 `);
-  good = buildFixtureInstall({ parent: workspace });
+  good = buildFixtureInstall({ parent: workspace, isolatePiState: true });
   // Hello binds before InteractiveMode.init (the documented host order). Observe the
   // actual attached event in this disposable host, rather than racing it with get_state.
   // Only the fixture writes this readiness signal; production startup stays unchanged.
@@ -73,7 +73,7 @@ effort = "high"
   const attach = '  session.markAttached("interactive");';
   expect(source.split(attach)).toHaveLength(2);
   writeFileSync(main, source.replace(attach, `${attach}\n  (await import("node:fs")).writeFileSync(${JSON.stringify(join(workspace, "interactive-ready"))}, "attached");`));
-  badBun = buildFixtureInstall({ parent: workspace });
+  badBun = buildFixtureInstall({ parent: workspace, isolatePiState: true });
   const compat = JSON.parse(readFileSync(join(badBun.dir, "compat.json"), "utf8"));
   writeFileSync(join(badBun.dir, "compat.json"), `${JSON.stringify({ ...compat, bun: { range: "0.0.1", tested: ["0.0.1"] } })}\n`);
   configure(good.dir);
@@ -90,6 +90,7 @@ afterAll(() => {
   }
 });
 
+// The first four tests intentionally exercise one live host; the final launch is a separate fixture.
 test("dispatch launches the host in the run pane and hello binds generation 1 without leaking a secret", async () => {
   if (!isolated) return;
   const bound = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001");

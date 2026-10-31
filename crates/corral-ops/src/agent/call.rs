@@ -57,6 +57,7 @@ pub enum AgentOp {
     PlanSubmit,
     PlanVerdict,
     OwnerAction,
+    WritePermission,
 }
 
 const ALL_ROLES: &[AgentRole] = &[
@@ -84,7 +85,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 36] = [
+    pub const ALL: [AgentOp; 37] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -121,6 +122,7 @@ impl AgentOp {
         AgentOp::PlanSubmit,
         AgentOp::PlanVerdict,
         AgentOp::OwnerAction,
+        AgentOp::WritePermission,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -161,6 +163,7 @@ impl AgentOp {
             AgentOp::PlanSubmit => "plan_submit",
             AgentOp::PlanVerdict => "plan_verdict",
             AgentOp::OwnerAction => "owner_action",
+            AgentOp::WritePermission => "write_permission",
         }
     }
 
@@ -181,7 +184,7 @@ impl AgentOp {
             AgentOp::PlanWrite => PLANNING,
             AgentOp::PlanSubmit => PLANNER,
             AgentOp::PlanVerdict => PLAN_REVIEWER,
-            AgentOp::OwnerAction => ASSISTANT,
+            AgentOp::OwnerAction | AgentOp::WritePermission => ASSISTANT,
             _ => PM,
         }
     }
@@ -204,7 +207,7 @@ impl AgentOp {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
             AgentOp::Todo | AgentOp::Job | AgentOp::JobMonitor | AgentOp::OwnerAction => None,
-            AgentOp::Ask | AgentOp::Withdraw => None,
+            AgentOp::Ask | AgentOp::Withdraw | AgentOp::WritePermission => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
             AgentOp::Evidence | AgentOp::Artifact if role == AgentRole::Reviewer => {
                 Some(Route::Reviewer)
@@ -287,6 +290,10 @@ pub enum RejectCode {
     ConflictInFlight,
     /// owner_action: a confirm-class action waits for the owner's answer in the pane.
     ConfirmationRequired,
+    /// write_permission: the target or scope is a path no grant can cover.
+    FixedRule,
+    /// write_permission: the session already holds its maximum of active grants.
+    GrantsFull,
 }
 
 impl RejectCode {
@@ -318,6 +325,8 @@ impl RejectCode {
             RejectCode::UnsupportedAction => "unsupported_action",
             RejectCode::ConflictInFlight => "conflict_in_flight",
             RejectCode::ConfirmationRequired => "confirmation_required",
+            RejectCode::FixedRule => "fixed_rule",
+            RejectCode::GrantsFull => "grants_full",
         }
     }
 }
@@ -523,6 +532,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
             AgentOp::Job | AgentOp::JobMonitor => super::ops::jobs::call(ctx, &envelope, op),
             AgentOp::OwnerAction => super::ops::owner_action::call(ctx, &envelope),
+            AgentOp::WritePermission => super::ops::write_permission::call(ctx, &envelope),
             AgentOp::Ask => ask(ctx, &envelope),
             AgentOp::Withdraw => withdraw(ctx, &envelope),
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => {

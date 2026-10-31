@@ -5,14 +5,53 @@ import { join } from "node:path";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { connect } from "./support/bridge-client.ts";
 import { within } from "./support/wait.ts";
-import { EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+
+// This preceding real pane crashes after InteractiveMode has installed its crash handler.
+// Its record must not become the next fixture's startup warning on the same herdr server.
+test("a preceding Pi pane records a crash in its own fixture state", async () => {
+  if (!privateHerdr()) { console.log("skipped: requires private herdr"); return; }
+  const workspace = mkdtempSync(join(privateRoot()!, "pi-crash-"));
+  const app = join(workspace, "app"); mkdirSync(app);
+  const assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, retainPiState: true });
+  let workspaceId = "";
+  try {
+    for (const args of [["init", "-q", "-b", "main"], ["config", "user.name", "test"], ["config", "user.email", "test@example.invalid"]]) ok(["git", "-C", app, ...args]);
+    writeFileSync(join(app, "README.md"), "fixture\n");
+    ok(["git", "-C", app, "add", "README.md"]); ok(["git", "-C", app, "commit", "-qm", "fixture"]);
+    const cli = (...args: string[]) => ok([corralBinary(), "--root", workspace, ...args], { cwd: workspace });
+    cli("init");
+    const main = join(assets.dir, "src/host/main.ts");
+    const source = readFileSync(main, "utf8");
+    const attached = '  session.markAttached("interactive");';
+    expect(source.split(attached)).toHaveLength(2);
+    writeFileSync(main, source.replace(attached, `${attached}\n  setTimeout(() => { throw new Error("setRawMode failed: deliberate fixture crash"); }, 0);`));
+    const state = join(assets.dir, "pi-state");
+    writeFileSync(join(state, "crashes.json"), JSON.stringify([{ timestamp: new Date().toISOString(), message: "planted previous crash" }]));
+    const config = join(workspace, ".corral/corral.toml");
+    writeFileSync(config, `${readFileSync(config, "utf8")}\n[profiles.pi]\nharness = "pi-native"\nmodel = "gpt-6.1-sol"\nvendor = "openai"\n[agent]\nassets_dir = ${JSON.stringify(assets.dir)}\n`);
+    cli("new", "Crash fixture worker", "-p", "app", "--ready");
+    cli("dispatch", "T-001", "--profile", "pi", "--force");
+    const launched = JSON.parse(cli("show", "T-001", "--json")).runs.at(-1);
+    workspaceId = launched.herdr.workspace_id;
+    const exits = join(workspace, ".corral/state/launch-exits");
+    await fileAppears(exits, "T-001-R1.exited");
+    expect(readFileSync(join(exits, "T-001-R1.exited"), "utf8").trim()).not.toBe("0");
+    expect(readFileSync(join(state, "crashes.json"), "utf8")).toContain("setRawMode failed: deliberate fixture crash");
+    const records = JSON.parse(readFileSync(join(state, "crashes.json"), "utf8"));
+    expect(records.find((record: { message: string }) => record.message === "planted previous crash")?.notified).toBeTrue();
+  } finally {
+    if (workspaceId) run(["herdr", "--session", "corral-test", "workspace", "close", workspaceId]);
+    assets.cleanup(); rmSync(workspace, { recursive: true, force: true });
+  }
+}, 180_000);
 
 test("completed interactive worker exits without a stack trace", async () => {
   if (!privateHerdr()) { console.log("skipped: requires private herdr"); return; }
   const workspace = mkdtempSync(join(privateRoot()!, "pi-finished-"));
   const app = join(workspace, "app"); mkdirSync(app);
   let workspaceId = "";
-  const assets = buildFixtureInstall({ parent: workspace, omit: ["role", "delivery"] });
+  const assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, omit: ["role", "delivery"] });
   let events: EventFollower | undefined;
   try {
     for (const args of [["init", "-q", "-b", "main"], ["config", "user.name", "test"], ["config", "user.email", "test@example.invalid"]]) ok(["git", "-C", app, ...args]);
@@ -80,6 +119,7 @@ export default { ...auth, transport() { const transport = fixtureTransport(); re
     const screen = ok(["herdr", "--session", "corral-test", "pane", "read", pane, "--source", "recent", "--lines", "400"]);
     console.log(`completed task outcome=${finished.outcome}; committed corral_done; post-completion bridge shutdown; exit=${exitCode}; worker pane:\n${screen}`);
     expect(exitCode).toBe("0");
+    expect(screen).not.toContain("planted previous crash");
     expect(screen).not.toMatch(/setRawMode failed|corral-pi host stopped|\n\s+at /);
   } finally {
     events?.close();

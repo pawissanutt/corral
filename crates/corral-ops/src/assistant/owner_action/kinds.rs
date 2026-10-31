@@ -199,6 +199,7 @@ pub const KINDS: [Spec; 20] = [
                 ("--review", true),
                 ("--into", true),
                 ("--note", true),
+                ("--expected-head", true),
             ],
         )
     },
@@ -310,8 +311,10 @@ pub fn resolve(
     expected_revision: Option<u64>,
 ) -> Result<Action> {
     let spec = KINDS.iter().find(|spec| spec.kind == kind).ok_or_else(|| {
+        let accepted: Vec<&str> = KINDS.iter().map(|spec| spec.kind).collect();
         unsupported(format!(
-            "{kind} is not an owner action; route it to the PM with corral pm inbox post"
+            "{kind} is not an owner action; this corral accepts {}; route anything else to the PM with corral pm inbox post",
+            accepted.join(", ")
         ))
     })?;
     let target = target(spec, target_word)?;

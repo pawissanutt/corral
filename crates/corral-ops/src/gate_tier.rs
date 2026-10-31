@@ -341,6 +341,13 @@ fn member<T: TaskRef + ?Sized>(
         &gate.expected_failures,
         &member.source,
     )?;
+    let full_binding = requirement::binding(
+        FULL_TIER,
+        &policy.gate,
+        &gate.tests,
+        &gate.expected_failures,
+        &member.source,
+    )?;
     Ok(GateContract {
         landing_tier: gate.tier.clone(),
         tier: gate.tier,
@@ -350,7 +357,8 @@ fn member<T: TaskRef + ?Sized>(
         source: member.source,
         requirement: GateRequirement {
             binding: Some(binding),
-            full_dominates: false,
+            full_dominates: true,
+            full_binding: Some(full_binding),
         },
         ..contract
     })
@@ -376,6 +384,7 @@ fn review_rounds(policy: &ReviewPolicy, contract: GateContract) -> Result<GateCo
         requirement: GateRequirement {
             binding: Some(binding),
             full_dominates: true,
+            full_binding: None,
         },
         ..contract
     })

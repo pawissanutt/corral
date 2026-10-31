@@ -179,6 +179,7 @@ fn receipt<T: TaskRef + ?Sized>(
                     .as_ref()
                     .and_then(|i| i.gate_tier.as_deref().cloned()),
                 full_dominates: true,
+                full_binding: None,
             };
             let requirement = requirement.unwrap_or(&own);
             verification::gate_fresh_for_at(ctx, task, run, g, requirement, moved)?
@@ -308,7 +309,7 @@ pub(crate) fn evidence_gaps<T: TaskRef + ?Sized>(
     let mut gap = |code, detail: String| gaps.push(EvidenceGap { code, detail });
     let policy = ctx.store.config.task_review_policy(task);
     let prose = route.requirement.contract.kind == ReviewContractKind::Prose;
-    // A tiered review needs a fresh receipt of its own tier only, never a full one.
+    // Freshness also checks tier dominance; a full receipt can satisfy a quick review.
     let tiered = gate_contract(ctx, task, run, moved)?;
     let commands = tiered.as_ref().map_or(&policy.gate, |c| &c.commands);
     match &run.gate {

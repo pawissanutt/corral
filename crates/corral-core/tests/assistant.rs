@@ -81,6 +81,7 @@ fn sessions_and_containers_round_trip_and_end_retains_transcripts() {
                         .resolve(AgentRole::Assistant, None),
                 ),
                 capability_transition: None,
+                assets_sha256: None,
             });
             Ok(())
         })

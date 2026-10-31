@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 
-for (const mode of ["throw", "emit"]) test(`terminal shutdown tolerates EIO (${mode}) and stops once`, () => {
+for (const mode of ["throw", "emit", "bun"]) test(`terminal shutdown tolerates EIO (${mode}) and stops once`, () => {
   const module = join(import.meta.dirname, "../src/host/terminal-stop.ts");
   const script = `
     import { EventEmitter } from 'node:events';
@@ -11,7 +11,8 @@ for (const mode of ["throw", "emit"]) test(`terminal shutdown tolerates EIO (${m
     let calls = 0;
     const terminal = { stop() {
       calls++;
-      const error = Object.assign(new Error('setRawMode failed'), { code: 'EIO' });
+      const error = ${JSON.stringify(mode)} === 'bun' ? new Error('setRawMode failed with errno: 5')
+        : Object.assign(new Error('setRawMode failed'), { code: 'EIO' });
       if (${JSON.stringify(mode)} === 'throw') throw error;
       queueMicrotask(() => stdin.emit('error', error));
     }};
