@@ -100,6 +100,46 @@ fn canonical_diff_prefix_and_imported_gzip_log_keep_the_original_logical_limits(
 }
 
 #[test]
+fn cold_collection_rejects_corrupt_content_without_blocking_other_valid_sources() {
+    let (root, ctx, bad) = artifact("+++ b/src/corrupt.rs\n", ArtifactKind::Diff);
+    let source = root.path().join("good.diff");
+    fs::write(&source, "+++ b/src/valid.rs\n").unwrap();
+    crate::add_artifact(
+        &ctx,
+        "T-001",
+        &source,
+        Some(ArtifactKind::Diff),
+        Some("valid"),
+    )
+    .unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&bad.sha256).unwrap();
+    fs::write(
+        ctx.store.blob_store().unwrap().path_of(&hash),
+        "altered frame",
+    )
+    .unwrap();
+    assert!(
+        artifact_text(&ctx, &bad, ARTIFACT_BYTES).is_err(),
+        "verification still refuses"
+    );
+    let actual = crate::lesson_rows::Source {
+        task: ctx.store.get("T-001").unwrap(),
+        usage: Default::default(),
+    };
+    let signals = collect(&ctx, "app", &[actual], &[], &Default::default()).unwrap();
+    assert!(
+        signals
+            .iter()
+            .any(|signal| signal.files.iter().any(|path| path == "src/valid.rs"))
+    );
+    assert!(
+        signals
+            .iter()
+            .all(|signal| signal.files.iter().all(|path| path != "src/corrupt.rs"))
+    );
+}
+
+#[test]
 fn canonical_signal_rejects_bad_lengths_unsafe_paths_and_corruption() {
     let (_root, ctx, original) = artifact("src/real.rs\n", ArtifactKind::Diff);
     let mut changed = original.clone();

@@ -638,8 +638,19 @@ pub(crate) fn collect(
         artifacts.truncate(32);
         for artifact in artifacts {
             let cap = ARTIFACT_BYTES.min(CONTEXT_BYTES.saturating_sub(collector.consumed));
-            let Some(text) = artifact_text(ctx, artifact, cap)? else {
-                continue;
+            let text = match artifact_text(ctx, artifact, cap) {
+                Ok(Some(text)) => text,
+                Ok(None) => continue,
+                Err(error) => {
+                    // Derived hints cannot make corrupt content authoritative or prevent the
+                    // actual gate/evidence boundary from recording its own refusal.
+                    crate::messages::report(
+                        Some(&task.id),
+                        "lesson signals",
+                        format!("omitting unreadable artifact {}: {error:#}", artifact.path),
+                    );
+                    continue;
+                }
             };
             let source = evidence(task, artifact.added, artifact.path.clone());
             if artifact.kind == ArtifactKind::Diff {
