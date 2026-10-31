@@ -260,13 +260,6 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
         "unchanged tasks do not re-toast after dismissal"
     );
     // Maintained counts include the undecodable tasks added after the intact baseline.
-    let digitless = |line: &str| -> String {
-        if line.contains("Backlog") {
-            line.chars().filter(|c| !c.is_ascii_digit()).collect()
-        } else {
-            line.to_owned()
-        }
-    };
     for ((width, height), (before, mut expected_cards)) in
         [(160, 45), (80, 45)].into_iter().zip(baseline)
     {
@@ -290,27 +283,50 @@ fn undecodable_stored_tasks_are_captured_and_deduplicated_without_garbling_the_b
         assert_eq!(cards, expected_cards, "unaffected cards remain intact");
         let before: Vec<_> = before.lines().collect();
         let after: Vec<_> = after.lines().collect();
+        assert_eq!(after[0], before[0], "chrome counts remain intact");
+        let resource_row = |lines: &[&str]| {
+            lines
+                .iter()
+                .position(|line| line.trim_start().starts_with("load "))
+                .unwrap()
+        };
+        let before_resources = resource_row(&before);
+        let after_resources = resource_row(&after);
         assert_eq!(
-            after[..4]
-                .iter()
-                .map(|line| digitless(line))
-                .collect::<Vec<_>>(),
-            before[..4]
-                .iter()
-                .map(|line| digitless(line))
-                .collect::<Vec<_>>(),
-            "app header remains intact"
+            after[after_resources], before[before_resources],
+            "resource header remains intact"
         );
+        // Canonical input corruption intentionally replaces operating authority, not chrome.
+        // Its actual diagnostic wraps with viewport width, so the resource row may move.
+        let policy = after[1..after_resources].join(" ");
+        assert!(policy.contains("policy unavailable"), "{policy}");
+        assert!(policy.contains("no automatic authority"), "{policy}");
         assert_eq!(
             &after[after.len() - 2..],
             &before[before.len() - 2..],
             "footer remains intact"
         );
         for border in ['╭', '╰'] {
+            let mut expected = before
+                .iter()
+                .find(|line| line.starts_with(border))
+                .unwrap()
+                .to_string();
+            if border == '╭' {
+                // Both malformed canonical rows still have actual Backlog index entries.
+                // Change only that independently expected count; every other cell/digit stays exact.
+                let first_column = expected.split_once('╮').unwrap().0;
+                assert!(first_column.contains("Backlog"));
+                let token = first_column.split_whitespace().last().unwrap();
+                let count = token.parse::<usize>().unwrap();
+                let start = first_column.rfind(token).unwrap();
+                let end = start + token.len();
+                expected.replace_range(start..end, &(count + broken.len()).to_string());
+            }
             assert_eq!(
-                after.iter().find(|line| line.starts_with(border)),
-                before.iter().find(|line| line.starts_with(border)),
-                "column border remains intact"
+                after.iter().find(|line| line.starts_with(border)).copied(),
+                Some(expected.as_str()),
+                "column border remains exact except the two added canonical tasks"
             );
         }
     }

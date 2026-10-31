@@ -18,6 +18,10 @@ impl Fixture {
     }
 
     fn run(&self, args: &[&str]) -> Output {
+        Self::run_at(self.dir.path(), args)
+    }
+
+    fn run_at(root: &Path, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_corral"));
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("CORRAL_")
@@ -35,12 +39,12 @@ impl Fixture {
             "XDG_CACHE_HOME",
             "XDG_RUNTIME_DIR",
         ] {
-            command.env(key, self.dir.path().join("private"));
+            command.env(key, root.join("private"));
         }
         command
-            .env("HERDR_BIN_PATH", self.dir.path().join("no-herdr"))
-            .env("CORRAL_ROOT", self.dir.path())
-            .current_dir(self.dir.path())
+            .env("HERDR_BIN_PATH", root.join("no-herdr"))
+            .env("CORRAL_ROOT", root)
+            .current_dir(root)
             .args(args)
             .stdin(Stdio::null())
             .output()
@@ -58,7 +62,17 @@ impl Fixture {
     }
 
     fn json(&self, args: &[&str]) -> Value {
-        serde_json::from_str(&self.ok(args)).unwrap()
+        Self::json_at(self.dir.path(), args)
+    }
+
+    fn json_at(root: &Path, args: &[&str]) -> Value {
+        let output = Self::run_at(root, args);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
     }
 }
 
@@ -276,10 +290,14 @@ fn attention_does_not_mutate_tasks_config_events_or_inbox_state() {
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str("\n# attention must not record configuration observation\n");
     std::fs::write(&config, text).unwrap();
-    let state = fx.dir.path().join(".corral");
+    // Close fixture connections before byte snapshots: SQLite closing its last connection
+    // checkpoints WAL, and reading SHM outside SQLite would invalidate process-wide locks.
+    let Fixture { dir, store } = fx;
+    let state = store.dir().to_owned();
+    drop(store);
     let before = snapshot(&state);
     // When listing all assessments without a terminal server.
-    fx.ok(&["attention", "list", "--json", "--all"]);
+    Fixture::json_at(dir.path(), &["attention", "list", "--json", "--all"]);
     // Then the entire durable store remains byte-for-byte unchanged.
     assert_eq!(before, snapshot(&state));
 }
@@ -305,13 +323,13 @@ fn legacy_missing_status_time_stays_unknown_without_a_durable_discovery() {
         .store
         .create("legacy choice", None, Status::NeedsMe, "")
         .unwrap();
-    let text = std::fs::read_to_string(&task.path).unwrap();
+    let text = fx.store.fixture_task_text(&task.id).unwrap();
     let text = text
         .lines()
         .filter(|line| !line.trim_start().starts_with("status_since:"))
         .collect::<Vec<_>>()
         .join("\n");
-    std::fs::write(&task.path, text).unwrap();
+    fx.store.fixture_put_task_text(&task.id, &text).unwrap();
     assert!(
         Store::open_unobserved(fx.dir.path())
             .unwrap()
@@ -320,10 +338,13 @@ fn legacy_missing_status_time_stays_unknown_without_a_durable_discovery() {
             .status_since
             .is_none()
     );
-    let before = snapshot(fx.store.dir());
+    let Fixture { dir, store } = fx;
+    let state = store.dir().to_owned();
+    drop(store);
+    let before = snapshot(&state);
     // When reading the legacy assessment twice.
-    let first = fx.json(&["attention", "--json"]);
-    let second = fx.json(&["attention", "list", "--json"]);
+    let first = Fixture::json_at(dir.path(), &["attention", "--json"]);
+    let second = Fixture::json_at(dir.path(), &["attention", "list", "--json"]);
     // Then neither invocation invents an age base or writes first discovery.
     for board in [&first, &second] {
         let condition = &board["tasks"][0]["primary"];
@@ -331,5 +352,5 @@ fn legacy_missing_status_time_stays_unknown_without_a_durable_discovery() {
         assert!(condition["since"].is_null());
         assert!(condition["age_secs"].is_null());
     }
-    assert_eq!(before, snapshot(fx.store.dir()));
+    assert_eq!(before, snapshot(&state));
 }

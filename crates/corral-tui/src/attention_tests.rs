@@ -212,13 +212,10 @@ fn attention_projection_decode_failure_stays_unavailable_in_board_and_detail() {
     let fx = lifecycle();
     let mut board = fx.board();
     let mut detail = crate::detail::DetailView::new(&fx.ctx, "T-006").unwrap();
-    let task = fx.ctx.store.get("T-002").unwrap();
-    let raw = corral_core::render_task(&task);
-    std::fs::write(
-        &task.path,
-        raw.replacen("task:\n", "task:\n  attention: [invalid-ledger]\n", 1),
-    )
-    .unwrap();
+    fx.ctx
+        .store
+        .fixture_corrupt_task_attention("T-002")
+        .unwrap();
     // When the views refresh from the broken canonical record.
     board.refresh(&fx.ctx);
     detail.refresh(&fx.ctx);

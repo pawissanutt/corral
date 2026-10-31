@@ -99,7 +99,7 @@ fn snapshot_inner(
     let frozen = ctx.store.read_only_snapshot()?;
     let mut roots = BTreeMap::new();
     for head in frozen
-        .heads(&HeadQuery::Open { project: None })?
+        .heads_checked(&HeadQuery::Open { project: None })?
         .into_iter()
         .chain(frozen.attention_input_heads()?)
     {
@@ -120,7 +120,7 @@ fn snapshot_inner(
         .into_iter()
         .filter(|id| !seen.contains(id))
         .collect();
-    for head in frozen.heads(&HeadQuery::Ids(ids))? {
+    for head in frozen.heads_checked(&HeadQuery::Ids(ids))? {
         context.insert(head.num, head);
     }
     let context = context.into_values().collect::<Vec<_>>();

@@ -7,6 +7,78 @@ use corral_core::{ResumeCheck, RunOutcome, WaitRecord};
 use serde_json::json;
 
 #[test]
+fn checked_projection_rejects_live_corruption_without_charging_for_unrelated_terminal_history() {
+    let fx = Fx::new();
+    let live = fx
+        .ctx
+        .store
+        .create("live", None, Status::Backlog, "")
+        .unwrap();
+    let closed = fx
+        .ctx
+        .store
+        .create("settled", None, Status::Done, "")
+        .unwrap();
+    let query = HeadQuery::Open { project: None };
+    let mut costs = Vec::new();
+    for checked in [false, true] {
+        let _hot = HotScope::enter();
+        let before = work::snapshot();
+        let heads = if checked {
+            fx.ctx.store.heads_checked(&query)
+        } else {
+            fx.ctx.store.heads(&query)
+        }
+        .unwrap();
+        let after = work::snapshot();
+        assert_eq!(
+            heads.iter().map(|head| &head.id).collect::<Vec<_>>(),
+            vec![&live.id]
+        );
+        costs.push(Counter::ALL.map(|counter| after.total(counter) - before.total(counter)));
+    }
+    assert_eq!(
+        costs[0], costs[1],
+        "checked decoding adds no healthy-path reads or bytes"
+    );
+    fx.ctx
+        .store
+        .fixture_corrupt_task_attention(&closed.id)
+        .unwrap();
+    let (_, valid) = snapshot(&fx.ctx, at(100)).unwrap();
+    assert_eq!(
+        valid.tasks.iter().map(|row| &row.task).collect::<Vec<_>>(),
+        vec![&live.id]
+    );
+    fx.ctx
+        .store
+        .fixture_corrupt_task_attention(&live.id)
+        .unwrap();
+    assert!(
+        fx.ctx.store.heads(&query).unwrap().is_empty(),
+        "partial card lists still work"
+    );
+    let error = snapshot(&fx.ctx, at(100)).unwrap_err();
+    assert!(
+        error
+            .downcast_ref::<corral_core::backend::HeadDecodeError>()
+            .is_some(),
+        "{error:#}"
+    );
+    let before = fx.ctx.store.view().unwrap().seq();
+    assert!(
+        super::super::handling::reconcile_projected(&fx.ctx, at(100), Some(false))
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        before,
+        fx.ctx.store.view().unwrap().seq(),
+        "unavailable input publishes no ledgers or successful projection"
+    );
+}
+
+#[test]
 fn queue_parking_ignores_receipted_stale_history_but_preserves_a_live_dependency_wait() {
     let mut measured = Vec::new();
     for scale in [1, 10] {
@@ -146,6 +218,7 @@ fn hot_snapshot_preserves_named_terminal_park_and_wait_sources_without_board_his
     let mut measured = Vec::new();
     for scale in [1, 10] {
         let fx = Fx::new();
+        fx.ctx.store.fixture_pin_now(at(0)).unwrap();
         let mut worker = fx.questions(1);
         worker.status = Status::NeedsMe;
         worker.status_since = Some(at(0));

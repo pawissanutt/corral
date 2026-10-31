@@ -155,6 +155,21 @@ impl Store {
         sqlite.fixture_raw_task_state(crate::backend::TaskNum(super::id_number(&id)), &state)
     }
 
+    /// Corrupts only the canonical attention ledger, preserving the rest of the head and
+    /// recording the actual database change so existing board cursors observe the fault.
+    #[doc(hidden)]
+    pub fn fixture_corrupt_task_attention(&self, id: &str) -> Result<()> {
+        let id = Store::normalize_id(id)?;
+        let num = crate::backend::TaskNum(super::id_number(&id));
+        let mut doc = self.view()?.head(num)?.context("fixture task missing")?.doc;
+        doc["state"]["attention"] = serde_json::json!(["invalid-ledger"]);
+        self.db
+            .sqlite
+            .as_ref()
+            .context("this store has no database file")?
+            .fixture_raw_task_state(num, &serde_json::to_string(&doc)?)
+    }
+
     /// The stored record of a task in the legacy Markdown form (schema version and recovery
     /// evidence included).
     #[doc(hidden)]

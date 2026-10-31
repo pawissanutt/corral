@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use corral_core::{Artifact, ArtifactKind, Run, RunMode, Status, Store, StuckProcess};
+use corral_core::{Artifact, ArtifactKind, RunMode, Status, Store, StuckProcess};
 use corral_herdr::Herdr;
 use corral_ops::Ctx;
 use jiff::Timestamp;
@@ -69,61 +69,9 @@ impl Drop for Fixture {
     }
 }
 
-pub(crate) fn run(id: &str, agent: &str) -> Run {
-    Run {
-        execution: None,
-        delivery: corral_core::inbox::DeliveryMode::Legacy,
-        inbox: Default::default(),
-        completion: Default::default(),
-        id: id.into(),
-        progress: None,
-        checkpoints: vec![],
-        checkpoint_required: false,
-        agent: agent.into(),
-        profile: None,
-        harness: None,
-        model: None,
-        effort: None,
-        route: None,
-        vendor: None,
-        failures: 0,
-        switches: vec![],
-        retry: None,
-        mode: RunMode::Interactive,
-        worktree: PathBuf::from("/tmp/wt"),
-        branch: "corral/x".into(),
-        base: "main".into(),
-        base_sha: "0".repeat(40),
-        plan_target: None,
-        herdr: None,
-        started: START,
-        ended: None,
-        outcome: None,
-        summary: None,
-        blocked_excerpt: None,
-        agent_state: Some("working".into()),
-        seen_pane: true,
-        seen_working: true,
-        gate: None,
-        idle_since: None,
-        idle_no_report: false,
-        changes_round: None,
-        review: None,
-        review_runs: Vec::new(),
-        usage: None,
-        usage_note: None,
-        usage_pending: false,
-        autopilot: None,
-        stuck: None,
-        pending_reply: None,
-        obligations: Default::default(),
-        herdr_idle_since: None,
-        gate_rules: corral_core::GateRules::Legacy,
-        promotion_origin: None,
-        agent_host: None,
-        session: None,
-    }
-}
+#[path = "tests_run.rs"]
+mod run_fixture;
+pub(crate) use run_fixture::run;
 
 fn artifact(kind: ArtifactKind, title: &str) -> Artifact {
     Artifact {

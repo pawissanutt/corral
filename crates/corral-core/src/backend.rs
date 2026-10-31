@@ -136,6 +136,30 @@ pub struct BlobFile {
     pub modified: jiff::Timestamp,
 }
 
+/// A stored task head cannot be decoded. Aggregate projections must stay unavailable;
+/// ordinary partial task lists may still report and skip the affected task.
+#[derive(Debug)]
+pub struct HeadDecodeError {
+    pub task: String,
+    pub(crate) cause: anyhow::Error,
+}
+
+impl std::fmt::Display for HeadDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "task head {} is unavailable: {:#}",
+            self.task, self.cause
+        )
+    }
+}
+
+impl std::error::Error for HeadDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
 /// A canonical blob stream failed decoding or content verification. Consumers of derived
 /// caches can diagnose this without treating corrupt bytes as authoritative or matching text.
 #[derive(Debug)]
