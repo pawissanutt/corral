@@ -196,6 +196,27 @@ test("fixed rules beat default roots and settings; temp excludes HOME and worksp
   } finally { f.close(); }
 });
 
+test("configured deny beats allow/grants, default roots precede settings, and off makes no op call", async () => {
+  const f = fixture();
+  try {
+    const directory = join(f.home, "notes"); mkdirSync(directory);
+    const denied = join(directory, "private"); mkdirSync(denied);
+    const settings = { allow: [directory], deny: [denied] };
+    const broker = new PermissionBroker(f.context, { ...f.paths, settings });
+    expect(await broker.authorize("write", { path: join(directory, "x") }, "x", f.ui)).toBeUndefined();
+    f.grant(true);
+    expect((await broker.authorize("write", { path: join(denied, "x") }, "x", f.ui))?.reason).toContain("configured_deny");
+    expect(f.calls).toHaveLength(0); expect(f.dialogs).toHaveLength(0);
+    const allDenied = { ...f.paths, settings: { allow: [], deny: ["/"] } };
+    expect(classifyWrite(join(f.base, "note"), allDenied).decision).toBe("allow");
+    expect(classifyWrite(join(f.home, "note"), { ...f.paths, temp: f.home }).decision).toBe("ask");
+    expect(classifyWrite(join(f.home, "temp/note"), { ...f.paths, temp: join(f.home, "temp") }).decision).toBe("allow");
+    const off = new PermissionBroker(f.context, { ...f.paths, enabled: false });
+    expect((await off.authorize("write", { path: join(directory, "x") }, "x", f.ui))?.reason).toContain("capability_off");
+    expect(f.calls).toHaveLength(0);
+  } finally { f.close(); }
+});
+
 test("global skill asks exactly once before decide, grants checked on every write, revoke asks again", async () => {
   const f = fixture();
   try {
@@ -231,6 +252,17 @@ test("external project offers distant Git root; session grant and resumed notice
     await new PermissionBroker(f.context, f.paths).notice(f.ui);
     expect(f.notices[0]).toContain("active write permissions: G-1");
     expect((await f.write(join(root, ".git/config")))?.reason).toContain("fixed_rule");
+  } finally { f.close(); }
+});
+
+test("queued nested writes recheck after the first session decision instead of opening another dialog", async () => {
+  const f = fixture();
+  try {
+    const directory = join(f.home, "proj");
+    f.answers.push("Allow for this session", directory);
+    expect(await Promise.all([f.write(join(directory, "a")), f.write(join(directory, "b"))])).toEqual([undefined, undefined]);
+    expect(f.dialogs).toHaveLength(2);
+    expect(f.calls.map((c) => c.payload.action)).toEqual(["check", "decide", "check"]);
   } finally { f.close(); }
 });
 
@@ -281,6 +313,9 @@ test("a symlinked external target shows its real destination before consent", as
     expect(await f.write(join(link, "new.txt"))).toBeUndefined();
     expect(f.dialogs[0]!.title).toContain(`Resolved destination: ${join(real, "new.txt")}`);
     expect(f.calls[0]!.payload.target).toEqual({ shown: join(link, "new.txt"), canonical: join(real, "new.txt") });
+    const project = join(f.home, "proj"); mkdirSync(join(project, ".git"), { recursive: true });
+    const vendor = join(project, "vendor"); symlinkSync(real, vendor);
+    expect(scopeCandidates(join(vendor, "new.txt"), f.home)).toEqual([{ shown: vendor, canonical: real }]);
   } finally { f.close(); }
 });
 
