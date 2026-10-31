@@ -223,6 +223,13 @@ fn task_identity(task: &Task) -> Result<Vec<u8>> {
     Ok(serde_json::to_vec(&canonical)?)
 }
 
+fn selected_task_identity(ctx: &Ctx, id: &str) -> Result<Vec<u8>> {
+    // T-678: exact main identity needs the selected owner's complete content until its
+    // non-attention digest is maintained. Selection, policy and callbacks stay outside.
+    let _cost = corral_core::work::followup("T-678", "pm_action_task_identity");
+    task_identity(&ctx.store.get(id)?)
+}
+
 /// The workset and the effective policy it was computed from, both from one read of the board.
 pub fn pm_workset_with_policy(ctx: &Ctx) -> Result<(PmWorkset, EffectivePolicy)> {
     project(ctx, None)
@@ -361,11 +368,7 @@ fn project(
                     (&run.gate, &run.review),
                 ))?
             } else {
-                let head = heads
-                    .iter()
-                    .find(|head| head.id == target.id)
-                    .context("automatic option head missing")?;
-                serde_json::to_vec(&(&head.id, head.rev))?
+                selected_task_identity(ctx, &target.id)?
             };
             let id = crate::verification::digest(&serde_json::to_vec(&(
                 &policy.revision,
@@ -609,6 +612,10 @@ pub fn pm_act(ctx: &Ctx, id: &str) -> Result<PmActionResult> {
         workset: pm_workset(ctx)?,
     })
 }
+
+#[cfg(test)]
+#[path = "pm_workset/identity_cost_tests.rs"]
+mod identity_cost_tests;
 
 #[cfg(test)]
 mod tests {
