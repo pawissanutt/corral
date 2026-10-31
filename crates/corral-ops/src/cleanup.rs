@@ -22,18 +22,17 @@ pub(crate) fn cleanup(ctx: &Ctx, task: &Task, scope: Cleanup) {
 }
 
 pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<String> {
-    match clean(ctx, std::iter::once(task), scope) {
-        Ok(mut warnings) => {
-            if scope == Cleanup::Task {
-                reap_sandboxes(ctx, task, &mut warnings);
-            }
-            warnings
-        }
+    let mut warnings = match clean(ctx, std::iter::once(task), scope) {
+        Ok(warnings) => warnings,
         Err(error) => {
             failed(ctx, task, "inventory", &error);
             vec![format!("pane inventory: {error:#}")]
         }
+    };
+    if scope == Cleanup::Task {
+        reap_sandboxes(ctx, task, &mut warnings);
     }
+    warnings
 }
 
 /// One inventory for the whole sweep, rather than subprocesses per finished task on each board tick.
@@ -57,17 +56,13 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
         .iter()
         .filter(|task| matches!(task.status, Status::Done | Status::Dropped))
         .collect();
-    match clean(ctx, terminal.iter().copied(), Cleanup::Task) {
-        Ok(_) => {
-            for task in terminal {
-                reap_sandboxes(ctx, task, &mut Vec::new());
-            }
-        }
-        Err(error) => {
-            if let Some(task) = terminal.first() {
-                failed(ctx, task, "inventory", &error);
-            }
-        }
+    if let Err(error) = clean(ctx, terminal.iter().copied(), Cleanup::Task)
+        && let Some(task) = terminal.first()
+    {
+        failed(ctx, task, "inventory", &error);
+    }
+    for task in terminal {
+        reap_sandboxes(ctx, task, &mut Vec::new());
     }
 }
 

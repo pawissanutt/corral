@@ -47,7 +47,8 @@ pub(crate) fn arm(command: &str, receipt: &Path) -> Result<String> {
     let identity = receipt
         .file_stem()
         .and_then(|s| s.to_str())
-        .and_then(|s| s.rsplit_once("-R"))
+        .and_then(|s| s.split_once("-R"))
+        .map(|(task, run)| (task, run.split('-').next().unwrap_or_default()))
         .filter(|(task, run)| {
             task.strip_prefix("T-")
                 .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
