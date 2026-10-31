@@ -14,7 +14,7 @@ use crate::agent::{
 use crate::{Store, Usage, store::atomic_write};
 
 pub const ASSISTANT_VERSION: u32 = 1;
-/// Owner inputs a container keeps; older ones leave the journal and can no longer be cited.
+/// Ordinary journal limit; a first permission may occupy one extra slot to preserve citable inputs.
 pub const OWNER_INPUTS_MAX: usize = 64;
 /// Bytes of one journaled owner input's text; a longer input keeps its full digest.
 pub const OWNER_INPUT_TEXT_MAX: usize = 16 * 1024;
@@ -137,7 +137,7 @@ pub enum OwnerInputSource {
     /// The owner's answer to an owner-action confirmation the host rendered.
     Confirmation,
     /// The owner's write-permission answer, journaled only by `write_permission` decide. It is
-    /// never citable: owner actions accept pane inputs only.
+    /// never citable: owner actions never accept permission inputs.
     Permission,
 }
 
@@ -209,7 +209,8 @@ impl AssistantContainer {
 
     /// `journal_owner_input` for a permission entry and its record. Once `PERMISSION_INPUTS_MAX`
     /// permission entries are held, or the journal is full, the oldest permission entry is
-    /// dropped first, so a permission answer never crowds out a citable input.
+    /// dropped first, so a permission answer never crowds out a citable input. If a full journal
+    /// has none to drop, the decision occupies one extra slot. Ordinary eviction is unchanged.
     pub fn journal_permission(
         &mut self,
         session: &str,
@@ -262,8 +263,10 @@ impl AssistantContainer {
             self.owner_inputs.remove(oldest);
         }
         self.owner_inputs.push(entry.clone());
-        let excess = self.owner_inputs.len().saturating_sub(OWNER_INPUTS_MAX);
-        self.owner_inputs.drain(..excess);
+        if entry.source != OwnerInputSource::Permission {
+            let excess = self.owner_inputs.len().saturating_sub(OWNER_INPUTS_MAX);
+            self.owner_inputs.drain(..excess);
+        }
         entry
     }
 }

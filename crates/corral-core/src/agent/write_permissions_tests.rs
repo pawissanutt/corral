@@ -367,6 +367,81 @@ fn a_permission_entry_drops_the_oldest_permission_entry_never_a_pane_input() {
 }
 
 #[test]
+fn the_first_permission_in_a_full_pane_journal_preserves_every_pane_input() {
+    for choice in [
+        PermissionChoice::Once,
+        PermissionChoice::Hour,
+        PermissionChoice::Session,
+        PermissionChoice::Deny,
+    ] {
+        // Given a full journal with no permission entry available for eviction.
+        let mut c = container();
+        for n in 0..OWNER_INPUTS_MAX {
+            c.journal_owner_input("A-1", pane_input(n));
+        }
+        let pane_inputs = c.owner_inputs.clone();
+        let scope = matches!(choice, PermissionChoice::Hour | PermissionChoice::Session)
+            .then_some("/srv/proj");
+        // When the owner makes the first permission decision.
+        let (entry, _) = c
+            .record_permission("A-1", decision(choice, scope, 1), at("10:00"))
+            .unwrap();
+        // Then every pane input and the new decision remain, with its durable audit record.
+        assert_eq!(
+            &c.owner_inputs[..OWNER_INPUTS_MAX],
+            pane_inputs,
+            "{choice:?}"
+        );
+        assert_eq!(c.owner_inputs.last(), Some(&entry));
+        assert_eq!(
+            c.permission_audit[0].detail["decision"],
+            serde_json::to_value(entry.permission.unwrap()).unwrap()
+        );
+    }
+}
+
+#[test]
+fn a_permission_overflow_stays_bounded_and_ordinary_eviction_stays_oldest_first() {
+    for source in [
+        OwnerInputSource::Pane,
+        OwnerInputSource::Dialog,
+        OwnerInputSource::Confirmation,
+    ] {
+        // Given a full citable journal followed by a permission decision.
+        let mut c = container();
+        for n in 0..OWNER_INPUTS_MAX {
+            c.journal_owner_input("A-1", pane_input(n));
+        }
+        c.record_permission(
+            "A-1",
+            decision(PermissionChoice::Deny, None, 1),
+            at("10:00"),
+        )
+        .unwrap();
+        let first_permission = c.owner_inputs.last().unwrap().id.clone();
+        // When another permission arrives, it replaces only the previous permission.
+        let (entry, _) = c
+            .record_permission(
+                "A-1",
+                decision(PermissionChoice::Deny, None, 2),
+                at("10:00"),
+            )
+            .unwrap();
+        assert_eq!(c.owner_inputs.len(), OWNER_INPUTS_MAX + 1);
+        assert_eq!(c.owner_inputs[0].id, "A-1/g1/i1");
+        assert!(c.owner_input(&first_permission).is_none());
+        // Ordinary inputs still trim oldest-first to the ordinary journal limit.
+        let mut input = pane_input(99);
+        input.source = source;
+        let newest = c.journal_owner_input("A-1", input);
+        assert_eq!(c.owner_inputs.len(), OWNER_INPUTS_MAX);
+        assert_eq!(c.owner_inputs[0].id, "A-1/g1/i3");
+        assert_eq!(c.owner_input(&entry.id), Some(&entry));
+        assert_eq!(c.owner_inputs.last(), Some(&newest));
+    }
+}
+
+#[test]
 fn a_deny_records_no_scope_lifetime_or_grant_and_the_summary_is_bounded() {
     let mut c = container();
     let mut long = decision(PermissionChoice::Deny, None, 1);
