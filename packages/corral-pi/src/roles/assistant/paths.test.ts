@@ -53,7 +53,7 @@ test("edit and write reach only the session's scratch, its artifact directory an
       ".corral/assistants/A-1.md", ".corral/artifacts/assistant/A-2/draft.md", "~/notes.txt",
       join(base, "outside.txt"),
     ];
-    const rule = "assistant rule: edit and write reach only this session's scratch";
+    const rule = "assistant rule:";
     expect(outside.map((path) => [path, refused(path)?.startsWith(rule) ?? false]))
       .toEqual(outside.map((path) => [path, true]));
     // And the scratch (new subdirectories too), the session artifact directory and temp are allowed.

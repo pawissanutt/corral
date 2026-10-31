@@ -1,6 +1,37 @@
 use super::*;
 
 #[test]
+fn write_permissions_defaults_and_configuration() {
+    for preset in [Preset::Strict, Preset::Standard, Preset::Full] {
+        let mut config = AgentCapabilities::default();
+        config.set_preset(preset);
+        let snapshot = config.resolve(AgentRole::Assistant, None);
+        assert_eq!(
+            snapshot.enabled("write_permissions"),
+            preset != Preset::Strict
+        );
+        for role in [
+            AgentRole::Worker,
+            AgentRole::Reviewer,
+            AgentRole::Pm,
+            AgentRole::Planner,
+            AgentRole::PlanReviewer,
+        ] {
+            assert!(!config.resolve(role, None).enabled("write_permissions"));
+            assert!(config.set(role, "write_permissions", true).is_err());
+        }
+    }
+    for entry in ["/", "~", "relative/dir"] {
+        let text = format!("[capabilities.assistant.write_permissions]\nallow = [{entry:?}]");
+        assert!(toml::from_str::<crate::config::AgentCfg>(&text).is_err());
+    }
+    toml::from_str::<crate::config::AgentCfg>(
+        "[capabilities.assistant.write_permissions]\ndeny = ['/', '~']",
+    )
+    .unwrap();
+}
+
+#[test]
 fn ask_user_defaults_to_interactive_roles_only() {
     let config = AgentCapabilities::default();
     for role in [AgentRole::Assistant, AgentRole::Pm] {

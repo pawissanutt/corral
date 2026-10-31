@@ -1,5 +1,6 @@
 // The launch message `corral agent launch` writes to the inherited pipe: the bound identity,
 // paths and both generation secrets. It never reaches argv, the environment or a file.
+import { writeSettings } from "../roles/assistant/paths.ts";
 import { closeSync, readFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
@@ -17,7 +18,7 @@ import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts"
 export const LAUNCH_VERSION = 1;
 /** Catalog keys this host implements; compat.json's `capabilities` lists the same keys. */
 export const HOST_CAPABILITIES: readonly string[] = [
-  "budget", "todo", "ask_user", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
+  "budget", "todo", "ask_user", "write_permissions", "web.enabled", "context_files", "skills", "prompt_templates", "compaction", "session_export",
   "mcp.enabled", "tool_search", "codemode",
   "hooks", "bash_rules", "background_shell", "role_enabled", "lsp", "browser", "llama_cpp.enabled", "checkpoints", "subagents", "oracle",
   "headless",
@@ -201,6 +202,10 @@ export function parseLaunchMessage(text: string): HostConfig {
   }
   const guidance = capabilityGuidance(message.capabilities);
   try {
+    if (capabilities?.enabled.includes("write_permissions")) {
+      if (role !== "assistant") throw new Error(`write_permissions is not available to the ${role} role`);
+      writeSettings(guidance?.settings.write_permissions);
+    }
     parseControls(role as Role, capabilities?.enabled ?? [], guidance?.settings);
     browserSettings(role as Role, capabilities?.enabled ?? [], guidance?.settings);
   } catch (error) {

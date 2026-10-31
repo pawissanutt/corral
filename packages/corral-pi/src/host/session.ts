@@ -29,6 +29,7 @@ import type { EventLog } from "../bridge/events.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import type { QuestionUpdate, SubmitInput, SubmitResult } from "../bridge/protocol.ts";
 import type { DeliveryHost } from "../delivery/types.ts";
+import { writeSettings } from "../roles/assistant/paths.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
@@ -240,6 +241,8 @@ export class HostSession {
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
   private readonly jobs: JobRuntime | undefined;
+  private writePermissionNotice: (() => Promise<void>) | undefined;
+  private writeAbort = new AbortController();
   private turn = 0;
   private open = false;
   private cancelRequested: number | undefined;
@@ -295,6 +298,18 @@ export class HostSession {
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
       ...(options.effort ? { effort: options.effort } : {}),
       ...(options.promptFile ? { promptFile: options.promptFile } : {}),
+      ...(options.identity.role === "assistant" && options.capabilities?.enabled.includes("write_permissions") ? {
+        writePermission: {
+          settings: writeSettings(options.guidance?.settings.write_permissions),
+          onBound: (notice: () => Promise<void>) => { this.writePermissionNotice = notice; },
+          sessionId: () => this.sessionId(),
+          turn: () => ({ id: this.currentTurn(), signal: this.writeAbort.signal }),
+          call: (requestId: string, payload: Record<string, unknown>) => options.client.call("write_permission", {
+            requestId, payload, turn: this.currentTurn(),
+          }),
+          emit: (kind: string, data: Record<string, unknown>) => { options.events.emit(kind, data); },
+        },
+      } : {}),
     };
     const role = options.modules.role;
     const specs = role.tools(this.roleContext);
@@ -699,6 +714,8 @@ export class HostSession {
   }
 
   private turnStarted(): void {
+    this.writeAbort.abort();
+    this.writeAbort = new AbortController();
     this.turn++;
     this.open = true;
     const origin: TurnOrigin = this.nextTurnOrigin
@@ -736,6 +753,7 @@ export class HostSession {
   }
 
   private turnEnded(aborted: boolean): void {
+    this.writeAbort.abort();
     if (!this.open) return;
     this.open = false;
     const cancelled = this.cancelRequested === this.turn;
@@ -813,6 +831,7 @@ export class HostSession {
   async close(): Promise<void> {
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
+    this.writeAbort.abort();
     const aborted = this.session.abort();
     await this.auxiliary?.close();
     await this.jobs?.shutdown();
@@ -849,6 +868,7 @@ export class HostSession {
     const bound = (receipt.result ?? {}) as { herdr_seq_epoch_ms?: unknown; questions?: unknown };
     this.options.herdr?.bind({ sessionId, sessionFile, epochMs: bound.herdr_seq_epoch_ms, questions: bound.questions });
     if ((this.options.capabilities?.catalog ?? 0) >= 7) await this.budget.refresh();
+    await this.writePermissionNotice?.();
     this.options.events.emit("bound", { generation: this.options.identity.generation, session_id: sessionId });
     return receipt;
   }
@@ -910,6 +930,7 @@ export class HostSession {
     this.cancelRequested = this.turn;
     const cancelled = this.turn;
     this.options.events.emit("cancel", { turn: cancelled });
+    this.writeAbort.abort();
     await this.session.abort();
     return { cancelled: true, turn: cancelled };
   }

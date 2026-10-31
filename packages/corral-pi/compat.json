@@ -53,6 +53,7 @@
     "budget",
     "todo",
     "ask_user",
+    "write_permissions",
     "web.enabled",
     "context_files",
     "skills",
