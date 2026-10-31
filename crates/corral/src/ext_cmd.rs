@@ -48,6 +48,8 @@ pub const RESERVED: &[&str] = &[
     "init",
     "pricing",
     "import",
+    "export",
+    "storage",
     "stats",
     "new",
     "list",
