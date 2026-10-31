@@ -103,7 +103,12 @@ test("live private-pane owner authority: landing, synthetic inputs, do it, confi
     await host.hello(bootstrap.bind_nonce, pane, sha256Hex("d".repeat(64)));
     const answers: boolean[] = [];
     const asked: string[] = [];
-    const ui = { confirm: async (_title: string, message: string) => { asked.push(message); return answers.shift() ?? false; } };
+    let cancelDialog = false;
+    const ui = {
+      confirm: async (_title: string, message: string) => { asked.push(message); return answers.shift() ?? false; },
+      select: async (_title: string, _options: string[]) => cancelDialog ? undefined : "Land",
+      input: async () => "Please proceed",
+    };
     await host.session.bindExtensions({ uiContext: ui as unknown as ExtensionUIContext });
     const live = host;
     const input = (n: number) => `${fixture.session}/g${identity.generation}/i${n}`;
@@ -245,6 +250,36 @@ test("live private-pane owner authority: landing, synthetic inputs, do it, confi
     expect(live.session.messages.filter((m) => m.role === "toolResult" && m.toolCallId.startsWith("held"))).toHaveLength(1);
     expect(status(fixture.held)).toBe("review");
     held.stdin?.end();
+
+    // The real host must persist a completed dialog in the assistant's actual journal and
+    // Pi transcript. Cancellation must add neither a dialog entry nor a user answer.
+    const dialog = (callId: string): Step => ({ toolCalls: [{ callId, name: "ask_user", arguments: {
+      questions: [{ question: "What next?", options: ["Land", "Wait"], freeText: true }],
+    } }] });
+    const dialogText = "What next?: Land\nPlease proceed";
+    const beforeDialog = journal().length;
+    await turn("Ask me what to do", [dialog("dialog-answer"), { text: "Understood." }, { text: "Noted." }]);
+    const entry = journal().slice(beforeDialog).find((e) => e.source === "dialog");
+    expect(entry?.text).toBe(dialogText);
+    expect(entry?.id).toMatch(new RegExp(`^${fixture.session}/g${identity.generation}/i[0-9]+$`));
+    const userMessages = () => live.session.messages.filter((m) => m.role === "user")
+      .map((m) => typeof m.content === "string" ? m.content : m.content.map((p) => p.type === "text" ? p.text : "").join(""));
+    const dialogMessage = `${dialogText}\n\n[owner input ${entry?.id}]`;
+    expect(userMessages()).toContain(dialogMessage);
+    expect(JSON.stringify(live.session.sessionManager.getEntries())).toContain(dialogMessage.replaceAll("\n", "\\n"));
+    const beforeCancel = journal().filter((e) => e.source === "dialog").length;
+    const usersBeforeCancel = userMessages().length;
+    cancelDialog = true;
+    await turn("Ask again", [dialog("dialog-cancel"), { text: "No answer." }]);
+    expect(journal().filter((e) => e.source === "dialog")).toHaveLength(beforeCancel);
+    const lastId = journal().at(-1)?.id ?? "";
+    const nextSeq = Number(lastId.split("/i").at(-1)) + 1;
+    const refused = await client.call("owner_action", { requestId: toolRequestId(live.sessionId(), "cancel-authority"),
+      payload: { kind: "approve", target: fixture.held, input: input(nextSeq) } });
+    expect([refused.state, (refused.result as { code?: string }).code]).toEqual(["rejected", "not_owner_input"]);
+    expect(userMessages().slice(usersBeforeCancel)).toHaveLength(1); // only "Ask again"
+    expect(JSON.stringify(live.session.messages.find((m) => m.role === "toolResult" && m.toolCallId.startsWith("dialog-cancel"))))
+      .toContain("no answer");
 
     const evidence = process.env.CORRAL_OWNER_EVIDENCE;
     if (evidence) {
