@@ -207,6 +207,46 @@ fn pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck() {
 }
 
 #[test]
+fn registered_pi_capability_does_not_raise_stuck() {
+    let fx = Fx::new("pi-native");
+    let processes = Processes::default();
+    pi_native_pane(&fx, &processes, &[(46, 44, &["rust-analyzer"])]);
+    let session = fx.bin_dir.join("session.jsonl");
+    let registry = format!("{}.capabilities-44.json", session.display());
+    std::fs::write(
+        &registry,
+        json!([{ "pid": 46, "started": "start-46" }]).to_string(),
+    )
+    .unwrap();
+    fx.ctx.store.update("T-001", |task| {
+        task.current_run_mut().unwrap().agent_host = Some(Box::new(serde_json::from_value(json!({
+            "version": 1,
+            "binding": {"role":"worker", "store":"fixture", "project":"app", "generation":1},
+            "generations": [{"n":1,"bind_nonce_sha256":"fixture","pane":"w1:p1", "created":fx.t0,
+                "bound":{"host_cap_sha256":"fixture","ctl_cap_sha256":"fixture","session_id":"s",
+                    "session_file":session,"pid":44,"start_time":"start-44","request_id":"fixture","at":fx.t0}}]
+        })).unwrap()));
+        Ok(())
+    }).unwrap();
+    fx.herdr_says("idle");
+    sync(&fx, &processes, 0);
+    let task = sync(&fx, &processes, 301);
+    assert!(task.current_run().unwrap().stuck.is_none());
+    assert_eq!(fx.events("stuck"), 0);
+    assert!(fx.notifications().is_empty());
+
+    // An unregistered tool child of the same host still alerts, even with an LSP present.
+    pi_native_pane(
+        &fx,
+        &processes,
+        &[(46, 44, &["rust-analyzer"]), (47, 44, &["sleep", "9999"])],
+    );
+    let task = sync(&fx, &processes, 600);
+    assert_eq!(task.current_run().unwrap().stuck.as_ref().unwrap().pid, 47);
+    assert_eq!(fx.events("stuck"), 1);
+}
+
+#[test]
 fn foreign_processes_in_a_pi_native_pane_are_still_stuck() {
     // Given a command the host spawned, and one typed into the nested shell.
     for (pid, parent) in [(46, 44), (47, 20)] {

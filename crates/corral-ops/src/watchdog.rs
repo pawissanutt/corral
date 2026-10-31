@@ -214,6 +214,7 @@ pub(crate) fn foreign_process(
             // The pane shell's direct child is the launch process even when its executable
             // differs from the configured harness name (shebangs, symlinks, wrappers).
             && !launched(&local, info, processes)?
+            && !registered_capability(run, process.pid, &local)
             && local.elapsed_secs > ctx.store.config.sync.stuck_after_secs
         {
             return Ok(Some(StuckProcess {
@@ -224,6 +225,50 @@ pub(crate) fn foreign_process(
         }
     }
     Ok(None)
+}
+
+/// Capability entries belong to the current bound host, not to a process name. A stale or
+/// unreadable registry is ignored, so ordinary commands remain visible to the watchdog.
+fn registered_capability(run: &Run, pid: u32, process: &ProcessSnapshot) -> bool {
+    let Some(generation) = run.agent_host.as_ref().and_then(|h| h.current_generation()) else {
+        return false;
+    };
+    let Some(bound) = generation
+        .bound
+        .as_ref()
+        .filter(|_| generation.fenced.is_none())
+    else {
+        return false;
+    };
+    if process.parent_pid != bound.pid {
+        return false;
+    }
+    let mut path = bound.session_file.as_os_str().to_os_string();
+    path.push(format!(".capabilities-{}.json", bound.pid));
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    if file.take(65537).read_to_end(&mut bytes).is_err() || bytes.len() > 65536 {
+        return false;
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        pid: u32,
+        started: Option<String>,
+    }
+    serde_json::from_slice::<Vec<Entry>>(&bytes).is_ok_and(|entries| {
+        entries.iter().any(|entry| {
+            entry.pid == pid
+                // Linux records kernel start ticks; other platforms use PID alone.
+                && if cfg!(target_os = "linux") {
+                    entry.started.as_deref() == Some(&process.started)
+                } else {
+                    true
+                }
+        })
+    })
 }
 
 /// corral's launch shells: the wrapper and the template's own shell
@@ -296,6 +341,7 @@ pub fn unstick_with(
         .inspect(expected.pid)?
         .context("stuck process exited")?;
     if launched(&current, &info, processes)?
+        || registered_capability(run, expected.pid, &current)
         || current.started != expected.started
         || current.argv != expected.argv
     {

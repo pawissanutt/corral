@@ -1,7 +1,7 @@
 // The LSP extension against the scripted fake server (started by argv) and against a missing
 // server: bounded results, 1-based positions, refusals and server failures as LspError.
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
+import { capabilityRegistry } from "./registry.ts";
 import { DEFAULT_SERVERS, LSP_TOOL_NAMES, LspError, type LspServerSpec, MAX_ITEMS, MAX_OUTPUT_BYTES, configuredServers, lspToolkit } from "./index.ts";
 
 const FAKE = fileURLToPath(new URL("./testing/fake-server.ts", import.meta.url));
@@ -60,6 +61,26 @@ async function failure(promise: Promise<unknown>): Promise<LspError> {
   }
   throw new Error("expected an LspError");
 }
+
+test("LSP registration records the child identity and removes it on exit", async () => {
+  const session = join(root, "session.jsonl");
+  const path = `${session}.capabilities-${process.pid}.json`;
+  const register = capabilityRegistry(() => session);
+  let exited!: () => void;
+  const removed = new Promise<void>((resolve) => { exited = resolve; });
+  const made = lspToolkit({ root, servers: [fake()], limits: LIMITS, registerCapability: (pid) => {
+    const remove = register(pid);
+    return () => { remove(); exited(); };
+  } });
+  await call(made, "lsp_diagnostics", { path: "src/main.fk" });
+  const entries = JSON.parse(readFileSync(path, "utf8"));
+  expect(entries).toHaveLength(1);
+  expect(entries[0].pid).toBeGreaterThan(1);
+  if (process.platform === "linux") expect(entries[0].started).toMatch(/^\d+$/);
+  await made.shutdown();
+  await removed;
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual([]);
+});
 
 test("framing round-trips split chunks and refuses a missing header or an oversize frame", () => {
   const frame = encodeFrame({ id: 1, text: "héllo" });

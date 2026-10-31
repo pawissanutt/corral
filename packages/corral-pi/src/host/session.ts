@@ -46,6 +46,7 @@ import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
+import { capabilityRegistry } from "../extensions/lsp/registry.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
 import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
@@ -284,8 +285,9 @@ export class HostSession {
       },
       cancel: () => { void this.cancel(this.currentTurn()); void this.auxiliary?.cancelAll(); },
     });
+    const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     this.roleContext = {
-      identity: options.identity, cwd: options.cwd, model: options.model,
+      identity: options.identity, cwd: options.cwd, model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
@@ -312,7 +314,7 @@ export class HostSession {
     const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
       ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
     if (lspEnabled && options.identity.role !== "worker") {
-      this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp) });
+      this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
     this.jobs = this.jobRuntime();
     const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
