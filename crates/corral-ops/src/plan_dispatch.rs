@@ -48,7 +48,7 @@ pub(crate) fn dispatch(
         .project_path(project)?
         .canonicalize()
         .context("resolving plan repository")?;
-    let mut plan = crate::queue::resolve_plan(ctx, task, opts)?;
+    let mut plan = crate::queue::resolve_plan(ctx, head, opts)?;
     crate::plan_sandbox::check(&repo, ctx.store.dir())?;
     let id = format!("D{}", head.plan_runs_len()? + 1);
     let output_dir = crate::scratch_reclaim::Attempt::Planner {

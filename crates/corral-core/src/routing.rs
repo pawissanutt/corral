@@ -302,9 +302,9 @@ impl Config {
 
     /// Owner choices precede a revision-bound semantic receipt. A stale or unavailable
     /// receipt requires reclassification rather than silently becoming a default.
-    pub fn route_task_with_selection(
+    pub fn route_task_with_selection<T: crate::TaskRef + ?Sized>(
         &self,
-        task: &Task,
+        task: &T,
         choice: &ProfileChoice,
         role: ProfileRole,
         selection: Option<&AutoProfileSelection>,
@@ -314,7 +314,7 @@ impl Config {
         if let Some(profile) = &choice.profile {
             candidates.push((profile.clone(), RouteSource::Override, None));
         } else {
-            if let Some(profile) = &task.profile {
+            if let Some(profile) = task.profile() {
                 candidates.push((profile.clone(), RouteSource::Task, None));
             }
             for (index, rule) in self.routing.rules.iter().enumerate() {
@@ -337,7 +337,7 @@ impl Config {
                 ));
             }
             if let Some(profile) = task
-                .project
+                .project()
                 .as_deref()
                 .and_then(|p| self.projects.get(p))
                 .and_then(|p| p.default_profile.as_ref())
@@ -374,7 +374,7 @@ impl Config {
                 && let Err(error) = self.check_profile_eligibility(
                     &profile,
                     role,
-                    task.project.as_deref(),
+                    task.project().as_deref(),
                     source.requires_automatic_eligibility(),
                 )
             {
