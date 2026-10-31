@@ -111,6 +111,16 @@ impl Fixture {
         self.ctx.store.get(&self.id).unwrap()
     }
 
+    pub fn checkpoint_bytes(&self, path: &str) -> Vec<u8> {
+        let task = self.task();
+        let artifact = task
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == path)
+            .unwrap();
+        corral_ops::artifact_read(&self.ctx, artifact).unwrap()
+    }
+
     pub fn progress(&self) -> ProgressUpdate {
         let read = corral_ops::progress_readback(&self.ctx, &self.id).unwrap();
         ProgressUpdate {

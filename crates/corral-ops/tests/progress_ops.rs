@@ -234,8 +234,8 @@ fn later_checkpoint_cannot_mutate_earlier_snapshot_or_pending_obligations() {
     let first_input = f.seed_checkpoint();
     let first_task = f.task();
     let first_record = first_task.current_run().unwrap().checkpoints[0].clone();
-    let first_path = f.ctx.store.dir().join(&first_record.artifact);
-    let first_bytes = std::fs::read(&first_path).unwrap();
+    let first_path = &first_record.artifact;
+    let first_bytes = f.checkpoint_bytes(first_path);
     let mut progress = f.progress();
     progress.phases[1].steps[0].status = StepState::Done;
     progress.phases[1].steps[1].status = StepState::InProgress;
@@ -251,7 +251,7 @@ fn later_checkpoint_cannot_mutate_earlier_snapshot_or_pending_obligations() {
     let records = &task.current_run().unwrap().checkpoints;
     assert_eq!(records.len(), 2);
     assert_eq!(records[0], first_record);
-    assert_eq!(std::fs::read(&first_path).unwrap(), first_bytes);
+    assert_eq!(f.checkpoint_bytes(first_path), first_bytes);
     let on_disk: Checkpoint = serde_json::from_slice(&first_bytes).unwrap();
     assert_eq!(on_disk, first_record.checkpoint);
     assert_ne!(records[0].artifact, records[1].artifact);
@@ -264,7 +264,7 @@ fn later_checkpoint_cannot_mutate_earlier_snapshot_or_pending_obligations() {
     assert_eq!(records[0].checkpoint.completed_steps, ["contract"]);
     assert_eq!(records[0].checkpoint.input.waits, first_input.waits);
     assert_eq!(records[0].checkpoint.input.resources, first_input.resources);
-    let latest_bytes = std::fs::read(f.ctx.store.dir().join(&records[1].artifact)).unwrap();
+    let latest_bytes = f.checkpoint_bytes(&records[1].artifact);
     let latest: Checkpoint = serde_json::from_slice(&latest_bytes).unwrap();
     assert_eq!(latest, records[1].checkpoint);
     let packet = f.packet();
@@ -341,8 +341,8 @@ fn explicit_obligation_resolution_persists_without_rewriting_pending_history() {
     let f = Fixture::new();
     f.seed_checkpoint();
     let pending = f.task().current_run().unwrap().checkpoints[0].clone();
-    let pending_path = f.ctx.store.dir().join(&pending.artifact);
-    let pending_bytes = std::fs::read(&pending_path).unwrap();
+    let pending_path = &pending.artifact;
+    let pending_bytes = f.checkpoint_bytes(pending_path);
     let mut input = f.checkpoint();
     input.waits[0].resolution = Some("build-42 exited with code 0".into());
     input.resources[0].resolution = Some("server-42 stopped".into());
@@ -364,8 +364,17 @@ fn explicit_obligation_resolution_persists_without_rewriting_pending_history() {
     );
     assert_eq!(records[1].checkpoint.input.waits, input.waits);
     assert_eq!(records[1].checkpoint.input.resources, input.resources);
-    assert_eq!(std::fs::read(pending_path).unwrap(), pending_bytes);
-    let latest_bytes = std::fs::read(store.dir().join(&records[1].artifact)).unwrap();
+    assert_eq!(f.checkpoint_bytes(pending_path), pending_bytes);
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.path == records[1].artifact)
+        .unwrap();
+    let reopened = Ctx {
+        store,
+        ..f.ctx.clone()
+    };
+    let latest_bytes = corral_ops::artifact_read(&reopened, artifact).unwrap();
     let latest: Checkpoint = serde_json::from_slice(&latest_bytes).unwrap();
     assert_eq!(latest.input, input);
     let packet = f.packet();
