@@ -29,6 +29,13 @@ pub(crate) fn cleanup_head(ctx: &Ctx, head: &corral_core::TaskHead, scope: Clean
     if let Err(error) = result {
         failed(ctx, &head.id, "inventory", &error);
     }
+    if scope == Cleanup::Task
+        && (head.current_run.is_some() || head.summary.runs != 0)
+        && crate::session_scope::owns_head(ctx, head).unwrap_or(false)
+        && let Err(error) = crate::sandbox_cleanup::reap_task(ctx, &head.id)
+    {
+        failed(ctx, &head.id, "sandbox", &error);
+    }
 }
 
 fn round_shell(head: &corral_core::TaskHead) -> Result<Task> {
@@ -130,14 +137,12 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
 }
 
 fn reap_sandboxes(ctx: &Ctx, task: &Task, warnings: &mut Vec<String>) {
-    if !crate::session_scope::owns_task(ctx, task).unwrap_or(false) {
+    if task.runs.is_empty() || !crate::session_scope::owns_task(ctx, task).unwrap_or(false) {
         return;
     }
-    for run in &task.runs {
-        if let Err(error) = crate::sandbox_cleanup::reap(ctx, &task.id, &run.id) {
-            failed(ctx, task, "sandbox", &error);
-            warnings.push(format!("sandbox {}: {error:#}", run.id));
-        }
+    if let Err(error) = crate::sandbox_cleanup::reap_task(ctx, &task.id) {
+        failed(ctx, &task.id, "sandbox", &error);
+        warnings.push(format!("sandbox {}: {error:#}", task.id));
     }
 }
 
