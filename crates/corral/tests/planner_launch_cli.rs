@@ -58,6 +58,8 @@ impl Fixture {
             write(&assets.join(name), body);
         }
         let mut store = Store::init(root).unwrap();
+        // Parent assertions and the isolated CLI must resolve the same real scratch root.
+        store.config.storage.scratch_root = Some(root.join("shared-scratch"));
         store.config.agent.assets_dir = Some(assets);
         store.config.dispatch.paused = false;
         store.config.limits.review = 4;

@@ -192,13 +192,18 @@ fn planner_fixture() -> (Fx, HostProc) {
     write(
         &host,
         r#"#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, subprocess, sys
 assert sys.argv[1] == "--launch-fd" and len(sys.argv) == 3, sys.argv
 with os.fdopen(int(sys.argv[2])) as pipe:
     message = json.load(pipe)
-events = pathlib.Path(message["root"], ".corral/events.jsonl").read_text().splitlines()
-notices = [json.loads(line) for line in events if json.loads(line)["kind"] == "metered_notice"]
-assert len(notices) == 1 and notices[0]["detail"]["role"] == "planner", notices
+marker = pathlib.Path(message["root"], "before-pane-guard.ok")
+marker.unlink(missing_ok=True)
+guard_env = dict(os.environ, CORRAL_FIXTURE_GUARD_ROOT=message["root"],
+    CORRAL_FIXTURE_GUARD_MODE="metered", CORRAL_FIXTURE_GUARD_ROLE=message["role"])
+subprocess.run([os.environ["CORRAL_METERED_OBSERVER"], "--exact",
+    "agent::fixture_guard_tests::durable_before_pane_run", "--ignored", "--nocapture"],
+    env=guard_env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, check=True)
+assert marker.is_file(), "fresh canonical observer must execute at host launch"
 assert not any(key.startswith("AWS_") for key in os.environ)
 fields = ("role", "task", "run", "model", "provider", "aws", "prompt_file", "cwd")
 captured = {key: message[key] for key in fields}
@@ -257,7 +262,11 @@ fn assert_planner_host(fx: &Fx, task: &str) {
     write_ctl_cap(&ready.generation_dir, &secrets.ctl_cap).unwrap();
     let (mut command, pipe) = host_command(&bootstrap, &ready, &secrets).unwrap();
     // The real Rust host command passes its launch message over the inherited descriptor.
-    let output = command.stdin(Stdio::null()).output().unwrap();
+    let output = command
+        .env("CORRAL_METERED_OBSERVER", std::env::current_exe().unwrap())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
     drop(pipe);
     assert!(
         output.status.success(),
