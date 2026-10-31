@@ -10,6 +10,7 @@
 //! snapshot so a checkpoint can complete.
 
 mod accepted_proof;
+mod artifact_digests;
 mod artifact_reviews;
 mod check;
 mod codec;
@@ -213,6 +214,7 @@ impl SqliteBackend {
         let workspace_id = BlobHash::of(seed.as_bytes()).as_str()[..32].to_owned();
         schema::init(&mut writer, &workspace_id)?;
         artifact_reviews::init(&mut writer)?;
+        artifact_digests::init(&mut writer)?;
         accepted_proof::init(&mut writer)?;
         lesson_artifacts::init(&mut writer)?;
         lesson_approvals::init(&mut writer)?;
