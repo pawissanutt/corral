@@ -1,4 +1,7 @@
 use super::*;
+
+#[path = "sandbox.rs"]
+mod sandbox;
 use corral_core::RunOutcome;
 use corral_ops::watch::{ProgressState, load};
 

@@ -35,7 +35,7 @@ elif args[0] == 'rm':
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                "sandbox::dropped_run_reaps_only_its_sandbox",
+                "lifecycle::sandbox::dropped_run_reaps_only_its_sandbox",
                 "--nocapture",
             ])
             .env("CORRAL_SANDBOX_FIXTURE", dir.path())
