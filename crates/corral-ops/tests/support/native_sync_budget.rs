@@ -71,6 +71,24 @@ fn retained(fx: &bridge::Fx, scale: usize) {
             }))
             .unwrap(),
         );
+        state.rewinds.push(
+            serde_json::from_value(json!({
+                "id":format!("rw-{i:04}"),"checkpoint":"g1-t1","commit":"commit","head":"head",
+                "leaf":"leaf","from_generation":i,"stage":"aborted","at":at,"updated":at
+            }))
+            .unwrap(),
+        );
+        state.usage_sessions.push(serde_json::from_value(json!({
+            "generation":i,"kind":"oracle","session_id":request,
+            "session_file":fx.root().join("historical-usage.jsonl"),"request":request,"outcome":"completed"
+        })).unwrap());
+        state.budget.requests.push(
+            serde_json::from_value(json!({
+                "request":request,"generation":i,"tokens":100,"usd_nanos":1000,
+                "priced":true,"response":request
+            }))
+            .unwrap(),
+        );
     }
     run.agent_host = Some(Box::new(state));
     fx.ctx.store.fixture_put_task(&task).unwrap();
