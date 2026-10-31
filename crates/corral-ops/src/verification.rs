@@ -173,6 +173,18 @@ pub(crate) fn identity_with<T: TaskRef + ?Sized>(
             target,
             binding,
         ))?),
+        (None, Some(target)) if !run.gate_rules.is_legacy() && !policy.gate_tiers.is_empty() => {
+            // Unbound full receipts must still capture the member selection, so an amendment
+            // cannot retroactively authorize a full gate for a different contract.
+            let selection =
+                crate::gate_tier::select(ctx, task, run, crate::gate_tier::GatePhase::Review)?;
+            digest(&serde_json::to_vec(&(
+                &policy,
+                task.completion(),
+                target,
+                &selection.requirement.binding,
+            ))?)
+        }
         (None, Some(target)) => digest(&serde_json::to_vec(&(&policy, task.completion(), target))?),
         (None, None) => digest(&serde_json::to_vec(&(&policy, task.completion()))?),
     };

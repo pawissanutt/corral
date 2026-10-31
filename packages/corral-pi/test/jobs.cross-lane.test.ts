@@ -87,7 +87,7 @@ beforeAll(async () => {
   if (!line) throw new Error(`worker lane setup printed no line: ${setup.stdout.slice(-2000)} ${setup.stderr.slice(-2000)}`);
   lane = JSON.parse(line) as Lane;
 
-  assets = buildFixtureInstall({ parent: workspace, overlays: false });
+  assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, overlays: false });
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const data = join(workspace, "data");
   const auth = join(data, "corral/pi-native/auth");

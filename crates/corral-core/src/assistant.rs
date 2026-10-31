@@ -5,6 +5,9 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::agent::write_permissions::{
+    PERMISSION_INPUTS_MAX, PermissionAudit, PermissionDecision, WriteGrant,
+};
 use crate::agent::{
     AgentBinding, AgentRole, AgentRunState, GenerationFence, HostHealth, WakeState,
 };
@@ -13,7 +16,7 @@ use crate::{Store, Usage};
 mod records;
 
 pub const ASSISTANT_VERSION: u32 = 1;
-/// Owner inputs a container keeps; older ones leave the journal and can no longer be cited.
+/// Ordinary journal limit; a first permission may occupy one extra slot to preserve citable inputs.
 pub const OWNER_INPUTS_MAX: usize = 64;
 /// Bytes of one journaled owner input's text; a longer input keeps its full digest.
 pub const OWNER_INPUT_TEXT_MAX: usize = 16 * 1024;
@@ -111,6 +114,19 @@ pub struct AssistantContainer {
     /// The owner-input journal, oldest first: the only inputs an owner action may cite.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owner_inputs: Vec<OwnerInput>,
+    /// Write grants the owner gave this session, oldest first (T-656).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub write_grants: Vec<WriteGrant>,
+    /// Grant IDs issued so far; `G-<n>` never repeats within the session.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub write_grants_issued: u64,
+    /// Audit lines committed with their decision or revocation and not yet logged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_audit: Vec<PermissionAudit>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +138,9 @@ pub enum OwnerInputSource {
     Dialog,
     /// The owner's answer to an owner-action confirmation the host rendered.
     Confirmation,
+    /// The owner's write-permission answer, journaled only by `write_permission` decide. It is
+    /// never citable: owner actions never accept permission inputs.
+    Permission,
 }
 
 /// OwnerInput journal entry v1. Only the assistant host's `event` op writes one, before the
@@ -150,6 +169,9 @@ pub struct OwnerInput {
     /// The host's `event` request that journaled it.
     pub request: String,
     pub at: Timestamp,
+    /// Permission entries only: the structured decision record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<PermissionDecision>,
 }
 
 /// What a host journals; the container assigns its ID.
@@ -184,6 +206,28 @@ impl AssistantContainer {
     /// oldest entries beyond `OWNER_INPUTS_MAX`. The newest entry is never the one dropped, so
     /// sequence numbers never repeat within a generation.
     pub fn journal_owner_input(&mut self, session: &str, input: NewOwnerInput) -> OwnerInput {
+        self.journal(session, input, None)
+    }
+
+    /// `journal_owner_input` for a permission entry and its record. Once `PERMISSION_INPUTS_MAX`
+    /// permission entries are held, or the journal is full, the oldest permission entry is
+    /// dropped first, so a permission answer never crowds out a citable input. If a full journal
+    /// has none to drop, the decision occupies one extra slot. Ordinary eviction is unchanged.
+    pub fn journal_permission(
+        &mut self,
+        session: &str,
+        input: NewOwnerInput,
+        decision: PermissionDecision,
+    ) -> OwnerInput {
+        self.journal(session, input, Some(decision))
+    }
+
+    fn journal(
+        &mut self,
+        session: &str,
+        input: NewOwnerInput,
+        permission: Option<PermissionDecision>,
+    ) -> OwnerInput {
         let seq = self
             .owner_inputs
             .iter()
@@ -205,10 +249,26 @@ impl AssistantContainer {
             answers: input.answers,
             request: input.request,
             at: Timestamp::now(),
+            permission,
         };
+        let permission_entry = |entry: &OwnerInput| entry.source == OwnerInputSource::Permission;
+        if entry.source == OwnerInputSource::Permission
+            && (self
+                .owner_inputs
+                .iter()
+                .filter(|e| permission_entry(e))
+                .count()
+                >= PERMISSION_INPUTS_MAX
+                || self.owner_inputs.len() >= OWNER_INPUTS_MAX)
+            && let Some(oldest) = self.owner_inputs.iter().position(permission_entry)
+        {
+            self.owner_inputs.remove(oldest);
+        }
         self.owner_inputs.push(entry.clone());
-        let excess = self.owner_inputs.len().saturating_sub(OWNER_INPUTS_MAX);
-        self.owner_inputs.drain(..excess);
+        if entry.source != OwnerInputSource::Permission {
+            let excess = self.owner_inputs.len().saturating_sub(OWNER_INPUTS_MAX);
+            self.owner_inputs.drain(..excess);
+        }
         entry
     }
 }
@@ -322,6 +382,9 @@ impl Store {
                 closing: false,
             }),
             owner_inputs: Vec::new(),
+            write_grants: Vec::new(),
+            write_grants_issued: 0,
+            permission_audit: Vec::new(),
         };
         self.records_transaction(|| {
             self.write_assistant_container(&session.id, &container)?;
@@ -362,6 +425,18 @@ impl Store {
 
     pub fn get_assistant_container(&self, id: &str) -> Result<AssistantContainer> {
         self.read_assistant_container(id)
+    }
+
+    /// Reads a container and whether its session ended under the board lock, without writing:
+    /// a check made here is ordered against every fence and end, which take the same lock.
+    pub fn inspect_assistant_container<R>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&AssistantContainer, bool) -> Result<R>,
+    ) -> Result<R> {
+        let _board = self.lock("dispatch")?;
+        let ended = self.read_assistant(id)?.ended.is_some();
+        f(&self.read_assistant_container(id)?, ended)
     }
 
     fn write_assistant(&self, session: &AssistantSession) -> Result<()> {

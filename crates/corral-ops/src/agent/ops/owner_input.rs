@@ -51,6 +51,11 @@ fn validate(envelope: &Envelope, payload: &Payload) -> Result<()> {
     if envelope.identity.role != AgentRole::Assistant {
         return Err(bad("only an assistant host journals owner input"));
     }
+    if payload.source == OwnerInputSource::Permission {
+        return Err(bad(
+            "a permission input is journaled only by write_permission decide",
+        ));
+    }
     match event_id_parts(&envelope.request_id) {
         Some((generation, _)) if generation == envelope.identity.generation => {}
         _ => return Err(bad("owner_input uses request_id ev-<generation>-<seq>")),

@@ -14,7 +14,7 @@ test("CLI cancel releases a live worker's blocking question without another turn
     return;
   }
   const root = mkdtempSync(join(privateRoot()!, "pi-question-cancel-"));
-  const assets = buildFixtureInstall({ parent: root });
+  const assets = buildFixtureInstall({ parent: root, isolatePiState: true });
   const corral = corralBinary();
   const cli = (...args: string[]) => ok([corral, "--root", root, ...args], { cwd: root });
   const show = () => JSON.parse(cli("show", "T-001", "--json"));

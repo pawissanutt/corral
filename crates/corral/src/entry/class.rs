@@ -5,7 +5,7 @@
 use corral_core::{CommentAuthor, Origin};
 
 use crate::agent_cmd::AgentCmd;
-use crate::assistant_cmd::{AssistantCmd, ScratchCmd};
+use crate::assistant_cmd::{AssistantCmd, PermissionsCmd, ScratchCmd};
 use crate::attention_cmd::AttentionCmd;
 use crate::automation_cmd::AutomationCmd;
 use crate::completion_cmd::{CriteriaCmd, EvidenceCmd};
@@ -67,6 +67,11 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
             AssistantCmd::List { .. } | AssistantCmd::Show { .. } => Read,
             AssistantCmd::Summary { id, .. } => file_if_own(id == session),
             AssistantCmd::Create { .. } | AssistantCmd::End { .. } => Refused,
+            // Grants come only from the owner's dialog answer; a shell may only end its own.
+            AssistantCmd::Permissions(args) => match &args.cmd {
+                None => Read,
+                Some(PermissionsCmd::Revoke { id, .. }) => file_if_own(id == session),
+            },
             AssistantCmd::Scratch(args) => match &args.cmd {
                 // Own-session scratch only: the operation refuses another's with not_own_scratch.
                 ScratchCmd::New { .. }

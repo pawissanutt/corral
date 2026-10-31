@@ -154,6 +154,9 @@ corral stats
 
 Each command accepts `--json`. `create` allocates an **unbound** record without starting a
 host (`corral pi --resume` can launch it later); it also accepts `--herdr-socket <path>`.
+For an open session, `show` also prints which assets its host runs and the owner actions the
+installed corral accepts ([which host a session runs](#which-host-a-session-runs)); in JSON
+that is the `host` object.
 Focus is informational and grants no task authority. `list` shows each session's status:
 `live` (its host is running), `open` (resumable) or `ended`. It also shows focus, pane, cost,
 scratch count and linked inbox-item count, and its JSON rows carry `live`. `show` includes the
@@ -435,7 +438,8 @@ owner (never `--root`, `--author` or output flags):
 | Ordinary: runs on the instruction | `approve`, `verdict`, `review_run` (review-run), `dispatch` (incl. `--plan`), `queue` (queue add), `unqueue` (queue remove), `move` to any status but dropped, `park` and `unpark` (attention park/unpark), `revert`, `plan_accept`, `plan_verdict`, `plan_review`, `plan_member_gate`, `plan_add_member`, `plan_move_member`, `finish` (assistant scratch finish; target: the scratch slug) |
 | Confirm: waits for the owner | `move` to dropped or with `--force`, `discard` (with or without `--keep-branch`), `config_set` (config set), `mode` (autopilot, assist, turbo, pause, resume) |
 
-Anything else refuses `unsupported_action`; the assistant then routes it to the PM. Finishing
+Anything else refuses `unsupported_action`, and the refusal lists the kinds this corral
+accepts; the assistant then routes it to the PM. Finishing
 co-work is described [below](#co-work-finish-and-landing). Disposing of the assistant's own
 scratch stays a File command (`corral assistant scratch discard`).
 `expected_revision` is passed as `--expected-revision` to the two kinds whose command takes
@@ -487,6 +491,7 @@ corral pm inbox show PMI-1
 corral assistant scratch finish cache-fix --title "Fix the cache" --session A-1
 corral assistant scratch finish cache-fix --title "Fix the cache" --review required --session A-1
 corral assistant scratch finish cache-fix --into T-042 --session A-1
+corral assistant scratch finish cache-fix --title "Fix the cache" --expected-head 3f2a9c1 --session A-1
 corral approve T-060
 ```
 
@@ -502,7 +507,9 @@ shell the same command takes `--session A-<n>`. An assistant shell is refused wi
 `corral_owner_action`.
 
 A finish needs a scratch with at least one commit beyond its base and no uncommitted
-changes (`scratch_empty`, `scratch_dirty`). Corral rebases the scratch branch onto the
+changes (`scratch_empty`, `scratch_dirty`). With `--expected-head <sha>` (7 to 64 hex digits)
+it also needs the scratch HEAD to still be that commit, the candidate the owner was shown,
+and refuses `stale_candidate` with the current HEAD otherwise. Corral rebases the scratch branch onto the
 project's base when the base has moved, and refuses `rebase_conflict` with the conflicting
 paths after aborting the rebase. Each of these refusals happens before any task exists and
 changes nothing. Then:
@@ -545,9 +552,75 @@ changes nothing. Then:
    logs `cowork_landed`. Discarding the task instead removes the worktree as for any task,
    and the session forgets the scratch record too.
 
-Events: `cowork_finished` (session, scratch, run, branch, head, base, review) and
+Events: `cowork_finished` (session, scratch, run, branch, head, candidate: the scratch HEAD
+before any rebase, base, review) and
 `cowork_landed` (session, run, sha, commits). Through an owner action, both carry the owner
 authority like every owner-action event. `corral stats` keeps co-work tasks in the ordinary
 task cohorts. The assistant role row adds `cowork: {finished, review_none, landed}`
 and a per-session `landed` count, so the acceptance path without a review can be counted.
 The run's usage is a slice of the session's usage, not extra spending.
+
+## Implement now or queue
+
+The packaged contract has the assistant settle, once, whether a change the owner asks for is
+made now in the pane or filed for the normal queue. The owner's words decide ("fix it", "do it
+now" against "file it", "for later"); when they do not, the assistant asks one plain question
+naming both options and does not ask again. It never both implements and files a change, so
+implement-now work is not handed to a worker to redo.
+
+Implement-now work happens in one of the session's scratch worktrees. When it is done, the
+assistant stops and reports the scratch and its candidate commit, the diff stat against the
+base, the checks it ran with their results and the risks left, then offers four options:
+
+| Owner picks | The assistant runs (citing that answer's owner input) | Result |
+|---|---|---|
+| Land now | `finish` with `--title` and `--expected-head <candidate>`; then, when the gate is `pass` or `none`, `approve` of the new task | the [finish](#co-work-finish-and-landing) task, gated, landed through the normal approve path |
+| Independent review | `finish` with `--review required` and `--expected-head <candidate>` | the normal reviewer starts on that same run and commit; landing waits for its verdict and an owner `approve` |
+| Keep it for later | nothing | the scratch stays as it is |
+| Drop it | `corral assistant scratch discard <slug>` | the work is saved as session artifacts, then removed |
+
+The owner's one land-now answer covers both the finish and the approve after it. Nothing
+else is relaxed: the approve takes the landing lock and runs the integration, size, freshness
+and gate checks of any approval, and a failed gate stops before it. When the scratch moved
+after the report, the finish refuses `stale_candidate` and changes nothing, and the assistant
+reports the new candidate and asks again. Plain chat works for both decisions. When the
+generation exposes `ask_user`, the assistant can offer the same choices in its structured
+dialog; a completed answer carries an owner input ID, while cancellation or timeout
+authorizes nothing. Older generations without that tool use plain chat.
+
+## Which host a session runs
+
+Three versions meet in an assistant session:
+
+- **Source**: the corral repository. A change there reaches no session until it is installed.
+- **Installed**: the `corral` binary and the pi-native assets `corral agent install` records
+  (or `[agent] assets_dir`). The binary decides at every call which owner-action kinds exist
+  and how each command behaves; the assets hold the contract and tool descriptions.
+- **Generation**: what a running host loaded when it started. Its contract and tool
+  descriptions stay fixed for its lifetime, so a generation opened before an upgrade can lack
+  guidance or a kind's description that the installed corral already supports.
+
+Each generation records the asset digest its bootstrap named (`assets_sha256`; absent on
+generations opened before this was recorded). `corral assistant show A-1` sets it beside the
+installed digest, for the owner and for the assistant's own shell:
+
+```text
+host: g1 runs unrecorded assets, installed 7288f337d172: its contract and tool list may predate this corral, whose owner actions below still apply; a new generation loads the current ones (`corral pi --resume A-1` once its host stopped, or a new `corral pi`)
+owner actions: approve, verdict, review_run, dispatch, queue, unqueue, move, park, unpark, revert, plan_accept, plan_verdict, plan_review, plan_member_gate, plan_add_member, plan_move_member, discard, finish, config_set, mode
+```
+
+JSON readers get `host: {generation, assets_sha256, installed_sha256, current,
+installed_error, owner_actions}`; `current` is null while either digest is unknown.
+
+For a session whose host predates the installed assets, the supported paths are:
+
+- **Keep working in it.** `corral_owner_action` passes any kind through to the installed
+  corral, so a kind its description does not list (such as `finish`) still runs when the owner
+  asks for it; `show` lists the accepted kinds.
+- **Finish from the owner's shell.** `corral assistant scratch finish` with `--session A-1`,
+  `--title`, and `--review required` or `--expected-head` as wanted, then `corral approve`,
+  works for open and ended sessions alike; the completed work is reused, not reimplemented.
+- **Start a new generation.** A host that stopped without a clean exit resumes with
+  `corral pi --resume A-1`, which loads the installed contract and tools and keeps the
+  conversation, scratch worktrees and records. A clean `/quit` ends the session instead;
+  corral has no in-place upgrade of a running host.

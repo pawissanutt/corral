@@ -5,12 +5,12 @@
 // resumed; the owner's answer then reaches it through the bridge and inbox alone, and it reports
 // done. A headless pi-native reviewer of that run then does the same and commits its verdict.
 // Nothing is ever typed into either pane.
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { connect } from "./support/bridge-client.ts";
-import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "./support/fixture-install.ts";
+import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall, clearFixturePiStates } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
 import { sha256Hex } from "../src/tools/corral.ts";
 import {
@@ -66,7 +66,7 @@ beforeAll(() => {
       kind: "clarification", text: "Which adapter should the reply use?", blocking: true, options: ["inbox", "pane"],
     } }] },
   ]));
-  assets = buildFixtureInstall({ parent: workspace, omit: ["role", "delivery"] });
+  assets = buildFixtureInstall({ parent: workspace, isolatePiState: true, omit: ["role", "delivery"] });
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const auth = join(assets.dir, "src/auth");
   copyFileSync(join(auth, "index.ts"), join(auth, "fixture-auth.ts"));
@@ -113,6 +113,9 @@ headless = true
   cli("new", "Pi headless worker asks, resumes and completes", "-p", "app", "--ready");
   events = new EventFollower(join(workspace, ".corral/events.jsonl"));
 }, 900_000);
+
+// The worker and reviewer are separate host lifecycles; SIGKILL cannot run exit cleanup.
+afterEach(() => { if (assets) clearFixturePiStates(assets); });
 
 afterAll(() => {
   events?.close();

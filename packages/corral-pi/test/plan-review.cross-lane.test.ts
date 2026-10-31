@@ -40,7 +40,7 @@ test("launched pi-native plan reviewer records a fixture verdict", async () => {
     ok(["git", "-C", app, "commit", "-q", "-m", "fixture"]);
     const cli = (...args: string[]) => ok([corral, "--root", workspace, ...args], { cwd: workspace });
     cli("init");
-    const assets = buildFixtureInstall({ parent: workspace });
+    const assets = buildFixtureInstall({ parent: workspace, isolatePiState: true });
     for (const role of ["planner", "plan-reviewer"]) {
       rmSync(join(assets.dir, "src/roles", role), { recursive: true, force: true });
       cpSync(join(PACKAGE_ROOT, "src/roles", role), join(assets.dir, "src/roles", role), { recursive: true });

@@ -192,6 +192,7 @@ fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Resul
     };
     let target = BindTarget::Assistant { session: id.into() };
     let prepared = launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
+    record_assets(ctx, id, &prepared)?;
     if resolved.vendor.as_deref() == Some("amazon-bedrock") {
         let binding =
             crate::agent::aws_profile::read_binding(&crate::agent::install::data_root()?)?
@@ -203,6 +204,22 @@ fn prepare(ctx: &Ctx, id: &str, pane: &str, resolved: &ResolvedProfile) -> Resul
         }
     }
     Ok(prepared)
+}
+
+/// Records on the new generation the asset digest its bootstrap names, so a readback can tell a
+/// generation whose contract and tool descriptions predate the installed assets.
+fn record_assets(ctx: &Ctx, id: &str, prepared: &Prepared) -> Result<()> {
+    let path = &prepared.bootstrap;
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bootstrap: launch::Bootstrap =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    ctx.store.update_assistant_container(id, |container| {
+        let generation = (container.state.generations.iter_mut())
+            .find(|generation| generation.n == bootstrap.generation)
+            .with_context(|| format!("{id} has no generation {}", bootstrap.generation))?;
+        generation.assets_sha256 = Some(bootstrap.asset_sha256.clone());
+        Ok(())
+    })
 }
 
 /// A new assistant session in the owner's pane `pane`: every check, then record and generation 1.
@@ -329,6 +346,14 @@ pub fn end(ctx: &Ctx, id: &str) -> Result<(AssistantSession, Option<String>)> {
         }
     }
     let session = ctx.store.end_assistant(id)?;
+    if let Err(error) = crate::assistant::permissions::drain_permission_audit(&ctx.store, id) {
+        let queued =
+            format!("warning: {id}'s write-permission audit lines stay queued ({error:#})");
+        warning = Some(match warning {
+            Some(first) => format!("{first}\n{queued}"),
+            None => queued,
+        });
+    }
     let dir = launch::assistant_runtime_dir(&ctx.store, id);
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
