@@ -67,4 +67,16 @@ Additional focused execution:
 - Pending-question done/verdict refusal case PASS.
 - Actual task-held owning-native-sync ten-family fixture PASS at 1x/10x warm/reopened, with real host probes, exactly three T-623 replay calls and independently exact follow-up cells, every unattributed cell equal and zero unattributed hydration. This does **not** establish the still-pending root PM/Assistant whole-sync/fresh-process acceptance.
 
-No gate has run. Q2 and Q3 remain pending; complete package/Pi matrices, root proofs, all work budgets, semantic audit/freshness and final gate are still outstanding.
+No gate has run. At the end of that integration round Q2 and Q3 were pending; complete package/Pi matrices, root proofs, all work budgets, semantic audit/freshness and final gate were still outstanding.
+
+### Q2 resolved: atomic event phase oracle, with real negative controls
+
+PM selected v2's existing atomic metadata-plus-event operation under the shared writer guard. `buffer_artifact_event` now supplies the phase probe immediately before the real buffered append, inside each existing full/head registration or revival operation. There are no new events or publication-boundary changes. The phase oracle requires that event append to hold storage both on the calling thread and against another file handle. Every existing task-read/index/PM-push/herdr storage-free assertion, all phase-presence assertions and the shared-writer/exclusive-GC contention cases remain.
+
+Three executions demonstrate the distinction:
+
+1. **Premature-release negative control:** temporarily move the real `drop(storage)` before `attach`. The adapted test executes and FAILS specifically with `artifact_event` observed `(held=false, here=false)`. Log `.evidence/R2-Q2-premature-release-red.log`; exact temporary diff `.evidence/R2-Q2-premature-release-mutant.diff`.
+2. **Index-order negative control:** temporarily retain the real writer guard across eager index work. The adapted test executes and FAILS specifically because `content_index_build` observes `(held=true, here=true)`. Log `.evidence/R2-Q2-index-order-red.log`; exact temporary diff `.evidence/R2-Q2-index-order-mutant.diff`.
+3. **Restored intended boundary:** remove both mutants, release storage after atomic publication and before eager indexing; `cargo test -p corral-ops --lib review_budget::tests::storage -- --nocapture --test-threads=1` executes **3 PASS, 0 FAIL**. Log `.evidence/R2-Q2-final-storage-green.log`. These are fake-engine unit fixtures; no live owner session is used.
+
+The negative controls were sequential ordinary targeted tests, not load/stress runs. Neither mutant remains in the candidate. The expected phase model changed only as PM authorized; no work-budget expectation changed. Q3 and the nonce model remain unresolved, as do the remaining acceptance obligations.

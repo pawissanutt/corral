@@ -224,7 +224,11 @@ exec "$dir/herdr-fake" "$@"
             let here = crate::artifact_storage::held_here();
             let held = match other.try_lock() {
                 Ok(()) => false,
-                Err(std::fs::TryLockError::WouldBlock) if point != ACQUIRED => still_held(other),
+                Err(std::fs::TryLockError::WouldBlock)
+                    if point != ACQUIRED && point != "artifact_event" =>
+                {
+                    still_held(other)
+                }
                 Err(std::fs::TryLockError::WouldBlock) => true,
                 Err(std::fs::TryLockError::Error(error)) => panic!("{error}"),
             };
@@ -241,7 +245,8 @@ exec "$dir/herdr-fake" "$@"
     let calls = std::fs::read_to_string(fx.tmp.path().join("herdr-calls.log")).unwrap();
     assert!(calls.lines().any(|l| l.contains("pane list")), "{calls}");
     assert!(calls.lines().all(|l| l.starts_with("free ")), "{calls}");
-    // every read, event and index phase ran with it free, on this thread and to other handles,
+    // Every task-read, index and PM-push phase remains storage-free. The artifact event
+    // is buffered with its metadata inside the atomic writer operation, under storage.
     let probes = probes.borrow();
     for phase in PHASES {
         assert!(
@@ -249,7 +254,17 @@ exec "$dir/herdr-fake" "$@"
             "{phase}: {probes:?}"
         );
     }
-    let phases = probes.iter().filter(|(p, ..)| p != ACQUIRED);
+    let events: Vec<_> = probes
+        .iter()
+        .filter(|(p, ..)| p == "artifact_event")
+        .collect();
+    assert!(
+        !events.is_empty() && events.iter().all(|(_, held, here)| *held && *here),
+        "atomic artifact event requires the writer guard: {probes:?}"
+    );
+    let phases = probes
+        .iter()
+        .filter(|(p, ..)| p != ACQUIRED && p != "artifact_event");
     assert!(
         phases.clone().all(|(_, held, here)| !held && !here),
         "{probes:?}"
