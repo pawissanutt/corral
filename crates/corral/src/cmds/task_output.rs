@@ -213,7 +213,8 @@ pub(super) fn list(
 ) -> Result<()> {
     let want = status.map(parse_status).transpose()?;
     if query.is_none() {
-        let open = !all && !matches!(want, Some(Status::Done | Status::Dropped));
+        let open = (!all || want == Some(Status::NeedsMe))
+            && !matches!(want, Some(Status::Done | Status::Dropped));
         let _hot = open.then(corral_core::work::HotScope::enter);
         let ctx = &Ctx {
             store: ctx.store.read_only_snapshot()?,
@@ -249,19 +250,53 @@ pub(super) fn list(
             heads.sort_by_key(|head| head.num);
             heads
         };
-        heads.retain(|t| {
-            want.is_none_or(|status| t.status == status)
-                && project.is_none_or(|p| t.project.as_deref() == Some(p))
-        });
+        heads.retain(|head| project.is_none_or(|p| head.project.as_deref() == Some(p)));
+        let assessments: std::collections::BTreeMap<_, _> = if want.is_some() || json {
+            corral_ops::attention::board_hot(ctx, jiff::Timestamp::now())?
+                .tasks
+                .into_iter()
+                .map(|row| (row.task, row.assessment))
+                .collect()
+        } else {
+            Default::default()
+        };
+        let mut selected = Vec::new();
+        let mut conditions = std::collections::BTreeMap::new();
+        for head in heads {
+            let condition = assessments
+                .get(&head.id)
+                .map(|assessment| corral_core::attention::blocked_ref(&head, assessment))
+                .transpose()?
+                .flatten();
+            let keep = match want {
+                Some(Status::NeedsMe) => condition.is_some(),
+                Some(status) => head.status == status && condition.is_none(),
+                None => true,
+            };
+            if keep {
+                if let Some(condition) = condition {
+                    conditions.insert(head.id.clone(), condition.clone());
+                }
+                selected.push(head);
+            }
+        }
         if json {
-            let values = heads
+            let values = selected
                 .iter()
-                .map(task_head_json)
+                .map(|head| -> Result<_> {
+                    let mut value = task_head_json(head)?;
+                    let condition = conditions.get(&head.id);
+                    value["display_status"] =
+                        condition.map_or(head.status.label(), |_| "Blocked").into();
+                    value["blocked"] = serde_json::json!(condition);
+                    value["unblocker"] = serde_json::json!(condition.map(|c| c.unblocker()));
+                    Ok(value)
+                })
                 .collect::<Result<Vec<_>>>()?;
             println!("{}", serde_json::to_string_pretty(&values)?);
             return Ok(());
         }
-        return crate::list_cols::print_heads(ctx, &heads, columns);
+        return crate::list_cols::print_heads(ctx, &selected, columns);
     }
     let tasks = match query {
         Some(input) => corral_ops::search_tasks(&ctx.store, input)?,

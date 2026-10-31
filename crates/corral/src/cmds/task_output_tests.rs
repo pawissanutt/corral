@@ -10,11 +10,32 @@ fn list_open_has_identical_counters_with_tenfold_terminal_and_nested_history() {
     for factor in [1, 10] {
         // Given the same open task and tenfold unrelated and nested history.
         let (_dir, store) = support::store();
+        store.fixture_pin_now(support::at(0)).unwrap();
         let mut task = store.create("Open", None, Status::Running, "Spec").unwrap();
         support::grow(&mut task, 3 * factor, 3 * factor, 3 * factor, 3 * factor);
+        // The generic rich builder leaves one reviewer pending on EVERY earlier plan.
+        // This list fixture grows retired history, not current delivery obligations: keep
+        // all rows, settle only those earlier reviews, and retain the latest pending one.
+        for plan in task.plans.iter_mut().rev().skip(1) {
+            for review in &mut plan.reviews {
+                if review.verdict.is_none() {
+                    review.verdict = Some(corral_core::Verdict::Approve);
+                }
+            }
+        }
         task.created = support::at(0);
         task.updated = support::at(0);
         store.fixture_put_task(&task).unwrap();
+        assert_eq!(
+            store
+                .head(&task.id)
+                .unwrap()
+                .pending_plan_reviewers()
+                .unwrap()
+                .len(),
+            1,
+            "one actual current reviewer at both history sizes"
+        );
         for _ in 0..10 * factor {
             store.create("Old", None, Status::Done, "").unwrap();
         }
