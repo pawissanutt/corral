@@ -104,6 +104,13 @@ head. Every landing on main and `plan verify` run the full tier; no setting
 lowers them. `gate_tiers` and `tier_policy` are part of the review policy, so
 changing them stales receipts; `plan_checkpoint_every` is not.
 
+A changes request reopens the review phase even when the run retains an earlier
+approval. The latest changes-round timestamp supersedes that approval for gate
+selection, including after the candidate changes and with a fresh worker session.
+Approval identities and gate receipts remain audit history. A later approval
+restores the landing phase; authorized receipt promotion and clean-replay carries
+do not by themselves reopen review.
+
 With `--tier quick`, `scripts/gate.sh` prints `==> tier quick` and reads the
 context file corral exports as `CORRAL_GATE_CONTEXT`. It runs `cargo fmt`, the
 800-SLOC ceiling and Clippy for the crates touched since the merge base (the
