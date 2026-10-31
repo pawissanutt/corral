@@ -54,6 +54,36 @@ pub enum AssistantCmd {
     },
     /// Scratch worktrees for spikes and co-work
     Scratch(ScratchArgs),
+    /// Write permissions the owner gave a session: its grants, settings and revocation
+    Permissions(PermissionsArgs),
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+pub struct PermissionsArgs {
+    #[command(subcommand)]
+    pub cmd: Option<PermissionsCmd>,
+    /// Session whose grants, generation settings and saved settings to list
+    #[arg(required = true)]
+    pub id: Option<String>,
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Only the owner's shell or the session's own shell revokes; nothing here creates a grant.
+#[derive(Subcommand)]
+pub enum PermissionsCmd {
+    /// Revoke one active grant, or every active grant with --all
+    Revoke {
+        id: String,
+        /// Grant ID, G-<n>
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        grant: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Args)]
@@ -278,6 +308,109 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
             }
         }
         AssistantCmd::Scratch(args) => scratch(ctx, args.cmd)?,
+        AssistantCmd::Permissions(args) => permissions(ctx, args)?,
+    }
+    Ok(())
+}
+
+fn print_settings(label: &str, settings: Option<&corral_ops::assistant::permissions::SettingsRow>) {
+    let Some(settings) = settings else {
+        println!("{label}: no write_permissions setting");
+        return;
+    };
+    println!(
+        "{label}: {}, allow {}, deny {}",
+        if settings.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        settings.allow.len(),
+        settings.deny.len()
+    );
+    for row in &settings.allow {
+        match (&row.canonical, &row.ignored) {
+            (Some(canonical), _) => println!("  allow {} -> {}", row.entry, canonical.display()),
+            (None, why) => println!(
+                "  allow {} ignored: {}",
+                row.entry,
+                why.as_deref().unwrap_or("unresolved")
+            ),
+        }
+    }
+    for entry in &settings.deny {
+        println!("  deny {entry}");
+    }
+}
+
+fn permissions(ctx: &Ctx, args: PermissionsArgs) -> Result<()> {
+    use corral_ops::assistant::permissions as ops;
+    if let Some(PermissionsCmd::Revoke {
+        id,
+        grant,
+        all,
+        json,
+    }) = args.cmd
+    {
+        let grant = if all { None } else { grant };
+        let by = std::env::var("CORRAL_ASSISTANT").unwrap_or_else(|_| "owner".into());
+        let done = ops::revoke(&ctx.store, &id, grant.as_deref(), &by)?;
+        if let Some(warning) = &done.warning {
+            eprintln!("{warning}");
+        }
+        if json {
+            return print_json(&done);
+        }
+        if done.revoked.is_empty() {
+            println!("{id}: no active write grant to revoke");
+        } else {
+            println!("{id}: revoked {} (by {by})", done.revoked.join(", "));
+        }
+        return Ok(());
+    }
+    let id = args
+        .id
+        .context("name the session: corral assistant permissions A-<n>")?;
+    let home = corral_core::agent::write_permissions::Home::from_env();
+    let listing = ops::list(&ctx.store, &id, jiff::Timestamp::now(), &home)?;
+    if args.json {
+        return print_json(&listing);
+    }
+    println!(
+        "{} {} generation {}",
+        listing.session,
+        if listing.ended { "ended" } else { "open" },
+        listing.generation
+    );
+    println!("GRANT STATE LIFETIME SCOPE EXPIRES");
+    for row in &listing.grants {
+        let grant = &row.grant;
+        println!(
+            "{} {} {} {} -> {} {}",
+            grant.id,
+            row.state.as_str(),
+            grant.lifetime.as_str(),
+            grant.scope.shown,
+            grant.scope.canonical,
+            grant
+                .expires_at
+                .map_or_else(|| "-".into(), |at| at.to_string())
+        );
+    }
+    print_settings(
+        &format!("generation {} settings", listing.generation),
+        listing.generation_settings.as_ref(),
+    );
+    if listing.saved_differs {
+        print_settings(
+            "saved settings (differ; a resume applies them)",
+            listing.saved_settings.as_ref(),
+        );
+    } else {
+        println!("saved settings: the same as the generation's");
+    }
+    if listing.audit_queued > 0 {
+        println!("{} audit line(s) queued", listing.audit_queued);
     }
     Ok(())
 }

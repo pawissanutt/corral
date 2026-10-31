@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use super::admission::{self, Admitted};
 use super::call::{CallResponse, RejectCode, Rejection};
+use super::envelope::Envelope;
 use crate::Ctx;
 
 /// What an op's apply step contributes to its committed receipt.
@@ -124,11 +125,31 @@ pub(crate) fn commit(
     respond(ctx, container, receipt, replayed)
 }
 
+/// How a commit transaction answers an identical receipt that is already stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StoredAnswer {
+    /// Answer it as-is, even to a fenced generation: every op's replay-after-fence rule.
+    Always,
+    /// Answer it only to a live, current generation of an open session, so a receipt that
+    /// is authority to write (a write_permission decide) never reaches a fenced or ended host.
+    LiveOnly,
+}
+
 /// `commit` for an assistant session whose op also changes its container beyond the run state,
 /// such as the owner-input journal, in the same transaction as its receipt.
 pub(crate) fn commit_assistant(
     ctx: &Ctx,
     admitted: &Admitted,
+    apply: impl FnOnce(&mut AssistantContainer) -> Result<Commit>,
+) -> Result<CallResponse> {
+    commit_assistant_with(ctx, admitted, StoredAnswer::Always, apply)
+}
+
+/// `commit_assistant` whose existing-receipt branch answers as `answer` says.
+pub(crate) fn commit_assistant_with(
+    ctx: &Ctx,
+    admitted: &Admitted,
+    answer: StoredAnswer,
     apply: impl FnOnce(&mut AssistantContainer) -> Result<Commit>,
 ) -> Result<CallResponse> {
     let origin = &admitted.origin;
@@ -141,6 +162,9 @@ pub(crate) fn commit_assistant(
         .settle_assistant_container(id, |assistant, ended| {
             if let Some(stored) = assistant.state.receipt(&origin.request_id) {
                 admission::same_request(stored, &origin.op, &origin.payload_sha256)?;
+                if answer == StoredAnswer::LiveOnly {
+                    admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
+                }
                 return Ok((stored.clone(), true));
             }
             admission::recheck_assistant(assistant, ended, origin.binding.generation)?;
@@ -148,6 +172,33 @@ pub(crate) fn commit_assistant(
             Ok((append(&mut assistant.state, origin, commit)?, false))
         })?;
     respond(ctx, container, receipt, replayed)
+}
+
+/// Answers a receipt that admission found only to a live generation: under the session's store
+/// lock, the lock fences and ends take, it rereads the receipt and repeats `same_request` and
+/// the liveness, fence and saved-pane check before `respond`.
+pub(crate) fn replay_assistant_live(
+    ctx: &Ctx,
+    envelope: &Envelope,
+    stored: RequestReceipt,
+) -> Result<CallResponse> {
+    let container = admission::container_of(&envelope.identity);
+    let id = container
+        .assistant()
+        .context("a live replay names an assistant session")?;
+    let receipt = ctx
+        .store
+        .inspect_assistant_container(id, |assistant, ended| {
+            let current = assistant
+                .state
+                .receipt(&envelope.request_id)
+                .cloned()
+                .unwrap_or(stored);
+            admission::same_request(&current, &envelope.op, &envelope.payload_sha256)?;
+            admission::recheck_assistant(assistant, ended, envelope.identity.generation)?;
+            Ok(current)
+        })?;
+    respond(ctx, &container, receipt, true)
 }
 
 /// `commit` for a worker run or review child whose op also changes task-level state (status,

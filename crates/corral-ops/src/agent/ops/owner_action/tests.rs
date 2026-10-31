@@ -188,6 +188,32 @@ fn rejected_detail(response: &CallResponse) -> Value {
 }
 
 #[test]
+fn a_permission_answer_never_authorizes_an_owner_action() {
+    // Given A-1's write_permission decide journaled the owner's Deny as a permission input.
+    let s = session();
+    let task = s.task(Status::Review);
+    let (generation, invocation) = (s.bound.identity.generation, format!("{:032x}", 7));
+    let request = tool_request_id(
+        &s.bound.identity.session_id,
+        &format!("wp:{generation}:{invocation}"),
+    );
+    let target = s.fx.root().join("notes/a.txt");
+    let payload = json!({"action": "decide",
+        "invocation": {"generation": generation, "id": invocation, "tool_call": "call-7"},
+        "tool": "write", "operation": {"kind": "new_file"},
+        "target": {"shown": target, "canonical": target},
+        "digest": "d".repeat(64), "preview_sha256": "e".repeat(64), "choice": "deny"});
+    let input = ts::envelope(&s.bound, "write_permission", &request, payload, false);
+    let decided = ts::committed(&ts::send(&s.ts(), &input, "write_permission"));
+    let cited = decided.result["input"].as_str().unwrap().to_owned();
+    // When the model cites it for an owner action, then corral refuses and nothing runs.
+    let payload = json!({"kind": "approve", "target": task, "input": cited});
+    let refused = s.act("approve-permission", &payload);
+    assert_eq!(ts::code(&refused), Some("not_owner_input"));
+    assert!(s.runs().is_empty());
+}
+
+#[test]
 fn a_cited_pane_instruction_runs_once_and_a_replay_returns_its_first_receipt() {
     // Given A-1 journaled the owner's pane message and a task in Review.
     let mut s = session();

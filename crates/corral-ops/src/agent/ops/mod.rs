@@ -16,6 +16,7 @@ mod pm_inbox;
 pub(crate) mod reviewer;
 pub(crate) mod todo;
 pub(crate) mod worker;
+pub(crate) mod write_permission;
 
 use anyhow::Result;
 use serde::de::DeserializeOwned;

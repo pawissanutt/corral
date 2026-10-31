@@ -21,6 +21,7 @@ mod rewind;
 mod tests;
 mod todo;
 mod usage;
+pub mod write_permissions;
 
 pub use auxiliary::{ExploreSettings, OracleSettings};
 pub use browser::canonical_origin;

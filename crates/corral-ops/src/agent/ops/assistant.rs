@@ -341,6 +341,14 @@ pub fn end(ctx: &Ctx, id: &str) -> Result<(AssistantSession, Option<String>)> {
         }
     }
     let session = ctx.store.end_assistant(id)?;
+    if let Err(error) = crate::assistant::permissions::drain_permission_audit(&ctx.store, id) {
+        let queued =
+            format!("warning: {id}'s write-permission audit lines stay queued ({error:#})");
+        warning = Some(match warning {
+            Some(first) => format!("{first}\n{queued}"),
+            None => queued,
+        });
+    }
     let dir = launch::assistant_runtime_dir(&ctx.store, id);
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
