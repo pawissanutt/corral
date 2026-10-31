@@ -35,7 +35,9 @@ fn session_retention_pins_follow_and_revival() {
         matches!(&pins[0].1, PinTarget::Artifact {artifact, followed: true, ..} if artifact.path == second.path)
     );
     assert_eq!(resolve_artifact(&ctx, "1").unwrap(), second);
-    // Both the follow anchor and its current target survive a purge policy.
+    // Both the follow anchor and its current target survive without legacy snapshots.
+    assert!(!ctx.store.dir().join(&first.path).exists());
+    assert!(!ctx.store.dir().join(&second.path).exists());
     assert!(artifact_gc(&ctx, false).unwrap().actions.is_empty());
     ctx.store.unpin("1").unwrap();
     let record_before = std::fs::read(ctx.store.assistant_path("A-1").unwrap()).unwrap();
@@ -79,10 +81,19 @@ fn session_and_task_artifacts_share_content_without_sharing_ownership() {
     let task_artifact = corral_ops::add_artifact(&ctx, &task.id, &path, None, None).unwrap();
     let session_artifact = add_session_artifact(&ctx, "A-1", &path, None, None).unwrap();
     assert_ne!(task_artifact.path, session_artifact.path);
+    assert!(!ctx.store.dir().join(&task_artifact.path).exists());
+    assert!(!ctx.store.dir().join(&session_artifact.path).exists());
     let stats = storage_stats(&ctx).unwrap();
     assert_eq!(stats.tasks.len(), 2);
     assert_eq!(stats.original_bytes, task_artifact.bytes * 2);
-    assert_eq!(stats.stored_bytes, task_artifact.bytes);
+    let hash = corral_core::blob_ref::BlobHash::parse(&task_artifact.sha256).unwrap();
+    let blob = ctx.store.blob_row(&hash).unwrap().unwrap();
+    let physical = std::fs::metadata(ctx.store.blob_store().unwrap().path_of(&hash))
+        .unwrap()
+        .len();
+    assert_eq!(blob.refs, 2);
+    assert_eq!(blob.stored_bytes, physical);
+    assert_eq!(stats.stored_bytes, physical);
     assert_eq!(ctx.store.get(&task.id).unwrap().artifacts.len(), 1);
     assert_eq!(ctx.store.get_assistant("A-1").unwrap().artifacts.len(), 1);
 }
@@ -101,6 +112,12 @@ fn session_compression_search_and_end_age() {
     );
     std::fs::write(&path, &body).unwrap();
     let a = add_session_artifact(&ctx, "A-1", &path, Some(ArtifactKind::Log), None).unwrap();
+    let legacy = ctx.store.dir().join(&a.path);
+    assert!(!legacy.exists(), "new publications store only the blob");
+    // Compression retention also services imported copies left until finalize. Seed that
+    // explicit legacy case; canonical blobs themselves are already compressed on ingestion.
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(&legacy, &body).unwrap();
     assert!(
         artifact_gc(&ctx, false).unwrap().actions.is_empty(),
         "open session is not old"

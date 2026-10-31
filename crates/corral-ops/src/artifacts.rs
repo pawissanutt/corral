@@ -271,7 +271,6 @@ fn attach(
             let existing = &mut t.artifacts[index];
             let revived = existing.purged_at.is_some();
             if revived {
-                crate::artifact_storage::mirror(ctx, existing, bytes)?;
                 existing.compressed_bytes = None;
                 existing.purged_at = None;
             }
@@ -304,7 +303,6 @@ fn attach(
             compressed_bytes: None,
             purged_at: None,
         };
-        crate::artifact_storage::mirror(ctx, &artifact, bytes)?;
         if artifact.kind == ArtifactKind::Diff {
             let superseded: Vec<usize> = t
                 .artifacts
@@ -405,7 +403,6 @@ fn attach_head(
             compressed_bytes: None,
             purged_at: None,
         };
-        crate::artifact_storage::mirror(ctx, &artifact, bytes)?;
         t.add_artifact(artifact.clone())?;
         crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
         rows.push((index, artifact.clone()));

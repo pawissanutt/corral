@@ -60,6 +60,19 @@ impl Fixture {
         self.ctx.store.dir().join(&a.path)
     }
 
+    fn blob_path(&self, a: &Artifact) -> std::path::PathBuf {
+        let hash = corral_core::blob_ref::BlobHash::parse(&a.sha256).unwrap();
+        self.ctx.store.blob_store().unwrap().path_of(&hash)
+    }
+
+    /// Explicit imported-copy fixture for tests of legacy gzip/dedup before finalize.
+    fn legacy_copy(&self, a: &Artifact) {
+        let bytes = artifact_read(&self.ctx, a).unwrap();
+        let path = self.path(a);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
     fn finish_at(&self, task: &str, at: &str) {
         let event = Event {
             seq: 0,
@@ -100,12 +113,16 @@ fn identical_contents_share_storage_across_tasks() {
     assert_ne!(a.path, b.path);
     let hash = corral_core::blob_ref::BlobHash::parse(&a.sha256).unwrap();
     assert_eq!(f.ctx.store.blob_row(&hash).unwrap().unwrap().refs, 2);
-    // And retention shares the legacy copies, which storage totals count once.
+    // No mirrors are produced; both references address the one physical blob.
+    assert!(!f.path(&a).exists() && !f.path(&b).exists());
     artifact_gc(&f.ctx, false).unwrap();
-    assert!(same_inode(&f.path(&a), &f.path(&b)));
+    assert!(same_inode(&f.blob_path(&a), &f.blob_path(&b)));
     let stats = storage_stats(&f.ctx).unwrap();
     assert_eq!(stats.original_bytes, 24);
-    assert_eq!(stats.stored_bytes, 12);
+    assert_eq!(
+        stats.stored_bytes,
+        fs::metadata(f.blob_path(&a)).unwrap().len()
+    );
     assert_eq!(stats.tasks.len(), 2);
 }
 
@@ -116,6 +133,8 @@ fn gzip_keeps_stable_paths_and_transparent_text_reads() {
     let task = f.task();
     let bytes = "storage line\n".repeat(300);
     let a = f.add(&task, "output.log", bytes.as_bytes(), ArtifactKind::Log);
+    assert!(!f.path(&a).exists());
+    f.legacy_copy(&a); // Imported raw-copy gzip retention, not a producer mirror.
     // When explicit GC runs.
     let report = artifact_gc(&f.ctx, false).unwrap();
     // Then metadata preserves original bytes and all text access is decoded.
@@ -160,6 +179,7 @@ fn reader_streams_plain_and_metadata_described_gzip_members() {
         gzip.write_all(bytes).unwrap();
         encoded.extend(gzip.finish().unwrap());
     }
+    f.legacy_copy(&a);
     fs::write(f.path(&a), &encoded).unwrap();
     out.clear();
     artifact_reader(&f.ctx, &a)
@@ -181,6 +201,7 @@ fn reader_reports_corrupt_gzip_on_read() {
     let f = Fixture::new(RetentionAction::Keep);
     let task = f.task();
     let mut a = f.add(&task, "corrupt.log", b"not gzip", ArtifactKind::Log);
+    f.legacy_copy(&a);
     a.compressed_bytes = Some(a.bytes);
     let mut reader = artifact_reader(&f.ctx, &a).unwrap();
     assert!(reader.read_to_end(&mut Vec::new()).is_err());
@@ -214,6 +235,8 @@ fn dry_run_predicts_exact_dedup_and_compression_without_writes() {
     let second = f.task();
     let a = f.add(&first, "a.log", &vec![b'A'; 12_000], ArtifactKind::Log);
     let b = f.add(&second, "b.log", &vec![b'A'; 12_000], ArtifactKind::Log);
+    f.legacy_copy(&a);
+    f.legacy_copy(&b);
     let independent = f.tmp.path().join("independent");
     fs::copy(f.path(&b), &independent).unwrap();
     fs::rename(independent, f.path(&b)).unwrap();
@@ -308,7 +331,9 @@ fn keep_pins_follow_latest_and_screenshots_are_protected() {
     assert!(report.actions.is_empty());
     for a in [plan, anchor, latest, image, pinned] {
         assert_eq!(f.current(&task, &a), a);
-        assert!(f.path(&a).is_file());
+        assert!(!f.path(&a).exists());
+        assert!(f.blob_path(&a).is_file());
+        assert_eq!(artifact_read(&f.ctx, &a).unwrap().len() as u64, a.bytes);
     }
 }
 
@@ -324,6 +349,9 @@ fn compressing_legacy_duplicates_does_not_mutate_protected_copy() {
     let keep = f.add(&keep_task, "plan.md", &bytes, ArtifactKind::Plan);
     let a = f.add(&first, "a.log", &bytes, ArtifactKind::Log);
     let b = f.add(&second, "b.log", &bytes, ArtifactKind::Log);
+    for imported in [&keep, &a, &b] {
+        f.legacy_copy(imported);
+    }
     for copy in [&a, &b] {
         let independent = f.tmp.path().join("independent");
         fs::copy(f.path(copy), &independent).unwrap();
@@ -386,7 +414,12 @@ fn old_artifact_on_active_task_is_not_age_eligible() {
     let report = artifact_gc(&f.ctx, false).unwrap();
     // Then artifact age alone cannot trigger it.
     assert!(report.actions.is_empty());
-    assert!(f.path(&a).exists());
+    assert!(!f.path(&a).exists());
+    assert!(f.blob_path(&a).exists());
+    assert_eq!(
+        artifact_read(&f.ctx, &f.current(&task, &a)).unwrap(),
+        b"still needed"
+    );
 }
 
 #[test]
@@ -413,8 +446,10 @@ fn tier_selection_and_explicit_override_are_honored() {
     // When purge runs.
     artifact_gc(&f.ctx, false).unwrap();
     // Then only the selected, unprotected tier is purged.
-    assert!(f.path(&normal).exists());
-    assert!(f.path(&keep).exists());
+    assert!(!f.path(&normal).exists() && !f.path(&keep).exists());
+    assert!(f.blob_path(&normal).exists() && f.blob_path(&keep).exists());
+    assert!(f.current(&task, &normal).purged_at.is_none());
+    assert!(f.current(&task, &keep).purged_at.is_none());
     assert!(f.current(&task, &transient).purged_at.is_some());
 }
 
@@ -526,12 +561,15 @@ fn storage_warnings_report_soft_workspace_and_file_limits() {
     f.ctx.store.config.artifacts.max_total = "5B".into();
     f.ctx.store.config.artifacts.max_file = "3B".into();
     let task = f.task();
-    f.add(&task, "large.txt", b"ten bytes!", ArtifactKind::Evidence);
+    let artifact = f.add(&task, "large.txt", b"ten bytes!", ArtifactKind::Evidence);
     // When storage stats are requested.
     let stats = storage_stats(&f.ctx).unwrap();
     // Then both thresholds warn without blocking attachment.
     assert_eq!(stats.warnings.len(), 2);
-    assert_eq!(stats.stored_bytes, 10);
+    assert_eq!(
+        stats.stored_bytes,
+        fs::metadata(f.blob_path(&artifact)).unwrap().len()
+    );
     assert!(serde_json::to_value(&stats).unwrap().is_object());
 }
 
@@ -612,6 +650,9 @@ fn workspace_and_project_per_tier_policies_control_retention() {
         &vec![b'P'; 4000],
         ArtifactKind::Diff,
     );
+    // An imported raw copy still needs the project-specific compression action; newly
+    // published canonical blobs are compressed at ingestion already.
+    f.legacy_copy(&overridden);
     // When explicit retention runs.
     artifact_gc(&f.ctx, false).unwrap();
     // Then the effective tier policy is applied after selecting the project policy.
@@ -632,12 +673,17 @@ fn new_snapshot_reuses_already_compressed_workspace_content() {
     let second = f.task();
     // When another task captures identical content.
     let b = f.add(&second, "second.log", &vec![b'D'; 4000], ArtifactKind::Log);
-    // Then it references the same blob, keeps a raw legacy copy and reads transparently.
-    assert!(a.compressed_bytes.is_some());
+    // Then it references the same already-compressed blob without producing raw mirrors.
+    let original_hash = corral_core::blob_ref::BlobHash::parse(&a.sha256).unwrap();
+    assert_eq!(
+        f.ctx.store.blob_row(&original_hash).unwrap().unwrap().codec,
+        "zstd"
+    );
     let hash = corral_core::blob_ref::BlobHash::parse(&b.sha256).unwrap();
     assert_eq!(f.ctx.store.blob_row(&hash).unwrap().unwrap().refs, 2);
     assert_eq!(b.compressed_bytes, None);
-    assert_eq!(fs::read(f.path(&b)).unwrap(), vec![b'D'; 4000]);
+    assert!(!f.path(&a).exists() && !f.path(&b).exists());
+    assert_eq!(f.blob_path(&a), f.blob_path(&b));
     assert_eq!(artifact_read(&f.ctx, &a).unwrap(), vec![b'D'; 4000]);
     assert_eq!(artifact_read(&f.ctx, &b).unwrap(), vec![b'D'; 4000]);
 }
@@ -670,7 +716,8 @@ fn kept_report_materializes_assets_without_modifying_snapshots() {
         fs::read(path).unwrap(),
         artifact_read(&f.ctx, &report).unwrap()
     );
-    assert_eq!(fs::read(f.path(&image)).unwrap(), b"kept picture");
+    assert!(!f.path(&image).exists());
+    assert_eq!(artifact_read(&f.ctx, &image).unwrap(), b"kept picture");
 }
 
 #[test]
