@@ -113,4 +113,22 @@ Executed proof on the changed sources:
 
 The nonce-width diagnostic is still red, now observed on both original kinds: 39 versus 35 for Worker, 67 versus 63 for AcceptPlanScopes. Q5 asks about reconciling only that exact derivative model after an independent input/site breakdown and negative control. No expected value has changed. Observation-only stack instrumentation has been removed; raw inputs and stacks are retained under `.evidence/R2-nonce-*`. The diagnostic now completes both cases before asserting failure, retaining all assertions.
 
-Read-only audit also found the unknown/contended-inventory branch in `sync.rs` still using a full board list; that branch must be converted and tested before delivery. Root PM/Assistant whole-owning-sync and genuine fresh-process proof remain outstanding. No full matrix, all-budget result, final freshness/rebase or gate is claimed by this milestone.
+Read-only audit also found the unknown/contended-inventory branch in `sync.rs` still using a full board list; at that milestone it still needed conversion. Root PM/Assistant whole-owning-sync and genuine fresh-process proof remained outstanding. No full matrix, all-budget result, final freshness/rebase or gate was claimed.
+
+### Contended-inventory branch
+
+Converted that branch to the same `board` plus `owns_board` ownership-summary guard as the healthy inventory path, including the optional invoking source. It no longer lists/hydrates terminal Tasks merely to establish ownership before collecting an authenticated gate receipt.
+
+The new regression holds the real `pane-liveness` issuance lease, so inventory is UNKNOWN rather than evidence of absent panes. It retains 1x/10x terminal task/container/obligation/artifact history with explicit fake-client socket provenance and genuinely closed/settled fixtures. The actual durable settlement recovery runs during fixture preparation, as production does before entering measured hot passes; no cached state is injected and the gate receipt is still unconsumed. The real PinnedReadingsProbe runs under validated configuration. Before reading counters, the test observes Gate Pass exactly once and an unheld, reason-free resource state.
+
+- Restore the original `Store::list` branch with this exact final fixture: **FAIL**, three unattributed hydrations at sync.rs:266 (`R2-unknown-inventory-exact-fixture-red.log`).
+- Restore the headed fix: **PASS** at 1x/10x, every unattributed cell equal, zero unattributed hydration, accounting identity and real sample-call count checked (`R2-unknown-inventory-restored-green.log`). This is targeted steady-pass coverage, not a claim about cold recovery or the whole fresh-process acceptance.
+- Existing inventory/ownership regression module: **4 PASS** (`R2-inventory-ownership-regressions.log`). Fake engine fixtures only; no owner panes/server used.
+
+### Q5 exact nonce diagnostic resolved
+
+See `docs/records/T-337-R2-nonce-model.md` for the independent old/current per-site breakdown. The original offline 83dcc33e diagnostic executes and passes 35/63. The preserved integrated source adds exactly four unattributed head decodes to each case: fresh-session owning mutation before/after (+2), parked-work admission (+1), role-session audit lookup (+1). Static site sums derive 39/67; an additional FU-3/sample head explains inclusive 40/68.
+
+The previous provisional cached-authorization explanation was **wrong**: all five repeated authorization reads are decoded, and none is waived. The raw-versus-unattributed byte difference is the one attributed resource-sample head. Observation-only tracing is removed. The final test uses the independently itemized static site model and nonce-width differences of one and three bytes. It retains all original non-byte unattributed/call assertions and additionally checks every inclusive/attributed cell against the predicted delta. **PASS** (`R2-Q5-nonce-model-green.log`); no history budget or runtime threshold changes.
+
+All eight failures observed in the earlier incomplete four-package matrix now have focused passing regressions, but that matrix is still incomplete and must be rerun. Root PM/Assistant whole-sync and genuine fresh-process proof, final package/Pi and complete work-budget runs, freshness/rebase and the single contracted quick gate remain outstanding.
