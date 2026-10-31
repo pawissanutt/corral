@@ -166,9 +166,9 @@ pub(crate) fn target_blocker(store: &Store, task: &Task) -> Result<Option<String
         return Ok(None);
     };
     let plan = plan.to_shell_task()?;
-    // Membership already proved the shared project and target. Reuse the resolved
-    // tracker so the target helper does not resolve (and hydrate) its parent again.
-    crate::plan_target::check_dispatch_target(store, &plan)?;
+    // Admission must retain the actual member's bound run/infra-wait context. The
+    // target helper resolves its parent through heads, so this does not hydrate history.
+    crate::plan_target::check_dispatch_target(store, task)?;
     let prerequisites = prerequisites(store, &plan, task)?;
     let reason = prerequisites
         .iter()
