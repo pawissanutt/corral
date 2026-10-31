@@ -22,9 +22,13 @@ pub use requirement::{GateRequirement, MAIN_LANDING_TIER, satisfies};
 #[path = "gate_tier_tests.rs"]
 pub(crate) mod tests;
 
+#[cfg(test)]
+#[path = "gate_tier_phase_tests.rs"]
+mod phase_tests;
+
 const REVIEW_ROUNDS_SOURCE: &str = "policy:review_rounds";
 
-/// Review until the current candidate has an approval; landing afterwards.
+/// Review until an approval follows the latest changes request; landing afterwards.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GatePhase {
@@ -87,7 +91,15 @@ pub struct GateReadback {
 }
 
 pub(crate) fn current_phase(run: &Run) -> GatePhase {
-    if run.review.as_ref().and_then(|review| review.verdict) == Some(Verdict::Approve) {
+    // Approval and receipt identities may legitimately move through authorized carries.
+    // A new changes round, not a candidate mismatch, reopens the review phase.
+    if run.review.as_ref().is_some_and(|review| {
+        review.verdict == Some(Verdict::Approve)
+            && run
+                .changes_round
+                .as_ref()
+                .is_none_or(|round| review.at > round.at)
+    }) {
         GatePhase::Landing
     } else {
         GatePhase::Review
