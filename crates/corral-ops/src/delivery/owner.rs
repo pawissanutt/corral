@@ -326,21 +326,24 @@ pub(crate) fn retire(ctx: &Ctx, recipient: &Recipient, reason: &str) -> Result<(
             .record::<bool>("late-evidence", &format!("{:020}", message.seq))?
             .unwrap_or(false);
         match attempted {
-            Some(envelope) => super::alert_once(
+            Some(envelope) => super::alert_once_held(
                 &inbox,
+                &posting,
                 "delivery_orphaned",
                 &format!("env{}", envelope.number),
                 json!({"envelope": envelope.number, "reason": reason}),
             )?,
-            None if previously_attempted => super::alert_once(
+            None if previously_attempted => super::alert_once_held(
                 &inbox,
+                &posting,
                 "delivery_orphaned",
                 &format!("seq{}", message.seq),
                 json!({"id": message.id, "reason": reason}),
             )?,
             // A native answer leaves no envelope attempt; it may have reached the agent.
-            None if message.binding.question_request.is_some() => super::alert_once(
+            None if message.binding.question_request.is_some() => super::alert_once_held(
                 &inbox,
+                &posting,
                 "delivery_orphaned",
                 &format!("seq{}", message.seq),
                 json!({"id": message.id, "reason": reason, "via": "omo_question"}),

@@ -555,7 +555,18 @@ pub(crate) fn alert_once(
     subject: &str,
     detail: Value,
 ) -> Result<()> {
-    let _lock = inbox.lock()?;
+    let posting = inbox.lock()?;
+    alert_once_held(inbox, &posting, kind, subject, detail)
+}
+
+/// Alert publication while the caller already owns this recipient's non-reentrant lock.
+pub(crate) fn alert_once_held(
+    inbox: &Inbox<'_>,
+    _posting: &corral_core::store::StoreLock,
+    kind: &str,
+    subject: &str,
+    detail: Value,
+) -> Result<()> {
     inbox.store.records_transaction(|| {
         let key = format!("{kind}-{subject}");
         if inbox.record::<bool>("alerts", &key)?.is_none() {
