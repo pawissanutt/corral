@@ -457,22 +457,7 @@ fn pm_push_settings_save_machine_values_and_keep_concurrent_agent_edit() {
     let fx = fixture();
     let mut v = SettingsView::new(&fx.ctx);
     assert!(!v.draft.pm.push_events);
-    assert_eq!(
-        v.draft.pm.push_kinds,
-        [
-            "done",
-            "needs_me",
-            "stuck",
-            "blocked",
-            "escalated",
-            "config_changed",
-            "lessons_due",
-            "run_resumed",
-            "wait_transition",
-            "pm_decision_resolved",
-            "attention_due"
-        ]
-    );
+    assert_eq!(v.draft.pm.push_kinds, corral_core::PM_DEFAULT_KINDS);
     fx.ctx
         .store
         .edit_config(|doc| doc.set_str("pm.agent", "claude"))

@@ -475,7 +475,7 @@ fn bounds_refuse_overflow_without_truncation() {
 }
 
 #[test]
-fn config_accepts_the_question_push_kinds_without_defaulting_them_and_agent_defaults() {
+fn config_defaults_to_question_push_kinds_and_preserves_agent_defaults() {
     let fx = fx();
     let root = fx.ctx.store.root().to_path_buf();
     let mut config = corral_core::Config::default_for(&root);
@@ -487,7 +487,7 @@ fn config_accepts_the_question_push_kinds_without_defaulting_them_and_agent_defa
     assert!(
         added
             .iter()
-            .all(|k| !config.pm.push_kinds.iter().any(|d| d == k))
+            .all(|k| config.pm.push_kinds.iter().any(|d| d == k))
     );
     let agent = &config.agent;
     assert_eq!(
@@ -499,7 +499,7 @@ fn config_accepts_the_question_push_kinds_without_defaulting_them_and_agent_defa
         (600, 300, 60)
     );
     assert!(!config.to_toml().contains("[agent]"));
-    config.pm.push_kinds.extend(added.map(String::from));
+    config.pm.push_kinds = added.map(String::from).to_vec();
     let problems = config
         .validate(&root)
         .err()
