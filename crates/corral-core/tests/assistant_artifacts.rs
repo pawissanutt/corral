@@ -58,5 +58,9 @@ fn session_refs_round_trip_without_task_or_run_identity() {
         })
         .unwrap();
     assert_eq!(owners.len(), 1);
-    assert!(owners[0].runs.is_empty());
+    assert!(
+        owners[0].task().is_none(),
+        "a session is never a fabricated Task"
+    );
+    assert_eq!(owners[0].session().unwrap().id, "A-1");
 }

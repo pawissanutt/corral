@@ -159,8 +159,8 @@ fn strip_sha(name: &str) -> &str {
 }
 
 /// The artifact named by `run` + `file` (exact snapshot name, else original name; last append wins).
-fn find_artifact<'a>(task: &'a Task, run: &str, file: &str) -> Option<&'a Artifact> {
-    let in_run = || task.artifacts.iter().filter(move |a| a.run == run);
+fn find_artifact<'a>(artifacts: &'a [Artifact], run: &str, file: &str) -> Option<&'a Artifact> {
+    let in_run = || artifacts.iter().filter(move |a| a.run == run);
     in_run()
         .find(|a| snapshot_name(a) == file)
         .or_else(|| in_run().rfind(|a| strip_sha(snapshot_name(a)) == file))
@@ -183,12 +183,29 @@ pub fn resolve_pin(pin: &Pin, tasks: &[Task], dir: &Path) -> PinTarget {
             path: task.path.clone(),
         };
     };
-    let Some(anchor) = find_artifact(task, run, file) else {
-        return PinTarget::Broken(format!("artifact {run}:{file} not found on {}", task.id));
+    let target = resolve_artifact_pin(pin, &task.id, &task.artifacts, run, file, dir);
+    if let PinTarget::Artifact { artifact, path, .. } = &target
+        && artifact.purged_at.is_none()
+        && !path.is_file()
+    {
+        return PinTarget::Broken(format!("snapshot {} is missing", artifact.path));
+    }
+    target
+}
+
+fn resolve_artifact_pin(
+    pin: &Pin,
+    id: &str,
+    artifacts: &[Artifact],
+    run: &str,
+    file: &str,
+    dir: &Path,
+) -> PinTarget {
+    let Some(anchor) = find_artifact(artifacts, run, file) else {
+        return PinTarget::Broken(format!("artifact {run}:{file} not found on {id}"));
     };
     let chosen = match pin.follow {
-        Some(Follow::Latest) => task
-            .artifacts
+        Some(Follow::Latest) => artifacts
             .iter()
             // Artifacts append under the task lock; wall time can stall or move backward.
             .rfind(|a| a.title == anchor.title || a.source == anchor.source)
@@ -196,11 +213,8 @@ pub fn resolve_pin(pin: &Pin, tasks: &[Task], dir: &Path) -> PinTarget {
         None => anchor,
     };
     let path = dir.join(&chosen.path);
-    if chosen.purged_at.is_none() && !path.is_file() {
-        return PinTarget::Broken(format!("snapshot {} is missing", chosen.path));
-    }
     PinTarget::Artifact {
-        task: task.id.clone(),
+        task: id.to_owned(),
         artifact: chosen.clone(),
         path,
         followed: chosen.path != anchor.path,
@@ -272,12 +286,9 @@ impl Store {
     ) -> Result<(usize, Pin)> {
         let r = PinRef::parse(target)?;
         let task = if r.task().starts_with("A-") {
-            self.artifact_owners()?
-                .into_iter()
-                .find(|t| t.id == r.task())
-                .context("artifact session not found")?
+            crate::ArtifactOwner::from(self.get_assistant(r.task())?)
         } else {
-            self.get(r.task())?
+            crate::ArtifactOwner::from(self.get(r.task())?)
         };
         let canonical = match &r {
             PinRef::Task(_) if follow_latest => {
@@ -285,7 +296,7 @@ impl Store {
             }
             PinRef::Task(_) => r.clone(),
             PinRef::Artifact { run, file, .. } => {
-                let a = find_artifact(&task, run, file)
+                let a = find_artifact(&task.artifacts, run, file)
                     .with_context(|| format!("artifact {run}:{file} not found on {}", task.id))?;
                 PinRef::of_artifact(&task.id, a)
             }
@@ -384,15 +395,107 @@ impl Store {
         Ok(pin)
     }
 
+    /// Resolve catalog metadata over actual owners. Blob availability is authoritative;
+    /// this does not hydrate or materialize artifact bodies during a board refresh.
+    pub fn resolve_pin_owners(
+        &self,
+        pin: &Pin,
+        owners: &[crate::ArtifactOwner],
+    ) -> Result<PinTarget> {
+        let parsed = match PinRef::parse(&pin.target) {
+            Ok(value) => value,
+            Err(error) => return Ok(PinTarget::Broken(format!("{error:#}"))),
+        };
+        let Some(owner) = owners.iter().find(|owner| owner.id == parsed.task()) else {
+            return Ok(PinTarget::Broken(format!(
+                "owner {} not found",
+                parsed.task()
+            )));
+        };
+        let PinRef::Artifact { run, file, .. } = &parsed else {
+            return Ok(match owner.task() {
+                Some(task) => PinTarget::Task {
+                    id: task.id.clone(),
+                    title: task.title.clone(),
+                    status: task.status,
+                    path: task.path.clone(),
+                },
+                None => PinTarget::Broken("an assistant session has no task identity".into()),
+            });
+        };
+        let target = resolve_artifact_pin(pin, &owner.id, &owner.artifacts, run, file, self.dir());
+        self.pin_availability(target)
+    }
+
+    fn pin_availability(&self, target: PinTarget) -> Result<PinTarget> {
+        if let PinTarget::Artifact { artifact, path, .. } = &target
+            && artifact.purged_at.is_none()
+            && !path.is_file()
+        {
+            let available = match crate::blob_ref::BlobHash::parse(&artifact.sha256) {
+                Ok(hash) => {
+                    self.blob_row(&hash)?
+                        .is_some_and(|row| row.state == crate::backend::BlobState::Live)
+                        && self.blob_store()?.path_of(&hash).is_file()
+                }
+                Err(_) => false,
+            };
+            if !available {
+                return Ok(PinTarget::Broken(format!(
+                    "snapshot {} is missing",
+                    artifact.path
+                )));
+            }
+        }
+        Ok(target)
+    }
+
+    /// Resolve only the real head/keyed artifact or session record a pin names.
+    pub fn resolve_pin_head(&self, pin: &Pin) -> Result<PinTarget> {
+        let parsed = PinRef::parse(&pin.target)?;
+        if parsed.task().starts_with("A-") {
+            let owner = crate::ArtifactOwner::from(self.get_assistant(parsed.task())?);
+            return self.resolve_pin_owners(pin, &[owner]);
+        }
+        let head = self.head(parsed.task())?;
+        let PinRef::Artifact { run, file, .. } = parsed else {
+            return Ok(PinTarget::Task {
+                id: head.id.clone(),
+                title: head.title.clone(),
+                status: head.status,
+                path: PathBuf::new(),
+            });
+        };
+        let Some(anchor) = head.artifact_by_file(&run, &file)? else {
+            return Ok(PinTarget::Broken(format!(
+                "artifact {run}:{file} not found on {}",
+                head.id
+            )));
+        };
+        let chosen = if pin.follow == Some(Follow::Latest) {
+            head.latest_artifact(&anchor)?
+        } else {
+            anchor.clone()
+        };
+        self.pin_availability(PinTarget::Artifact {
+            task: head.id.clone(),
+            path: self.dir().join(&chosen.path),
+            followed: chosen.path != anchor.path,
+            artifact: chosen,
+        })
+    }
+
     /// Every pin with its current target, in order.
     pub fn resolved_pins(&self) -> Result<Vec<(Pin, PinTarget)>> {
-        let pins = self.pins()?;
-        let tasks = self.artifact_owners()?;
-        Ok(pins
+        self.check_runtime()?;
+        Ok(self
+            .pins()?
             .into_iter()
-            .map(|p| {
-                let t = resolve_pin(&p, &tasks, self.dir());
-                (p, t)
+            .map(|pin| {
+                let target = self
+                    .resolve_pin_head(&pin)
+                    .unwrap_or_else(|error| PinTarget::Broken(format!("{error:#}")));
+                (pin, target)
             })
             .collect())
     }

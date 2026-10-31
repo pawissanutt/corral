@@ -6,6 +6,8 @@ use anyhow::{Context, Result, bail};
 use jiff::{SignedDuration, Timestamp, civil::Date, tz::TimeZone};
 
 use crate::{Run, Status, Task, TaskCost};
+mod owners;
+pub use owners::ContentOwner;
 
 #[cfg(test)]
 #[path = "query_tests.rs"]
@@ -125,6 +127,16 @@ impl Query {
         context: SearchContext<'_>,
         content: ContentContext<'_>,
     ) -> bool {
+        self.matches_owned_content(ContentOwner::Task(task), context, content)
+    }
+
+    /// Match content against actual task/session metadata, or taskless workspace records.
+    pub fn matches_owned_content(
+        &self,
+        owner: ContentOwner<'_>,
+        context: SearchContext<'_>,
+        content: ContentContext<'_>,
+    ) -> bool {
         self.terms.iter().all(|term| {
             let matched = match &term.predicate {
                 Predicate::Text(value) => {
@@ -152,7 +164,7 @@ impl Query {
                 | Predicate::Rounds(_)
                 | Predicate::Tokens(_)
                 | Predicate::HasArtifact
-                | Predicate::Sha(_) => term.predicate.score(task, context).is_some(),
+                | Predicate::Sha(_) => owner.metadata_matches(&term.predicate, context),
             };
             matched != term.negative
         })

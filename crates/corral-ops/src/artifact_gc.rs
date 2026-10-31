@@ -9,7 +9,9 @@ use corral_core::backend::BlobState;
 use corral_core::backend::{Clock, SystemClock};
 use corral_core::blob::GcRun;
 use corral_core::blob_ref::BlobHash;
-use corral_core::{Artifact, ArtifactRetention, ArtifactTier, RetentionAction, Status, Task};
+use corral_core::{
+    Artifact, ArtifactOwner, ArtifactRetention, ArtifactTier, RetentionAction, Status,
+};
 use jiff::Timestamp;
 use serde::Serialize;
 
@@ -79,7 +81,7 @@ fn identity(meta: &fs::Metadata, path: &str) -> String {
     }
 }
 
-fn entries(ctx: &Ctx, tasks: &[Task]) -> Result<Vec<Entry>> {
+fn entries(ctx: &Ctx, tasks: &[ArtifactOwner]) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for t in tasks {
         for a in &t.artifacts {
@@ -225,8 +227,12 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     };
     crate::assistant_artifacts::check_owner(None)?;
     let tasks = ctx.store.artifact_owners()?;
-    let protected = protected(ctx, &tasks)?;
-    let finishes = crate::finishes(&ctx.store, &tasks)?;
+    let actual_tasks: Vec<_> = tasks
+        .iter()
+        .filter_map(|owner| owner.task().cloned())
+        .collect();
+    let protected = protected(ctx, &actual_tasks)?;
+    let finishes = crate::finishes(&ctx.store, &actual_tasks)?;
     let sessions = ctx.store.assistant_artifact_owners()?;
     let mut entries = entries(ctx, &tasks)?;
     let before = stored(&entries);

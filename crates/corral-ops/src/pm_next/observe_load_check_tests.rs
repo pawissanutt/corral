@@ -80,6 +80,7 @@ fn fixture() -> (tempfile::TempDir, Ctx, Task, String) {
         );
     }
     let store = Store::init(root.path()).unwrap();
+    store.fixture_pin_now(NOW.parse().unwrap()).unwrap();
     let head = corral_git::rev_sha(root.path(), "HEAD").unwrap();
     let mut task = store.create("Load", None, Status::Review, "").unwrap();
     task.runs.push(

@@ -3,8 +3,9 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read};
 
 use anyhow::{Context, Result};
-use corral_core::Task;
-use corral_core::query::{ContentContext, ContentField, Query, SearchContext, content_fields};
+use corral_core::query::{
+    ContentContext, ContentField, ContentOwner, Query, SearchContext, content_fields,
+};
 
 use crate::Ctx;
 use crate::content_index::{Document, Record, Source};
@@ -250,10 +251,10 @@ impl<'a> Scan<'a> {
     }
 }
 
-pub(crate) fn search_record(
+pub(crate) fn search_record<'a>(
     ctx: &Ctx,
     record: &Record,
-    task: &Task,
+    owner: impl Into<ContentOwner<'a>>,
     query: &Query,
     metadata: SearchContext<'_>,
     context: usize,
@@ -274,8 +275,8 @@ pub(crate) fn search_record(
         };
         scan_reader(reader, &mut scan)?;
     }
-    if !query.matches_content(
-        task,
+    if !query.matches_owned_content(
+        owner.into(),
         metadata,
         ContentContext {
             title: &doc.title,

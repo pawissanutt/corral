@@ -227,29 +227,25 @@ pub fn validate_id(id: &str) -> Result<()> {
 impl Store {
     /// Read-only artifact-owner projection for shared pin/search/retention readers.
     /// These records are never task files and never enter scheduling or the board.
-    pub fn artifact_owners(&self) -> Result<Vec<crate::Task>> {
-        let mut owners = self.list()?;
+    pub fn artifact_owners(&self) -> Result<Vec<crate::ArtifactOwner>> {
+        let mut owners: Vec<_> = self
+            .list()?
+            .into_iter()
+            .map(crate::ArtifactOwner::from)
+            .collect();
         owners.extend(self.assistant_artifact_owners()?);
         Ok(owners)
     }
 
     /// Session contexts only, for readers which already have the task listing.
-    pub fn assistant_artifact_owners(&self) -> Result<Vec<crate::Task>> {
-        let mut owners = Vec::new();
-        // Atomic record replacement makes this safe without taking the board lock.
-        // Indexing also runs inside dispatch, so recursively acquiring it would deadlock.
-        for session in self.read_assistants()? {
-            owners.push(
-                serde_json::from_value(serde_json::json!({
-                    "id": session.id, "title": session.summary,
-                    "status": if session.ended.is_some() { "done" } else { "backlog" },
-                    "created": session.created, "updated": session.ended.unwrap_or(session.created),
-                    "artifacts": session.artifacts,
-                }))
-                .context("building assistant artifact context")?,
-            );
-        }
-        Ok(owners)
+    pub fn assistant_artifact_owners(&self) -> Result<Vec<crate::ArtifactOwner>> {
+        // Atomic record replacement makes this safe inside dispatch without recursively
+        // acquiring the board lock. Every view retains its actual session source.
+        Ok(self
+            .read_assistants()?
+            .into_iter()
+            .map(crate::ArtifactOwner::from)
+            .collect())
     }
 
     /// Read-only scratch rendering of the canonical session record.
