@@ -4,6 +4,23 @@ Assistants have workspace-scoped session identities (`A-1`, `A-2`, …), separat
 coding runs and the single PM. Any number can be open at once; there is still exactly one
 PM. An assistant takes no coding slot, creates no task and names no project.
 
+## Board sessions and PM inbox
+
+On the board, **S** opens the assistants screen. It lists every live session and the
+20 most recent open or ended sessions: focus, pane, cost (`unknown` when unavailable),
+scratch count and the number of pending PM inbox items from that session. The PM inbox
+below lists open and claimed items with their source (`asst A-…` for assistants), kind,
+state, subject and the command to read the full item. Resolved and withdrawn items do not
+count. The board's **S asst inbox N** badge opens the same screen. Use **j/k** to scroll,
+**r** to refresh and **Esc** to return; periodic board sync also refreshes the screen.
+
+Select a card and press **s**, or choose **open assistant** from its **.** menu, to open
+`corral pi --task <id>` in a new herdr workspace/pane. This is a new interactive assistant,
+not a worker dispatch, PM handoff or input into another session. Normal assistant launch
+checks still apply; task focus grants no task authority. These shortcuts are configurable
+as `ui.keys.assistant` and `ui.keys.assistants`. Co-work cards and history rows carry an
+**asst** marker, including after they reach Done.
+
 ## Opening an assistant: `corral pi`
 
 ```sh

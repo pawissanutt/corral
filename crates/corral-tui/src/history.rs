@@ -193,7 +193,17 @@ impl HistoryView {
             Span::styled(glyph, Style::new().fg(color)),
             Span::styled(fit(&t.id, ID_W), theme::bold()),
             shelf::star(pinned),
-            Span::styled(fit(&t.title, title_w.saturating_sub(2)), title_style),
+            Span::styled(
+                fit(
+                    &format!(
+                        "{}{}",
+                        if t.cowork.is_some() { "asst · " } else { "" },
+                        t.title
+                    ),
+                    title_w.saturating_sub(2),
+                ),
+                title_style,
+            ),
             Span::styled(
                 fit(project, PROJECT_W),
                 Style::new().fg(t

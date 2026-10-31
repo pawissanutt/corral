@@ -59,6 +59,19 @@ fn init_is_idempotent() {
 }
 
 #[test]
+fn init_ignores_evidence_in_git_repo_idempotently() {
+    let d = tempdir().unwrap();
+    git_init(d.path());
+    std::fs::write(d.path().join(".gitignore"), "existing").unwrap();
+    Store::init(d.path()).unwrap();
+    Store::init(d.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(d.path().join(".gitignore")).unwrap(),
+        "existing\n/.evidence/\n"
+    );
+}
+
+#[test]
 fn reviewer_idle_bound_defaults_round_trips_and_rejects_zero() {
     // Given an old configuration containing only the worker idle threshold.
     let config: Config = toml::from_str("[sync]\nidle_after_secs = 120\n").unwrap();

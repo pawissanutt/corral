@@ -70,6 +70,7 @@ pub(crate) fn items_for(status: Status, pinned: bool) -> Vec<Item> {
         "*",
         if pinned { "unpin" } else { "pin" },
     ));
+    items.push((KeyCode::Char('s'), "s", "open assistant"));
     items.push((KeyCode::Char('A'), "A", "artifacts"));
     items
 }

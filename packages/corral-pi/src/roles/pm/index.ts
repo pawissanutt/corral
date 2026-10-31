@@ -1,10 +1,11 @@
 // PM authority lives in Rust; this role supplies only the project-scoped typed loadout.
-import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
+import { assetPath, assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import type { CorralOp, RoleModule } from "../types.ts";
 import { pmTools } from "./tools.ts";
 import { todoTool } from "../common/todo.ts";
 
 export const CONTEXT_ASSET = "assets/pm-context.md";
+export const SKILL_ASSET = "src/roles/pm/skills/corral-pm/SKILL.md";
 const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...pmTools.map((tool) => tool.op), "todo"];
 
 export function pmRole(root: string): RoleModule {
@@ -15,6 +16,10 @@ export function pmRole(root: string): RoleModule {
     corralOps: OPS,
     tools: (context) => context.todo === true ? [...pmTools, todoTool] : pmTools,
     contract: (context) => renderContract(readAsset(root, CONTEXT_ASSET), context.identity),
+    extend(pi) {
+      const skill = assetPath(root, SKILL_ASSET);
+      pi.on("resources_discover", () => ({ skillPaths: [skill] }));
+    },
   };
 }
 

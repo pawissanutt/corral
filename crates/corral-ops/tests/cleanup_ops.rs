@@ -553,8 +553,8 @@ fn terminal_history(status: Status) {
     assert_eq!(fx.ctx.store.get(&fx.id).unwrap().runs.len(), 2);
     // Model resources left behind by a previous process/version, without changing ownership records.
     fx.restore_inventory(&inventory);
-    corral_ops::move_task(&fx.ctx, &fx.id, status, true).unwrap();
     fx.reset_calls();
+    corral_ops::move_task(&fx.ctx, &fx.id, status, true).unwrap();
     fx.sync();
     let current = fx.run();
     for pane in &owned {
@@ -680,8 +680,8 @@ fn sync_reaps_event_only_historical_tools_and_fallback_workspaces() {
             "fallback workspace ownership not logged for {pane}"
         );
     }
-    corral_ops::move_task(&fx.ctx, &fx.id, Status::Dropped, false).unwrap();
     fx.reset_calls();
+    corral_ops::move_task(&fx.ctx, &fx.id, Status::Dropped, false).unwrap();
     fx.sync();
     for pane in inventory["panes"].as_object().unwrap().keys() {
         assert!(

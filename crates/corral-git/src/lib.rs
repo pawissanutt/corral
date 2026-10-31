@@ -214,9 +214,45 @@ pub fn current_branch(repo: &Path) -> Result<String> {
     Ok(name)
 }
 
+/// Install the project-local scratch exclusion shared by all linked worktrees.
+/// This does not modify the tracked project or make its checkout dirty.
+pub fn ensure_evidence_excluded(repo: &Path) -> Result<()> {
+    use std::io::Write;
+    let common = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let path = Path::new(common.trim_end()).join("info/exclude");
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    if !contents
+        .lines()
+        .any(|line| matches!(line.trim(), ".evidence/" | "/.evidence/"))
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            writeln!(file).with_context(|| format!("writing {}", path.display()))?;
+        }
+        writeln!(file, "/.evidence/").with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(())
+}
+
 /// Creates a worktree at `path` on new branch `branch` from `base` (`worktree add -b <branch> <path> <base>`).
 /// If `branch` already exists, checks it out instead (`worktree add <path> <branch>`). Creates parent dirs.
 pub fn worktree_add(repo: &Path, path: &Path, branch: &str, base: &str) -> Result<()> {
+    ensure_evidence_excluded(repo)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -262,6 +298,29 @@ fn untracked_files(worktree: &Path) -> Result<Vec<String>> {
     let out = git(
         worktree,
         &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?;
+    Ok(out
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+/// Ignored scratch files eligible for artifact harvesting, without changing normal diff semantics.
+pub fn ignored_artifact_scratch(worktree: &Path) -> Result<Vec<String>> {
+    let out = git(
+        worktree,
+        &[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+            ".evidence",
+            ".omo/evidence",
+            ".omo/plans",
+        ],
     )?;
     Ok(out
         .split('\0')

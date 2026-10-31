@@ -31,6 +31,7 @@ never runs twice. Use them instead of the shell for every corral operation that 
 | `corral artifact add <task> <path>` | `corral_artifact` |
 | asking in the pane | `corral_ask`, and `corral_withdraw` to retract |
 
+Use `.evidence/` for gitignored worktree scratch and `docs/records/` for durable reports.
 Your evidence and artifacts are review proof: corral keeps them beside the review, never in the
 candidate's evidence or packet, so recording them never invalidates your own verdict. An
 evidence observation names one of the task's criteria and run {{run}}.

@@ -24,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 7;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 8;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -125,7 +125,7 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "codemode",
         summary: "QuickJS parallel tool calls and result filtering (no non-LLM models)",
-        defaults: |role| Some([false, role != AgentRole::Pm, true]),
+        defaults: |_| Some([false, true, true]),
         host: true,
         settings: None,
     },
@@ -184,10 +184,10 @@ pub const CATALOG: &[CapabilityDef] = &[
         defaults: |role| match role {
             AgentRole::Worker
             | AgentRole::Assistant
+            | AgentRole::Pm
             | AgentRole::Planner
             | AgentRole::PlanReviewer => Some([false, true, true]),
             AgentRole::Reviewer => Some([false, false, true]),
-            AgentRole::Pm => None,
         },
         host: true,
         settings: Some(super::auxiliary::explore_settings),
@@ -230,22 +230,18 @@ fn hooks_defaults(role: AgentRole) -> Option<[bool; 3]> {
 
 fn bash_rules_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Assistant => {
+        AgentRole::Worker | AgentRole::Reviewer | AgentRole::Assistant | AgentRole::Pm => {
             Some([false, false, true])
         }
-        AgentRole::Pm | AgentRole::Planner | AgentRole::PlanReviewer => None,
+        AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 
-// Session-owned assistant jobs (killed at session end) are not implemented yet.
+// Interactive PM and assistant jobs are owned by the host session, not a task run.
 fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
     match role {
-        AgentRole::Worker => Some([false, true, true]),
-        AgentRole::Reviewer
-        | AgentRole::Pm
-        | AgentRole::Planner
-        | AgentRole::PlanReviewer
-        | AgentRole::Assistant => None,
+        AgentRole::Worker | AgentRole::Pm | AgentRole::Assistant => Some([false, true, true]),
+        AgentRole::Reviewer | AgentRole::Planner | AgentRole::PlanReviewer => None,
     }
 }
 
@@ -305,8 +301,8 @@ fn web_defaults(role: AgentRole) -> Option<[bool; 3]> {
         | AgentRole::Reviewer
         | AgentRole::Planner
         | AgentRole::PlanReviewer
-        | AgentRole::Assistant => Some([false, true, true]),
-        AgentRole::Pm => None,
+        | AgentRole::Assistant
+        | AgentRole::Pm => Some([false, true, true]),
     }
 }
 
@@ -823,7 +819,7 @@ mod lsp_config_tests {
             )
             .is_err()
         );
-        assert!(toml::from_str::<AgentCapabilities>(&text.replace("[worker.", "[pm.")).is_err());
+        assert!(toml::from_str::<AgentCapabilities>(&text.replace("[worker.", "[pm.")).is_ok());
         for (role, defaults) in [
             (AgentRole::Worker, [true, true, true]),
             (AgentRole::Reviewer, [false, false, true]),
@@ -849,6 +845,34 @@ mod mcp_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pm_catalog_matches_assistant_for_every_key() {
+        for def in CATALOG {
+            assert_eq!(
+                (def.defaults)(AgentRole::Pm),
+                (def.defaults)(AgentRole::Assistant),
+                "{}",
+                def.key
+            );
+        }
+    }
+
+    #[test]
+    fn interactive_host_test_fixtures_are_actual_default_snapshots() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../packages/corral-pi/test/fixtures/default-capabilities.json"
+        ))
+        .unwrap();
+        let defaults = crate::config::agent_capabilities::AgentCapabilities::default();
+        for (name, role) in [("pm", AgentRole::Pm), ("assistant", AgentRole::Assistant)] {
+            assert_eq!(
+                fixture[name],
+                serde_json::to_value(defaults.resolve(role, None)).unwrap(),
+                "refresh default host fixture for {name}"
+            );
+        }
+    }
 
     #[test]
     fn old_snapshots_keep_their_recorded_catalog_and_digest() {

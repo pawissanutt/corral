@@ -177,6 +177,7 @@ pub(crate) struct App {
     toasts: Vec<(Toast, Instant)>,
     counts: Counts,
     operating_header: String,
+    inbox_open: Option<usize>,
     herdr_online: bool,
     last_sync_error: Option<String>,
     /// When the last sync pass completed (or the app started), by [`Self::clock`].
@@ -233,6 +234,7 @@ impl App {
             toasts: Vec::new(),
             counts: Counts::default(),
             operating_header: String::new(),
+            inbox_open: None,
             herdr_online: true,
             last_sync_error: None,
             synced_at: Instant::now(),

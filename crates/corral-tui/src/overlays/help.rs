@@ -18,7 +18,7 @@ use crate::{Action, View};
 const KEY_COL: usize = 18;
 
 /// Board keys below the "getting around" block. Clicking a key presses it on the board.
-pub(crate) const HELP_ROWS: [(&str, &str); 13] = [
+pub(crate) const HELP_ROWS: [(&str, &str); 14] = [
     ("h j k l / arrows", "move selection"),
     ("d", "dispatch (profile, model, effort, mode)"),
     ("X", "drop unfinished task (asks first; optional reason)"),
@@ -37,6 +37,7 @@ pub(crate) const HELP_ROWS: [(&str, &str); 13] = [
         "A V Y M P ,",
         "artifacts · gallery · history · messages · PM · settings",
     ),
+    ("s / S", "open card assistant / assistants and PM inbox"),
     ("i / D", "ideas only / show done"),
     ("O", "operating mode, finite scope and delegated authority"),
     ("esc ctrl+c", "back · quit from anywhere"),

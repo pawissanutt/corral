@@ -163,14 +163,14 @@ test("a save_as escaping the worktree is refused without creating anything outsi
   expect(readdirSync(profiles)).toEqual([]);
 });
 
-test("browser settings are worker-only and must be resolved by corral", () => {
+test("browser settings respect role availability and must be resolved by corral", () => {
   // Given launch settings for each role.
   const resolved = { browser: settings };
-  // When the host reads them, then only the worker receives a browser and malformed settings fail.
+  // When the host reads them, eligible roles receive a browser and malformed settings fail.
   expect(browserSettings("worker", ["browser"], resolved)).toEqual(settings);
   expect(browserSettings("worker", [], resolved)).toBeUndefined();
   expect(() => browserSettings("reviewer", ["browser"], resolved)).toThrow(/not available to the reviewer/);
-  expect(() => browserSettings("pm", ["browser"], resolved)).toThrow(/not available to the pm/);
+  expect(browserSettings("pm", ["browser"], resolved)).toEqual(settings);
   expect(() => browserSettings("worker", ["browser"], { browser: { origins: ["ftp://x"], timeout_ms: 1 } })).toThrow(/malformed/);
   expect(() => browserSettings("worker", ["browser"], undefined)).toThrow(/malformed/);
 });

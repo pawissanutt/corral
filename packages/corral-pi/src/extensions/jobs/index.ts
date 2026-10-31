@@ -19,8 +19,8 @@ async function guarded(run: () => Promise<unknown> | unknown) {
   }
 }
 
-export function jobTools(jobs: JobRuntime): readonly ToolDefinition[] {
-  return [
+export function jobTools(jobs: JobRuntime, monitor = true): readonly ToolDefinition[] {
+  const tools: ToolDefinition[] = [
     {
       name: "job_start",
       label: "Start a background job",
@@ -77,4 +77,5 @@ export function jobTools(jobs: JobRuntime): readonly ToolDefinition[] {
       },
     },
   ];
+  return monitor ? tools : tools.filter((tool) => tool.name !== JOB_MONITOR_TOOL);
 }

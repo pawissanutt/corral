@@ -508,6 +508,7 @@ pub(crate) fn card_lines(
         (false, true) => "⚠ ",
         (false, false) => "",
     };
+    let star = format!("{star}{}", if t.cowork.is_some() { "asst " } else { "" });
     let id_w = t.id.width() + star.width();
     let prio_w = t.priority.width();
     let proj_room = width.saturating_sub(id_w + prio_w + 4);

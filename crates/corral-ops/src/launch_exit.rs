@@ -80,8 +80,21 @@ pub(crate) fn arm(ctx: &Ctx, command: &str, receipt: &Path) -> Result<String> {
         .context("launch receipt has no UTF-8 name")?;
     PROCESS_OWNERS.save(&ctx.store, &marker, &name.to_owned())?;
     let path = crate::prompt::sh_escape(&crate::prompt::shell_path(receipt));
+    let identity = receipt
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.split_once("-R"))
+        .map(|(task, run)| (task, run.split('-').next().unwrap_or_default()))
+        .filter(|(task, run)| {
+            task.strip_prefix("T-")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                && !run.is_empty()
+                && run.bytes().all(|b| b.is_ascii_digit())
+        })
+        .map(|(task, run)| format!("CORRAL_SANDBOX_TASK='{task}' CORRAL_SANDBOX_RUN='R{run}' "))
+        .unwrap_or_default();
     let script = format!(
-        "CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
+        "{identity}CORRAL_PROCESS_OWNER='{marker}' /bin/sh -c \"$1\" corral-launch; corral_launch_exit=$?; printf '%s\\n' \"$corral_launch_exit\" > '{path}'"
     );
     Ok(format!(
         "/bin/sh -c {} corral-launch {}",
