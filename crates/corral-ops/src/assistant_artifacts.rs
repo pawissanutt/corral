@@ -66,12 +66,7 @@ pub fn add_session_artifact(
         compressed_bytes: None,
         purged_at: None,
     });
-    artifact.compressed_bytes = crate::artifact_storage::snapshot(
-        ctx,
-        &ctx.store.dir().join(&artifact.path),
-        &bytes,
-        &artifact,
-    )?;
+    artifact.compressed_bytes = crate::artifact_storage::snapshot(ctx, &bytes, &artifact)?;
     artifact.purged_at = None;
     ctx.store.update_assistant(session, |s| {
         if let Some(old) = s.artifacts.iter_mut().find(|a| a.path == artifact.path) {

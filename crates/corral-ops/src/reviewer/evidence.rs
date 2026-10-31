@@ -13,7 +13,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::Ctx;
-use crate::artifact_storage::{ARTIFACT_BLOBS, blob_key, mirror, record_keys, store_blob};
+use crate::artifact_storage::{ARTIFACT_BLOBS, blob_key, record_keys, store_blob};
 
 #[derive(Debug)]
 struct File {
@@ -210,7 +210,6 @@ impl Staged<'_> {
                 compressed_bytes: None,
                 purged_at: None,
             };
-            mirror(ctx, &artifact, &file.bytes)?;
             task.artifacts.push(artifact.clone());
             record_keys(ctx, task, task.artifacts.len() - 1, true)?;
             ctx.store.log_event(

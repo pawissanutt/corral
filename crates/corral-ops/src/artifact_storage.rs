@@ -1,9 +1,7 @@
-//! Artifact bytes are content-addressed blobs (plan T-253 section 7): each task holds one
-//! `artifact-blobs` record per distinct content, whose document references the blob. Until
-//! `review-scratch` removes `artifacts_dir()`, the legacy copy at `<store dir>/<path>` is still
-//! written for the readers that open it directly, and reads keep its checks: they read the
-//! copy while it exists and decode the blob once it is gone. Encoding of that copy is
-//! described by artifact metadata.
+//! Artifact bytes are content-addressed blobs (plan T-253 section 7): each owner holds one
+//! `artifact-blobs` record per distinct content, whose document references the blob.
+//! New publications never write legacy snapshot copies. Imported copies remain readable
+//! until owner-run finalize; their encoding is described by artifact metadata.
 use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read, Write};
@@ -791,41 +789,26 @@ pub(crate) fn protected(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<HashSe
         );
     }
     for pin in ctx.store.pins()? {
-        if pin.target.starts_with("A-") {
-            if let Ok(artifact) = resolve_artifact(ctx, &pin.target) {
-                paths.insert(artifact.path);
-            }
-            continue;
-        }
-        if let PinTarget::Artifact { artifact, .. } =
-            corral_core::resolve_pin(&pin, tasks, ctx.store.dir())
-        {
-            paths.insert(artifact.path);
-        }
-        // Preserve the anchor as well as the current follow-latest target.
+        // Both actual owner kinds protect their anchor AND current follow-latest target.
+        // The keyed resolver checks canonical blobs, not just legacy snapshot paths.
         let anchor = corral_core::Pin {
             follow: None,
-            ..pin
+            ..pin.clone()
         };
-        if let PinTarget::Artifact { artifact, .. } =
-            corral_core::resolve_pin(&anchor, tasks, ctx.store.dir())
-        {
-            paths.insert(artifact.path);
+        for selection in [&pin, &anchor] {
+            if let Ok(PinTarget::Artifact { artifact, .. }) = ctx.store.resolve_pin_head(selection)
+            {
+                paths.insert(artifact.path);
+            }
         }
     }
     Ok(paths)
 }
 
 /// Publishes session artifact bytes through the same canonical blob store as task evidence.
-pub(crate) fn snapshot(
-    ctx: &Ctx,
-    dest: &Path,
-    bytes: &[u8],
-    artifact: &Artifact,
-) -> Result<Option<u64>> {
+pub(crate) fn snapshot(ctx: &Ctx, bytes: &[u8], artifact: &Artifact) -> Result<Option<u64>> {
     let owner = task_of(&artifact.path).context("artifact owner missing")?;
     store_blob(ctx, owner, &artifact.sha256, bytes)?;
-    replace(dest, bytes)?;
     Ok(None)
 }
 
@@ -838,8 +821,4 @@ pub(crate) fn snapshot_root(store_dir: &Path) -> PathBuf {
 /// The mirrored snapshots of `task`'s run `run` (not created).
 pub(crate) fn snapshot_dir(store_dir: &Path, task: &str, run: &str) -> PathBuf {
     snapshot_root(store_dir).join(task).join(run)
-}
-
-pub(crate) fn mirror(ctx: &Ctx, a: &Artifact, bytes: &[u8]) -> Result<()> {
-    replace(&ctx.store.dir().join(&a.path), bytes)
 }

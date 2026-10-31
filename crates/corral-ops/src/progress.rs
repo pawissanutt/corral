@@ -343,7 +343,14 @@ fn checkpoint_inner(
                 .run_obligations
                 .waits
                 .retain(|wait| wait.unresolved());
-            let dir = crate::artifact_storage::snapshot_dir(ctx.store.dir(), &task.id, &run.id);
+            let dir = ctx
+                .store
+                .scratch_spool(
+                    corral_core::backend::ScratchKind::TmpStaging,
+                    "checkpoint-payloads",
+                )?
+                .join(&task.id)
+                .join(&run.id);
             if origin.is_some()
                 && let Some(earlier) = materialized(&dir, &checkpoint)?
             {
