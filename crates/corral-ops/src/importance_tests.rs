@@ -33,6 +33,14 @@ impl Fx {
         add_artifact(&self.ctx, &self.task, &path, Some(kind), Some(title)).unwrap()
     }
 
+    /// Imported raw snapshots still exercise legacy gzip retention; normal publications
+    /// remain blob-only. Only the two explicit compression cases use this setup.
+    fn seed_imported_copy(&self, artifact: &Artifact, body: &str) {
+        let path = self.ctx.store.dir().join(&artifact.path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
     fn current(&self, a: &Artifact) -> Artifact {
         self.ctx
             .store
@@ -137,6 +145,7 @@ fn excerpt_decodes_compressed_snapshots_and_skips_purged_and_binary_ones() {
     let body = format!("# Compressed heading\n{}", "filler line\n".repeat(200));
     let report = f.add("r.md", &body, ArtifactKind::Report, "report");
     f.tier(&report, ArtifactTier::Normal);
+    f.seed_imported_copy(&report, &body);
     artifact_gc(&f.ctx, false).unwrap();
     let report = f.current(&report);
     assert!(report.compressed_bytes.is_some(), "compressed on disk");
@@ -178,6 +187,7 @@ fn document_returns_the_whole_decoded_log_while_preview_truncates() {
         .chain(["error: final failure\n".to_string()])
         .collect();
     let a = f.add("long.log", &log, ArtifactKind::Log, "long log");
+    f.seed_imported_copy(&a, &log);
     artifact_gc(&f.ctx, false).unwrap();
     let a = f.current(&a);
     assert!(a.compressed_bytes.is_some());

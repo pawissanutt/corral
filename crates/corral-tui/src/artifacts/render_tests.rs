@@ -288,6 +288,7 @@ fn compressed_long_log_reaches_an_error_past_the_preview_cap() {
             .chain(["error: final failure\n".to_string()])
             .collect();
         add(&fx, "long.log", &log, ArtifactKind::Log, "Long gate log");
+        fx.seed_imported_copy("Long gate log");
         corral_ops::artifact_gc(&fx.ctx, false).unwrap();
         let stored = fx.ctx.store.get(&fx.id).unwrap();
         assert!(
@@ -339,6 +340,7 @@ fn compressed_and_purged_previews_render_as_text_not_bytes() {
             Ok(())
         })
         .unwrap();
+    fx.seed_imported_copy("Packed report");
     corral_ops::artifact_gc(&fx.ctx, false).unwrap();
     assert!(
         fx.ctx

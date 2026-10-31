@@ -17,6 +17,22 @@ pub(crate) struct Fixture {
     pub id: String,
 }
 
+impl Fixture {
+    /// Explicit imported-copy setup for legacy gzip cases only; publications stay blob-only.
+    pub(crate) fn seed_imported_copy(&self, title: &str) {
+        let task = self.ctx.store.get(&self.id).unwrap();
+        let artifact = task
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.title == title)
+            .unwrap();
+        let bytes = corral_ops::artifact_read(&self.ctx, artifact).unwrap();
+        let path = self.ctx.store.dir().join(&artifact.path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
+    }
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
