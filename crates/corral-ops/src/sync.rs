@@ -221,7 +221,7 @@ fn sync_scoped(
     let mut changes = crate::queue::migrate_backlog(ctx)?;
     changes.extend(crate::tracker::reconcile(ctx)?);
     let resources = crate::resources::observe(ctx, now)?;
-    changes.extend(crate::resource_escalation::reconcile(ctx, &resources, now)?);
+    changes.extend(resource_phase(ctx, &resources, now)?);
     crate::lesson_distill::announce_due(ctx, now)?;
     let herdr_available = ctx.herdr.available();
     if let Err(error) = crate::pm_policy::reconcile_pm_policy(ctx, herdr_available) {
@@ -449,6 +449,10 @@ fn close_held_run(
     })?;
     Ok(())
 }
+
+#[path = "sync/resource_phase.rs"]
+mod resource_driver;
+pub(crate) use resource_driver::reconcile as resource_phase;
 
 fn reconcile_attention(
     ctx: &Ctx,
