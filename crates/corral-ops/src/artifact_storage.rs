@@ -63,12 +63,16 @@ pub(crate) fn storage_lock(ctx: &Ctx) -> Result<StorageGuard> {
 }
 
 /// Exclusive access for GC, the only operation that rewrites or removes existing snapshots.
+/// Lock order with the search index (T-659): GC takes this holding nothing and releases it
+/// before refreshing the index, and nothing awaits the index lock while holding storage, so
+/// an index owner waiting here for shared storage never closes a cycle.
 pub(crate) fn storage_exclusive(ctx: &Ctx) -> Result<StorageGuard> {
     if held_here() {
         bail!("artifact storage is already held on this thread");
     }
     let file = open_lock(ctx)?;
     file.lock().context("locking artifact storage")?;
+    crate::agent::effects::failpoint("artifact_storage_exclusive");
     Ok(StorageGuard::enter(Some(file)))
 }
 

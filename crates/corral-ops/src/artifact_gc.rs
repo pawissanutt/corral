@@ -182,7 +182,7 @@ enum Operation {
 /// Applies workspace-wide dedup before retention. Protected snapshots are never replaced or removed.
 pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     // A dry run must not even create a lock/state file.
-    let _lock = if dry_run {
+    let lock = if dry_run {
         None
     } else {
         Some(storage_exclusive(ctx)?)
@@ -310,6 +310,8 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
         if cache.exists() {
             fs::remove_dir_all(&cache).context("invalidating decoded artifact cache")?;
         }
+        // Release storage first: the index lock is never awaited while holding it (T-659).
+        drop(lock);
         crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
     }
     Ok(GcReport {

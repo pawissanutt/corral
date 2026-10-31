@@ -332,9 +332,31 @@ fn index_lock(ctx: &Ctx) -> Result<File> {
         .context("opening search index lock")
 }
 
-fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
+/// Blocks for the index lock. Lock order: the index lock is taken before artifact storage and
+/// never while holding it, so an index owner waiting for storage (extraction, or a search's
+/// scan) can never wait on a storage holder that is itself waiting for the index (T-659).
+pub(crate) fn lock(ctx: &Ctx) -> Result<File> {
+    anyhow::ensure!(
+        !crate::artifact_storage::held_here(),
+        "search index lock requested while holding artifact storage"
+    );
     let lock = index_lock(ctx)?;
     lock.lock().context("locking search index")?;
+    Ok(lock)
+}
+
+/// A snapshot built under the caller's [`lock`].
+pub(crate) fn snapshot_locked(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
+    let update = if reindex {
+        Update::Reindex
+    } else {
+        Update::Incremental
+    };
+    build_locked(ctx, tasks, update)
+}
+
+fn build_snapshot(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
+    let _lock = lock(ctx)?;
     build_locked(ctx, tasks, update)
 }
 
