@@ -221,6 +221,13 @@ fn sync_scoped(
     let mut changes = crate::queue::migrate_backlog(ctx)?;
     changes.extend(crate::tracker::reconcile(ctx)?);
     let resources = crate::resources::observe(ctx, now)?;
+    // A holding observation already fences this operation. Reuse its real admission for
+    // attention; launch-capable paths still perform their own fresh admission checks.
+    let held_admission = resources
+        .reason
+        .as_ref()
+        .filter(|_| resources.held)
+        .map(|reason| format!("waiting: machine busy ({reason})"));
     changes.extend(resource_phase(ctx, &resources, now)?);
     crate::lesson_distill::announce_due(ctx, now)?;
     let herdr_available = ctx.herdr.available();
@@ -238,7 +245,7 @@ fn sync_scoped(
             crate::obligations_sync::reconcile_head(ctx, &head, now, None)?;
         }
         crate::movement::reconcile(ctx, now, false)?;
-        reconcile_attention(ctx, now, None, attention)?;
+        reconcile_attention(ctx, now, None, attention, held_admission.as_deref())?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
         match crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp) {
@@ -264,7 +271,7 @@ fn sync_scoped(
                 crate::gate::collect_finished(ctx, now)?;
             }
         }
-        reconcile_attention(ctx, now, None, attention)?;
+        reconcile_attention(ctx, now, None, attention, held_admission.as_deref())?;
         return Ok(changes);
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
@@ -386,7 +393,7 @@ fn sync_scoped(
     changes.extend(crate::queue_drain::start_queued(ctx, now)?);
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
-    reconcile_attention(ctx, now, pm_live, attention)?;
+    reconcile_attention(ctx, now, pm_live, attention, held_admission.as_deref())?;
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     match crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp) {
@@ -454,19 +461,9 @@ fn close_held_run(
 mod resource_driver;
 pub(crate) use resource_driver::reconcile as resource_phase;
 
-fn reconcile_attention(
-    ctx: &Ctx,
-    now: Timestamp,
-    pm_live: Option<bool>,
-    output: Option<&mut Option<crate::attention::AttentionBoard>>,
-) -> Result<()> {
-    if let Some(output) = output {
-        *output = crate::attention::reconcile_projected(ctx, now, pm_live)?;
-        Ok(())
-    } else {
-        crate::attention::reconcile(ctx, now, pm_live)
-    }
-}
+#[path = "sync/attention_phase.rs"]
+mod attention_driver;
+use attention_driver::reconcile as reconcile_attention;
 
 fn reconcile(
     ctx: &Ctx,

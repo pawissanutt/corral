@@ -62,6 +62,15 @@ pub(crate) fn headroom_slots(ctx: &Ctx) -> Result<usize> {
     free_slots_below(ctx, ctx.store.config.limits.running)
 }
 
+/// Promotion-only observation can use the admission actually sampled by its attention pass.
+/// Candidate dispatch still goes through the independent, fresh admission checks below.
+pub(crate) fn headroom_from_admission(ctx: &Ctx, admission: &Option<String>) -> Result<usize> {
+    if ctx.store.config.dispatch.paused || admission.is_some() {
+        return Ok(0);
+    }
+    available_heads(&ctx.store, 0, ctx.store.config.limits.running)
+}
+
 fn free_slots_below(ctx: &Ctx, cap: usize) -> Result<usize> {
     if ctx.store.config.dispatch.paused || crate::resources::read_admission(ctx)?.is_some() {
         return Ok(0);

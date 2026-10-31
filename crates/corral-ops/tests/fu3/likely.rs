@@ -124,6 +124,34 @@ fn assert_likely(cells: &WorkSnapshot, fixture: &Fixture, calls: u64, similar: b
 }
 
 #[test]
+fn a_genuinely_cancelled_current_plan_remains_an_owner_blocker() {
+    let fixture = Fixture::new(10, true, false);
+    let before = fixture.ctx.store.get(&fixture.active.id).unwrap();
+    fixture
+        .ctx
+        .store
+        .update(&fixture.active.id, |task| {
+            task.plan_runs.last_mut().unwrap().state = corral_core::PlanRunState::Cancelled;
+            Ok(())
+        })
+        .unwrap();
+    let after = fixture.ctx.store.get(&fixture.active.id).unwrap();
+    assert_eq!(before.plan_runs.len(), after.plan_runs.len());
+    assert_eq!(
+        &before.plan_runs[..before.plan_runs.len() - 1],
+        &after.plan_runs[..after.plan_runs.len() - 1]
+    );
+    assert_eq!(
+        after.plan_runs.last().unwrap().state,
+        corral_core::PlanRunState::Cancelled
+    );
+    let action = pm_next(&fixture.ctx).unwrap();
+    assert_eq!(action.kind, PmActionKind::Owner);
+    assert_eq!(action.task.as_deref(), Some(fixture.active.id.as_str()));
+    assert!(action.why.contains("Cancelled"), "{action:?}");
+}
+
+#[test]
 fn pm_next_reaches_both_likely_files_calls_and_the_resource_walk() {
     for similar in [false, true] {
         let variants = [1, 10].map(|scale| shortlist_variant(scale, similar));

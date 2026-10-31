@@ -44,6 +44,14 @@ pub(crate) fn with_assessments(
     ctx: &Ctx,
     assessments: &[crate::attention::TaskAssessment],
 ) -> Result<Vec<PmObservation>> {
+    with_admission(ctx, assessments, None)
+}
+
+pub(crate) fn with_admission(
+    ctx: &Ctx,
+    assessments: &[crate::attention::TaskAssessment],
+    sampled_admission: Option<&Option<String>>,
+) -> Result<Vec<PmObservation>> {
     let heads = super::heads::inputs(ctx)?;
     let mut tasks = heads
         .iter()
@@ -51,6 +59,7 @@ pub(crate) fn with_assessments(
         .collect::<Result<Vec<_>>>()?;
     tasks.sort_by(|a, b| a.created.cmp(&b.created).then(a.id.cmp(&b.id)));
     let mut out = Vec::new();
+    let mut inspected_dispatch = false;
     let used =
         crate::SlotUsage::from_heads(&super::heads::open(&ctx.store)?, &ctx.store.config.limits)
             .total();
@@ -200,6 +209,7 @@ pub(crate) fn with_assessments(
             && used < limit
             && task.project.is_some()
         {
+            inspected_dispatch = true;
             match crate::queue::blocked_reason(ctx, &ctx.store, task, false) {
                 Ok(None) => out.push(PmObservation::Dispatch {
                     task: task.id.clone(),
@@ -217,7 +227,15 @@ pub(crate) fn with_assessments(
     }
     project_blocked(assessments, &mut out);
     // Each candidate's own soft/hard cap is checked below; P0 and red-main Ideas may use headroom.
-    if crate::dispatch_policy::headroom_slots(ctx)? > 0 {
+    let headroom = match (inspected_dispatch, sampled_admission) {
+        // No launch decision was inspected: idea suggestions can share this operation's
+        // actual attention admission. Real dispatch retains its fresh independent checks.
+        (false, Some(admission)) => {
+            crate::dispatch_policy::headroom_from_admission(ctx, admission)?
+        }
+        _ => crate::dispatch_policy::headroom_slots(ctx)?,
+    };
+    if headroom > 0 {
         let mut shortlist = Vec::new();
         for candidate in crate::promotion::promotion_shortlist(ctx)? {
             let mode = ctx

@@ -271,11 +271,12 @@ fn project(
         .map(crate::pm_next::heads::shell)
         .collect::<Result<Vec<_>>>()?;
     let fresh;
-    let board = if let Some(board) = attention {
-        board
+    let admission;
+    let (board, sampled_admission) = if let Some(board) = attention {
+        (board, None)
     } else {
-        fresh = crate::attention::board_hot(ctx, ctx.store.now())?;
-        &fresh
+        (fresh, admission) = crate::attention::board_hot_with_admission(ctx, ctx.store.now())?;
+        (&fresh, Some(&admission))
     };
     let assessments: Vec<_> = if policy.tasks.is_empty() {
         Vec::new()
@@ -292,7 +293,8 @@ fn project(
         crate::gate_script::q(&crate::prompt::corral_bin()?.display().to_string()),
         crate::gate_script::q(&ctx.store.root().display().to_string())
     );
-    let mut observations = crate::pm_next::observe::with_assessments(ctx, &board.tasks)?;
+    let mut observations =
+        crate::pm_next::observe::with_admission(ctx, &board.tasks, sampled_admission)?;
     observations.sort_by_key(crate::pm_next::rank);
     let mut actions = Vec::new();
     let mut decisions = Vec::new();
