@@ -9,6 +9,7 @@ pub(super) struct Continuation {
 
 pub(super) struct Prepared {
     pub herdr: corral_core::HerdrRef,
+    pub basis: corral_core::TaskHead,
     command: String,
     old_pane: Option<String>,
     receipt: std::path::PathBuf,
@@ -91,6 +92,7 @@ impl Continuation {
         &self,
         ctx: &Ctx,
         task: &Task,
+        basis: &corral_core::TaskHead,
         text: &str,
         notice: Option<&str>,
     ) -> Result<Option<Prepared>> {
@@ -138,16 +140,29 @@ impl Continuation {
                 error
             }
         })?;
-        let herdr =
-            crate::gate::open_run_pane(ctx, task, &corral_core::RunHead::of(run)?, "worker")?;
-        Ok(Some(Prepared {
-            herdr,
+        let receipt = crate::launch_exit::receipt(ctx, &task.id, &run.id)?;
+        let allocation = crate::gate::open_run_pane_published(
+            ctx,
+            task,
+            &corral_core::RunHead::of(run)?,
+            "worker",
+        )?;
+        // Own the unsubmitted pane before checking the publication's read set, so any
+        // concurrent-task refusal still closes precisely this newly allocated pane.
+        let mut prepared = Prepared {
+            herdr: allocation.herdr,
+            basis: basis.clone(),
             command,
             old_pane: run.herdr.as_ref().map(|old| old.pane_id.clone()),
-            receipt: crate::launch_exit::receipt(ctx, &task.id, &run.id)?,
+            receipt,
             ctx: ctx.clone(),
             submitted: std::cell::Cell::new(false),
-        }))
+        };
+        if let Some(publication) = allocation.publication {
+            crate::queue::check_snapshot_head(ctx, &ctx.store, basis, &publication.before)?;
+            prepared.basis = publication.after;
+        }
+        Ok(Some(prepared))
     }
 
     /// Runs only after the original capacity/repair admission has reopened the same run.

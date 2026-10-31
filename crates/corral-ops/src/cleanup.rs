@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use corral_core::{Run, RunHead, Status, Task};
 use corral_herdr::PaneInfo;
 use serde_json::json;
@@ -415,6 +415,12 @@ fn clean_listed(
 #[path = "../tests/support/cleanup_ledger.rs"]
 mod ledger_tests;
 
+/// Exact task transition owned by publishing a newly allocated fallback workspace.
+pub(crate) struct WorkspacePublication {
+    pub before: corral_core::TaskHead,
+    pub after: corral_core::TaskHead,
+}
+
 /// Records a run's fallback workspace in the cleanup ledger, in the operation that logs it.
 pub(crate) fn record_run_workspace(
     ctx: &Ctx,
@@ -422,9 +428,11 @@ pub(crate) fn record_run_workspace(
     run: &str,
     pane: &str,
     workspace: &str,
-) -> Result<()> {
+) -> Result<WorkspacePublication> {
     let socket = ctx.herdr.socket_path()?;
-    ctx.store.update_head(task, |head| {
+    let mut before = None;
+    let after = ctx.store.update_head(task, |head| {
+        before = Some(head.head().clone());
         if head
             .head()
             .current_run
@@ -439,5 +447,8 @@ pub(crate) fn record_run_workspace(
             json!({ "run": run, "workspace": workspace, "pane": pane }),
         )
     })?;
-    Ok(())
+    Ok(WorkspacePublication {
+        before: before.context("workspace publication did not observe its task")?,
+        after,
+    })
 }

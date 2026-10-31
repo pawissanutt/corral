@@ -636,3 +636,63 @@ fn one_sweep_settles_each_owners_workspace_debt() {
     assert_eq!(delta.get(Counter::NestedRowDecodes), 0);
     assert_eq!(world.calls(), (BTreeSet::new(), BTreeSet::new()));
 }
+
+#[test]
+fn own_workspace_publication_carries_exact_basis_but_never_hides_other_task_changes() {
+    let mut world = World::new();
+    let workspace = world.workspace("replacement");
+    let pane = world.pane(&workspace);
+    let run: Run = serde_json::from_value(json!({
+        "id":"R1", "agent":"fake", "worktree":"/", "branch":"b",
+        "base":"main", "base_sha":"0".repeat(40), "started":T
+    }))
+    .unwrap();
+    world
+        .ctx
+        .store
+        .update(&world.id, |task| {
+            task.runs.push(run);
+            Ok(())
+        })
+        .unwrap();
+    let expected = world.ctx.store.head(&world.id).unwrap();
+    let published =
+        super::record_run_workspace(&world.ctx, &world.id, "R1", &pane, &workspace).unwrap();
+    assert_eq!(published.before, expected);
+    assert_eq!(published.after.rev, expected.rev + 1);
+    crate::queue::check_snapshot_head(&world.ctx, &world.ctx.store, &expected, &published.before)
+        .unwrap();
+    let current = world.ctx.store.head(&world.id).unwrap();
+    assert_eq!(published.after, current);
+    crate::queue::check_snapshot_head(&world.ctx, &world.ctx.store, &published.after, &current)
+        .unwrap();
+    // A real mutation after publication cannot ride on the owned transition.
+    world
+        .ctx
+        .store
+        .update_head(&world.id, |task| {
+            task.title.push_str(" changed after");
+            Ok(())
+        })
+        .unwrap();
+    let changed = world.ctx.store.head(&world.id).unwrap();
+    assert!(
+        crate::queue::check_snapshot_head(&world.ctx, &world.ctx.store, &published.after, &changed)
+            .is_err()
+    );
+    // Nor can a change before a later publication be hidden by taking its fresh result.
+    let other = world.workspace("later");
+    let other_pane = world.pane(&other);
+    let later =
+        super::record_run_workspace(&world.ctx, &world.id, "R1", &other_pane, &other).unwrap();
+    assert_eq!(later.before, changed);
+    assert!(
+        crate::queue::check_snapshot_head(
+            &world.ctx,
+            &world.ctx.store,
+            &published.after,
+            &later.before
+        )
+        .is_err()
+    );
+}
