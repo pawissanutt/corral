@@ -61,6 +61,7 @@ fn finder_uses_cached_gzip_body_after_snapshot_becomes_unavailable() {
         ArtifactKind::Log,
         &"obsidian output\n".repeat(100),
     );
+    fx.seed_imported_copy("Raw output");
     corral_ops::artifact_gc(&fx.ctx, false).unwrap();
     let stored = fx.ctx.store.get(&fx.id).unwrap();
     assert!(
@@ -74,6 +75,8 @@ fn finder_uses_cached_gzip_body_after_snapshot_becomes_unavailable() {
     );
     let mut view = ArtifactsView::new(&fx.ctx, None).unwrap();
     std::fs::remove_file(fx.ctx.store.dir().join(&artifact.path)).unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+    std::fs::remove_file(fx.ctx.store.blob_store().unwrap().path_of(&hash)).unwrap();
 
     // When typing and backspacing cannot reread or decompress that snapshot.
     view.on_key(key(KeyCode::Tab), &fx.ctx);
@@ -248,6 +251,7 @@ fn finder_searches_gzip_overflow_beyond_cached_prefix() {
     fx.ctx.store.config.artifacts.retention.larger_than = Some("1B".into());
     let body = format!("{}obsidian-tail\n", "ordinary output\n".repeat(20_000));
     let artifact = add(&fx, &fx.id, "Large output", ArtifactKind::Log, &body);
+    fx.seed_imported_copy("Large output");
     corral_ops::artifact_gc(&fx.ctx, false).unwrap();
     let mut view = ArtifactsView::new(&fx.ctx, None).unwrap();
     assert!(
@@ -281,7 +285,10 @@ fn finder_does_not_keep_old_results_when_overflow_content_cannot_be_read() {
     let mut view = ArtifactsView::new(&fx.ctx, None).unwrap();
     type_query(&mut view, &fx, "app");
     assert!(!view.matches.is_empty());
-    std::fs::remove_file(fx.ctx.store.dir().join(&artifact.path)).unwrap();
+    assert!(
+        !fx.ctx.store.dir().join(&artifact.path).exists(),
+        "no publication mirror"
+    );
     let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
     std::fs::remove_file(fx.ctx.store.blob_store().unwrap().path_of(&hash)).unwrap();
 

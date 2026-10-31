@@ -24,6 +24,7 @@ fn compressed_preview_titles_preserve_label_size_and_tier_at_both_sizes() {
         Some("Compressed raw command output with a long title"),
     )
     .unwrap();
+    fx.seed_imported_copy("Compressed raw command output with a long title");
     corral_ops::artifact_gc(&fx.ctx, false).unwrap();
 
     // When finder and detail preview titles render at either supported terminal size.
