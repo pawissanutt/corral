@@ -121,7 +121,9 @@ fn sync_passes(
     let changes = hot_passes(ctx, now, processes, source, &mut rebuild, attention)?;
     // Rebuildable state recovers outside the measured hot path (plan T-253 section 4).
     if rebuild {
-        crate::content_refresh::refresh_search_index(ctx)?;
+        if let Err(error) = crate::content_refresh::refresh_search_index(ctx) {
+            crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?;
+        }
     }
     Ok(changes)
 }
@@ -239,7 +241,10 @@ fn sync_scoped(
         reconcile_attention(ctx, now, None, attention)?;
         crate::pm_events::push_events(ctx, false)?;
         crate::desktop_notifications::reconcile(ctx)?;
-        *rebuild |= !crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp)?;
+        match crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp) {
+            Ok(followed) => *rebuild |= !followed,
+            Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
+        }
         return Ok(changes);
     }
     // Wait for artifact storage before taking the reconciliation lease every finishing launch
@@ -384,7 +389,10 @@ fn sync_scoped(
     reconcile_attention(ctx, now, pm_live, attention)?;
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
-    *rebuild |= !crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp)?;
+    match crate::content_refresh::refresh_after_sync(ctx, &[], &search_stamp) {
+        Ok(followed) => *rebuild |= !followed,
+        Err(error) => crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?,
+    }
     Ok(changes)
 }
 

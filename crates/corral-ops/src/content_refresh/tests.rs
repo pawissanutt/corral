@@ -10,6 +10,38 @@ use crate::{ContentSearch, search_content};
 mod incremental;
 mod overflow;
 
+#[test]
+fn sync_only_defers_typed_canonical_blob_cache_failures() {
+    let hash = corral_core::blob_ref::BlobHash::parse(&"a".repeat(64)).unwrap();
+    let typed = std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        corral_core::backend::BlobReadError {
+            hash,
+            detail: "does not decode".into(),
+        },
+    );
+    assert!(
+        defer_corrupt_blob_cache_refresh(
+            anyhow::Error::new(typed).context("extracting search text")
+        )
+        .is_ok()
+    );
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::InvalidData,
+    ] {
+        let other = anyhow::Error::new(std::io::Error::new(
+            kind,
+            "HashMismatch: not a typed blob failure",
+        ));
+        assert!(
+            defer_corrupt_blob_cache_refresh(other).is_err(),
+            "{kind:?} must propagate"
+        );
+    }
+}
+
 struct Fixture {
     _tmp: tempfile::TempDir,
     ctx: Ctx,
