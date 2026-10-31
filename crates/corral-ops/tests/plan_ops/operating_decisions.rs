@@ -231,10 +231,14 @@ fn invalid_parent_answers_cannot_authorize_a_freshly_scoped_child() {
                         .push("Choose backup".into()),
                     "stale-policy" => plan.approval.as_mut().unwrap().policy_digest.clear(),
                     "changed-source" => std::fs::write(&plan.artifact.source, "Changed source")?,
-                    "changed-snapshot" => std::fs::write(
-                        ctx.store.dir().join(&plan.artifact.path),
-                        "Changed snapshot",
-                    )?,
+                    "changed-snapshot" => {
+                        std::fs::write(
+                            ctx.store.blob_store()?.path_of(
+                                &corral_core::blob_ref::BlobHash::parse(&plan.artifact.sha256)?,
+                            ),
+                            "Changed snapshot",
+                        )?
+                    }
                     "replaced-plan" => {
                         let mut replacement = plan.clone();
                         replacement.id = "P2".into();

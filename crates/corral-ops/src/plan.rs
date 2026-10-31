@@ -79,7 +79,11 @@ pub(crate) fn plan_submit_checked(
         .to_string_lossy()
         .into_owned();
     // Parse the exact stored snapshot, not a second read of a mutable source.
-    let snapshot = read_plan(ctx, &ctx.store.dir().join(&artifact.path))?;
+    let max = ctx.store.config.artifacts.max_bytes;
+    let snapshot = crate::artifact_storage::artifact_read_confined_limited(ctx, &artifact, max)?;
+    if u64::try_from(snapshot.len())? > max {
+        bail!("plan exceeds artifacts.max_bytes ({max})");
+    }
     let document =
         PlanDocument::parse(std::str::from_utf8(&snapshot).context("plan must be UTF-8")?)?;
     crate::plan_decompose::validate(&document)?;
@@ -208,6 +212,17 @@ pub fn approved_plan<T: TaskRef + ?Sized>(ctx: &Ctx, task: &T) -> Result<Option<
 
 /// A Done design task whose accepted plan already published its children. Its
 /// status is the dependency barrier for those children and must not be reopened.
+pub(crate) fn published_design_head(task: &corral_core::TaskHead) -> bool {
+    task.status == corral_core::Status::Done
+        && !task.children.is_empty()
+        && task.plan.as_deref()
+            == Some(&format!(
+                "{}@{}",
+                task.id,
+                task.last_plan.as_ref().map_or("", |plan| plan.id.as_str())
+            ))
+}
+
 pub(crate) fn published_design(task: &corral_core::Task) -> bool {
     task.status == corral_core::Status::Done
         && !task.children.is_empty()

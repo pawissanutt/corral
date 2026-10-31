@@ -435,7 +435,7 @@ fn submitted_plan_is_pending_and_snapshots_exact_bytes_without_coding_run() {
             .contains("pending")
     );
     assert_eq!(
-        std::fs::read(ctx.store.dir().join(plan.artifact.path)).unwrap(),
+        corral_ops::artifact_read(&ctx, &plan.artifact).unwrap(),
         PLAN.as_bytes()
     );
     assert!(task.runs.is_empty());
