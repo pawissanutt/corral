@@ -107,7 +107,7 @@ fn sync_passes(
     now: Timestamp,
     processes: &dyn ProcessControl,
     source: Option<&Ctx>,
-    mut attention: Option<&mut Option<crate::attention::AttentionBoard>>,
+    attention: Option<&mut Option<crate::attention::AttentionBoard>>,
 ) -> Result<Vec<Change>> {
     // Latch replacement/schema skew before any preparation reopens a snapshot and
     // reports only a generic incompatible-schema error (T-587).

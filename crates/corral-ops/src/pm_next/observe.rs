@@ -283,7 +283,6 @@ fn project_blocked(
 }
 
 fn review_observation(ctx: &Ctx, task: &Task, run: &Run, tasks: &[Task]) -> Result<PmObservation> {
-    let id = &task.id;
     let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
     let checked = super::heads::review_task(&ctx.store.head(&task.id)?, task, &head)?;
     let task = &checked;

@@ -310,62 +310,27 @@ fn pane_marker(_process: &StuckProcess) -> Option<String> {
     None
 }
 
-fn recorded_panes(ctx: &Ctx, task: &Task) -> Result<BTreeSet<String>> {
-    if !crate::session_scope::owns_task(ctx, task)? {
+fn recorded_panes<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    named: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let head = ctx.store.head(task.id())?;
+    if !crate::session_scope::owns_head(ctx, &head)? {
         return Ok(BTreeSet::new());
     }
-    fn collect(run: &Run, panes: &mut BTreeSet<String>) {
-        if let Some(pane) = run.gate.as_ref().and_then(|g| g.pane.as_ref()) {
-            panes.insert(pane.clone());
-        }
-        if let Some(review) = &run.review
-            && review.reviewer != "pm"
-            && let Some(pane) = &review.pane
-        {
-            panes.insert(pane.clone());
-        }
-        for child in &run.review_runs {
-            // Child herdr references can be PM accounting, not pane ownership.
-            collect(child, panes);
-        }
-    }
+    let pending = head.pending_plan_review_panes()?;
     let mut panes = BTreeSet::new();
-    for run in &task.runs {
-        if let Some(h) = &run.herdr {
-            panes.insert(h.pane_id.clone());
-        }
-        collect(run, &mut panes);
-    }
-    for event in ctx
-        .store
-        .events_shared()?
-        .iter()
-        .filter(|e| e.task.as_deref() == Some(&task.id))
-    {
-        if !task
-            .runs
+    // The ledger already carries exactly the coding-run/tool/creation-event ownership
+    // oracle. Ask only for pane markers the resident process snapshot actually supplied;
+    // released rows remain evidence, but pending plan reviewers remain protected.
+    for pane in named.iter().filter(|pane| !pending.contains(*pane)) {
+        if head
+            .ledger_named(pane)?
             .iter()
-            .any(|run| event.detail["run"].as_str() == Some(&run.id))
+            .any(|row| row.key.starts_with("run:"))
         {
-            continue;
-        }
-        if (event.kind == "gate_started"
-            || event.kind == "run_workspace_created"
-            || (event.kind == "review_started"
-                && event.detail["reviewer"].as_str().is_some_and(|r| r != "pm")))
-            && let Some(pane) = event.detail["pane"].as_str()
-        {
-            panes.insert(pane.to_owned());
-        }
-    }
-    for review in task
-        .plans
-        .iter()
-        .flat_map(|plan| &plan.reviews)
-        .filter(|r| r.verdict.is_none())
-    {
-        if let Some(h) = &review.herdr {
-            panes.remove(&h.pane_id);
+            panes.insert(pane.clone());
         }
     }
     Ok(panes)
@@ -513,9 +478,11 @@ pub(crate) fn remove<T: TaskRef + ?Sized>(
     let protected_set = protected_pids()?;
     // Harness processes and residents lacking an exact ownership marker stay protected.
     let mut runs = None;
-    let panes = recorded_panes(ctx, task)?;
+    let resident_processes = residents(&path)?;
+    let named = resident_processes.iter().filter_map(pane_marker).collect();
+    let panes = recorded_panes(ctx, task, &named)?;
     let mut warnings = Vec::new();
-    for process in residents(&path)? {
+    for process in resident_processes {
         let pane = pane_marker(&process);
         let pane_owned = pane.as_ref().is_some_and(|p| panes.contains(p));
         if protected_set.contains(&process.pid)

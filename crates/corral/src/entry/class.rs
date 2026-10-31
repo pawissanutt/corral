@@ -10,6 +10,7 @@ use crate::attention_cmd::AttentionCmd;
 use crate::automation_cmd::AutomationCmd;
 use crate::completion_cmd::{CriteriaCmd, EvidenceCmd};
 use crate::dashboard_cmd::DashboardCmd;
+use crate::export_cmd::ExportCmd;
 use crate::hooks_cmd::HooksCmd;
 use crate::inbox_cmd::InboxCmd;
 use crate::lessons_cmd::LessonsCmd;
@@ -23,6 +24,7 @@ use crate::queue::QueueCmd;
 use crate::run_cmd::RunCmd;
 use crate::selection_cmd::SelectionCmd;
 use crate::setup_cmd::SetupCmd;
+use crate::storage_cmd::StorageCmd;
 use crate::{ArtifactCmd, Cmd, ConfigCmd, HarnessCmd, PluginCmd, SkillCmd};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +54,15 @@ fn file_if_own(own: bool) -> CommandClass {
 )]
 pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
     match cmd {
+        Cmd::Export { what } => match what {
+            ExportCmd::Events { .. } => Read,
+            ExportCmd::Tasks { .. } => Refused,
+        },
+        Cmd::Storage { cmd } => match cmd {
+            StorageCmd::Check { .. } => Read,
+            StorageCmd::Gc { yes, .. } => read_unless(*yes),
+            StorageCmd::Backup { .. } => Refused,
+        },
         Cmd::Assistant(args) => match &args.cmd {
             AssistantCmd::List { .. } | AssistantCmd::Show { .. } => Read,
             AssistantCmd::Summary { id, .. } => file_if_own(id == session),
@@ -279,6 +290,7 @@ pub fn of(cmd: &Cmd, session: &str) -> CommandClass {
         | Cmd::Up { .. }
         | Cmd::Init
         | Cmd::Import(_)
+        | Cmd::Migrate(_)
         | Cmd::Move { .. }
         | Cmd::Edit { .. }
         | Cmd::Reply { .. }

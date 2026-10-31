@@ -6,7 +6,7 @@
 //! closes the pane or types into it.
 use anyhow::{Context, Result};
 use corral_core::agent::{
-    self, AgentGeneration, AgentQuestion, AgentRunState, ContainerRef, GenerationBound, HostHealth,
+    AgentGeneration, AgentQuestion, AgentRunState, ContainerRef, GenerationBound, HostHealth,
     QuestionKind, QuestionState,
 };
 use corral_herdr::Herdr;

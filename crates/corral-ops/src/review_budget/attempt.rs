@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use corral_core::agent::{
-    self, AgentRunState, ContainerRef, EVIDENCE_MAX, Executor, ReceiptEvidence, ReceiptState,
-    RefusalCode, RequestBinding, RequestReceipt, WakeKind, WakeState,
+    self, ContainerRef, EVIDENCE_MAX, Executor, ReceiptEvidence, ReceiptState, RefusalCode,
+    RequestBinding, RequestReceipt, WakeKind, WakeState,
 };
 use corral_core::{GateResult, Store, SubmissionDisposition, Task, TaskRef};
 use jiff::Timestamp;

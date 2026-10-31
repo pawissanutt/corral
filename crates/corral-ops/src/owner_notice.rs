@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use corral_core::attention::{
     Condition, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome, SourceNoticeRef,
 };
-use corral_core::{Store, Task};
+use corral_core::Store;
+#[cfg(test)]
+use corral_core::Task;
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -222,33 +224,6 @@ pub(crate) fn prepare_subject(
     };
     claim.pending.push(fact(&claim, "notification_claimed"));
     Ok(claim)
-}
-
-/// Commit a source transition and its claim together; return authority only to this caller.
-pub(crate) fn commit(
-    ctx: &Ctx,
-    id: &str,
-    change: impl FnOnce(&Store, &mut Task) -> Result<Option<NoticeClaim>>,
-) -> Result<Option<NewlyCommittedClaim>> {
-    let lease = ctx
-        .store
-        .try_lock(&format!("owner-notice-{id}"))?
-        .context("notification_accounting_backpressure: task notice publication is in flight")?;
-    let (_, claim) = ctx.store.dispatch_update(id, |store, task| {
-        let Some(claim) = change(store, task)? else {
-            return Ok(None);
-        };
-        task.attention.push_notice(claim.clone())?;
-        Ok(Some(claim))
-    })?;
-    #[cfg(test)]
-    crash_at(CrashPoint::AfterClaim)?;
-    Ok(claim.map(|claim| NewlyCommittedClaim {
-        task: id.into(),
-        claim,
-        source: None,
-        lease: Some(std::sync::Arc::new(lease)),
-    }))
 }
 
 /// Head-form source transition: claims and scalar changes share one task operation.
