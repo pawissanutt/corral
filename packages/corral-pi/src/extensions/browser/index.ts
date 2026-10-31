@@ -7,6 +7,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { Role } from "../../roles/types.ts";
+import type { RegisterCapability } from "../registry.ts";
 import { Browser, findBrowser } from "./chrome.ts";
 import { type BrowserSettings, BrowserSettingsSchema } from "./settings.ts";
 import { BrowserError, browserTarget, checkLanded, inside } from "./target.ts";
@@ -32,6 +33,7 @@ export interface BrowserOptions {
   readonly cwd: string;
   /** Parent directory of each call's temporary profile. */
   readonly tmpRoot?: string;
+  readonly registerCapability?: RegisterCapability;
 }
 
 async function visit<T>(
@@ -53,7 +55,8 @@ async function visit<T>(
   let deadline = setTimeout(abort, settings.timeout_ms);
   if (signal?.aborted) abort();
   else signal?.addEventListener("abort", abort, { once: true });
-  const browser = Browser.launch({ executable, signal: stop.signal, ...(options.tmpRoot ? { tmpRoot: options.tmpRoot } : {}) });
+  const browser = Browser.launch({ executable, signal: stop.signal, ...(options.tmpRoot ? { tmpRoot: options.tmpRoot } : {}),
+    ...(options.registerCapability ? { registerCapability: options.registerCapability } : {}) });
   try {
     await browser.send("Browser.getVersion");
     clearTimeout(deadline);

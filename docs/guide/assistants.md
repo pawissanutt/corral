@@ -420,9 +420,12 @@ journals it on the session's container (`owner_inputs`) as `A-<n>/g<generation>/
 with its SHA-256 and text (up to 16 KiB), and shows the model the message followed by
 `[owner input A-1/g1/i3]`. An owner action cites that ID and nothing else: corral wakes, PM
 inbox outcomes, recovery notices and other programmatic input are never journaled, so citing
-one refuses `not_owner_input`. Corral checks only that the cited input is a real pane-typed
-input of this session, not that its words prove the exact action. The journal keeps the
-newest 64 entries.
+one refuses `not_owner_input`. The default-enabled `ask_user` tool also journals a completed
+interactive dialog answer with `dialog` provenance: its exact question, selected option and
+optional free text. A cancelled or timed-out dialog journals no answer and authorizes nothing.
+Dialog answers carry an owner input ID and can be cited like pane-typed input. Corral checks
+only that the cited input is from this session, not that its words prove the exact action.
+The journal keeps the newest 64 entries.
 
 **Kinds.** Each kind is one existing command, with the flags that command takes for the
 owner (never `--root`, `--author` or output flags):

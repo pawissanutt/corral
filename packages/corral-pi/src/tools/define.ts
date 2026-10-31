@@ -60,6 +60,9 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
       return {
         content: [{ type: "text", text: JSON.stringify({ state: receipt.state, result: receipt.result }) }],
         details: receipt,
+        // These committed operations close the review or run; another model turn cannot reserve budget.
+        ...((spec.op === "verdict" || spec.op === "plan_verdict" || spec.op === "done") && receipt.state === "committed"
+          ? { terminate: true } : {}),
       };
     },
   };

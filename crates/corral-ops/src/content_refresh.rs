@@ -187,7 +187,6 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, _tasks: &[Task]) -> Result<()>
     if follow_index(ctx)? {
         return Ok(());
     }
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
     let tasks = view_ctx.store.list()?;
     crate::content_index::refresh_snapshot(&view_ctx, &tasks, seq)?;
@@ -198,7 +197,6 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, _tasks: &[Task]) -> Result<()>
 /// cursor. `false` when it cannot be followed (missing or unreadable index, pruned feed,
 /// budget overflow) and must be rebuilt.
 fn follow_index(ctx: &Ctx) -> Result<bool> {
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let root = ctx.store.cache_root()?;
     let (view_ctx, seq) = crate::content_index::one_view(ctx)?;
     corral_core::work::record(corral_core::work::Work::IndexRefreshPass, 1);

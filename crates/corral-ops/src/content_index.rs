@@ -238,6 +238,7 @@ fn extract(ctx: &Ctx, record: &mut Record) -> Result<()> {
             bytes.extend_from_slice(&text.as_bytes()[..text.len().min(DOCUMENT_BYTES + 1)])
         }
         Source::Artifact(artifact) => {
+            let _storage = crate::artifact_storage::storage_lock(ctx)?;
             if !crate::artifact_storage::content_available(ctx, artifact)? {
                 // Imported task metadata can outlive its snapshot file.
                 record.document.complete = true;
@@ -309,6 +310,10 @@ fn read_cache(reader: impl Read) -> Cache {
 }
 
 fn lock_index(dir: &std::path::Path) -> Result<File> {
+    anyhow::ensure!(
+        !crate::artifact_storage::held_here(),
+        "search index lock requested while holding artifact storage"
+    );
     fs::create_dir_all(dir).context("creating search state directory")?;
     let lock = fs::OpenOptions::new()
         .create(true)
@@ -325,7 +330,13 @@ fn lock_index(dir: &std::path::Path) -> Result<File> {
 /// (a full index or text budget) is left to the next refresh.
 pub(crate) fn index_artifact(ctx: &Ctx, task: &str, artifact: &Artifact) -> Result<()> {
     let dir = ctx.store.cache_root()?;
-    let _lock = lock_index(&dir)?;
+    let lock = index_lock(ctx)?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => return Ok(()),
+        Err(fs::TryLockError::Error(error)) => return Err(error).context("locking search index"),
+    }
+    crate::agent::effects::failpoint("content_index_build");
     let path = dir.join("content-search.json");
     let mut cache = match File::open(&path) {
         Ok(file)
@@ -415,7 +426,49 @@ enum Update {
     Reindex,
 }
 
+fn index_lock(ctx: &Ctx) -> Result<File> {
+    let dir = ctx.store.cache_root()?;
+    fs::create_dir_all(&dir).context("creating search state directory")?;
+    fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join("content-search.lock"))
+        .context("opening search index lock")
+}
+
+/// Lock order: index before storage; never queue for this lock holding storage.
+pub(crate) fn lock(ctx: &Ctx) -> Result<File> {
+    anyhow::ensure!(
+        !crate::artifact_storage::held_here(),
+        "search index lock requested while holding artifact storage"
+    );
+    let lock = index_lock(ctx)?;
+    lock.lock().context("locking search index")?;
+    Ok(lock)
+}
+
+/// Uses the caller's index lock, keeping the read-view/feed-position contract.
+pub(crate) fn snapshot_locked(ctx: &Ctx, tasks: &[Task], reindex: bool) -> Result<Snapshot> {
+    if !reindex {
+        return build_locked(ctx, tasks, Update::Incremental, None);
+    }
+    let (view_ctx, seq) = one_view(ctx)?;
+    let tasks = view_ctx.store.list()?;
+    build_locked(&view_ctx, &tasks, Update::Reindex, Some(seq))
+}
+
 fn build_snapshot(
+    ctx: &Ctx,
+    tasks: &[Task],
+    update: Update,
+    cursor: Option<ChangeSeq>,
+) -> Result<Snapshot> {
+    let _lock = lock(ctx)?;
+    build_locked(ctx, tasks, update, cursor)
+}
+
+fn build_locked(
     ctx: &Ctx,
     tasks: &[Task],
     update: Update,
@@ -428,8 +481,8 @@ fn build_snapshot(
     };
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
+    crate::agent::effects::failpoint("content_index_build");
     let dir = ctx.store.cache_root()?;
-    let _lock = lock_index(&dir)?;
     let inputs = inspect_artifacts
         .then(|| crate::content_refresh::fingerprint(ctx, tasks))
         .transpose()?;
@@ -472,6 +525,10 @@ fn build_snapshot(
             record.document.complete = cached.complete;
             record.document.binary = cached.binary;
         } else if budget > 0 && documents.len() < 4096 {
+            // Only reading a snapshot needs storage, so GC cannot rewrite it mid-read (T-659).
+            let _storage = matches!(record.source, Source::Artifact(_))
+                .then(|| crate::artifact_storage::storage_lock(ctx))
+                .transpose()?;
             extract(ctx, record)?;
         }
         if record.document.text.len() <= budget && documents.len() < 4096 {

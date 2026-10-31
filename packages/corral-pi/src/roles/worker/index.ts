@@ -42,7 +42,7 @@ export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = 
   const toolkit = (context: RoleContext) => {
     let found = toolkits.get(context);
     if (!found) {
-      found = lspToolkit({ ...lsp, servers: lsp.servers ?? configuredServers(context.lspSettings), root: context.cwd });
+      found = lspToolkit({ ...lsp, servers: lsp.servers ?? configuredServers(context.lspSettings), root: context.cwd, registerCapability: context.registerCapability });
       toolkits.set(context, found);
     }
     return found;

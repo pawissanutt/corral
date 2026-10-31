@@ -1,8 +1,12 @@
 {
   "assistant": {
     "catalog": 8,
-    "digest": "532fa05be6f3e127a1f633df6515aa040600f6b2a82594cfbbcffc571fb7498c",
+    "digest": "1fe8a8524e424a0cd9eef0a5d5b174c1f8cb0a6681204ff8e9217720b9a9ba1f",
     "features": {
+      "ask_user": {
+        "enabled": true,
+        "source": "preset"
+      },
       "background_shell": {
         "enabled": true,
         "settings": {
@@ -110,8 +114,12 @@
   },
   "pm": {
     "catalog": 8,
-    "digest": "9bc9a4f169258efe549f4ceeb3eec1cd29d59f6f857cf17f76676ed8c627b9fb",
+    "digest": "36179f2c0cae554a69116bbde4cd2eda07380c2081312895ecd7dbbab769f013",
     "features": {
+      "ask_user": {
+        "enabled": true,
+        "source": "preset"
+      },
       "background_shell": {
         "enabled": true,
         "settings": {

@@ -178,7 +178,6 @@ fn add_artifact_inner(
     if !matches!(target, Target::Promotion) {
         crate::assistant_artifacts::check_owner(None)?;
     }
-    let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
     if !meta.is_file() {
@@ -208,6 +207,7 @@ fn add_artifact_inner(
     let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let id = corral_core::Store::normalize_id(id)?;
     ctx.store.head(&id)?;
+    let storage = crate::artifact_storage::storage_lock(ctx)?;
     // The blob and this task's reference to it commit first; attaching then only adds rows.
     let created = crate::artifact_storage::store_blob(ctx, &id, &sha, &bytes)?;
     let attached = attach(
@@ -233,6 +233,7 @@ fn add_artifact_inner(
             return Err(error);
         }
     };
+    drop(storage);
     // The index is a rebuildable cache: failing to update it never undoes the attachment.
     if origin.is_none()
         && let Err(error) = crate::content_index::index_artifact(ctx, &id, &artifact)

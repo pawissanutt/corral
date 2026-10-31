@@ -25,4 +25,9 @@ declare module "bun:test" {
   export function beforeAll(run: () => unknown, timeout?: number): void;
   export function afterAll(run: () => unknown, timeout?: number): void;
   export function afterEach(run: () => unknown): void;
+  export const jest: {
+    useFakeTimers(): void;
+    useRealTimers(): void;
+    advanceTimersByTime(ms: number): void;
+  };
 }

@@ -155,32 +155,37 @@ impl Fixture {
         self.command(args).output().unwrap()
     }
 
+    /// Saves the run checkpoint `corral done` requires.
+    pub fn checkpoint(&self, id: &str) {
+        let mut checkpoint = Command::new("bash");
+        checkpoint
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../scripts/checkpoint-fixture.sh"
+            ))
+            .arg(env!("CARGO_BIN_EXE_corral"))
+            .arg(id)
+            .env("CORRAL_ROOT", self.temp.path())
+            .env("HERDR_BIN_PATH", &self.bin)
+            .env("CORRAL_HERDR_SESSION", "corral-test")
+            .stdin(Stdio::null());
+        for name in [
+            "CORRAL_GATE_ATTEMPT",
+            "CORRAL_CANDIDATE_HEAD",
+            "CORRAL_INTEGRATION_BASE",
+            "HERDR_PANE_ID",
+            "HERDR_WORKSPACE_ID",
+            "HERDR_TAB_ID",
+        ] {
+            checkpoint.env_remove(name);
+        }
+        let output = checkpoint.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
     pub fn ok(&self, args: &[&str]) -> Output {
         if args.first() == Some(&"done") {
-            let mut checkpoint = Command::new("bash");
-            checkpoint
-                .arg(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/../../scripts/checkpoint-fixture.sh"
-                ))
-                .arg(env!("CARGO_BIN_EXE_corral"))
-                .arg(args[1])
-                .env("CORRAL_ROOT", self.temp.path())
-                .env("HERDR_BIN_PATH", &self.bin)
-                .env("CORRAL_HERDR_SESSION", "corral-test")
-                .stdin(Stdio::null());
-            for name in [
-                "CORRAL_GATE_ATTEMPT",
-                "CORRAL_CANDIDATE_HEAD",
-                "CORRAL_INTEGRATION_BASE",
-                "HERDR_PANE_ID",
-                "HERDR_WORKSPACE_ID",
-                "HERDR_TAB_ID",
-            ] {
-                checkpoint.env_remove(name);
-            }
-            let output = checkpoint.output().unwrap();
-            assert!(output.status.success(), "{output:?}");
+            self.checkpoint(args[1]);
         }
         let out = self.cli(args);
         assert!(

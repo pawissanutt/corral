@@ -20,7 +20,6 @@ impl ArtifactSearch {
     /// Returns an error if tasks, snapshots or the derived cache cannot be read.
     pub fn load(ctx: &Ctx) -> Result<Self> {
         let tasks = ctx.store.artifact_owners()?;
-        let _storage = crate::artifact_storage::storage_lock(ctx)?;
         let actual_tasks: Vec<_> = tasks
             .iter()
             .filter_map(|owner| owner.task().cloned())

@@ -52,6 +52,7 @@
   "capabilities": [
     "budget",
     "todo",
+    "ask_user",
     "web.enabled",
     "context_files",
     "skills",

@@ -154,9 +154,18 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
     expect([task.status, task.origin, task.labels]).toEqual(["review", "assistant", ["cowork"]]);
     expect(task.cowork).toEqual({ session: fixture.session, scratch: "cache-fix", run: "R1", review: "none" });
     const runR1 = task.runs[0];
+    process.stdout.write(`COWORK_LIVE_USAGE ${JSON.stringify({ usage: runR1.usage, usage_note: runR1.usage_note })}\n`);
     expect([runR1.id, runR1.branch, runR1.worktree]).toEqual(["R1", `corral/${fixture.session}/cache-fix`, fixture.scratch[0]]);
     expect(runR1.gate.result).toBe("pass");
-    expect(runR1.usage?.input ?? 0).toBeGreaterThan(0);
+    // A finish snapshots the transcript while the host can still be writing. It must either
+    // record real tokens or explain why that snapshot could not provide them, never zero silently.
+    if (runR1.usage == null) {
+      expect(typeof runR1.usage_note).toBe("string");
+      expect(runR1.usage_note.trim().length).toBeGreaterThan(0);
+    } else {
+      expect(runR1.usage.input + runR1.usage.output + runR1.usage.cache_read + runR1.usage.cache_write).toBeGreaterThan(0);
+      expect(runR1.usage_note == null).toBe(true);
+    }
     expect(task.body).toContain(words);
     expect(kinds()["cache-fix"]).toBe("cowork");
     const finishedEvent = storeEvents().find((e) => e.kind === "cowork_finished" && e.task === "T-002");
@@ -185,7 +194,7 @@ test("live private-pane co-work: shell finish refused, unclear ship asks, promot
         pluginInventory: plugins.trim(), provider: "deterministic Codex SSE transport; production host/auth/role",
         c10: { shellFinish: offered, question, promoted, backlog: { status: backlog.status, artifacts: backlog.artifacts } },
         c9: { finish: finished, task: { status: task.status, origin: task.origin, labels: task.labels, cowork: task.cowork,
-          run: { id: runR1.id, branch: runR1.branch, gate: runR1.gate.result, usage: runR1.usage } },
+          run: { id: runR1.id, branch: runR1.branch, gate: runR1.gate.result, usage: runR1.usage, usage_note: runR1.usage_note } },
           finishedEvent, approve: approved, landed, head, approvedEvent } }, null, 2));
     }
     process.stdout.write(`PASS LIVE COWORK: private pane ${pane}; assistant ${fixture.session}; shell finish refused; unclear ship asked; spike promoted as T-001; cache-fix finished as T-002 (gate pass, review none) and landed at ${head}\n`);

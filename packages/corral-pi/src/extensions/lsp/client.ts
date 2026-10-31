@@ -7,6 +7,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { FrameDecoder, encodeFrame } from "./framing.ts";
+import type { RegisterCapability } from "../registry.ts";
 
 export interface LspServerSpec {
   /** Stable name used in tool output and errors, for example `rust-analyzer`. */
@@ -121,11 +122,20 @@ export class LspClient {
     private readonly child: ChildProcessWithoutNullStreams,
   ) {}
 
-  static async start(spec: LspServerSpec, root: string, limits: LspLimits = DEFAULT_LIMITS): Promise<LspClient> {
+  static async start(spec: LspServerSpec, root: string, limits: LspLimits = DEFAULT_LIMITS, register?: RegisterCapability): Promise<LspClient> {
     const program = resolveCommand(spec);
     const child = spawn(program, spec.command.slice(1), { cwd: root, stdio: ["pipe", "pipe", "pipe"], shell: false });
     const client = new LspClient(spec, root, limits, child);
     client.attach();
+    if (register && child.pid !== undefined) {
+      try {
+        const remove = register(child.pid);
+        child.once("exit", remove);
+      } catch (error) {
+        child.kill("SIGKILL");
+        throw error;
+      }
+    }
     const init = await client.request("initialize", {
       processId: process.pid,
       rootUri: pathToFileURL(root).href,
