@@ -537,10 +537,13 @@ clears that. Updates may name `"plan":"P2"`, and one that names an older plan is
 
 The host restores the ledger at startup and resume and gives every model request a bounded
 summary of the current plan (identity, revision, outstanding steps, waits and the next
-action), rebuilt at each turn and after compaction and never written into Pi's session
-file. When a turn ends with an actionable step, corral may grant one continuation per plan
-revision. The host starts it only while the pane is idle, and only after re-reading the
-ledger and finding the same plan revision. A cancelled, aborted or failed turn is never
+action). It is built from the latest accepted ledger right before each request, so a todo
+update earlier in the same turn is already reflected, and it is never written into Pi's
+session file. When a turn ends with an actionable step, corral may grant one continuation
+per plan revision. The host starts it only while the pane is idle, the budget holds and no
+newer turn has started since the granting one, and only after re-reading the ledger and
+finding the same plan revision; a turn that starts during that read, even one that is
+cancelled or fails, voids the grant. A cancelled, aborted or failed turn is never
 continued, and neither is a turn waiting on an event or the owner. A continued turn that
 changes nothing stops continuation, and so does a run of 8; the stop is shown in the pane.
 Board activity alone never starts a continuation. `corral agent state --pm` shows the

@@ -57,6 +57,16 @@ if (envelope.op === "todo" && existsSync(snapshot)) {
   const state = JSON.parse(readFileSync(snapshot, "utf8"));
   progress = state.container?.todo ?? state.container?.state?.todo
     ?? state.runs?.find(run => run.id === envelope.identity.run)?.progress;
+  // A session ledger's init opens the next plan at the next revision, as corral does.
+  const holder = state.container?.state ?? state.container;
+  if (holder && envelope.payload.op === "init") {
+    const plan = "P" + (Number(String(progress?.plan ?? "P0").slice(1)) + 1);
+    progress = { revision: (progress?.revision ?? 0) + 1, spec_revision: "spec", plan,
+      phases: envelope.payload.phases.map(phase => ({ ...phase,
+        steps: phase.steps.map(step => ({ ...step, status: { state: "pending" }, criteria: [] })) })) };
+    holder.todo = progress;
+    writeFileSync(snapshot, JSON.stringify(state));
+  }
   if (progress && envelope.payload.op === "done") {
     const step = progress.phases.flatMap(phase => phase.steps).find(step => step.id === envelope.payload.step);
     if (step) {
