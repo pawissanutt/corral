@@ -367,8 +367,8 @@ pub struct AttemptHead {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NativeRecordCounts {
-    #[serde(with = "crate::container_facts::fixed::array")]
-    pub counts: [u64; 7],
+    #[serde(with = "super::native_counts")]
+    pub counts: [u64; 10],
     #[serde(with = "crate::container_facts::fixed")]
     pub pending: u64,
 }
@@ -388,6 +388,9 @@ impl NativeRecordCounts {
             state.wakes.len(),
             state.reports.len(),
             state.jobs.len(),
+            state.rewinds.len(),
+            state.usage_sessions.len(),
+            state.budget.requests.len(),
         ]
         .map(crate::container_facts::len_u64);
         let pending = state

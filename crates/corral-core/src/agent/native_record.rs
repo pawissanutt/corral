@@ -14,6 +14,9 @@ pub enum NativeRecord {
     Wake(WakeSubscription),
     Report(AgentReport),
     Job(JobRecord),
+    Rewind(RewindRecord),
+    UsageSession(UsageSession),
+    BudgetRequest(BudgetRequest),
 }
 
 impl NativeRecord {
@@ -26,6 +29,9 @@ impl NativeRecord {
             Self::Wake(_) => "wakes",
             Self::Report(_) => "reports",
             Self::Job(_) => "jobs",
+            Self::Rewind(_) => "rewinds",
+            Self::UsageSession(_) => "usage_sessions",
+            Self::BudgetRequest(_) => "budget_requests",
         }
     }
     pub fn token(&self) -> String {
@@ -37,6 +43,16 @@ impl NativeRecord {
             Self::Wake(w) => format!("request:{}", w.request_id),
             Self::Report(r) => format!("request:{}", r.request_id),
             Self::Job(j) => format!("id:{}", j.id),
+            Self::Rewind(r) => format!("id:{}", r.id),
+            Self::UsageSession(s) => {
+                let kind = match s.kind {
+                    UsageSessionKind::Explore => "explore",
+                    UsageSessionKind::Oracle => "oracle",
+                    UsageSessionKind::Summary => "summary",
+                };
+                format!("session:{}:{kind}:{}", s.generation, s.session_id)
+            }
+            Self::BudgetRequest(r) => format!("request:{}", r.request),
         }
     }
     /// Work that makes an otherwise settled container owe another reconciliation tick.
@@ -106,6 +122,13 @@ impl NativeRecord {
             Self::Wake(r) => put(&mut state.wakes, r, |a, b| a.request_id == b.request_id),
             Self::Report(r) => put(&mut state.reports, r, |a, b| a.request_id == b.request_id),
             Self::Job(r) => put(&mut state.jobs, r, |a, b| a.id == b.id),
+            Self::Rewind(r) => put(&mut state.rewinds, r, |a, b| a.id == b.id),
+            Self::UsageSession(r) => put(&mut state.usage_sessions, r, |a, b| {
+                a.generation == b.generation && a.kind == b.kind && a.session_id == b.session_id
+            }),
+            Self::BudgetRequest(r) => {
+                put(&mut state.budget.requests, r, |a, b| a.request == b.request)
+            }
         }
     }
 
@@ -118,6 +141,9 @@ impl NativeRecord {
             "wakes" => serde_json::from_value(doc).map(Self::Wake),
             "reports" => serde_json::from_value(doc).map(Self::Report),
             "jobs" => serde_json::from_value(doc).map(Self::Job),
+            "rewinds" => serde_json::from_value(doc).map(Self::Rewind),
+            "usage_sessions" => serde_json::from_value(doc).map(Self::UsageSession),
+            "budget_requests" => serde_json::from_value(doc).map(Self::BudgetRequest),
             _ => bail!("unknown native record family {kind}"),
         };
         parsed.with_context(|| format!("decoding native {kind} record"))

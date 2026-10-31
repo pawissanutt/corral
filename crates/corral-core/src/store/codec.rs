@@ -70,7 +70,7 @@ const HISTORY_VECTORS: &[&str] = &[
 ];
 
 /// Pi-native record lists of a run's host state, each one row per record.
-pub const AGENT_KINDS: [&str; 7] = [
+pub const AGENT_KINDS: [&str; 10] = [
     "generations",
     "receipts",
     "questions",
@@ -78,6 +78,9 @@ pub const AGENT_KINDS: [&str; 7] = [
     "wakes",
     "reports",
     "jobs",
+    "rewinds",
+    "usage_sessions",
+    "budget_requests",
 ];
 
 pub fn seq(n: usize) -> String {
@@ -734,8 +737,19 @@ pub(crate) fn split_agent_host(
                 rows.put(latest_turn_row(owner, generation, turn));
             }
         }
+        // Budget requests are nested in the public model but are ordinary native child
+        // rows physically. The ledger has no scalar fields to retain in the host header.
+        let mut budget = host
+            .remove("budget")
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
         for kind in AGENT_KINDS {
-            for (i, record) in take_array(host, kind).into_iter().enumerate() {
+            let records = if kind == "budget_requests" {
+                take_array(&mut budget, "requests")
+            } else {
+                take_array(host, kind)
+            };
+            for (i, record) in records.into_iter().enumerate() {
                 let (open, index) =
                     crate::agent::NativeRecord::from_doc(kind, record.clone())?.metadata();
                 rows.put_indexed(
