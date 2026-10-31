@@ -81,21 +81,41 @@ fn dependencies(store: &Store, roots: &[TaskHead]) -> Result<BTreeSet<String>> {
 }
 
 pub(super) fn snapshot(ctx: &Ctx, now: Timestamp) -> Result<(Vec<TaskHead>, AttentionBoard)> {
-    snapshot_inner(ctx, now, false)
+    let (roots, board, _) = snapshot_inner(ctx, now, false, None)?;
+    Ok((roots, board))
 }
 
 pub(super) fn reconcile_snapshot(
     ctx: &Ctx,
     now: Timestamp,
 ) -> Result<(Vec<TaskHead>, AttentionBoard)> {
-    snapshot_inner(ctx, now, true)
+    let (roots, board, _) = snapshot_inner(ctx, now, true, None)?;
+    Ok((roots, board))
+}
+
+pub(super) fn snapshot_with_admission(
+    ctx: &Ctx,
+    now: Timestamp,
+) -> Result<(AttentionBoard, Option<String>)> {
+    let (_, board, admission) = snapshot_inner(ctx, now, false, None)?;
+    Ok((board, admission))
+}
+
+pub(super) fn reconcile_with_admission(
+    ctx: &Ctx,
+    now: Timestamp,
+    admission: &Option<String>,
+) -> Result<(Vec<TaskHead>, AttentionBoard)> {
+    let (roots, board, _) = snapshot_inner(ctx, now, true, Some(admission))?;
+    Ok((roots, board))
 }
 
 fn snapshot_inner(
     ctx: &Ctx,
     now: Timestamp,
     reconcile: bool,
-) -> Result<(Vec<TaskHead>, AttentionBoard)> {
+    shared_admission: Option<&Option<String>>,
+) -> Result<(Vec<TaskHead>, AttentionBoard, Option<String>)> {
     let frozen = ctx.store.read_only_snapshot()?;
     let mut roots = BTreeMap::new();
     for head in frozen
@@ -126,10 +146,14 @@ fn snapshot_inner(
     let context = context.into_values().collect::<Vec<_>>();
     let mut neighborhood = Neighborhood::new_heads(&context, &ctx.store.config, &policy)?;
     if reconcile && crate::park::latch_heads(ctx, &roots, &neighborhood, now)? {
-        return snapshot_inner(ctx, now, false);
+        return snapshot_inner(ctx, now, false, shared_admission);
     }
     stopping::load(ctx, &mut neighborhood)?;
-    neighborhood.resource_wait = crate::resources::read_admission(ctx)?;
+    let admission = match shared_admission {
+        Some(sampled) => sampled.clone(),
+        None => crate::resources::read_admission(ctx)?,
+    };
+    neighborhood.resource_wait = admission.clone();
     for task in roots
         .iter()
         .filter(|task| !matches!(task.status, Status::Done | Status::Dropped))
@@ -168,5 +192,5 @@ fn snapshot_inner(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok((roots, AttentionBoard { version: 1, tasks }))
+    Ok((roots, AttentionBoard { version: 1, tasks }, admission))
 }

@@ -41,7 +41,7 @@ use recipients::recipients;
 mod snapshot_heads;
 mod stopping;
 pub use handling::{attend, guard};
-pub(crate) use handling::{reconcile, reconcile_projected};
+pub(crate) use handling::{reconcile, reconcile_projected, reconcile_sampled};
 #[cfg(test)]
 pub(crate) mod handling_tests;
 
@@ -261,6 +261,14 @@ fn refresh_overflow(
 /// Hot active/owed board. Unrelated settled terminal tasks are not inputs.
 pub fn board_hot(ctx: &Ctx, now: Timestamp) -> Result<AttentionBoard> {
     Ok(snapshot_heads::snapshot(ctx, now)?.1)
+}
+
+/// The same real projection plus its sampled admission, for the owning read operation.
+pub(crate) fn board_hot_with_admission(
+    ctx: &Ctx,
+    now: Timestamp,
+) -> Result<(AttentionBoard, Option<String>)> {
+    snapshot_heads::snapshot_with_admission(ctx, now)
 }
 
 /// Cold complete-output compatibility, including empty terminal rows.

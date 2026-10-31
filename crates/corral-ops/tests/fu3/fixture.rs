@@ -27,6 +27,7 @@ impl Fixture {
     pub fn new(scale: usize, similar: bool, existing: bool) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let mut store = Store::init(tmp.path()).unwrap();
+        store.fixture_pin_now(NOW.parse().unwrap()).unwrap();
         for name in ["app", "other"] {
             std::fs::create_dir_all(tmp.path().join(name).join(".git")).unwrap();
             store.config.projects.insert(
@@ -126,12 +127,14 @@ impl Fixture {
                     }
                     if t.id != idea.id {
                         // As with coding runs, both sizes need a fixed current plan run
-                        // and at least one earlier run represented in the summary.
+                        // and at least one earlier run represented in the summary. The latest
+                        // attempt is resolved: Cancelled would be a real current owner blocker,
+                        // not unrelated retired history for a shortlist-only evaluation.
                         t.plan_runs.push(serde_json::from_value(json!({
                             "id":"P-current","profile":"generic","harness":"generic",
                             "spec_revision":"historic","started":NOW,"ended":NOW,
                             "output_dir":store.root().join("plan-output"),
-                            "rounds":0,"state":"cancelled"
+                            "rounds":0,"state":"approved"
                         }))?);
                     }
                     Ok(())

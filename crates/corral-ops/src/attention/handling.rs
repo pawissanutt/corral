@@ -14,7 +14,7 @@ use crate::{Ctx, owner_notice};
 
 /// Reconcile from one fresh post-mutation listing; no event-history reads or transport retries.
 pub fn reconcile(ctx: &Ctx, now: Timestamp, pm_live: Option<bool>) -> Result<()> {
-    reconcile_inner(ctx, now, pm_live, false).map(|_| ())
+    reconcile_inner(ctx, now, pm_live, false, None).map(|_| ())
 }
 
 /// Retain the pass-owned assessment for readers after ledger publication.
@@ -23,7 +23,17 @@ pub(crate) fn reconcile_projected(
     now: Timestamp,
     pm_live: Option<bool>,
 ) -> Result<Option<super::AttentionBoard>> {
-    reconcile_inner(ctx, now, pm_live, true)
+    reconcile_inner(ctx, now, pm_live, true, None)
+}
+
+pub(crate) fn reconcile_sampled(
+    ctx: &Ctx,
+    now: Timestamp,
+    pm_live: Option<bool>,
+    retain: bool,
+    admission: &Option<String>,
+) -> Result<Option<super::AttentionBoard>> {
+    reconcile_inner(ctx, now, pm_live, retain, Some(admission))
 }
 
 fn reconcile_inner(
@@ -31,11 +41,16 @@ fn reconcile_inner(
     now: Timestamp,
     pm_live: Option<bool>,
     retain: bool,
+    sampled_admission: Option<&Option<String>>,
 ) -> Result<Option<super::AttentionBoard>> {
     let Some(_lock) = ctx.store.try_lock("attention-reconcile")? else {
         return Ok(None);
     };
-    let (tasks, mut board) = match super::snapshot_heads::reconcile_snapshot(ctx, now) {
+    let projected = match sampled_admission {
+        Some(admission) => super::snapshot_heads::reconcile_with_admission(ctx, now, admission),
+        None => super::snapshot_heads::reconcile_snapshot(ctx, now),
+    };
+    let (tasks, mut board) = match projected {
         Ok(snapshot) => snapshot,
         // Never mutate ledgers or publish a successful aggregate from incomplete inputs.
         // The decoder reports the actual task; readers retry strictly and show unavailable.
