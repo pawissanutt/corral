@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { RegisterCapability } from "./registry.ts";
+import type { RegisterCapability } from "../registry.ts";
 import { DEFAULT_LIMITS, type Diagnostic, LspClient, LspError, type LspLimits, type LspServerSpec, type Range } from "./client.ts";
 
 export { LspClient, LspError, type LspLimits, type LspServerSpec } from "./client.ts";

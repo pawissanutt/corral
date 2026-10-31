@@ -176,6 +176,14 @@ test("browser settings respect role availability and must be resolved by corral"
 });
 
 const fakeBrowser = fileURLToPath(new URL("./support/fake-browser.ts", import.meta.url));
+test("detached browser leader is registered and removed on exit", async () => {
+  const pids = new Set<number>();
+  const browser = Browser.launch({ executable: fakeBrowser, signal: new AbortController().signal, tmpRoot: profiles,
+    registerCapability: (pid) => { pids.add(pid); return () => { pids.delete(pid); }; } });
+  expect([...pids]).toEqual([browser.child.pid]);
+  await browser.close();
+  expect([...pids]).toEqual([]);
+});
 const navigateWith = (timeout_ms: number, tmpRoot: string) =>
   (browserTools({ origins: [origin], timeout_ms, executable: fakeBrowser }, { cwd, tmpRoot })
     .find((entry) => entry.name === "browser_navigate") as ToolDefinition)

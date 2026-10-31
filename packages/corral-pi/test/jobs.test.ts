@@ -29,6 +29,7 @@ interface Sent {
 
 function fixture(options: {
   maxOutput?: number; maxJobs?: number; schedule?: Schedule; answer?: (sent: Sent) => Promise<JobReceipt>;
+  registerCapability?: (pid: number) => () => void;
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "corral-jobs-"));
   dirs.push(dir);
@@ -41,6 +42,7 @@ function fixture(options: {
   };
   const runtime = new JobRuntime({
     cwd: dir, runtimeDir: join(dir, "runtime"), generation: 3, call, ...(options.schedule ? { schedule: options.schedule } : {}),
+    ...(options.registerCapability ? { registerCapability: options.registerCapability } : {}),
     settings: { max_jobs: options.maxJobs ?? 4, max_output_bytes: options.maxOutput ?? 1024, max_runtime_secs: 60 },
   });
   const fifo = (name: string) => {
@@ -55,6 +57,17 @@ function fixture(options: {
   };
   return { dir, sent, runtime, fifo, actions, identity };
 }
+
+test("the supervisor is registered until exit, not the command it launches", async () => {
+  const pids = new Set<number>();
+  const fx = fixture({ registerCapability: (pid) => { pids.add(pid); return () => { pids.delete(pid); }; } });
+  const gate = fx.fifo("registered-gate");
+  const started = await fx.runtime.start(`cat ${gate} >/dev/null`, "registered");
+  expect([...pids]).toEqual([started.pid]);
+  await writeFile(gate, "go\n");
+  await fx.runtime.settled(started.job as string);
+  expect([...pids]).toEqual([]);
+});
 
 test("a job is recorded before it spawns, with its pid and kernel start time, and output is bounded", async () => {
   // Given a job that prints more than the retained output bound.

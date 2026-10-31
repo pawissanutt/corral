@@ -46,7 +46,7 @@ import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
-import { capabilityRegistry } from "../extensions/lsp/registry.ts";
+import { capabilityRegistry } from "../extensions/registry.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
 import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
@@ -316,7 +316,7 @@ export class HostSession {
     if (lspEnabled && options.identity.role !== "worker") {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
-    this.jobs = this.jobRuntime();
+    this.jobs = this.jobRuntime(registerCapability);
     const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
     if (auxiliary.explore || auxiliary.oracle) {
       this.auxiliary = new AuxiliaryRuntime({
@@ -344,7 +344,7 @@ export class HostSession {
       ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
-      ...(browser ? browserTools(browser, { cwd: options.cwd }) : [])];
+      ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -384,7 +384,7 @@ export class HostSession {
    * Worker jobs are receipted against their run. Interactive jobs live only as long as this host;
    * they have no task-scoped monitor or durable wake.
    */
-  private jobRuntime(): JobRuntime | undefined {
+  private jobRuntime(registerCapability: (pid: number) => () => void): JobRuntime | undefined {
     const { options } = this;
     if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
     const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
@@ -396,7 +396,7 @@ export class HostSession {
     if (worker && (!ops.includes("job") || !ops.includes("job_monitor"))) return undefined;
     return new JobRuntime({
       cwd: options.cwd, runtimeDir: options.runtimeDir, generation: options.identity.generation,
-      settings: settings.data,
+      settings: settings.data, registerCapability,
       onEvent: (kind, data) => options.events.emit(kind, data),
       call: (op, key, payload) => worker ? options.client.call(op, {
         requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
