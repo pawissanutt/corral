@@ -49,24 +49,7 @@ pub(crate) fn shell_task(fields: &TaskHeadFields) -> Result<Task> {
     Ok(task)
 }
 
-pub(crate) fn artifact_indexes(artifact: &crate::Artifact) -> Vec<String> {
-    let file = crate::snapshot_name(artifact);
-    let original = match file.split_once('-') {
-        Some((sha, rest)) if sha.len() == 8 && sha.chars().all(|c| c.is_ascii_hexdigit()) => rest,
-        _ => file,
-    };
-    vec![
-        format!("run:{}", artifact.run),
-        format!("run-path:{}:{}", artifact.run, artifact.path),
-        format!("run-title:{}:{}", artifact.run, artifact.title),
-        format!("run-kind:{}:{}", artifact.run, artifact.kind.as_str()),
-        format!("path:{}", artifact.path),
-        format!("file:{}:{file}", artifact.run),
-        format!("original:{}:{original}", artifact.run),
-        format!("title:{}", artifact.title),
-        format!("source:{}", artifact.source),
-    ]
-}
+pub(crate) use super::head_artifact::artifact_indexes;
 
 impl TaskHead {
     /// The full Task slot predicate, without reading waits or historical containers.

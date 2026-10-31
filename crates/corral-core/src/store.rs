@@ -27,6 +27,7 @@ mod head;
 mod head_agent;
 mod head_api;
 mod head_artifact;
+pub(crate) use head_artifact::digest_token as artifact_digest_token;
 mod head_checkpoints;
 mod head_child_edit;
 mod head_children;
