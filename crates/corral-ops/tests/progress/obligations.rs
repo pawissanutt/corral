@@ -59,7 +59,7 @@ fn native_obligations_survive_checkpoint_and_fresh_or_stale_resume() {
     assert!(native.pending_decision().is_some());
     let record = source.checkpoints.last().unwrap().clone();
     assert_eq!(record.checkpoint.run_obligations, native);
-    let bytes = std::fs::read(f.ctx.store.dir().join(&record.artifact)).unwrap();
+    let bytes = f.checkpoint_bytes(&record.artifact);
     let frozen: corral_core::Checkpoint = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(frozen.run_obligations, native);
 
@@ -87,10 +87,7 @@ fn native_obligations_survive_checkpoint_and_fresh_or_stale_resume() {
             serde_json::to_value(&native).unwrap()
         );
         assert!(target.obligations.is_empty());
-        assert_eq!(
-            std::fs::read(f.ctx.store.dir().join(&record.artifact)).unwrap(),
-            bytes
-        );
+        assert_eq!(f.checkpoint_bytes(&record.artifact), bytes);
     }
 }
 
