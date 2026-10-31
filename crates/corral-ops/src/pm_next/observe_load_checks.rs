@@ -189,6 +189,48 @@ fn fold(
     }
 }
 
+/// A transcript publication never changes a load-check body or title. Carry a valid current
+/// checkpoint across its unrelated metadata change using the head's bounded facts. Historical
+/// checkpoints have no current consumer. Missing/stale checkpoints remain recovery inputs;
+/// never certify one using an incomplete artifact page. A digest collision with a reserved
+/// report registration invalidates that checkpoint instead, preserving canonical first-wins.
+pub(crate) fn published_transcript(
+    ctx: &Ctx,
+    head: &TaskHead,
+    artifact: &Artifact,
+    before: Option<&corral_core::accepted_proof::AcceptedProof>,
+) -> Result<()> {
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let key = run_key(&head.id, &artifact.run)?;
+    let previous: Option<RunState> = ctx.store.record(RUNS, &key)?;
+    if artifact.title == TITLE {
+        ctx.store.delete_record(RUNS, &key)?;
+        return Ok(());
+    }
+    let mut state = match previous {
+        Some(state) if state.revision == before.revision => state,
+        None if before.count == 0 => RunState {
+            epoch: epoch(1),
+            ..RunState::default()
+        },
+        Some(_) => {
+            // In particular, A->B->A cannot accidentally recertify a stale checkpoint.
+            ctx.store.delete_record(RUNS, &key)?;
+            return Ok(());
+        }
+        None => return Ok(()),
+    };
+    state.revision = head
+        .summary
+        .current_artifacts
+        .accepted_proof
+        .revision
+        .clone();
+    ctx.store.save_record(RUNS, &key, &state)
+}
+
 /// Called under the publisher's storage lock and task transaction. Every attachment advances
 /// its run's checkpoint, including unrelated titles, so a normal evaluation never scans. When
 /// the stored checkpoint does not describe the run as it was before this publication (any edit

@@ -51,6 +51,7 @@ pub struct TaskHeadMut {
     pub(crate) originals: std::cell::RefCell<BTreeMap<(TaskPart, String), HistoryRow>>,
     /// Set when this mutation appends a scope revision, which changes the contract digest.
     pub(crate) scope_history_changed: bool,
+    pub(crate) artifact_ordinals: BTreeMap<String, u64>,
     /// The head fields and scope revision count the contract revision was last settled for.
     pub(crate) contract_settled: Option<(TaskHeadFields, u64)>,
     /// Set by [`Self::restart_current_run`] and [`Self::restart_last_plan_run`]: the only
@@ -267,6 +268,7 @@ impl TaskHeadMut {
             history_edit: false,
             originals: std::cell::RefCell::default(),
             scope_history_changed: false,
+            artifact_ordinals: BTreeMap::new(),
             contract_settled: None,
             restarted: Restarted::default(),
             preserve_updated: false,
@@ -552,6 +554,13 @@ impl TaskHeadMut {
 
     /// Appends a registration and folds its scalar facts without loading earlier artifacts.
     pub fn add_artifact(&mut self, artifact: crate::Artifact) -> Result<()> {
+        let ordinal = match self.artifact_ordinals.get(&artifact.run) {
+            Some(n) => n.checked_add(1).context("artifact ordinal overflow")?,
+            None => self.head.next_artifact_ordinal(&artifact.run)?,
+        };
+        self.artifact_ordinals.insert(artifact.run.clone(), ordinal);
+        let mut doc = serde_json::to_value(&artifact)?;
+        doc[super::head_artifact::RUN_ORDINAL] = format!("{ordinal:020}").into();
         self.head.summary.artifacts += 1;
         self.head.summary.kept_artifacts +=
             u64::from(artifact.tier() == crate::ArtifactTier::Keep && artifact.purged_at.is_none());
@@ -568,7 +577,7 @@ impl TaskHeadMut {
             ordinal_key(usize::try_from(self.head.summary.artifacts)?),
             false,
             false,
-            serde_json::to_value(&artifact)?,
+            doc,
             super::head_api::artifact_indexes(&artifact),
         ));
         Ok(())

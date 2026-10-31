@@ -14,7 +14,7 @@ use crate::Artifact;
 pub struct AcceptedProof {
     #[serde(with = "crate::container_facts::fixed")]
     pub count: u64,
-    /// A chain over all artifact fields, including retention and compression metadata.
+    /// Versioned per-ordinal accumulator over every artifact field, including retention and compression.
     pub revision: String,
     pub first_purged: Option<ProofFailure>,
 }
@@ -23,7 +23,7 @@ impl Default for AcceptedProof {
     fn default() -> Self {
         Self {
             count: 0,
-            revision: "0".repeat(64),
+            revision: format!("v2:{:x}", Sha256::digest(b"corral.accepted-proof.v2")),
             first_purged: None,
         }
     }
@@ -34,10 +34,7 @@ impl AcceptedProof {
     /// field; this revision is an invalidation token, never a candidate/proof identity.
     pub fn fold(&mut self, artifact: &Artifact) {
         self.count += 1;
-        let mut hash = Sha256::new();
-        hash.update(self.revision.as_bytes());
-        hash.update(format!("{artifact:?}").as_bytes());
-        self.revision = format!("{:x}", hash.finalize());
+        self.toggle(self.count, artifact);
         if artifact.purged_at.is_some() && self.first_purged.is_none() {
             self.first_purged = Some(ProofFailure {
                 ordinal: self.count,
@@ -45,6 +42,33 @@ impl AcceptedProof {
                 kind: ProofFailureKind::Purged,
             });
         }
+    }
+
+    /// Replaces one registration without reading other registrations. The caller maintains
+    /// first_purged through the ordinal index; count and public ordering are unchanged.
+    pub(crate) fn replace(&mut self, ordinal: u64, before: &Artifact, after: &Artifact) {
+        self.toggle(ordinal, before);
+        self.toggle(ordinal, after);
+    }
+
+    fn toggle(&mut self, ordinal: u64, artifact: &Artifact) {
+        let mut hash = Sha256::new();
+        hash.update(b"corral.accepted-proof.v2/registration");
+        hash.update(ordinal.to_be_bytes());
+        hash.update(format!("{artifact:?}").as_bytes());
+        let leaf = format!("{:x}", hash.finalize());
+        // A malformed or old token cannot silently become the canonical v2 empty token.
+        // Stored legacy tokens are independently rederived before opening any read view.
+        let old = self.revision.strip_prefix("v2:").unwrap_or(&self.revision);
+        let value: String = old
+            .chars()
+            .zip(leaf.chars())
+            .map(|(a, b)| match (a.to_digit(16), b.to_digit(16)) {
+                (Some(a), Some(b)) => char::from_digit(a ^ b, 16).unwrap_or('?'),
+                _ => '?',
+            })
+            .collect();
+        self.revision = format!("v2:{value}");
     }
 }
 

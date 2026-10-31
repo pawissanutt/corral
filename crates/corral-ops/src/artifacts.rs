@@ -220,6 +220,7 @@ fn add_artifact_inner(
         kind,
         title,
         origin,
+        frozen.is_some(),
     );
     let (artifact, receipt) = match attached {
         Ok(attached) => attached,
@@ -274,6 +275,7 @@ fn attach(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
     origin: Option<&RequestOrigin>,
+    transcript: bool,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
     if origin.is_none()
         && let Some(attached) = attach_head(
@@ -285,6 +287,7 @@ fn attach(
             (file_name, source),
             kind,
             title,
+            transcript,
         )?
     {
         return Ok((attached, None));
@@ -397,6 +400,7 @@ fn attach_head(
     (file_name, source): (&str, &Path),
     kind: Option<ArtifactKind>,
     title: Option<&str>,
+    transcript: bool,
 ) -> Result<Option<Artifact>> {
     use corral_core::TaskRef as _;
     let kind = kind.unwrap_or_else(|| ArtifactKind::guess(file_name));
@@ -421,7 +425,20 @@ fn attach_head(
                 .or(current)
                 .unwrap_or_else(|| "R0".to_string()),
         };
-        let mut rows = t.head().artifact_rows_of(&run)?;
+        let before = t
+            .head()
+            .current_run
+            .as_ref()
+            .filter(|r| r.id == run)
+            .map(|_| t.head().summary.current_artifacts.accepted_proof.clone());
+        let mut rows = if transcript {
+            t.head()
+                .artifact_registration_by_sha(&run, sha)?
+                .into_iter()
+                .collect()
+        } else {
+            t.head().artifact_rows_of(&run)?
+        };
         if let Some((index, mut existing)) = rows.iter().find(|(_, a)| a.sha256 == sha).cloned() {
             if existing.purged_at.is_some() {
                 existing.compressed_bytes = None;
@@ -436,7 +453,18 @@ fn attach_head(
                 .filter(|(i, _)| *i == index)
                 .for_each(|(_, a)| *a = existing.clone());
             crate::artifact_storage::record_row_keys(ctx, &t.id, &existing, index, false)?;
-            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, false)?;
+            if transcript {
+                crate::pm_next::observe::load_checks::published_transcript(
+                    ctx,
+                    t.head(),
+                    &existing,
+                    before.as_ref(),
+                )?;
+            } else {
+                crate::pm_next::observe::load_checks::published_rows(
+                    ctx, &t.id, &rows, index, false,
+                )?;
+            }
             result = Some(existing);
             return Ok(true);
         }
@@ -472,7 +500,16 @@ fn attach_head(
         t.add_artifact(artifact.clone())?;
         crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
         rows.push((index, artifact.clone()));
-        crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, true)?;
+        if transcript {
+            crate::pm_next::observe::load_checks::published_transcript(
+                ctx,
+                t.head(),
+                &artifact,
+                before.as_ref(),
+            )?;
+        } else {
+            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, true)?;
+        }
         buffer_artifact_event(ctx, &t.id, &artifact)?;
         result = Some(artifact);
         Ok(true)

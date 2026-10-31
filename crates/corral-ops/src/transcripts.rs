@@ -11,6 +11,9 @@ use corral_core::{Artifact, Run, Status, Task};
 use crate::Ctx;
 
 #[cfg(test)]
+#[path = "transcript_registration_tests.rs"]
+mod registration_tests;
+#[cfg(test)]
 #[path = "transcripts_tests.rs"]
 mod tests;
 
