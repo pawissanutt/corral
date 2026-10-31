@@ -56,6 +56,8 @@ fn plan(label: &str) -> RunProgress {
                 ],
             },
         ],
+        plan: None,
+        waits: Vec::new(),
     }
 }
 
