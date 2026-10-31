@@ -94,63 +94,194 @@ fn retained(fx: &bridge::Fx, scale: usize) {
     fx.ctx.store.fixture_put_task(&task).unwrap();
 }
 
+pub(super) fn fixture(scale: usize) -> bridge::Fx {
+    corral_core::clock::pin_thread(Some(native::data::at(100_000)));
+    let fx = bridge::fixture(false, 1);
+    fx.ctx
+        .store
+        .fixture_pin_now(native::data::at(100_000))
+        .unwrap();
+    super::action_budget_growth::grow(&fx.ctx.store, fx.root(), &fx.id, 2 * scale, true, true);
+    for i in 0..2 * scale {
+        let mut task = fx
+            .ctx
+            .store
+            .create(
+                &format!("Retired {i:04}"),
+                Some("corral"),
+                corral_core::Status::Done,
+                "old",
+            )
+            .unwrap();
+        native::data::grow(&mut task, 2 * scale, 2 * scale, 2 * scale, 2 * scale);
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+    }
+    // A completed tracker/member pair also grows the T-251 history family. It is not
+    // reclassified into live work just to make this worker's pipeline select it.
+    let mut tracker = fx
+        .ctx
+        .store
+        .create(
+            "Retired tracker",
+            Some("corral"),
+            corral_core::Status::Done,
+            "tracking",
+        )
+        .unwrap();
+    tracker.tracker = true;
+    tracker.member_gates.insert("T-002".into(), serde_json::from_value(json!({
+            "revision":2 * scale + 1,"gate":{"tier":"quick"},"reason":"current rule","by":"owner","at":native::data::at(99),
+            "history":(1..=2 * scale).map(|revision| json!({"revision":revision,"gate":{"tier":"quick"},"reason":"previous rule","by":"owner","at":native::data::at(revision as i64)})).collect::<Vec<_>>()
+        })).unwrap());
+    fx.ctx.store.fixture_put_task(&tracker).unwrap();
+    fx.ctx
+        .store
+        .update("T-002", |member| {
+            member.parent = Some(tracker.id.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        fx.ctx.store.get(&tracker.id).unwrap().member_gates["T-002"]
+            .history
+            .len(),
+        2 * scale
+    );
+    retained(&fx, scale);
+    fx
+}
+
+const CHILD_ROOT: &str = "CORRAL_NATIVE_TASK_PROCESS_ROOT";
+const CHILD_REPORT: &str = "CORRAL_NATIVE_TASK_PROCESS_REPORT";
+pub(super) type Cost = [u64; Counter::ALL.len()];
+
+#[test]
+fn native_task_sync_fresh_process_child() {
+    let Some(root) = std::env::var_os(CHILD_ROOT) else {
+        return;
+    };
+    corral_core::clock::pin_thread(Some(native::data::at(100_000)));
+    crate::agent::bridge::liveness::probe_hosts_in_tests();
+    let ctx = bridge::ctx_at(std::path::Path::new(&root));
+    let cost = observe(&ctx, "T-001");
+    let report = json!({"pid":std::process::id(),"cost":cost});
+    std::fs::write(
+        std::env::var_os(CHILD_REPORT).unwrap(),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    corral_core::clock::pin_thread(None);
+}
+
+pub(super) fn observe(ctx: &crate::Ctx, id: &str) -> Cost {
+    let oracle = corral_core::Store::open(ctx.store.root()).unwrap();
+    let doc = oracle
+        .view()
+        .unwrap()
+        .task(
+            TaskNum(id.trim_start_matches("T-").parse().unwrap()),
+            &TaskParts::All,
+        )
+        .unwrap()
+        .unwrap();
+    let events = oracle.events().unwrap();
+    let mut replay = native::full_read_cost(&doc);
+    *replay.get_mut(&Counter::ViewsOpened).unwrap() += 1;
+    replay.insert(Counter::EventDecodes, events.len() as u64);
+    *replay.get_mut(&Counter::DecodedDocBytes).unwrap() += events
+        .iter()
+        .map(|event| serde_json::to_vec(&event.detail).unwrap().len() as u64)
+        .sum::<u64>();
+    let before = work::snapshot();
+    let hot = HotScope::enter();
+    let output = crate::agent::hooks::sync::task_id(ctx, id, ctx.store.now()).unwrap();
+    let delta = work::snapshot().since(&before);
+    drop(hot);
+    assert_eq!(output.open.len(), 1, "{output:?}");
+    assert_eq!(
+        output.open[0].container,
+        corral_core::agent::ContainerRef::Worker {
+            task: id.into(),
+            run: "R1".into()
+        }
+    );
+    assert!(output.open[0].healthy, "{output:?}");
+    assert_eq!(output.attention, None);
+    assert_eq!(
+        ctx.store
+            .get(id)
+            .unwrap()
+            .runs
+            .last()
+            .unwrap()
+            .agent_host
+            .as_ref()
+            .unwrap()
+            .binding
+            .health,
+        corral_core::agent::HostHealth::Healthy
+    );
+    assert_eq!(
+        ctx.store.events().unwrap(),
+        events,
+        "steady pipeline must not append events"
+    );
+    assert_eq!(delta.followup_calls.len(), 1, "{delta:?}");
+    assert_eq!(delta.followup_calls("T-623", "question_event_replay"), 3);
+    for counter in Counter::ALL {
+        let cells = delta.cells(counter);
+        assert_eq!(
+            cells
+                .followup
+                .get(&("T-623".into(), "question_event_replay".into()))
+                .copied()
+                .unwrap_or(0),
+            3 * replay[&counter],
+            "{}: {delta:?}",
+            counter.name()
+        );
+        assert_eq!(
+            cells.total,
+            cells.unattributed
+                + cells.own_record
+                + cells.emitted
+                + cells.followup.values().sum::<u64>()
+        );
+    }
+    assert_eq!(delta.unattributed_hydrations(), 0, "{delta:?}");
+    eprintln!(
+        "NATIVE owning pipeline pid={}: {delta:?}",
+        std::process::id()
+    );
+    delta.check_identity().unwrap();
+    Counter::ALL.map(|counter| delta.get(counter))
+}
+
+fn rpc(socket: &bridge::Bridge) {
+    let frames = socket.commands();
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["command"] == "get_state")
+            .count(),
+        1,
+        "{frames:?}"
+    );
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["command"] == "events_since")
+            .count(),
+        1,
+        "{frames:?}"
+    );
+}
+
 #[test]
 fn owning_native_sync_pipeline_has_fixed_unattributed_work_with_real_host_probes() {
     let mut costs = Vec::new();
     for scale in [1, 10] {
-        corral_core::clock::pin_thread(Some(native::data::at(100_000)));
-        let fx = bridge::fixture(false, 1);
-        fx.ctx
-            .store
-            .fixture_pin_now(native::data::at(100_000))
-            .unwrap();
-        super::action_budget_growth::grow(&fx.ctx.store, fx.root(), &fx.id, 2 * scale, true, true);
-        for i in 0..2 * scale {
-            let mut task = fx
-                .ctx
-                .store
-                .create(
-                    &format!("Retired {i:04}"),
-                    Some("corral"),
-                    corral_core::Status::Done,
-                    "old",
-                )
-                .unwrap();
-            native::data::grow(&mut task, 2 * scale, 2 * scale, 2 * scale, 2 * scale);
-            fx.ctx.store.fixture_put_task(&task).unwrap();
-        }
-        // A completed tracker/member pair also grows the T-251 history family. It is not
-        // reclassified into live work just to make this worker's pipeline select it.
-        let mut tracker = fx
-            .ctx
-            .store
-            .create(
-                "Retired tracker",
-                Some("corral"),
-                corral_core::Status::Done,
-                "tracking",
-            )
-            .unwrap();
-        tracker.tracker = true;
-        tracker.member_gates.insert("T-002".into(), serde_json::from_value(json!({
-            "revision":2 * scale + 1,"gate":{"tier":"quick"},"reason":"current rule","by":"owner","at":native::data::at(99),
-            "history":(1..=2 * scale).map(|revision| json!({"revision":revision,"gate":{"tier":"quick"},"reason":"previous rule","by":"owner","at":native::data::at(revision as i64)})).collect::<Vec<_>>()
-        })).unwrap());
-        fx.ctx.store.fixture_put_task(&tracker).unwrap();
-        fx.ctx
-            .store
-            .update("T-002", |member| {
-                member.parent = Some(tracker.id.clone());
-                Ok(())
-            })
-            .unwrap();
-        assert_eq!(
-            fx.ctx.store.get(&tracker.id).unwrap().member_gates["T-002"]
-                .history
-                .len(),
-            2 * scale
-        );
-        retained(&fx, scale);
+        let fx = fixture(scale);
         let process = bridge::HostProc::spawn(true);
         let host = fx.bind(&fx.worker_target(), "w0:p1", &process);
         assert_eq!(host.identity.generation, 1000);
@@ -164,6 +295,9 @@ fn owning_native_sync_pipeline_has_fixed_unattributed_work_with_real_host_probes
             native.wakes.len(),
             native.reports.len(),
             native.jobs.len(),
+            native.rewinds.len(),
+            native.usage_sessions.len(),
+            native.budget.requests.len(),
             stored.agent_pm_receipts.len(),
         ] {
             assert_eq!(count, 2 * scale, "actual canonical retained-family growth");
@@ -187,92 +321,38 @@ fn owning_native_sync_pipeline_has_fixed_unattributed_work_with_real_host_probes
             } else {
                 fx.ctx.clone()
             };
-            let doc = ctx
-                .store
-                .view()
-                .unwrap()
-                .task(TaskNum(1), &TaskParts::All)
-                .unwrap()
-                .unwrap();
-            let events = ctx.store.events().unwrap();
-            let mut replay = native::full_read_cost(&doc);
-            *replay.get_mut(&Counter::ViewsOpened).unwrap() += 1;
-            replay.insert(Counter::EventDecodes, events.len() as u64);
-            *replay.get_mut(&Counter::DecodedDocBytes).unwrap() += events
-                .iter()
-                .map(|event| serde_json::to_vec(&event.detail).unwrap().len() as u64)
-                .sum::<u64>();
-            let before = work::snapshot();
-            let hot = HotScope::enter();
-            let output = crate::agent::hooks::sync::task_id(&ctx, &fx.id, ctx.store.now()).unwrap();
-            let delta = work::snapshot().since(&before);
-            drop(hot);
-            assert_eq!(output.open.len(), 1, "{output:?}");
-            assert_eq!(output.open[0].container, fx.worker());
-            assert!(output.open[0].healthy, "{output:?}");
-            assert_eq!(output.attention, None);
-            let frames = socket.commands();
-            assert_eq!(
-                frames
-                    .iter()
-                    .filter(|frame| frame["command"] == "get_state")
-                    .count(),
-                1,
-                "{frames:?}"
-            );
-            assert_eq!(
-                frames
-                    .iter()
-                    .filter(|frame| frame["command"] == "events_since")
-                    .count(),
-                1,
-                "{frames:?}"
-            );
-            assert_eq!(
-                ctx.store
-                    .get(&fx.id)
-                    .unwrap()
-                    .runs
-                    .last()
-                    .unwrap()
-                    .agent_host
-                    .as_ref()
-                    .unwrap()
-                    .binding
-                    .health,
-                corral_core::agent::HostHealth::Healthy
-            );
-            assert_eq!(
-                ctx.store.events().unwrap(),
-                events,
-                "steady pipeline must not append events"
-            );
-            assert_eq!(delta.followup_calls.len(), 1, "{delta:?}");
-            assert_eq!(delta.followup_calls("T-623", "question_event_replay"), 3);
-            for counter in Counter::ALL {
-                let cells = delta.cells(counter);
-                assert_eq!(
-                    cells
-                        .followup
-                        .get(&("T-623".into(), "question_event_replay".into()))
-                        .copied()
-                        .unwrap_or(0),
-                    3 * replay[&counter],
-                    "{}: {delta:?}",
-                    counter.name()
-                );
-                assert_eq!(
-                    cells.total,
-                    cells.unattributed
-                        + cells.own_record
-                        + cells.emitted
-                        + cells.followup.values().sum::<u64>()
-                );
-            }
-            assert_eq!(delta.unattributed_hydrations(), 0, "{delta:?}");
-            eprintln!("NATIVE owning pipeline scale={scale} fresh={fresh}: {delta:?}");
-            costs.push(Counter::ALL.map(|counter| delta.get(counter)));
+            costs.push(observe(&ctx, &fx.id));
+            rpc(&socket);
         }
+        let report = fx.root().join("native-task-process-report.json");
+        assert!(!report.exists());
+        let child = crate::test_support::command(std::env::current_exe().unwrap(), fx.root())
+            .args([
+                "--exact",
+                "submission_paths_tests::native_sync_budget::native_task_sync_fresh_process_child",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, fx.root())
+            .env(CHILD_REPORT, &report)
+            .env("RUST_TEST_THREADS", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "fresh task child: {}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(String::from_utf8_lossy(&child.stdout).contains("1 passed; 0 failed;"));
+        let result: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(report).unwrap()).unwrap();
+        let pid = result["pid"].as_u64().unwrap();
+        assert_ne!(pid, u64::from(std::process::id()));
+        let cost: Cost = serde_json::from_value(result["cost"].clone()).unwrap();
+        costs.push(cost);
+        rpc(&socket);
+        eprintln!("Fresh native task sync child pid={pid} scale={scale}");
         corral_core::clock::pin_thread(None);
     }
     for cost in &costs[1..] {
