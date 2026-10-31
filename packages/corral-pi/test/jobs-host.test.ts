@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { EventLog } from "../src/bridge/events.ts";
+import { type JobRuntime, startTimeOf } from "../src/extensions/jobs/runtime.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
@@ -125,6 +126,71 @@ test("background_shell gives only the worker job tools, and the monitor runs onl
     } finally {
       without.session.dispose();
     }
+  } finally {
+    assets.cleanup();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test("host close fences a job whose prepare is in flight", async () => {
+  const assets = buildFixtureInstall();
+  const cwd = mkdtempSync(join(tmpdir(), "corral-pi-close-start-"));
+  try {
+    restrictEnvironment(process.env);
+    const sdk = await import("@earendil-works/pi-coding-agent");
+    const modules = await loadModules(assets.dir, "worker");
+    const transport = modules.auth.transport?.(authContext());
+    if (!transport) throw new Error("fixture transport missing");
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-565", run: "R1" };
+    const events = new EventLog(1);
+    const corral = writeFakeCorral(cwd);
+    let host: HostSession | undefined;
+    const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64),
+      sessionId: () => host?.sessionId() ?? "" });
+    let holdPrepare = false;
+    let prepared!: () => void;
+    const prepareEntered = new Promise<void>((resolve) => { prepared = resolve; });
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const call = client.call.bind(client);
+    client.call = async (op, request) => {
+      const receipt = await call(op, request);
+      if (holdPrepare && op === "job" && request.payload.action === "prepare") {
+        prepared();
+        await barrier;
+      }
+      return receipt;
+    };
+    host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
+      capabilities, guidance: { ...guidance, settings: { background_shell: { ...guidance.settings.background_shell, max_jobs: 3 } } },
+      client, events, network: guardedFetch(transport, undefined, "openai-codex"),
+      runtimeDir: join(cwd, "runtime"), modules: { ...modules, role: workerRole(PACKAGE_ROOT) },
+      sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")) });
+    await host.session.bindExtensions({});
+    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    const jobs = (host as unknown as { jobs: JobRuntime }).jobs;
+    const ready = join(cwd, "ready");
+    expect(spawnSync("mkfifo", [ready]).status).toBe(0);
+    const normal = await jobs.start("sleep 30", "normal");
+    const stubborn = await jobs.start(`trap '' TERM; echo ready > ${ready}; exec sleep 30`, "stubborn");
+    await readFile(ready, "utf8");
+    holdPrepare = true;
+    const shutdown = jobs.shutdown.bind(jobs);
+    let closing!: () => void;
+    const shutdownEntered = new Promise<void>((resolve) => { closing = resolve; });
+    jobs.shutdown = () => { const result = shutdown(); closing(); return result; };
+    fixtureTransport().script([{ toolCalls: [{ callId: "start", name: "job_start", arguments: { command: "sleep 30" } }] }]);
+    await host.submit({ text: "go", busyPolicy: "prompt", idempotencyKey: "go", origin: "test" }, "rq-go");
+    await prepareEntered;
+    const closed = host.close();
+    await shutdownEntered;
+    release();
+    await closed;
+    const actions = corral.calls().map((item) => item.envelope).filter((item) => item.op === "job")
+      .map((item) => item.payload.action);
+    expect(actions.filter((action) => action === "prepare")).toHaveLength(3);
+    expect(actions.filter((action) => action === "started")).toHaveLength(2);
+    for (const job of [normal, stubborn]) expect(startTimeOf(job.pid as number)).toBeUndefined();
   } finally {
     assets.cleanup();
     rmSync(cwd, { recursive: true, force: true });

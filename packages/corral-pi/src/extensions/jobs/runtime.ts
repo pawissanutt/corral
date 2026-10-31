@@ -160,6 +160,9 @@ export class JobError extends Error {}
 export class JobRuntime {
   private readonly jobs = new Map<string, Job>();
   private seq = 0;
+  private shutdownEpoch = 0;
+  private shutdownOperation?: Promise<void>;
+  private readonly starting = new Set<Promise<unknown>>();
   private readonly schedule: Schedule;
 
   constructor(private readonly options: JobRuntimeOptions) {
@@ -195,6 +198,17 @@ export class JobRuntime {
   }
 
   async start(command: string, key: string): Promise<Record<string, unknown>> {
+    if (this.shutdownOperation) throw new JobError("job runtime is shutting down");
+    const starting = this.startJob(command, key, this.shutdownEpoch);
+    this.starting.add(starting);
+    try {
+      return await starting;
+    } finally {
+      this.starting.delete(starting);
+    }
+  }
+
+  private async startJob(command: string, key: string, epoch: number): Promise<Record<string, unknown>> {
     const { settings } = this.options;
     if (this.live() >= settings.max_jobs) {
       throw new JobError(`job_limit: ${settings.max_jobs} jobs are already running; wait for one or kill it`);
@@ -202,6 +216,7 @@ export class JobRuntime {
     const id = `j${this.options.generation}-${++this.seq}`;
     const prepared = await this.options.call("job", `${key}/prepare`, { action: "prepare", job: id, command });
     if (prepared.state !== "committed") return { job: id, state: "refused", result: prepared.result };
+    if (epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "job runtime shut down" };
     const dir = join(this.options.runtimeDir, "jobs");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, `${id}.log`);
@@ -435,6 +450,19 @@ export class JobRuntime {
   }
 
   async shutdown(): Promise<void> {
+    if (this.shutdownOperation) return this.shutdownOperation;
+    this.shutdownEpoch++;
+    const operation = this.stopJobs();
+    this.shutdownOperation = operation;
+    try {
+      await operation;
+    } finally {
+      this.shutdownOperation = undefined;
+    }
+  }
+
+  private async stopJobs(): Promise<void> {
+    await Promise.allSettled([...this.starting]);
     await Promise.all([...this.jobs.values()].filter((job) => !job.groupClear).map(async (job) => {
       this.groupSignal(job, "SIGTERM");
       job.cancelKill?.();
