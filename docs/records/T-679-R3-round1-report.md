@@ -35,15 +35,22 @@ Current main's other changes were retained by normal rebase.
 - Green: from `packages/corral-pi`, `bun test
   src/roles/assistant/assistant.test.ts test/request.test.ts` passes 40 tests,
   including all three exact-copy variants and both roles' capability selection.
+  The same command passes again after integrating the landed T-686 fix at
+  `2f5e7f92`. Independent package typechecking also passed on the preserved
+  candidate before that final integration.
 - Changed-file diagnostics report no errors or warnings. The existing
   no-effect-await hint in the receipt fixture is unrelated and left unchanged.
-- No quick-gate receipt exists for this round yet. The normal contracted
-  `corral gate T-679 --wait` command was admitted as full tier because the run
-  retains the old candidate's approval and is classified as landing. The worker
+- The first admitted round attempt of the normal contracted
+  `corral gate T-679 --wait` command selected full tier because the run
+  retained the old candidate's approval and was classified as landing. The worker
   interrupted that unintended attempt; its actual command receipt records
   exit 130. The receipt and tier context are evidence of the workflow mismatch,
-  not a passing or quick-gate result. Normal review/quick eligibility must be
-  restored before the contracted quick gate and completion can proceed.
+  not a passing or quick-gate result. Per the owner's answer, the clean candidate
+  was parked on T-686, releasing its coding slot without rewriting workflow
+  state, approval history or policy. T-686 subsequently landed and its supported
+  installed identity is `2f5e7f92`; native R3 selection now reports review/quick.
+  Use the separately recorded contracted quick-gate receipt and completion
+  audit for final submission, never the interrupted full-tier result.
 
 The original implementation, acceptance mapping and terminal evidence remain
 documented in `T-679-R3-report.md` and the prior independent review. They are
