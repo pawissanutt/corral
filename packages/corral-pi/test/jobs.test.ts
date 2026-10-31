@@ -251,7 +251,7 @@ test("shutdown awaits process-group closure without waiting on remote exit recei
   // When shutdown is awaited, it must be a process-completion boundary, not just a signal.
   const shutdown = fx.runtime.shutdown();
   try {
-    expect(shutdown).toBeInstanceOf(Promise);
+    expect(shutdown instanceof Promise).toBeTrue();
     await shutdown;
     // Then cleanup has completed independently of the deliberately blocked remote receipt.
     expect(startTimeOf(pid)).toBeUndefined();
