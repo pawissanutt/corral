@@ -1,10 +1,11 @@
-//! Derived HTML previews. Originals remain the open target; thumbnails are disposable sibling files.
+//! Derived HTML previews. Originals remain the open target; thumbnails live only in rebuildable cache.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use corral_core::Artifact;
+use sha2::{Digest, Sha256};
 
 use crate::Ctx;
 use crate::viewers::{Host, SystemHost};
@@ -18,10 +19,16 @@ pub fn is_visual_artifact(artifact: &Artifact) -> bool {
         )
 }
 
-fn thumbnail_path(ctx: &Ctx, artifact: &Artifact) -> PathBuf {
-    ctx.store
-        .dir()
-        .join(format!("{}.thumbnail.png", artifact.path))
+fn thumbnail_path(ctx: &Ctx, artifact: &Artifact) -> Result<PathBuf> {
+    let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256)?;
+    // Identical HTML can refer to different run-scoped assets. Never share previews
+    // across logical artifact owners merely because the HTML body hash matches.
+    let owner = format!("{:x}", Sha256::digest(artifact.path.as_bytes()));
+    Ok(ctx
+        .store
+        .cache_root()?
+        .join("thumbnails")
+        .join(format!("{owner}-{hash}.png")))
 }
 
 /// Raster snapshots display directly; HTML displays its done-time screenshot, when available.
@@ -33,7 +40,7 @@ pub fn artifact_thumbnail(ctx: &Ctx, artifact: &Artifact) -> Result<Option<PathB
         crate::viewers::extension(Path::new(&artifact.path)).as_str(),
         "html" | "htm"
     ) {
-        let path = thumbnail_path(ctx, artifact);
+        let path = thumbnail_path(ctx, artifact)?;
         return Ok(path.is_file().then_some(path));
     }
     crate::artifact_path(ctx, artifact).map(Some)
@@ -51,7 +58,7 @@ fn chrome() -> Result<PathBuf> {
 }
 
 fn capture(ctx: &Ctx, artifact: &Artifact, browser: &Path) -> Result<()> {
-    let target = thumbnail_path(ctx, artifact);
+    let target = thumbnail_path(ctx, artifact)?;
     if target.is_file() {
         return Ok(());
     }
@@ -88,6 +95,7 @@ fn capture(ctx: &Ctx, artifact: &Artifact, browser: &Path) -> Result<()> {
     let parent = target
         .parent()
         .context("thumbnail has no parent directory")?;
+    std::fs::create_dir_all(parent).context("creating thumbnail cache directory")?;
     let mut pending =
         tempfile::NamedTempFile::new_in(parent).context("creating atomic thumbnail file")?;
     pending

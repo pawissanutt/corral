@@ -280,10 +280,19 @@ fn done_snapshots_diff_summary_and_scanned_report() {
         t.id,
         &report.sha256[..8]
     )));
-    assert!(ws.ctx.store.dir().join(&report.path).is_file());
+    assert!(
+        !ws.ctx.store.dir().join(&report.path).exists(),
+        "new reports have no mirror"
+    );
+    let hash = corral_core::blob_ref::BlobHash::parse(&report.sha256).unwrap();
+    assert!(ws.ctx.store.blob_store().unwrap().path_of(&hash).is_file());
+    assert_eq!(
+        corral_ops::artifact_read(&ws.ctx, report).unwrap(),
+        b"# Report\nall good\n"
+    );
     assert_eq!(t.artifacts.len(), 3, "feature.txt does not match any glob");
 
-    let diff_text = std::fs::read_to_string(ws.ctx.store.dir().join(&diff.path)).unwrap();
+    let diff_text = String::from_utf8(corral_ops::artifact_read(&ws.ctx, diff).unwrap()).unwrap();
     assert!(diff_text.contains("+line one"));
     assert!(
         ws.ctx
@@ -347,7 +356,7 @@ fn done_harvests_ignored_scratch_and_legacy_evidence() {
     for name in ["new.log", "legacy.log"] {
         let artifact = finished.artifacts.iter().find(|a| a.title == name).unwrap();
         assert_eq!(
-            std::fs::read(ws.ctx.store.dir().join(&artifact.path)).unwrap(),
+            corral_ops::artifact_read(&ws.ctx, artifact).unwrap(),
             name.as_bytes()
         );
     }

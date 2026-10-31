@@ -242,6 +242,24 @@ fn done_task_detail_reads_snapshots_after_the_worktree_is_removed() {
         runs_tab.contains("(removed)") && runs_tab.contains("Added the shard cache."),
         "{runs_tab}"
     );
+    // A later canonical fault must be unavailable, not a fabricated empty/no-change diff.
+    let task = fx.ctx.store.get(&fx.id).unwrap();
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|a| a.kind == corral_core::ArtifactKind::Diff)
+        .unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+    std::fs::write(
+        fx.ctx.store.blob_store().unwrap().path_of(&hash),
+        "invalid frame",
+    )
+    .unwrap();
+    let error = corral_ops::review_info(&fx.ctx, &fx.id).unwrap_err();
+    assert!(format!("{error:#}").contains("HashMismatch"), "{error:#}");
+    let mut unavailable = DetailView::new(&fx.ctx, &fx.id).unwrap();
+    unavailable.on_key(key(KeyCode::Char('4')), &fx.ctx);
+    assert!(render(&mut unavailable, &fx.ctx).contains("diff unavailable"));
 }
 
 #[test]

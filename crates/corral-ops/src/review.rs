@@ -17,6 +17,7 @@ use crate::cleanup::Cleanup;
 use crate::verification;
 
 mod owner;
+mod snapshot_diff;
 pub use owner::awaiting_owner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,13 +339,7 @@ pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
             corral_git::diff_text(&run.worktree, &base)?,
         )
     } else {
-        let snapshot = artifacts
-            .iter()
-            .rev()
-            .find(|a| a.kind == ArtifactKind::Diff)
-            .and_then(|a| std::fs::read_to_string(ctx.store.dir().join(&a.path)).ok())
-            .unwrap_or_default();
-        (DiffStat::from_diff(&snapshot), snapshot)
+        snapshot_diff::read(ctx, &artifacts)?
     };
     let main_ready =
         match crate::plan_target::validate_run(&ctx.store, &task, &corral_core::RunHead::of(&run)?)
