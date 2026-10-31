@@ -132,6 +132,9 @@ pub enum ScratchCmd {
         /// Context for the run summary and a new task's body
         #[arg(long)]
         note: Option<String>,
+        /// Refuse `stale_candidate` unless the scratch HEAD is this commit (the candidate the owner was shown)
+        #[arg(long, value_name = "SHA")]
+        expected_head: Option<String>,
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
@@ -203,11 +206,13 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
             let session = ctx.store.get_assistant(&id)?;
             let container = ctx.store.get_assistant_container(&id)?;
             let usage = corral_ops::assistant_usage(&ctx.store, &session)?;
+            let host = corral_ops::assistant::host::host_assets(&ctx.store, &container.state);
             if json {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
                         "session": session, "body": session.body, "container": container, "usage": usage,
+                        "host": host,
                     }))?
                 );
             } else {
@@ -229,6 +234,10 @@ pub fn run(ctx: &Ctx, args: AssistantArgs) -> Result<()> {
                         .map(|u| u.summary())
                         .unwrap_or_else(|| "unknown".into())
                 );
+                if session.ended.is_none() {
+                    println!("{}", host.line(&session.id));
+                    println!("owner actions: {}", host.owner_actions.join(", "));
+                }
                 for generation in &container.state.generations {
                     if let Some(bound) = &generation.bound {
                         println!(
@@ -372,6 +381,7 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
             review,
             into,
             note,
+            expected_head,
             session,
             json,
         } => {
@@ -389,6 +399,7 @@ fn scratch(ctx: &Ctx, cmd: ScratchCmd) -> Result<()> {
                 review: Some(review),
                 into: into.as_deref(),
                 note: note.as_deref(),
+                expected_head: expected_head.as_deref(),
             };
             let done = ops::finish(ctx, &session, &slug, &opts)?;
             if json {

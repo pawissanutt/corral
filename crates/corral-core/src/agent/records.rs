@@ -185,6 +185,10 @@ pub struct AgentGeneration {
     /// How these settings differ from the previous generation's, when they do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capability_transition: Option<super::CapabilityTransition>,
+    /// The pi-native asset digest its bootstrap named: the contract and tool descriptions this
+    /// generation runs with. Recorded for assistant generations (T-653); absent before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assets_sha256: Option<String>,
 }
 
 impl AgentGeneration {

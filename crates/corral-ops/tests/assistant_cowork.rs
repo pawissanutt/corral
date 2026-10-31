@@ -324,6 +324,57 @@ fn review_required_runs_the_normal_reviewer_after_the_gate() {
     assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::Review);
 }
 
+#[test]
+fn a_stale_candidate_refuses_and_the_shown_one_goes_to_independent_review() {
+    // Given A-1's scratch whose candidate the owner was shown, then one more commit on it.
+    let fx = Fx::new(Some("rev"));
+    let made = fx.scratch("cache-fix");
+    let shown = fx.commit(&made.path, "cache.txt");
+    let later = fx.commit(&made.path, "more.txt");
+    let review = |head| Finish {
+        title: Some("Fix the cache"),
+        review: Some(CoworkReview::Required),
+        expected_head: Some(head),
+        ..Finish::default()
+    };
+    // When the owner's answer finishes the candidate they saw, it refuses and changes nothing;
+    // so does a value that is no commit SHA.
+    let stale = scratch::finish(&fx.ctx, "A-1", "cache-fix", &review(&shown[..7])).unwrap_err();
+    assert!(
+        format!("{stale:#}").contains("stale_candidate"),
+        "{stale:#}"
+    );
+    let bad = scratch::finish(&fx.ctx, "A-1", "cache-fix", &review("-v")).unwrap_err();
+    assert!(
+        format!("{bad:#}").contains("--expected-head takes"),
+        "{bad:#}"
+    );
+    assert!(fx.ctx.store.list().unwrap().is_empty());
+    assert_eq!(fx.kind("cache-fix").as_deref(), Some("spike"));
+    assert_eq!(git(&made.path, &["rev-parse", "HEAD"]), later);
+    let events = fx.ctx.store.events_shared().unwrap();
+    assert!(!events.iter().any(|e| e.kind == "cowork_finished"));
+    // When the owner was shown the current candidate and asks for independent review.
+    let finished = scratch::finish(&fx.ctx, "A-1", "cache-fix", &review(&later[..12])).unwrap();
+    // Then the gate and the normal reviewer run on that same commit, in the one co-work run.
+    assert_eq!(
+        (finished.head.as_str(), finished.gate.as_str()),
+        (later.as_str(), "pass")
+    );
+    assert_eq!(finished.reviewer.as_deref(), Some("rev"));
+    let task = fx.ctx.store.get(&finished.task).unwrap();
+    assert_eq!(task.runs.len(), 1);
+    let run = task.current_run().unwrap();
+    assert_eq!(
+        run.gate.as_ref().map(|g| g.sha.as_str()),
+        Some(later.as_str())
+    );
+    assert_eq!(run.review_runs.len(), 1);
+    let events = fx.ctx.store.events_shared().unwrap();
+    let event = events.iter().find(|e| e.kind == "cowork_finished").unwrap();
+    assert_eq!(event.detail["candidate"], later.as_str());
+}
+
 fn approve(fx: &Fx, id: &str) -> anyhow::Result<String> {
     corral_ops::approve(&fx.ctx, id, ApproveStrategy::FastForward, true, false)
 }

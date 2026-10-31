@@ -137,6 +137,9 @@ fn two_launches_open_separate_assistant_sessions_without_a_task_or_slot() {
         assert_eq!(saved["project"], "");
         assert_eq!(saved["cwd"], json!(fx.ctx.store.root()));
         assert!(saved["capabilities"]["digest"].is_string());
+        // And the generation records the asset digest its bootstrap names (T-653).
+        let assets = container.state.generation(1).unwrap().assets_sha256.clone();
+        assert_eq!(assets.as_deref(), saved["asset_sha256"].as_str());
     }
     // No task, run, queue entry or pane typing came with them.
     assert_eq!(fx.ctx.store.list().unwrap(), tasks);
@@ -274,6 +277,14 @@ fn resume_after_host_death_fences_generation_one_and_opens_two_in_this_pane() {
     assert_eq!(container.state.generation(2).unwrap().pane, OTHER);
     assert_eq!(container.pane.as_deref(), Some(OTHER));
     let saved = bootstrap(&fx, &id, 2);
+    let assets = container
+        .state
+        .generation(2)
+        .unwrap()
+        .assets_sha256
+        .as_deref();
+    assert_eq!(assets, saved["asset_sha256"].as_str());
+    assert!(assets.is_some());
     assert_eq!(saved["resume_session"], json!(session_file(&first)));
     assert_eq!(saved["fresh_session"], false);
     assert_eq!(fx.events("assistant_resumed").len(), 1);
