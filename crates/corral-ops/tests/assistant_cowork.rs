@@ -246,6 +246,46 @@ fn c9_finish_materializes_a_gated_review_none_task_that_lands_through_approve() 
 }
 
 #[test]
+fn finish_records_note_when_zero_usage_is_followed_by_partial_response() {
+    let fx = Fx::new(None);
+    let made = fx.scratch("partial");
+    fx.commit(&made.path, "partial.txt");
+    fx.usage_around(made.created);
+    let transcript = fx.ctx.store.dir().join("A-1-session.jsonl");
+    // A completed zero-token assistant entry is followed by an unfinished response. The old
+    // collector silently dropped the tail and finish persisted a zero-input Usage without a note.
+    std::fs::write(&transcript, format!(
+        "{{\"type\":\"message\",\"id\":\"zero\",\"timestamp\":\"{}\",\"message\":{{\"role\":\"assistant\",\"usage\":{{\"input\":0,\"output\":0}}}}}}\n{{\"type\":\"message\",\"id\":\"partial\"",
+        made.created
+    )).unwrap();
+    let finished = scratch::finish(
+        &fx.ctx,
+        "A-1",
+        "partial",
+        &Finish {
+            title: Some("Partial transcript"),
+            ..Finish::default()
+        },
+    )
+    .unwrap();
+    let task = fx.ctx.store.get(&finished.task).unwrap();
+    let run = task.current_run().unwrap();
+    assert!(
+        run.usage.is_none(),
+        "partial snapshot must not be recorded as complete: {:?}",
+        run.usage
+    );
+    assert!(
+        run.usage_note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("incomplete trailing line"),
+        "{:?}",
+        run.usage_note
+    );
+}
+
+#[test]
 fn review_required_runs_the_normal_reviewer_after_the_gate() {
     // Given A-1's scratch with a commit in a project reviewed by rev.
     let fx = Fx::new(Some("rev"));
