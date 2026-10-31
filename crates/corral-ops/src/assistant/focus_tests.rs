@@ -22,7 +22,10 @@ fn brief_is_bounded_utf8_context_and_has_all_sections_without_mutation() {
         })).unwrap());
         Ok(())
     }).unwrap();
-    let before = std::fs::read(&task.path).unwrap();
+    let before = (
+        store.get(&task.id).unwrap(),
+        store.head(&task.id).unwrap().rev,
+    );
     let text = task_brief(&store, &task.id).unwrap();
     assert!(text.len() <= BRIEF_BYTES);
     for expected in [
@@ -41,5 +44,11 @@ fn brief_is_bounded_utf8_context_and_has_all_sections_without_mutation() {
     ] {
         assert!(text.contains(expected), "missing {expected}");
     }
-    assert_eq!(before, std::fs::read(&task.path).unwrap());
+    assert_eq!(
+        before,
+        (
+            store.get(&task.id).unwrap(),
+            store.head(&task.id).unwrap().rev
+        )
+    );
 }

@@ -255,7 +255,7 @@ pub fn open_focused(
 /// current generation and opens the next one here on the same Pi session file.
 pub fn resume(ctx: &Ctx, id: &str, pane: &str, overrides: &Overrides) -> Result<(u32, Prepared)> {
     corral_core::assistant::validate_id(id).map_err(|e| refuse("usage_error", format!("{e:#}")))?;
-    if !ctx.store.assistant_path(id)?.exists() {
+    if !ctx.store.assistant_exists(id)? {
         return Err(refuse(
             "assistant_unknown",
             format!("no assistant session {id}"),

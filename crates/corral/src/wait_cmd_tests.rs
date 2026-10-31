@@ -27,7 +27,7 @@ fn attention_batches_route_complete_membership_and_resume_without_replay() {
         (vec!["--project", "beta"], "beta"),
     ] {
         let opts = args(&options);
-        let mut reader = EventReader::from_offset(&store.dir().join("events.jsonl"), 0).unwrap();
+        let mut reader = store.events_since(Some(EventCursor::default())).unwrap();
         let mut matched = None;
         while let Some((event, cursor)) = reader.next_event().unwrap() {
             if opts.matches(&store, &event).unwrap() {
@@ -38,14 +38,13 @@ fn attention_batches_route_complete_membership_and_resume_without_replay() {
         let (event, cursor) = matched.unwrap();
         assert_eq!(event.detail["project"], project);
         // Then the returned cursor never replays its batch.
-        let mut rearmed =
-            EventReader::from_offset(&store.dir().join("events.jsonl"), cursor.offset).unwrap();
+        let mut rearmed = store.events_since(Some(cursor)).unwrap();
         while let Some((event, _)) = rearmed.next_event().unwrap() {
             assert!(!opts.matches(&store, &event).unwrap());
         }
     }
     let unmatched = args(&["--task", "T-999"]);
-    let mut reader = EventReader::from_offset(&store.dir().join("events.jsonl"), 0).unwrap();
+    let mut reader = store.events_since(Some(EventCursor::default())).unwrap();
     while let Some((event, _)) = reader.next_event().unwrap() {
         assert!(!unmatched.matches(&store, &event).unwrap());
     }
@@ -253,7 +252,6 @@ fn for_accepts_and_defaults_to_every_pm_actionable_kind_plus_config_invalid() {
 fn default_wait_wakes_on_question_opened_and_rearmed_wait_skips_question_answered() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::init(dir.path()).unwrap();
-    let path = store.dir().join("events.jsonl");
     let question = |extra: serde_json::Value| {
         let mut detail = serde_json::json!({
             "key": "T-001/R1/Q1", "revision": 1, "at": "2026-10-25T00:00:00Z"
@@ -266,7 +264,7 @@ fn default_wait_wakes_on_question_opened_and_rearmed_wait_skips_question_answere
     };
     // Given a default-kinds wait subscribed before the question opens. `follow` idles again only
     // after reading every appended event without a match, so a second idle is a failure:
-    let mut reader = EventReader::open(&path, None).unwrap();
+    let mut reader = store.events_since(None).unwrap();
     let mut logged = false;
     let (opened, cursor) = follow(&store, &args(&[]), &mut reader, |_| {
         assert!(
@@ -291,7 +289,7 @@ fn default_wait_wakes_on_question_opened_and_rearmed_wait_skips_question_answere
     assert_eq!(format_event_line(&opened), "T-001 question_opened");
     // And a wait re-armed at that cursor skips question_answered; the sentinel written at its
     // first idle proves the answer was read and not matched.
-    let mut rearmed = EventReader::open(&path, Some(cursor)).unwrap();
+    let mut rearmed = store.events_since(Some(cursor)).unwrap();
     let mut sentinel = false;
     let (next, _) = follow(&store, &args(&[]), &mut rearmed, |_| {
         assert!(

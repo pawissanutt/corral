@@ -107,7 +107,7 @@ pub(crate) fn container_of(identity: &RequestIdentity) -> ContainerRef {
 
 fn resolve(store: &Store, container: &ContainerRef) -> Result<Resolved> {
     if let Some(id) = container.assistant() {
-        if !store.assistant_path(id)?.exists() {
+        if !store.assistant_exists(id)? {
             return Err(reject(
                 RejectCode::ContainerNotFound,
                 format!("assistant session {id} not found"),
