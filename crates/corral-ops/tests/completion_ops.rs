@@ -295,6 +295,17 @@ impl Fixture {
         }
     }
 
+    fn snapshot_path(&self) -> PathBuf {
+        let task = self.ctx.store.get(&self.id).unwrap();
+        let artifact = task
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == self.artifact)
+            .unwrap();
+        let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+        self.ctx.store.blob_store().unwrap().path_of(&hash)
+    }
+
     fn observation(&self) -> EvidenceObservation {
         EvidenceObservation {
             version: 1,
@@ -446,7 +457,7 @@ fn malformed_and_cross_run_references_never_append() {
 fn tampered_artifact_is_rejected_at_record_boundary() {
     // Given a snapshot whose bytes changed.
     let fx = Fixture::new();
-    std::fs::write(fx.ctx.store.dir().join(&fx.artifact), "tampered").unwrap();
+    std::fs::write(fx.snapshot_path(), "tampered").unwrap();
     // When registering its observation.
     let result = record_evidence(&fx.ctx, &fx.id, &fx.observation());
     // Then no observation is accepted.
@@ -672,7 +683,7 @@ fn artifact_deletion_after_registration_blocks_completion() {
     // Given a registered observation whose snapshot disappears.
     let fx = Fixture::new();
     record_evidence(&fx.ctx, &fx.id, &fx.observation()).unwrap();
-    std::fs::remove_file(fx.ctx.store.dir().join(&fx.artifact)).unwrap();
+    std::fs::remove_file(fx.snapshot_path()).unwrap();
     // When auditing.
     let failures = fx.failures();
     // Then metadata alone cannot satisfy evidence presence.
@@ -774,7 +785,7 @@ fn old_snapshot_cannot_be_reattached_to_new_attempt() {
 fn snapshot_symlink_cannot_escape_the_run_directory() {
     // Given a snapshot replaced by an outside symlink with identical bytes.
     let fx = Fixture::new();
-    let snapshot = fx.ctx.store.dir().join(&fx.artifact);
+    let snapshot = fx.snapshot_path();
     let outside = fx._tmp.path().join("outside");
     std::fs::copy(&snapshot, &outside).unwrap();
     std::fs::remove_file(&snapshot).unwrap();

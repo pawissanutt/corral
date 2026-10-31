@@ -231,6 +231,31 @@ mod imp {
         Ok(bytes)
     }
 
+    /// Opens immutable content through no-follow directory handles. Nonblocking open plus
+    /// the retained descriptor's type check rejects FIFOs/devices before any content is read.
+    pub(crate) fn open_regular_nofollow(path: &Path) -> Result<File> {
+        let path = std::path::absolute(path).context("resolve immutable content path")?;
+        let parent = path.parent().context("immutable content has no parent")?;
+        let dir = open_absolute(parent, false)
+            .context("open immutable content parent without symlinks")?;
+        let name = c_name(path.file_name().context("immutable content has no name")?)?;
+        let flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC;
+        // SAFETY: valid retained directory descriptor and NUL-terminated name; owned takes
+        // the unique descriptor returned by a successful openat.
+        let fd = check(unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), flags) })
+            .map(owned)
+            .context("open immutable content without following symlinks")?;
+        let file = File::from(fd);
+        if !file
+            .metadata()
+            .context("inspect opened immutable content")?
+            .is_file()
+        {
+            bail!("immutable content is not a regular file");
+        }
+        Ok(file)
+    }
+
     /// Creates the absolute directory `path` and its missing parents, never through a symlink.
     pub fn create_dir_all_nofollow(path: &Path) -> Result<()> {
         open_absolute(path, true)
@@ -379,6 +404,8 @@ mod imp {
 
 #[cfg(unix)]
 pub use imp::create_dir_all_nofollow;
+#[cfg(unix)]
+pub(crate) use imp::open_regular_nofollow;
 
 #[cfg(not(unix))]
 pub fn create_dir_all_nofollow(path: &Path) -> Result<()> {
