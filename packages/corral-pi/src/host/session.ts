@@ -37,6 +37,7 @@ import { corralRenderers } from "../ui/render.ts";
 import { installTodo } from "../ui/todo.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
+import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
@@ -237,6 +238,7 @@ export class HostSession {
   private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
   private readonly localTools: readonly ToolDefinition[];
+  private dialogPi: ExtensionAPI | undefined;
   private readonly jobs: JobRuntime | undefined;
   private turn = 0;
   private open = false;
@@ -339,7 +341,15 @@ export class HostSession {
         },
       });
     }
+    const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
+      ...(dialogEnabled ? [askUserTool(async (answer) => {
+        if (!this.dialogPi) throw new Error("dialog session is unavailable");
+        const id = options.identity.role === "assistant" ? await this.journalOwnerInput("dialog", answer) : undefined;
+        const message = id ? ownerInputText(answer, id) : answer;
+        this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
+        return message;
+      })] : []),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
       ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
@@ -512,6 +522,7 @@ export class HostSession {
   }
 
   private async extension(pi: ExtensionAPI): Promise<void> {
+    this.dialogPi = pi;
     if (this.options.capabilities?.enabled.includes("codemode")) {
       await codemode(this.options.sdk.createCodemodeExtension)(pi);
     }
@@ -641,7 +652,7 @@ export class HostSession {
    * so an owner action cannot cite it.
    */
   private async journalOwnerInput(
-    source: "pane" | "confirmation", text: string, command?: string, answers?: string,
+    source: "pane" | "dialog" | "confirmation", text: string, command?: string, answers?: string,
   ): Promise<string | undefined> {
     if (!this.bound) return undefined;
     const sha256 = sha256Hex(text);

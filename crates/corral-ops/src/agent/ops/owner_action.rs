@@ -1,7 +1,7 @@
 //! `owner_action` (T-544 owner-authority): an assistant executes one owner-level corral command
 //! the owner clearly asked for in its pane, citing that journaled owner input. The instruction
-//! is the authorization: corral checks only that the cited input is a real pane-typed owner
-//! input of this session, then runs the command once as a direct child `corral` process that
+//! is the authorization: corral checks only that the cited input is a real pane-typed or
+//! dialog-selected owner input of this session, then runs the command once as a direct child `corral` process that
 //! claims the reservation (`crate::assistant::owner_action`), so the same CLI path, locks and refusals apply as from
 //! the owner's shell. The confirm class first waits for the owner's y or n, which the host
 //! journals bound to this request, so the request's payload never changes; n records a
@@ -72,13 +72,18 @@ fn cite(
 ) -> Result<Cited> {
     let input = assistant
         .owner_input(&payload.input)
-        .filter(|entry| entry.source == OwnerInputSource::Pane)
+        .filter(|entry| {
+            matches!(
+                entry.source,
+                OwnerInputSource::Pane | OwnerInputSource::Dialog
+            )
+        })
         .cloned()
         .ok_or_else(|| {
             reject(
                 RejectCode::NotOwnerInput,
                 format!(
-                    "{} is not a pane-typed owner input of this session; only the owner's own \
+                    "{} is not a pane-typed or dialog-selected owner input of this session; only the owner's own \
                      messages authorize an owner action, never a corral wake, PM message or \
                      recovery notice",
                     payload.input

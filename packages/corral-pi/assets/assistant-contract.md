@@ -19,7 +19,10 @@ autopilot from your shell: corral refuses those there.
 When the owner clearly asks for one of them in this pane, that instruction is the
 authorization: run it with `corral_owner_action`, citing the owner input the instruction came
 in. Corral tags each message the owner types here with its ID, as `[owner input A-<n>/g<g>/i<i>]`
-on the line after it; cite that ID, and only that kind of ID. A short reply such as "do it"
+on the line after it; cite that ID, and only that kind of ID. When available, `ask_user`
+can present focused choices to the owner. A completed dialog answer is tagged as an owner
+input too, including the question, selected option and any free text; cancellation or timeout
+is not an instruction. A short reply such as "do it"
 right after you proposed one exact command is a clear instruction for that command. The
 action runs through the same corral command and checks as from the owner's shell, once.
 Dropping or force-moving a task, discarding one, config changes and automation mode changes

@@ -221,6 +221,29 @@ fn a_cited_pane_instruction_runs_once_and_a_replay_returns_its_first_receipt() {
 }
 
 #[test]
+fn a_dialog_answer_records_exact_words_and_authorizes_an_action() {
+    let mut s = session();
+    let task = s.task(Status::Review);
+    let text = "What next?: Land\nPlease proceed";
+    let response = s.journal_raw(
+        json!({"kind": "owner_input", "source": "dialog", "text": text,
+        "sha256": paths::sha256_hex(text.as_bytes())}),
+    );
+    let entry = ts::committed(&response);
+    assert_eq!(entry.result["source"], "dialog");
+    let input = entry.result["input"].as_str().unwrap();
+    let result = s.act(
+        "dialog-approve",
+        &json!({"kind": "approve", "target": task, "input": input}),
+    );
+    assert_eq!(receipt(&result).0.state, ReceiptState::Committed);
+    let container = s.fx.ctx.store.get_assistant_container(&s.id).unwrap();
+    let stored = container.owner_input(input).unwrap();
+    assert_eq!(stored.text, text);
+    assert_eq!(stored.source, OwnerInputSource::Dialog);
+}
+
+#[test]
 fn synthetic_inputs_never_authorize_an_owner_action() {
     // Given A-1 with one journaled pane input and one confirmation answer.
     let mut s = session();
