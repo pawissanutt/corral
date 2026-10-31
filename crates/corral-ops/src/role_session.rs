@@ -511,6 +511,41 @@ pub(crate) fn observe_head<T: TaskRef + ?Sized>(
     }
 }
 
+/// Capture and publish the current reviewer's actual session in its owning task unit.
+/// The caller then appends review_started, preserving the incoming-main audit order.
+pub(crate) fn publish_reviewer(
+    ctx: &Ctx,
+    task: &mut corral_core::TaskHeadMut,
+    parent: &str,
+) -> Result<()> {
+    let Some(child) = task
+        .head()
+        .current_run
+        .as_deref()
+        .filter(|run| run.id == parent)
+        .and_then(|run| run.current_child.as_deref())
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let container = ContainerRef::Reviewer {
+        task: task.id.clone(),
+        run: parent.into(),
+        review: child.id.clone(),
+    };
+    let session = capture_head(ctx, &*task, &child, &container)
+        .ok()
+        .or(child.session);
+    if let Some(session) = session {
+        task.edit_review_child(parent, &child.id, |current| {
+            current.session = Some(session.clone());
+            Ok(())
+        })?;
+        log_value(ctx, &task.id, &child.id, &session)?;
+    }
+    Ok(())
+}
+
 /// Refresh identities that an asynchronously launched harness has since written.
 pub fn refresh_role_sessions(ctx: &Ctx, id: &str) -> Result<()> {
     let task = ctx.store.get(id)?;
@@ -540,16 +575,21 @@ pub(crate) fn log(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
         None => None,
     };
     if let Some(session) = saved {
-        ctx.store.log_event(
-            Some(task),
-            "role_session",
-            json!({
-                "run":run, "session":session
-            }),
-        )?;
-        if let Some(reason) = &session.diagnostic {
-            crate::messages::report(Some(task), "session", reason.clone());
-        }
+        log_value(ctx, task, run, &session)?;
+    }
+    Ok(())
+}
+
+fn log_value(ctx: &Ctx, task: &str, run: &str, session: &RoleSession) -> Result<()> {
+    ctx.store.log_event(
+        Some(task),
+        "role_session",
+        json!({
+            "run":run, "session":session
+        }),
+    )?;
+    if let Some(reason) = &session.diagnostic {
+        crate::messages::report(Some(task), "session", reason.clone());
     }
     Ok(())
 }

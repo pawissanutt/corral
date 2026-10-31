@@ -530,6 +530,7 @@ pub(super) fn review_run_origin(
             }
         }
         if let Ok(pane) = &launched {
+            crate::role_session::publish_reviewer(ctx, t, &run.id)?;
             ctx.store.log_event(
                 Some(&task.id),
                 "review_started",
@@ -539,19 +540,6 @@ pub(super) fn review_run_origin(
         Ok(())
     })?;
     launched?;
-    if let Some(child) = saved
-        .current_run
-        .as_deref()
-        .and_then(|parent| parent.current_child.as_deref())
-    {
-        let container = corral_core::agent::ContainerRef::Reviewer {
-            task: task.id.clone(),
-            run: run.id.clone(),
-            review: child.id.clone(),
-        };
-        crate::role_session::observe_head(ctx, &saved, child, &container);
-        crate::role_session::log(ctx, &saved.id, &child.id)?;
-    }
     let record = saved
         .current_run
         .as_ref()

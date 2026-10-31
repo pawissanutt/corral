@@ -5,6 +5,7 @@
 //! refusal's state, events and records, the next pass, and an earlier child's usage as expected.
 use super::*;
 use corral_core::{ReviewRecord, Task, UsageEntry, Verdict};
+use serde_json::json;
 
 const POINT: &str = "review_child_observed";
 const REFUSAL: &str = "review changed before preparing accounting child";
@@ -151,7 +152,7 @@ fn run(interleaving: Interleaving) -> (Outcome, bool) {
     let pane_runs = fx.records("submissions.jsonl").len();
     let plain = fx.ctx.store.clone();
     let edits = plain.clone();
-    let observed = Arc::new(Mutex::new(None::<Task>));
+    let observed = Arc::new(Mutex::new(None::<(Task, Vec<String>)>));
     let seen = observed.clone();
     let fired = Mutex::new(false);
     let task = id.clone();
@@ -160,10 +161,21 @@ fn run(interleaving: Interleaving) -> (Outcome, bool) {
             return;
         }
         apply(&edits, &task, interleaving);
-        *seen.lock().unwrap() = Some(edits.get(&task).unwrap());
+        let at_guard = edits
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|event| event.task.as_deref() == Some(&task))
+            .map(|event| event.kind.clone())
+            .collect();
+        *seen.lock().unwrap() = Some((edits.get(&task).unwrap(), at_guard));
     }));
     let launched = crate::review_run(&fx.ctx, &id, Some("rev"));
-    let between = observed.lock().unwrap().take().expect("the barrier fired");
+    let (between, at_guard) = observed.lock().unwrap().take().expect("the barrier fired");
+    // Claiming precedes this CAS read/write boundary. Validate it explicitly instead of
+    // filtering audit events: every event after the actual guard is compared exactly.
+    assert_eq!(&at_guard[..events.len()], events.as_slice());
+    assert_eq!(&at_guard[events.len()..], &["review_claimed".to_string()]);
     let expected = db316644_refuses(&before, &between);
     fx.ctx.store = plain;
     let after = fx.ctx.store.get(&id).unwrap();
@@ -177,13 +189,29 @@ fn run(interleaving: Interleaving) -> (Outcome, bool) {
             - between.current_run().unwrap().review_runs.len(),
         events: event_kinds(&fx, &id)
             .into_iter()
-            .skip(events.len())
+            .skip(at_guard.len())
             .collect(),
         pane_runs: fx.records("submissions.jsonl").len() - pane_runs,
         reservation: after.review_reservation,
         earlier_usage_kept: earlier(&after) == earlier(&between),
         next_pass_launched: false,
     };
+    if !refused {
+        let audits = fx.ctx.store.events().unwrap();
+        let audit = audits
+            .iter()
+            .filter(|event| event.task.as_deref() == Some(&id))
+            .nth(at_guard.len())
+            .unwrap();
+        assert_eq!(audit.kind, "role_session");
+        assert_eq!(audit.actor, Some(corral_core::Actor::Reviewer));
+        let child = after.current_run().unwrap().review_runs.last().unwrap();
+        assert_eq!(audit.detail["run"], json!(child.id));
+        assert_eq!(
+            audit.detail["session"],
+            serde_json::to_value(child.session.as_ref().unwrap()).unwrap()
+        );
+    }
     if refused {
         outcome.next_pass_launched = crate::review_run(&fx.ctx, &id, Some("rev")).is_ok();
     }
@@ -218,15 +246,14 @@ fn reviewer_launch_guard_decides_as_db316644_on_every_interleaving() {
                 refused: false,
                 error: None,
                 pushed: 1,
-                events: vec!["review_started".into()],
+                events: vec!["role_session".into(), "review_started".into()],
                 pane_runs: 1,
                 reservation: None,
                 earlier_usage_kept: true,
                 next_pass_launched: false,
             }
         };
-        let mut got = outcome;
-        got.events.retain(|kind| kind != "review_claimed");
+        let got = outcome;
         if got != want {
             failures.push(format!("{interleaving:?}: {got:?}, expected {want:?}"));
         }
