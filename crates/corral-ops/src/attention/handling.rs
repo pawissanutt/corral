@@ -35,7 +35,19 @@ fn reconcile_inner(
     let Some(_lock) = ctx.store.try_lock("attention-reconcile")? else {
         return Ok(None);
     };
-    let (tasks, mut board) = super::snapshot_heads::reconcile_snapshot(ctx, now)?;
+    let (tasks, mut board) = match super::snapshot_heads::reconcile_snapshot(ctx, now) {
+        Ok(snapshot) => snapshot,
+        // Never mutate ledgers or publish a successful aggregate from incomplete inputs.
+        // The decoder reports the actual task; readers retry strictly and show unavailable.
+        Err(error)
+            if error
+                .downcast_ref::<corral_core::backend::HeadDecodeError>()
+                .is_some() =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     owner_notice::drain_heads(ctx, &tasks)?;
     let mut wakes = Wakes::new();
     let mut published = BTreeMap::new();

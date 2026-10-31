@@ -485,6 +485,19 @@ impl Store {
     /// # Errors
     /// Returns read errors.
     pub fn heads(&self, q: &HeadQuery) -> Result<Vec<TaskHead>> {
+        self.heads_with_policy(q, false)
+    }
+
+    /// Heads for aggregate policy/attention projections, where an undecodable input must
+    /// make the projection unavailable rather than imply a successfully empty assessment.
+    ///
+    /// # Errors
+    /// Returns read and head decoding errors after reporting the affected task.
+    pub fn heads_checked(&self, q: &HeadQuery) -> Result<Vec<TaskHead>> {
+        self.heads_with_policy(q, true)
+    }
+
+    fn heads_with_policy(&self, q: &HeadQuery, checked: bool) -> Result<Vec<TaskHead>> {
         let view = self.pinned_view()?;
         let docs = {
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
@@ -499,7 +512,7 @@ impl Store {
                 }
             }
         };
-        Self::decode_heads(&view, docs)
+        Self::decode_heads(&view, docs, checked)
     }
 
     /// The first `limit` heads matching `q` in the query's order, on one view; nothing past
@@ -516,12 +529,13 @@ impl Store {
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
             guard.heads(q, PageReq::first(limit))?.items
         };
-        Self::decode_heads(&view, docs)
+        Self::decode_heads(&view, docs, false)
     }
 
     fn decode_heads(
         view: &PinnedView,
         docs: Vec<crate::backend::TaskHeadDoc>,
+        checked: bool,
     ) -> Result<Vec<TaskHead>> {
         let mut heads = Vec::new();
         for doc in docs {
@@ -533,7 +547,26 @@ impl Store {
                 );
             }
             let guard = view.lock().unwrap_or_else(PoisonError::into_inner);
-            let head = decode_or_skip(guard.as_ref(), doc)?;
+            let head = if checked {
+                let id = doc.header.id.clone();
+                TaskHead::from_doc(guard.as_ref(), doc).map_err(|error| {
+                    crate::messages::report(
+                        Some(&id),
+                        "store",
+                        format!("skipping {id}: {error:#}"),
+                    );
+                    if error.downcast_ref::<serde_json::Error>().is_some() {
+                        anyhow::Error::new(crate::backend::HeadDecodeError {
+                            task: id,
+                            cause: error,
+                        })
+                    } else {
+                        error.context(format!("task head {id} is unavailable"))
+                    }
+                })?
+            } else {
+                decode_or_skip(guard.as_ref(), doc)?
+            };
             drop(guard);
             if let Some(mut head) = head {
                 head.view = Some(Arc::clone(view));

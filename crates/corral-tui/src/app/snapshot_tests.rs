@@ -128,14 +128,26 @@ fn worker_projection_reaches_visible_detail_without_reclassification() {
 fn worker_projection_keeps_decode_failure_unavailable_and_forwards_diagnostics() {
     let fx = seeded();
     let (messages, diagnostics) = std::sync::mpsc::channel();
-    std::fs::write(fx.ctx.store.dir().join("tasks/broken.md"), "not a task").unwrap();
+    let broken = fx
+        .ctx
+        .store
+        .create("broken projection", None, corral_core::Status::Backlog, "")
+        .unwrap();
+    fx.ctx
+        .store
+        .fixture_corrupt_task(&broken.id, "not-a-status")
+        .unwrap();
     let update = WorkerMsg::synced_with_attention(&fx.ctx, &messages);
     let WorkerMsg::Synced(Ok((_, snapshot))) = update else {
         panic!("expected a partial board snapshot with an explicit attention error");
     };
     assert!(snapshot.attention.is_err());
     assert!(snapshot.operating_header.contains("policy unavailable"));
-    assert!(diagnostics.try_iter().any(|message| message.file.is_some()));
+    assert!(
+        diagnostics
+            .try_iter()
+            .any(|message| message.task.as_deref() == Some(&broken.id))
+    );
 }
 
 impl View for RefreshCounter {
