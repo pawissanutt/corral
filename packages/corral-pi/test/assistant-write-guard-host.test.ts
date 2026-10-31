@@ -102,7 +102,7 @@ test("assistant edit and write reach the session's scratch, never the main check
     // Then the main checkout and the task worktree are refused and unchanged, nested calls too.
     for (const id of ["main", "edit-main", "task"]) {
       expect(result(id).isError).toBeTrue();
-      expect(result(id).text.startsWith("assistant rule: edit and write reach only this session's scratch")).toBeTrue();
+      expect(result(id).text).toContain(id === "task" ? "fixed_rule" : "capability_off");
     }
     expect(result("nest").text).toBe("true");
     expect(readFileSync(join(cwd, "README.md"), "utf8")).toBe("main\n");

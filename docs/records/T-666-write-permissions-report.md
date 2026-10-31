@@ -39,6 +39,16 @@ containment, target swaps before decide (no journal) and after authorization (no
 configured-deny precedence over grants. Rust tests retain session/end, expiry, grant capacity,
 permission eviction and audit recovery behavior from the grant-store dependency.
 
+## Gate rework
+
+The first contracted quick gate passed its 571 selected Rust tests and 517 Bun tests but failed
+one previously uncovered legacy test counterpart: assistant-write-guard-host.test.ts asserted
+the old refusal prose for a protected task worktree. With the explicit Q6 scope amendment,
+that one assertion now checks stable reasons: capability_off for main/edit-main and fixed_rule
+for the protected task worktree. Its isError, unchanged-file, nested-refusal and scratch/artifact
+success assertions are unchanged. The focused real-host test passed (1 test, 15 assertions).
+The next receipted gate result is recorded separately by corral.
+
 ## Limitations
 
 This is an accident guard for an honest assistant, not an OS sandbox. The final resolution-to-Pi
