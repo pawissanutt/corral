@@ -65,6 +65,12 @@ fn actual_cli_searches_compressed_artifact_filters_snippets_and_source_slice() {
             "log",
         ],
     );
+    // Explicit imported raw copy for legacy gzip retention, never a production mirror.
+    let published = store.get(&task.id).unwrap().artifacts.remove(0);
+    let imported = store.dir().join(&published.path);
+    assert!(!imported.exists(), "new CLI publication is blob-only");
+    std::fs::create_dir_all(imported.parent().unwrap()).unwrap();
+    std::fs::write(&imported, &text).unwrap();
     success(tmp.path(), &["artifact", "gc", "--yes"]);
     let artifact = store.get(&task.id).unwrap().artifacts.remove(0);
     assert!(artifact.compressed_bytes.is_some());

@@ -21,7 +21,8 @@ fn whole_line_fields_and_excerpts_survive_marker_order_cache_and_compression() {
                 ("prefix", format!("needle {padding} {field}\n")),
             ] {
                 let name = format!("{prefix}-{name}.log");
-                f.add(&name, &text, ArtifactKind::Log, &name);
+                let artifact = f.add(&name, &text, ArtifactKind::Log, &name);
+                f.seed_imported_copy(&artifact, &text);
             }
         }
 

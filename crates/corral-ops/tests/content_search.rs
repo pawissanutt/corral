@@ -80,6 +80,14 @@ impl Fixture {
         add_artifact(&self.ctx, &self.task, &file, Some(kind), Some(title)).unwrap()
     }
 
+    // Only explicit legacy-gzip cases seed an imported copy. Normal adds stay blob-only.
+    fn seed_imported_copy(&self, artifact: &Artifact, body: &str) {
+        let path = self.ctx.store.dir().join(&artifact.path);
+        assert!(!path.exists(), "new publication has no legacy mirror");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
     fn search(&self, query: &str) -> Vec<ContentHit> {
         search_content(
             &self.ctx,
@@ -125,6 +133,7 @@ fn compressed_hit_reuses_write_time_text_and_reindex_streams_canonical_gzip() {
         f.cache()["documents"].get(&reference).is_some(),
         "indexed on add"
     );
+    f.seed_imported_copy(&artifact, &fs::read_to_string(&artifact.source).unwrap());
     f.retention(RetentionAction::Compress);
     artifact_gc(&f.ctx, false).unwrap();
     let current = f.ctx.store.get(&f.task).unwrap().artifacts.remove(0);
@@ -462,29 +471,18 @@ fn aggregate_cache_budget_evicts_text_without_losing_search_results() {
     // Given more than the 8 MiB cache budget in real artifact snapshots.
     let f = Fixture::new();
     let padding = "padding text\n".repeat(22_000);
-    let seed = f.add(
-        "seed.log",
-        &format!("{padding}overflowbudget\n"),
-        ArtifactKind::Log,
-        "Seed",
-    );
-    f.ctx
-        .store
-        .update(&f.task, |t| {
-            for i in 0..40 {
-                let mut artifact = seed.clone();
-                artifact.path = format!("artifacts/{}/R0/budget-{i:02}.log", t.id);
-                artifact.title = format!("Budget {i:02}");
-                std::fs::hard_link(
-                    f.ctx.store.dir().join(&seed.path),
-                    f.ctx.store.dir().join(&artifact.path),
-                )
-                .unwrap();
-                t.artifacts.push(artifact);
-            }
-            Ok(())
-        })
-        .unwrap();
+    let body = format!("{padding}overflowbudget\n");
+    f.add("seed.log", &body, ArtifactKind::Log, "Seed");
+    // The publisher deduplicates identical bodies. Distinct actual source bytes retain
+    // all 41 logical documents while still exceeding the unchanged 8 MiB text budget.
+    for i in 0..40 {
+        f.add(
+            &format!("budget-{i:02}.log"),
+            &format!("{body}publication {i:02}\n"),
+            ArtifactKind::Log,
+            &format!("Budget {i:02}"),
+        );
+    }
 
     // When rebuilding the bounded index and searching every overflow source.
     let hits = search_content(

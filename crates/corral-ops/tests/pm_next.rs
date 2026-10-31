@@ -769,7 +769,11 @@ fn compressed_isolated_result_is_decoded_before_hash_and_json_checks() {
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&bytes).unwrap();
     let compressed = encoder.finish().unwrap();
-    std::fs::write(ctx.store.dir().join(&artifact.path), &compressed).unwrap();
+    // Explicitly imported gzip fixture; ordinary publication remains blob-only.
+    let imported = ctx.store.dir().join(&artifact.path);
+    assert!(!imported.exists());
+    std::fs::create_dir_all(imported.parent().unwrap()).unwrap();
+    std::fs::write(imported, &compressed).unwrap();
     ctx.store
         .update(&id, |task| {
             task.artifacts
