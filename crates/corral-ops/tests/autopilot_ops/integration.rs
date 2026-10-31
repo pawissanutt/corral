@@ -55,8 +55,8 @@ fn packet(fx: &Fx) -> (PathBuf, Vec<u8>, Value) {
         .rev()
         .find(|a| a.title == PACKET)
         .unwrap();
-    let path = fx.ctx.store.dir().join(&artifact.path);
-    let bytes = std::fs::read(&path).unwrap();
+    let path = corral_ops::artifact_path(&fx.ctx, artifact).unwrap();
+    let bytes = corral_ops::artifact_read(&fx.ctx, artifact).unwrap();
     let value = serde_json::from_slice(&bytes).unwrap();
     (path, bytes, value)
 }
@@ -98,10 +98,16 @@ fn assert_request(fx: &Fx, expected_key: &Value, path: &Path) {
             .ends_with(&format!("-{digest}.json"))
     );
     let recorded = Path::new(detail["packet"].as_str().unwrap());
-    assert!(
-        recorded == path || fx.ctx.store.dir().join(recorded) == path,
-        "{recorded:?} != {path:?}"
-    );
+    let task = fx.task();
+    let artifact = task
+        .artifacts
+        .iter()
+        .find(|artifact| {
+            recorded == Path::new(&artifact.path)
+                || recorded == fx.ctx.store.dir().join(&artifact.path)
+        })
+        .expect("packet names its actual artifact registration");
+    assert_eq!(corral_ops::artifact_path(&fx.ctx, artifact).unwrap(), path);
 }
 
 fn assert_no_launches(fx: &Fx) {

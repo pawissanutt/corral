@@ -90,7 +90,10 @@ fn inputs_changed_between_approval_and_the_full_gate_refuse_the_carry() {
         }),
         ("carried artifact bytes", |fx, _| {
             let path = fx.run().completion.evidence[0].observation.artifacts[0].clone();
-            let file = fx.ctx.store.dir().join(path);
+            let task = fx.task();
+            let artifact = task.artifacts.iter().find(|artifact| artifact.path == path).unwrap();
+            let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+            let file = fx.ctx.store.blob_store().unwrap().path_of(&hash);
             std::fs::remove_file(&file).unwrap();
             std::fs::write(&file, "edited\n").unwrap();
         }),

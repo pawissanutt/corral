@@ -105,10 +105,12 @@ impl Fixture {
     }
 
     fn event(&self, kind: &str) -> Value {
-        std::fs::read_to_string(self.root.join(".corral/events.jsonl"))
+        corral_core::Store::open(&self.root)
             .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .events()
+            .unwrap()
+            .into_iter()
+            .map(|event| serde_json::to_value(event).unwrap())
             .rfind(|e| e["kind"] == kind)
             .unwrap_or_else(|| panic!("no {kind} event"))
     }
@@ -233,14 +235,12 @@ fn c7_a_routed_refusal_is_swept_claimed_resolved_and_notified_once() {
     // And A-1's native agent inbox holds exactly one notice, pmi:PMI-1:2, queued for its host.
     assert_eq!(resolved["notice"]["key"], "pmi:PMI-1:2");
     assert_eq!(resolved["notice"]["state"], "posted");
-    let inbox = fx.root.join(".corral/inbox/assistant_A-1");
-    let messages: Vec<_> = std::fs::read_dir(&inbox)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-        .collect();
+    let store = corral_core::Store::open(&fx.root).unwrap();
+    let inbox = corral_core::inbox::Inbox::new(&store,
+        corral_core::inbox::Recipient::Assistant { session:"A-1".into() }).unwrap();
+    let messages = inbox.messages().unwrap();
     assert_eq!(messages.len(), 1, "{messages:?}");
-    let message = std::fs::read_to_string(&messages[0]).unwrap();
+    let message = serde_json::to_string(&messages[0]).unwrap();
     assert!(message.contains("pmi:PMI-1:2") && message.contains("pm_inbox_outcome"));
     // And the sweep no longer shows a card for the resolved item.
     assert!(
@@ -298,15 +298,13 @@ fn a_large_accepted_resolution_still_reaches_the_author_once() {
     assert_eq!(resolved["notice"]["state"], "posted", "{resolved}");
     assert_eq!(resolved["outcome"]["text"].as_str().unwrap().len(), 4096);
     assert_eq!(resolved["outcome"]["refs"].as_array().unwrap().len(), 24);
-    let messages: Vec<_> = std::fs::read_dir(fx.root.join(".corral/inbox/assistant_A-1"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
-        .collect();
+    let store = corral_core::Store::open(&fx.root).unwrap();
+    let inbox = corral_core::inbox::Inbox::new(&store,
+        corral_core::inbox::Recipient::Assistant { session:"A-1".into() }).unwrap();
+    let messages = inbox.messages().unwrap();
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(
-        std::fs::read_to_string(&messages[0])
-            .unwrap()
+        serde_json::to_string(&messages[0]).unwrap()
             .contains("pmi:PMI-1:2")
     );
 }

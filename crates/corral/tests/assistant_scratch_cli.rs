@@ -119,10 +119,12 @@ impl Fixture {
     }
 
     fn event(&self, kind: &str) -> serde_json::Value {
-        std::fs::read_to_string(self.root.join(".corral/events.jsonl"))
+        corral_core::Store::open(&self.root)
             .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .events()
+            .unwrap()
+            .into_iter()
+            .map(|event| serde_json::to_value(event).unwrap())
             .rfind(|event| event["kind"] == kind)
             .unwrap_or_else(|| panic!("no {kind} event"))
     }

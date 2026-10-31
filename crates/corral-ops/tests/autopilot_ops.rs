@@ -313,7 +313,7 @@ impl Fx {
             .rev()
             .find(|a| a.title == title)
             .unwrap_or_else(|| panic!("no artifact {title:?}"));
-        std::fs::read_to_string(self.ctx.store.dir().join(&a.path)).unwrap()
+        String::from_utf8(corral_ops::artifact_read(&self.ctx, a).unwrap()).unwrap()
     }
 
     fn main_subjects(&self) -> String {
