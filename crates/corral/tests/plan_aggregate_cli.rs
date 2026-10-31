@@ -8,6 +8,8 @@ use std::process::{Command, Output, Stdio};
 use corral_core::{Actor, AgentCmd, Origin, Status, Store};
 use serde_json::{Value, json};
 
+mod plan_capture;
+
 /// Extracts the exact verdict command from its prompt, writes notes and approves.
 const REVIEWER: &str = r#"#!/bin/sh
 set -eu
@@ -261,6 +263,55 @@ fn cli_owner_acceptance_requires_a_launched_aggregate_review() {
     assert_eq!(acceptance["state"], "landed", "{acceptance}");
     assert_eq!(store.get(&plan).unwrap().status, Status::Done);
     assert_eq!(git(&root.join("app"), &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
+fn evidence_survives_a_backward_capture_clock_step() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (store, plan) = fixture(&root);
+    let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
+    let gate: jiff::Timestamp = attempt["gate"]["at"].as_str().unwrap().parse().unwrap();
+    // Inject a clock step after verification, without changing the host clock or sleeping.
+    let stepped_back = gate
+        .checked_sub(jiff::SignedDuration::from_secs(3600))
+        .unwrap();
+    assert!(stepped_back < gate);
+    let captured = plan_capture::capture_time(&attempt, stepped_back);
+    let id = attempt["id"].as_str().unwrap();
+    let file = root.join("before-gate.json");
+    std::fs::write(
+        &file,
+        serde_json::to_vec(&json!({
+            "version":1, "key":"before-gate", "criterion":"C1", "run":"aggregate",
+            "attempt":id, "status":"pass", "action":"run the combined scenario",
+            "environment":"fixture", "expected":"pass", "observed":"observed",
+            "artifacts":[], "captured":stepped_back, "producer":"test", "live":false,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let rejected = cli(
+        &root,
+        &[
+            "plan",
+            "evidence",
+            &plan,
+            "--file",
+            file.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("capture_outside_attempt"));
+    observe(&root, &plan, id, &json!(captured), "C1", "pass");
+    let saved = store.get(&plan).unwrap();
+    assert_eq!(
+        saved.aggregate_attempts.last().unwrap().evidence[0]
+            .observation
+            .captured,
+        gate
+    );
 }
 
 #[test]
