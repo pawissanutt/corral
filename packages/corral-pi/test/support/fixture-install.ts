@@ -22,11 +22,20 @@ export interface FixtureOptions {
   readonly parent?: string;
   /** Give the fixture host a private upstream Pi state directory, including crashes.json. */
   readonly isolatePiState?: boolean;
+  /** Keep a fixed state directory only for tests that explicitly inspect a crashed host. */
+  readonly retainPiState?: boolean;
 }
 
 export interface FixtureInstall {
   readonly dir: string;
   cleanup(): void;
+}
+
+/** Remove state left by killed hosts at an independent test boundary. */
+export function clearFixturePiStates(install: FixtureInstall): void {
+  for (const name of readdirSync(install.dir)) {
+    if (name.startsWith("pi-state-")) rmSync(join(install.dir, name), { recursive: true, force: true });
+  }
 }
 
 function bounded(dir: string): void {
@@ -63,9 +72,17 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
     const source = readFileSync(main, "utf8");
     const restrict = "  restrictEnvironment(process.env, provider);";
     if (source.split(restrict).length !== 2) throw new Error("fixture host environment hook not found");
-    const state = join(dir, "pi-state");
-    mkdirSync(state);
-    writeFileSync(main, source.replace(restrict, `${restrict}\n  process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(state)};`));
+    let setup: string;
+    if (options.retainPiState) {
+      const state = join(dir, "pi-state");
+      mkdirSync(state);
+      setup = `process.env.PI_CODING_AGENT_DIR = ${JSON.stringify(state)};`;
+    } else {
+      // Each launched host (including a resumed generation) gets its own state. The containing
+      // fixture removes any residue after SIGKILL, which cannot run the exit handler.
+      setup = `const fs = await import("node:fs");\n  const state = fs.mkdtempSync(${JSON.stringify(join(dir, "pi-state-"))});\n  process.env.PI_CODING_AGENT_DIR = state;\n  process.once("exit", () => fs.rmSync(state, { recursive: true, force: true }));`;
+    }
+    writeFileSync(main, source.replace(restrict, `${restrict}\n  ${setup}`));
   }
   symlinkSync(join(PACKAGE_ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   if (options.overlays ?? true) {

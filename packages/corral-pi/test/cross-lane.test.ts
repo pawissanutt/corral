@@ -90,6 +90,7 @@ afterAll(() => {
   }
 });
 
+// The first four tests intentionally exercise one live host; the final launch is a separate fixture.
 test("dispatch launches the host in the run pane and hello binds generation 1 without leaking a secret", async () => {
   if (!isolated) return;
   const bound = events!.next((event) => event.kind === "agent_bound" && event.task === "T-001");

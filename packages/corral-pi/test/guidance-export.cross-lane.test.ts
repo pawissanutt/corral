@@ -104,6 +104,7 @@ afterAll(() => {
   }
 });
 
+// Both tests below deliberately share one dispatched host/session; afterAll closes it and its state.
 test("a dispatched worker keeps its role skill, loads trusted guidance and expands slash commands in its pane", async () => {
   if (!isolated) return;
   // Given a dispatched worker whose kickoff turn has ended:
