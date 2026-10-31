@@ -1,5 +1,4 @@
-//! What a receipt must carry to count: binding equality, plus full dominance where the
-//! review selection comes only from configuration already inside every policy digest.
+//! What a receipt must carry to count: binding equality, plus full-tier dominance.
 use anyhow::Result;
 use corral_core::{ExpectedFailure, FULL_TIER, GateTierBinding};
 use serde::Serialize;
@@ -12,9 +11,11 @@ pub const MAIN_LANDING_TIER: &str = FULL_TIER;
 pub struct GateRequirement {
     /// The binding a receipt must carry; `None` is the full tier.
     pub binding: Option<GateTierBinding>,
-    /// A full receipt (no binding) also satisfies it. Plan members never allow this, so a
-    /// member-gate amendment stales that member's receipts of every tier.
+    /// An unbound full receipt also satisfies it, subject to identity freshness.
     pub full_dominates: bool,
+    /// A full member receipt must retain the same member selection inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_binding: Option<GateTierBinding>,
 }
 
 impl GateRequirement {
@@ -23,12 +24,15 @@ impl GateRequirement {
         Self {
             binding: None,
             full_dominates: true,
+            full_binding: None,
         }
     }
 }
 
 pub fn satisfies(binding: Option<&GateTierBinding>, requirement: &GateRequirement) -> bool {
-    binding == requirement.binding.as_ref() || (binding.is_none() && requirement.full_dominates)
+    binding == requirement.binding.as_ref()
+        || (binding.is_none() && requirement.full_dominates)
+        || (binding.is_some() && binding == requirement.full_binding.as_ref())
 }
 
 /// The binding of one selection; its digest covers every input the tier command sees.

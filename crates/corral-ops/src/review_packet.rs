@@ -180,6 +180,7 @@ fn receipt(
                     .as_ref()
                     .and_then(|i| i.gate_tier.as_deref().cloned()),
                 full_dominates: true,
+                full_binding: None,
             };
             let requirement = requirement.unwrap_or(&own);
             verification::gate_fresh_for_at(ctx, task, run, g, requirement, moved)?

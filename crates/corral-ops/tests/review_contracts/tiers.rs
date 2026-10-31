@@ -221,6 +221,76 @@ fn quick_member_review_carries_one_gate_contract_and_needs_only_its_own_tier() {
 }
 
 #[test]
+fn full_member_receipt_preserves_approval_but_amendment_stales_it() {
+    use sha2::{Digest, Sha256};
+
+    let fx = fixture(tiered);
+    let id = member(&fx);
+    corral_ops::gate_start(&fx.ctx, &id).unwrap();
+    corral_ops::gate_wait(&fx.ctx, &id).unwrap();
+    // Model an unbound full receipt captured under this member's current selection.
+    // Its identity includes that selection even though its tier binding is absent.
+    let task = fx.ctx.store.get(&id).unwrap();
+    let run = task.current_run().unwrap();
+    let mut gate = run.gate.clone().unwrap();
+    let identity = gate.identity.as_mut().unwrap();
+    let binding = identity.gate_tier.take();
+    let policy = fx.ctx.store.config.task_review_policy(&task);
+    identity.policy_digest = format!(
+        "{:x}",
+        Sha256::digest(
+            serde_json::to_vec(&(
+                &policy,
+                &task.completion,
+                run.plan_target.as_ref().unwrap(),
+                &binding,
+            ))
+            .unwrap()
+        )
+    );
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            task.current_run_mut().unwrap().gate = Some(gate.clone());
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    assert!(gate_gaps(&packet(&fx, &id)["bound"]).is_empty());
+    let approved = corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "full passes").unwrap();
+    assert_eq!(approved.verdict, Some(Verdict::Approve));
+
+    let tracker = fx
+        .ctx
+        .store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|task| task.member_gates.contains_key(&id))
+        .unwrap();
+    let amendment = MemberGateAmendment {
+        member: id.clone(),
+        expected_revision: 1,
+        gate: ScopeGate {
+            tier: "quick".into(),
+            tests: vec!["different".into()],
+            expected_failures: vec![],
+        },
+        reason: "changed selection".into(),
+        by: "owner".into(),
+    };
+    fx.ctx
+        .store
+        .amend_member_gate(&tracker.id, &amendment, |_, _| Ok(()), |_, _| Ok(None))
+        .unwrap();
+    corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    let gaps = gate_gaps(&packet(&fx, &id)["bound"]);
+    assert!(gaps.iter().any(|g| g["code"] == "gate_stale"), "{gaps:?}");
+    let verdict = corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "stale").unwrap();
+    assert_eq!(verdict.verdict, Some(Verdict::Changes));
+}
+
+#[test]
 fn full_landing_receipt_satisfies_quick_review_and_preserves_approval() {
     let fx = fixture(tiered);
     clean_run_template(&fx);

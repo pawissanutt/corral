@@ -227,10 +227,12 @@ fn satisfaction_is_binding_equality_with_full_dominance_only_where_allowed() {
     let member_requirement = GateRequirement {
         binding: Some(member.clone()),
         full_dominates: false,
+        full_binding: None,
     };
     let review_requirement = GateRequirement {
         binding: Some(review.clone()),
         full_dominates: true,
+        full_binding: None,
     };
     // A member receipt is fresh only with exactly its binding; full never stands in.
     assert!(satisfies(Some(&member), &member_requirement));
@@ -364,9 +366,9 @@ fn members_bind_their_gate_in_every_phase_and_owner_records_win() {
             contract.requirement.binding,
             Some(quick_binding("policy:plan_member"))
         );
-        assert!(!contract.requirement.full_dominates);
+        assert!(contract.requirement.full_dominates);
     }
-    // An owner record for tier full still binds the member, so full never dominates.
+    // An owner record for tier full still binds the member selection.
     fx.amend(&tracker, &task.id, 1, FULL_TIER);
     let (task, run) = fx.current(&task.id);
     let full = select(&fx.ctx, &task, &run, GatePhase::Review).unwrap();
@@ -376,7 +378,7 @@ fn members_bind_their_gate_in_every_phase_and_owner_records_win() {
     );
     let binding = full.requirement.binding.clone().unwrap();
     assert_eq!(binding.source, format!("member-gate:{tracker}@1"));
-    assert!(!full.requirement.full_dominates);
+    assert!(full.requirement.full_dominates);
 }
 
 #[test]
@@ -442,6 +444,33 @@ fn a_changed_member_selection_stales_its_receipts_of_every_tier() {
     assert!(fx.fresh(&id, &full));
     fx.amend(&tracker, &id, 2, "quick");
     assert!(!fx.fresh(&id, &full));
+}
+
+#[test]
+fn full_member_receipts_keep_selection_freshness() {
+    let fx = fixture(true);
+    let (task, tracker) = fx.member();
+    let id = task.id;
+    let (task, run) = fx.current(&id);
+    let requirement = select(&fx.ctx, &task, &run, GatePhase::Review)
+        .unwrap()
+        .requirement;
+    let full_binding = requirement.full_binding.clone().unwrap();
+    assert!(satisfies(Some(&full_binding), &requirement));
+    let mut other = full_binding.clone();
+    other.selection_sha256 = "different".into();
+    assert!(!satisfies(Some(&other), &requirement));
+    let mut full = fx.receipt(&id, GatePhase::Review, "full");
+    full.identity =
+        Some(verification::capture_identity_with(&fx.ctx, &task, &run, "full", None).unwrap());
+    assert!(verification::gate_fresh_for(&fx.ctx, &task, &run, &full, &requirement).unwrap());
+    fx.amend(&tracker, &id, 1, "quick");
+    let (task, run) = fx.current(&id);
+    let amended = select(&fx.ctx, &task, &run, GatePhase::Review)
+        .unwrap()
+        .requirement;
+    assert!(!satisfies(Some(&full_binding), &amended));
+    assert!(!verification::gate_fresh_for(&fx.ctx, &task, &run, &full, &amended).unwrap());
 }
 
 #[test]
