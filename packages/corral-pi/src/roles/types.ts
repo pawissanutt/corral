@@ -29,7 +29,7 @@ export type CorralOp =
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
   | "read_route" | "read_artifacts" | "read_lessons" | "inbox_read" | "inbox_resolve"
   | "job" | "job_monitor"
-  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action";
+  | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission";
 
 export const CORRAL_OPS: readonly CorralOp[] = [
   "hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint",
@@ -37,7 +37,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
   "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "inbox_read", "inbox_resolve",
   "todo", "job", "job_monitor",
-  "plan_write", "plan_submit", "plan_verdict", "owner_action",
+  "plan_write", "plan_submit", "plan_verdict", "owner_action", "write_permission",
 ];
 
 /** The launcher-bound identity; never chosen by the model. */
@@ -78,6 +78,14 @@ export interface RoleContext {
   readonly capabilities?: CapabilitySet;
   /** LSP server settings resolved for this generation. */
   readonly lspSettings?: Readonly<Record<string, unknown>>;
+  readonly writePermission?: {
+    readonly settings: import("./assistant/paths.ts").WriteSettings;
+    onBound(notice: () => Promise<void>): void;
+    sessionId(): string;
+    turn(): { id: number | undefined; signal: AbortSignal };
+    call(requestId: string, payload: Record<string, unknown>): Promise<import("../tools/corral.ts").CorralReceipt>;
+    emit(kind: string, data: Record<string, unknown>): void;
+  };
   readonly registerCapability?: (pid: number) => () => void;
   /** The worktree (worker, reviewer) or workspace root (pm, assistant) Pi works in. */
   readonly cwd: string;

@@ -1,6 +1,6 @@
 // Assistant authority lives in Rust: this role supplies the workspace-scoped loadout and contract.
-// Reads and filing go through the corral CLI from bash; edit and write reach only the session's
-// scratch worktrees, session artifact directory and temp directory (paths.ts). Owner-level
+// Reads and filing go through the corral CLI from bash; external edit/write calls are brokered
+// through scoped owner permissions (paths.ts and permissions.ts). Owner-level
 // commands the owner asks for go through corral_owner_action (owner-action.ts).
 import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
@@ -12,7 +12,7 @@ import { installWriteGuard } from "./paths.ts";
 
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action"];
+const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission"];
 
 export function assistantRole(root: string): RoleModule {
   return {

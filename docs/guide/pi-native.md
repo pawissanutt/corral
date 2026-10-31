@@ -78,6 +78,7 @@ error. The catalog today, as strict / standard / full:
 | Key | Worker, PM | Reviewer, planner, plan reviewer |
 |---|---|---|
 | `todo` | off / on / on | not available |
+| `write_permissions` | not available (assistant only: off / on / on) | not available |
 | `llama_cpp.enabled` | off / off / off | off / off / off |
 | `web.enabled` | worker off / on / on; not available to PM | off / on / on |
 | `context_files` | off / on / on | off / on / on |
@@ -98,6 +99,13 @@ error. The catalog today, as strict / standard / full:
 | `headless` | worker off / off / off; not available to PM | reviewer off / off / off; not available to planning roles |
 
 `headless` is never a preset default; set it per role (see [Headless runs](#headless-runs)).
+
+Assistant-only `write_permissions` allows scoped owner dialogs for external edit/write calls.
+For example, `[agent.capabilities.assistant.write_permissions]` with
+`allow = ['~/.agents/skills']` and `deny = ['~/.agents/skills/corral']` skips prompting in the
+first directory except the denied subtree. Settings apply next generation; fixed protected
+paths always refuse. See [assistant write permissions](assistants.md#write-permissions) for
+scope limits, once/hour/session choices, inspection and revocation.
 
 A compound key also takes a table with an optional `enabled` and its settings:
 

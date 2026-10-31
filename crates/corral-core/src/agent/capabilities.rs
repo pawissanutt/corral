@@ -24,7 +24,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 8;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 9;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -53,6 +53,13 @@ pub const CATALOG: &[CapabilityDef] = &[
         defaults: todo_defaults,
         host: true,
         settings: None,
+    },
+    CapabilityDef {
+        key: "write_permissions",
+        summary: "scoped owner permission for assistant writes",
+        defaults: |role| (role == AgentRole::Assistant).then_some([false, true, true]),
+        host: true,
+        settings: Some(super::write_permissions::write_permission_settings),
     },
     CapabilityDef {
         key: "ask_user",
@@ -127,7 +134,7 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "mcp.enabled",
         summary: "explicit project-scoped MCP servers",
-        defaults: mcp_defaults,
+        defaults: optional_text,
         host: true,
         settings: None,
     },
@@ -141,7 +148,7 @@ pub const CATALOG: &[CapabilityDef] = &[
     CapabilityDef {
         key: "tool_search",
         summary: "local cached tool discovery",
-        defaults: mcp_defaults,
+        defaults: optional_text,
         host: true,
         settings: None,
     },
@@ -256,17 +263,6 @@ fn background_shell_defaults(role: AgentRole) -> Option<[bool; 3]> {
 
 fn optional_text(_: AgentRole) -> Option<[bool; 3]> {
     Some([false, true, true])
-}
-
-fn mcp_defaults(role: AgentRole) -> Option<[bool; 3]> {
-    match role {
-        AgentRole::Worker
-        | AgentRole::Reviewer
-        | AgentRole::Pm
-        | AgentRole::Planner
-        | AgentRole::PlanReviewer
-        | AgentRole::Assistant => Some([false, true, true]),
-    }
 }
 
 fn llama_cpp_defaults(role: AgentRole) -> Option<[bool; 3]> {
@@ -856,11 +852,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pm_catalog_matches_assistant_for_every_key() {
+    fn pm_catalog_matches_assistant_except_write_permissions() {
         for def in CATALOG {
             assert_eq!(
                 (def.defaults)(AgentRole::Pm),
-                (def.defaults)(AgentRole::Assistant),
+                match def.key {
+                    "write_permissions" => None,
+                    _ => (def.defaults)(AgentRole::Assistant),
+                },
                 "{}",
                 def.key
             );
