@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::Ctx;
-use crate::artifact_storage::{gzip, link_replace, protected, replace, storage_lock};
+use crate::artifact_storage::{gzip, link_replace, protected, replace, storage_exclusive};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GcAction {
@@ -185,7 +185,7 @@ pub fn artifact_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
     let _lock = if dry_run {
         None
     } else {
-        Some(storage_lock(ctx)?)
+        Some(storage_exclusive(ctx)?)
     };
     crate::assistant_artifacts::check_owner(None)?;
     let tasks = ctx.store.artifact_owners()?;

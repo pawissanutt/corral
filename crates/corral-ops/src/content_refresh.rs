@@ -168,7 +168,6 @@ pub(crate) fn fingerprint(ctx: &Ctx, tasks: &[Task]) -> Result<String> {
 /// The caller must supply current tasks; no task, artifact, event, or index contents
 /// are read on an unchanged refresh. Missing indexes are always rebuilt.
 pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> {
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let path = ctx.store.state_dir().join("content-search.fingerprint");
     let inputs = fingerprint(ctx, tasks)?;
     let index = ctx.store.state_dir().join("content-search.json");
@@ -182,6 +181,8 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> 
     if previous.as_deref() == Some(&current) && index.is_file() {
         return Ok(());
     }
+    // Only a rebuild reads snapshot contents, which GC must not rewrite meanwhile (T-659).
+    let _storage = crate::artifact_storage::storage_lock(ctx)?;
     crate::content_index::refresh_snapshot(ctx, tasks)?;
     Ok(())
 }

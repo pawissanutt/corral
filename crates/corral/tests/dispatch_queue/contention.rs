@@ -304,7 +304,7 @@ fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
         .unwrap();
     assert!(ran.status.success(), "{ran:?}");
 
-    // When another process holds artifact storage while a real sync process starts.
+    // When GC (the exclusive holder) has artifact storage while a real sync process starts.
     let lock = f.ctx.store.dir().join("lock/artifact-storage.lock");
     std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let held = std::fs::OpenOptions::new()
@@ -332,7 +332,7 @@ fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
     // Await the exact blocking syscall entry, bounded, without polling.
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut seen = Vec::new();
-    while !String::from_utf8_lossy(&seen).contains("/artifact-storage.lock>, LOCK_EX") {
+    while !String::from_utf8_lossy(&seen).contains("/artifact-storage.lock>, LOCK_SH") {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| {

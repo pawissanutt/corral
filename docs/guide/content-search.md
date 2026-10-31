@@ -44,8 +44,10 @@ decoded source bytes and stops after the final requested line, without reading t
 `.corral/state/content-search.json` is a versioned inverted index with extracted text. It uses existing
 Serde and SHA-256 dependencies rather than introducing SQLite or a search service for a local file
 store. Updates retain unchanged artifact text by SHA-256 across compression; task/review/event text
-is content-hashed. Artifact add, retention, sync and search refresh the index. Task edits are picked up
-by the next refresh. Atomic replacement and locks serialize cache writers and artifact retention.
+is content-hashed. Retention, sync and search refresh the index; artifact add refreshes it unless
+another build holds it, leaving the change to the next sync or search. Task edits are
+picked up by the next refresh. Atomic replacement and locks serialize cache writers and artifact
+retention.
 Deleting the index, changing its version, corruption, or `--reindex` rebuilds it from canonical files.
 
 The index caches at most 4096 documents, 256 KiB of text per document, 8 MiB of total text, and

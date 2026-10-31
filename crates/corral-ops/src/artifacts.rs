@@ -135,7 +135,6 @@ fn add_artifact_inner(
     if !matches!(target, Target::Promotion) {
         crate::assistant_artifacts::check_owner(None)?;
     }
-    let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
     let meta = std::fs::metadata(path)
         .with_context(|| format!("artifact {} not found", path.display()))?;
     if !meta.is_file() {
@@ -156,6 +155,8 @@ fn add_artifact_inner(
         .map(|n| n.to_string_lossy().into_owned())
         .with_context(|| format!("artifact {} has no file name", path.display()))?;
     let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // Reading the source needs no storage; only the snapshot write and its metadata do.
+    let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
 
     let mut result: Option<(Artifact, bool)> = None;
     let mut receipt = None;
@@ -248,7 +249,7 @@ fn add_artifact_inner(
         ctx.store
             .log_event(Some(&task.id), "artifact", artifact_detail(&artifact))?;
     }
-    crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
+    crate::content_index::snapshot_if_idle(ctx)?;
     Ok((artifact, None))
 }
 

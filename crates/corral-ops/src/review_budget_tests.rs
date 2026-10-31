@@ -927,3 +927,6 @@ mod config_edit;
 
 #[path = "review_budget/ownership_tests.rs"]
 mod ownership;
+
+#[path = "review_budget/storage_tests.rs"]
+mod storage;
