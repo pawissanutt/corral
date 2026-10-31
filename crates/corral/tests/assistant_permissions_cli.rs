@@ -223,8 +223,11 @@ fn the_listing_shows_every_grant_state_and_each_allow_entry_resolution() {
         allow[2]["ignored"],
         "does not resolve to an existing directory"
     );
-    // And the saved configuration, which does not register the key yet, differs.
-    assert_eq!(listing["saved_settings"], Value::Null);
+    // And the saved configuration's registered defaults differ from this generation.
+    assert_eq!(
+        listing["saved_settings"],
+        json!({"enabled": true, "allow": [], "deny": []})
+    );
     assert_eq!(listing["saved_differs"], true);
     // When ~/link is relinked to /, then the entry is flagged as ignored.
     std::fs::remove_file(fx.home.join("link")).unwrap();
