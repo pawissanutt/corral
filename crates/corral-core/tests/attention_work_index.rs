@@ -24,6 +24,7 @@ fn owed_attention_and_terminal_slots_are_indexed_with_constant_work_and_atomic_r
     let mut measured = Vec::new();
     for scale in [1, 10] {
         let (_dir, store) = store_support::store();
+        store.fixture_pin_now(store_support::at(0)).unwrap();
         let mut facts = store_support::rich(&store, 1, 0, 0, 0);
         facts.status = Status::Done;
         facts.runs[0].gate = Some(

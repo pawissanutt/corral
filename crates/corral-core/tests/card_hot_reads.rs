@@ -149,6 +149,7 @@ fn card_reads_have_identical_work_with_tenfold_nested_history() {
     for nested in [2, 20] {
         // Given the same current inputs with additional terminal nested records.
         let (_dir, store) = store();
+        store.fixture_pin_now(at(0)).unwrap();
         let mut task = store.create("Bounded", None, Status::Running, "").unwrap();
         grow(&mut task, 2, nested + 1, 2, nested);
         task.created = at(0);
