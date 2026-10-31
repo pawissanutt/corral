@@ -43,6 +43,15 @@ mod done_reference;
 #[path = "../tests/support/launch_resume.rs"]
 mod launch_resume;
 #[cfg(target_os = "linux")]
+#[path = "../tests/support/native_root_budget.rs"]
+mod native_root_budget;
+#[cfg(target_os = "linux")]
+#[path = "../tests/support/native_root_fixture.rs"]
+mod native_root_fixture;
+#[cfg(target_os = "linux")]
+#[path = "../tests/support/native_root_model.rs"]
+mod native_root_model;
+#[cfg(target_os = "linux")]
 #[path = "../tests/support/native_sync_budget.rs"]
 mod native_sync_budget;
 #[path = "../tests/support/submission_refusals.rs"]
