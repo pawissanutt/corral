@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 mod lifecycle;
 #[path = "cleanup_ops/plan_review.rs"]
 mod plan_review;
+#[path = "cleanup_ops/sandbox.rs"]
+mod sandbox;
 #[path = "cleanup_ops/worktree.rs"]
 mod worktree;
 
@@ -656,8 +658,8 @@ fn sync_reaps_event_only_historical_tools_and_fallback_workspaces() {
             "fallback workspace ownership not logged for {pane}"
         );
     }
-    corral_ops::move_task(&fx.ctx, &fx.id, Status::Dropped, false).unwrap();
     fx.reset_calls();
+    corral_ops::move_task(&fx.ctx, &fx.id, Status::Dropped, false).unwrap();
     fx.sync();
     for pane in inventory["panes"].as_object().unwrap().keys() {
         assert!(
