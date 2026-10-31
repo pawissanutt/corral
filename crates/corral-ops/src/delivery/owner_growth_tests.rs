@@ -22,6 +22,7 @@ fn world(earlier: u64) -> OmoWorld {
         .store
         .update(&world.task.id, |task| {
             task.created = now;
+            task.status_since = Some(now);
             let mut inbox = serde_json::to_value(&task.runs[0].inbox)?;
             inbox["next_seq"] = json!(1000);
             inbox["effects_applied"] = json!((1..=earlier).collect::<Vec<_>>());
@@ -35,6 +36,20 @@ fn world(earlier: u64) -> OmoWorld {
             Ok(())
         })
         .unwrap();
+    // Complete actual bounded legacy identity indexing during cold fixture preparation.
+    // Keep every earlier effect/cursor; the measured pass must never bypass this guard.
+    let inbox = Inbox::new(&world.ctx.store, world.recipient()).unwrap();
+    let mut indexed = false;
+    for _ in 0..32 {
+        if inbox.index_owner(64).unwrap().legacy_debt.is_none() {
+            indexed = true;
+            break;
+        }
+    }
+    assert!(
+        indexed,
+        "both phases index the actual 999 reserved legacy slots"
+    );
     // Post without the gateway, so the measured pass is the one that delivers.
     let registry = world.temp.path().join("agent/rpc-host-daemon");
     let hidden = world.temp.path().join("agent/registry-hidden");
