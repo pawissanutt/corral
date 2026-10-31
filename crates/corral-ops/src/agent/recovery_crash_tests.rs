@@ -298,7 +298,7 @@ fn a_host_killed_inside_an_edit_and_a_command_keeps_their_effects_and_reports_th
     );
     let task = fx.task();
     let artifact = task.artifacts.iter().find(|a| a.title == title).unwrap();
-    let snapshot = std::fs::read_to_string(fx.ctx.store.dir().join(&artifact.path)).unwrap();
+    let snapshot = String::from_utf8(crate::artifact_read(&fx.ctx, artifact).unwrap()).unwrap();
     assert!(
         snapshot.contains(".M") && snapshot.contains("tracked"),
         "{snapshot}"

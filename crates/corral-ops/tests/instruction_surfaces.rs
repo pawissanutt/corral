@@ -427,7 +427,7 @@ fn surfaces_rendered_for_a_reduced_tier_task_carry_the_tier_commands_and_no_full
         .rev()
         .find(|a| a.title == "Autopilot changes (round 1)")
         .expect("change request artifact");
-    let request = std::fs::read_to_string(fx.ctx.store.dir().join(&request.path)).unwrap();
+    let request = String::from_utf8(corral_ops::artifact_read(&fx.ctx, request).unwrap()).unwrap();
     assert_reduced("change request", &request);
 
     // When its review goes stale, the PM send-back.

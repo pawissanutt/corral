@@ -319,7 +319,7 @@ fn resume_fences_the_dead_generation_classifies_its_dangling_calls_and_relaunche
         fx.worker().key()
     );
     let artifact = task.artifacts.iter().find(|a| a.title == title).unwrap();
-    let text = std::fs::read_to_string(fx.ctx.store.dir().join(&artifact.path)).unwrap();
+    let text = String::from_utf8(crate::artifact_read(&fx.ctx, artifact).unwrap()).unwrap();
     assert!(text.contains("--porcelain=v2") && text.contains(".M") && text.contains("tracked"));
     assert_eq!(
         std::fs::read_to_string(f::session_file(&bound)).unwrap(),

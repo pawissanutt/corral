@@ -6,6 +6,10 @@ use corral_core::{Accept, AgentCmd, AutoStage, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+#[path = "support/canonical_artifact.rs"]
+mod canonical_artifact;
+use canonical_artifact::canonical_text;
+
 #[cfg(target_os = "linux")]
 #[path = "acceptance_live/approval_busy.rs"]
 mod approval_busy;
@@ -364,7 +368,7 @@ fn isolated_gate_review_land_preserves_exact_receipt_identities() {
         "LIVE_RECEIPTS {}",
         json!({"identity":identity, "audit":audit, "evidence":evidence,
         "gate":landed.current_run().unwrap().gate, "review":landed.current_run().unwrap().review,
-        "acceptance":std::fs::read_to_string(store.dir().join(&receipt.path)).unwrap(),
+        "acceptance":canonical_text(&store, receipt),
         "events":store.events().unwrap()})
     );
 }

@@ -6,6 +6,10 @@ use corral_core::{AgentCmd, AutoStage, Status, Store};
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+#[path = "support/canonical_artifact.rs"]
+mod canonical_artifact;
+use canonical_artifact::canonical_text;
+
 #[path = "resource_support/mod.rs"]
 mod resource_support;
 
@@ -202,9 +206,7 @@ fn isolated_cli_conflict_escalates_before_gate_or_reviewer_and_keeps_exact_packe
         .filter(|a| a.title == "Integration repair packet")
         .collect();
     assert_eq!(artifacts.len(), 1, "{:?}", run.autopilot);
-    let packet: Value =
-        serde_json::from_slice(&std::fs::read(store.dir().join(&artifacts[0].path)).unwrap())
-            .unwrap();
+    let packet: Value = serde_json::from_str(&canonical_text(&store, artifacts[0])).unwrap();
     assert_eq!(
         packet["key"],
         json!({
