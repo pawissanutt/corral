@@ -17,12 +17,12 @@ export interface Ran {
   readonly stderr: string;
 }
 
-export function run(argv: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Ran {
+export function run(argv: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {}): Ran {
   const [command, ...args] = argv;
   if (!command) throw new Error("empty argv");
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? REPO, env: options.env ?? process.env, stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+    encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: options.timeout, killSignal: "SIGKILL",
   });
   return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
