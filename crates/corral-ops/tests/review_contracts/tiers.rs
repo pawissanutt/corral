@@ -220,6 +220,72 @@ fn quick_member_review_carries_one_gate_contract_and_needs_only_its_own_tier() {
     );
 }
 
+#[test]
+fn full_landing_receipt_satisfies_quick_review_and_preserves_approval() {
+    let fx = fixture(tiered);
+    clean_run_template(&fx);
+    let id = candidate(&fx, "logic", &[], "src/widget.rs");
+    corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    let approved = corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "quick passes").unwrap();
+    assert_eq!(approved.verdict, Some(Verdict::Approve));
+
+    // An approval changes selection to the full landing tier; a subsequent review still
+    // requires quick, and must accept the stronger receipt on the same candidate.
+    corral_ops::gate_start(&fx.ctx, &id).unwrap();
+    corral_ops::gate_wait(&fx.ctx, &id).unwrap();
+    let task = fx.ctx.store.get(&id).unwrap();
+    let receipt = task.current_run().unwrap().gate.as_ref().unwrap();
+    assert!(receipt.identity.as_ref().unwrap().gate_tier.is_none());
+    corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+    assert_eq!(packet(&fx, &id)["bound"]["gate_contract"]["tier"], "quick");
+    assert!(gate_gaps(&packet(&fx, &id)["bound"]).is_empty());
+    let approved = corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "full passes").unwrap();
+    assert_eq!(
+        approved.verdict,
+        Some(Verdict::Approve),
+        "{:?}",
+        approved.notes
+    );
+}
+
+#[test]
+fn stale_candidate_receipts_are_rejected_for_quick_and_full() {
+    for full in [false, true] {
+        let fx = fixture(tiered);
+        clean_run_template(&fx);
+        let id = candidate(&fx, "logic", &[], "src/widget.rs");
+        if full {
+            corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+            corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "quick passes").unwrap();
+            corral_ops::gate_start(&fx.ctx, &id).unwrap();
+            corral_ops::gate_wait(&fx.ctx, &id).unwrap();
+        }
+        let task = fx.ctx.store.get(&id).unwrap();
+        let run = task.current_run().unwrap();
+        assert_eq!(
+            run.gate
+                .as_ref()
+                .unwrap()
+                .identity
+                .as_ref()
+                .unwrap()
+                .gate_tier
+                .is_none(),
+            full
+        );
+        std::fs::write(run.worktree.join("src/widget.rs"), "new candidate\n").unwrap();
+        corral_git::commit_all(&run.worktree, "Change candidate after gate").unwrap();
+        corral_ops::review_run(&fx.ctx, &id, None).unwrap();
+        let gaps = gate_gaps(&packet(&fx, &id)["bound"]);
+        assert!(
+            gaps.iter().any(|g| g["code"] == "gate_stale"),
+            "full={full}: {gaps:?}"
+        );
+        let verdict = corral_ops::verdict(&fx.ctx, &id, Verdict::Approve, "stale").unwrap();
+        assert_eq!(verdict.verdict, Some(Verdict::Changes));
+    }
+}
+
 fn tiered(config: &mut corral_core::Config) {
     config.review.gate_tiers = Some(BTreeMap::from([(
         "quick".to_owned(),
