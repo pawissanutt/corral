@@ -19,6 +19,7 @@ import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { type FakeTransport, fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 import { type FixtureInstall, buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { nextEvent } from "./support/wait.ts";
+import { inboxMessages } from "./support/canonical-store.ts";
 import { corralBinary, generationDir, ok, privateHerdr, privateRoot, probeBinary, run } from "./support/workspace.ts";
 
 const isolated = privateHerdr();
@@ -189,10 +190,8 @@ test("a worker starts, peeks, kills and monitors jobs; one wake answers the exit
   await host.drained();
   await cliAsync("sync");
   // Then exactly one wait_wake reached the worker, naming the ready exit.
-  const inbox = join(workspace, `.corral/inbox/${lane.task}_${lane.run}`);
-  const wakes = readdirSync(inbox).filter((name) => /^\d+\.md$/.test(name))
-    .map((name) => readFileSync(join(inbox, name), "utf8"))
-    .filter((body) => body.includes("kind: wait_wake"));
+  const wakes = inboxMessages(workspace, `${lane.task}_${lane.run}`)
+    .filter(message => message.kind === "wait_wake").map(message => message.body);
   expect(wakes).toHaveLength(1);
   expect(wakes[0]).toContain(`Wait ${wait} (job ${built.id} exits) reached ready`);
   state = show(lane.task).runs[0].agent_host;

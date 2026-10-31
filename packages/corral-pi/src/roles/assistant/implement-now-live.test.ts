@@ -18,6 +18,7 @@ import { completionChoices, implementNowQuestion } from "../../../test/support/a
 import { exportAssistantSession } from "./env.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { corralBinary, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
+import { storeEvents as canonicalEvents } from "../../../test/support/canonical-store.ts";
 
 function syntheticAccess(): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -126,8 +127,7 @@ test("live implement-now: one ambiguous question, scratch work, a candidate-boun
     const shown = () => JSON.parse(ok([corral, "assistant", "show", fixture.session, "--json"], { cwd: workspace }));
     const kinds = () => Object.fromEntries((shown().session.scratch as { slug: string; kind: string }[]).map((s) => [s.slug, s.kind]));
     const ownerActions = () => (shown().container.state.receipts as { op: string }[]).filter((r) => r.op === "owner_action");
-    const storeEvents = (): StoreEvent[] => readFileSync(join(workspace, ".corral/events.jsonl"), "utf8").trim().split("\n")
-      .map((l) => JSON.parse(l) as StoreEvent);
+    const storeEvents = (): StoreEvent[] => canonicalEvents(corral, workspace);
     const slug = "readme-usage";
     const scratch = join(app, ".worktrees", `${fixture.session}-${slug}`);
     const before = kinds();

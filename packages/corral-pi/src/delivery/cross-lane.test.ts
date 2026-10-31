@@ -9,8 +9,9 @@ import { join } from "node:path";
 
 import { type FixtureInstall, buildFixtureInstall } from "../../test/support/fixture-install.ts";
 import {
-  EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, run, sha256,
+  corralBinary, generationDir, ok, privateHerdr, privateRoot, run, sha256,
 } from "../../test/support/workspace.ts";
+import { StoreEventFollower as EventFollower, inboxEnvelopes, requireReceipt } from "../../test/support/canonical-store.ts";
 import { ownerNewIsRefused } from "../../test/support/replacement.ts";
 import { ENTRY_TYPE } from "./index.ts";
 
@@ -25,7 +26,7 @@ const workspaces: string[] = [];
 const cli = (...args: string[]) => ok([corral, "--root", workspace, ...args], { cwd: workspace });
 const show = (task: string): any => JSON.parse(cli("show", task, "--json"));
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("delivery cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -52,7 +53,7 @@ effort = "high"
 assets_dir = ${JSON.stringify(assets.dir)}
 `);
   cli("new", "Pi inbox delivery", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
@@ -83,27 +84,25 @@ test("corral reply reaches the live pi-native worker by submit_input and is obse
   await ended;
   cli("sync");
 
-  const inbox = join(workspace, ".corral/inbox/T-001_R1");
-  const envelopes = readdirSync(join(inbox, "envelopes")).filter((name) => name.endsWith(".json"))
-    .map((name) => JSON.parse(readFileSync(join(inbox, "envelopes", name), "utf8")));
+  const envelopes = inboxEnvelopes(workspace, "T-001_R1");
   // The reply's turn ends without a report, so worker-role's one OD11 turn_nudge follows it.
   const replies = envelopes.filter((candidate) => candidate.idempotency_key === "T-001_R1@env1");
   expect(replies).toHaveLength(1);
-  const envelope = replies[0];
+  const envelope = replies[0]!;
   expect(envelope.adapter).toBe("pi_native");
   expect(envelope.binding.endpoint).toBe(join(generationDir(workspace, "T-001", "R1", 1), "host.sock"));
-  expect(existsSync(join(inbox, "000001.receipt.observed.json"))).toBeTrue();
-  const receipt = JSON.parse(readFileSync(join(inbox, "000001.receipt.observed.json"), "utf8"));
+  const receipt = requireReceipt(workspace, "T-001_R1", 1);
+  expect(receipt).toBeDefined();
   expect(receipt.via).toBe("pi_native");
 
-  const session = readFileSync(envelope.binding.transcript, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const session = readFileSync(envelope.binding.transcript!, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   const written = session.filter((entry) => entry.customType === ENTRY_TYPE
     && entry.data.idempotency_key === envelope.idempotency_key.replace("@env", ":env"));
   expect(written).toHaveLength(1);
   expect(written[0].data.idempotency_key).toBe(envelope.idempotency_key.replace("@env", ":env"));
   expect(written[0].data.text_sha256).toBe(envelope.payload_sha256);
   expect(written[0].data.origin).toBe("corral-inbox");
-  expect(sha256(readFileSync(envelope.payload_path, "utf8"))).toBe(envelope.payload_sha256);
+  expect(sha256(envelope.payload)).toBe(envelope.payload_sha256);
   expect(envelope.binding.transcript).toBe(binding.session_file);
   expect(written[0].data.session_id).toBe(binding.session_id);
   expect(receipt.detail.entry_id).toBe(written[0].id);

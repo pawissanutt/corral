@@ -14,8 +14,9 @@ import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall, clearFixturePiS
 import { within } from "./support/wait.ts";
 import { sha256Hex } from "../src/tools/corral.ts";
 import {
-  EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
+  corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
 } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir, requireReceipt, inboxEnvelopes } from "./support/canonical-store.ts";
 
 const isolated = privateHerdr();
 let corral = "";
@@ -43,7 +44,7 @@ async function hostState(generation: number, dir = generationDir(workspace, "T-0
   }
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("headless cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -111,7 +112,7 @@ headless = true
 `.replace("max_load_per_core = 1.0", "max_load_per_core = 1000.0")
     .replace('min_mem_available = "8GB"', 'min_mem_available = "1KB"').replace('min_disk_free = "50GB"', 'min_disk_free = "1KB"'));
   cli("new", "Pi headless worker asks, resumes and completes", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 // The worker and reviewer are separate host lifecycles; SIGKILL cannot run exit cleanup.
@@ -149,7 +150,7 @@ test("a headless worker asks, survives host loss through explicit resume and com
   expect(screen).toContain("headless: no terminal input");
 
   // When its host dies and the owner explicitly resumes the run:
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   mkdirSync(exits, { recursive: true });
   const exited = fileAppears(exits, "T-001-R1.exited");
   process.kill(first.pid, "SIGKILL");
@@ -196,13 +197,10 @@ test("a headless worker asks, survives host loss through explicit resume and com
 
   // Then the answer was observed from the bound transcript, and done committed from generation 2:
   const [container, seq] = String(answered.message_id).split("#");
-  const inbox = join(workspace, ".corral/inbox", container ?? "");
-  const receipt = JSON.parse(readFileSync(join(inbox, `${String(seq).padStart(6, "0")}.receipt.observed.json`), "utf8"));
+  const receipt = requireReceipt(workspace, container ?? "", Number(seq));
   expect(receipt.via).toBe("pi_native");
-  const envelopes = readdirSync(join(inbox, "envelopes")).filter((name) => name.endsWith(".json"))
-    .map((name) => JSON.parse(readFileSync(join(inbox, "envelopes", name), "utf8")));
-  const carried = envelopes.find((envelope) => existsSync(envelope.payload_path)
-    && readFileSync(envelope.payload_path, "utf8").includes("Use the inbox adapter."));
+  const envelopes = inboxEnvelopes(workspace, container ?? "");
+  const carried = envelopes.find(envelope => envelope.payload.includes("Use the inbox adapter."));
   expect([carried?.adapter, carried?.binding.transcript]).toEqual(["pi_native", first.session_file]);
   const finished = show("T-001").runs.at(-1);
   expect(finished.outcome).toBe("done");
@@ -252,7 +250,7 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
     .toContain("headless: no terminal input");
 
   // When its host dies and the owner explicitly resumes the review child:
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   mkdirSync(exits, { recursive: true });
   const exited = fileAppears(exits, `T-001-R1-${review}.exited`);
   process.kill(first.pid, "SIGKILL");
@@ -299,8 +297,7 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
   // Then the answer was observed from the bound transcript and the verdict committed from
   // generation 2 under the same review child and callback, with no terminal-origin turn:
   const [container, seq] = String(answered.message_id).split("#");
-  const inbox = join(workspace, ".corral/inbox", container ?? "");
-  const receipt = JSON.parse(readFileSync(join(inbox, `${String(seq).padStart(6, "0")}.receipt.observed.json`), "utf8"));
+  const receipt = requireReceipt(workspace, container ?? "", Number(seq));
   expect(receipt.via).toBe("pi_native");
   const host = child().agent_host;
   const committed = host.receipts.find((r: any) => r.op === "verdict");

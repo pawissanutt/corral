@@ -19,6 +19,7 @@ import { exportAssistantSession } from "./env.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { nextEvent, within } from "../../../test/support/wait.ts";
 import { corralBinary, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
+import { storeEvents as canonicalEvents } from "../../../test/support/canonical-store.ts";
 
 function syntheticAccess(): string {
   const part = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -132,10 +133,9 @@ test("live private-pane owner authority: landing, synthetic inputs, do it, confi
       return message.toolCallId;
     };
     const status = (id: string) => JSON.parse(ok([corral, "show", id, "--json"], { cwd: workspace })).status as string;
-    const storeEvents = (): StoreEvent[] => readFileSync(join(workspace, ".corral/events.jsonl"), "utf8").trim().split("\n")
-      .map((l) => JSON.parse(l) as StoreEvent);
-    const journal = () => (JSON.parse(readFileSync(join(workspace, `.corral/state/agent-assistant/${fixture.session}.json`), "utf8"))
-      .owner_inputs ?? []) as { id: string; source: string; text: string; answers?: string }[];
+    const storeEvents = (): StoreEvent[] => canonicalEvents(corral, workspace);
+    const journal = () => (JSON.parse(ok([corral, "assistant", "show", fixture.session, "--json"], { cwd: workspace }))
+      .container.owner_inputs ?? []) as { id: string; source: string; text: string; answers?: string }[];
     const toml = () => readFileSync(join(workspace, ".corral/corral.toml"), "utf8");
 
     // C3: the owner's own words land T-001 through the normal approve path, with no question.

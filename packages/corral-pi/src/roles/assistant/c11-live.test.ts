@@ -52,7 +52,7 @@ test("live private-pane C11: focused production assistant consumes brief and pag
       { env: { ...process.env, CORRAL_ASSISTANT_C11: JSON.stringify({ root: workspace, assets: assets.dir, pane }) } });
     const line = /ASSISTANT_C11 (\{.*\})/.exec(setup)?.[1];
     if (!line) throw new Error(`C11 setup produced no result: ${setup.slice(-2000)}`);
-    const fixture = JSON.parse(line) as { task: string; session: string; bootstrap: string; launch: string; task_path: string; missing: string };
+    const fixture = JSON.parse(line) as { task: string; session: string; bootstrap: string; launch: string; missing: string };
     const bootstrap = JSON.parse(readFileSync(fixture.bootstrap, "utf8"));
     const launch = parseLaunchMessage(readFileSync(fixture.launch, "utf8"));
     expect([bootstrap.role, bootstrap.assistant, bootstrap.task]).toEqual(["assistant", fixture.session, undefined]);
@@ -60,7 +60,8 @@ test("live private-pane C11: focused production assistant consumes brief and pag
     expect(Buffer.byteLength(brief)).toBeLessThanOrEqual(24 * 1024);
     expect(brief).toContain("C11_BRIEF_SENTINEL");
     expect(brief).toContain("[truncated");
-    const before = readFileSync(fixture.task_path, "utf8");
+    const taskRecord = () => JSON.parse(ok([corral, "show", fixture.task, "--json"], { cwd: workspace }));
+    const before = taskRecord();
     const data = join(workspace, "data");
     const auth = join(data, "corral/pi-native/auth");
     mkdirSync(auth, { recursive: true, mode: 0o700 });
@@ -130,7 +131,7 @@ test("live private-pane C11: focused production assistant consumes brief and pag
     for (const marker of ["OMO_C11", "CLAUDE_C11", "PI_C11", "REVIEW_C11", "transcript_unavailable", fixture.missing, "assistant_refused"]) {
       expect(output).toContain(marker);
     }
-    expect(readFileSync(fixture.task_path, "utf8")).toBe(before);
+    expect(taskRecord()).toEqual(before);
     const record = JSON.parse(ok([corral, "assistant", "show", fixture.session, "--json"], { cwd: workspace }));
     expect(JSON.stringify(record)).toContain(fixture.task);
     const evidence = process.env.CORRAL_C11_EVIDENCE;

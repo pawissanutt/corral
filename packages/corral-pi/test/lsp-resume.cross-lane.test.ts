@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { connect } from "./support/bridge-client.ts";
 import { buildFixtureInstall, PACKAGE_ROOT, type FixtureInstall } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
-import { EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run } from "./support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir } from "./support/canonical-store.ts";
 
 const isolated = privateHerdr();
 let corral = "", workspace = "", workspaceId = "";
@@ -16,7 +17,7 @@ const show = (): any => JSON.parse(cli("show", "T-001", "--json"));
 const frame = (cap: string, generation: number, command: string, args: Record<string, unknown>) =>
   ({ version: 1, id: crypto.randomUUID(), ctl_cap: cap, generation, command, args });
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) { console.log("lsp resume: skipped (requires private test-herdr server)"); return; }
   corral = corralBinary();
   workspace = mkdtempSync(join(privateRoot()!, "lsp-resume-"));
@@ -59,7 +60,7 @@ args = [${JSON.stringify(fake)}]
 extensions = { ".fk" = "fake" }
 `);
   cli("new", "LSP resume", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
@@ -114,7 +115,7 @@ test("explicit lost-host resume uses changed LSP settings and retains the prior 
   const old = show().runs.at(-1).agent_host.generations[0];
   const originalSnapshot = structuredClone(old.capabilities);
   expect(readFileSync(old.bound.session_file, "utf8")).toContain('\\"server\\":\\"first\\"');
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   mkdirSync(exits, { recursive: true });
   const exited = fileAppears(exits, "T-001-R1.exited");
   process.kill(old.bound.pid, "SIGKILL");

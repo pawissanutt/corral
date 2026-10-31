@@ -12,8 +12,9 @@ import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../te
 import { ownerNewIsRefused } from "../../test/support/replacement.ts";
 import { within } from "../../test/support/wait.ts";
 import {
-  EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, run, sha256,
+  corralBinary, generationDir, ok, privateHerdr, privateRoot, run, sha256,
 } from "../../test/support/workspace.ts";
+import { StoreEventFollower as EventFollower, inboxReceipt, inboxEnvelopes, requireReceipt } from "../../test/support/canonical-store.ts";
 import { ENTRY_TYPE } from "./index.ts";
 
 const isolated = privateHerdr();
@@ -42,7 +43,7 @@ async function untilReported(client: TestClient, cap: string, state: string, aft
   }
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("question cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -97,7 +98,7 @@ effort = "high"
 assets_dir = ${JSON.stringify(assets.dir)}
 `);
   cli("new", "Pi question answered after a refused /new", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
@@ -136,9 +137,7 @@ test("a question answered after the owner's refused /new is observed from the or
     "--text", "Use the inbox adapter.", "--option", "inbox", "--owner", "--json"));
   expect(answered.delivery).toBe("queued");
   const [container, seq] = String(answered.message_id).split("#");
-  const inbox = join(workspace, ".corral/inbox", container ?? "");
-  const receiptFile = join(inbox, `${String(seq).padStart(6, "0")}.receipt.observed.json`);
-  expect(existsSync(receiptFile)).toBeFalse();
+  expect(inboxReceipt(workspace, container ?? "", Number(seq))).toBeUndefined();
   // The first sync submits the answer to the host, which records it before Pi sees it; the second
   // observes that record.
   const answerTurn = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
@@ -150,12 +149,11 @@ test("a question answered after the owner's refused /new is observed from the or
   expect(["idle", "done"]).toContain(herdr("agent", "wait", pane, "--timeout", "30000").agent.agent_status);
 
   // Then corral observed that answer member from the transcript hello bound, in the bound session:
-  expect(existsSync(receiptFile)).toBeTrue();
-  const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+  const receipt = requireReceipt(workspace, container ?? "", Number(seq));
+  expect(receipt).toBeDefined();
   expect(receipt.via).toBe("pi_native");
-  const envelope = readdirSync(join(inbox, "envelopes")).filter((name) => name.endsWith(".json"))
-    .map((name) => JSON.parse(readFileSync(join(inbox, "envelopes", name), "utf8")))
-    .find((candidate) => readFileSync(candidate.payload_path, "utf8").includes("Use the inbox adapter."));
+  const envelope = inboxEnvelopes(workspace, container ?? "")
+    .find(candidate => candidate.payload.includes("Use the inbox adapter."))!;
   expect(envelope.adapter).toBe("pi_native");
   expect(envelope.binding.transcript).toBe(binding.session_file);
   const session = readFileSync(binding.session_file, "utf8").trim().split("\n").map((line) => JSON.parse(line));
@@ -163,7 +161,7 @@ test("a question answered after the owner's refused /new is observed from the or
   expect(written?.customType).toBe(ENTRY_TYPE);
   expect(written?.data.session_id).toBe(binding.session_id);
   expect(written?.data.text_sha256).toBe(envelope.payload_sha256);
-  expect(sha256(readFileSync(envelope.payload_path, "utf8"))).toBe(envelope.payload_sha256);
+  expect(sha256(envelope.payload)).toBe(envelope.payload_sha256);
   const after = JSON.parse(cli("question", "show", question.key, "--json"));
   expect(after.answer?.message_id ?? after.question?.answer?.message_id).toBe(answered.message_id);
 }, 600_000);

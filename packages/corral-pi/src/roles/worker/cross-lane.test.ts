@@ -7,7 +7,7 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, watch, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { EventLog } from "../../bridge/events.ts";
 import { type BridgeServer, startBridge } from "../../bridge/server.ts";
@@ -19,7 +19,8 @@ import { CorralClient, sha256Hex } from "../../tools/corral.ts";
 import { type FakeTransport, fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.ts";
 import { type FixtureInstall, buildFixtureInstall, PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
 import { within, nextEvent } from "../../../test/support/wait.ts";
-import { EventFollower, corralBinary, generationDir, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
+import { corralBinary, generationDir, ok, privateHerdr, privateRoot, probeBinary, run } from "../../../test/support/workspace.ts";
+import { StoreEventFollower as EventFollower, gateResult, inboxMessages } from "../../../test/support/canonical-store.ts";
 
 const isolated = privateHerdr();
 const CTL = "d".repeat(64);
@@ -137,7 +138,7 @@ beforeAll(async () => {
       shutdown: () => undefined,
     },
   });
-  follower = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  follower = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(async () => {
@@ -207,13 +208,13 @@ test("the production worker gates, owner input steers a bridge turn, and a fresh
   expect(engaged.class).toBe("owner_engaged");
 
   // When the gate's real pane finishes and a fresh corral process syncs:
-  const gates = join(workspace, ".corral/state/gates");
-  const result = `${lane.task}-${lane.run}-${attempt}.json`;
+  const result = gateResult(workspace, lane.task, lane.run);
+  const gates = dirname(result);
   await within(new Promise<void>((resolve) => {
     const watcher = watch(gates, () => {
-      if (existsSync(join(gates, result))) { watcher.close(); resolve(); }
+      if (existsSync(result)) { watcher.close(); resolve(); }
     });
-    if (existsSync(join(gates, result))) { watcher.close(); resolve(); }
+    if (existsSync(result)) { watcher.close(); resolve(); }
   }), 120_000, "the gate result file");
   const readback = show(lane.task).gate_ref;
   expect(readback.attempt).toBe(attempt);
@@ -238,11 +239,10 @@ test("the production worker gates, owner input steers a bridge turn, and a fresh
 
   // Then exactly one wait_wake reached the worker by submit_input, no nudge was posted, and its
   // done moved the task to Review with AgentReport v1:
-  const inbox = join(workspace, `.corral/inbox/${lane.task}_${lane.run}`);
-  const kinds = readdirSync(inbox).filter((name) => /^\d+\.md$/.test(name))
-    .map((name) => readFileSync(join(inbox, name), "utf8").split("\n").find((l) => l.startsWith("kind: ")));
+  const messages = inboxMessages(workspace, `${lane.task}_${lane.run}`);
+  const kinds = messages.map(message => `kind: ${message.kind}`);
   expect(kinds).toEqual(["kind: wait_wake"]);
-  const wake = readFileSync(join(inbox, "000001.md"), "utf8");
+  const wake = messages.find(message => message.seq === 1)?.body ?? "";
   expect(wake).toContain(`Gate attempt ${attempt} finished: pass.`);
   expect(JSON.parse(/gate_ref: (\{.*\})/.exec(wake)?.[1] ?? "null")).toEqual(readback);
   expect(wake).toContain(`contract_sha256: ${lane.contract_sha256}`);

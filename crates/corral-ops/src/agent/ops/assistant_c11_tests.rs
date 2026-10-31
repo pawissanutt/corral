@@ -129,6 +129,6 @@ fn focused_assistant_c11_setup() {
     .unwrap();
     println!(
         "ASSISTANT_C11 {}",
-        json!({"task":task.id, "session":session.id, "bootstrap":prepared.bootstrap, "launch":launch, "task_path":task.path, "missing":paths[4]})
+        json!({"task":task.id, "session":session.id, "bootstrap":prepared.bootstrap, "launch":launch, "missing":paths[4]})
     );
 }

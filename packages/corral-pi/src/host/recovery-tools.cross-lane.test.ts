@@ -16,8 +16,9 @@ import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../te
 import { ownerNewIsRefused } from "../../test/support/replacement.ts";
 import { within } from "../../test/support/wait.ts";
 import {
-  EventFollower, corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
+  corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
 } from "../../test/support/workspace.ts";
+import { StoreEventFollower as EventFollower, launchExitDir } from "../../test/support/canonical-store.ts";
 
 const isolated = privateHerdr();
 let corral = "";
@@ -55,7 +56,7 @@ async function untilBound(client: TestClient, cap: string, generation: number): 
 /** Kills generation `n`'s host while its pane stays, then lets sync record the loss. */
 async function kill(n: number): Promise<void> {
   const host = show("T-001").runs.at(-1).agent_host.generations[n - 1];
-  const exits = join(workspace, ".corral/state/launch-exits");
+  const exits = launchExitDir(workspace);
   mkdirSync(exits, { recursive: true });
   const exited = fileAppears(exits, "T-001-R1.exited");
   process.kill(host.bound.pid, "SIGKILL");
@@ -116,7 +117,7 @@ function recordedCalls(session: string): (id: string, tool: string) => Promise<v
   };
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   if (!isolated) {
     console.log("recovery tools cross-lane: skipped (needs the private corral-test server of scripts/test-herdr.sh)");
     return;
@@ -188,7 +189,7 @@ effort = "high"
 assets_dir = ${JSON.stringify(assets.dir)}
 `);
   cli("new", "Pi host killed inside upstream tools", "-p", "app", "--ready");
-  events = new EventFollower(join(workspace, ".corral/events.jsonl"));
+  events = await EventFollower.open(workspace);
 }, 900_000);
 
 afterAll(() => {
