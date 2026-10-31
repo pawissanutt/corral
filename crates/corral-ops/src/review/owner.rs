@@ -1,15 +1,6 @@
 //! Owner-acceptance checks of a task's current run, read from any task form.
 use anyhow::Result;
-use corral_core::{RunHead, RunOutcome, Status, TaskRef};
-
-/// [`corral_core::Run::review_interrupted`] of a run projection: its current child.
-pub(super) fn review_interrupted(run: &RunHead) -> bool {
-    run.review.as_ref().is_some_and(|r| r.verdict.is_none())
-        && run
-            .current_child
-            .as_deref()
-            .is_some_and(|c| c.outcome == Some(RunOutcome::Interrupted))
-}
+use corral_core::{RunOutcome, Status, TaskRef};
 
 /// [`Task::awaiting_owner`] of any task form: Review, or escalated by the autopilot.
 pub(crate) fn awaiting_owner<T: TaskRef + ?Sized>(task: &T) -> Result<bool> {

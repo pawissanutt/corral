@@ -106,7 +106,7 @@ fn relaunch(
         if current.status != Status::Review {
             return Ok(false);
         }
-        let Some(parent) = current
+        let Some(_parent) = current
             .current_run_mut()
             .filter(|r| r.id == run.id && r.review.as_ref() == Some(review))
         else {

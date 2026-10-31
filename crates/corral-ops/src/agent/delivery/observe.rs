@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use corral_core::inbox::{Coverage, Inbox, ObserveCursor, Recipient, SessionBinding};
 use serde_json::{Value, json};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 
 use super::{ADAPTER, ENTRY_TYPE, ORIGIN, endpoint_generation, envelope_key};
@@ -14,6 +15,7 @@ use crate::delivery::Observation;
 
 const MAX_SESSION_READ: u64 = 32 * 1024 * 1024;
 
+#[cfg(test)]
 pub(super) fn sha256(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }

@@ -64,7 +64,10 @@ fn head(task: &TaskHead, run: &RunHead, container: &ContainerRef) -> Result<RunS
         ContainerRef::Reviewer { run, review, .. } => {
             task.unreceipted_review_obligations(run, review)?
         }
-        ContainerRef::Planner { .. } | ContainerRef::PlanReviewer { .. } | ContainerRef::Pm => {
+        ContainerRef::Planner { .. }
+        | ContainerRef::PlanReviewer { .. }
+        | ContainerRef::Pm
+        | ContainerRef::Assistant { .. } => {
             bail!("stopping run input needs a coding container")
         }
     };

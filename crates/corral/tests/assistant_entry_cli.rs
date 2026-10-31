@@ -19,6 +19,17 @@ const HIDDEN: [&str; 1] = ["runtime-probe"];
 /// One row per command path, plus one per argument that changes the class.
 const ROWS: &[(&str, &[&str], Class)] = &[
     ("", &[], Refused),
+    ("export tasks", &["out"], Refused),
+    ("export events", &["--json"], Read),
+    ("storage check", &[], Read),
+    ("storage gc", &["--dry-run"], Read),
+    ("storage gc", &["--yes"], Refused),
+    ("storage backup", &["out"], Refused),
+    ("migrate", &["--status"], Refused),
+    ("migrate", &["--dry-run"], Refused),
+    ("migrate", &["--apply"], Refused),
+    ("migrate", &["--rollback"], Refused),
+    ("migrate", &["--finalize", "--yes"], Refused),
     ("assistant create", &[], Refused),
     ("assistant list", &[], Read),
     ("assistant show", &["A-1"], Read),
@@ -449,10 +460,12 @@ impl Fixture {
     }
 
     fn events(&self) -> Vec<serde_json::Value> {
-        std::fs::read_to_string(self.root.join(".corral/events.jsonl"))
+        corral_core::Store::open(&self.root)
             .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .events_shared()
+            .unwrap()
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap())
             .collect()
     }
 
