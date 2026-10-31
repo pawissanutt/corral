@@ -2,7 +2,8 @@
 // A stand-in for Chrome that speaks just enough DevTools over fds 3 and 4 for one page call (T-613).
 // It answers nothing until a file named `started` exists in the tmpRoot above its profile, and fires
 // the page's load event only once `loaded` exists there, so a test decides how long each phase takes.
-import { createReadStream, createWriteStream, existsSync, watch } from "node:fs";
+// Each request it receives leaves an `asked-<method>` file there, so a test can wait for that exact step.
+import { createReadStream, createWriteStream, existsSync, watch, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const profile = process.argv.find((arg) => arg.startsWith("--user-data-dir="))?.slice("--user-data-dir=".length) ?? "";
@@ -42,6 +43,7 @@ createReadStream("", { fd: 3, encoding: "utf8" }).on("data", async (chunk) => {
   for (let end = buffer.indexOf("\0"); end >= 0; end = buffer.indexOf("\0")) {
     const message = JSON.parse(buffer.slice(0, end)) as { id: number; method: string; params?: Record<string, unknown>; sessionId?: string };
     buffer = buffer.slice(end + 1);
+    writeFileSync(join(tmpRoot, `asked-${message.method}`), "");
     await started;
     send({ id: message.id, result: result(message.method, message.params ?? {}), ...(message.sessionId ? { sessionId: message.sessionId } : {}) });
     if (message.method === "Page.navigate") {

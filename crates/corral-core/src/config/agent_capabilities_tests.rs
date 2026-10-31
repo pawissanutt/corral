@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn ask_user_defaults_to_interactive_roles_only() {
+    let config = AgentCapabilities::default();
+    for role in [AgentRole::Assistant, AgentRole::Pm] {
+        assert!(config.resolve(role, None).enabled("ask_user"));
+    }
+    for role in [
+        AgentRole::Worker,
+        AgentRole::Reviewer,
+        AgentRole::Planner,
+        AgentRole::PlanReviewer,
+    ] {
+        assert!(!config.resolve(role, None).enabled("ask_user"));
+    }
+}
+
+#[test]
 fn presets_and_overrides_respect_role_ceiling() {
     // Given each preset and a per-role override different from its default.
     for preset in [Preset::Strict, Preset::Standard, Preset::Full] {

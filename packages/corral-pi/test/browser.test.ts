@@ -1,10 +1,10 @@
 // Worker browser (T-574): configured dev origins and worktree HTML load in a fresh profile with no
 // carried cookies, other top-level targets fail, a finished or cancelled call leaves no browser
 // process or profile behind, and a browser whose host dies exits with it.
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, jest, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -176,26 +176,60 @@ test("browser settings respect role availability and must be resolved by corral"
 });
 
 const fakeBrowser = fileURLToPath(new URL("./support/fake-browser.ts", import.meta.url));
+test("detached browser leader is registered and removed on exit", async () => {
+  const pids = new Set<number>();
+  const browser = Browser.launch({ executable: fakeBrowser, signal: new AbortController().signal, tmpRoot: profiles,
+    registerCapability: (pid) => { pids.add(pid); return () => { pids.delete(pid); }; } });
+  expect([...pids]).toEqual([browser.child.pid]);
+  await browser.close();
+  expect([...pids]).toEqual([]);
+});
 const navigateWith = (timeout_ms: number, tmpRoot: string) =>
   (browserTools({ origins: [origin], timeout_ms, executable: fakeBrowser }, { cwd, tmpRoot })
     .find((entry) => entry.name === "browser_navigate") as ToolDefinition)
     .execute("call-1", { url: `${origin}/` } as never, undefined, undefined, undefined as never);
 
+/** Resolves once `name` exists in `dir`, e.g. the fake browser's marker for a request it received. */
+function appeared(dir: string, name: string): Promise<void> {
+  return new Promise((resolve) => {
+    const check = () => {
+      if (!existsSync(join(dir, name))) return;
+      watcher.close();
+      resolve();
+    };
+    const watcher = watch(dir, check);
+    check();
+  });
+}
+
+/** Removes the fake browser's gate and request-marker files once its call has finished. */
+function removeGates(root: string): void {
+  for (const entry of readdirSync(root, { withFileTypes: true })) if (entry.isFile()) rmSync(join(root, entry.name));
+}
+
 test("a slow browser start-up does not consume the page's timeout_ms", async () => {
-  // Given a browser whose start-up and page load each take most of a 4 s timeout_ms, together more
-  // than all of it (time is the behavior under test).
+  // Given a browser whose start-up and page load each take 3 s of a 4 s timeout_ms, together more
+  // than all of it. The call's deadlines run on fake timers, advanced only once the fake browser has
+  // received the request each phase waits on, so host load cannot move either bound (T-674).
   const root = mkdtempSync(join(work, "slow-start-"));
-  const call = navigateWith(4_000, root);
-  const elapse = () => new Promise((resolve) => setTimeout(resolve, 2_500));
-  // When start-up ends after 2.5 s and the page's load event fires 2.5 s later.
-  await elapse();
-  writeFileSync(join(root, "started"), "");
-  await elapse();
-  writeFileSync(join(root, "loaded"), "");
-  // Then each phase stayed within its own bound and the call succeeds.
-  const page = text(await call);
-  expect([page.url, page.title, page.text]).toEqual([`${origin}/`, "Fake Page", "fake body"]);
-  for (const gate of ["started", "loaded"]) rmSync(join(root, gate));
+  jest.useFakeTimers();
+  try {
+    const call = navigateWith(4_000, root);
+    // When start-up takes 3 s: the first DevTools request waits that long for its reply.
+    await Promise.race([appeared(root, "asked-Browser.getVersion"), call]);
+    jest.advanceTimersByTime(3_000);
+    writeFileSync(join(root, "started"), "");
+    // And the page's load event fires 3 s after the navigation request.
+    await Promise.race([appeared(root, "asked-Page.navigate"), call]);
+    jest.advanceTimersByTime(3_000);
+    writeFileSync(join(root, "loaded"), "");
+    // Then each phase stayed within its own bound and the call succeeds.
+    const page = text(await call);
+    expect([page.url, page.title, page.text]).toEqual([`${origin}/`, "Fake Page", "fake body"]);
+  } finally {
+    jest.useRealTimers();
+  }
+  removeGates(root);
   await cleanedUp(root, root);
 }, 30_000);
 
@@ -204,6 +238,7 @@ test("a browser that never starts is stopped after timeout_ms", async () => {
   const root = mkdtempSync(join(work, "no-start-"));
   // When a call uses it, then start-up is bounded by timeout_ms and nothing is left behind.
   await expect(navigateWith(300, root)).rejects.toThrow(/browser_timeout: the browser did not start within 300 ms/);
+  removeGates(root);
   await cleanedUp(root, root);
 }, 30_000);
 

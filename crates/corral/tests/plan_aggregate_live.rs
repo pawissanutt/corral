@@ -14,6 +14,8 @@ use corral_core::{AgentCmd, AggregateAttempt, Origin, ReviewContractKind, Status
 use corral_herdr::Herdr;
 use serde_json::{Value, json};
 
+mod plan_capture;
+
 /// Waits for the test's go signal, inspects the checkout and its prompt, then calls back.
 const REVIEWER: &str = r#"#!/bin/sh
 set -eu
@@ -176,7 +178,14 @@ fn fixture(root: &Path, reviewer: &Path, out: &Path) -> (Store, String) {
     (store, imported.tracker.id)
 }
 
-fn observe(root: &Path, plan: &str, attempt: &str, criterion: &str, expected: &str) {
+fn observe(
+    root: &Path,
+    plan: &str,
+    attempt: &str,
+    captured: jiff::Timestamp,
+    criterion: &str,
+    expected: &str,
+) {
     let file: PathBuf = root.join(format!("{criterion}.json"));
     std::fs::write(
         &file,
@@ -185,7 +194,7 @@ fn observe(root: &Path, plan: &str, attempt: &str, criterion: &str, expected: &s
             "run":"aggregate", "attempt":attempt, "status":"pass",
             "action":"run the combined scenario", "environment":"isolated corral-test herdr",
             "expected":expected, "observed":"observed", "artifacts":[],
-            "captured":jiff::Timestamp::now(), "producer":"live test", "live":true,
+            "captured":captured, "producer":"live test", "live":true,
         }))
         .unwrap(),
     )
@@ -255,9 +264,10 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
     let (store, plan) = fixture(&root, &reviewer, &out);
     let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
     assert_eq!(attempt["gate"]["result"], "pass", "{attempt}");
+    let captured = plan_capture::capture_time(&attempt);
     let attempt = attempt["id"].as_str().unwrap().to_owned();
-    observe(&root, &plan, &attempt, "C1", "pass");
-    observe(&root, &plan, &attempt, "C2", "pass together");
+    observe(&root, &plan, &attempt, captured, "C1", "pass");
+    observe(&root, &plan, &attempt, captured, "C2", "pass together");
 
     // When the owner accepts before any aggregate review, it is refused.
     let refused = cli(&root, &["plan", "accept", &plan, "--attempt", &attempt]);

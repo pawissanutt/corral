@@ -37,6 +37,7 @@ import { corralRenderers } from "../ui/render.ts";
 import { installTodo } from "../ui/todo.ts";
 import type { HostCapabilities, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
+import { askUserEnabled, askUserTool } from "./ask-user.ts";
 import { type HerdrLifecycle, answeredKeys } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
@@ -46,6 +47,7 @@ import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
+import { capabilityRegistry } from "../extensions/registry.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
 import { MCP_CONTROLS } from "./mcp-tools.ts";
 import { toolSearch } from "./tool-search.ts";
@@ -236,6 +238,7 @@ export class HostSession {
   private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
   private readonly localTools: readonly ToolDefinition[];
+  private dialogPi: ExtensionAPI | undefined;
   private readonly jobs: JobRuntime | undefined;
   private turn = 0;
   private open = false;
@@ -284,8 +287,9 @@ export class HostSession {
       },
       cancel: () => { void this.cancel(this.currentTurn()); void this.auxiliary?.cancelAll(); },
     });
+    const registerCapability = capabilityRegistry(() => this.session?.sessionFile);
     this.roleContext = {
-      identity: options.identity, cwd: options.cwd, model: options.model,
+      identity: options.identity, cwd: options.cwd, model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
@@ -312,9 +316,9 @@ export class HostSession {
     const lspEnabled = !options.capabilities || options.capabilities.catalog < 5
       ? options.identity.role === "worker" : options.capabilities.enabled.includes("lsp");
     if (lspEnabled && options.identity.role !== "worker") {
-      this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp) });
+      this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
-    this.jobs = this.jobRuntime();
+    this.jobs = this.jobRuntime(registerCapability);
     const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
     if (auxiliary.explore || auxiliary.oracle) {
       this.auxiliary = new AuxiliaryRuntime({
@@ -337,12 +341,20 @@ export class HostSession {
         },
       });
     }
+    const dialogEnabled = askUserEnabled(options.identity.role, options.capabilities?.enabled ?? []);
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
+      ...(dialogEnabled ? [askUserTool(async (answer) => {
+        if (!this.dialogPi) throw new Error("dialog session is unavailable");
+        const id = options.identity.role === "assistant" ? await this.journalOwnerInput("dialog", answer) : undefined;
+        const message = id ? ownerInputText(answer, id) : answer;
+        this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
+        return message;
+      })] : []),
       ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
       ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
-      ...(browser ? browserTools(browser, { cwd: options.cwd }) : [])];
+      ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
     const local = this.localTools.map((tool) => tool.name);
     const mcp = options.capabilities?.enabled.includes("mcp.enabled") === true;
     if (mcp !== (options.capabilities?.mcp !== undefined)) {
@@ -382,7 +394,7 @@ export class HostSession {
    * Worker jobs are receipted against their run. Interactive jobs live only as long as this host;
    * they have no task-scoped monitor or durable wake.
    */
-  private jobRuntime(): JobRuntime | undefined {
+  private jobRuntime(registerCapability: (pid: number) => () => void): JobRuntime | undefined {
     const { options } = this;
     if (options.capabilities?.enabled.includes("background_shell") !== true) return undefined;
     const settings = JobSettingsSchema.safeParse(options.guidance?.settings.background_shell);
@@ -394,7 +406,7 @@ export class HostSession {
     if (worker && (!ops.includes("job") || !ops.includes("job_monitor"))) return undefined;
     return new JobRuntime({
       cwd: options.cwd, runtimeDir: options.runtimeDir, generation: options.identity.generation,
-      settings: settings.data,
+      settings: settings.data, registerCapability,
       onEvent: (kind, data) => options.events.emit(kind, data),
       call: (op, key, payload) => worker ? options.client.call(op, {
         requestId: toolRequestId(this.sessionId(), key), payload, turn: this.currentTurn(),
@@ -510,6 +522,7 @@ export class HostSession {
   }
 
   private async extension(pi: ExtensionAPI): Promise<void> {
+    this.dialogPi = pi;
     if (this.options.capabilities?.enabled.includes("codemode")) {
       await codemode(this.options.sdk.createCodemodeExtension)(pi);
     }
@@ -639,7 +652,7 @@ export class HostSession {
    * so an owner action cannot cite it.
    */
   private async journalOwnerInput(
-    source: "pane" | "confirmation", text: string, command?: string, answers?: string,
+    source: "pane" | "dialog" | "confirmation", text: string, command?: string, answers?: string,
   ): Promise<string | undefined> {
     if (!this.bound) return undefined;
     const sha256 = sha256Hex(text);

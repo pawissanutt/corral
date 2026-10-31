@@ -121,7 +121,6 @@ test("corral_verdict is one verdict envelope whose request ID derives from the s
   const notes = "Changes needed:\n- add the regression test";
   fixtureTransport().script([
     { toolCalls: [{ callId: "call-verdict", name: "corral_verdict", arguments: { verdict: "changes", notes } }] },
-    { text: "FINISHED" },
   ]);
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 2);
   expect(await host.submit(input("Record changes.", "k-verdict"), "rq-verdict")).toEqual({ disposition: "started", turn: 2 });

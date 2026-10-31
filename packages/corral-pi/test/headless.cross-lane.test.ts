@@ -116,7 +116,7 @@ headless = true
 
 afterAll(() => {
   events?.close();
-  for (const id of workspaces) run(["herdr", "--session", "corral-test", "workspace", "close", id]);
+  for (const id of workspaces) run(["herdr", "--session", "corral-test", "workspace", "close", id], { timeout: 10_000 });
   if (workspace) {
     rmSync(join(generationDir(workspace, "T-001", "R1", 1), ".."), { recursive: true, force: true });
     rmSync(workspace, { recursive: true, force: true });
@@ -281,10 +281,16 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
   const answered = JSON.parse(cli("question", "answer", question.key, "--rev", String(question.revision),
     "--text", "Yes, the inbox adapter is acceptable.", "--option", "yes", "--owner", "--json"));
   expect(answered.delivery).toBe("queued");
-  const verdict = events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
-    && event.detail?.role === "reviewer" && event.detail?.generation === 2, 120_000);
+  // A resume-notice turn can end before the answer turn. The verdict event is emitted only
+  // after its receipt commits; a generation-2 turn-ended event alone is not that barrier.
+  const verdict = events!.next((event) => event.kind === "verdict" && event.task === "T-001"
+    && event.detail?.run === "R1", 120_000, "review verdict to commit");
   cli("sync");
   await verdict;
+  await events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
+    && event.detail?.role === "reviewer" && event.detail?.generation === 2
+    && child().agent_host.turns.some((turn: any) => turn.generation === 2
+      && turn.origin.kind === "bridge" && turn.class === "completed"), 120_000, "completed reviewer turn");
   cli("sync");
 
   // Then the answer was observed from the bound transcript and the verdict committed from

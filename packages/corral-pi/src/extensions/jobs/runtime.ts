@@ -12,6 +12,7 @@ import { constants } from "node:os";
 import { join } from "node:path";
 
 import type { JobSettings } from "./settings.ts";
+import type { RegisterCapability } from "../registry.ts";
 
 export const OUTPUT_READ_DEFAULT = 16 * 1024;
 export const OUTPUT_READ_MAX = 64 * 1024;
@@ -60,6 +61,7 @@ export interface JobRuntimeOptions {
   readonly call: JobCall;
   readonly shell?: string;
   readonly schedule?: Schedule;
+  readonly registerCapability?: RegisterCapability;
   /** Bridge events: `job_started` once identity is recorded, `job_exited` once the exit is. */
   readonly onEvent?: (kind: "job_started" | "job_exited", data: Record<string, unknown>) => void;
 }
@@ -160,6 +162,9 @@ export class JobError extends Error {}
 export class JobRuntime {
   private readonly jobs = new Map<string, Job>();
   private seq = 0;
+  private shutdownEpoch = 0;
+  private shutdownOperation?: Promise<void>;
+  private readonly starting = new Set<Promise<unknown>>();
   private readonly schedule: Schedule;
 
   constructor(private readonly options: JobRuntimeOptions) {
@@ -195,6 +200,17 @@ export class JobRuntime {
   }
 
   async start(command: string, key: string): Promise<Record<string, unknown>> {
+    if (this.shutdownOperation) throw new JobError("job runtime is shutting down");
+    const starting = this.startJob(command, key, this.shutdownEpoch);
+    this.starting.add(starting);
+    try {
+      return await starting;
+    } finally {
+      this.starting.delete(starting);
+    }
+  }
+
+  private async startJob(command: string, key: string, epoch: number): Promise<Record<string, unknown>> {
     const { settings } = this.options;
     if (this.live() >= settings.max_jobs) {
       throw new JobError(`job_limit: ${settings.max_jobs} jobs are already running; wait for one or kill it`);
@@ -202,6 +218,7 @@ export class JobRuntime {
     const id = `j${this.options.generation}-${++this.seq}`;
     const prepared = await this.options.call("job", `${key}/prepare`, { action: "prepare", job: id, command });
     if (prepared.state !== "committed") return { job: id, state: "refused", result: prepared.result };
+    if (epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "job runtime shut down" };
     const dir = join(this.options.runtimeDir, "jobs");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const file = join(dir, `${id}.log`);
@@ -218,6 +235,15 @@ export class JobRuntime {
       closeSync(fd);
       await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
       throw new JobError(`job ${id} did not start: ${spawned?.message ?? "no pid"}`);
+    }
+    try {
+      const remove = this.options.registerCapability?.(child.pid);
+      if (remove) child.once("exit", remove);
+    } catch (error) {
+      child.kill("SIGKILL");
+      closeSync(fd);
+      await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
+      throw error;
     }
     let finish!: () => void;
     let close!: () => void;
@@ -434,8 +460,26 @@ export class JobRuntime {
     return { job: id, state: job.state, exit_code: job.exitCode, signal: job.signal, group_clear: job.groupClear };
   }
 
-  shutdown(): void {
-    for (const job of this.jobs.values()) if (!job.groupClear) this.groupSignal(job, "SIGKILL");
+  async shutdown(): Promise<void> {
+    if (this.shutdownOperation) return this.shutdownOperation;
+    this.shutdownEpoch++;
+    const operation = this.stopJobs();
+    this.shutdownOperation = operation;
+    try {
+      await operation;
+    } finally {
+      this.shutdownOperation = undefined;
+    }
+  }
+
+  private async stopJobs(): Promise<void> {
+    await Promise.allSettled([...this.starting]);
+    await Promise.all([...this.jobs.values()].filter((job) => !job.groupClear).map(async (job) => {
+      this.groupSignal(job, "SIGTERM");
+      job.cancelKill?.();
+      job.cancelKill = this.schedule(() => this.groupSignal(job, "SIGKILL"), KILL_GRACE_MS);
+      await job.closed;
+    }));
   }
 
   state(): Record<string, unknown>[] {

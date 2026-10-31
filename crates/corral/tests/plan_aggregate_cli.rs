@@ -8,6 +8,8 @@ use std::process::{Command, Output, Stdio};
 use corral_core::{Actor, AgentCmd, Origin, Status, Store};
 use serde_json::{Value, json};
 
+mod plan_capture;
+
 /// Extracts the exact verdict command from its prompt, writes notes and approves.
 const REVIEWER: &str = r#"#!/bin/sh
 set -eu
@@ -193,9 +195,8 @@ fn cli_owner_acceptance_requires_a_launched_aggregate_review() {
     let (store, plan) = fixture(&root);
     let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
     assert_eq!(attempt["gate"]["result"], "pass", "{attempt}");
-    // Use the gate's own timestamp as the capture boundary, not another process's clock.
-    let captured = attempt["gate"]["at"].clone();
-    assert!(captured.is_string(), "{attempt}");
+    // Use the same boundary as the live aggregate fixture.
+    let captured = json!(plan_capture::capture_time(&attempt));
     let attempt = attempt["id"].as_str().unwrap().to_owned();
     observe(&root, &plan, &attempt, &captured, "C1", "pass");
     observe(&root, &plan, &attempt, &captured, "C2", "pass together");
@@ -263,6 +264,127 @@ fn cli_owner_acceptance_requires_a_launched_aggregate_review() {
     assert_eq!(git(&root.join("app"), &["rev-parse", "HEAD"]), head);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn evidence_survives_a_backward_capture_clock_step() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let (store, plan) = fixture(&root);
+    let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
+    let gate: jiff::Timestamp = attempt["gate"]["at"].as_str().unwrap().parse().unwrap();
+    // Inject a clock step after verification, without changing the host clock or sleeping.
+    let stepped_back = gate
+        .checked_sub(jiff::SignedDuration::from_secs(3600))
+        .unwrap();
+    assert!(stepped_back < gate);
+    let captured = plan_capture::capture_time(&attempt);
+    let id = attempt["id"].as_str().unwrap();
+    let file = root.join("before-gate.json");
+    std::fs::write(
+        &file,
+        serde_json::to_vec(&json!({
+            "version":1, "key":"before-gate", "criterion":"C1", "run":"aggregate",
+            "attempt":id, "status":"pass", "action":"run the combined scenario",
+            "environment":"fixture", "expected":"pass", "observed":"observed",
+            "artifacts":[], "captured":stepped_back, "producer":"test", "live":false,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let rejected = cli(
+        &root,
+        &[
+            "plan",
+            "evidence",
+            &plan,
+            "--file",
+            file.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("capture_outside_attempt"));
+    // Shift CLOCK_REALTIME in the evidence CLI and its children, not the host.
+    let source = root.join("clock.c");
+    let library = root.join("clock.so");
+    std::fs::write(
+        &source,
+        r#"
+#include <time.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+int clock_gettime(clockid_t id, struct timespec *ts) {
+    int result = syscall(SYS_clock_gettime, id, ts);
+    if (result == 0 && id == CLOCK_REALTIME) ts->tv_sec -= 3600;
+    return result;
+}
+"#,
+    )
+    .unwrap();
+    let compiler = Command::new("cc")
+        .args(["-shared", "-fPIC", "-o"])
+        .arg(&library)
+        .arg(&source)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(compiler.status.success(), "{compiler:?}");
+    let clock = Command::new("date")
+        .arg("+%s")
+        .env("LD_PRELOAD", &library)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(clock.status.success());
+    let shifted: i64 = String::from_utf8(clock.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(shifted < gate.as_second());
+    let mut observation = serde_json::from_slice::<Value>(&std::fs::read(&file).unwrap()).unwrap();
+    observation["captured"] = json!(captured);
+    observation["key"] = json!("at-gate");
+    std::fs::write(&file, serde_json::to_vec(&observation).unwrap()).unwrap();
+    let args = [
+        "plan",
+        "evidence",
+        &plan,
+        "--file",
+        file.to_str().unwrap(),
+        "--json",
+    ];
+    let output = command(&root, &args)
+        .env("LD_PRELOAD", &library)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // A capture even one second beyond the known gate remains a future capture.
+    observation["captured"] = json!(
+        gate.checked_add(jiff::SignedDuration::from_secs(1))
+            .unwrap()
+    );
+    observation["key"] = json!("after-gate");
+    std::fs::write(&file, serde_json::to_vec(&observation).unwrap()).unwrap();
+    let output = command(&root, &args)
+        .env("LD_PRELOAD", &library)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("capture_outside_attempt"));
+    let saved = store.get(&plan).unwrap();
+    assert_eq!(
+        saved.aggregate_attempts.last().unwrap().evidence[0]
+            .observation
+            .captured,
+        gate
+    );
+}
+
 #[test]
 fn the_pm_adds_a_started_member_from_an_agent_pane() {
     // Given a Plan and a started task whose run never landed, with a PM shell in its worktree.
@@ -301,8 +423,7 @@ fn the_pm_accepts_a_reviewed_plan_from_an_agent_pane() {
     let root = tmp.path().canonicalize().unwrap();
     let (store, plan) = fixture(&root);
     let attempt = json_ok(&root, &["plan", "verify", &plan, "--json"]);
-    let captured = attempt["gate"]["at"].clone();
-    assert!(captured.is_string(), "{attempt}");
+    let captured = json!(plan_capture::capture_time(&attempt));
     let attempt = attempt["id"].as_str().unwrap().to_owned();
     observe(&root, &plan, &attempt, &captured, "C1", "pass");
     observe(&root, &plan, &attempt, &captured, "C2", "pass together");

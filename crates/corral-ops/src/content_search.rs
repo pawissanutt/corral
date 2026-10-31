@@ -113,12 +113,14 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         .transpose()?;
     let tasks = ctx.store.artifact_owners()?;
     let by_id: HashMap<_, _> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    // The scan streams snapshots, so it keeps storage; the index lock comes first (T-659).
+    let _index = content_index::lock(ctx)?;
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let actual_tasks: Vec<_> = tasks
         .iter()
         .filter_map(|owner| owner.task().cloned())
         .collect();
-    let snapshot = content_index::snapshot(ctx, &actual_tasks, options.reindex)?;
+    let snapshot = content_index::snapshot_locked(ctx, &actual_tasks, options.reindex)?;
     let candidates = candidates(&snapshot, &query);
     let pins: BTreeSet<_> = ctx
         .store
@@ -202,7 +204,6 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
 /// Adds indexed content to task-search snapshots without changing their public result shape.
 pub(crate) fn task_text(store: &Store, tasks: &[Task]) -> Result<HashMap<String, String>> {
     let ctx = Ctx::from_store(store.clone());
-    let _storage = crate::artifact_storage::storage_lock(&ctx)?;
     let snapshot = content_index::snapshot(&ctx, tasks, false)?;
     let mut text = HashMap::<String, String>::new();
     for record in snapshot.records {

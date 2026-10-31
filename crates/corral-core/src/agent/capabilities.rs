@@ -55,6 +55,15 @@ pub const CATALOG: &[CapabilityDef] = &[
         settings: None,
     },
     CapabilityDef {
+        key: "ask_user",
+        summary: "interactive owner question dialog",
+        defaults: |role| {
+            matches!(role, AgentRole::Pm | AgentRole::Assistant).then_some([true, true, true])
+        },
+        host: true,
+        settings: None,
+    },
+    CapabilityDef {
         key: "web.enabled",
         summary: "GET-only web fetch and search",
         defaults: web_defaults,

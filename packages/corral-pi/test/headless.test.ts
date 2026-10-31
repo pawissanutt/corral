@@ -109,7 +109,6 @@ test("a headless worker asks, resumes in the same session and completes through 
       { toolCalls: [{ callId: "done-1", name: "corral_done", arguments: {
         summary: "Used the inbox adapter.\nVerified: headless fixture\nNot verified: none",
       } }] },
-      { text: "DONE" },
     ]);
     const answered = nextEvent(second.events, (event) => event.kind === "turn_ended" && event.turn === 1);
     const submitted = await second.host.submit({

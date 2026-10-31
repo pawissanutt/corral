@@ -17,7 +17,8 @@ use serde::Serialize;
 
 use crate::Ctx;
 use crate::artifact_storage::{
-    ARTIFACT_BLOBS, blob_key, decoded_root, gzip, link_replace, protected, replace, storage_lock,
+    ARTIFACT_BLOBS, blob_key, decoded_root, gzip, link_replace, protected, replace,
+    storage_exclusive,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -230,10 +231,10 @@ pub(crate) fn transcript_gc(ctx: &Ctx, dry_run: bool) -> Result<GcReport> {
 
 fn gc(ctx: &Ctx, dry_run: bool, transcripts_only: bool) -> Result<GcReport> {
     // A dry run must not even create a lock/state file.
-    let _lock = if dry_run {
+    let lock = if dry_run {
         None
     } else {
-        Some(storage_lock(ctx)?)
+        Some(storage_exclusive(ctx)?)
     };
     crate::assistant_artifacts::check_owner(None)?;
     let tasks = ctx.store.artifact_owners()?;
@@ -399,6 +400,8 @@ fn gc(ctx: &Ctx, dry_run: bool, transcripts_only: bool) -> Result<GcReport> {
         if cache.exists() {
             fs::remove_dir_all(&cache).context("invalidating decoded artifact cache")?;
         }
+        // Release storage first: the index lock is never awaited while holding it (T-659).
+        drop(lock);
         crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
         if !transcripts_only && let GcRun::Done(report) = ctx.store.blob_gc(&clock)? {
             blobs_deleted = u64::try_from(report.deleted.len() + report.completed.len())?;

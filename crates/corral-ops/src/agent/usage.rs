@@ -68,6 +68,20 @@ pub fn collect_container(container: &ContainerRef, store: &Store) -> Result<Usag
 /// selects the durable container, never a directory scan. All generations and auxiliary requests
 /// share one response identity map, so copies/resumes cannot multiply spending.
 pub fn collect_state(state: &AgentRunState, model: Option<&str>, store: &Store) -> Result<Usage> {
+    collect_state_inner(state, model, store, false)
+}
+
+/// Finish requires a complete snapshot, rather than silently reporting a partial total.
+pub(crate) fn collect_state_complete(state: &AgentRunState, store: &Store) -> Result<Usage> {
+    collect_state_inner(state, None, store, true)
+}
+
+fn collect_state_inner(
+    state: &AgentRunState,
+    model: Option<&str>,
+    store: &Store,
+    complete: bool,
+) -> Result<Usage> {
     // Generations that resumed the same file are read once; copies are deduplicated by key.
     let mut files: BTreeMap<&Path, (&str, Option<&str>)> = BTreeMap::new();
     for bound in state.generations.iter().filter_map(|g| g.bound.as_ref()) {
@@ -91,7 +105,7 @@ pub fn collect_state(state: &AgentRunState, model: Option<&str>, store: &Store) 
     }
     let mut entries = BTreeMap::new();
     for (path, (session_id, model)) in files {
-        read_session(path, session_id, model, &mut entries)?;
+        read_session(path, session_id, model, &mut entries, complete)?;
     }
     if entries.is_empty() {
         bail!("no assistant usage found in the bound Pi sessions");
@@ -149,6 +163,7 @@ fn read_session(
     bound_session: &str,
     run_model: Option<&str>,
     entries: &mut BTreeMap<(String, String), UsageEntry>,
+    complete: bool,
 ) -> Result<()> {
     let display = path.display();
     let meta = match fs::symlink_metadata(path) {
@@ -186,6 +201,11 @@ fn read_session(
         }
         // The host may be appending: an unterminated last line is not yet a record.
         if line.last() != Some(&b'\n') {
+            if complete {
+                bail!(
+                    "Pi session {display} has an incomplete trailing line; usage snapshot is incomplete"
+                );
+            }
             break;
         }
         if line.iter().all(u8::is_ascii_whitespace) {

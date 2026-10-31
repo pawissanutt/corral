@@ -176,8 +176,15 @@ struct Traced {
 #[cfg(target_os = "linux")]
 impl Traced {
     fn sync(f: &Fixture, strace: &[&str]) -> Self {
+        Self::spawn(f, strace, &["sync"])
+    }
+
+    /// A traced corral command in its own process group, so a failing test can kill it.
+    fn spawn(f: &Fixture, strace: &[&str], args: &[&str]) -> Self {
         use std::io::Read;
-        let mut child = wrapped(f, strace, &["sync"])
+        use std::os::unix::process::CommandExt;
+        let mut child = wrapped(f, strace, args)
+            .process_group(0)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()
@@ -217,6 +224,19 @@ impl Traced {
         }
     }
 
+    /// Continues the tracee a `signal=SIGSTOP` injection stopped.
+    fn resume(&self) {
+        let tracer = self.child.id();
+        let tracee =
+            std::fs::read_to_string(format!("/proc/{tracer}/task/{tracer}/children")).unwrap();
+        let resumed = std::process::Command::new("kill")
+            .arg("-CONT")
+            .arg(tracee.trim())
+            .status()
+            .unwrap();
+        assert!(resumed.success());
+    }
+
     fn finish(self) -> std::process::ExitStatus {
         let mut child = self.child;
         let status = child.wait().unwrap();
@@ -254,14 +274,7 @@ fn concurrent_syncs_attempt_an_unchanged_refusal_once() {
     // another sync process runs to completion,
     f.ok(&["sync"]);
     // and the stopped one then resumes.
-    let tracer = stopped.child.id();
-    let tracee = std::fs::read_to_string(format!("/proc/{tracer}/task/{tracer}/children")).unwrap();
-    let resumed = std::process::Command::new("kill")
-        .arg("-CONT")
-        .arg(tracee.trim())
-        .status()
-        .unwrap();
-    assert!(resumed.success());
+    stopped.resume();
     assert!(stopped.finish().success());
 
     // Then the unchanged refusal was attempted and logged exactly once.
@@ -305,7 +318,7 @@ fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
         .unwrap();
     assert!(ran.status.success(), "{ran:?}");
 
-    // When another process holds artifact storage while a real sync process starts.
+    // When GC (the exclusive holder) has artifact storage while a real sync process starts.
     let lock = f.ctx.store.dir().join("lock/artifact-storage.lock");
     std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let held = std::fs::OpenOptions::new()
@@ -333,7 +346,7 @@ fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
     // Await the exact blocking syscall entry, bounded, without polling.
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut seen = Vec::new();
-    while !String::from_utf8_lossy(&seen).contains("/artifact-storage.lock>, LOCK_EX") {
+    while !String::from_utf8_lossy(&seen).contains("/artifact-storage.lock>, LOCK_SH") {
         let remaining = deadline
             .checked_duration_since(Instant::now())
             .unwrap_or_else(|| {
@@ -373,6 +386,190 @@ fn reconciliation_waits_for_artifact_storage_before_taking_the_launch_lease() {
             .result,
         corral_core::GateResult::Pass
     );
+}
+
+/// One Pi agent call's deadline (`agent/bridge/client.rs` IO_TIMEOUT).
+#[cfg(target_os = "linux")]
+const CALL_DEADLINE: Duration = Duration::from_secs(60);
+
+/// A hook process: real `corral hook` invocations, each followed by a fresh artifact.
+#[cfg(target_os = "linux")]
+const HOOK_STREAM: &str = r#"set -u
+corral=("$@")
+k=0
+while [ ! -e "$HOOK_DIR/stop" ] && [ "$k" -lt 200 ]; do
+  k=$((k + 1))
+  "${corral[@]}" hook 2>> "$HOOK_DIR/hook-$HOOK_N.err" || exit 1
+  file="$HOOK_DIR/hook-$HOOK_N-$k.log"
+  printf 'hook %s write %s\n' "$HOOK_N" "$k" > "$file"
+  "${corral[@]}" artifact add "$HOOK_TASK" "$file" --kind log > /dev/null || exit 1
+  echo WROTE
+done
+"#;
+
+/// Kills fixture process groups on drop, so a failing assertion leaves none stopped or looping.
+#[cfg(target_os = "linux")]
+struct Groups(Vec<u32>);
+
+#[cfg(target_os = "linux")]
+impl Drop for Groups {
+    fn drop(&mut self) {
+        for group in &self.0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", "--", &format!("-{group}")])
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn storage_busy(lock: &std::path::Path) -> bool {
+    let file = std::fs::OpenOptions::new().write(true).open(lock).unwrap();
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
+/// Runs `work` on a thread and requires it to finish within one agent-call deadline.
+#[cfg(target_os = "linux")]
+fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    rx.recv_timeout(CALL_DEADLINE)
+        .unwrap_or_else(|error| panic!("{what}: {error}"))
+}
+
+/// Awaits one more completed write from every hook process, bounded by the deadline.
+#[cfg(target_os = "linux")]
+fn writes_past(progress: &std::sync::mpsc::Receiver<usize>, writes: &mut [usize], what: &str) {
+    let floor = writes.to_vec();
+    let deadline = Instant::now() + CALL_DEADLINE;
+    while writes.iter().zip(&floor).any(|(now, then)| now <= then) {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_else(|| panic!("{what}: {writes:?}"));
+        let n = progress
+            .recv_timeout(remaining)
+            .unwrap_or_else(|error| panic!("{what}: {error} {writes:?}"));
+        writes[n] += 1;
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn done_and_verdict_finish_while_hook_processes_keep_writing_artifacts() {
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
+    const STREAMS: usize = 3;
+    // Given a running task, a reviewed task, and tasks the hook processes attach to.
+    let f = super::queue_fixture();
+    let review = reviewed(&f, "other");
+    let work = f.task("app", Status::Ready).id;
+    f.ok(&["dispatch", &work]);
+    let targets: Vec<String> = (0..=STREAMS)
+        .map(|_| f.task("app", Status::Backlog).id)
+        .collect();
+    let lock = f.ctx.store.dir().join("lock/artifact-storage.lock");
+    let path = lock.to_str().unwrap();
+    let inject = "inject=flock:signal=SIGSTOP:when=1";
+    let stop = ["strace", "-P", path, "-e", "trace=flock", "-e", inject];
+    let stopped = |trace: &str| trace.contains("stopped by SIGSTOP");
+    let mut groups = Groups(Vec::new());
+
+    // When one hook's artifact write stops while it holds artifact storage,
+    let source = f.temp.path().join("held-hook.log");
+    std::fs::write(&source, "hook write held mid-flight\n").unwrap();
+    let source = source.to_str().unwrap();
+    let mut held = Traced::spawn(&f, &stop, &["artifact", "add", &targets[STREAMS], source]);
+    groups.0.push(held.child.id());
+    held.until(stopped);
+    assert!(storage_busy(&lock));
+    // and hook processes keep running `corral hook` and attaching fresh artifacts,
+    let dir = f.temp.path().join("hooks");
+    std::fs::create_dir(&dir).unwrap();
+    let (tx, progress) = std::sync::mpsc::channel();
+    let mut streams = Vec::new();
+    for (n, target) in targets[..STREAMS].iter().enumerate() {
+        let mut child = wrapped(&f, &["bash", "-c", HOOK_STREAM, "hook-stream"], &[])
+            .env("HOOK_DIR", &dir)
+            .env("HOOK_N", n.to_string())
+            .env("HOOK_TASK", target)
+            .env_remove("HERDR_SOCKET_PATH")
+            .env_remove("HERDR_SESSION")
+            .process_group(0)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        groups.0.push(child.id());
+        let stdout = child.stdout.take().unwrap();
+        let tx = tx.clone();
+        let reader = std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                if line.unwrap() == "WROTE" && tx.send(n).is_err() {
+                    break;
+                }
+            }
+        });
+        streams.push((child, reader));
+    }
+    drop(tx);
+    let mut writes = vec![0; STREAMS];
+    writes_past(&progress, &mut writes, "hooks stalled behind a held write");
+    // and done and verdict each stop inside their own artifact-storage acquisition.
+    f.checkpoint(&work);
+    let summary = "Verified: fixture\nNot verified: none";
+    let mut done = Traced::spawn(&f, &stop, &["done", &work, "--summary", summary]);
+    let notes = "Reviewed while hooks write.";
+    let mut verdict = Traced::spawn(
+        &f,
+        &stop,
+        &["verdict", &review, "approve", "--notes", notes],
+    );
+    groups.0.extend([done.child.id(), verdict.child.id()]);
+    done.until(stopped);
+    verdict.until(stopped);
+
+    // Then every hook process attaches another artifact while both calls are in flight,
+    writes_past(&progress, &mut writes, "hooks stalled behind done/verdict");
+    // and both calls finish within one agent-call deadline while a hook still holds storage.
+    done.resume();
+    verdict.resume();
+    let finished = within("done/verdict missed the deadline", move || {
+        (done.finish(), verdict.finish())
+    });
+    assert!(finished.0.success() && finished.1.success(), "{finished:?}");
+    assert!(
+        storage_busy(&lock),
+        "the held hook write released storage early"
+    );
+    held.resume();
+    assert!(held.finish().success());
+    std::fs::write(dir.join("stop"), "").unwrap();
+    for (mut child, reader) in streams {
+        let status = within("a hook process did not stop", move || child.wait().unwrap());
+        assert!(status.success(), "{status:?}");
+        reader.join().unwrap();
+    }
+    for n in progress.try_iter() {
+        writes[n] += 1;
+    }
+    for n in 0..STREAMS {
+        let errors = std::fs::read_to_string(dir.join(format!("hook-{n}.err"))).unwrap();
+        assert!(errors.is_empty(), "hook {n}: {errors}");
+    }
+    for (n, target) in targets[..STREAMS].iter().enumerate() {
+        let attached = f.ctx.store.get(target).unwrap().artifacts.len();
+        assert_eq!(attached, writes[n], "{target}");
+    }
+    assert_eq!(
+        f.ctx.store.get(&targets[STREAMS]).unwrap().artifacts.len(),
+        1
+    );
+    assert_eq!(f.ctx.store.get(&work).unwrap().status, Status::Review);
+    let reviewed = f.ctx.store.get(&review).unwrap();
+    let record = reviewed.current_run().unwrap().review.clone().unwrap();
+    assert_eq!(record.verdict, Some(corral_core::Verdict::Approve));
 }
 
 #[test]

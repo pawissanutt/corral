@@ -141,27 +141,44 @@ fn usage_between(
         .store
         .get_assistant_container(session)
         .and_then(|container| {
-            crate::agent::usage::collect_state(&container.state, None, &ctx.store)
+            crate::agent::usage::collect_state_complete(&container.state, &ctx.store)
         });
     match measured {
-        Ok(usage) => {
-            let entries: Vec<_> = (usage.entries.into_iter())
-                .filter(|entry| entry.at.is_some_and(|at| from <= at && at <= to))
-                .collect();
-            if entries.is_empty() {
-                let note =
-                    format!("{session} recorded no usage between scratch creation and finish");
-                (None, Some(note))
-            } else {
-                (Some(Usage::from_entries(entries)), None)
-            }
-        }
+        Ok(usage) => window_usage(session, usage, from, to),
         Err(error) => (
             None,
             Some(format!("{session} usage unavailable: {error:#}")),
         ),
     }
 }
+
+fn window_usage(
+    session: &str,
+    usage: Usage,
+    from: Timestamp,
+    to: Timestamp,
+) -> (Option<Usage>, Option<String>) {
+    let entries: Vec<_> = usage
+        .entries
+        .into_iter()
+        .filter(|entry| entry.at.is_some_and(|at| from <= at && at <= to))
+        .collect();
+    let usage = Usage::from_entries(entries);
+    if usage.total_tokens() == 0 {
+        (
+            None,
+            Some(format!(
+                "{session} recorded no nonzero usage between scratch creation and finish"
+            )),
+        )
+    } else {
+        (Some(usage), None)
+    }
+}
+
+#[cfg(test)]
+#[path = "finish_tests.rs"]
+mod tests;
 
 /// The scratch's branch, rebased onto the project's base when that moved, and its head.
 fn rebased(

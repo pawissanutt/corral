@@ -78,6 +78,7 @@ export interface RoleContext {
   readonly capabilities?: CapabilitySet;
   /** LSP server settings resolved for this generation. */
   readonly lspSettings?: Readonly<Record<string, unknown>>;
+  readonly registerCapability?: (pid: number) => () => void;
   /** The worktree (worker, reviewer) or workspace root (pm, assistant) Pi works in. */
   readonly cwd: string;
   /** The run's prompt file, when dispatch wrote one. */

@@ -122,7 +122,6 @@ test("each corral tool call is one envelope whose request ID derives from the se
       summary: "Did it.\nVerified: x\nNot verified: none", contract_sha256: "ab".repeat(32),
       gate_ref: { attempt: "ag-0123456789abcdef", tier: "quick", receipt_sha256: "cd".repeat(32) },
     } }] },
-    { text: "FINISHED" },
   ]);
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
   expect(await host.submit(input("Start the gate, then finish.", "k-tools"), "rq-tools")).toEqual({ disposition: "started", turn: 1 });

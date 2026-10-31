@@ -16,6 +16,8 @@ use crate::artifacts::{add_artifact, scan_artifacts};
 use crate::cleanup::Cleanup;
 use crate::verification;
 
+mod display;
+use display::{short, truncate_lines};
 mod finish;
 use finish::{finish_task, refuse_open_questions_head, save_finish};
 mod owner;
@@ -321,15 +323,6 @@ pub(crate) fn audit_artifact(
     }
 }
 
-fn truncate_lines(text: String, max: usize) -> String {
-    if text.lines().count() <= max {
-        return text;
-    }
-    let mut out: String = text.lines().take(max).flat_map(|l| [l, "\n"]).collect();
-    out.push_str("... (truncated)\n");
-    out
-}
-
 /// Review data for the current run (error unless the task has a run).
 pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
     let task = ctx.store.get(id)?;
@@ -365,10 +358,6 @@ pub fn review_info(ctx: &Ctx, id: &str) -> Result<ReviewInfo> {
         artifacts,
         main_ready,
     })
-}
-
-fn short(sha: &str) -> &str {
-    sha.get(..7).unwrap_or(sha)
 }
 
 /// Every landing on main, and on any base that is not an owned Plan target, requires a fresh
