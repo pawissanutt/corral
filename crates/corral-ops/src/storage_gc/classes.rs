@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use corral_core::backend::{BlobRow, BlobState, ScratchState, SystemClock};
 use corral_core::blob::GcRun;
 use corral_core::scratch::{ClassDeleter, Registration};
-use corral_core::{ArtifactKind, Status, StorageClass, Store};
+use corral_core::{Status, StorageClass, Store};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::json;
 
@@ -340,18 +340,22 @@ fn unpromoted<'a>(
     task: &str,
     files: &'a [(String, PathBuf)],
 ) -> Result<Vec<&'a (String, PathBuf)>> {
-    let live: std::collections::BTreeSet<String> = ctx
-        .store
-        .artifact_rows(task, None)?
-        .into_iter()
-        .filter(|artifact| artifact.purged_at.is_none())
-        .map(|artifact| artifact.sha256)
-        .collect();
+    let mut live = std::collections::BTreeSet::new();
+    for artifact in ctx.store.artifact_rows(task, None)? {
+        if artifact.purged_at.is_none()
+            && !crate::transcripts::owners(ctx, task, &artifact)?.is_empty()
+        {
+            live.insert((artifact.run, artifact.sha256));
+        }
+    }
     let mut owed = Vec::new();
     for entry in files {
         let bytes =
             std::fs::read(&entry.1).with_context(|| format!("reading {}", entry.1.display()))?;
-        if !live.contains(&corral_core::agent::paths::sha256_hex(&bytes)) {
+        if !live.contains(&(
+            entry.0.clone(),
+            corral_core::agent::paths::sha256_hex(&bytes),
+        )) {
             owed.push(entry);
         }
     }
@@ -367,15 +371,25 @@ fn promote_and_remove(
     bytes: u64,
     path: &Path,
 ) -> Result<()> {
-    let current = head.current_run.as_deref().map(|run| run.id.as_str());
-    for (run, file) in owed {
-        let title = format!("agent session transcript {}", file.display());
-        let kind = Some(ArtifactKind::Log);
-        if Some(run.as_str()) == current {
-            crate::add_artifact(ctx, &head.id, file, kind, Some(&title))?;
-        } else {
-            crate::artifacts::add_artifact_to_run(ctx, &head.id, run, file, kind, Some(&title))?;
-        }
+    // Register every owner, even when two containers produced identical bytes.
+    for (run, file) in files {
+        let rel = file
+            .strip_prefix(path.join(run))
+            .context("session outside its run")?;
+        let parts: Vec<_> = rel.components().collect();
+        let owner = match parts.as_slice() {
+            [_] => corral_core::agent::ContainerRef::Worker {
+                task: head.id.clone(),
+                run: run.clone(),
+            },
+            [review, _] => corral_core::agent::ContainerRef::Reviewer {
+                task: head.id.clone(),
+                run: run.clone(),
+                review: review.as_os_str().to_string_lossy().into_owned(),
+            },
+            _ => anyhow::bail!("unrecognized session ownership: {}", file.display()),
+        };
+        crate::transcripts::promote(ctx, &head.id, run, owner, file)?;
     }
     let deleter = ClassDeleter::open(layout, StorageClass::AgentSessions)?;
     let registration = Registration {

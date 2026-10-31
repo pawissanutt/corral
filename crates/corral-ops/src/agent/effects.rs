@@ -13,6 +13,9 @@ use corral_core::agent::{
 use corral_core::{Store, Task, TaskRef, Verdict};
 use serde_json::{Value, json};
 
+mod done;
+pub(crate) use done::swept as swept_done;
+
 use super::admission;
 use super::call::{CallResponse, RejectCode, Rejection};
 use crate::Ctx;

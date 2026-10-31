@@ -232,6 +232,22 @@ fn a_failed_capture_source_read_stays_owed_until_a_retry_reads_it() {
             "{kind}"
         );
         assert_eq!(snapshots(&fx, kind), ["R1"], "{kind}");
+        if kind == "transcript" {
+            let task = fx.task();
+            let artifact = task
+                .artifacts
+                .iter()
+                .find(|a| a.title == "Reviewer transcript (R1-review1)")
+                .unwrap();
+            assert_eq!(
+                crate::transcripts::owners(&fx.ctx, &fx.id, artifact).unwrap(),
+                vec![corral_core::agent::ContainerRef::Reviewer {
+                    task: fx.id.clone(),
+                    run: "R1".into(),
+                    review: "R1-review1".into(),
+                }]
+            );
+        }
     }
 
     // Given a review pane that no longer exists, then the capture completes without a screen.

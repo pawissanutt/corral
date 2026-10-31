@@ -620,8 +620,12 @@ fn git_output(run: &RunHead, args: &[&str]) -> Result<std::process::Output> {
 }
 
 /// Lock-safe read-only variant for `Store::update`: uses its current task, never re-locks it.
-pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<CompletionAudit> {
-    let audited = task.completion.as_ref().is_some_and(|m| m.audited);
+pub fn completion_check_task<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    summary: &str,
+) -> Result<CompletionAudit> {
+    let audited = task.completion().as_ref().is_some_and(|m| m.audited);
     let mut audit = CompletionAudit {
         version: 1,
         audited,
@@ -633,34 +637,20 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         failures: Vec::new(),
         checked: corral_core::clock::now(),
     };
-    let Some(run) = task.current_run() else {
+    let Some(run) = task.current_run_head()? else {
         audit.failures.push("no_current_run".into());
         audit.passed = false;
         return Ok(audit);
     };
-    audit.failures.extend(evidence_failures(
-        ctx,
-        task,
-        &corral_core::RunHead::of(run)?,
-    )?);
+    audit.failures.extend(evidence_failures(ctx, task, &run)?);
     if !audited {
-        audit.identity = Some(current_identity(
-            ctx,
-            task,
-            &corral_core::RunHead::of(run)?,
-        )?);
+        audit.identity = Some(current_identity(ctx, task, &run)?);
         audit.passed = audit.failures.is_empty();
         return Ok(audit);
     }
-    let manifest = task.completion.as_ref().context("missing_manifest")?;
+    let manifest = task.completion().as_ref().context("missing_manifest")?;
     audit.manifest_digest = Some(manifest_digest(manifest)?);
-    audit.required_checks = crate::gate_tier::select(
-        ctx,
-        task,
-        &corral_core::RunHead::of(run)?,
-        GatePhase::Review,
-    )?
-    .commands;
+    audit.required_checks = crate::gate_tier::select(ctx, task, &run, GatePhase::Review)?.commands;
     if run.completion.required_checks.as_ref() != Some(&audit.required_checks) {
         audit.failures.push("completion_policy_changed".into());
     }
@@ -690,10 +680,7 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
         "sequencer",
         "BISECT_LOG",
     ] {
-        let out = git_output(
-            &corral_core::RunHead::of(run)?,
-            &["rev-parse", "--git-path", operation],
-        )?;
+        let out = git_output(&run, &["rev-parse", "--git-path", operation])?;
         if !out.status.success() {
             bail!("cannot inspect git operation state");
         }
@@ -702,9 +689,9 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
             audit.failures.push(format!("git_operation:{operation}"));
         }
     }
-    let identity = current_identity(ctx, task, &corral_core::RunHead::of(run)?)?;
+    let identity = current_identity(ctx, task, &run)?;
     let ancestry = git_output(
-        &corral_core::RunHead::of(run)?,
+        &run,
         &[
             "merge-base",
             "--is-ancestor",
@@ -724,14 +711,13 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
                 if gate.result != GateResult::Pass {
                     audit.failures.push("gate_not_passed".into());
                 }
-                if !review_gate_fresh(ctx, task, &corral_core::RunHead::of(run)?, gate)? {
+                if !review_gate_fresh(ctx, task, &run, gate)? {
                     audit.failures.push("gate_stale".into());
                 }
             }
         }
     }
-    let run_head = corral_core::RunHead::of(run)?;
-    let carried = evidence_carry::live(task, &run_head, &identity)?.map(|c| &c.from);
+    let carried = evidence_carry::live(task, &run, &identity)?.map(|c| &c.from);
     audit.evidence_keys = run
         .completion
         .evidence
@@ -746,5 +732,5 @@ pub fn completion_check_task(ctx: &Ctx, task: &Task, summary: &str) -> Result<Co
 
 /// Preflight only: no commits, snapshots, events, or status changes.
 pub fn completion_check(ctx: &Ctx, id: &str, summary: &str) -> Result<CompletionAudit> {
-    completion_check_task(ctx, &ctx.store.get(id)?, summary)
+    completion_check_task(ctx, &ctx.store.head(id)?, summary)
 }

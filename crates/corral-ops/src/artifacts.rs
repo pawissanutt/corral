@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::bail;
@@ -52,7 +51,7 @@ pub fn add_artifact(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Target::Current, path, kind, title, None).map(|(a, _)| a)
+    add_artifact_inner(ctx, id, Target::Current, path, kind, title, None, None).map(|(a, _)| a)
 }
 
 /// An assistant's scratch promotion attaches the spike diff to the Backlog task it just filed;
@@ -64,7 +63,17 @@ pub(crate) fn add_promotion_artifact(
     title: &str,
 ) -> Result<Artifact> {
     let kind = Some(ArtifactKind::Diff);
-    add_artifact_inner(ctx, id, Target::Promotion, path, kind, Some(title), None).map(|(a, _)| a)
+    add_artifact_inner(
+        ctx,
+        id,
+        Target::Promotion,
+        path,
+        kind,
+        Some(title),
+        None,
+        None,
+    )
+    .map(|(a, _)| a)
 }
 
 /// Which run an artifact attaches to.
@@ -89,7 +98,7 @@ pub(crate) fn add_artifact_to_run(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Target::Named(run), path, kind, title, None).map(|(a, _)| a)
+    add_artifact_inner(ctx, id, Target::Named(run), path, kind, title, None, None).map(|(a, _)| a)
 }
 
 /// The Pi-native `artifact` op: attaches to the requester's run (a reviewer's parent run)
@@ -108,7 +117,7 @@ pub fn add_artifact_request(
         .as_deref()
         .map_or(Target::Current, Target::Expected);
     effects::swept(ctx, origin, effects::Home::of(origin), || {
-        add_artifact_inner(ctx, id, run, path, kind, title, Some(origin)).map(|(_, r)| r)
+        add_artifact_inner(ctx, id, run, path, kind, title, Some(origin), None).map(|(_, r)| r)
     })
 }
 
@@ -120,9 +129,42 @@ pub(crate) fn add_artifact_for_run(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
 ) -> Result<Artifact> {
-    add_artifact_inner(ctx, id, Target::Expected(run), path, kind, title, None).map(|(a, _)| a)
+    add_artifact_inner(
+        ctx,
+        id,
+        Target::Expected(run),
+        path,
+        kind,
+        title,
+        None,
+        None,
+    )
+    .map(|(a, _)| a)
 }
 
+/// Attach an already frozen transcript while preserving its original source path.
+pub(crate) fn add_transcript_bytes(
+    ctx: &Ctx,
+    id: &str,
+    run: &str,
+    path: &Path,
+    bytes: &[u8],
+    title: &str,
+) -> Result<Artifact> {
+    add_artifact_inner(
+        ctx,
+        id,
+        Target::Named(run),
+        path,
+        Some(ArtifactKind::Log),
+        Some(title),
+        None,
+        Some(bytes),
+    )
+    .map(|(a, _)| a)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn add_artifact_inner(
     ctx: &Ctx,
     id: &str,
@@ -131,6 +173,7 @@ fn add_artifact_inner(
     kind: Option<ArtifactKind>,
     title: Option<&str>,
     origin: Option<&RequestOrigin>,
+    frozen: Option<&[u8]>,
 ) -> Result<(Artifact, Option<RequestReceipt>)> {
     if !matches!(target, Target::Promotion) {
         crate::assistant_artifacts::check_owner(None)?;
@@ -149,7 +192,14 @@ fn add_artifact_inner(
             meta.len()
         );
     }
-    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = match frozen {
+        Some(bytes) => bytes.to_vec(),
+        None => std::fs::read(path).with_context(|| format!("reading {}", path.display()))?,
+    };
+    anyhow::ensure!(
+        u64::try_from(bytes.len())? <= max,
+        "artifact exceeds max_bytes {max}"
+    );
     let sha = sha256_hex(&bytes);
     let file_name = path
         .file_name()
@@ -337,8 +387,7 @@ fn attach(
 }
 
 /// [`attach`] of a registration without a request origin, as a head update: the target run and
-/// its own registrations are read by key, never the task's other artifacts. A revival or a
-/// Diff, which edit earlier rows, returns `None` for the full form.
+/// its own registrations are read by key, never the task's other artifacts.
 #[allow(clippy::too_many_arguments)]
 fn attach_head(
     ctx: &Ctx,
@@ -352,9 +401,6 @@ fn attach_head(
 ) -> Result<Option<Artifact>> {
     use corral_core::TaskRef as _;
     let kind = kind.unwrap_or_else(|| ArtifactKind::guess(file_name));
-    if kind == ArtifactKind::Diff {
-        return Ok(None);
-    }
     let mut result = None;
     ctx.store.try_update_head(id, |t| {
         let current = t.current_run_head()?.map(|r| r.id.clone());
@@ -377,13 +423,23 @@ fn attach_head(
                 .unwrap_or_else(|| "R0".to_string()),
         };
         let mut rows = t.head().artifact_rows_of(&run)?;
-        if let Some((index, existing)) = rows.iter().find(|(_, a)| a.sha256 == sha) {
+        if let Some((index, mut existing)) = rows.iter().find(|(_, a)| a.sha256 == sha).cloned() {
             if existing.purged_at.is_some() {
-                return Ok(false);
+                existing.compressed_bytes = None;
+                existing.purged_at = None;
+                t.edit_artifact(index, |a| {
+                    *a = existing.clone();
+                    Ok(())
+                })?;
+                ctx.store
+                    .log_event(Some(&t.id), "artifact", artifact_detail(&existing))?;
             }
-            crate::artifact_storage::record_row_keys(ctx, &t.id, existing, *index, false)?;
-            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, *index, false)?;
-            result = Some(existing.clone());
+            rows.iter_mut()
+                .filter(|(i, _)| *i == index)
+                .for_each(|(_, a)| *a = existing.clone());
+            crate::artifact_storage::record_row_keys(ctx, &t.id, &existing, index, false)?;
+            crate::pm_next::observe::load_checks::published_rows(ctx, &t.id, &rows, index, false)?;
+            result = Some(existing);
             return Ok(true);
         }
         let index = usize::try_from(t.head().summary.artifacts)?;
@@ -403,6 +459,18 @@ fn attach_head(
             compressed_bytes: None,
             purged_at: None,
         };
+        if artifact.kind == ArtifactKind::Diff {
+            for (index, earlier) in &mut rows {
+                if earlier.kind == ArtifactKind::Diff && earlier.tier_override.is_none() {
+                    earlier.tier_override = Some(corral_core::ArtifactTier::Transient);
+                    t.edit_artifact(*index, |a| {
+                        *a = earlier.clone();
+                        Ok(())
+                    })?;
+                    crate::artifact_storage::record_row_keys(ctx, &t.id, earlier, *index, false)?;
+                }
+            }
+        }
         t.add_artifact(artifact.clone())?;
         crate::artifact_storage::record_row_keys(ctx, &t.id, &artifact, index, true)?;
         rows.push((index, artifact.clone()));
@@ -473,11 +541,10 @@ pub(crate) fn glob_match(pattern: &str, path: &str) -> bool {
 /// (corral_git changed files incl. untracked) and adds each with `ArtifactKind::guess`. Returns the added ones.
 /// Simple glob support is enough: "**" any dirs, "*" within one path segment.
 pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
-    let task = ctx.store.get(id)?;
-    let Some(run) = task.current_run() else {
+    let task = ctx.store.head(id)?;
+    let Some(run) = task.current_run.as_deref() else {
         return Ok(Vec::new());
     };
-    let known: HashSet<String> = task.artifacts.iter().map(|a| a.path.clone()).collect();
     let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
     let cfg = &ctx.store.config.artifacts;
     let mut added = Vec::new();
@@ -495,8 +562,9 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
             Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
             _ => continue,
         }
+        // Registration returns a content-addressed path; consult the pre-registration view.
         let artifact = add_artifact(ctx, &task.id, &full, None, None)?;
-        if !known.contains(&artifact.path)
+        if task.artifact_by_path(&artifact.path)?.is_none()
             && !added.iter().any(|a: &Artifact| a.path == artifact.path)
         {
             added.push(artifact);

@@ -539,7 +539,13 @@ fn session_paths_of(root: &Path, worktree: &Path, claude: bool) -> Result<Vec<Pa
                 relative.to_string_lossy().replace(['/', '\\', ':'], "-")
             )
         });
-    for entry in fs::read_dir(root).with_context(|| format!("reading {}", root.display()))? {
+    let listing = match fs::read_dir(root) {
+        Ok(listing) => listing,
+        // A supported harness need not have produced a session (or even its root) yet.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(paths),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", root.display())),
+    };
+    for entry in listing {
         let entry = entry.context("reading session directory entry")?;
         let kind = entry.file_type().context("reading session file type")?;
         if kind.is_file() && entry.path().extension().is_some_and(|e| e == "jsonl") {
@@ -588,6 +594,18 @@ fn collect_from(root: &Path, run: &Run, claude: bool, config: &Config) -> Result
 pub(crate) fn transcript_head(run: &corral_core::RunHead, store: &Store) -> Result<Vec<u8>> {
     let harness = harness_of(run.harness.as_deref(), &run.agent, &store.config);
     transcript_of(harness, (&run.worktree, run.started, run.ended), store)
+}
+
+pub(crate) fn has_transcript(run: &Run, store: &Store) -> bool {
+    matches!(run_harness(run, &store.config), "omo" | "omp" | "claude")
+}
+
+pub(crate) fn transcript_run(run: &Run, store: &Store) -> Result<Vec<u8>> {
+    transcript_of(
+        run_harness(run, &store.config),
+        (&run.worktree, run.started, run.ended),
+        store,
+    )
 }
 
 fn transcript_of(

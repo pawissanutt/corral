@@ -108,12 +108,12 @@ fn capture(ctx: &Ctx, artifact: &Artifact, browser: &Path) -> Result<()> {
 /// Captures every HTML artifact in the finishing run, including files explicitly attached before done.
 /// Missing browser or failed renders are reported beside the artifact, never a fabricated preview.
 pub fn capture_html_thumbnails(ctx: &Ctx, id: &str) -> Result<usize> {
-    let task = ctx.store.get(id)?;
-    let Some(run) = task.current_run() else {
+    let task = ctx.store.head(id)?;
+    let Some(run) = task.current_run.as_deref() else {
         return Ok(0);
     };
-    let html: Vec<_> = task
-        .artifacts
+    let artifacts = task.artifacts_of(&run.id)?;
+    let html: Vec<_> = artifacts
         .iter()
         .filter(|a| {
             a.run == run.id

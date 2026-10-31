@@ -80,6 +80,18 @@ impl TaskHead {
         )
     }
 
+    /// The newest review child of `run`, using a bounded row query.
+    pub fn latest_review_child(&self, run: &str) -> Result<Option<RunHead>> {
+        Ok(self
+            .run_children(
+                run,
+                |p| RowQuery::under(TaskPart::ReviewRun, p).newest_first(),
+                1,
+            )?
+            .into_iter()
+            .next())
+    }
+
     /// The coding run before the current one, by its key.
     pub fn previous_run_head(&self) -> Result<Option<RunHead>> {
         self.run_head_back(1)

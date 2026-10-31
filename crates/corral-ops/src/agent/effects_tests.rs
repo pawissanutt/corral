@@ -25,6 +25,9 @@ use super::{BindTarget, fence_generation, open_generation, tool_request_id};
 use crate::Ctx;
 use crate::review_budget::{AttemptState, Kind};
 
+#[path = "effects_done_tests.rs"]
+mod done;
+
 const FAKE: &str = include_str!("effects_herdr.sh");
 const SUMMARY: &str = "Verified: fixture\nNot verified: none\n";
 
@@ -400,20 +403,7 @@ fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
         "checkpoint_saved",
     );
 
-    let done: &SweptOp = &|ctx, o| {
-        let report = Report {
-            origin: o,
-            gate_ref: None,
-            contract_sha256: Some("c0".into()),
-        };
-        crate::review::done_request(
-            ctx,
-            o.identity.task.as_deref().unwrap(),
-            SUMMARY,
-            None,
-            &report,
-        )
-    };
+    let done: &SweptOp = &done::call;
     let finished = |_: &Fx, t: &Task| {
         let diffs = t
             .artifacts

@@ -59,6 +59,70 @@ fn fixture(root: &Path, action: RetentionAction) -> (Store, String, Artifact, Ve
 }
 
 #[test]
+fn storage_gc_previews_and_applies_owned_transcript_retention() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.storage.transcript_retention_days = Some(30);
+    store.save_config().unwrap();
+    let id = store
+        .create("Transcript CLI", None, Status::Done, "")
+        .unwrap()
+        .id;
+    store
+        .update(&id, |t| {
+            t.runs.push(
+                serde_json::from_value(serde_json::json!({
+                    "id":"R1", "agent":"pi-native", "harness":"pi-native",
+                    "worktree":"/fixture", "branch":"test", "base":"main", "base_sha":"abc",
+                    "started":"2026-09-01T00:00:00Z"
+                }))
+                .unwrap(),
+            );
+            Ok(())
+        })
+        .unwrap();
+    let source = store
+        .dir()
+        .join("agent/sessions")
+        .join(&id)
+        .join("R1/session.jsonl");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"actual Pi session\n").unwrap();
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
+    corral_ops::agent::hooks::cleanup::run_end(&ctx, &ctx.store.get(&id).unwrap()).unwrap();
+    let at = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(31 * 24);
+    ctx.store
+        .fixture_append_events(&format!(
+            "{}\n",
+            serde_json::json!({
+                "seq":0, "ts":at, "kind":"moved", "task":id, "detail":{"to":"done"}
+            })
+        ))
+        .unwrap();
+    let dry = success(tmp.path(), &["storage", "gc", "--dry-run", "--json"]);
+    let dry: Value = serde_json::from_slice(&dry.stdout).unwrap();
+    assert!(
+        dry["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["class"] == "transcript")
+    );
+    assert!(ctx.store.get(&id).unwrap().artifacts[0].purged_at.is_none());
+    assert!(source.exists());
+    let applied = success(tmp.path(), &["storage", "gc", "--yes", "--json"]);
+    let applied: Value = serde_json::from_slice(&applied.stdout).unwrap();
+    assert!(
+        applied["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["class"] == "transcript")
+    );
+    assert!(ctx.store.get(&id).unwrap().artifacts[0].purged_at.is_some());
+}
+
+#[test]
 fn compression_is_transparent_to_show_and_open_after_confirmed_gc() {
     // Given a raw log and a viewer that copies exactly the file it receives.
     let tmp = tempfile::tempdir().unwrap();

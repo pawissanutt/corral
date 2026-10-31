@@ -392,7 +392,7 @@ impl TaskHead {
             .collect()
     }
 
-    fn run_children(
+    pub(super) fn run_children(
         &self,
         run: &str,
         q: impl FnOnce(String) -> RowQuery,
