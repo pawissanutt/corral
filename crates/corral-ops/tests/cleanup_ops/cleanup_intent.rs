@@ -81,6 +81,108 @@ fn failed_removal_is_retried(strategy: ApproveStrategy, keep_branch: bool) {
 }
 
 #[test]
+fn retained_branch_cleanup_refuses_missing_changed_or_unpreserved_approval_after_restart() {
+    use corral_core::records::RecordArea;
+    const APPROVALS: RecordArea<Value> = RecordArea::new("worktree-cleanup-approvals");
+    for fault in [
+        "missing",
+        "changed_intent",
+        "changed_branch",
+        "changed_worktree",
+        "lost_commit",
+        "moved_worktree",
+    ] {
+        let mut fx = Fx::new();
+        fx.owner_ready();
+        let run = fx.run();
+        let holder = Holder::start(&run.worktree);
+        let line =
+            corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::KeepBranch, true, false).unwrap();
+        assert!(line.contains("protected process"), "{fault}: {line}");
+        drop(holder);
+        let key = format!("{}/{}", fx.id, run.id);
+        let mut approval = APPROVALS.load(&fx.ctx.store, &key).unwrap().unwrap();
+        assert_eq!(approval["remove_worktree"], true);
+        assert_eq!(approval["keep_branch_strategy"], true);
+        let approved = approval["sha"].as_str().unwrap().to_owned();
+        match fault {
+            "missing" => {
+                fx.ctx
+                    .store
+                    .delete_record("worktree-cleanup-approvals", &key)
+                    .unwrap();
+            }
+            "changed_intent" => {
+                approval["remove_worktree"] = json!(false);
+                APPROVALS.save(&fx.ctx.store, &key, &approval).unwrap();
+            }
+            "changed_branch" => {
+                approval["branch"] = json!("not-the-approved-branch");
+                APPROVALS.save(&fx.ctx.store, &key, &approval).unwrap();
+            }
+            "changed_worktree" => {
+                approval["worktree"] = json!(fx.app.join(".worktrees/not-the-approved-worktree"));
+                APPROVALS.save(&fx.ctx.store, &key, &approval).unwrap();
+            }
+            "lost_commit" | "moved_worktree" => {
+                let tree = git(&run.worktree, &["rev-parse", "HEAD^{tree}"]);
+                // Same tree, clean checkout: refusing cannot be attributed to dirt.
+                let replacement = if fault == "lost_commit" {
+                    git(
+                        &fx.app,
+                        &["commit-tree", &tree, "-m", "unrelated same-tree root"],
+                    )
+                } else {
+                    git(
+                        &fx.app,
+                        &[
+                            "commit-tree",
+                            &tree,
+                            "-p",
+                            &approved,
+                            "-m",
+                            "unapproved descendant",
+                        ],
+                    )
+                };
+                git(
+                    &fx.app,
+                    &[
+                        "update-ref",
+                        &format!("refs/heads/{}", run.branch),
+                        &replacement,
+                    ],
+                );
+                assert!(git(&run.worktree, &["status", "--porcelain"]).is_empty());
+                assert_eq!(
+                    corral_git::is_ancestor(&fx.app, &approved, &run.branch).unwrap(),
+                    fault == "moved_worktree"
+                );
+            }
+            _ => unreachable!(),
+        }
+        // Restart the consumer: only canonical recorded authority may permit the retry.
+        fx.ctx.store = Store::open(fx.ctx.store.root()).unwrap();
+        let (outcome, reason) = lifecycle(&fx);
+        assert_ne!(outcome, LifecycleOutcome::Reclaimed, "{fault}: {reason:?}");
+        let reason = reason.unwrap();
+        let expected = match fault {
+            "missing" => "missing recorded",
+            "changed_intent" | "changed_branch" | "changed_worktree" => "approval changed",
+            "lost_commit" => "no longer preserves",
+            "moved_worktree" => "HEAD differs",
+            _ => unreachable!(),
+        };
+        assert!(reason.contains(expected), "{fault}: {reason}");
+        assert!(run.worktree.is_dir(), "{fault}: worktree retained");
+        assert!(
+            corral_git::rev_sha(&fx.app, &run.branch).is_ok(),
+            "{fault}: named branch retained"
+        );
+    }
+}
+
+#[test]
 fn a_failed_keep_branch_strategy_removal_is_retried() {
     failed_removal_is_retried(ApproveStrategy::KeepBranch, false);
 }

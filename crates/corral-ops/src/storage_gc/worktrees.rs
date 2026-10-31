@@ -103,9 +103,26 @@ fn finding(
             repo.display()
         )));
     }
-    *repo_out = Some(repo);
+    *repo_out = Some(repo.clone());
     if let Some(reason) = kept(ctx, head, run)? {
         return Ok(Finding::Retain(reason));
+    }
+    if crate::cleanup_worktree::retained::requested(ctx, &head.id, run)? {
+        let Some(actual) = head
+            .current_run
+            .as_deref()
+            .filter(|actual| actual.id == run && actual.worktree == path)
+        else {
+            return Ok(Finding::Retain(
+                "approved retained-branch run changed".into(),
+            ));
+        };
+        if let Err(error) = crate::cleanup_worktree::retained::require(ctx, &head.id, &repo, actual)
+        {
+            return Ok(Finding::Retain(format!(
+                "retained-branch approval unavailable: {error:#}"
+            )));
+        }
     }
     if !git_identity(path) {
         if !build_output_only(path)? {
@@ -294,7 +311,17 @@ pub(crate) fn reclaim(ctx: &Ctx, found: &Assessment, via: &str) -> Result<()> {
             "{} is not a real directory",
             found.path.display()
         );
-        corral_git::worktree_remove(repo, &found.path, false)?;
+        if crate::cleanup_worktree::retained::requested(ctx, &found.task, &found.generation)? {
+            let head = ctx.store.head(&found.task)?;
+            let run = head
+                .current_run
+                .as_deref()
+                .filter(|run| run.id == found.generation)
+                .context("approved retained-branch run changed")?;
+            crate::cleanup_worktree::remove_retained(ctx, &head, repo, run)?;
+        } else {
+            corral_git::worktree_remove(repo, &found.path, false)?;
+        }
         // Git can unregister the worktree and still fail to unlink its directory; what it left
         // is removed through the same handle, with no further eligibility check.
         handle.remove_entry(&name, &|| Ok(()))?;

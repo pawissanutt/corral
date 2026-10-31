@@ -406,10 +406,7 @@ fn approve_case(strategy: ApproveStrategy, remove_worktree: bool, policy_keeps: 
         .unwrap();
     assert_eq!(cleared.len(), 1);
     assert_eq!(cleared[0].detail["count"], 2);
-    assert_eq!(
-        run.worktree.exists(),
-        !remove_worktree || policy_keeps || strategy == ApproveStrategy::KeepBranch
-    );
+    assert_eq!(run.worktree.exists(), !remove_worktree || policy_keeps);
     assert_eq!(
         fx.app.join("feature.txt").exists(),
         strategy != ApproveStrategy::KeepBranch

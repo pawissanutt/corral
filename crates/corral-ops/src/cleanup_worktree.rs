@@ -411,6 +411,13 @@ fn residents(path: &Path) -> Result<Vec<StuckProcess>> {
     Ok(found)
 }
 
+pub(crate) mod retained;
+
+enum Removal {
+    Normal { discard: bool },
+    ApprovedRetained,
+}
+
 pub(crate) fn remove<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
@@ -418,6 +425,27 @@ pub(crate) fn remove<T: TaskRef + ?Sized>(
     run: &RunHead,
     discard: bool,
 ) -> Result<()> {
+    remove_inner(ctx, task, repo, run, Removal::Normal { discard })
+}
+
+/// The same strictly validated approved-retained path for immediate cleanup and GC retry.
+pub(crate) fn remove_retained<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    repo: &Path,
+    run: &RunHead,
+) -> Result<()> {
+    remove_inner(ctx, task, repo, run, Removal::ApprovedRetained)
+}
+
+fn remove_inner<T: TaskRef + ?Sized>(
+    ctx: &Ctx,
+    task: &T,
+    repo: &Path,
+    run: &RunHead,
+    mode: Removal,
+) -> Result<()> {
+    let discard = matches!(mode, Removal::Normal { discard: true });
     crate::plan_target::protect_cleanup(repo, run)?;
     let repo = repo
         .canonicalize()
@@ -471,7 +499,9 @@ pub(crate) fn remove<T: TaskRef + ?Sized>(
             .plan_target
             .as_ref()
             .map_or(run.base.as_str(), |t| t.branch.as_str());
-        if !corral_git::is_ancestor(&repo, &run.branch, target)? {
+        if matches!(mode, Removal::ApprovedRetained) {
+            retained::require(ctx, task.id(), &repo, run)?;
+        } else if !corral_git::is_ancestor(&repo, &run.branch, target)? {
             bail!("refusing to remove worktree for unlanded branch");
         }
     }
