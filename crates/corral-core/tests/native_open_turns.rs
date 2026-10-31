@@ -83,7 +83,7 @@ fn current_generation_open_turn_is_not_inferred_from_the_latest_turn_or_older_ge
                             review: review.id.clone(),
                         }
                     }
-                    AgentRole::Pm => unreachable!(),
+                    AgentRole::Pm | AgentRole::Assistant => unreachable!(),
                 };
                 assert_eq!(task.has_open_agent_turn(&container, 2).unwrap(), open);
                 store.fixture_put_task(&task).unwrap();

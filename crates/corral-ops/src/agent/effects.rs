@@ -829,12 +829,17 @@ pub fn reconcile_pm(ctx: &Ctx, request: &str) -> Result<RequestReceipt> {
     }
     let kind = receipt.effect.as_ref().map(|e| e.kind.as_str());
     let to = if kind == Some("capture") {
-        let tasks = ctx.store.list()?;
-        let marked = tasks.iter().find(|t| {
-            t.agent_origin
-                .as_ref()
-                .is_some_and(|o| o.request_id == request)
-        });
+        let marked = ctx
+            .store
+            .heads_page(
+                &corral_core::backend::HeadQuery::EdgeTo {
+                    kind: "agent_origin".into(),
+                    other: request.to_owned(),
+                },
+                1,
+            )?
+            .into_iter()
+            .next();
         match marked {
             Some(task) => (
                 ReceiptState::Committed,

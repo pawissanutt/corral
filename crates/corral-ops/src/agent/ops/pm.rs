@@ -328,11 +328,18 @@ fn two_phase(
         Err(error) if kind == "capture" => {
             // Creation can succeed before its event write fails. The marker, not the return
             // code, is the evidence of a capture, exactly as after a killed executor.
-            match ctx.store.list()?.into_iter().find(|task| {
-                task.agent_origin
-                    .as_ref()
-                    .is_some_and(|mark| mark.request_id == origin.request_id)
-            }) {
+            match ctx
+                .store
+                .heads_page(
+                    &corral_core::backend::HeadQuery::EdgeTo {
+                        kind: "agent_origin".into(),
+                        other: origin.request_id.clone(),
+                    },
+                    1,
+                )?
+                .into_iter()
+                .next()
+            {
                 Some(task) => (
                     ReceiptState::Committed,
                     json!({"outcome":"captured","task":task.id}),

@@ -27,7 +27,7 @@ fn recipient(container: &ContainerRef) -> Recipient {
             plan: plan.clone(),
             review: review.clone(),
         },
-        ContainerRef::Pm => unreachable!(),
+        ContainerRef::Pm | ContainerRef::Assistant { .. } => unreachable!(),
     }
 }
 

@@ -141,7 +141,7 @@ impl Inbox<'_> {
         let _inbox = self.lock()?;
         let mut pm = self.pm_state()?;
         pm.delivery = DeliveryMode::Legacy;
-        self.store.save_record("pm-inbox", "current", &pm)
+        self.save_standalone_record("pm-inbox", "current", &pm)
     }
     pub fn keys(store: &Store) -> Result<Vec<String>> {
         let mut keys = Vec::new();

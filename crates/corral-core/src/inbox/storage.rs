@@ -51,8 +51,7 @@ impl<'a> Inbox<'a> {
     pub fn state(&self) -> Result<InboxState> {
         match self.standalone_state_key() {
             Some((area, key)) => Ok(self
-                .store
-                .record::<PmInbox>(area, key)?
+                .standalone_record::<PmInbox>(area, key)?
                 .unwrap_or_default()
                 .inbox),
             None => {
@@ -66,8 +65,7 @@ impl<'a> Inbox<'a> {
 
     pub fn pm_state(&self) -> Result<PmInbox> {
         Ok(self
-            .store
-            .record("pm-inbox", "current")?
+            .standalone_record("pm-inbox", "current")?
             .unwrap_or_default())
     }
 
@@ -75,9 +73,11 @@ impl<'a> Inbox<'a> {
     pub fn update_state<T>(&self, f: impl FnOnce(&mut InboxState) -> Result<T>) -> Result<T> {
         match self.standalone_state_key() {
             Some((area, key)) => self.store.records_transaction(|| {
-                let mut side = self.store.record::<PmInbox>(area, key)?.unwrap_or_default();
+                let mut side = self
+                    .standalone_record::<PmInbox>(area, key)?
+                    .unwrap_or_default();
                 let result = f(&mut side.inbox)?;
-                self.store.save_record(area, key, &side)?;
+                self.save_standalone_record(area, key, &side)?;
                 Ok(result)
             }),
             None => {

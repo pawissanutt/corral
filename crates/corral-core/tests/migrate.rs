@@ -53,6 +53,37 @@ fn dry_run_lists_and_refuses_unclassified_files() {
     assert_eq!(legacy.fence().as_deref(), Some(FENCE));
 }
 
+#[test]
+fn new_main_assistant_and_pm_desk_legacy_roots_refuse_without_discarding_bytes() {
+    // These incoming-main roots have no declared importer. Never silently treat their
+    // sessions, containers or desk items as rebuildable caches or generic evidence.
+    for path in [
+        "assistants/A-1.md",
+        "state/agent-assistant/A-1.json",
+        "state/assistant-counter",
+        "pm-inbox/PMI-1.md",
+        "state/pm-inbox-counter",
+    ] {
+        let legacy = Legacy::new();
+        let target = legacy.corral.join(path);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, format!("retained incoming-main data: {path}\n")).unwrap();
+        let before = legacy.legacy_bytes();
+        let report = legacy.migrate().dry_run().unwrap();
+        assert!(!report.ok, "{path}");
+        assert_eq!(report.unclassified, [path]);
+        let error = legacy.migrate().apply().unwrap_err();
+        assert!(format!("{error:#}").contains(path), "{path}: {error:#}");
+        assert_eq!(legacy.legacy_bytes(), before, "{path}");
+        assert!(legacy.journal().is_none(), "{path}");
+        assert_eq!(legacy.fence().as_deref(), Some(FENCE), "{path}");
+        assert!(
+            !legacy.exists("db") && !legacy.exists("db.migrating") && !legacy.exists("blobs"),
+            "{path}"
+        );
+    }
+}
+
 fn inject(legacy: &Legacy, family: &str) {
     let tasks = legacy.corral.join("tasks");
     let open_run = "  runs:\n  - id: R1\n    agent: claude\n    worktree: /tmp/w\n    branch: corral/T-009\n    base: main\n    base_sha: '00'\n    started: 2026-10-04T00:00:00Z\n";
