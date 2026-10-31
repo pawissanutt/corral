@@ -1,6 +1,6 @@
 //! The owner-input journal (T-544 owner-authority): the assistant host's host-only `event` op
-//! `owner_input` records one pane-typed owner message, or the owner's answer to a confirmation
-//! the host rendered, before the text reaches the model. `owner_action` may cite only these
+//! `owner_input` records one pane-typed owner message, a selected dialog answer, or the owner's
+//! answer to a confirmation the host rendered, before the text reaches the model. `owner_action` may cite only these
 //! entries; corral wakes, inbox deliveries, PM outcomes and recovery notices never become one.
 use anyhow::Result;
 use corral_core::agent::{AgentRole, ReceiptEffect, paths};
@@ -74,6 +74,7 @@ fn validate(envelope: &Envelope, payload: &Payload) -> Result<()> {
     let answers = payload.answers.as_deref();
     match (payload.source, payload.command.as_deref()) {
         (OwnerInputSource::Pane, None) if answers.is_none() => Ok(()),
+        (OwnerInputSource::Dialog, None) if answers.is_none() && !payload.truncated => Ok(()),
         (OwnerInputSource::Confirmation, Some(command))
             if matches!(payload.text.as_str(), "y" | "n")
                 && !command.is_empty()
@@ -84,7 +85,7 @@ fn validate(envelope: &Envelope, payload: &Payload) -> Result<()> {
             Ok(())
         }
         _ => Err(bad(
-            "a pane input carries no command; a confirmation carries the command it showed, the \
+            "a pane or dialog input carries no command; a confirmation carries the command it showed, the \
              answer y or n and the request it answers",
         )),
     }

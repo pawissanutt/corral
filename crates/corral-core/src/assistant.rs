@@ -116,6 +116,8 @@ pub struct AssistantContainer {
 pub enum OwnerInputSource {
     /// Typed into the session's pane by the owner (Pi input source `interactive`).
     Pane,
+    /// A question and option selected by the owner in the interactive dialog.
+    Dialog,
     /// The owner's answer to an owner-action confirmation the host rendered.
     Confirmation,
 }
