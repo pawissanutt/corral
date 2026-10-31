@@ -209,6 +209,112 @@ fn worker_launch_packet_with_emitted_obligations_equals_the_reference() {
 }
 
 /// A launched worker R1 with `n` waits and `n` decisions frozen into its newest checkpoint.
+// Q19: obligation growth also emits terminal notices. Retire those through the real
+// publisher, then exercise the atomic claim/send/outcome publisher to hold a full, identical
+// bounded current window. This neither removes obligation rows nor changes notice retention.
+fn steady_notice_window(fx: &Fx, id: &str) {
+    let before = fx.ctx.store.get(id).unwrap();
+    let obligations = before.current_run().unwrap().obligations.clone();
+    let old = before
+        .attention
+        .notice_outbox
+        .iter()
+        .map(|claim| claim.batch_id.clone())
+        .collect::<Vec<_>>();
+    crate::owner_notice::drain_task(&fx.ctx, id).unwrap();
+    assert!(
+        fx.ctx
+            .store
+            .head(id)
+            .unwrap()
+            .attention
+            .notice_outbox
+            .is_empty()
+    );
+    let events = fx.ctx.store.events_for(id).unwrap();
+    for batch in old {
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == "owner_notified" && event.detail["batch_id"] == batch),
+            "retired notice remains in its durable event history"
+        );
+    }
+    for i in 0..corral_core::attention::MAX_NOTICE_OUTBOX {
+        let source = format!("checkpoint-window-{i:03}");
+        let claim = crate::owner_notice::commit_head(&fx.ctx, id, |_, head| {
+            crate::owner_notice::prepare(
+                &fx.ctx,
+                head,
+                "obligation_transition",
+                &source,
+                fixture::now(),
+                vec![],
+            )
+            .map(Some)
+        })
+        .unwrap()
+        .unwrap();
+        crate::owner_notice::notify(
+            &fx.ctx,
+            claim,
+            "checkpoint fixture",
+            "bounded current input",
+            false,
+        )
+        .unwrap();
+    }
+    let after = fx.ctx.store.get(id).unwrap();
+    assert_eq!(after.current_run().unwrap().obligations, obligations);
+    assert_eq!(
+        after.attention.notice_outbox.len(),
+        corral_core::attention::MAX_NOTICE_OUTBOX
+    );
+    for (i, claim) in after.attention.notice_outbox.iter().enumerate() {
+        let source = format!("checkpoint-window-{i:03}");
+        let hash = crate::verification::digest(
+            &serde_json::to_vec(&(
+                1,
+                fx.ctx.store.root(),
+                Some(id),
+                "obligation_transition",
+                &source,
+            ))
+            .unwrap(),
+        );
+        assert_eq!(
+            claim,
+            &corral_core::attention::NoticeClaim {
+                version: 1,
+                batch_id: hash.clone(),
+                claim_ids: vec![hash],
+                producer: "obligation_transition".into(),
+                source,
+                claimed_at: fixture::now(),
+                coverage: vec![],
+                exemption_basis: None,
+                pending: vec![],
+                outcome: Some(corral_core::attention::NoticeOutcome::Notified {
+                    at: fixture::now()
+                }),
+            }
+        );
+    }
+}
+
+fn notice_input(fx: &Fx, id: &str) -> (usize, serde_json::Value) {
+    let ledger = fx.ctx.store.head(id).unwrap().attention.clone();
+    let bytes = serde_json::to_vec(&ledger).unwrap().len();
+    let mut normalized = serde_json::to_value(ledger).unwrap();
+    // Only the identity digests include the fixture's distinct root. Their exact values
+    // and widths were checked above; all other bounded current fields must match outright.
+    for claim in normalized["notice_outbox"].as_array_mut().unwrap() {
+        claim["batch_id"] = serde_json::json!("root-scoped");
+        claim["claim_ids"] = serde_json::json!(["root-scoped"]);
+    }
+    (bytes, normalized)
+}
+
 fn obligated(n: usize, finished: bool) -> (Fx, String) {
     corral_core::clock::pin_thread(Some(fixture::now()));
     let (mut fx, id) = Path::Worker.setup();
@@ -249,6 +355,7 @@ fn obligated(n: usize, finished: bool) -> (Fx, String) {
         )
         .unwrap();
     }
+    steady_notice_window(&fx, &id);
     action_heads::checkpoint(&fx, &id);
     // Retry and the handoff act on a run its worker finished, the task in Review; approve
     // (`corral done`) on the running one.
@@ -376,6 +483,7 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
         for is_stale in [false, true] {
             let what = format!("{entry:?} stale={is_stale}");
             let mut sizes = Vec::new();
+            let mut current_notices = Vec::new();
             for n in [1, 10] {
                 // Given R1 with n waits and n answered decisions frozen into its newest
                 // checkpoint, which a later commit may have made stale.
@@ -404,6 +512,7 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                 );
                 assert_eq!(reference.is_err(), is_stale, "{what} x{n}: {reference:?}");
                 let expected = obligation_rows(&fx, &id);
+                current_notices.push(notice_input(&fx, &id));
                 // When the real entry runs.
                 let mut outcome = String::new();
                 let delta = timed(|| outcome = enter(&fx, &id, entry, &key));
@@ -420,6 +529,10 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                 }
                 sizes.push((delta, expected, outcome));
             }
+            assert_eq!(
+                current_notices[0], current_notices[1],
+                "{what}: bounded current notice inputs and exact byte widths"
+            );
             let [
                 (small, small_rows, small_out),
                 (large, large_rows, large_out),
