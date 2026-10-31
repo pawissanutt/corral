@@ -381,17 +381,67 @@ fn dirty_worktree_is_retained_without_signalling_owned_process() {
 
 #[test]
 fn unlanded_branch_and_worktree_are_retained() {
+    // Q26: approval now grants explicit retained-branch removal. Absence or change of
+    // that actual committed authority must still protect even a genuinely owned resident.
+    for missing in [true, false] {
+        let mut fx = Fx::new();
+        fx.owner_ready();
+        let run = fx.run();
+        let marker = fx.marker();
+        let mut child = Resident::start(&run.worktree, None, Some(&marker));
+        let plain = fx.ctx.store.clone();
+        let mutations = plain.clone();
+        let key = format!("{}/{}", fx.id, run.id);
+        fx.ctx.store = plain.with_submission_barrier(std::sync::Arc::new(move |at| {
+            if at != "approval_cleanup_committed" {
+                return;
+            }
+            let area = corral_core::records::RecordArea::<serde_json::Value>::new(
+                "worktree-cleanup-approvals",
+            );
+            let mut actual = area.load(&mutations, &key).unwrap().unwrap();
+            if missing {
+                mutations
+                    .delete_record("worktree-cleanup-approvals", &key)
+                    .unwrap();
+            } else {
+                actual["remove_worktree"] = serde_json::json!(false);
+                area.save(&mutations, &key, &actual).unwrap();
+            }
+        }));
+        let line =
+            corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::KeepBranch, true, false).unwrap();
+        let expected = if missing {
+            "missing recorded"
+        } else {
+            "approval changed"
+        };
+        assert!(line.contains(expected), "{line}");
+        assert!(run.worktree.exists());
+        assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
+        assert!(child.0.try_wait().unwrap().is_none());
+    }
+}
+
+#[test]
+fn recorded_retained_branch_approval_removes_only_its_owned_worktree_and_preserves_commit() {
     let fx = Fx::new();
     fx.owner_ready();
     let run = fx.run();
+    let approved = corral_git::rev_sha(&run.worktree, "HEAD").unwrap();
+    let main = corral_git::rev_sha(&fx.app, "main").unwrap();
     let marker = fx.marker();
     let mut child = Resident::start(&run.worktree, None, Some(&marker));
     let line =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::KeepBranch, true, false).unwrap();
-    assert!(line.contains("unlanded branch"), "{line}");
-    assert!(run.worktree.exists());
-    assert!(corral_git::rev_sha(&fx.app, &run.branch).is_ok());
-    assert!(child.0.try_wait().unwrap().is_none());
+    assert!(
+        line.contains("worktree removed; branch kept (branch not merged)"),
+        "{line}"
+    );
+    assert!(!run.worktree.exists());
+    assert_eq!(corral_git::rev_sha(&fx.app, &run.branch).unwrap(), approved);
+    assert_eq!(corral_git::rev_sha(&fx.app, "main").unwrap(), main);
+    assert!(child.0.try_wait().unwrap().is_some());
 }
 
 #[test]

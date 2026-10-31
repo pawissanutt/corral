@@ -20,12 +20,8 @@ mod owner;
 mod snapshot_diff;
 pub use owner::awaiting_owner;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApproveStrategy {
-    FastForward,
-    Rebase,
-    KeepBranch,
-}
+mod strategy;
+pub use strategy::ApproveStrategy;
 
 /// Everything the review screen shows.
 #[derive(Debug, Clone)]
@@ -686,7 +682,6 @@ pub(crate) fn approve_landed(
                 sha: sha.clone(),
             });
         }
-        landed = Some((sha, action));
         // A legacy/concurrent change request may have reopened the run. Landing
         // owns the terminal transition: never persist Done with a working run.
         let now = corral_core::clock::now();
@@ -703,6 +698,8 @@ pub(crate) fn approve_landed(
         current.stuck = None;
         head.status = Status::Done;
         head.queued = false;
+        crate::cleanup_worktree::retained::record(ctx, head.head(), &run, &sha, strategy, remove_worktree)?;
+        landed = Some((sha, action));
         Ok(())
     });
     let task = match task {
@@ -723,6 +720,8 @@ pub(crate) fn approve_landed(
         ctx.store.clear_condition(Some(id), "landing_stale")?;
         return Ok(landed);
     }
+    ctx.store
+        .submission_effect_barrier("approval_cleanup_committed");
     let operational_note = if let Some(op) = &mut operation {
         if let Err(error) = crate::hooks::complete_landing(ctx, op) {
             // Git advancement and Done are already durable. Never report this as a failed merge.
@@ -745,7 +744,12 @@ pub(crate) fn approve_landed(
     let warnings = crate::cleanup::cleanup_report_head(ctx, &task, Cleanup::Task);
     let mut worktree_note = "kept".to_string();
     if remove_worktree && warnings.is_empty() {
-        match crate::cleanup_worktree::remove(ctx, &task, &repo, &run, false) {
+        let removal = if strategy == ApproveStrategy::KeepBranch {
+            crate::cleanup_worktree::remove_retained(ctx, &task, &repo, &run)
+        } else {
+            crate::cleanup_worktree::remove(ctx, &task, &repo, &run, false)
+        };
+        match removal {
             Ok(()) => worktree_note = "removed".to_string(),
             Err(e) => worktree_note = format!("kept (warning: remove failed: {e:#})"),
         }
