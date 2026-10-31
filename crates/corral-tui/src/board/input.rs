@@ -138,6 +138,8 @@ impl BoardView {
                     )),
                 };
             }
+            KeyCode::Char('s') => return id.map(Action::OpenAssistant).unwrap_or(Action::None),
+            KeyCode::Char('S') => return Action::OpenAssistants,
             KeyCode::Char('A') => return Action::OpenArtifacts,
             KeyCode::Char('V') => return Action::OpenGallery,
             KeyCode::Char('Y') => return Action::OpenHistory,
