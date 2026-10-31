@@ -211,6 +211,11 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .context("the review's run disappeared")?;
         run.blocked_excerpt = Some(reason.clone());
         current.status = Status::NeedsMe;
+        ctx.store.log_event(
+            Some(task_id),
+            "needs_me",
+            json!({"from": "review", "agent_state": "pi_native", "note": reason}),
+        )?;
         batch = Some(crate::owner_notice::record_entry_head(
             ctx,
             current,
@@ -230,8 +235,6 @@ pub fn hold_lost(ctx: &Ctx, task_id: &str) -> Result<bool> {
         &reason,
         true,
     )?;
-    let detail = json!({"from": "review", "agent_state": "pi_native", "note": reason});
-    ctx.store.log_event(Some(task_id), "needs_me", detail)?;
     Ok(true)
 }
 
@@ -541,6 +544,13 @@ fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> 
             sha,
             at: now,
         });
+        ctx.store.log_event(
+            Some(task_id),
+            "review_escalated",
+            json!({
+                "run": run.id, "reason": reason, "container": container.key(),
+            }),
+        )?;
         escalated = Some((run.id.clone(), reason));
         task.status = Status::NeedsMe;
         batch = Some(crate::owner_notice::record_stage_head(
@@ -551,7 +561,7 @@ fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> 
         )?);
         Ok(true)
     })?;
-    let Some((run, reason)) = escalated else {
+    let Some((_run, reason)) = escalated else {
         return Ok(false);
     };
     if let (Some(saved), Some(batch)) = (saved, batch) {
@@ -563,11 +573,6 @@ fn escalate(ctx: &Ctx, task_id: &str, container: &ContainerRef) -> Result<bool> 
             true,
         )?;
     }
-    ctx.store.log_event(
-        Some(task_id),
-        "review_escalated",
-        json!({"run": run, "reason": reason, "container": container.key()}),
-    )?;
     Ok(true)
 }
 

@@ -336,8 +336,16 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
     }
     let mut ended = 0;
     ctx.store.try_update_head(task_id, |task| {
-        let mut changed = false;
         for (run_id, job_id, before, after, detail, clear) in &reaped {
+            // The external reap already happened. Preserve its diagnostic even if the
+            // guarded row has meanwhile settled; publish it with any actual row edits.
+            ctx.store.log_event(
+                Some(task_id),
+                "agent_job_reaped",
+                json!({
+                    "run": run_id, "job": job_id, "state": after, "detail": detail,
+                }),
+            )?;
             let container = ContainerRef::Worker {
                 task: task.id.clone(),
                 run: run_id.clone(),
@@ -360,17 +368,9 @@ pub fn reap(ctx: &Ctx, task_id: &str, now: Timestamp) -> Result<usize> {
             }
             task.put_agent_record(&container, agent::NativeRecord::Job(job))?;
             ended += 1;
-            changed = true;
         }
-        Ok(changed)
+        Ok(true)
     })?;
-    for (run, job, _, state, detail, _) in &reaped {
-        ctx.store.log_event(
-            Some(task_id),
-            "agent_job_reaped",
-            json!({"run": run, "job": job, "state": state, "detail": detail}),
-        )?;
-    }
     Ok(ended)
 }
 

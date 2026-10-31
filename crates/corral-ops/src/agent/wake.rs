@@ -219,16 +219,20 @@ pub fn post_due(ctx: &Ctx, due: &[DueWake]) -> Result<usize> {
                 None => stored.state = WakeState::Cancelled,
             }
             task.put_agent_record(&wake.container, agent::NativeRecord::Wake(stored))?;
+            if let Some(message) = &reserved {
+                inbox.announce(message)?;
+                ctx.store.log_event(
+                    Some(task_id),
+                    "agent_wake_posted",
+                    json!({
+                        "container": wake.container.key(), "key": key, "message": message.id,
+                    }),
+                )?;
+            }
             message = reserved;
             Ok(true)
         })?;
-        if let Some(message) = message {
-            inbox.announce(&message)?;
-            ctx.store.log_event(
-                Some(task_id),
-                "agent_wake_posted",
-                json!({"container": wake.container.key(), "key": key, "message": message.id}),
-            )?;
+        if message.is_some() {
             posted += 1;
         }
     }

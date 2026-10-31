@@ -323,11 +323,22 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         now,
         usage: usage_between(ctx, session, scratch.created, now),
     };
+    let log_finished = |task: &Task, run: &str| {
+        ctx.store.log_event(
+            Some(&task.id),
+            "cowork_finished",
+            json!({
+                "session": session, "slug": slug, "run": run, "branch": scratch.branch,
+                "head": head, "base": base, "review": review, "into": into.is_some(),
+            }),
+        )
+    };
     let mut run = String::new();
     let task = match &into {
         Some(id) => ctx.store.update(id, |task| {
             check_into(task, project)?;
             run = draft.apply(ctx, task)?;
+            log_finished(task, &run)?;
             Ok(())
         })?,
         None => {
@@ -352,6 +363,7 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
                     task.kind = opts.kind.map(|kind| kind.to_string());
                     task.size = opts.size;
                     run = draft.apply(ctx, task)?;
+                    log_finished(task, &run)?;
                     Ok(())
                 },
             )?
@@ -363,12 +375,6 @@ pub fn finish(ctx: &Ctx, session: &str, slug: &str, opts: &Finish<'_>) -> Result
         }
         Ok(())
     })?;
-    ctx.store.log_event(
-        Some(&task.id),
-        "cowork_finished",
-        json!({"session": session, "slug": slug, "run": run, "branch": scratch.branch,
-            "head": head, "base": base, "review": review, "into": into.is_some()}),
-    )?;
     snapshot_diff(ctx, &task.id, &scratch.path, &base_sha)?;
     let gate = gate(ctx, &task.id);
     let reviewer =

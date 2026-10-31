@@ -2,12 +2,39 @@
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, ensure};
+use corral_core::RunOutcome;
+use serde_json::json;
 
 use crate::Ctx;
 
 #[cfg(all(test, unix))]
 #[path = "sandbox_cleanup_tests.rs"]
 mod tests;
+
+/// Own the retry retirement effect, after durable supersession and before replacement dispatch.
+/// A reap failure is an observed external outcome, not part of the preceding task transaction.
+/// Ownership/issuer checks stay in `reap`; failed cleanup retains that debt for later recovery.
+pub(crate) fn retire_superseded(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
+    let head = ctx.store.head(task)?;
+    let intent = head
+        .run_head(run)?
+        .context("sandbox retirement run missing")?;
+    ensure!(
+        intent.outcome == Some(RunOutcome::Superseded) && intent.ended.is_some(),
+        "sandbox retirement requires durable supersession intent"
+    );
+    if let Err(error) = reap(ctx, task, run) {
+        // Preserve retry's best-effort diagnostic behavior, but only after actual failure.
+        let _ = ctx.store.log_event(
+            Some(task),
+            "cleanup_failed",
+            json!({
+                "resource": "sandbox", "error": format!("{error:#}"),
+            }),
+        );
+    }
+    Ok(())
+}
 
 pub(crate) fn reap(ctx: &Ctx, task: &str, run: &str) -> Result<()> {
     reap_scope(ctx, task, Some(run))

@@ -172,12 +172,11 @@ fn retry<T: TaskRef + ?Sized>(
         ContainerRef::Pm | ContainerRef::Assistant { .. } => None,
     };
     let key = format!("provider-retry:{}:{generation}:{attempt}", container.key());
-    let mut posted = None;
     ctx.store.try_update_head(task.id(), |current| {
         if agent::container_closure_ref(current, container)?.is_some() {
             return Ok(false);
         }
-        posted = Some(inbox.reserve_in_head(
+        let message = inbox.reserve_in_head(
             current,
             Post {
                 kind: super::super::turns::NUDGE_KIND,
@@ -191,16 +190,14 @@ fn retry<T: TaskRef + ?Sized>(
                 subject: Some(json!({"key": key, "attempt": attempt})),
                 max_payload: corral_core::inbox::MAX_PAYLOAD,
             },
-        )?);
-        Ok(true)
-    })?;
-    if let Some(message) = posted {
+        )?;
         inbox.announce(&message)?;
         let detail = json!({"key": key, "attempt": attempt, "of": BACKOFF_SECS.len(),
             "message": message.id, "submitted": true});
         ctx.store
             .log_event(Some(task.id()), "provider_retry", detail)?;
-    }
+        Ok(true)
+    })?;
     Ok(())
 }
 
@@ -232,21 +229,23 @@ pub(crate) fn advance_agent<T: TaskRef + ?Sized>(
         };
         current.blocked_excerpt = Some(reason.clone());
         t.status = Status::NeedsMe;
+        ctx.store.log_event(Some(task.id()), "provider_escalated", json!({
+            "key": run_key(task.id(), &container)?, "reason": reason, "attempts": state.attempts,
+        }))?;
+        if from != Status::NeedsMe {
+            ctx.store.log_event(
+                Some(task.id()),
+                "needs_me",
+                json!({
+                    "from": from.as_str(), "agent_state": "pi_native", "note": reason,
+                }),
+            )?;
+        }
         Ok(true)
     })?;
-    ctx.store.log_event(
-        Some(task.id()),
-        "provider_escalated",
-        json!({"key": run_key(task.id(),&container)?, "reason": reason, "attempts": state.attempts}),
-    )?;
     if saved.is_none() || from == Status::NeedsMe {
         return Ok(None);
     }
-    ctx.store.log_event(
-        Some(task.id()),
-        "needs_me",
-        json!({"from": from.as_str(), "agent_state": "pi_native", "note": reason}),
-    )?;
     Ok(Some(Change {
         task: task.id().clone(),
         from,

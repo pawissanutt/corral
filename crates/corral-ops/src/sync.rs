@@ -428,7 +428,6 @@ fn close_held_run(
         _ => return Ok(()),
     };
     let run_id = run.id.clone();
-    let mut closed = false;
     let _attribution = ctx.store.attribute(corral_core::Actor::System);
     ctx.store.update_head(&task.id, |current| {
         if current.status == Status::Backlog
@@ -440,17 +439,14 @@ fn close_held_run(
         {
             run.outcome = Some(RunOutcome::Abandoned);
             run.ended = Some(now);
-            closed = true;
+            ctx.store.log_event(
+                Some(&task.id),
+                "run_abandoned",
+                json!({"run": run_id, "reason": reason}),
+            )?;
         }
         Ok(())
     })?;
-    if closed {
-        ctx.store.log_event(
-            Some(&task.id),
-            "run_abandoned",
-            json!({"run": run_id, "reason": reason}),
-        )?;
-    }
     Ok(())
 }
 

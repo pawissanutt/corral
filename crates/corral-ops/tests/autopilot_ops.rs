@@ -6,6 +6,8 @@
 mod authority;
 #[path = "autopilot_ops/churn.rs"]
 mod churn;
+#[path = "autopilot_ops/cleanup_boundary.rs"]
+mod cleanup_boundary;
 #[path = "autopilot_ops/config_identity.rs"]
 mod config_identity;
 #[path = "autopilot_ops/deferred_gate.rs"]
