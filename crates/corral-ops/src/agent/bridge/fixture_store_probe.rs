@@ -85,7 +85,9 @@ fn canonical_store_probe() {
             emit(json!({"messages":messages,"entries":entries,"envelopes":envelopes}));
         }
         "watch" => {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
+            let callback_failure = std::sync::Arc::clone(&failure);
             // Notification only, never an authority: every payload and cursor is read through
             // Store. Cross-lane writers are real corral command processes; CLOSE_WRITE is
             // after their commit, unlike a pre-commit data notification. No timer/poll loop.
@@ -97,10 +99,11 @@ fn canonical_store_probe() {
                             notify::EventKind::Access(AccessKind::Close(AccessMode::Write))
                         ) =>
                     {
-                        let _ = tx.send(Ok(()));
+                        let _ = tx.try_send(());
                     }
                     Err(error) => {
-                        let _ = tx.send(Err(error));
+                        *callback_failure.lock().unwrap() = Some(error);
+                        let _ = tx.try_send(());
                     }
                     _ => {}
                 },
@@ -114,15 +117,15 @@ fn canonical_store_probe() {
             let mut reader = store.events_since(None).unwrap();
             emit(json!({"ready":reader.cursor().seq}));
             loop {
+                if let Some(error) = failure.lock().unwrap().take() {
+                    panic!("canonical notification failed: {error}");
+                }
                 // EventReader pages by persisted sequence; queued notifications cannot
                 // create duplicates and events between empty read and recv are not lost.
                 while let Some((event, _)) = reader.next_event().unwrap() {
                     emit(json!({"event":event}));
                 }
-                rx.recv().unwrap().unwrap();
-                for result in rx.try_iter() {
-                    result.unwrap();
-                }
+                rx.recv().unwrap();
             }
         }
         mode => panic!("unknown fixture probe mode {mode}"),
