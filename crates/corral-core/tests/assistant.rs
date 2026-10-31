@@ -193,9 +193,11 @@ fn invalid_ids_never_escape_the_assistant_roots() {
 fn interrupted_reservation_is_not_reused() {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
-    std::fs::create_dir_all(store.state_dir()).unwrap();
-    // Exact persisted crash boundary: reservation committed, neither session file written yet.
-    std::fs::write(store.state_dir().join("assistant-counter"), "1").unwrap();
+    // Exact persisted crash boundary: canonical reservation committed, neither session nor
+    // container record published yet. No legacy file participates in allocation.
+    store
+        .save_record("assistant-counter", "current", &1_u64)
+        .unwrap();
     assert_eq!(
         store.create_assistant("pi", None, None, None).unwrap().id,
         "A-2"
