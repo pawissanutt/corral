@@ -448,6 +448,116 @@ fn refuses_symlinks_directories_and_special_files_without_reading_them() {
     assert!(!dir.path().join("special.md").exists());
 }
 
+#[cfg(unix)]
+fn hostile_temporary_path(kind: &str) {
+    use std::os::unix::fs::symlink;
+    for updating in [false, true] {
+        let dir = tempdir().unwrap();
+        let store = Store::init(dir.path()).unwrap();
+        let s = selector(MemoryScope::Workspace, "safe");
+        let original = updating.then(|| put(&store, &s));
+        fs::create_dir_all(store.dir().join("memory/workspace")).unwrap();
+        let victim = dir.path().join("unrelated");
+        fs::write(&victim, "unrelated bytes must survive").unwrap();
+        let temp = store.dir().join("memory/workspace/safe.md.tmp");
+        match kind {
+            "symlink" => symlink(&victim, &temp).unwrap(),
+            "hardlink" => fs::hard_link(&victim, &temp).unwrap(),
+            "fifo" => assert!(
+                Command::new("mkfifo")
+                    .arg(&temp)
+                    .stdin(std::process::Stdio::null())
+                    .status()
+                    .unwrap()
+                    .success()
+            ),
+            _ => panic!("unknown fixture"),
+        }
+        let mut replacement = entry(&s);
+        replacement.body = "Safe replacement".into();
+        let item = store
+            .memory_put(
+                &s,
+                replacement,
+                original.as_ref().map(|i| i.hash.as_str()),
+                "pm",
+                at(),
+            )
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            "unrelated bytes must survive",
+            "{kind}, updating={updating}"
+        );
+        let canonical = store.dir().join("memory/workspace/safe.md");
+        assert!(fs::symlink_metadata(&canonical).unwrap().is_file());
+        assert_eq!(
+            store.memory_read(&s, 0, 4096).unwrap().unwrap().body,
+            "Safe replacement"
+        );
+        // The hostile preexisting path is neither opened nor removed.
+        let meta = fs::symlink_metadata(&temp).unwrap();
+        match kind {
+            "symlink" => assert!(meta.is_symlink()),
+            "hardlink" => assert_eq!(
+                fs::read_to_string(&temp).unwrap(),
+                "unrelated bytes must survive"
+            ),
+            "fifo" => {
+                use std::os::unix::fs::FileTypeExt;
+                assert!(meta.file_type().is_fifo());
+            }
+            _ => unreachable!(),
+        }
+        // CAS still rejects stale expectations after safe replacement.
+        assert!(
+            store
+                .memory_put(
+                    &s,
+                    entry(&s),
+                    original.as_ref().map(|i| i.hash.as_str()),
+                    "pm",
+                    at()
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.memory_read(&s, 0, 4096).unwrap().unwrap().item.hash,
+            item.hash
+        );
+        let mut names: Vec<_> = fs::read_dir(canonical.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                std::ffi::OsString::from("safe.md"),
+                std::ffi::OsString::from("safe.md.tmp")
+            ]
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn temporary_symlinks_preserve_unrelated_bytes_on_create_and_update() {
+    hostile_temporary_path("symlink");
+}
+
+#[cfg(unix)]
+#[test]
+fn temporary_hardlinks_preserve_unrelated_bytes_on_create_and_update() {
+    hostile_temporary_path("hardlink");
+}
+
+#[cfg(unix)]
+#[test]
+fn temporary_fifos_are_never_opened_on_create_or_update() {
+    hostile_temporary_path("fifo");
+}
+
 #[test]
 fn memory_writes_leave_git_head_index_and_unrelated_bytes_untouched() {
     let dir = tempdir().unwrap();
