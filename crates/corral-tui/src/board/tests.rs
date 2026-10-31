@@ -46,7 +46,9 @@ impl Fixture {
             .store
             .confirm_operating_policy(&preview, "fixture owner", START)
             .unwrap();
+        let stamp = self.ctx.store.now();
         self.ctx.store = Store::open(self.ctx.store.root()).unwrap();
+        self.ctx.store.fixture_pin_now(stamp).unwrap();
     }
 
     pub fn board(&self) -> BoardView {
@@ -141,11 +143,22 @@ fn artifact(kind: ArtifactKind, title: &str) -> Artifact {
 
 /// T-001 idea, T-002 backlog, T-003 ready, T-004 running, T-005 blocked, T-006 review, T-007 done.
 pub(crate) fn seeded() -> Fixture {
+    seeded_with_clock(None)
+}
+
+pub(crate) fn budget_seeded() -> Fixture {
+    seeded_with_clock(Some(START))
+}
+
+fn seeded_with_clock(clock: Option<Timestamp>) -> Fixture {
     let n = SEQ.fetch_add(1, Ordering::SeqCst);
     let root = std::env::temp_dir().join(format!("corral-tui-test-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let store = Store::init(&root).unwrap();
+    if let Some(stamp) = clock {
+        store.fixture_pin_now(stamp).unwrap();
+    }
     let mk = |title: &str, project: &str, status: Status| {
         store
             .create(title, Some(project), status, "## Goal\nDo it.\n")

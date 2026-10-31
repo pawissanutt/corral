@@ -50,6 +50,21 @@ impl Fx {
         self.tmp.path()
     }
 
+    /// Explicit imported-copy fixture for legacy gzip retention; never a publication mirror.
+    fn seed_imported_copy(&self, title: &str, body: &str) {
+        let artifact = self
+            .store
+            .get(&self.task)
+            .unwrap()
+            .artifacts
+            .into_iter()
+            .find(|artifact| artifact.title == title)
+            .unwrap();
+        let path = self.store.dir().join(artifact.path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
     fn add(&self, name: &str, body: &str, kind: &str, title: &str) -> String {
         let path = self.root().join(name);
         std::fs::write(&path, body).unwrap();
@@ -110,6 +125,7 @@ fn show_reads_the_whole_compressed_log_and_raw_matches_the_stored_bytes() {
         .chain(["error: final failure\n".to_string()])
         .collect();
     let reference = f.add("long.log", &log, "log", "Long log");
+    f.seed_imported_copy("Long log", &log);
     ok(f.root(), &["artifact", "gc", "--yes"]);
     let stored = f.store.get(&f.task).unwrap().artifacts.remove(0);
     assert!(stored.compressed_bytes.is_some(), "compressed on disk");
@@ -143,6 +159,9 @@ fn show_line_ranges_select_exact_decoded_source_lines() {
         let first = format!("{}\r\n", "first ".repeat(2000));
         let body = format!("{first}\r\n# 三\r\nlast");
         let reference = f.add("range.log", &body, "log", "Range log");
+        if action == RetentionAction::Compress {
+            f.seed_imported_copy("Range log", &body);
+        }
         ok(f.root(), &["artifact", "gc", "--yes"]);
         if action == RetentionAction::Compress {
             assert!(

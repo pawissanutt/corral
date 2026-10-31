@@ -63,6 +63,10 @@ fn compression_is_transparent_to_show_and_open_after_confirmed_gc() {
     // Given a raw log and a viewer that copies exactly the file it receives.
     let tmp = tempfile::tempdir().unwrap();
     let (mut store, id, artifact, content) = fixture(tmp.path(), RetentionAction::Compress);
+    // Explicit legacy imported copy: canonical publications are already compressed blobs.
+    let imported = store.dir().join(&artifact.path);
+    std::fs::create_dir_all(imported.parent().unwrap()).unwrap();
+    std::fs::write(imported, &content).unwrap();
     let copied = tmp.path().join("opened.log");
     store
         .config

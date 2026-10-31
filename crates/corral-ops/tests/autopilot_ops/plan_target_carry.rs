@@ -440,7 +440,11 @@ fn carried_evidence_that_fails_refuses_the_carry_and_reports_the_failure() {
         .find(|artifact| artifact.title == "Widget scenario proof")
         .unwrap();
     let blob = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
-    std::fs::write(fx.ctx.store.blob_store().unwrap().path_of(&blob), "edited\n").unwrap();
+    std::fs::write(
+        fx.ctx.store.blob_store().unwrap().path_of(&blob),
+        "edited\n",
+    )
+    .unwrap();
     fx.id = b.clone();
     sync_until_regated(&fx);
     // Then no carry happens, a new member gate runs, and the failure is reported.

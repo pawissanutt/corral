@@ -1,4 +1,4 @@
-use super::tests::seeded;
+use super::tests::budget_seeded as seeded;
 use super::*;
 use corral_core::work::{self, Counter, HotScope};
 use corral_core::{ApprovedScope, PlanAcceptance, PlanDeliveryTarget, Store};

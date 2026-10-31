@@ -696,7 +696,11 @@ fn pi_native_ws() -> Ws {
         ));
     }
     let ws = routing_ws(&profiles);
-    let path = ws.root.join(".corral/state/harnesses.json");
+    let path = corral_core::Store::open(&ws.root)
+        .unwrap()
+        .cache_root()
+        .unwrap()
+        .join("harnesses.json");
     let mut cache: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).expect("cache")).expect("json");
     cache["harnesses"]

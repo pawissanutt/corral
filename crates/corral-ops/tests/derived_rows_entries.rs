@@ -13,6 +13,7 @@ fn now() -> Timestamp {
 }
 
 fn context(store: Store) -> Ctx {
+    store.fixture_pin_now(now()).unwrap();
     let mut ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
     ctx.herdr = corral_herdr::Herdr::with_bin("/nonexistent/derived-rows-herdr".into(), None);
     ctx
