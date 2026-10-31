@@ -275,7 +275,10 @@ impl<R: Read> Read for Decoded<R> {
             }
             io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("HashMismatch: blob {} does not decode: {error}", self.hash),
+                crate::backend::BlobReadError {
+                    hash: self.hash.clone(),
+                    detail: format!("does not decode: {error}"),
+                },
             )
         })
     }

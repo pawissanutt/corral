@@ -136,6 +136,22 @@ pub struct BlobFile {
     pub modified: jiff::Timestamp,
 }
 
+/// A canonical blob stream failed decoding or content verification. Consumers of derived
+/// caches can diagnose this without treating corrupt bytes as authoritative or matching text.
+#[derive(Debug)]
+pub struct BlobReadError {
+    pub hash: BlobHash,
+    pub detail: String,
+}
+
+impl std::fmt::Display for BlobReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HashMismatch: blob {} {}", self.hash, self.detail)
+    }
+}
+
+impl std::error::Error for BlobReadError {}
+
 /// Decoded blob content that checks its hash at end of stream: reading to the end of altered
 /// or truncated content fails with an `InvalidData` error naming the hash (`HashMismatch`).
 pub struct VerifiedReader {
@@ -178,7 +194,10 @@ impl Read for VerifiedReader {
             if actual != self.expected.as_str() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("HashMismatch: blob {} read as {actual}", self.expected),
+                    BlobReadError {
+                        hash: self.expected.clone(),
+                        detail: format!("read as {actual}"),
+                    },
                 ));
             }
             self.verified = true;

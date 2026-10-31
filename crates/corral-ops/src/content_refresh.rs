@@ -303,6 +303,28 @@ pub(crate) fn task_stamp(ctx: &Ctx) -> Result<String> {
     ctx.store.tasks_stamp()
 }
 
+/// Canonical verification remains fatal for explicit search/read operations, but failure of
+/// this derived cache must not erase successful sync work (including evidence refusals).
+/// Leave the failed refresh pending and diagnose it; never publish corrupt source text.
+pub(crate) fn defer_corrupt_blob_cache_refresh(error: anyhow::Error) -> Result<()> {
+    let corrupt = error.chain().any(|cause| {
+        cause.is::<corral_core::backend::BlobReadError>()
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::get_ref)
+                .is_some_and(|inner| inner.is::<corral_core::backend::BlobReadError>())
+    });
+    if !corrupt {
+        return Err(error);
+    }
+    crate::messages::report(
+        None,
+        "content search",
+        format!("search cache refresh deferred after verified blob failure: {error:#}"),
+    );
+    Ok(())
+}
+
 /// Sync's refresh inside its measured pass. Whether or not tasks changed after sync's sample,
 /// the feed carries every change since the index's cursor, so neither case lists the board.
 /// `false` when the index needs a rebuild, which sync runs after the measured pass.
