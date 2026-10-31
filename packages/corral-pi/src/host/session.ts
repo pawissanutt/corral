@@ -301,7 +301,10 @@ export class HostSession {
       ...(options.identity.role === "assistant" && options.capabilities?.enabled.includes("write_permissions") ? {
         writePermission: {
           settings: writeSettings(options.guidance?.settings.write_permissions),
-          onBound: (notice: () => Promise<void>) => { this.writePermissionNotice = notice; },
+          onBound: async (notice: () => Promise<void>) => {
+            this.writePermissionNotice = notice;
+            if (this.bound) await notice();
+          },
           sessionId: () => this.sessionId(),
           turn: () => ({ id: this.currentTurn(), signal: this.writeAbort.signal }),
           call: (requestId: string, payload: Record<string, unknown>) => options.client.call("write_permission", {

@@ -28,7 +28,7 @@ function fixture() {
   let afterDecide = () => {};
   const context: RoleContext = { cwd: workspace, model: "test", identity: { store: "s", project: "", role: "assistant", assistant: "A-1", generation: 1 },
     capabilities: { catalog: 9, digest: "d".repeat(64), preset: "standard", enabled: ["write_permissions"] },
-    writePermission: { onBound() {}, settings: { allow: [], deny: [] }, sessionId: () => "pi-session", turn: () => ({ id: turn, signal: abort.signal }), emit() {},
+    writePermission: { async onBound() {}, settings: { allow: [], deny: [] }, sessionId: () => "pi-session", turn: () => ({ id: turn, signal: abort.signal }), emit() {},
       async call(id, payload) {
         calls.push({ id, payload });
         if (payload.action === "decide") {
@@ -102,11 +102,12 @@ test("private production host: global skill, external edit, audit and second-she
       capabilities: launch.capabilities, guidance: launch.guidance, root: workspace, runtimeDir: dirname(fixture.bootstrap),
       exportDir: join(bootstrap.session_dir, "exports"), sessionManager: sdk.SessionManager.create(workspace, bootstrap.session_dir) });
     await host.hello(bootstrap.bind_nonce, pane, sha256Hex("d".repeat(64)));
-    expect(actions).toContain("list");
     const answers: string[] = [], dialogs: string[] = [];
     await host.session.bindExtensions({ uiContext: { notify() {}, select: async (title: string, choices: string[]) => {
+      if (title.includes(join(skill, "SKILL.md"))) expect(existsSync(skill)).toBeFalse();
       dialogs.push(title); const answer = answers.shift(); expect(choices).toContain(answer!); return answer;
     } } as unknown as ExtensionUIContext });
+    expect(actions).toContain("list");
     const turn = async (name: string, args: Record<string, unknown>) => {
       transport.script([{ toolCalls: [{ callId: `call-${dialogs.length}-${actions.length}`, name, arguments: args }] }, { text: "done" }] as never);
       await host!.session.prompt("perform the requested fixture write", { source: "interactive" }); await host!.drained();
@@ -120,6 +121,7 @@ test("private production host: global skill, external edit, audit and second-she
     expect(actions).toHaveLength(count); expect(dialogs).toHaveLength(2);
     console.log("WRITE_PERMISSIONS_EXTERNAL_OK: in-place external edit and fixed refusals through real host/op");
     const before = actions.length;
+    expect(existsSync(skill)).toBeFalse();
     answers.push("Allow for 1 hour", skill);
     await turn("write", { path: join(skill, "SKILL.md"), content: "# Example\n" });
     expect(dialogs).toHaveLength(4); expect(dialogs[2]).toContain("new file");
@@ -127,18 +129,24 @@ test("private production host: global skill, external edit, audit and second-she
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe("# Example\n");
     await turn("write", { path: join(skill, "scripts/run.sh"), content: "echo hi\n" });
     expect(dialogs).toHaveLength(4);
+    const otherSkill = `${skill}-other/SKILL.md`;
+    answers.push("Deny");
+    await turn("write", { path: otherSkill, content: "never" });
+    expect(dialogs).toHaveLength(5); expect(existsSync(otherSkill)).toBeFalse();
     const shown = JSON.parse(ok([corral, "assistant", "show", fixture.session, "--json"], { cwd: workspace }));
     const inputs = shown.container.owner_inputs ?? shown.container.state.owner_inputs;
     const record = inputs.find((i: { source: string; permission?: { choice: string } }) => i.source === "permission" && i.permission?.choice === "hour");
     expect(record.permission.tool).toBe("write"); expect(record.permission.choice).toBe("hour");
     expect(record.permission.scope.shown).toBe(skill); expect(record.permission.expires_at).toBeDefined();
+    const denial = inputs.find((i: { permission?: { choice: string } }) => i.permission?.choice === "deny");
+    expect(denial.permission.scope).toBeUndefined(); expect(denial.permission.grant).toBeUndefined();
     const event = readFileSync(join(workspace, ".corral/events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)).find((e) => e.kind === "assistant_write_permission" && e.detail.decision.choice === "hour");
     expect(event.detail.decision).toEqual(record.permission);
     // A separate owner's shell revokes the grant; no fabricated host-memory revocation.
     const ownerEnv = { ...process.env }; delete ownerEnv.CORRAL_ASSISTANT; delete ownerEnv.CORRAL_ASSISTANT_GENERATION;
     ok([corral, "assistant", "permissions", "revoke", fixture.session, record.permission.grant], { cwd: workspace, env: ownerEnv });
     answers.push("Deny"); await turn("write", { path: join(skill, "after-revoke"), content: "never" });
-    expect(dialogs).toHaveLength(5); expect(existsSync(join(skill, "after-revoke"))).toBeFalse();
+    expect(dialogs).toHaveLength(6); expect(existsSync(join(skill, "after-revoke"))).toBeFalse();
     console.log("WRITE_PERMISSIONS_LIVE_OK: real production tool guard/dialog callbacks, check/decide, skill and external edit, structured journal/event, second-shell revoke, fixed refusals; private plugin-free server");
   } finally {
     await host?.close();
@@ -261,6 +269,18 @@ test("cancel, absent UI, abort after decide, no candidates and default roots nev
     f.answers.push("Allow once"); f.decide(() => f.abort.abort());
     expect((await f.write(path))?.reason).toContain("aborted");
     expect(f.calls.at(-1)!.payload.choice).toBe("once");
+  } finally { f.close(); }
+});
+
+test("a symlinked external target shows its real destination before consent", async () => {
+  const f = fixture();
+  try {
+    const real = join(f.home, "real"), link = join(f.home, "link");
+    mkdirSync(real); symlinkSync(real, link);
+    f.answers.push("Allow once");
+    expect(await f.write(join(link, "new.txt"))).toBeUndefined();
+    expect(f.dialogs[0]!.title).toContain(`Resolved destination: ${join(real, "new.txt")}`);
+    expect(f.calls[0]!.payload.target).toEqual({ shown: join(link, "new.txt"), canonical: join(real, "new.txt") });
   } finally { f.close(); }
 });
 
