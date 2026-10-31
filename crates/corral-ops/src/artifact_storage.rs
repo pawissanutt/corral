@@ -33,7 +33,7 @@ impl Drop for StorageGuard {
     }
 }
 
-fn held_here() -> bool {
+pub(crate) fn held_here() -> bool {
     HELD.with(|held| held.get() > 0)
 }
 

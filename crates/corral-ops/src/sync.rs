@@ -234,6 +234,7 @@ fn sync_scoped(
     };
     let search_stamp = crate::content_refresh::task_stamp(ctx)?;
     let tasks = ctx.store.list()?;
+    crate::agent::effects::failpoint("sync_tasks_read");
     if !crate::session_scope::owns_tasks(ctx, &ctx.store, &tasks)? {
         return Ok(changes);
     }
@@ -334,6 +335,7 @@ fn sync_scoped(
     changes.extend(crate::dispatch_policy::advance(ctx, now)?);
     let pm_live = Some(crate::pm::live_pm_pane(ctx)?.is_some());
     reconcile_attention(ctx, now, pm_live, attention)?;
+    crate::agent::effects::failpoint("sync_events");
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;

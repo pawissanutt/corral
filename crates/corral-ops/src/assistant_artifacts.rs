@@ -34,7 +34,6 @@ pub fn add_session_artifact(
 ) -> Result<Artifact> {
     check_owner(Some(session))?;
     corral_core::assistant::validate_id(session)?;
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
     let current = ctx.store.get_assistant(session)?;
     let meta = std::fs::metadata(path).context("inspecting session artifact")?;
     if !meta.is_file() || meta.len() > ctx.store.config.artifacts.max_bytes {
@@ -66,6 +65,8 @@ pub fn add_session_artifact(
         compressed_bytes: None,
         purged_at: None,
     });
+    // Only publishing the snapshot and committing the metadata that names it need storage (T-659).
+    let storage = crate::artifact_storage::storage_lock(ctx)?;
     artifact.compressed_bytes = crate::artifact_storage::snapshot(
         ctx,
         &ctx.store.dir().join(&artifact.path),
@@ -90,6 +91,7 @@ pub fn add_session_artifact(
         }
         Ok(())
     })?;
+    drop(storage);
     ctx.store.log_event(None, "artifact", serde_json::json!({
         "session": session, "kind": artifact.kind.as_str(), "path": artifact.path, "title": artifact.title,
     }))?;
