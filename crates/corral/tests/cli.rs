@@ -498,7 +498,9 @@ fn verdict_records_review_notes_artifact_and_event() {
         .find(|a| a.title == "Review (opus-rev)")
         .expect("review report artifact");
     assert_eq!(report.kind, corral_core::ArtifactKind::Report);
-    let saved = std::fs::read_to_string(store.dir().join(&report.path)).expect("snapshot");
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store.clone());
+    let saved =
+        String::from_utf8(corral_ops::artifact_read(&ctx, report).expect("snapshot")).unwrap();
     assert!(saved.contains("tests cover it"), "{saved}");
     let verdicts: Vec<_> = store
         .events()

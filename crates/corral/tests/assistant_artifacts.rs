@@ -78,7 +78,20 @@ fn session_artifact_cli_and_ownership_table() {
     assert_eq!(rows[0]["tier"], "keep");
     let snapshot = rows[0]["artifact"]["path"].as_str().unwrap();
     assert!(snapshot.starts_with("artifacts/assistant/A-1/"));
-    assert!(root.join(".corral").join(snapshot).is_file());
+    assert!(
+        !root.join(".corral").join(snapshot).exists(),
+        "no publication mirror"
+    );
+    let hash =
+        corral_core::blob_ref::BlobHash::parse(rows[0]["artifact"]["sha256"].as_str().unwrap())
+            .unwrap();
+    assert!(
+        corral_core::Store::open(root)
+            .unwrap()
+            .blob_reader(&hash)
+            .unwrap()
+            .is_some()
+    );
     assert_eq!(
         ok(root, None, &["artifact", "show", "A-1:report.md", "--raw"]),
         "# Session finding\nunique_session_needle\n"

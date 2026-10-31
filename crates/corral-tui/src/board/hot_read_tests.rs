@@ -1,4 +1,4 @@
-use super::tests::{run, seeded};
+use super::tests::{budget_seeded as seeded, run};
 use super::*;
 use corral_core::work::{self, Counter, HotScope};
 

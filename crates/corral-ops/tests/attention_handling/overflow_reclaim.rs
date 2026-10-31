@@ -52,10 +52,7 @@ fn retained_resolutions(
         })
         .unwrap();
     std::fs::write(fx.tmp.path().join("inventory-down"), "").unwrap();
-    let log = fx.ctx.store.dir().join("events.jsonl");
-    let backup = fx.ctx.store.dir().join("events.before-failure");
-    std::fs::rename(&log, &backup).unwrap();
-    std::fs::create_dir(&log).unwrap();
+    fx.ctx.store.fixture_break_events().unwrap();
     let error = corral_ops::sync_at(&fx.reopen(), at(1799)).unwrap_err();
     let stopped = fx.ctx.store.get(&task.id).unwrap();
     assert_eq!(
@@ -78,8 +75,7 @@ fn retained_resolutions(
     );
     assert_eq!(stopped.attention.overflow_count, Some(2));
     println!("PUBLICATION_FAILURE {error:#}");
-    std::fs::remove_dir(&log).unwrap();
-    std::fs::rename(&backup, &log).unwrap();
+    fx.ctx.store.fixture_restore_events().unwrap();
     (fx, task.id, overflow)
 }
 

@@ -236,8 +236,13 @@ fn c7_a_routed_refusal_is_swept_claimed_resolved_and_notified_once() {
     assert_eq!(resolved["notice"]["key"], "pmi:PMI-1:2");
     assert_eq!(resolved["notice"]["state"], "posted");
     let store = corral_core::Store::open(&fx.root).unwrap();
-    let inbox = corral_core::inbox::Inbox::new(&store,
-        corral_core::inbox::Recipient::Assistant { session:"A-1".into() }).unwrap();
+    let inbox = corral_core::inbox::Inbox::new(
+        &store,
+        corral_core::inbox::Recipient::Assistant {
+            session: "A-1".into(),
+        },
+    )
+    .unwrap();
     let messages = inbox.messages().unwrap();
     assert_eq!(messages.len(), 1, "{messages:?}");
     let message = serde_json::to_string(&messages[0]).unwrap();
@@ -299,12 +304,18 @@ fn a_large_accepted_resolution_still_reaches_the_author_once() {
     assert_eq!(resolved["outcome"]["text"].as_str().unwrap().len(), 4096);
     assert_eq!(resolved["outcome"]["refs"].as_array().unwrap().len(), 24);
     let store = corral_core::Store::open(&fx.root).unwrap();
-    let inbox = corral_core::inbox::Inbox::new(&store,
-        corral_core::inbox::Recipient::Assistant { session:"A-1".into() }).unwrap();
+    let inbox = corral_core::inbox::Inbox::new(
+        &store,
+        corral_core::inbox::Recipient::Assistant {
+            session: "A-1".into(),
+        },
+    )
+    .unwrap();
     let messages = inbox.messages().unwrap();
     assert_eq!(messages.len(), 1, "{messages:?}");
     assert!(
-        serde_json::to_string(&messages[0]).unwrap()
+        serde_json::to_string(&messages[0])
+            .unwrap()
             .contains("pmi:PMI-1:2")
     );
 }

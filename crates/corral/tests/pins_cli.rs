@@ -98,7 +98,7 @@ fn pin_unpin_pins_json_and_open() {
     );
     assert!(latest.ends_with("/81db67b6-dash.html"));
     assert_eq!(pins[0]["followed"], true);
-    assert_eq!(std::fs::read_to_string(&latest).expect("snapshot"), "v2\n");
+    assert_eq!(ok(&root, &log, &["artifact", "show", "1", "--raw"]), "v2\n");
 
     ok(&root, &log, &["open", "1"]);
     ok(&root, &log, &["open", "T-001"]);
@@ -122,8 +122,11 @@ fn pin_unpin_pins_json_and_open() {
     let pins = pins_json(&root, &log);
     assert_eq!(pins.len(), 1);
 
-    // Without its legacy snapshot the artifact still opens from its blob.
-    std::fs::remove_file(&latest).expect("remove snapshot");
+    // New publications have no legacy mirror; the artifact opens from its blob.
+    assert!(
+        !std::path::Path::new(&latest).exists(),
+        "no publication mirror"
+    );
     assert_eq!(pins_json(&root, &log)[0]["state"], "ok");
     std::fs::remove_file(&log).expect("reset opener log");
     ok(&root, &log, &["open", "1"]);

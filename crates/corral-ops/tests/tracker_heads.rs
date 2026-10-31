@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 fn fixture() -> (tempfile::TempDir, Ctx, String, Vec<String>) {
     let root = tempfile::tempdir().unwrap();
     let store = Store::init(root.path()).unwrap();
+    store
+        .fixture_pin_now("2026-10-27T00:00:00Z".parse().unwrap())
+        .unwrap();
     let mut tracker = store.create("Plan", None, Status::Backlog, "").unwrap();
     tracker.created = "2026-10-27T00:00:00Z".parse().unwrap();
     tracker.updated = tracker.created;
@@ -240,22 +243,20 @@ fn unrelated_live_config_changes_do_not_recompute_task_projection() {
 }
 
 #[test]
-fn snapshot_progress_retains_dispatch_lease_refusal() {
-    // Given a snapshot whose board dispatch lease is held by a writer.
+fn snapshot_progress_is_advisory_while_a_writer_holds_dispatch() {
+    // Main deliberately made progress advisory: a consistent snapshot needs no dispatch lease.
     let (_root, ctx, id, _) = fixture();
     let frozen = Ctx {
         store: ctx.store.read_only_snapshot().unwrap(),
         ..ctx.clone()
     };
+    let expected = serde_json::to_value(corral_ops::plan_progress(&frozen, &id).unwrap()).unwrap();
     let _lease = ctx.store.try_lock("dispatch").unwrap().unwrap();
-
-    // When progress tries to read that snapshot.
-    let error = corral_ops::plan_progress(&frozen, &id).unwrap_err();
-
-    // Then it retains the existing externally visible refusal.
-    assert_eq!(
-        error.to_string(),
-        "board is being updated; retry Plan progress"
+    let actual = corral_ops::plan_progress(&frozen, &id).unwrap();
+    assert_eq!(serde_json::to_value(actual).unwrap(), expected);
+    assert!(
+        ctx.store.try_lock("dispatch").unwrap().is_none(),
+        "the reader must not release the writer's lease"
     );
 }
 
