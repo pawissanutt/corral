@@ -128,10 +128,12 @@ impl Fixture {
     }
 
     fn events(&self) -> Vec<Value> {
-        std::fs::read_to_string(self.root.join(".corral/events.jsonl"))
+        corral_core::Store::open(&self.root)
             .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
+            .events()
+            .unwrap()
+            .into_iter()
+            .map(|event| serde_json::to_value(event).unwrap())
             .collect()
     }
 }

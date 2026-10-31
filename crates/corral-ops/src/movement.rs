@@ -474,5 +474,5 @@ fn attach(ctx: &Ctx, notice: &Notice) -> Result<String> {
         Some(ArtifactKind::Report),
         Some("Main movement context"),
     )?;
-    Ok(ctx.store.dir().join(artifact.path).display().to_string())
+    Ok(crate::artifact_path(ctx, &artifact)?.display().to_string())
 }

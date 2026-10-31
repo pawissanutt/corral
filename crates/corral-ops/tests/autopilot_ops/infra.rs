@@ -57,6 +57,15 @@ fn file_state(path: &Path) -> (Vec<u8>, std::time::SystemTime) {
     )
 }
 
+fn task_record(fx: &Fx) -> (Vec<u8>, u64) {
+    let store = fx.ctx.store.read_only_snapshot().unwrap();
+    let head = store.head(&fx.id).unwrap();
+    (
+        serde_json::to_vec(&store.get(&fx.id).unwrap()).unwrap(),
+        head.rev,
+    )
+}
+
 fn no_infra_escalation(fx: &Fx) {
     for kind in ["infra_hold", "owner_notified"] {
         assert!(events(fx, &fx.id, kind).is_empty(), "{kind}");
@@ -86,7 +95,7 @@ fn live_plan_reviewer_survives_three_lock_passes_and_reuses_gate_after_clear() {
     assert_eq!(waiting.current_run(), before.current_run());
     assert_eq!(waiting.rounds, before.rounds);
     assert_eq!(waiting.status, before.status);
-    let task_state = file_state(&waiting.path);
+    let task_state = task_record(&fx);
     let event_count = fx.ctx.store.events().unwrap().len();
 
     // When three more deterministic passes observe the same lock.
@@ -96,7 +105,7 @@ fn live_plan_reviewer_survives_three_lock_passes_and_reuses_gate_after_clear() {
         // Then no run, file, or event is rewritten and no reviewer is cleaned up.
         assert_eq!(fx.task(), waiting);
         assert_eq!(fx.run(), run);
-        assert_eq!(file_state(&waiting.path), task_state);
+        assert_eq!(task_record(&fx), task_state);
         assert_eq!(file_state(&lock), lock_state);
         assert_eq!(fx.ctx.store.events().unwrap().len(), event_count);
         no_infra_escalation(&fx);
@@ -138,7 +147,7 @@ fn persistent_lock_holds_once_at_bound_across_ten_passes_and_reopen() {
     assert_eq!(wait.first_seen, first.first_seen);
     assert_eq!(wait.first_mtime, first.first_mtime);
     assert_eq!(wait.held_at, Some(at(300)));
-    let state = file_state(&held.path);
+    let state = task_record(&fx);
     for seconds in 301..311 {
         if seconds == 306 {
             fx.ctx = Ctx {
@@ -149,7 +158,7 @@ fn persistent_lock_holds_once_at_bound_across_ten_passes_and_reopen() {
         }
         corral_ops::sync_at(&fx.ctx, at(seconds)).unwrap();
         assert_eq!(fx.task(), held);
-        assert_eq!(file_state(&held.path), state);
+        assert_eq!(task_record(&fx), state);
     }
 
     // Then Review and its receipts survive, with one durable claim and one notification.
@@ -437,14 +446,14 @@ fn reviewed_fresh_receipts_obey_recorded_wait_before_acceptance_fast_path() {
         })
         .unwrap();
     let waiting = fx.task();
-    let bytes = file_state(&waiting.path);
+    let bytes = task_record(&fx);
 
     // When fresh receipts would normally bypass the integration preflight.
     corral_ops::sync_at(&fx.ctx, at(2)).unwrap();
 
     // Then the persisted wait wins without stage change, acceptance, or replacement gate.
     assert_eq!(fx.task(), waiting);
-    assert_eq!(file_state(&waiting.path), bytes);
+    assert_eq!(task_record(&fx), bytes);
     assert_eq!(fx.stage(), Some(AutoStage::Reviewed));
     assert!(events(&fx, &fx.id, "approved").is_empty());
     assert_eq!(events(&fx, &fx.id, "gate_started").len(), 1);
@@ -527,11 +536,11 @@ fn first_marker_wait(stage: AutoStage, marker: &str) {
     assert_eq!(waiting.status, Status::Review);
     assert_eq!(waiting.current_run(), before.current_run());
     assert_eq!(waiting.rounds, before.rounds);
-    let waiting_file = file_state(&waiting.path);
+    let waiting_file = task_record(&fx);
     for seconds in [2, 300] {
         corral_ops::sync_at(&fx.ctx, at(seconds)).unwrap();
         assert_eq!(fx.task(), waiting);
-        assert_eq!(file_state(&waiting.path), waiting_file);
+        assert_eq!(task_record(&fx), waiting_file);
     }
     no_infra_escalation(&fx);
 

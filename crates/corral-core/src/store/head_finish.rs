@@ -151,6 +151,8 @@ impl TaskHeadMut {
     /// rows, the current run's usage totals and the contract revision.
     pub(crate) fn sync(&mut self) -> Result<()> {
         self.adjust_projections()?;
+        // This policy context is deliberately not serialized in scalar task fields.
+        self.head.task.current_run_id = self.head.current_run.as_ref().map(|run| run.id.clone());
         if self.usage_dirty {
             self.recompute_usage()?;
             self.usage_dirty = false;

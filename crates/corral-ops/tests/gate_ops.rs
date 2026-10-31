@@ -97,7 +97,7 @@ fn gate_log(ctx: &Ctx, id: &str) -> (String, String) {
         .rev()
         .find(|a| a.kind == ArtifactKind::Log)
         .expect("gate log artifact");
-    let text = std::fs::read_to_string(ctx.store.dir().join(&a.path)).unwrap();
+    let text = String::from_utf8(corral_ops::artifact_read(ctx, a).unwrap()).unwrap();
     (a.title.clone(), text)
 }
 

@@ -139,6 +139,7 @@ impl TaskMut for TaskHeadMut {
                     fields.member_gates == self.head.task.member_gates,
                     "member gates change only through a member-gate amendment"
                 );
+                fields.current_run_id = self.head.current_run.as_ref().map(|run| run.id.clone());
                 self.head.task = fields;
                 Ok(())
             })()

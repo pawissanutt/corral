@@ -92,7 +92,7 @@ impl Pilot<'_> {
             "{}: {}.\n\nIntegration packet: {}",
             key.reason,
             packet.compact(),
-            self.ctx.store.dir().join(&artifact.path).display()
+            crate::artifact_path(self.ctx, &artifact)?.display()
         );
         self.send_request(&summary, &details, &key, Some(&artifact.path))
     }
