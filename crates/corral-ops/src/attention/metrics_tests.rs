@@ -426,7 +426,7 @@ fn window_activity_respects_both_bounds_while_history_rebuilds_carry_in() {
             event(
                 "pm_event_delivery",
                 Some("T-001"),
-                json!({"submitted": true, "event_kind": "needs_me", "cursor": {"offset": 1}}),
+                json!({"submitted": true, "event_kind": "needs_me", "cursor": {"seq": 1}}),
             ),
             8000,
         ),
@@ -498,7 +498,7 @@ fn raw_question_pushes_resolve_their_source_event_by_cursor() {
             "pm_event_delivery",
             Some("T-001"),
             json!({"submitted": true, "event_kind": "question_opened", "pane": "pm:p1",
-                "cursor": {"offset": offset}}),
+                "cursor": {"seq": offset}}),
         )
     };
     let events = vec![
@@ -757,7 +757,7 @@ fn a_raw_push_joins_the_condition_its_source_event_announced() {
             "pm_event_delivery",
             Some("T-001"),
             json!({"submitted": true, "event_kind": "question_opened", "pane": "pm:p1",
-                "cursor": {"offset": 20}}),
+                "cursor": {"seq": 20}}),
         )
     };
     let events = vec![

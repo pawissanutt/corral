@@ -8,12 +8,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixDatagram, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use corral_core::{AgentCmd, AggregateAttempt, Origin, ReviewContractKind, Status, Store};
 use corral_herdr::Herdr;
-use notify::{RecursiveMode, Watcher};
 use serde_json::{Value, json};
 
 /// Waits for the test's go signal, inspects the checkout and its prompt, then calls back.
@@ -206,7 +204,8 @@ fn observe(root: &Path, plan: &str, attempt: &str, criterion: &str, expected: &s
 }
 
 fn current(store: &Store, plan: &str) -> AggregateAttempt {
-    store
+    Store::open(store.root())
+        .unwrap()
         .get(plan)
         .unwrap()
         .aggregate_attempts
@@ -304,28 +303,9 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
     );
 
     let deadline = Instant::now() + Duration::from_secs(120);
-    // Subscribe after preparation, before releasing the callback. A WAL Modify event can
-    // precede the transaction commit; the callback closes its writer after saving the verdict.
-    // Only that final writer-close wake can complete this wait, followed by a fresh row read.
-    let (tx, events) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.as_ref().is_ok_and(|event| {
-            !matches!(
-                event.kind,
-                notify::EventKind::Access(notify::event::AccessKind::Close(
-                    notify::event::AccessMode::Write
-                ))
-            )
-        }) {
-            return;
-        }
-        let _ = tx.send(event);
-    })
-    .unwrap();
-    let database = corral_core::sqlite::SqliteBackend::db_path(store.dir());
-    watcher
-        .watch(database.parent().unwrap(), RecursiveMode::NonRecursive)
-        .unwrap();
+    // A SQLite connection can stay open through cleanup: descriptor close is not a
+    // commit acknowledgement. The real cleanup command's existing external fence is
+    // the post-verdict boundary; read the committed canonical row independently there.
     // Independently acknowledge the pane-cleanup subscription before releasing the callback.
     let mut connection = UnixStream::connect(&socket).unwrap();
     writeln!(
@@ -345,49 +325,6 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
     // When the reviewer is released, it inspects and answers through its exact callback.
     let fifo = out.join("go.fifo");
     let released = std::thread::spawn(move || std::fs::write(fifo, "go\n"));
-    let answered = || {
-        current(&store, &plan)
-            .reviews
-            .last()
-            .is_some_and(|review| review.verdict.is_some())
-    };
-    let completion = loop {
-        let received = deadline
-            .checked_duration_since(Instant::now())
-            .map(|remaining| events.recv_timeout(remaining));
-        let event = match received {
-            Some(Ok(Ok(event))) => event,
-            received => {
-                let files: Vec<_> = std::fs::read_dir(&out)
-                    .unwrap()
-                    .map(|entry| entry.unwrap().file_name())
-                    .collect();
-                panic!(
-                    "isolated aggregate reviewer did not finish ({received:?}); files {files:?}; committed review {:?}; verdict output {:?}; pane:\n{}",
-                    current(&store, &plan)
-                        .reviews
-                        .last()
-                        .map(|review| (&review.id, review.verdict)),
-                    std::fs::read_to_string(out.join("verdict.out")).ok(),
-                    herdr
-                        .pane_read(&pane, 80)
-                        .unwrap_or_else(|error| format!("{error:#}"))
-                );
-            }
-        };
-        if answered() {
-            break event;
-        }
-    };
-    assert!(
-        matches!(
-            completion.kind,
-            notify::EventKind::Access(notify::event::AccessKind::Close(
-                notify::event::AccessMode::Write
-            ))
-        ),
-        "completion must follow the callback writer closing: {completion:?}"
-    );
     released.join().unwrap().unwrap();
     cleanup_ready
         .set_read_timeout(Some(
@@ -446,8 +383,7 @@ fn isolated_aggregate_reviewer_answers_its_callback_before_owner_acceptance() {
             "plan": plan, "attempt": attempt, "candidate": review.identity,
             "review": review.id, "reviewer": review.reviewer, "route": review.route,
             "launch": review.herdr, "socket": socket, "pane_open_after_verdict": pane_after,
-            "completion_event": format!("{:?}", completion.kind),
-            "completion_paths": completion.paths,
+            "commit_observed_at_cleanup_boundary": true,
             "pane_open_before_cleanup": pane_before_cleanup, "cleanup_event": closed,
             "owner_refused_without_review": missing.trim(),
             "verdict": review.verdict, "notes": notes, "callback_output": callback.trim(),

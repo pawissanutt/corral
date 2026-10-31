@@ -190,7 +190,7 @@ pub fn stats(ctx: &Ctx, window: Window) -> Result<Stats> {
         .events_since(Some(corral_core::EventCursor::default()))?;
     while let Some((event, cursor)) = reader.next_event()? {
         events.push(event);
-        cursors.push(cursor.offset);
+        cursors.push(cursor.seq);
     }
     let mut claims: Vec<NoticeClaim> = tasks
         .iter()
@@ -425,7 +425,7 @@ pub fn compute(tasks: &[Task], events: &[Event], claims: &[NoticeClaim], window:
     compute_logged(tasks, events, &[], claims, window)
 }
 
-/// As [`compute`], with each event's reader cursor offset, parallel to `events`.
+/// As [`compute`], with each event's canonical reader sequence, parallel to `events`.
 pub fn compute_logged(
     tasks: &[Task],
     events: &[Event],
@@ -598,9 +598,9 @@ fn wakes(
         out.raw_push.submitted += 1;
         *out.raw_push.by_kind.entry(kind.into()).or_default() += 1;
         // A receipt names its source event by reader cursor; only that event's identity joins.
-        let source = event.detail["cursor"]["offset"]
+        let source = event.detail["cursor"]["seq"]
             .as_u64()
-            .and_then(|offset| cursors.iter().position(|end| *end == offset))
+            .and_then(|seq| cursors.iter().position(|end| *end == seq))
             .and_then(|index| events.get(index))
             .filter(|source| source.kind == "question_opened");
         let Some((question, asked)) = source.and_then(|source| {
