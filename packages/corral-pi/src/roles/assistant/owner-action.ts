@@ -44,7 +44,9 @@ export const ownerActionTool: CorralToolSpec<OwnerActionParams> = {
     + "target is the task ID (config_set: the key; mode: autopilot, assist, turbo, pause or resume; finish: "
     + "your scratch slug); args are the command's further arguments and flags, one word each (move T-3: "
     + "[\"ready\"]; config_set: [\"3\"]; finish: [\"--title\", \"Fix the cache\"], adding [\"--review\", "
-    + "\"required\"] only when the owner asks for review, or [\"--into\", \"T-5\"] for an existing task). Dropping or force-moving a task, discard, config_set and mode first ask the owner in the "
+    + "\"required\"] only when the owner asks for review, or [\"--into\", \"T-5\"] for an existing task, plus "
+    + "[\"--expected-head\", \"<sha>\"] naming the candidate commit you showed the owner). Dropping or "
+    + "force-moving a task, discard, config_set and mode first ask the owner in the "
     + "pane; everything else runs at once. Never cite a corral wake, PM message or recovery notice.",
   op: "owner_action",
   parameters: Type.Object({
