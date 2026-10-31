@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import type { RegisterCapability } from "./registry.ts";
 import { DEFAULT_LIMITS, type Diagnostic, LspClient, LspError, type LspLimits, type LspServerSpec, type Range } from "./client.ts";
 
 export { LspClient, LspError, type LspLimits, type LspServerSpec } from "./client.ts";
@@ -61,6 +62,7 @@ export interface LspToolkitOptions {
   readonly root: string;
   readonly servers?: readonly LspServerSpec[];
   readonly limits?: Partial<LspLimits>;
+  readonly registerCapability?: RegisterCapability;
 }
 
 export interface LspToolkit {
@@ -143,7 +145,7 @@ export function lspToolkit(options: LspToolkitOptions): LspToolkit {
       const current = await existing.catch(() => undefined);
       if (current?.alive) return current;
     }
-    const started = LspClient.start(spec, serverRoot, limits);
+    const started = LspClient.start(spec, serverRoot, limits, options.registerCapability);
     clients.set(key, started);
     started.catch(() => { if (clients.get(key) === started) clients.delete(key); });
     return started;
