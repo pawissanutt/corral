@@ -4,7 +4,9 @@ export function guardTerminalStop(terminal: { stop(): void }, stdin: NodeJS.Read
   const stop = terminal.stop.bind(terminal);
   let stopped = false;
   const terminalGone = (error: unknown): boolean =>
-    error instanceof Error && ["EIO", "EBADF", "ENOTTY"].includes((error as NodeJS.ErrnoException).code ?? "");
+    error instanceof Error && (["EIO", "EBADF", "ENOTTY"].includes((error as NodeJS.ErrnoException).code ?? "") ||
+      // Bun's tty.setRawMode emits a plain Error without `code` (node:tty).
+      /^setRawMode failed with errno: (?:5|9|25)$/.test(error.message));
   terminal.stop = () => {
     if (stopped) return;
     stopped = true;
