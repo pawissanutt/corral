@@ -273,10 +273,13 @@ Use task/project/kind filters to scope the subscription, and `--since` for times
 
 `[pm] push_events = true` separately opts in to sync delivering `[corral]` messages to the live PM
 pane only, using the same agent-prompt delivery and terminal fallback as normal replies. It never
-launches a PM or targets dispatched coding panes. `push_kinds` selects done, needs_me, stuck,
-blocked, escalated, config_changed, lessons_due, run_resumed, wait_transition and
-pm_decision_resolved (all ten by default). Delivery and presentation accounting never wakes
-its own subscription.
+launches a PM or targets dispatched coding panes. `push_kinds` defaults to the same
+PM-actionable set as `wait`: questions, non-question Needs me, stuck/blocked/escalated,
+unreported turns, uncertain/orphaned deliveries, unobserved messages, wait transitions,
+invalid config, inbox items, Plans awaiting owner and install reminders. Routine completion,
+configuration edits, resumptions, slot reacquisition, resolved decisions, lessons and attention
+digests remain opt-in. Question-derived Needs me mirrors carry canonical keys and do not
+wake the default subscription again. Delivery and presentation accounting never wakes itself.
 Sync emits lessons_due once per project and distillation request when its configured schedule is due.
 Delivery position persists in `.corral/state/pm-events.json`.
 Effective-policy replacement is separate and mandatory for a remembered live PM,
