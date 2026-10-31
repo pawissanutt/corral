@@ -199,7 +199,9 @@ fn deleting_caches_preserves_resource_latches_and_alerts_after_restart() {
     fs::remove_dir_all(&root).unwrap();
     ctx.store = Store::open(ctx.store.root()).unwrap();
     let held = sample(&mut ctx, 0.1, 109, 200);
-    let changes = crate::resource_escalation::reconcile(&ctx, &held, now).unwrap();
+    let changes = crate::resource_escalation::reconcile(&ctx, &held, now)
+        .unwrap()
+        .changes;
 
     // Then the latch and attention survive, with no duplicate alert or legacy mirrors.
     assert!(held.held && held.severe);
@@ -229,7 +231,9 @@ fn deleting_caches_preserves_resource_latches_and_alerts_after_restart() {
 
     // Recovery clears both the persisted alert and its attention card.
     let healthy = sample(&mut ctx, 0.1, 110, 110);
-    let changes = crate::resource_escalation::reconcile(&ctx, &healthy, now).unwrap();
+    let changes = crate::resource_escalation::reconcile(&ctx, &healthy, now)
+        .unwrap()
+        .changes;
     assert_eq!(changes.len(), 1);
     assert_eq!(
         ctx.store.get(&task.id).unwrap().status,
@@ -271,7 +275,9 @@ fn alert_raise_and_recovery_commit_task_record_and_event_together() {
         let before = ctx.store.view().unwrap().seq();
 
         // A task attention transition, its record and its event publish once.
-        let changes = crate::resource_escalation::reconcile(&ctx, &severe, now).unwrap();
+        let changes = crate::resource_escalation::reconcile(&ctx, &severe, now)
+            .unwrap()
+            .changes;
         assert_eq!(ctx.store.view().unwrap().seq().0, before.0 + 1);
         assert_eq!(changes.len(), usize::from(initial == Status::Running));
         assert_eq!(
@@ -289,12 +295,35 @@ fn alert_raise_and_recovery_commit_task_record_and_event_together() {
                 .is_some()
         );
         assert_eq!(ctx.store.events_of(None, &["escalated"]).unwrap().len(), 1);
+        assert!(
+            ctx.store
+                .events_of(
+                    None,
+                    &[
+                        "notification_claimed",
+                        "owner_notified",
+                        "owner_notify_failed"
+                    ]
+                )
+                .unwrap()
+                .is_empty(),
+            "the core boundary commits intent and a real pending claim, never invokes transport"
+        );
+        let alert = ctx
+            .store
+            .record_row("resource-alert", "state")
+            .unwrap()
+            .unwrap();
+        assert!(alert.doc["value"]["notice"].is_object());
+        assert!(alert.doc["value"]["notice"]["outcome"].is_null());
 
         let healthy = sample(&mut ctx, 0.1, 110, 110);
         let before = ctx.store.view().unwrap().seq();
 
         // Recovery publishes the restoration, record removal and event together too.
-        let changes = crate::resource_escalation::reconcile(&ctx, &healthy, now).unwrap();
+        let changes = crate::resource_escalation::reconcile(&ctx, &healthy, now)
+            .unwrap()
+            .changes;
         assert_eq!(ctx.store.view().unwrap().seq().0, before.0 + 1);
         assert_eq!(changes.len(), usize::from(initial == Status::Running));
         assert_eq!(ctx.store.get(&task.id).unwrap().status, initial);

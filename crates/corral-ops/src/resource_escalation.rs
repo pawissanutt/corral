@@ -26,6 +26,14 @@ struct Alert {
     notice: Option<corral_core::NoticeClaim>,
 }
 
+/// The core publication's fresh notice capability is consumed only by the owning-sync phase.
+/// Reopened old alerts can publish retained facts, never authorize another physical invocation.
+#[derive(Default)]
+pub(crate) struct Reconciliation {
+    pub changes: Vec<Change>,
+    fresh: Option<Alert>,
+}
+
 const ALERTS: RecordArea<Alert> = RecordArea::new("resource-alert");
 
 #[derive(Debug, Serialize)]
@@ -103,6 +111,41 @@ fn drain(ctx: &Ctx, alert: &Alert) -> Result<()> {
     Ok(())
 }
 
+/// Recover already-durable notice facts before another core transition can clear the source.
+pub(crate) fn drain_notices(ctx: &Ctx) -> Result<()> {
+    if let Some(alert) = read(ctx)? {
+        drain(ctx, &alert)?;
+    }
+    Ok(())
+}
+
+/// Separately invoked after the core commit. Only this return's fresh source transition may
+/// invoke transport; restart drains existing claims instead of resending unknown outcomes.
+pub(crate) fn deliver(ctx: &Ctx, update: Reconciliation) -> Result<Vec<Change>> {
+    if let Some(alert) = update.fresh {
+        let subject = alert
+            .attention
+            .as_ref()
+            .map(|attention| attention.task.as_str());
+        let claim = alert.notice.context("committed resource claim missing")?;
+        let reference = crate::owner_notice::register_source(
+            ctx,
+            subject,
+            "resources",
+            "resource-alert",
+            &claim,
+        )?;
+        crate::owner_notice::notify(
+            ctx,
+            crate::owner_notice::source_committed(subject, reference, claim)?,
+            "Machine resources need you",
+            &alert.message,
+            true,
+        )?;
+    }
+    Ok(update.changes)
+}
+
 /// Keep the attention card visible even if herdr still reports its agent as working.
 pub(crate) fn holds_attention(ctx: &Ctx, task: &Task) -> Result<bool> {
     Ok(read(ctx)?.is_some_and(|alert| {
@@ -113,46 +156,45 @@ pub(crate) fn holds_attention(ctx: &Ctx, task: &Task) -> Result<bool> {
     }))
 }
 
-pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Result<Vec<Change>> {
+pub(crate) fn reconcile(
+    ctx: &Ctx,
+    state: &ResourceState,
+    now: Timestamp,
+) -> Result<Reconciliation> {
     corral_core::work::record(corral_core::work::Work::ResourcePass, 1);
     let Some(_lock) = ctx.store.try_lock("resource-alert")? else {
-        return Ok(Vec::new());
+        return Ok(Reconciliation::default());
     };
     let previous = read(ctx)?;
-    if let Some(previous) = &previous {
-        drain(ctx, previous)?;
-    }
     if !state.severe {
         let Some(previous) = previous else {
-            return Ok(Vec::new());
+            return Ok(Reconciliation::default());
         };
-        if let (Some(attention), Some(claim)) = (&previous.attention, &previous.notice) {
-            ctx.store.update_attention_head(&attention.task, |ledger| {
-                ledger.source_notices.retain(|source| {
-                    source.area != "resources" || source.claim_id != claim.batch_id
-                });
-                Ok(())
-            })?;
-        }
         let mut changes = Vec::new();
         if let Some(attention) = previous.attention {
-            let written = ctx.store.try_update_head(&attention.task, |task| {
-                if task.status != Status::NeedsMe
-                    || task.head().current_run.as_ref().map(|r| &r.id) != attention.run.as_ref()
-                    || task.head().current_run.as_ref().is_some_and(|r| {
-                        r.blocked_excerpt.as_deref() != Some(previous.message.as_str())
+            let mut restored = false;
+            ctx.store.try_update_head(&attention.task, |task| {
+                if let Some(claim) = &previous.notice {
+                    task.attention.source_notices.retain(|source| {
+                        source.area != "resources" || source.claim_id != claim.batch_id
+                    });
+                }
+                if task.status == Status::NeedsMe
+                    && task.head().current_run.as_ref().map(|r| &r.id) == attention.run.as_ref()
+                    && task.head().current_run.as_ref().is_none_or(|r| {
+                        r.blocked_excerpt.as_deref() == Some(previous.message.as_str())
                     })
                 {
-                    return Ok(false);
-                }
-                task.status = attention.from;
-                if let Some(run) = task.current_run_mut() {
-                    run.blocked_excerpt = attention.previous_excerpt.clone();
+                    task.status = attention.from;
+                    if let Some(run) = task.current_run_mut() {
+                        run.blocked_excerpt = attention.previous_excerpt.clone();
+                    }
+                    restored = true;
                 }
                 clear_alert(&ctx.store, now)?;
                 Ok(true)
             })?;
-            if written.is_some() {
+            if restored {
                 changes.push(Change {
                     task: attention.task,
                     from: Status::NeedsMe,
@@ -160,25 +202,30 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
                     note: "machine memory/disk pressure cleared".into(),
                     stage: None,
                 });
-                return Ok(changes);
             }
+        } else {
+            clear_alert(&ctx.store, now)?;
         }
-        clear_alert(&ctx.store, now)?;
-        return Ok(changes);
+        return Ok(Reconciliation {
+            changes,
+            fresh: None,
+        });
     }
     if previous.is_some() {
-        return Ok(Vec::new());
+        return Ok(Reconciliation::default());
     }
 
     let mut tasks = ctx
         .store
-        .heads(&corral_core::backend::HeadQuery::Open { project: None })?
-        .iter()
-        .map(|head| head.to_shell_task())
-        .collect::<Result<Vec<_>>>()?;
+        .heads(&corral_core::backend::HeadQuery::Open { project: None })?;
     let mut sizes: Vec<_> = tasks
         .iter()
-        .flat_map(|task| task.runs.iter().map(move |run| (task, run)))
+        .flat_map(|task| {
+            task.current_run
+                .as_deref()
+                .into_iter()
+                .map(move |run| (task, run))
+        })
         // Finished runs are cleanup candidates, not the live consumers an alert is about.
         .filter(|(_, run)| run.ended.is_none() && run.outcome.is_none() && run.worktree.is_dir())
         .map(|(task, run)| {
@@ -235,10 +282,11 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         .find(|task| task.status == Status::Running);
     let attention = selected.map(|task| Attention {
         task: task.id.clone(),
-        run: task.current_run().map(|run| run.id.clone()),
+        run: task.current_run.as_deref().map(|run| run.id.clone()),
         from: task.status,
         previous_excerpt: task
-            .current_run()
+            .current_run
+            .as_deref()
             .and_then(|run| run.blocked_excerpt.clone()),
     });
     // The existing singleton first retains the selected restore state. A stopped creator
@@ -248,57 +296,45 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         message,
         notice: None,
     };
-    let subject = selected.map(|task| task.id.as_str());
     let mut batch = None;
-    let claim = if let Some(task) = selected {
-        let attention = alert
+    if let Some(task) = selected {
+        let expected_run = alert
             .attention
             .as_ref()
-            .context("selected attention missing")?;
-        let saved = ctx.store.update_head(&task.id, |current| {
+            .context("selected attention missing")?
+            .run
+            .clone();
+        ctx.store.update_head(&task.id, |current| {
             if current.status != task.status
-                || current.head().current_run.as_ref().map(|r| &r.id) != attention.run.as_ref()
+                || current.head().current_run.as_ref().map(|r| &r.id) != expected_run.as_ref()
             {
                 anyhow::bail!("task changed while raising resource alert; retry next sync");
             }
             anyhow::ensure!(current.attention.notice_outbox.len() + current.attention.source_notices.len() <= 30,
                 "notification_accounting_backpressure: resource entry needs a claim and source reference");
             current.status = Status::NeedsMe;
-            if let Some(run) = current.current_run_mut() {
-                run.blocked_excerpt = Some(alert.message.clone());
-            }
-            batch = Some(crate::owner_notice::record_entry_head(
-                ctx,
-                current,
-                "resource_escalation",
-                now,
-                Vec::new(),
-            )?);
+            if let Some(run) = current.current_run_mut() { run.blocked_excerpt = Some(alert.message.clone()); }
+            let pending = crate::owner_notice::record_entry_head(ctx, current, "resource_escalation", now, Vec::new())?;
+            alert.notice = Some(current.attention.notice_outbox.iter()
+                .find(|claim| claim.batch_id == pending.batch_id)
+                .context("resource entry claim missing")?.clone());
+            batch = Some(pending);
             publish_alert(&ctx.store, &alert, state, &sizes, now)?;
             Ok(())
         })?;
-        saved
-            .attention
-            .notice_outbox
-            .iter()
-            .find(|claim| Some(&claim.batch_id) == batch.as_ref().map(|pending| &pending.batch_id))
-            .context("saved resource entry claim missing")?
-            .clone()
     } else {
-        publish_alert(&ctx.store, &alert, state, &sizes, now)?;
-        crate::owner_notice::prepare_subject(
+        // Claim construction is pure; the singleton, claim and event publish together.
+        alert.notice = Some(crate::owner_notice::prepare_subject(
             ctx,
             None,
             "resource_escalation",
             &format!("resources/{now}"),
             now,
             Vec::new(),
-        )?
-    };
-    let reference =
-        crate::owner_notice::register_source(ctx, subject, "resources", "resource-alert", &claim)?;
-    alert.notice = Some(claim.clone());
-    save(ctx, &alert)?;
+        )?);
+        publish_alert(&ctx.store, &alert, state, &sizes, now)?;
+    }
+    drop(batch); // Retain reservation through the actual core commit, never transport.
     let changes = alert
         .attention
         .as_ref()
@@ -312,14 +348,10 @@ pub(crate) fn reconcile(ctx: &Ctx, state: &ResourceState, now: Timestamp) -> Res
         .into_iter()
         .collect();
 
-    crate::owner_notice::notify(
-        ctx,
-        crate::owner_notice::source_committed(subject, reference, claim)?,
-        "Machine resources need you",
-        &alert.message,
-        true,
-    )?;
-    Ok(changes)
+    Ok(Reconciliation {
+        changes,
+        fresh: Some(alert),
+    })
 }
 
 fn directory_bytes(path: &Path) -> Result<u64> {

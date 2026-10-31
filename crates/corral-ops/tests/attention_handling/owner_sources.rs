@@ -199,15 +199,35 @@ fn real_resource_entries_and_taskless_alerts_survive_all_notification_crash_wind
             let task = selected.then(|| fx.questions(0));
             CRASH.with(|crash| crash.set(Some(point)));
             assert!(
-                crate::resource_escalation::reconcile(&fx.ctx, &pressure(true), at(0)).is_err(),
+                crate::sync::resource_phase(&fx.ctx, &pressure(true), at(0)).is_err(),
                 "{point:?}"
             );
             let calls = fx.calls();
+            // The actual owning-sync phase reaches transport only after the core's task,
+            // singleton claim and escalated event are visible, including at this crash fence.
+            if point == CrashPoint::BeforeNotify {
+                assert_eq!(calls, 0);
+                let row = fx
+                    .ctx
+                    .store
+                    .record_row("resource-alert", "state")
+                    .unwrap()
+                    .unwrap();
+                assert!(row.doc["value"]["notice"].is_object());
+                assert!(row.doc["value"]["notice"]["outcome"].is_null());
+                assert_eq!(
+                    fx.ctx.store.events_of(None, &["escalated"]).unwrap().len(),
+                    1
+                );
+                if let Some(task) = &task {
+                    assert_eq!(fx.ctx.store.get(&task.id).unwrap().status, Status::NeedsMe);
+                }
+            }
             // When restart drains the same singleton, then recovery clears it.
             let reopened = fx.reopen();
-            crate::resource_escalation::reconcile(&reopened, &pressure(true), at(1)).unwrap();
+            crate::sync::resource_phase(&reopened, &pressure(true), at(1)).unwrap();
             drain(&reopened).unwrap();
-            crate::resource_escalation::reconcile(&reopened, &pressure(false), at(2)).unwrap();
+            crate::sync::resource_phase(&reopened, &pressure(false), at(2)).unwrap();
             drain(&reopened).unwrap();
             assert_eq!(fx.calls(), calls, "{point:?}");
             assert_eq!(fx.logical("notification_claimed").len(), 1, "{point:?}");
