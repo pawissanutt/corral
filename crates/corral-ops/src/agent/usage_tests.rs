@@ -15,6 +15,23 @@ const EXPECTED: &str =
     include_str!("../../../../tools/pi-probe/fixtures/session-usage.expected.json");
 
 #[test]
+fn complete_snapshot_reports_partial_tail_instead_of_partial_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session.jsonl");
+    std::fs::write(&path, concat!(
+        "{\"type\":\"message\",\"id\":\"a\",\"timestamp\":\"2026-01-01T00:00:01Z\",\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":32,\"output\":3}}}\n",
+        "{\"type\":\"message\""
+    )).unwrap();
+    let mut entries = BTreeMap::new();
+    let error = read_session(&path, "s", None, &mut entries, true).unwrap_err();
+    assert_eq!(entries.len(), 1);
+    assert!(error.to_string().contains("incomplete trailing line"));
+    let mut ordinary = BTreeMap::new();
+    read_session(&path, "s", None, &mut ordinary, false).unwrap();
+    assert_eq!(ordinary.len(), 1);
+}
+
+#[test]
 fn transcript_pages_use_bound_worker_and_review_files() {
     let fx = fx();
     let (id, target) = worker(&fx);
