@@ -155,11 +155,12 @@ fn add_artifact_inner(
         .map(|n| n.to_string_lossy().into_owned())
         .with_context(|| format!("artifact {} has no file name", path.display()))?;
     let source = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    // Reading the source needs no storage; only the snapshot write and its metadata do.
-    let _storage_lock = crate::artifact_storage::storage_lock(ctx)?;
 
     let mut result: Option<(Artifact, bool)> = None;
     let mut receipt = None;
+    // Only publishing the snapshot and committing the metadata that names it need storage:
+    // source preparation above and event and index work below run outside it (T-659).
+    let storage = crate::artifact_storage::storage_lock(ctx)?;
     let task = ctx.store.update(id, |t| {
         if let Some(origin) = origin {
             effects::recheck(&ctx.store, t, origin, &effects::Home::of(origin))?;
@@ -241,10 +242,12 @@ fn add_artifact_inner(
         result = Some((artifact, true));
         Ok(())
     })?;
+    drop(storage);
     let (artifact, added) = result.context("artifact update produced no result")?;
     if origin.is_some() {
         return Ok((artifact, receipt));
     }
+    effects::failpoint("artifact_event");
     if added {
         ctx.store
             .log_event(Some(&task.id), "artifact", artifact_detail(&artifact))?;

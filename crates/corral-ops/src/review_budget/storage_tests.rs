@@ -7,6 +7,14 @@ use std::process::Stdio;
 /// One Pi agent call's deadline (`agent/bridge/client.rs` IO_TIMEOUT).
 const CALL_DEADLINE: Duration = Duration::from_secs(60);
 const HOOK_WRITERS: usize = 4;
+const ACQUIRED: &str = "artifact_storage_held";
+/// A pass's task read, artifact event, index build and PM event push.
+const PHASES: [&str; 4] = [
+    "sync_tasks_read",
+    "artifact_event",
+    "content_index_build",
+    "sync_events",
+];
 
 #[test]
 fn done_and_verdict_finish_while_hook_writers_hold_artifact_storage() {
@@ -119,19 +127,24 @@ exec "$dir/herdr-fake" "$@"
     );
     std::fs::write(&herdr, wrapper).unwrap();
     std::fs::set_permissions(&herdr, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // Every acquisition on this thread checks, through another handle, that storage is held.
-    let holds = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let (seen, probe) = (holds.clone(), lock.clone());
+    // Each acquisition and each read, event and index phase on this thread records whether
+    // storage is held, through another handle and by this thread.
+    let probes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (seen, probe) = (probes.clone(), lock.clone());
     crate::agent::FAILPOINT.with(|slot| {
         *slot.borrow_mut() = Some(Box::new(move |point| {
-            if point == "artifact_storage_held" {
-                let other = std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&probe)
-                    .unwrap();
-                let held = matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock));
-                seen.borrow_mut().push(held);
+            if point != ACQUIRED && !PHASES.contains(&point) {
+                return;
             }
+            let other = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(&probe)
+                .unwrap();
+            let held = matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock));
+            let here = crate::artifact_storage::held_here();
+            seen.borrow_mut().push((point.to_owned(), held, here));
         }));
     });
 
@@ -144,11 +157,24 @@ exec "$dir/herdr-fake" "$@"
     let calls = std::fs::read_to_string(fx.tmp.path().join("herdr-calls.log")).unwrap();
     assert!(calls.lines().any(|l| l.contains("pane list")), "{calls}");
     assert!(calls.lines().all(|l| l.starts_with("free ")), "{calls}");
-    // while the gate's artifacts were written under storage that was really held.
-    let holds = holds.borrow();
+    // every read, event and index phase ran with it free, on this thread and to other handles,
+    let probes = probes.borrow();
+    for phase in PHASES {
+        assert!(
+            probes.iter().any(|(p, ..)| p == phase),
+            "{phase}: {probes:?}"
+        );
+    }
+    let phases = probes.iter().filter(|(p, ..)| p != ACQUIRED);
     assert!(
-        !holds.is_empty() && holds.iter().all(|held| *held),
-        "{holds:?}"
+        phases.clone().all(|(_, held, here)| !held && !here),
+        "{probes:?}"
+    );
+    // and the gate's artifacts were written under storage that was really held.
+    let acquired: Vec<_> = probes.iter().filter(|(p, ..)| p == ACQUIRED).collect();
+    assert!(
+        !acquired.is_empty() && acquired.iter().all(|(_, held, _)| *held),
+        "{probes:?}"
     );
     let task = fx.ctx.store.get(&id).unwrap();
     let gate = task.current_run().unwrap().gate.clone().unwrap();

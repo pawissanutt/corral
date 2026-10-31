@@ -347,6 +347,7 @@ fn build_locked(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
     };
     #[cfg(test)]
     SNAPSHOTS.with(|count| count.set(count.get() + 1));
+    crate::agent::effects::failpoint("content_index_build");
     let dir = ctx.store.state_dir();
     let inputs = inspect_artifacts
         .then(|| crate::content_refresh::fingerprint(ctx, tasks))
@@ -390,6 +391,10 @@ fn build_locked(ctx: &Ctx, tasks: &[Task], update: Update) -> Result<Snapshot> {
             record.document.complete = cached.complete;
             record.document.binary = cached.binary;
         } else if budget > 0 && documents.len() < 4096 {
+            // Only reading a snapshot needs storage, so GC cannot rewrite it mid-read (T-659).
+            let _storage = matches!(record.source, Source::Artifact(_))
+                .then(|| crate::artifact_storage::storage_lock(ctx))
+                .transpose()?;
             extract(ctx, record)?;
         }
         if record.document.text.len() <= budget && documents.len() < 4096 {

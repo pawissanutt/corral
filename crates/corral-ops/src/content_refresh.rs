@@ -181,8 +181,7 @@ pub fn refresh_search_index_with_tasks(ctx: &Ctx, tasks: &[Task]) -> Result<()> 
     if previous.as_deref() == Some(&current) && index.is_file() {
         return Ok(());
     }
-    // Only a rebuild reads snapshot contents, which GC must not rewrite meanwhile (T-659).
-    let _storage = crate::artifact_storage::storage_lock(ctx)?;
+    // The rebuild shares storage only around each snapshot it reads (T-659).
     crate::content_index::refresh_snapshot(ctx, tasks)?;
     Ok(())
 }
