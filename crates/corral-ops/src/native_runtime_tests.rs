@@ -264,7 +264,8 @@ fn native_artifact_reader_rejects_a_nonregular_replacement() {
         crate::artifact_storage::artifact_read_confined(&ctx, &artifact).unwrap(),
         b"native artifact bytes"
     );
-    let snapshot = ctx.store.dir().join(&artifact.path);
+    let hash = corral_core::blob_ref::BlobHash::parse(&artifact.sha256).unwrap();
+    let snapshot = ctx.store.blob_store().unwrap().path_of(&hash);
     std::fs::remove_file(&snapshot).unwrap();
     std::fs::create_dir(&snapshot).unwrap();
     // When a retained snapshot path is replaced with a directory.

@@ -244,6 +244,14 @@ impl Store {
             .is_some_and(|unit| unit.authorization.borrow().is_some())
     }
 
+    /// A task unit may publish immutable evidence alongside its task/record writes.
+    pub(crate) fn stage_evidence_reservation(&self, reservation: ReservationUse) -> Result<()> {
+        self.stage_gate(|stage| {
+            stage.reservations.push(reservation);
+            Ok(())
+        })
+    }
+
     /// Stages gate attempt rows, blob reservations or a result into the open unit; a unit
     /// holds at most one result and never a result together with an authorization.
     pub(super) fn stage_gate(

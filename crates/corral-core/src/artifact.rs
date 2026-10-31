@@ -70,6 +70,27 @@ impl Store {
         Ok(created)
     }
 
+    /// Stage evidence inside an existing task-update callback. Its reference, reservation
+    /// and task state publish in that task's single operation; callback error/unwind publishes
+    /// neither the reference nor live evidence. The staged bytes remain GC-reservable.
+    pub fn stage_task_evidence(
+        &self,
+        area: &str,
+        key: &str,
+        bytes: &[u8],
+        doc: impl FnOnce(&BlobRef) -> serde_json::Value,
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            self.has_record_unit(),
+            "staging evidence requires a task update"
+        );
+        let put = self.put_gate_blob(bytes)?;
+        let created = self.record_row(area, key)?.is_none();
+        self.save_record(area, key, &doc(&put.blob))?;
+        self.stage_evidence_reservation(put.reservation)?;
+        Ok(created)
+    }
+
     /// The artifacts of `task` read as its artifact rows alone, never the full task: only those
     /// of `run` when given (by the rows' run index), in stored order. Each decoded row counts
     /// as a history row decode; use [`Store::artifact_row`] for one artifact.

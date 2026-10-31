@@ -441,17 +441,23 @@ pub fn artifact_reader(ctx: &Ctx, a: &Artifact) -> Result<Box<dyn Read>> {
 /// a symlinked snapshot or parent directory is refused instead of followed, so the bytes always come from the
 /// artifact store (the live server's read-only boundary).
 pub(crate) fn artifact_read_confined(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>> {
+    artifact_read_confined_limited(ctx, a, u64::MAX)
+}
+
+/// The same confined/verified read, capped at `max + 1` decoded bytes for evidence validation.
+pub(crate) fn artifact_read_confined_limited(ctx: &Ctx, a: &Artifact, max: u64) -> Result<Vec<u8>> {
     if a.purged_at.is_some() {
         return Ok(stub(a));
     }
     let file = match open_beneath_artifacts(ctx, &a.path) {
         Ok(file) => file,
         Err(error) if absent(&error) => {
-            let Some(mut reader) = blob_reader(ctx, a)? else {
+            let Some(reader) = blob_reader(ctx, a)? else {
                 return Err(error);
             };
             let mut decoded = Vec::new();
             reader
+                .take(max.saturating_add(1))
                 .read_to_end(&mut decoded)
                 .context("reading artifact blob")?;
             return Ok(decoded);
@@ -465,13 +471,14 @@ pub(crate) fn artifact_read_confined(ctx: &Ctx, a: &Artifact) -> Result<Vec<u8>>
     {
         bail!("artifact is not a regular file: {}", a.path);
     }
-    let mut reader: Box<dyn Read> = if a.compressed_bytes.is_some() {
+    let reader: Box<dyn Read> = if a.compressed_bytes.is_some() {
         Box::new(MultiGzDecoder::new(file))
     } else {
         Box::new(file)
     };
     let mut decoded = Vec::new();
     reader
+        .take(max.saturating_add(1))
         .read_to_end(&mut decoded)
         .context("reading decoded artifact")?;
     Ok(decoded)
@@ -812,13 +819,7 @@ pub(crate) fn snapshot(ctx: &Ctx, bytes: &[u8], artifact: &Artifact) -> Result<O
     Ok(None)
 }
 
-/// Writes the legacy copy at the artifact's stored path (see the module comment).
-/// The legacy snapshot mirror `<.corral>/artifacts`, kept in place until `migrate --finalize`.
+/// The imported legacy snapshot root, retained in place until `migrate --finalize`.
 pub(crate) fn snapshot_root(store_dir: &Path) -> PathBuf {
     store_dir.join("artifacts") // path-guard: allow (legacy snapshot mirror until finalize)
-}
-
-/// The mirrored snapshots of `task`'s run `run` (not created).
-pub(crate) fn snapshot_dir(store_dir: &Path, task: &str, run: &str) -> PathBuf {
-    snapshot_root(store_dir).join(task).join(run)
 }

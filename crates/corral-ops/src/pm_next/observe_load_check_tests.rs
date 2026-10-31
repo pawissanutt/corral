@@ -304,17 +304,16 @@ fn damage_report(
     damage: &str,
     legacy: bool,
 ) {
-    let path = ctx.store.dir().join(&damaged.path);
+    let path = if legacy {
+        ctx.store.dir().join(&damaged.path)
+    } else {
+        let hash = corral_core::blob_ref::BlobHash::parse(&damaged.sha256).unwrap();
+        ctx.store.blob_store().unwrap().path_of(&hash)
+    };
     match damage {
         "hash" => std::fs::write(&path, b"tampered").unwrap(),
         "missing" => {
             std::fs::remove_file(&path).unwrap();
-            if !legacy {
-                // A missing mirror alone legitimately falls back to its live blob,
-                // even after the last reference is removed, until GC reclaims it.
-                let hash = corral_core::blob_ref::BlobHash::parse(&damaged.sha256).unwrap();
-                std::fs::remove_file(ctx.store.blob_store().unwrap().path_of(&hash)).unwrap();
-            }
         }
         "directory" => {
             std::fs::remove_file(&path).unwrap();
@@ -328,7 +327,17 @@ fn damage_report(
                 value["unexpected"] = true.into();
                 serde_json::to_vec(&value).unwrap()
             };
-            std::fs::write(&path, &bytes).unwrap();
+            if legacy {
+                std::fs::write(&path, &bytes).unwrap();
+            } else {
+                crate::artifact_storage::store_blob(
+                    ctx,
+                    &task.id,
+                    &verification::digest(&bytes),
+                    &bytes,
+                )
+                .unwrap();
+            }
             ctx.store
                 .update(&task.id, |t| {
                     t.artifacts
@@ -442,7 +451,7 @@ fn missing_mirror_uses_the_live_blob_like_the_full_task_oracle() {
     // Given a published matching failure whose legacy mirror has been reclaimed.
     let (_root, ctx, task, head) = fixture();
     let report = attach(&ctx, &task, check(&task, &head, 1, 0), false);
-    std::fs::remove_file(ctx.store.dir().join(&report.path)).unwrap();
+    assert!(!ctx.store.dir().join(&report.path).exists());
     let task = ctx.store.get(&task.id).unwrap();
     let ctx = frozen(&ctx);
     // When production prepares the blob-backed report.
@@ -528,7 +537,12 @@ fn skipped_report_corruption_after_publication_is_not_rescanned() {
     let (_root, ctx, task, head) = fixture();
     attach(&ctx, &task, check(&task, &head, 101, 0), false);
     let skipped = attach(&ctx, &task, check(&task, &"a".repeat(40), 0, 1), false);
-    std::fs::write(ctx.store.dir().join(&skipped.path), b"out of band").unwrap();
+    let hash = corral_core::blob_ref::BlobHash::parse(&skipped.sha256).unwrap();
+    std::fs::write(
+        ctx.store.blob_store().unwrap().path_of(&hash),
+        b"out of band",
+    )
+    .unwrap();
     let task = ctx.store.get(&task.id).unwrap();
     // When a later evaluation reads the maintained selection.
     let workset = crate::pm_workset(&ctx).unwrap();

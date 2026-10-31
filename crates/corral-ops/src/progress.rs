@@ -382,6 +382,12 @@ fn checkpoint_inner(
                 bytes: u64::try_from(bytes.len())?,
                 added: checkpoint.captured,
             };
+            ctx.store.stage_task_evidence(
+                crate::artifact_storage::ARTIFACT_BLOBS,
+                &crate::artifact_storage::blob_key(&task.id, &artifact.sha256),
+                &bytes,
+                |blob| json!({"task": &task.id, "sha256": &artifact.sha256, "blob": blob}),
+            )?;
             task.current_run_mut()
                 .context("missing_run")?
                 .checkpoints
@@ -394,6 +400,7 @@ fn checkpoint_inner(
                 .checkpoint_required = true;
             let saved = artifact.path.clone();
             task.artifacts.push(artifact);
+            crate::artifact_storage::record_keys(ctx, task, task.artifacts.len() - 1, true)?;
             if let Some(origin) = origin {
                 let event = effects::event("checkpoint_saved", detail.clone(), origin);
                 let commit = effects::Commit {
