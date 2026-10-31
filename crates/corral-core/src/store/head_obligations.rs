@@ -79,11 +79,12 @@ impl TaskHead {
         &self,
         owner: &str,
         slot_wait: Option<SlotWait>,
+        facet: &str,
     ) -> Result<RunObligations> {
         let rows = |kind: &str| {
             self.query(
                 &RowQuery::under(TaskPart::RunObligation, format!("{owner}{kind}/"))
-                    .with_index("receipt:absent"),
+                    .with_index(facet),
                 u32::MAX,
                 Counter::NestedRowDecodes,
             )
@@ -103,7 +104,7 @@ impl TaskHead {
         };
         let slot_wait =
             crate::TaskRef::run_head(self, run)?.and_then(|run| run.obligations.slot_wait);
-        self.unreceipted_owner_obligations(&owner, slot_wait)
+        self.unreceipted_owner_obligations(&owner, slot_wait, "receipt:absent")
     }
 
     pub fn unreceipted_review_obligations(
@@ -117,7 +118,27 @@ impl TaskHead {
         let slot_wait = self
             .review_child(run, review)?
             .and_then(|child| child.obligations.slot_wait);
-        self.unreceipted_owner_obligations(&format!("{owner}/"), slot_wait)
+        self.unreceipted_owner_obligations(&format!("{owner}/"), slot_wait, "receipt:absent")
+    }
+
+    /// Attention input excludes settled operational job exits before any row decode.
+    pub fn attention_obligations(&self, run: &str) -> Result<RunObligations> {
+        let Some(owner) = self.run_owner(run)? else {
+            return Ok(RunObligations::default());
+        };
+        let slot_wait =
+            crate::TaskRef::run_head(self, run)?.and_then(|run| run.obligations.slot_wait);
+        self.unreceipted_owner_obligations(&owner, slot_wait, "attention")
+    }
+
+    pub fn attention_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations> {
+        let Some(owner) = self.owner_key(run, Some(review))? else {
+            return Ok(RunObligations::default());
+        };
+        let slot_wait = self
+            .review_child(run, review)?
+            .and_then(|child| child.obligations.slot_wait);
+        self.unreceipted_owner_obligations(&format!("{owner}/"), slot_wait, "attention")
     }
 
     fn open_owner_obligations(

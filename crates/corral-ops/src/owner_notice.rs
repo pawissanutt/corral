@@ -1,12 +1,12 @@
 //! Durable claim-before-send owner notifications. Publication can replay; transport cannot.
 
 use anyhow::{Context, Result};
-use corral_core::attention::{
-    Condition, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome, SourceNoticeRef,
-};
 use corral_core::Store;
 #[cfg(test)]
 use corral_core::Task;
+use corral_core::attention::{
+    Condition, NoticeClaim, NoticeCoverage, NoticeFact, NoticeOutcome, SourceNoticeRef,
+};
 use jiff::Timestamp;
 use serde_json::json;
 

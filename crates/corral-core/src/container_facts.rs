@@ -383,6 +383,9 @@ pub struct ContainerFacts {
     pub pending_decision_ordinal: Option<u64>,
     #[serde(with = "fixed")]
     pub waits: u64,
+    /// Settled operational job-exit waits, summarized without reading their rows.
+    #[serde(with = "fixed")]
+    pub settled_job_exits: u64,
     #[serde(with = "fixed")]
     pub decisions: u64,
     #[serde(with = "fixed")]
@@ -482,6 +485,12 @@ impl ContainerFacts {
                 .position(DecisionRecord::pending)
                 .map(|i| len_u64(i + 1)),
             waits: len_u64(run.obligations.waits.len()),
+            settled_job_exits: count(
+                run.obligations
+                    .waits
+                    .iter()
+                    .filter(|w| w.settled_job_exit()),
+            ),
             decisions: len_u64(run.obligations.decisions.len()),
             pending_waits: count(
                 run.obligations

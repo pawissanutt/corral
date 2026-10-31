@@ -1,5 +1,7 @@
 use super::tests::seeded;
+use crate::View;
 use corral_core::Status;
+use ratatui::{Terminal, backend::TestBackend};
 use serde_json::json;
 
 #[test]
@@ -41,7 +43,23 @@ fn ready_and_expired_job_exits_do_not_block_and_open_waits_remain_visible() {
     assert_eq!(lines.len(), 2);
     assert!(lines.iter().any(|l| l.to_string().contains("2 settled")));
     assert!(lines.iter().any(|l| l.to_string().contains("CI finishes")));
-    let board = fx.board();
+    let mut board = fx.board();
+    let head = fx.ctx.store.head("T-004").unwrap();
+    let run = head.current_run.as_ref().unwrap();
+    let indexed = head.card_obligations(&run.id).unwrap();
+    assert_eq!(indexed.waits.len(), 1);
+    assert_eq!(run.facts.settled_job_exits, 2);
+    assert_eq!(
+        crate::obligations::card_lines_with_settled(&indexed, true, run.facts.settled_job_exits),
+        lines
+    );
+    let mut terminal = Terminal::new(TestBackend::new(200, 60)).unwrap();
+    let mut hits = crate::HitMap::default();
+    terminal
+        .draw(|frame| board.draw(frame, frame.area(), &fx.ctx, &mut hits))
+        .unwrap();
+    let text = super::tests::buffer_text(terminal.backend().buffer());
+    assert!(text.contains("jobs: 2 settled"), "{text}");
     assert!(
         board
             .column_tasks(Status::NeedsMe)

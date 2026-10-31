@@ -668,6 +668,9 @@ fn split_nested(
             if wait.receipt.is_none() {
                 index.push("receipt:absent".into());
             }
+            if crate::card::attention_obligation_visible("wait", &doc) {
+                index.push("attention".into());
+            }
             if crate::card::card_obligation_visible("wait", &doc) {
                 index.push("card".into());
             }
@@ -691,6 +694,9 @@ fn split_nested(
             index.extend(decision.receipt.iter().map(|r| format!("receipt:{}", r.id)));
             if decision.receipt.is_none() {
                 index.push("receipt:absent".into());
+            }
+            if crate::card::attention_obligation_visible("decision", &doc) {
+                index.push("attention".into());
             }
             if crate::card::card_obligation_visible("decision", &doc) {
                 index.push("card".into());

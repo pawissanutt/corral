@@ -31,6 +31,9 @@ pub(super) fn adjust_facts(
     facts.open_obligations = facts
         .open_obligations
         .saturating_add_signed(open(after) - open(before));
+    facts.settled_job_exits = facts.settled_job_exits.saturating_add_signed(
+        i64::from(after.settled_job_exit()) - i64::from(before.settled_job_exit()),
+    );
     facts.obligations_rev += 1;
 }
 

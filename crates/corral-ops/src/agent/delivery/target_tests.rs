@@ -61,7 +61,7 @@ fn native_delivery_binding_and_closure_match_full_state_with_constant_work_for_e
                         review: review.id.clone(),
                     }
                 }
-                AgentRole::Pm => unreachable!(),
+                AgentRole::Pm | AgentRole::Assistant => unreachable!(),
             };
             let recipient = crate::questions::recipient(&container).unwrap();
             let expected = corral_core::agent::container_state(&task, &container).unwrap();

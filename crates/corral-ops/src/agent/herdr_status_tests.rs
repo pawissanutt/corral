@@ -78,7 +78,7 @@ fn untouched_panes(fx: &f::Fx) -> bool {
 
 fn exited(fx: &f::Fx, host: &mut HostProc) {
     host.kill();
-    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1");
+    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1").unwrap();
     std::fs::create_dir_all(exit.parent().unwrap()).unwrap();
     std::fs::write(&exit, "137\n").unwrap();
 }
@@ -408,7 +408,12 @@ fn an_old_pending_question_behind_130_settled_ones_survives_hello_pushes_and_ret
 fn planning(fx: &f::Fx, review: bool, pane: &str) -> BindTarget {
     let id = fx.id.clone();
     let socket = fx.ctx.herdr.socket_path().unwrap();
-    let output = fx.ctx.store.state_dir().join("plans");
+    let output = crate::scratch_reclaim::Attempt::Planner {
+        task: &id,
+        run: "D1",
+    }
+    .open(&fx.ctx)
+    .unwrap();
     fx.ctx
         .store
         .update(&id, |task| {

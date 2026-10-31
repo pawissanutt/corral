@@ -146,7 +146,7 @@ fn a_reviewer_host_exit_recorded_by_its_pane_wrapper_is_a_resumable_loss_not_a_c
     let mut host = HostProc::spawn(true);
     let (child, _) = reviewing(&fx, &host, Timestamp::now());
     host.kill();
-    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1-R1-review1");
+    let exit = crate::launch_exit::receipt(&fx.ctx, &fx.id, "R1-R1-review1").unwrap();
     std::fs::create_dir_all(exit.parent().unwrap()).unwrap();
     std::fs::write(&exit, "137\n").unwrap();
 

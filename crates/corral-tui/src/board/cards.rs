@@ -296,7 +296,19 @@ fn meta_lines(
                 run.map(|r| {
                     extra.obligations.map_or_else(
                         || obligations::card_lines(r, true),
-                        |o| obligations::card_lines_from(o, true),
+                        |o| {
+                            obligations::card_lines_with_settled(
+                                o,
+                                true,
+                                extra.head.and_then(|h| h.current_run.as_ref()).map_or_else(
+                                    || {
+                                        o.waits.iter().filter(|w| w.settled_job_exit()).count()
+                                            as u64
+                                    },
+                                    |r| r.facts.settled_job_exits,
+                                ),
+                            )
+                        },
                     )
                 })
                 .unwrap_or_default(),
@@ -343,7 +355,19 @@ fn meta_lines(
                 run.map(|r| {
                     extra.obligations.map_or_else(
                         || obligations::card_lines(r, false),
-                        |o| obligations::card_lines_from(o, false),
+                        |o| {
+                            obligations::card_lines_with_settled(
+                                o,
+                                false,
+                                extra.head.and_then(|h| h.current_run.as_ref()).map_or_else(
+                                    || {
+                                        o.waits.iter().filter(|w| w.settled_job_exit()).count()
+                                            as u64
+                                    },
+                                    |r| r.facts.settled_job_exits,
+                                ),
+                            )
+                        },
                     )
                 })
                 .unwrap_or_default(),

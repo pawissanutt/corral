@@ -85,6 +85,19 @@ pub(crate) fn card_lines_from(
     obligations: &corral_core::RunObligations,
     with_decision: bool,
 ) -> Vec<Line<'static>> {
+    let settled = obligations
+        .waits
+        .iter()
+        .filter(|wait| wait.settled_job_exit())
+        .count() as u64;
+    card_lines_with_settled(obligations, with_decision, settled)
+}
+
+pub(crate) fn card_lines_with_settled(
+    obligations: &corral_core::RunObligations,
+    with_decision: bool,
+    settled_jobs: u64,
+) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for d in &obligations.decisions {
         let state = d.observation.state;
@@ -96,11 +109,6 @@ pub(crate) fn card_lines_from(
             ]));
         }
     }
-    let settled_jobs = obligations
-        .waits
-        .iter()
-        .filter(|wait| wait.settled_job_exit())
-        .count();
     if settled_jobs > 0 {
         out.push(Line::from(format!("jobs: {settled_jobs} settled")));
     }

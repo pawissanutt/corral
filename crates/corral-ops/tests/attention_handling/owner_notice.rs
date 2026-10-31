@@ -94,7 +94,7 @@ esac
                 "first_seen": at(), "marker": "index.lock"}),
             },
         );
-        commit(&self.ctx, &self.task, |_, _| Ok(Some(claim)))
+        commit_head(&self.ctx, &self.task, |_, _| Ok(Some(claim)))
     }
 
     fn calls(&self) -> usize {

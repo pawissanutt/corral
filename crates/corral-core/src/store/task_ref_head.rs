@@ -271,6 +271,12 @@ macro_rules! keyed_reads {
         ) -> Result<RunObligations> {
             self.$reads()?.unreceipted_review_obligations(run, review)
         }
+        fn attention_obligations(&self, run: &str) -> Result<RunObligations> {
+            self.$reads()?.attention_obligations(run)
+        }
+        fn attention_review_obligations(&self, run: &str, review: &str) -> Result<RunObligations> {
+            self.$reads()?.attention_review_obligations(run, review)
+        }
         fn open_obligations(&self, run: &str) -> Result<RunObligations> {
             self.$reads()?.open_obligations(run)
         }
