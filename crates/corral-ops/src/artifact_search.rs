@@ -1,6 +1,6 @@
 //! Literal finder matching over the shared, bounded content snapshot.
 use anyhow::{Context, Result};
-use corral_core::Task;
+use corral_core::ArtifactOwner;
 use corral_core::query::{Query, SearchContext};
 
 use crate::content_index::{self, Snapshot, Source};
@@ -10,7 +10,7 @@ use crate::{ArtifactRow, Ctx};
 /// Complete bodies stay cached; overflow uses the shared bounded streaming scanner.
 pub struct ArtifactSearch {
     snapshot: Snapshot,
-    tasks: Vec<Task>,
+    tasks: Vec<ArtifactOwner>,
 }
 
 impl ArtifactSearch {
@@ -21,7 +21,11 @@ impl ArtifactSearch {
     pub fn load(ctx: &Ctx) -> Result<Self> {
         let tasks = ctx.store.artifact_owners()?;
         let _storage = crate::artifact_storage::storage_lock(ctx)?;
-        let mut snapshot = content_index::snapshot(ctx, &tasks, false)?;
+        let actual_tasks: Vec<_> = tasks
+            .iter()
+            .filter_map(|owner| owner.task().cloned())
+            .collect();
+        let mut snapshot = content_index::snapshot(ctx, &actual_tasks, false)?;
         snapshot
             .records
             .retain(|record| record.document.scope == "artifacts");

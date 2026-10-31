@@ -93,7 +93,7 @@ pub fn add_session_artifact(
     ctx.store.log_event(None, "artifact", serde_json::json!({
         "session": session, "kind": artifact.kind.as_str(), "path": artifact.path, "title": artifact.title,
     }))?;
-    crate::content_index::snapshot(ctx, &ctx.store.list()?, false)?;
+    crate::content_index::index_artifact(ctx, session, &artifact)?;
     Ok(artifact)
 }
 

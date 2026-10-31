@@ -2,7 +2,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Result, ensure};
-use corral_core::query::{Query, SearchContext, cutoff};
+use corral_core::query::{ContentOwner, Query, SearchContext, cutoff};
 use corral_core::{ArtifactKind, ArtifactTier, Store, Task};
 use jiff::Timestamp;
 use serde::Serialize;
@@ -57,14 +57,6 @@ pub struct ContentHit {
     pub snippet: String,
     pub score: u64,
     pub updated: Timestamp,
-}
-
-fn workspace_task(now: Timestamp) -> Result<Task> {
-    serde_json::from_value(serde_json::json!({
-        "id": "", "title": "Workspace events", "status": "backlog",
-        "created": now, "updated": now,
-    }))
-    .map_err(Into::into)
 }
 
 fn candidates(snapshot: &Snapshot, query: &Query) -> BTreeSet<String> {
@@ -122,7 +114,11 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
     let tasks = ctx.store.artifact_owners()?;
     let by_id: HashMap<_, _> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
     let _storage = crate::artifact_storage::storage_lock(ctx)?;
-    let snapshot = content_index::snapshot(ctx, &tasks, options.reindex)?;
+    let actual_tasks: Vec<_> = tasks
+        .iter()
+        .filter_map(|owner| owner.task().cloned())
+        .collect();
+    let snapshot = content_index::snapshot(ctx, &actual_tasks, options.reindex)?;
     let candidates = candidates(&snapshot, &query);
     let pins: BTreeSet<_> = ctx
         .store
@@ -131,7 +127,6 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         .filter_map(|p| corral_core::PinRef::parse(&p.target).ok())
         .map(|p| p.task().to_string())
         .collect();
-    let fallback = workspace_task(now)?;
     let idfs: Vec<u64> = query
         .content_terms()
         .iter()
@@ -149,16 +144,14 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
     let mut hits = Vec::new();
     for record in &snapshot.records {
         let doc = &record.document;
-        let task = by_id.get(doc.task.as_str()).copied().unwrap_or(&fallback);
+        let owner = by_id.get(doc.task.as_str()).copied();
+        let project = owner.and_then(|owner| owner.project.as_ref());
         if (options.scope != "all" && options.scope != doc.scope)
             || options.task.as_ref().is_some_and(|id| id != &doc.task)
             || options.kind.is_some_and(|kind| kind.as_str() != doc.kind)
             || options.tier.is_some_and(|tier| tier != doc.tier)
             || since.is_some_and(|since| doc.updated < since)
-            || options
-                .project
-                .as_ref()
-                .is_some_and(|p| task.project.as_ref() != Some(p))
+            || options.project.as_ref().is_some_and(|p| project != Some(p))
             || (doc.complete && !candidates.contains(&doc.reference))
         {
             continue;
@@ -166,7 +159,9 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
         if let Some(found) = crate::content_scan::search_record(
             ctx,
             record,
-            task,
+            owner
+                .map(ContentOwner::from)
+                .unwrap_or(ContentOwner::Workspace),
             &query,
             SearchContext {
                 pinned: pins.contains(&doc.task),
@@ -180,7 +175,7 @@ pub fn search_content(ctx: &Ctx, input: &str, options: &ContentSearch) -> Result
                 artifact_ref: (doc.scope == "artifacts").then(|| doc.reference.clone()),
                 task: doc.task.clone(),
                 run: doc.run.clone(),
-                project: task.project.clone(),
+                project: project.cloned(),
                 scope: doc.scope.clone(),
                 kind: doc.kind.clone(),
                 tier: doc.tier,

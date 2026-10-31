@@ -51,10 +51,13 @@ impl GalleryView {
     }
 
     fn load(&mut self, ctx: &Ctx) -> Result<()> {
-        let owners = ctx.store.artifact_owners()?;
         let mut pins = HashMap::new();
         for pin in ctx.store.pins()? {
-            match corral_core::resolve_pin(&pin, &owners, ctx.store.dir()) {
+            match ctx
+                .store
+                .resolve_pin_head(&pin)
+                .unwrap_or_else(|error| PinTarget::Broken(format!("{error:#}")))
+            {
                 PinTarget::Artifact { artifact, .. } => {
                     pins.insert(artifact.path, pin.target);
                 }

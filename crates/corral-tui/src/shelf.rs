@@ -63,24 +63,10 @@ pub(crate) fn load_heads(ctx: &Ctx) -> Result<Vec<Entry>> {
         .unwrap_or_default()
         .into_iter()
         .map(|pin| {
-            let target = (|| -> Result<PinTarget> {
-                let reference = PinRef::parse(&pin.target)?;
-                let head = ctx.store.head(reference.task())?;
-                let mut task = head.to_shell_task()?;
-                if let PinRef::Artifact { run, file, .. } = reference
-                    && let Some(anchor) = head.artifact_by_file(&run, &file)?
-                {
-                    task.artifacts.push(anchor.clone());
-                    if pin.follow.is_some() {
-                        let latest = head.latest_artifact(&anchor)?;
-                        if latest.path != anchor.path {
-                            task.artifacts.push(latest);
-                        }
-                    }
-                }
-                Ok(resolve_pin(&pin, &[task], ctx.store.dir()))
-            })()
-            .unwrap_or_else(|error| PinTarget::Broken(format!("{error:#}")));
+            let target = ctx
+                .store
+                .resolve_pin_head(&pin)
+                .unwrap_or_else(|error| PinTarget::Broken(format!("{error:#}")));
             Ok(Entry { pin, target })
         })
         .collect()
@@ -298,10 +284,9 @@ pub(crate) fn open(ctx: &Ctx, index: usize) -> Result<Opening> {
     let Some(pin) = pins.get(index) else {
         bail!("no pin #{} ({} pinned)", index + 1, pins.len());
     };
-    let owners = ctx.store.artifact_owners()?;
-    match resolve_pin(pin, &owners, ctx.store.dir()) {
+    match ctx.store.resolve_pin_head(pin)? {
         PinTarget::Task { id, .. } => {
-            let awaiting = owners.iter().any(|t| t.id == id && t.awaiting_owner());
+            let awaiting = corral_ops::awaiting_owner(&ctx.store.head(&id)?)?;
             Ok(if awaiting {
                 Opening::Action(Action::OpenReview(id))
             } else {

@@ -107,8 +107,12 @@ fn session_artifact_cli_and_ownership_table() {
         &["artifact", "set-tier", "A-1:report.md", "normal"],
     );
     ok(root, None, &["artifact", "gc", "--dry-run", "--json"]);
-    let before_session = std::fs::read(root.join(".corral/assistants/A-2.md")).unwrap();
     let store = corral_core::Store::open(root).unwrap();
+    let before_session = store.get_assistant("A-2").unwrap();
+    assert!(
+        !root.join(".corral/assistants").exists(),
+        "no legacy session mirror"
+    );
     let task_before = store.get("T-001").unwrap();
     // Every add destination has an explicit allow/refuse case. Refusals leave both owners unchanged.
     for (target, allowed) in [
@@ -124,10 +128,7 @@ fn session_artifact_cli_and_ownership_table() {
             assert!(String::from_utf8_lossy(&out.stderr).contains("assistant_refused"));
         }
     }
-    assert_eq!(
-        before_session,
-        std::fs::read(root.join(".corral/assistants/A-2.md")).unwrap()
-    );
+    assert_eq!(before_session, store.get_assistant("A-2").unwrap());
     assert_eq!(task_before, store.get("T-001").unwrap());
     ok(root, None, &["unpin", "A-1:report.md"]);
 }

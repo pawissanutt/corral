@@ -17,7 +17,7 @@ use crate::cleanup::Cleanup;
 use crate::verification;
 
 mod owner;
-pub(crate) use owner::awaiting_owner;
+pub use owner::awaiting_owner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApproveStrategy {

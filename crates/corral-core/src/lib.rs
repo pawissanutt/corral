@@ -8,6 +8,8 @@ pub mod accepted_proof;
 pub mod agent;
 mod aggregate;
 pub mod artifact;
+pub mod artifact_owner;
+pub use artifact_owner::{ArtifactOwner, ArtifactOwnerSource};
 pub mod assistant;
 pub mod attention;
 pub mod attribution;
