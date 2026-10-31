@@ -13,7 +13,7 @@ const isolated = privateHerdr();
 const cap = "c".repeat(48);
 const frame = (command: string) => ({ version: 1, id: command, ctl_cap: cap, generation: 1, command, args: {} });
 
-for (const mode of ["normal", "throw", "emit"]) test(`interactive worker shutdown: ${mode}`, async () => {
+for (const mode of ["normal", "throw", "emit", "bun"]) test(`interactive worker shutdown: ${mode}`, async () => {
   if (!isolated) { console.log("skipped: requires private herdr"); return; }
   const dir = mkdtempSync(join(privateRoot() ?? "", "pi-shutdown-"));
   const assets = buildFixtureInstall({ parent: dir, isolatePiState: true });
@@ -34,7 +34,9 @@ for (const mode of ["normal", "throw", "emit"]) test(`interactive worker shutdow
       process.stdin.setRawMode = (value) => {
         if (!value) {
           restores++;
-          const error = Object.assign(new Error('injected raw mode EIO'), { code: 'EIO' });
+          const error = ${JSON.stringify(mode)} === 'bun' ? new Error('setRawMode failed with errno: 5')
+            : Object.assign(new Error('injected raw mode EIO'), { code: 'EIO' });
+          if (${JSON.stringify(mode)} === 'bun') { emitted++; process.stdin.emit('error', error); return process.stdin; }
           if (${JSON.stringify(mode)} === 'throw') throw error;
           if (${JSON.stringify(mode)} === 'emit') queueMicrotask(() => { emitted++; process.stdin.emit('error', error); });
         }
@@ -71,7 +73,7 @@ for (const mode of ["normal", "throw", "emit"]) test(`interactive worker shutdow
     expect(errors).toBe("");
     expect(counts.stopCalls).toBe(1);
     expect(counts.restores).toBeGreaterThan(0);
-    if (mode === "emit") expect(counts.emitted).toBeGreaterThan(0);
+    if (mode === "emit" || mode === "bun") expect(counts.emitted).toBeGreaterThan(0);
   } finally {
     if (workspace) run(["herdr", "--session", "corral-test", "workspace", "close", workspace]);
     assets.cleanup(); rmSync(dir, { recursive: true, force: true });
