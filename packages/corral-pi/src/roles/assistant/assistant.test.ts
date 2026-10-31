@@ -9,6 +9,7 @@ import { loadModules, modulePaths } from "../../host/modules.ts";
 import { CorralClient } from "../../tools/corral.ts";
 import { snapshotProgress } from "../../ui/todo.ts";
 import { PACKAGE_ROOT } from "../../../test/support/fixture-install.ts";
+import { completionChoices, implementNowQuestion } from "../../../test/support/assistant-workflow.ts";
 import type { HostIdentity } from "../types.ts";
 import { GENERATION_ENV, SESSION_ENV, exportAssistantSession } from "./env.ts";
 import assistant, { UPSTREAM, assistantRole } from "./index.ts";
@@ -126,6 +127,17 @@ test("the contract tells the model to cite the tagged owner input and route uncl
   expect(contract).toContain("corral_owner_action");
   expect(contract).toContain("[owner input A-<n>/g<g>/i<i>]");
   expect(contract).toContain("corral pm inbox show PMI-<n>");
+});
+
+test("the contract asks implement-now or queue once and binds the completion choices to the reported candidate", () => {
+  const contract = assistantRole(PACKAGE_ROOT).contract(context);
+  expect(implementNowQuestion(contract)).toBeDefined();
+  expect(completionChoices(contract)).toHaveLength(4);
+  for (const command of ["git -C <scratch> rev-parse HEAD", "git -C <scratch> diff --stat <base>",
+    "--expected-head <the commit you reported>", "--review required", "corral assistant scratch discard <slug>",
+    "stale_candidate", "corral assistant show A-3"]) {
+    expect(contract).toContain(command);
+  }
 });
 
 /**
