@@ -37,8 +37,13 @@ Current main's other changes were retained by normal rebase.
   including all three exact-copy variants and both roles' capability selection.
 - Changed-file diagnostics report no errors or warnings. The existing
   no-effect-await hint in the receipt fixture is unrelated and left unchanged.
-- The current round's contracted post-commit/post-rebase quick gate and its
-  actual receipt are attached separately. No full gate was started by this worker.
+- No quick-gate receipt exists for this round yet. The normal contracted
+  `corral gate T-679 --wait` command was admitted as full tier because the run
+  retains the old candidate's approval and is classified as landing. The worker
+  interrupted that unintended attempt; its actual command receipt records
+  exit 130. The receipt and tier context are evidence of the workflow mismatch,
+  not a passing or quick-gate result. Normal review/quick eligibility must be
+  restored before the contracted quick gate and completion can proceed.
 
 The original implementation, acceptance mapping and terminal evidence remain
 documented in `T-679-R3-report.md` and the prior independent review. They are
