@@ -21,7 +21,6 @@ import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { writeFakeCorral } from "./support/fake-corral.ts";
-import { nextEvent } from "./support/wait.ts";
 
 const capabilities: CapabilitySet = { catalog: 3, digest: "c".repeat(64), preset: "full", enabled: ["checkpoints"] };
 
@@ -86,11 +85,18 @@ test("the worker host checkpoints each turn's start and end with the entry befor
         { toolCalls: [{ callId: `${key}-bash`, name: "bash", arguments: { command } }] },
         { text: "Finished" },
       ]);
-      const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      expect((await live.submit({ text: `${key}-turn-prompt`, busyPolicy: "prompt", idempotencyKey: key, origin: "test" }, `rq-${key}`))
-        .disposition).toBe("started");
-      await ended;
-      await live.drained();
+      let off = () => {};
+      const ended = new Promise<void>((resolve) => {
+        off = events.on((event) => { if (event.kind === "turn_ended") resolve(); });
+      });
+      try {
+        expect((await live.submit({ text: `${key}-turn-prompt`, busyPolicy: "prompt", idempotencyKey: key, origin: "test" }, `rq-${key}`))
+          .disposition).toBe("started");
+        await ended;
+        await live.drained();
+      } finally {
+        off();
+      }
     };
 
     // When two turns each change the worktree, one of them in an ignored directory too.
@@ -151,7 +157,8 @@ test("the worker host checkpoints each turn's start and end with the entry befor
     assets.cleanup();
     rmSync(work, { recursive: true, force: true });
   }
-});
+// The event and drain barriers, not Bun's wall-clock timeout, govern fixture cleanup.
+}, 0);
 
 test("a failed snapshot is recorded with its error and never throws into the turn", () => {
   // Given a cwd that is not a git worktree.
