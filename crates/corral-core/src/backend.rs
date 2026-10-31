@@ -6,6 +6,7 @@
 //! database mechanism; SQL is confined to `crate::sqlite`. [`fake`] is the in-memory reference
 //! implementation and [`conformance`] the one suite every implementation must pass.
 
+pub(crate) mod artifact_counts;
 pub mod conformance;
 mod error;
 pub mod fake;

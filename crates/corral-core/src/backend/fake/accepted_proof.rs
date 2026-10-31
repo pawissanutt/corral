@@ -4,6 +4,40 @@ use crate::accepted_proof::{INTEGRITY_CHECKS, changed_runs};
 use crate::backend::{HistoryRow, RecordWrite, TaskNum, TaskPart};
 
 impl Tx<'_> {
+    pub(super) fn maintain_artifact_count(
+        &mut self,
+        task: TaskNum,
+        part: TaskPart,
+        key: &str,
+        after: Option<&HistoryRow>,
+    ) -> Applied<()> {
+        if part != TaskPart::Artifact {
+            return Ok(());
+        }
+        let changes = crate::backend::artifact_counts::changes(
+            self.row(task, part, key).map(|r| &r.doc),
+            after.map(|r| &r.doc),
+        );
+        for (run, delta) in changes {
+            let key = format!("{}/{run}", self.task_id(task)?);
+            let stored = self
+                .state
+                .records
+                .get(&(crate::backend::artifact_counts::AREA.into(), key.clone()));
+            let doc = crate::backend::artifact_counts::adjusted(stored.map(|r| &r.doc), delta)
+                .map_err(crate::backend::ApplyError::Io)?;
+            let write = RecordWrite {
+                area: crate::backend::artifact_counts::AREA.into(),
+                key,
+                expected: stored.map(|r| r.version),
+                doc: Some(doc),
+                updated: self.now,
+            };
+            self.put_record(&write)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn invalidate_accepted_proof(
         &mut self,
         task: TaskNum,

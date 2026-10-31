@@ -1,4 +1,85 @@
 use super::*;
+
+#[test]
+fn transcript_publication_keeps_valid_checkpoints_and_recovers_missing_stale_and_reserved_title_collisions()
+ {
+    corral_core::clock::pin_thread(Some(NOW.parse().unwrap()));
+    for checkpoint in ["valid", "missing", "stale"] {
+        for collision in [false, true] {
+            for revive in [false, true] {
+                let (root, ctx, task, head) = fixture();
+                let published = attach(&ctx, &task, check(&task, &head, 101, 0), false);
+                let key = verification::digest(&serde_json::to_vec(&(&task.id, "R1")).unwrap());
+                if revive {
+                    ctx.store
+                        .update_head(&task.id, |h| {
+                            h.edit_artifact(0, |a| {
+                                a.purged_at = Some(NOW.parse().unwrap());
+                                a.compressed_bytes = Some(0);
+                                Ok(())
+                            })
+                        })
+                        .unwrap();
+                }
+                if checkpoint == "missing" {
+                    ctx.store.delete_record("pm-load-runs-v2", &key).unwrap();
+                }
+                if checkpoint == "stale" {
+                    let mut row: Value =
+                        ctx.store.record("pm-load-runs-v2", &key).unwrap().unwrap();
+                    row["revision"] = json!("old-stale-token");
+                    ctx.store
+                        .save_record("pm-load-runs-v2", &key, &row)
+                        .unwrap();
+                }
+                let bytes = if collision {
+                    crate::artifact_read(
+                        &ctx,
+                        &Artifact {
+                            purged_at: None,
+                            compressed_bytes: None,
+                            ..published.clone()
+                        },
+                    )
+                    .unwrap()
+                } else {
+                    b"unrelated native transcript\n".to_vec()
+                };
+                let path = root.path().join("native.jsonl");
+                std::fs::write(&path, &bytes).unwrap();
+                crate::artifacts::add_transcript_bytes(
+                    &ctx,
+                    &task.id,
+                    "R1",
+                    &path,
+                    &bytes,
+                    "Raw agent transcript",
+                )
+                .unwrap();
+                let current = ctx.store.get(&task.id).unwrap();
+                let expected = outcome(full_oracle(
+                    &ctx,
+                    &current,
+                    current.current_run().unwrap(),
+                    &head,
+                ));
+                let snapshot = frozen(&ctx);
+                crate::pm_workset(&snapshot).unwrap();
+                assert_eq!(
+                    outcome(load_check(
+                        &snapshot,
+                        &current,
+                        current.current_run().unwrap(),
+                        &head
+                    )),
+                    expected,
+                    "{checkpoint} collision={collision} revive={revive}"
+                );
+            }
+        }
+    }
+}
+
 use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
 use corral_core::{Artifact, ArtifactKind, Store};
 use serde_json::{Value, json};

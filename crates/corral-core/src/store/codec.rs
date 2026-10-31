@@ -287,7 +287,11 @@ pub fn split(record: &TaskRecord) -> Result<Split> {
             doc,
         ));
     }
-    for (i, (artifact, doc)) in task.artifacts.iter().zip(vector("artifacts")).enumerate() {
+    let mut artifact_ordinals = BTreeMap::<&str, u64>::new();
+    for (i, (artifact, mut doc)) in task.artifacts.iter().zip(vector("artifacts")).enumerate() {
+        let n = artifact_ordinals.entry(&artifact.run).or_default();
+        *n += 1;
+        doc[super::head_artifact::RUN_ORDINAL] = format!("{n:020}").into();
         rows.put_indexed(
             row(TaskPart::Artifact, ordinal_key(i + 1), false, false, doc),
             super::head_api::artifact_indexes(artifact),

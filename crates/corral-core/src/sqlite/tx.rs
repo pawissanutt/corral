@@ -418,6 +418,7 @@ impl Tx<'_> {
     }
 
     fn put_row(&mut self, num: TaskNum, row: HistoryRow) -> Applied<()> {
+        self.maintain_artifact_count(num, row.part, &row.key, Some(&row))?;
         self.invalidate_accepted_proof(num, row.part, &row.key, Some(&row))?;
         if row.part == TaskPart::Artifact {
             super::lesson_artifacts::put(self.db, num, &row.key, Some(&row.doc)).or_io()?;
@@ -472,6 +473,7 @@ impl Tx<'_> {
     }
 
     fn delete_row(&mut self, num: TaskNum, part: TaskPart, key: &str) -> Applied<()> {
+        self.maintain_artifact_count(num, part, key, None)?;
         self.invalidate_accepted_proof(num, part, key, None)?;
         if part == TaskPart::Artifact {
             super::lesson_artifacts::put(self.db, num, key, None).or_io()?;
