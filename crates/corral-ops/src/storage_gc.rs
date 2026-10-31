@@ -143,6 +143,17 @@ pub fn storage_gc(ctx: &Ctx, apply: bool) -> Result<GcReport> {
     classes::scratch(ctx, now, &mut report)?;
     classes::agent_sessions(ctx, &mut report)?;
     classes::legacy(ctx, &mut report)?;
+    if ctx.store.config.storage.transcript_retention_days.is_some() {
+        let transcripts = crate::artifact_gc::transcript_gc(ctx, !apply)?;
+        for action in transcripts.actions {
+            // Retiring a reference does not free its blob before the grace horizon.
+            let mut line = report.removable("transcript", action.path, 0);
+            line.task = Some(action.task_id);
+            line.reason =
+                Some("transcript retired; unreferenced blobs reclaimed after grace".into());
+            report.push(line);
+        }
+    }
     classes::blobs(ctx, now, &mut report)?;
     classes::roots(ctx, &mut report)?;
     report.total();

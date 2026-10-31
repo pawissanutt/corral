@@ -7,6 +7,29 @@ use crate::Ctx;
 
 const STARTS: &str = "operating-starts";
 
+#[cfg(test)]
+thread_local! {
+    static START_ATTEMPT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Pins only the nonce generator, not start admission, storage reads or submission effects.
+#[cfg(test)]
+pub(crate) fn pin_start_attempt(attempt: Option<&str>) {
+    START_ATTEMPT.with(|value| *value.borrow_mut() = attempt.map(str::to_owned));
+}
+
+fn start_attempt() -> String {
+    #[cfg(test)]
+    if let Some(attempt) = START_ATTEMPT.with(|value| value.borrow().clone()) {
+        return attempt;
+    }
+    format!(
+        "start-{}-{}",
+        std::process::id(),
+        jiff::Timestamp::now().as_nanosecond()
+    )
+}
+
 fn key(task: &str, run: &str, kind: OperatingActionKind) -> Result<String> {
     Ok(crate::verification::digest(&serde_json::to_vec(&(
         task, run, kind,
@@ -65,11 +88,7 @@ pub(crate) fn authorize_start(
         } else {
             // An explicit direct start is a new owner action, not conversion or replay
             // of a separate unreserved automatic queue intent.
-            action.attempt = format!(
-                "start-{}-{}",
-                std::process::id(),
-                jiff::Timestamp::now().as_nanosecond()
-            );
+            action.attempt = start_attempt();
             authorize(ctx, action, origin)?
         };
     let key = key(

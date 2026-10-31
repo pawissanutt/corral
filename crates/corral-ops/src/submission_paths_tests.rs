@@ -24,14 +24,22 @@ mod action_budget_fixture;
 mod action_budget_growth;
 #[path = "../tests/support/action_budget_hot.rs"]
 mod action_budget_hot;
+#[path = "../tests/support/action_budget_nonce.rs"]
+mod action_budget_nonce;
 #[path = "../tests/support/action_budget_prompts.rs"]
 mod action_budget_prompts;
+#[path = "../tests/support/action_budget_trace.rs"]
+mod action_budget_trace;
 #[path = "../tests/support/action_heads.rs"]
 mod action_heads;
 #[path = "../tests/support/submission_aggregate.rs"]
 mod aggregate;
 #[path = "../tests/support/submission_path_crashes.rs"]
 mod crashes;
+#[path = "../tests/support/done_budget.rs"]
+mod done_budget;
+#[path = "../tests/support/done_reference.rs"]
+mod done_reference;
 #[path = "../tests/support/launch_resume.rs"]
 mod launch_resume;
 #[cfg(target_os = "linux")]

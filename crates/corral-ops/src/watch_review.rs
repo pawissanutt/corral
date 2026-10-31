@@ -199,7 +199,20 @@ fn snapshot(
         Some(ArtifactKind::Log),
         format!("Reviewer {kind} ({})", child.id),
     );
-    let artifact = if named {
+    let artifact = if kind == "transcript" {
+        crate::transcripts::promote_with_title(
+            ctx,
+            task,
+            &parent.id,
+            corral_core::agent::ContainerRef::Reviewer {
+                task: task.into(),
+                run: parent.id.clone(),
+                review: child.id.clone(),
+            },
+            &file,
+            &title,
+        )
+    } else if named {
         crate::artifacts::add_artifact_to_run(ctx, task, &parent.id, &file, log, Some(&title))
     } else {
         crate::artifacts::add_artifact_for_run(ctx, task, &parent.id, &file, log, Some(&title))

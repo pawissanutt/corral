@@ -315,7 +315,7 @@ fn notice_input(fx: &Fx, id: &str) -> (usize, serde_json::Value) {
     (bytes, normalized)
 }
 
-fn obligated(n: usize, finished: bool) -> (Fx, String) {
+pub(super) fn obligated(n: usize, finished: bool) -> (Fx, String) {
     corral_core::clock::pin_thread(Some(fixture::now()));
     let (mut fx, id) = Path::Worker.setup();
     fx.start(&id);
@@ -357,6 +357,7 @@ fn obligated(n: usize, finished: bool) -> (Fx, String) {
     }
     steady_notice_window(&fx, &id);
     action_heads::checkpoint(&fx, &id);
+    normalize_checkpoint_artifact_width(&fx, &id);
     // Retry and the handoff act on a run its worker finished, the task in Review; approve
     // (`corral done`) on the running one.
     if finished {
@@ -373,6 +374,48 @@ fn obligated(n: usize, finished: bool) -> (Fx, String) {
     }
     fx.grant(&[&id]);
     (fx, id)
+}
+
+fn normalize_checkpoint_artifact_width(fx: &Fx, id: &str) {
+    let task = fx.ctx.store.get(id).unwrap();
+    let record = task.current_run().unwrap().checkpoints.last().unwrap();
+    let old = task
+        .artifacts
+        .iter()
+        .find(|a| a.path == record.artifact)
+        .unwrap();
+    let mut bytes = crate::artifact_read(&fx.ctx, old).unwrap();
+    // Equal-width Artifact.bytes avoids decimal digit noise; the real checkpoint/obligation payload still scales.
+    bytes.resize(bytes.len() + 100_000, b' ');
+    assert_eq!(
+        serde_json::from_slice::<corral_core::Checkpoint>(&bytes).unwrap(),
+        record.checkpoint
+    );
+    let file = fx.temp.path().join("padded-checkpoint.json");
+    std::fs::write(&file, &bytes).unwrap();
+    let padded = crate::artifacts::add_artifact_to_run(
+        &fx.ctx,
+        id,
+        &record.checkpoint.input.run,
+        &file,
+        Some(old.kind),
+        Some(&old.title),
+    )
+    .unwrap();
+    assert!((100_000..1_000_000).contains(&padded.bytes));
+    fx.ctx
+        .store
+        .update(id, |task| {
+            task.artifacts.retain(|a| a.path != old.path);
+            task.current_run_mut()
+                .unwrap()
+                .checkpoints
+                .last_mut()
+                .unwrap()
+                .artifact = padded.path.clone();
+            Ok(())
+        })
+        .unwrap();
 }
 
 /// The rows require_checkpoint reads as R1's own records: its waits and decisions, its newest
@@ -415,7 +458,7 @@ enum Entry {
 }
 
 /// Moves R1's worktree past its checkpoint: a commit the checkpoint does not record.
-fn stale(fx: &Fx, id: &str) {
+pub(super) fn stale(fx: &Fx, id: &str) {
     let task: Task = fx.ctx.store.get(id).unwrap();
     let worktree = task.current_run().unwrap().worktree.clone();
     std::fs::write(worktree.join("after-checkpoint.txt"), "later work\n").unwrap();
@@ -524,9 +567,12 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                     }
                 }
                 delta.check_identity().unwrap();
-                if entry != Entry::Approve {
-                    assert_eq!(delta.unattributed_hydrations(), 0, "{what} x{n}");
-                }
+                assert_eq!(
+                    delta.unattributed_hydrations(),
+                    0,
+                    "{what} x{n}: {:?}",
+                    delta.sites
+                );
                 sizes.push((delta, expected, outcome));
             }
             assert_eq!(
@@ -538,11 +584,6 @@ fn require_checkpoint_reads_the_run_own_obligations_through_its_real_entries() {
                 (large, large_rows, large_out),
             ] = sizes.try_into().unwrap();
             assert_eq!(small_out, large_out, "{what}: outcome");
-            if entry == Entry::Approve {
-                // `corral done` still reads the full task: its cells are T-528's (PM decision
-                // 2026-10-28). Here it is held to the reference's outcome and refusal.
-                continue;
-            }
             // A proceeding entry checks the checkpoint before its lock and again under it; a
             // refused one stops at the first check.
             let times = if is_stale { 1 } else { 2 };

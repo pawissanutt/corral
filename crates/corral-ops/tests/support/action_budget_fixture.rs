@@ -464,6 +464,8 @@ fn filler(store: &Store) {
 
 pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
     let _entropy = crate::fixture_role_entropy(1);
+    // Cold children have different PID/nonce widths; pin identity, never the measured work.
+    crate::operating::pin_start_attempt(Some("start-fixture-0000000000000000000"));
     corral_core::clock::pin_thread(Some(fixture::now()));
     crate::resources::pin_psi(Some(PSI));
     let (fx, id, attempt) = setup(kind);
@@ -601,6 +603,7 @@ pub(super) fn build(kind: Kind, variant: Variant) -> Bench {
     let probe = RecordingProbe::arc();
     let Fx { temp, mut ctx, .. } = fx;
     ctx.resource_probe = probe.clone();
+    ctx.store = super::action_budget_trace::decorate(&ctx.store);
     if kind == Kind::Steady {
         // The gate starts before measuring; the measured tick only waits on it.
         crate::sync_at(&ctx, fixture::now()).unwrap();
@@ -638,8 +641,9 @@ fn bench_ticks(bench: &Bench) -> bool {
 
 /// The store `root` another process built and settled, opened afresh.
 pub(super) fn reopen(root: &FsPath, id: &str, attempt: &str) -> Bench {
+    crate::operating::pin_start_attempt(Some("start-fixture-0000000000000000000"));
     corral_core::clock::pin_thread(Some(fixture::now()));
-    let store = Store::open(root).unwrap();
+    let store = super::action_budget_trace::decorate(&Store::open(root).unwrap());
     let herdr = Herdr::with_bin(
         root.join("engine").join("herdr"),
         Some("corral-test".into()),

@@ -250,10 +250,8 @@ fn clean_listed(
             continue;
         }
         let pending_reviews = head.pending_plan_review_panes()?;
-        // Pi-native runtime directories go; recovery-critical sessions stay as transcripts.
-        if crate::agent::hooks::task_is_pi_native(task)
-            && let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task)
-        {
+        // Promote closed containers before retiring their runtime/panes. Provider files stay.
+        if let Err(error) = crate::agent::hooks::cleanup::run_end(ctx, task) {
             failed(ctx, &task.id, "agent-runtime", &error);
             warnings.push(format!("agent runtime: {error:#}"));
         }

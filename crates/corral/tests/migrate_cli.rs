@@ -345,9 +345,9 @@ fn blob_refs(legacy: &Legacy, content: &[u8]) -> Option<(u64, bool)> {
 }
 
 #[test]
-fn transcript_retention_after_migration_and_finalize_frees_every_copy() {
-    // Given a Done task's transcript artifact with a legacy review copy, under a one-day
-    // transcript retention.
+fn owned_transcript_retention_after_migration_and_finalize_retires_the_blob_reference() {
+    // Given a Done task's log with a legacy review copy, under one-day transcript retention.
+    // A name alone cannot establish ownership; real lifecycle promotion below must do it.
     let env = Env::new();
     let legacy = Legacy::new();
     let transcript = b"agent transcript line\n".repeat(32);
@@ -376,9 +376,37 @@ fn transcript_retention_after_migration_and_finalize_frees_every_copy() {
         text + "\n[storage]\ntranscript_retention_days = 1\n"
     };
     std::fs::write(&config, text).unwrap();
-    // When it is migrated and finalized, and artifact retention runs.
+    // When it is migrated and finalized, its name still grants no transcript authority.
     env.ok(&legacy, &["migrate", "--apply"]);
     env.ok(&legacy, &["migrate", "--finalize", "--yes"]);
+    assert_eq!(blob_refs(&legacy, &transcript), Some((1, false)));
+    let unowned = env.ok(&legacy, &["artifact", "gc", "--yes", "--json"]);
+    assert!(!unowned.contains("\"transcript\""), "{unowned}");
+    assert_eq!(blob_refs(&legacy, &transcript), Some((1, false)));
+
+    // A retained Pi session of that exact content is then promoted by run-end cleanup,
+    // reusing the migrated artifact/blob and registering the task/run owner.
+    let store = corral_core::Store::discover(&legacy.root).unwrap();
+    let task = store
+        .update("T-001", |t| {
+            t.runs[0].harness = Some("pi-native".into());
+            Ok(())
+        })
+        .unwrap();
+    let at = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(48);
+    store
+        .fixture_append_events(&format!(
+            "{}\n",
+            serde_json::json!({
+                "seq":0, "ts":at, "kind":"moved", "task":"T-001", "detail":{"to":"done"}
+            })
+        ))
+        .unwrap();
+    let source = store.dir().join("agent/sessions/T-001/R1/session.jsonl");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, &transcript).unwrap();
+    let ctx = corral_ops::resources::FixedResourceProbe::ctx(store);
+    corral_ops::agent::hooks::cleanup::run_end(&ctx, &task).unwrap();
     assert_eq!(blob_refs(&legacy, &transcript), Some((1, false)));
     let gc = env.ok(&legacy, &["artifact", "gc", "--yes", "--json"]);
     assert!(gc.contains("\"transcript\""), "{gc}");
@@ -386,4 +414,9 @@ fn transcript_retention_after_migration_and_finalize_frees_every_copy() {
     // the report artifact keeps its reference.
     assert_eq!(blob_refs(&legacy, &transcript), Some((0, true)));
     assert_eq!(blob_refs(&legacy, support::REPORT), Some((1, false)));
+    assert_eq!(
+        std::fs::read(source).unwrap(),
+        transcript,
+        "capture does not delete raw sessions"
+    );
 }

@@ -133,6 +133,7 @@ pub mod throughput;
 mod thumbnails;
 pub mod timeline;
 mod tracker;
+mod transcripts;
 mod usage;
 mod verdict_carry;
 mod verification;
