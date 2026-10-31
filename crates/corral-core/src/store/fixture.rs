@@ -37,6 +37,18 @@ impl Store {
         self.event_fixture()?.fixture_replace_events("")
     }
 
+    /// Blocks publication of one canonical record until restored, preserving its bytes.
+    /// The failure is in the disposable fixture database, including for fresh CLI processes;
+    /// reads and unrelated keys remain usable. This never creates a legacy evidence path.
+    #[doc(hidden)]
+    pub fn fixture_block_record(&self, area: &str, key: &str, blocked: bool) -> Result<()> {
+        self.db
+            .sqlite
+            .as_ref()
+            .context("record publication fixture needs a database")?
+            .fixture_block_record(area, key, blocked)
+    }
+
     /// Makes event reads and appends fail without changing existing event data.
     #[doc(hidden)]
     pub fn fixture_break_events(&self) -> Result<()> {

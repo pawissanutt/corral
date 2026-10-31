@@ -210,7 +210,7 @@ fn owner_terminal_recovery_flags_refuse_as_unavailable_and_change_nothing() {
         post(&inbox, "draft");
         uncertain_envelope(&inbox);
         let state = inbox.state().unwrap();
-        let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+        let events = store.events().unwrap();
 
         // When the owner runs the uninstalled terminal adapter's recovery.
         let output = invoke(
@@ -227,10 +227,7 @@ fn owner_terminal_recovery_flags_refuse_as_unavailable_and_change_nothing() {
             "{output:?}"
         );
         assert_eq!(inbox.state().unwrap(), state);
-        assert_eq!(
-            std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-            events
-        );
+        assert_eq!(store.events().unwrap(), events);
     }
 }
 
@@ -280,7 +277,7 @@ fn agent_marked_planners_and_reviewers_cannot_retry_outside_coding_worktrees() {
             .mark_terminal(message.seq, TerminalState::Cancelled, "fixture", "test")
             .unwrap();
         let before = inbox.state().unwrap();
-        let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+        let events = store.events().unwrap();
 
         // When either supported agent marker identifies the caller.
         let output = invoke_with_marker(
@@ -299,11 +296,13 @@ fn agent_marked_planners_and_reviewers_cannot_retry_outside_coding_worktrees() {
         );
         assert_eq!(inbox.state().unwrap(), before);
         assert_eq!(inbox.messages().unwrap(), vec![message.clone()]);
-        assert!(!inbox.record_path(message.seq, "retried").exists());
-        assert_eq!(
-            std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-            events
+        assert!(
+            inbox
+                .record::<serde_json::Value>("retried", &format!("{:020}", message.seq))
+                .unwrap()
+                .is_none()
         );
+        assert_eq!(store.events().unwrap(), events);
     }
 }
 
@@ -319,7 +318,7 @@ fn agent_marked_planners_and_reviewers_cannot_recover_outside_coding_worktrees()
             uncertain_envelope(&inbox);
             let before = inbox.state().unwrap();
             let envelope = inbox.envelope(1).unwrap();
-            let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+            let events = store.events().unwrap();
 
             // When either supported agent marker requests an owner recovery.
             let output = invoke_with_marker(
@@ -345,11 +344,13 @@ fn agent_marked_planners_and_reviewers_cannot_recover_outside_coding_worktrees()
             assert_eq!(inbox.terminal(message.seq).unwrap(), None);
             assert_eq!(inbox.messages().unwrap(), vec![message]);
             assert!(!inbox.flush_requested());
-            assert!(!inbox.dir().join("envelopes/000001.settled.json").exists());
-            assert_eq!(
-                std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-                events
+            assert!(
+                inbox
+                    .record::<serde_json::Value>("settled", &format!("{:020}", 1))
+                    .unwrap()
+                    .is_none()
             );
+            assert_eq!(store.events().unwrap(), events);
         }
     }
 }
@@ -413,7 +414,7 @@ fn inspect_retry_is_read_only_and_retry_rechecks_a_new_admission() {
         })
         .unwrap();
     let before = inbox.state().unwrap();
-    let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
+    let events = store.events().unwrap();
     // When the PM inspects the exact ID through the real command.
     let output = invoke(
         dir.path(),
@@ -429,10 +430,7 @@ fn inspect_retry_is_read_only_and_retry_rechecks_a_new_admission() {
         format!("corral inbox retry {}", message.id)
     );
     assert_eq!(inbox.state().unwrap(), before);
-    assert_eq!(
-        std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-        events
-    );
+    assert_eq!(store.events().unwrap(), events);
     // Then a newly admitted receipt invalidates that suggestion without a post.
     inbox
         .record_receipt(
@@ -502,15 +500,30 @@ fn explicit_index_owner_is_budgeted_context_guarded_and_keeps_evidence_unknown()
     }
 }
 
-fn evidence_bytes(path: &Path) -> std::collections::BTreeMap<std::path::PathBuf, Option<Vec<u8>>> {
+fn evidence_bytes(
+    store: &Store,
+    inbox: &Inbox<'_>,
+) -> std::collections::BTreeMap<(String, String), Vec<u8>> {
+    use corral_core::backend::{PageReq, RecordQuery};
+    let view = store.view().unwrap();
+    let prefix = format!("inbox/{}/", inbox.key());
     let mut snapshot = std::collections::BTreeMap::new();
-    for entry in std::fs::read_dir(path).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            snapshot.insert(path.clone(), None);
-            snapshot.extend(evidence_bytes(&path));
-        } else {
-            snapshot.insert(path.clone(), Some(std::fs::read(path).unwrap()));
+    let mut page = PageReq::first(256);
+    loop {
+        let rows = view.records(&RecordQuery::default(), page.clone()).unwrap();
+        for row in rows
+            .items
+            .into_iter()
+            .filter(|row| row.area.starts_with(&prefix))
+        {
+            snapshot.insert(
+                (row.area, row.key),
+                serde_json::to_vec(&(row.version, row.updated, row.doc)).unwrap(),
+            );
+        }
+        match rows.next {
+            Some(after) => page.after = Some(after),
+            None => break,
         }
     }
     snapshot
@@ -575,17 +588,19 @@ fn inspection_previews_full_header_without_writing_unrelated_retry_proof() {
                         },
                     )
                     .unwrap();
-                let proof = inbox.record_path(unsafe_message.seq, TerminalState::Failed.suffix());
-                let temporary = proof.with_extension("json.tmp");
+                let area = format!("inbox/{}/failed", inbox.key());
+                let proof_key = format!("{:020}", unsafe_message.seq);
                 if blocked_handoff {
-                    std::fs::create_dir(&temporary).unwrap();
+                    store.fixture_block_record(&area, &proof_key, true).unwrap();
                 }
                 let state = inbox.state().unwrap();
                 assert_eq!(state.owner_header.as_ref().unwrap().len(), 16);
-                let task_bytes =
-                    std::fs::read(store.get(recipient.task().unwrap()).unwrap().path).unwrap();
-                let events = std::fs::read(store.dir().join("events.jsonl")).unwrap();
-                let evidence = evidence_bytes(&inbox.dir());
+                let task_bytes = (
+                    store.fixture_task_text(recipient.task().unwrap()).unwrap(),
+                    store.head(recipient.task().unwrap()).unwrap().rev,
+                );
+                let events = store.events().unwrap();
+                let evidence = evidence_bytes(&store, &inbox);
                 // When the real CLI previews capacity without committing those handoffs.
                 let output = invoke(
                     dir.path(),
@@ -601,21 +616,23 @@ fn inspection_previews_full_header_without_writing_unrelated_retry_proof() {
                     inspection["next_action"],
                     format!("corral inbox retry {}", target.id)
                 );
-                assert_eq!(evidence_bytes(&inbox.dir()), evidence);
+                assert_eq!(evidence_bytes(&store, &inbox), evidence);
                 assert_eq!(inbox.state().unwrap(), state);
                 assert_eq!(
-                    std::fs::read(store.get(recipient.task().unwrap()).unwrap().path).unwrap(),
+                    (
+                        store.fixture_task_text(recipient.task().unwrap()).unwrap(),
+                        store.head(recipient.task().unwrap()).unwrap().rev
+                    ),
                     task_bytes
                 );
-                assert_eq!(
-                    std::fs::read(store.dir().join("events.jsonl")).unwrap(),
-                    events
-                );
+                assert_eq!(store.events().unwrap(), events);
                 // Actual maintenance still must commit proof before removing the identity.
                 if blocked_handoff {
                     assert!(inbox.maintain_owner_header(now).is_err());
                     assert_eq!(inbox.state().unwrap(), state);
-                    std::fs::remove_dir(&temporary).unwrap();
+                    store
+                        .fixture_block_record(&area, &proof_key, false)
+                        .unwrap();
                 }
                 inbox.maintain_owner_header(now).unwrap();
                 assert!(
@@ -628,8 +645,8 @@ fn inspection_previews_full_header_without_writing_unrelated_retry_proof() {
                         .any(|entry| entry.seq == unsafe_message.seq)
                 );
                 assert_ne!(
-                    std::fs::read(&proof).unwrap(),
-                    evidence[&proof].as_ref().unwrap().clone()
+                    evidence_bytes(&store, &inbox)[&(area.clone(), proof_key.clone())],
+                    evidence[&(area, proof_key)]
                 );
                 assert!(!inbox.inspect_retry(unsafe_message.seq).unwrap().eligible);
                 assert!(inbox.retry(unsafe_message.seq).is_err());
@@ -644,7 +661,13 @@ fn inspect_retry_reports_unknown_publication_and_corrupt_envelope_without_writes
     let inbox = Inbox::new(&store, recipient).unwrap();
     let message = post(&inbox, "publication");
     uncertain_envelope(&inbox);
-    std::fs::write(inbox.envelope_path(1), "{corrupt").unwrap();
+    inbox
+        .save_record(
+            "envelopes",
+            &format!("{:020}", 1),
+            &json!("corrupt envelope shape"),
+        )
+        .unwrap();
     let before = inbox.state().unwrap();
     // When exact inspection sees corrupt evidence it is an incomplete result, not replay permission.
     let output = invoke(

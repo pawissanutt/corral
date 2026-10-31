@@ -234,10 +234,12 @@ impl World {
             .unwrap()
     }
     fn events(&self, kind: &str) -> Vec<Value> {
-        std::fs::read_to_string(self.ctx.store.dir().join("events.jsonl"))
+        self.ctx
+            .store
+            .events()
             .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .into_iter()
+            .map(|event| serde_json::to_value(event).unwrap())
             .filter(|event| event["kind"] == kind)
             .collect()
     }
@@ -698,8 +700,20 @@ fn supersession_never_discards_rewritten_retry_proof_for_any_recipient_or_array(
                         inbox.save_envelope(&envelope).unwrap();
                     } else {
                         // Block proof publication after the task bar, without permission or timing assumptions.
-                        let path = inbox.dir().join(format!("{position:06}.failed.json"));
-                        std::fs::create_dir(&path).unwrap();
+                        // Observed receipt and failed-proof removal are one canonical unit:
+                        // its final durable proof is receipt.observed, not an intermediate file.
+                        let kind = if publication == "observed" {
+                            "receipt.observed"
+                        } else {
+                            "failed"
+                        };
+                        let area = format!("inbox/{}/{kind}", inbox.key());
+                        let key = format!("{position:020}");
+                        world
+                            .ctx
+                            .store
+                            .fixture_block_record(&area, &key, true)
+                            .unwrap();
                         let result = match publication {
                             "admitted" => inbox
                                 .record_receipt(position, ReceiptLevel::Admitted, &receipt)
@@ -714,7 +728,11 @@ fn supersession_never_discards_rewritten_retry_proof_for_any_recipient_or_array(
                             _ => unreachable!(),
                         };
                         assert!(result.is_err(), "{publication}");
-                        std::fs::remove_dir(&path).unwrap();
+                        world
+                            .ctx
+                            .store
+                            .fixture_block_record(&area, &key, false)
+                            .unwrap();
                     }
                     inbox
                         .mark_terminal(position, TerminalState::Failed, "fixture", "test")
