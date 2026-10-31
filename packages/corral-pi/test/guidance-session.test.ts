@@ -167,7 +167,7 @@ test("every role loads home skills, trusted project text and templates, never am
       // Then home and repository Agent Skills, both template sets and the workspace and project
       // context files load in ancestor order; the worker keeps its packaged role skill; and no
       // ~/.pi, project .pi or out-of-workspace resource is loaded.
-      const roleSkills = role === "worker" ? ["corral-worker"] : [];
+      const roleSkills = role === "worker" ? ["corral-worker"] : role === "pm" ? ["corral-pm"] : [];
       expect(found.skills).toEqual([...roleSkills, "home-skill", "repo-skill"].sort());
       expect(found.prompts).toEqual(["home-review", "repo-prompt"]);
       expect(found.context).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);

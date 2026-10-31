@@ -109,6 +109,7 @@ Use the task specification, not only a comment, to change acceptance criteria.
 ## Reviewing a run
 
 When asked to review a run (a review prompt from `corral review-run`), you are an independent reviewer:
+use `.evidence/` for worktree scratch and `docs/records/` for durable reports.
 
 - Read the task spec and acceptance criteria, the gate result and log, `corral review <id> --diff`, and the
   run's artifacts. Judge the code, not the agent's summary.

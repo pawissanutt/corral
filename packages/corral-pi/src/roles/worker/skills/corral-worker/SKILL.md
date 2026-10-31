@@ -3,7 +3,7 @@ name: corral-worker
 description: Procedure for a dispatched corral coding run - implement one task in its worktree, run the gate, attach evidence and finish with corral done. Use when your prompt carries a corral Run contract.
 ---
 <!-- managed by `corral skill install`; local edits are overwritten -->
-<!-- corral-skill: corral-worker version=0.3.0 sha256=1ac1446fe17014f3000f84d59e52fa2a759378359f3632840357afa996ef4991 -->
+<!-- corral-skill: corral-worker version=0.3.0 sha256=f1282e511722379f5a9eb3e4ee4bd39c67d2f4a6d897d2a45dd4a90974afb03d -->
 
 # corral worker
 
@@ -43,7 +43,8 @@ This does not authorize an extra gate or a different tier.
    failures it puts outside your scope instead of fixing them. Otherwise follow contract step 2 and
    keep the gate's output in a log file for step 3; if you pipe it through `tee`, set
    `set -o pipefail` first so the gate's exit status is not masked.
-5. **Attach proof** (contract step 3). Give each artifact a title that names what it proves. List the
+5. **Attach proof** (contract step 3). Use gitignored `.evidence/` for scratch and tracked
+   `docs/records/` for durable reports. Give each artifact a title that names what it proves. List the
    refs you attached with `corral artifact list --task <id> --json`; a ref is what
    `corral artifact set-tier <ref> keep` takes when a log that would otherwise be eligible for
    retention is the proof you need to keep.

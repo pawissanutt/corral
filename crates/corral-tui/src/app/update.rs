@@ -49,6 +49,7 @@ impl App {
                 self.resources = snapshot.resources.clone();
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
+                self.load_inbox_count();
                 // Hidden screens refresh when exposed by pop(), not on every periodic sync.
                 if self.stack.len() > 1
                     && let Some(top) = self.stack.last_mut()
@@ -97,7 +98,23 @@ impl App {
         }
     }
 
+    fn load_inbox_count(&mut self) {
+        self.inbox_open = self.ctx.store.pm_inbox_items().ok().map(|items| {
+            items
+                .iter()
+                .filter(|i| {
+                    matches!(
+                        i.state,
+                        corral_core::pm_inbox::ItemState::Open
+                            | corral_core::pm_inbox::ItemState::Claimed
+                    )
+                })
+                .count()
+        });
+    }
+
     pub(super) fn load_counts(&mut self) {
+        self.load_inbox_count();
         self.resources = crate::resources::ResourceDisplay::sample(&self.ctx);
         self.operating_header = operating::readback(&self.ctx);
         let _hot = corral_core::work::HotScope::enter();

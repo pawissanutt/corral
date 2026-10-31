@@ -13,7 +13,7 @@ test("compiled codemode runs QuickJS with embedded WASM and worker, including re
   try {
     const binary = join(root, "codemode-smoke");
     await exec(process.execPath, [
-      "build", "--compile", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
+      "build", "--compile", "--root", ".", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
       "test/fixtures/compiled-codemode.ts", "src/extensions/codemode/worker.ts", "--outfile", binary,
     ], { cwd: PACKAGE_ROOT, timeout: 30_000 });
     const { stdout, stderr } = await exec(binary, [], {

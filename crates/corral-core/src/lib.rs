@@ -44,6 +44,7 @@ pub mod infra_wait;
 mod json_path;
 pub mod legacy;
 pub mod lessons;
+pub mod memory;
 pub mod messages;
 pub mod migrate;
 pub mod model;

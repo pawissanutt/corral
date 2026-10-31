@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod artifacts;
+mod assistants;
 pub(crate) mod attention;
 #[cfg(test)]
 mod attention_tests;
@@ -116,6 +117,10 @@ pub enum Action {
     OpenGallery,
     /// Push the history view (finished and dropped tasks).
     OpenHistory,
+    /// Live/recent assistants and open PM inbox items.
+    OpenAssistants,
+    /// Open a new task-focused assistant pane (owner TUI action).
+    OpenAssistant(String),
     /// Push the ranked search across every task status.
     OpenSearch,
     /// Push the settings screen.

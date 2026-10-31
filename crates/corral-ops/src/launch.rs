@@ -267,6 +267,7 @@ fn advance(
             .store
             .project_path(task.project.as_deref().context("task has no project")?)?;
         if run.worktree.is_dir() {
+            corral_git::ensure_evidence_excluded(&repo)?;
             if corral_git::current_branch(&run.worktree)? != run.branch
                 || corral_git::rev_sha(&run.worktree, "HEAD")? != run.base_sha
             {

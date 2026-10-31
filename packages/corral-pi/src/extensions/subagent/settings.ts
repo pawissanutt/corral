@@ -13,7 +13,7 @@ export type OracleSettings = z.infer<typeof OracleSettingsSchema>;
 export interface AuxiliarySettings { readonly explore?: ExploreSettings; readonly oracle?: OracleSettings }
 
 export function auxiliarySettings(role: Role, enabled: readonly string[], settings?: Readonly<Record<string, unknown>>): AuxiliarySettings {
-  if (role === "pm" && enabled.includes("subagents")) throw new Error("subagents is not available to PM");
+  void role;
   return {
     ...(enabled.includes("subagents") ? { explore: ExploreSettingsSchema.parse(settings?.subagents) } : {}),
     ...(enabled.includes("oracle") ? { oracle: OracleSettingsSchema.parse(settings?.oracle) } : {}),

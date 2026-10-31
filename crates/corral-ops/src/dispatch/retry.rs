@@ -270,6 +270,13 @@ pub(super) fn retry_with(
         Ok(())
     })?;
     cleanup_head(ctx, &task, Cleanup::Round);
+    if let Err(error) = crate::sandbox_cleanup::reap(ctx, &task.id, &prev.id) {
+        let _ = ctx.store.log_event(
+            Some(&task.id),
+            "cleanup_failed",
+            json!({"resource": "sandbox", "error": format!("{error:#}")}),
+        );
+    }
     let opts = DispatchOpts {
         plan: false,
         profile: Some(plan.profile),

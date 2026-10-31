@@ -170,6 +170,16 @@ impl App {
                 theme::dim(),
             ),
         ];
+        spans.push(gap());
+        spans.push(Span::styled(
+            format!(
+                "{} asst inbox {}",
+                self.ctx.store.config.ui.bound_key('S'),
+                self.inbox_open
+                    .map_or_else(|| "?".into(), |n| n.to_string())
+            ),
+            Style::new().fg(theme::CYAN),
+        ));
         if !self.herdr_online {
             spans.push(gap());
             spans.push(Span::styled(
@@ -193,6 +203,7 @@ impl App {
                 6 => Some(Hit::Column(Status::Running)),
                 8 => Some(Hit::Column(Status::Review)),
                 10 => Some(Hit::Column(Status::Ready)),
+                12 => Some(Hit::Key(hit::press(KeyCode::Char('S')))),
                 _ => None,
             };
             if let Some(hit) = hit {

@@ -73,13 +73,17 @@ pub(crate) fn cleanup_report(ctx: &Ctx, task: &Task, scope: Cleanup) -> Vec<Stri
         .store
         .head(&task.id)
         .and_then(|head| clean(ctx, &[(task, &head)], scope));
-    match result {
+    let mut warnings = match result {
         Ok(warnings) => warnings,
         Err(error) => {
             failed(ctx, &task.id, "inventory", &error);
             vec![format!("pane inventory: {error:#}")]
         }
+    };
+    if scope == Cleanup::Task {
+        reap_sandboxes(ctx, task, &mut warnings);
     }
+    warnings
 }
 
 /// The per-tick retry net, bounded by what herdr lists rather than by finished history: each
@@ -119,6 +123,21 @@ pub(crate) fn sweep(ctx: &Ctx, tasks: &[Task]) {
         && let Some(task) = terminal.first()
     {
         failed(ctx, &task.id, "inventory", &error);
+    }
+    for task in terminal {
+        reap_sandboxes(ctx, task, &mut Vec::new());
+    }
+}
+
+fn reap_sandboxes(ctx: &Ctx, task: &Task, warnings: &mut Vec<String>) {
+    if !crate::session_scope::owns_task(ctx, task).unwrap_or(false) {
+        return;
+    }
+    for run in &task.runs {
+        if let Err(error) = crate::sandbox_cleanup::reap(ctx, &task.id, &run.id) {
+            failed(ctx, task, "sandbox", &error);
+            warnings.push(format!("sandbox {}: {error:#}", run.id));
+        }
     }
 }
 

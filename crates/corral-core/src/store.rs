@@ -254,6 +254,26 @@ impl Store {
     /// `prepare` runs before configuration is loaded, including on idempotent init.
     pub fn init_with(root: &Path, prepare: impl FnOnce(&Store) -> Result<()>) -> Result<Store> {
         let dir = root.join(".corral");
+        if root.join(".git").exists() {
+            let ignore = root.join(".gitignore");
+            let mut contents = if ignore.exists() {
+                fs::read_to_string(&ignore)
+                    .with_context(|| format!("reading {}", ignore.display()))?
+            } else {
+                String::new()
+            };
+            if !contents
+                .lines()
+                .any(|line| matches!(line.trim(), ".evidence/" | "/.evidence/"))
+            {
+                if !contents.is_empty() && !contents.ends_with('\n') {
+                    contents.push('\n');
+                }
+                contents.push_str("/.evidence/\n");
+                fs::write(&ignore, contents)
+                    .with_context(|| format!("writing {}", ignore.display()))?;
+            }
+        }
         for sub in ["artifacts", "prompts", "state", "lock"] {
             let p = dir.join(sub);
             fs::create_dir_all(&p).with_context(|| format!("creating {}", p.display()))?;

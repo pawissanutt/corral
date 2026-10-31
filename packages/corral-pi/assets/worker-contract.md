@@ -66,6 +66,7 @@ depends on its answer:
 
 The result message carries the `gate_ref` and the `contract_sha256` that `corral_done` takes.
 
+Use `.evidence/` for gitignored worktree scratch and `docs/records/` for durable reports.
 Attach proof of each acceptance criterion with `corral_artifact` (and `corral_evidence` for an
 audited task) before `corral_done`. Its summary is this run's activity, then a line starting
 `Verified:` and a line starting `Not verified:`; its result is the cumulative task outcome.
