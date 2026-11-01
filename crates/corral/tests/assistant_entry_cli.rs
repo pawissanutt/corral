@@ -147,6 +147,18 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ("setup diff", &[], Read),
     ("setup apply", &[], Refused),
     ("setup cancel", &["--expected-revision", "0"], Refused),
+    ("memory list", &[], Refused),
+    ("memory read", &["entry"], Refused),
+    (
+        "memory put",
+        &["entry", "--file", "memory.json", "--create"],
+        Refused,
+    ),
+    (
+        "memory remove",
+        &["entry", "--expected-hash", "hash"],
+        Refused,
+    ),
     ("digest", &[], Refused),
     ("revert", &["T-001"], Refused),
     ("review-sprint", &[], Refused),
