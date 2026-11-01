@@ -16,15 +16,18 @@ export class RecordingTerminal implements Terminal {
   write(data: string): void { this.writes.push(data); for (const listener of this.listeners) listener(); }
   send(data: string): void { this.input?.(data); }
   resize(columns: number, rows: number): void { this.columns = columns; this.rows = rows; this.resizeInput?.(); }
-  async until(text: string, after = 0): Promise<void> {
-    const matches = () => this.writes.slice(after).join("").includes(text);
+  until(text: string, after = 0): Promise<void> {
+    return this.whenWritten(() => this.writes.slice(after).join("").includes(text), JSON.stringify(text) + " on the native terminal");
+  }
+  /** Rechecks `matches` after every terminal write until it holds. */
+  async whenWritten(matches: () => boolean, what: string): Promise<void> {
     if (matches()) return;
     let listener: () => void = () => {};
     const seen = new Promise<void>(resolve => {
       listener = () => { if (matches()) resolve(); };
       this.listeners.add(listener);
     });
-    try { await within(seen, 10_000, JSON.stringify(text) + " on the native terminal"); }
+    try { await within(seen, 10_000, what); }
     finally { this.listeners.delete(listener); }
   }
   moveBy(lines: number): void { this.write(`\x1b[${Math.abs(lines)}${lines < 0 ? "A" : "B"}`); }
