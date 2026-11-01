@@ -19,6 +19,14 @@ export async function panelGit(cwd: string, args: readonly string[], signal?: Ab
     throw error;
   }
 }
+export function gitFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/not a git repository/i.test(message)) return "Not a Git repository";
+  if (error instanceof Error && "code" in error && error.code === "ENOENT") return "Git is not installed";
+  // execFile prefixes the whole command line; Git's own fatal/error line is the readable part.
+  const lines = message.split("\n").map(line => line.trim()).filter(Boolean);
+  return lines.find(line => /^(fatal|error):/i.test(line)) ?? lines.at(-1) ?? "Git unavailable";
+}
 export async function repositoryRoot(cwd: string, signal?: AbortSignal): Promise<string> {
   return (await panelGit(cwd, ["rev-parse", "--show-toplevel"], signal)).trimEnd();
 }
