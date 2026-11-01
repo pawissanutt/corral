@@ -177,9 +177,9 @@ The listing shows active/consumed/expired/revoked/ended records, current and sav
 and ignored allow resolutions. Revocation applies to the next check; an already-authorized
 write can finish. Only the owner or the owning session can revoke; no CLI creates grants.
 Hour/session grants belong only to A-1, survive host crash and resume (announced in the pane),
-and end with the session. Hour expiry uses corral's absolute wall clock: a reading before
-grant time or at/after expiry refuses; a smaller backward clock jump can extend it by that
-amount, and a forward jump ends it early.
+and end with the session. Hour expiry uses corral's absolute wall clock: a reading at or
+after expiry refuses. A backward clock jump can extend the grant by the size of the jump,
+including when the clock moves before grant time; a forward jump ends it early.
 
 Once means one live invocation, not a transcript call ID. A transport resend reuses its
 receipt; a repeated tool call or resumed transcript asks again. Aborted or crashed invocations
