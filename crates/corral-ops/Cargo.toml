@@ -42,5 +42,6 @@ kqueue = "1.2"
 hermetic-harness = []
 
 [dev-dependencies]
+corral-core = { workspace = true, features = ["test-clock"] }
 tempfile.workspace = true
 corral-ops = { path = ".", features = ["hermetic-harness"] }
