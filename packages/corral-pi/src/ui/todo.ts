@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import type { HostIdentity } from "../roles/types.ts";
 import { ProgressSchema, TodoWidget, type TodoProgress } from "./todo-widget.ts";
+import { observedCorralResult } from "./receipt-source.ts";
 
 const Receipt = z.object({
   state: z.literal("committed"),
@@ -105,12 +106,16 @@ export class TodoLedger {
     const receipt = Receipt.safeParse(details);
     if (receipt.success) this.apply(receipt.data.result.progress);
     else if (z.object({ state: z.literal("committed") }).safeParse(details).success) await this.restore().catch(() => false);
+    else if (z.object({ state: z.enum(["uncertain", "reserved", "queued"]) }).safeParse(details).success
+      || z.object({ error: z.object({ effect: z.literal("unknown") }) }).safeParse(details).success) {
+      this.stale = true;
+      for (const listener of this.listeners) listener("Todo outcome unconfirmed; refresh canonical ledger");
+    }
   }
 
   extend(pi: ExtensionAPI): void {
     pi.on("tool_result", async (event) => {
-      if (event.isError || event.parentToolCallId !== undefined
-        || !["corral_todo", "corral_progress"].includes(event.toolName)) return;
+      if (!["corral_todo", "corral_progress"].includes(event.toolName) || !observedCorralResult(event)) return;
       await this.receipt(event.details);
     });
   }

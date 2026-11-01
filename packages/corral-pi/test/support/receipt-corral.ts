@@ -27,6 +27,8 @@ export interface Rule {
   readonly reject?: { readonly code: string; readonly reason: string };
   /** Commit, then exit without a response, as a killed executor after its transaction would. */
   readonly loseAck?: boolean;
+  /** Canonical backend outcomes returned to real host adapters by inspector regressions. */
+  readonly receipt?: { readonly state: "committed" | "uncertain"; readonly result: Record<string, unknown>; readonly replayed?: boolean };
   /** Refuse with confirmation_required until the owner's answer is journaled for the request. */
   readonly confirm?: boolean;
 }
@@ -92,13 +94,13 @@ if (rule.confirm && !answered) {
 }
 if (rule.reject) emit({ ...base, state: "rejected", result: rule.reject });
 const receipt = { ...base, state: "committed", result: { op: envelope.op, outcome: "applied",
-  ...(envelope.op === "ask" ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q-" + envelope.request_id.slice(3, 9), revision: 1 } : {}) } };
+  ...(envelope.op === "ask" ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q-" + envelope.request_id.slice(3, 9), revision: 1 } : {}) }, ...rule.receipt };
 try {
   writeFileSync(join(store, envelope.request_id + ".json"), JSON.stringify(receipt), { flag: "wx" });
 } catch {
   emit({ ...stored(envelope.request_id), replayed: true });
 }
-appendFileSync(join(dir, "effects.jsonl"), JSON.stringify({ op: envelope.op, request_id: envelope.request_id,
+if (receipt.state === "committed" && receipt.replayed !== true) appendFileSync(join(dir, "effects.jsonl"), JSON.stringify({ op: envelope.op, request_id: envelope.request_id,
   payload: envelope.payload, parent: envelope.identity.parent ?? null }) + "\\n");
 if (rule.loseAck) { process.stderr.write("fixture executor lost its acknowledgement after commit\\n"); process.exit(9); }
 emit(receipt);

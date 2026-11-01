@@ -9,6 +9,7 @@ import { NativePanels } from "./panels.ts";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { runChild, childKey } from "../extensions/codemode/child.ts";
 
 const identity = { store: "st-test", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
 function adapter() {
@@ -36,7 +37,7 @@ test("event and receipt adapter retains actual outcomes, replay, gaps and bounde
   for (const state of ["committed", "rejected", "uncertain", "queued"]) send({ state, result: { code: "example" } });
   send({ state: "committed", replayed: true, result: { status: "started" } });
   send(undefined, { isError: true, content: [{ type: "text", text: "transport unavailable" }] });
-  // Neither nested calls nor non-Corral tools can inject receipt outcomes.
+  // Unauthenticated nested calls and non-Corral tools cannot inject receipt outcomes.
   send({ state: "committed" }, { parentToolCallId: "nested" });
   send({ state: "committed" }, { toolName: "read" });
   expect(activity.snapshot().receipts).toHaveLength(6);
@@ -45,6 +46,28 @@ test("event and receipt adapter retains actual outcomes, replay, gaps and bounde
   for (let n = 0; n < 30; n++) send({ state: "committed", result: { revision: n } });
   expect(activity.snapshot().receipts).toHaveLength(24);
   expect(activity.snapshot().receiptsOmitted).toBe(12);
+});
+
+test("only authenticated, non-denied Code Mode children can feed receipt and ledger adapters", async () => {
+  type Result = { toolName: string; toolCallId: string; parentToolCallId?: string; details: unknown; content: []; isError: boolean };
+  const listeners: ((event: Result) => unknown)[] = [];
+  const pi = { on: (_name: string, fn: (event: Result) => unknown) => { listeners.push(fn); } } as unknown as ExtensionAPI;
+  const activity = new InspectorActivity(new EventLog(3), () => {});
+  const ledger = new TodoLedger(identity, async () => ({ runs: [{ id: "R1", progress: progress(1) }] }));
+  await ledger.restore();
+  activity.extend(pi, new Set(["corral_todo"])); ledger.extend(pi);
+  const parent = { tool_call_id: "code", cell: "cell-1", call: "cell-1.1" };
+  const child = { key: childKey(parent), parent, tool: "corral_todo" };
+  const event: Result = { toolName: "corral_todo", toolCallId: "code/1", parentToolCallId: "code", content: [], isError: false,
+    details: { state: "committed", result: { progress: progress(2) } } };
+  const send = async (result = event) => { await Promise.all(listeners.map(fn => fn(result))); };
+  await send(); // A receipt-shaped object and parent ID are insufficient.
+  await runChild({ ...child, denied: "not allowed" }, () => send());
+  await runChild(child, () => send({ ...event, parentToolCallId: "foreign" }));
+  await runChild({ ...child, tool: "read" }, () => send());
+  expect(ledger.current?.revision).toBe(1); expect(activity.snapshot().receipts).toHaveLength(0);
+  await runChild(child, () => send());
+  expect(ledger.current?.revision).toBe(2); expect(activity.snapshot().receipts).toHaveLength(1);
 });
 
 test("canonical ledger adapters reject local assertions, rejected outcomes, late replay and stale reads", async () => {

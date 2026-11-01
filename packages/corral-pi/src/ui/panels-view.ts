@@ -127,7 +127,8 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
     }
     case "Plan": {
       const ledger = snapshot.ledger;
-      add(snapshot.ledgerStale ? "Canonical plan · stale" : "Canonical plan", true);
+      add("Canonical plan", true);
+      if (snapshot.ledgerStale && ledger) add("Canonical plan stale · refresh to reconcile unconfirmed state");
       if (!snapshot.bound) add("Disconnected/unbound · retained ledger may be stale");
       if (!ledger) { add(snapshot.ledgerStale ? "Canonical plan unavailable" : "No canonical plan recorded"); break; }
       add(`${ledger.plan ?? "Progress"} · revision ${ledger.revision}`);
