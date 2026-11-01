@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { startBridge } from "../src/bridge/server.ts";
@@ -64,10 +65,35 @@ afterAll(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
+function captureInspector(bound: boolean): void {
+  const panels = host.panels;
+  if (!panels) throw new Error("rich host supplies native panels");
+  panels.focused = true;
+  const output: string[] = [];
+  for (const tab of ["Context", "Agents", "Plan"] as const) {
+    panels.tab = tab;
+    output.push(`WIDE · ${tab}`, ...panels.renderSidebar(100, 50), `INLINE · ${tab}`, ...panels.renderInline(80, 34));
+  }
+  const text = stripTerminalSequences(output.join("\n"));
+  const state = host.state();
+  expect(text).toContain(String(state.model));
+  expect(text).toContain(host.sessionId());
+  expect(text).toContain("Budget unavailable");
+  expect(text).toContain(bound ? "Bound" : "Disconnected/unbound");
+  expect(text).toContain("Turn 0");
+  const evidence = resolve(import.meta.dirname, "../../../.evidence");
+  mkdirSync(evidence, { recursive: true });
+  writeFileSync(join(evidence, `T-689-host-${bound ? "bound" : "disconnected"}-render.txt`), text);
+  panels.focused = false;
+}
+
+test("host inspector renders real disconnected state in wide and inline layouts without model calls", () => captureInspector(false));
+
 test("input before hello is rejected; hello binds the generation through corral", async () => {
   expect(await host.submit(input("Reply only EARLY.", "prompt", "k0"), "rq-0")).toEqual({ disposition: "rejected", reason: "host_not_bound" });
   await host.hello(NONCE, "pane-1", sha256Hex(CTL));
   expect(host.bound).toBeTrue();
+  captureInspector(true);
   const [hello] = corral.calls();
   expect(hello?.argv).toEqual(["agent", "call", "--op", "hello"]);
   expect(hello?.envelope.request_id).toBe("ev-1-0");

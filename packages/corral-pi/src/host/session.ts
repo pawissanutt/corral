@@ -38,6 +38,7 @@ import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
 import { NativePanels } from "../ui/panels.ts";
 import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
+import { InspectorActivity } from "../ui/inspector.ts";
 import { corralRenderers } from "../ui/render.ts";
 import { TodoLedger, installTodo } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
@@ -271,6 +272,7 @@ export class HostSession {
   private calls: Promise<unknown> = Promise.resolve();
   private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
+  private inspector: InspectorActivity | undefined;
   private panelTokens: number | undefined;
   private panelTokenLeaf: string | null | undefined;
   private sessionsCreated = 0;
@@ -641,6 +643,8 @@ export class HostSession {
     const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
     const reads = new Set(specs.filter((spec) => nestedCorralRead(spec.op)).map((spec) => spec.name));
     const rich = this.options.ui !== "plain";
+    this.inspector ??= new InspectorActivity(this.options.events, () => this.panels?.refresh());
+    this.inspector.extend(pi, corral);
     const role = this.options.identity.role;
     this.ledger = this.loadout.includes("corral_todo")
       ? new TodoLedger(this.options.identity, () => this.options.client.todoSnapshot()) : undefined;
@@ -1110,7 +1114,23 @@ export class HostSession {
       tokens: this.panelTokens ??= session.getSessionStats().tokens.total, tools: session.getActiveToolNames(),
       contextFiles: this.guidance.contextFiles.map(file => file.path),
       skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
-      ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? false,
+      ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? true,
+      inspector: {
+        session: session.sessionId, boundSession: this.boundSessionId ?? null,
+        turn: this.turn, turnOpen: this.open,
+        capabilities: this.options.capabilities ?? null,
+        guidance: {
+          projectText: this.options.guidance?.projectText ?? null,
+          skillPaths: this.guidance.skillPaths, promptPaths: this.guidance.promptPaths,
+          prompts: this.runtime.services.resourceLoader.getPrompts().prompts.map(prompt => prompt.name),
+          skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => `${skill.name} · ${skill.filePath}`),
+        },
+        // Only effective SDK settings, never raw capability/MCP settings or credentials.
+        settings: Object.entries(this.settings).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
+        budget: [(this.options.capabilities?.catalog ?? 0) >= 7
+          ? `Budget: ${JSON.stringify(this.budget.state())}` : "Budget unavailable · legacy generation"],
+        ...(this.inspector?.snapshot() ?? { events: this.options.events.since(0, 512 * 8192, 512), receipts: [], receiptsOmitted: 0 }),
+      },
       jobs, auxiliary: this.auxiliary?.state() ?? null,
       steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
     };
