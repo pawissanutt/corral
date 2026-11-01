@@ -198,7 +198,8 @@ pub fn prepared(
             super::super::launch::host_provider(resolved.vendor.as_deref(), model)
         }),
         effort: resolved.effort.clone(),
-        prompt_file: Some(ctx.store.prompts_dir().join("pm.md")),
+        // Rebuild on resume too: never append the legacy harness's command runbook.
+        prompt_file: Some(crate::pm::save_native_context(ctx)?),
         adopt,
     };
     let prepared = super::super::launch::prepare_bootstrap(ctx, &target, pane, &spec)?;
@@ -465,6 +466,13 @@ case "$1 $2" in"#;
                         .join(format!("{}.jsonl", bound.identity.session_id))
                 )
             );
+            let input: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(bootstrap.prompt_file.as_ref().unwrap()).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(input["projects"].as_object().unwrap().len(), 1);
+            assert!(input["projects"].get("other").is_some());
+            assert!(input["projects"].get("corral").is_none());
             assert_eq!(bootstrap.project_dir.as_deref(), Some(fx.root()));
             assert!(bootstrap.project.is_empty());
             assert_eq!(bootstrap.capabilities.unwrap().project_text, Some(true));
