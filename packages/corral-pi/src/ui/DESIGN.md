@@ -45,7 +45,7 @@ The terminal owns font, size, cell dimensions and shaping. No application font i
 
 ## Layout
 
-Fullscreen main width reserves a 34-column rail plus one separator at 105 physical columns or more. Below that—or when manually hidden—the native inspector occupies 4–7 rows above the real editor. Pi owns transcript scrolling/follow, selections and editor height. Inspector content scrolls independently; SDK overlays own modal input.
+Fullscreen main width reserves a 34-column rail plus one separator at 105 physical columns or more. Below that—or when manually hidden—the native inspector is a single unboxed navigation row at rest; focus adds two detail rows and explicit expansion adds up to four. Pi owns transcript scrolling/follow, selections and editor height. Inspector content scrolls independently; SDK overlays own modal input.
 
 **The Continuity Rule.** Resize and inspection preserve draft, selected tab/file and bound session.
 
@@ -63,7 +63,10 @@ Square terminal boxes with one-cell rules and two-column content inset. Existing
 Context, Files, Agents and Plan labels share one stable tab model. Blue indicates the active tab/focused border. Counts are measured or explicitly unknown. F6/arrows/Enter and native pointer controls inspect rather than mutate.
 
 ### Composer
-A CustomEditor subclass changes filled rendering and border color only. Stock handlers, model/effort shortcuts, paste, submission and owner-input hooks remain intact.
+The Message field has a filled graphite body, inset native input and model/effort in its bottom control bar. A CustomEditor subclass uses public border/padding/render hooks; stock editing, model/effort shortcuts, paste, submission, scroll indicators and owner-input hooks remain intact.
+
+### Status ownership
+Branded header: binding, role, generation and repository. Composer: model and effort. Wide Context overview: measured usage, changed files, agents/jobs and plan; when that overview is not visible, usage moves to the compact footer. The stock multi-row footer is replaced, not stacked. Refusals and extension statuses are retained.
 
 ### Read-only details
 Bounded native overlays show Git diff or full metadata, with visible scroll/close controls. Foreground SDK prompts disable background panel interception.

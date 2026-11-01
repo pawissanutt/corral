@@ -54,32 +54,18 @@ export function box(title: string, lines: readonly string[], width: number, heig
   result.push(`${PANEL_BG}${rule}└${"─".repeat(width - 2)}┘${RESET}`);
   return result;
 }
-export function summary(snapshot: PanelSnapshot | null, files: FilesState): string {
-  if (!snapshot) return "Waiting for bound session state";
-  const context = snapshot.context?.percent;
-  const steps = snapshot.ledger?.phases.flatMap(phase => phase.steps) ?? [];
-  return `${context == null ? "?" : Math.round(context) + "%"} context · ` +
-    `${files.kind === "ready" ? files.files.length === 100 ? "100+" : files.files.length : "?"} files · ` +
-    `${steps.filter(step => step.status.state === "done").length}/${steps.length} steps`;
-}
 export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: PanelSnapshot | null, files: FilesState): PanelLine[] {
   if (!snapshot) return [{ text: "Session state unavailable" }];
   const rows: PanelLine[] = [];
   const add = (text: string, heading = false) => rows.push({ text: plainLabel(text), heading });
   switch (tab) {
     case "Context": {
-      add(snapshot.bound ? "Bound to Corral" : "Not bound", true);
-      add(`${identity.role} · g${identity.generation} · ${snapshot.streaming ? "Working" : "Idle"}`);
-      add(snapshot.model ?? "Model unavailable");
-      add(`Effort: ${snapshot.effort}`);
-      const usage = snapshot.context;
-      add(usage?.tokens == null ? "Context tokens unavailable" : `${usage.tokens.toLocaleString()} / ${usage.contextWindow.toLocaleString()} context tokens`);
-      add(`${snapshot.tokens.toLocaleString()} recorded tokens`);
-      add(`${snapshot.steering} steering · ${snapshot.followUps} follow-ups`);
-      add("Resources", true);
+      add("Loaded context", true);
       add(`${snapshot.tools.length} active tools · ${snapshot.skills.length} skills`);
       for (const path of snapshot.contextFiles) add(path);
       if (!snapshot.contextFiles.length) add("No context files loaded");
+      if (snapshot.skills.length) add(`Skills: ${snapshot.skills.join(", ")}`);
+      add(`${snapshot.tokens.toLocaleString()} recorded session tokens`);
       add("Jobs", true);
       if (snapshot.jobs === null) add("Background jobs unavailable");
       else if (!snapshot.jobs.length) add("No background jobs");
@@ -104,7 +90,6 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       add("Current bound session", true);
       add(`${identity.role} · ${identity.task ?? identity.assistant ?? identity.project}`);
       add(`${identity.run ?? ""} · g${identity.generation} · ${snapshot.streaming ? "Working" : "Idle"}`);
-      add(snapshot.model ?? "Model unavailable");
       add("Read-only auxiliary activity", true);
       if (!snapshot.auxiliary) add("Auxiliary telemetry unavailable");
       else {

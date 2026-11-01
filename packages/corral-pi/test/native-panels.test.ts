@@ -69,13 +69,20 @@ test("native panels retain real streaming, composing, binding, modal isolation a
 
     for (const char of "Keep this unsent draft") physical.send(char);
     let mark = physical.writes.length;
-    physical.resize(80, 34); await physical.until("Session · F6", mark);
+    physical.resize(80, 34); await physical.until("F6 inspect", mark);
     expect(terminal.columns).toBe(80); expect(host.sessionId()).toBe(bound);
     physical.send("\x1b[17~"); physical.send("\x1b[C");
     expect(panels.tab).toBe("Files"); physical.send("\x1b");
+    mark = physical.writes.length;
+    physical.send("\x1b[17~"); physical.send("\x1b[D");
+    await physical.until("↑↓ Enter", mark);
+    expect(panels.focused).toBeTrue();
+    physical.send("\x1b[<0;6;32M"); physical.send("\x1b[<0;6;32m");
+    expect(panels.focused).toBeFalse(); // Real editor click releases logical inspector focus.
+    physical.send("\x1b[F"); // Keep the fake-cursor escape outside the draft substring checked on resize.
     if (evidence) writeFileSync(join(evidence, "narrow.ansi"), physical.writes.join(""));
     mark = physical.writes.length;
-    physical.resize(52, 24); await physical.until("Session · F6", mark);
+    physical.resize(52, 24); await physical.until("F6 inspect", mark);
     expect(terminal.columns).toBe(52);
     if (evidence) writeFileSync(join(evidence, "small.ansi"), physical.writes.join(""));
     physical.resize(140, 46); await physical.until("Keep this unsent draft", mark);
