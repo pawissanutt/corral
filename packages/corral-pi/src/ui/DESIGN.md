@@ -69,8 +69,11 @@ The Message field has a filled graphite body, inset native input and model/effor
 ### Status ownership
 Branded header: binding, role, generation and repository. Composer: model and effort. Wide Context overview: measured usage, changed files, agents/jobs and plan; when that overview is not visible, usage moves to the compact footer. The stock multi-row footer is replaced, not stacked. Refusals and extension statuses are retained.
 
-### Read-only details
-Bounded native overlays show Git diff or full metadata, with visible scroll/close controls. Filename rows in the overview and full/inline Files list open the actual selected-path diff. Additions/removals retain +/− signs as well as semantic green/red; file headers are muted and hunk markers use focus blue. Foreground SDK prompts disable background panel interception.
+### Read-only main views
+F7 Changes and F8 Activity replace only the main reading area through the optional typed SDK mainView hook; F9 restores the same transcript instance. The real input dock remains SDK-owned. Changes retains scope, selection and captured hunk provenance, exposes meaningful comparison/search/refresh controls, and appends references without submission. Activity distinguishes local job/monitor observations from canonical settlement. Additions/removals retain +/− signs as well as semantic colors. Foreground prompts and active selection suppress background interception.
+
+### Images
+Click an inline terminal image to fit its existing bytes into the main reading area. Click again (including a quick second click), Esc or F9 restores Conversation. Draft and transcript instance remain intact. Image placement is bounded by the actual main viewport, not guessed composer height. This uses the optional packaged SDK image activation hook; no fetch, external viewer or model call. Native rendering still requires a supported graphics terminal. Do not layer expanded images in SDK overlays: captions over existing inline graphics are not reliably composited.
 
 ## Do's and Don'ts
 

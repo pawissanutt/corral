@@ -1,12 +1,12 @@
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { isKeyRelease, matchesKey, Text, type Component, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { isKeyRelease, matchesKey, Text, TuiAltScreen, type Component, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
-import { readPanelDiff, readPanelFiles } from "./panels-git.ts";
+import { NativeWorkbench } from "./workbench.ts";
 import { panelTheme } from "./panels-theme.ts";
-import { composerBar, overviewLines, panelFooter, panelHeader, splitRow } from "./panels-chrome.ts";
+import { composerBar, overviewLines, panelFooter, splitRow } from "./panels-chrome.ts";
 import {
   box, pad, panelLines, plainLabel, diffLine, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
   type FilesState, type PanelSnapshot, type PanelTab, type PanelLine,
@@ -20,6 +20,7 @@ export interface NativePanelsOptions {
 interface TabHit { readonly from: number; readonly to: number; readonly tab: PanelTab }
 
 export class NativePanels implements PanelSurface {
+  readonly workbench: NativeWorkbench;
   sidebarEnabled = true;
   tab: PanelTab = "Context";
   focused = false;
@@ -29,19 +30,26 @@ export class NativePanels implements PanelSurface {
   private ui: ExtensionUIContext | undefined;
   private requestRender: (() => void) | undefined;
   private editorFocused: (() => boolean) | undefined;
+  private activeSelection: (() => boolean) | undefined;
   private hasOverlay: (() => boolean) | undefined;
   private prompts = 0;
   private inspecting = false;
   private pointerOrigin: "main" | "sidebar" | undefined;
   private queued = false;
   private disposed = false;
-  private readonly abort = new AbortController();
-  private fileIndex = 0;
   private files: FilesState = { kind: "unread" };
   private contentRows: readonly PanelLine[] = [];
   private tabHits: TabHit[] = [];
 
-  constructor(private readonly options: NativePanelsOptions) {}
+  constructor(private readonly options: NativePanelsOptions) {
+    this.workbench = new NativeWorkbench({ ...options, canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => {
+      const review = this.workbench.review;
+      this.files = review.error && !review.checkedAt ? { kind: "error", reason: plainLabel(review.error) }
+        : review.refreshing && !review.checkedAt ? { kind: "loading" } : { kind: "ready", files: review.files };
+      this.refresh();
+    } });
+  }
+  mainView(transcript: Component): Component { return this.workbench.mount(transcript); }
   wrap(physical: Terminal): PanelTerminal {
     if (this.terminal) throw new Error("native panels already have a terminal");
     this.terminal = new PanelTerminal(physical, this);
@@ -64,11 +72,11 @@ export class NativePanels implements PanelSurface {
   }
   dispose(): void {
     this.disposed = true;
-    this.abort.abort();
+    this.workbench.dispose();
     this.ui = undefined;
     this.requestRender = undefined;
     this.editorFocused = undefined;
-    this.hasOverlay = undefined;
+    this.hasOverlay = undefined; this.activeSelection = undefined;
   }
   private tabs(): string {
     let x = 0;
@@ -83,36 +91,18 @@ export class NativePanels implements PanelSurface {
   private choose(tab: PanelTab): void {
     this.tab = tab;
     this.offset = 0;
-    if (tab === "Files" && this.files.kind === "unread") void this.loadFiles();
+    if (tab === "Files") { this.workbench.setView("changes"); if (this.files.kind === "unread") void this.loadFiles(); }
+    if (tab === "Agents") this.workbench.setView("activity");
     this.refresh();
   }
-  async loadFiles(): Promise<void> {
-    if (this.files.kind === "loading") return;
-    const previous = this.files.kind === "ready" ? this.files.files[this.fileIndex]?.path : undefined;
-    this.files = { kind: "loading" }; this.refresh();
-    try {
-      const files = await readPanelFiles(this.options.cwd, this.abort.signal);
-      if (this.disposed) return;
-      this.files = { kind: "ready", files };
-      const index = files.findIndex(file => file.path === previous);
-      this.fileIndex = index >= 0 ? index : 0;
-    } catch (error) {
-      if (this.disposed) return;
-      this.files = { kind: "error", reason: plainLabel(error instanceof Error ? error.message : String(error)).slice(0, 240) };
-    }
-    this.refresh();
-  }
+  async loadFiles(): Promise<void> { await this.workbench.review.refresh(); }
   private content(capacity: number): string[] {
     const lines = this.wide && this.tab === "Context" && !this.focused
       ? overviewLines(this.options.snapshot(), this.files)
-      : this.lines().filter(line => this.wide || !line.heading);
-    if (this.tab === "Files" && this.files.kind === "ready" && this.files.files.length) {
-      const files = this.files.files;
-      const start = Math.max(0, Math.min(this.fileIndex, files.length - capacity));
-      this.contentRows = files.slice(start, start + capacity).map(file => ({ text: file.path, action: { kind: "diff", path: file.path } }));
-      return files.slice(start, start + capacity).map((file, i) =>
-        (start + i === this.fileIndex ? PANEL_BLUE + "› " : PANEL_MUTED + "  ") +
-        plainLabel(file.status + " " + file.path) + PANEL_TEXT);
+      : (this.tab === "Files" ? this.workbench.files() : this.lines()).filter(line => this.wide || !line.heading);
+    if (this.tab === "Files" && capacity > 0) {
+      const selected = lines.findIndex(row => row.action?.kind === "diff" && row.action.path === this.workbench.review.selected);
+      if (selected >= 0) this.offset = Math.max(Math.min(this.offset, selected), selected - capacity + 1);
     }
     const start = Math.max(0, Math.min(this.offset, lines.length - capacity));
     this.contentRows = lines.slice(start, start + capacity);
@@ -134,7 +124,10 @@ export class NativePanels implements PanelSurface {
   }
   private move(delta: number): void {
     if (this.tab === "Files" && this.files.kind === "ready") {
-      this.fileIndex = Math.max(0, Math.min(this.files.files.length - 1, this.fileIndex + delta));
+      const visible = this.workbench.review.visible;
+      const index = visible.findIndex(file => file.path === this.workbench.review.selected);
+      const file = visible[Math.max(0, Math.min(visible.length - 1, index + delta))];
+      if (file) { void this.workbench.openFile(file.path); this.workbench.focused = false; }
     } else this.offset = Math.max(0, Math.min(Math.max(0, this.lines().length - 1), this.offset + delta));
     this.refresh();
   }
@@ -145,15 +138,12 @@ export class NativePanels implements PanelSurface {
     if (this.tab === "Files") {
       if (this.files.kind === "unread" || this.files.kind === "error") { await this.loadFiles(); return; }
       if (this.files.kind === "ready") {
-        const file = this.files.files[this.fileIndex];
+        const file = this.workbench.review.current;
         if (file) {
           const ui = this.ui;
           try {
-            const diff = await readPanelDiff(this.options.cwd, file, this.abort.signal);
-            if (this.canInteract && this.tab === "Files" && this.files.kind === "ready"
-              && this.files.files[this.fileIndex]?.path === file.path) {
-              await this.detail(file.path + " · HEAD → working tree", diff.split("\n"), "diff");
-            }
+            await this.workbench.openFile(file.path);
+            this.focused = false;
           }
           catch (error) { ui.notify(error instanceof Error ? error.message : String(error), "error"); }
           return;
@@ -213,7 +203,8 @@ export class NativePanels implements PanelSurface {
         if (this.files.kind !== "ready") return;
         const index = this.files.files.findIndex(file => file.path === action.path);
         if (index < 0) return; // A refresh may have removed the displayed path.
-        this.choose("Files"); this.fileIndex = index; this.refresh(); void this.inspect(); return;
+        this.choose("Files"); this.focused = false;
+        void this.workbench.openFile(action.path); this.refresh(); return;
       }
       case "files": this.focused = true; this.choose("Files"); return;
       default: {
@@ -244,6 +235,13 @@ export class NativePanels implements PanelSurface {
       }
     }
     if (!this.canInteract || mouse) return false;
+    if (matchesKey(data, "f7") || matchesKey(data, "f8") || matchesKey(data, "f9")) {
+      this.focused = false;
+      if (matchesKey(data, "f7")) this.tab = "Files";
+      if (matchesKey(data, "f8")) this.tab = "Agents";
+      return this.workbench.handleInput(data);
+    }
+    if (!this.focused && this.workbench.handleInput(data)) return true;
     if (matchesKey(data, "ctrl+b")) {
       if ((this.terminal?.physical.columns ?? 0) >= 105) this.sidebarEnabled = !this.sidebarEnabled;
       else this.expanded = !this.expanded;
@@ -267,6 +265,7 @@ export class NativePanels implements PanelSurface {
     pi.on("session_start", (_event, ctx) => {
       if (ctx.mode !== "tui" || !this.terminal) return;
       this.ui = ctx.ui;
+      this.workbench.bind(ctx.ui);
       this.prompts = 0;
       this.focused = false;
       ctx.ui.setTheme(panelTheme(sdk.Theme, ctx.ui.theme.getColorMode()));
@@ -282,7 +281,7 @@ export class NativePanels implements PanelSurface {
             return composerBar(owner.options.snapshot(), width, hidden);
           }
           handleMouse(event: TuiMouseEvent) {
-            if (event.type === "click" && event.button === "left") { owner.focused = false; owner.refresh(); }
+            if (event.type === "click" && event.button === "left") { owner.focused = false; owner.workbench.focused = false; owner.refresh(); }
             return super.handleMouse(event);
           }
           render(width: number): string[] {
@@ -298,12 +297,13 @@ export class NativePanels implements PanelSurface {
         owner.editorFocused = () => editor.focused;
         owner.requestRender = () => tui.requestRender();
         owner.hasOverlay = () => tui.hasOverlay();
+        owner.activeSelection = tui instanceof TuiAltScreen ? () => tui.hasActiveSelection() : () => false;
         return editor;
       });
       ctx.ui.setFooter((tui, _theme, data) => {
         const unsubscribe = data.onBranchChange(() => tui.requestRender());
         ctx.ui.setHeader(() => ({
-          render: width => panelHeader(this.options.identity, this.options.cwd, data.getGitBranch(), this.options.snapshot(), width),
+          render: () => [],
           invalidate() {},
         }));
         return {
@@ -331,7 +331,7 @@ export class NativePanels implements PanelSurface {
     pi.on("agent_end", () => { this.refresh(); });
     pi.on("turn_end", () => { this.refresh(); });
     pi.on("model_select", () => { this.refresh(); });
-    pi.on("tool_result", () => { this.refresh(); });
+    pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
       description: "Native session inspector: context, files, agents, plan, refresh or toggle",
       handler: async (args, ctx) => {

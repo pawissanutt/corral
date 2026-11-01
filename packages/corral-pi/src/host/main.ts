@@ -140,9 +140,10 @@ async function main(): Promise<void> {
     await attachHeadless(session, events, (line) => process.stdout.write(line));
     return;
   }
+  const panels = session.panels;
   terminal = new sdk.InteractiveMode(session.runtime, {
     verbose: false,
-    ...(session.panels ? { tuiMode: "fullscreen" as const, terminal: session.panels.wrap(new ProcessTerminal()) } : {}),
+    ...(panels ? { tuiMode: "fullscreen" as const, terminal: panels.wrap(new ProcessTerminal()), mainView: transcript => panels.mainView(transcript) } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
