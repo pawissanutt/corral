@@ -15,6 +15,9 @@ use corral_herdr::Herdr;
 use corral_ops::{ApproveStrategy, Ctx, DispatchOpts, DispatchOutcome};
 use serde_json::{Value, json};
 
+#[path = "cleanup_ops/git.rs"]
+mod git_support;
+use git_support::git;
 #[path = "cleanup_ops/lifecycle.rs"]
 mod lifecycle;
 #[path = "cleanup_ops/plan_review.rs"]
@@ -128,22 +131,6 @@ struct Fx {
     state: PathBuf,
     app: PathBuf,
     id: String,
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = support::command("git", dir)
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 impl Fx {
