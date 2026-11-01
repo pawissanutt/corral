@@ -2,11 +2,10 @@
 // In fullscreen its renderer sees a reserved main width; the right rail is painted in the
 // remaining physical cells. Normal-screen output and shutdown never receive a rail paint.
 import type { ProgramStatus, Terminal } from "@earendil-works/pi-tui";
+import { PanelCanvas, CANVAS_STYLE } from "./panel-canvas.ts";
 
 export const PANEL_BREAKPOINT = 105;
 export const PANEL_WIDTH = 34;
-const ENTER = "\x1b[?1049h";
-const EXIT = "\x1b[?1049l";
 const SYNC_END = "\x1b[?2026l";
 
 export interface PanelSurface {
@@ -17,6 +16,7 @@ export interface PanelSurface {
 }
 
 export class PanelTerminal implements Terminal {
+  private readonly canvas = new PanelCanvas();
   private active = false;
   private fullscreen = true;
   private started = false;
@@ -43,27 +43,28 @@ export class PanelTerminal implements Terminal {
   stop(): void {
     this.started = false;
     this.active = false;
+    this.canvas.reset();
     this.resizeHandler = undefined;
     this.physical.stop();
   }
   drainInput(maxMs?: number, idleMs?: number): Promise<void> { return this.physical.drainInput(maxMs, idleMs); }
 
   private rail(): string {
-    if (!this.active || !this.sidebarVisible) return "";
+    if (!this.active || !this.sidebarVisible || !this.canvas.atBoundary) return "";
     const column = this.columns + 2;
     const lines = this.surface.renderSidebar(PANEL_WIDTH, this.rows);
     let data = "\x1b7\x1b[?7l";
     for (let row = 0; row < this.rows; row++) {
       // Never erase a whole physical line: Pi's main screen is on the left.
-      data += `\x1b[${row + 1};${column - 1}H\x1b[0m \x1b[${row + 1};${column}H${lines[row] ?? " ".repeat(PANEL_WIDTH)}`;
+      data += `\x1b[${row + 1};${column - 1}H\x1b[0m${CANVAS_STYLE} \x1b[${row + 1};${column}H${lines[row] ?? " ".repeat(PANEL_WIDTH)}`;
     }
     return data + "\x1b[0m\x1b8" + (this.autowrap ? "\x1b[?7h" : "");
   }
   write(data: string): void {
-    const enter = data.lastIndexOf(ENTER), exit = data.lastIndexOf(EXIT);
-    if (enter >= 0 || exit >= 0) this.active = this.fullscreen = enter > exit;
-    const wrapOn = data.lastIndexOf("\x1b[?7h"), wrapOff = data.lastIndexOf("\x1b[?7l");
-    if (wrapOn >= 0 || wrapOff >= 0) this.autowrap = wrapOn > wrapOff;
+    const frame = this.canvas.write(data);
+    data = frame.data;
+    if (frame.screen !== undefined) this.active = this.fullscreen = frame.screen;
+    if (frame.wrap !== undefined) this.autowrap = frame.wrap;
     const rail = this.rail();
     if (!rail) { this.physical.write(data); return; }
     // Keep Pi's differential frame and rail in the same synchronized terminal update.
