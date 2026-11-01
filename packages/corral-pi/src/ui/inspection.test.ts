@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripTerminalSequences, Text, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
@@ -124,6 +124,56 @@ test("committed candidate files, binary/rename diffstats and captured hunks igno
     } finally { wb.dispose(); }
     expect(parseChangedPaths("M\0literal\n界面.ts\0")[0]?.path).toBe("literal\n界面.ts");
   } finally { store.dispose(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("retained candidate status/diffstat and hunks advance together only when the new patch is applied", async () => {
+  for (const next of ["edit", "delete"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "candidate-refresh-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", root, "-c", "core.hooksPath=/dev/null", ...args], { encoding: "utf8" }).trim();
+    const current = data();
+    const wb = new NativeWorkbench({ cwd: root, identity, snapshot: () => null, changed() {}, canInteract: () => true, inspection: async () => current });
+    const component = wb.mount(new Text("transcript", 0, 0));
+    const capture = process.env.CORRAL_F1_CAPTURE_DIR;
+    const render = (width: number, stage: string) => {
+      const ansi = renderLayoutFrame(component, width, 50, () => {}).lines.join("\n");
+      if (capture) { mkdirSync(capture, { recursive: true }); writeFileSync(join(capture, `${next}-${stage}-${width}.ansi`), ansi + "\n"); }
+      return stripTerminalSequences(ansi);
+    };
+    try {
+      git("init", "-qb", "main"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid");
+      writeFileSync(join(root, "a.txt"), "base\n"); git("add", "."); git("commit", "-qm", "base");
+      current.root = root; current.base = git("rev-parse", "HEAD");
+      writeFileSync(join(root, "a.txt"), "first\n"); git("add", "."); git("commit", "-qm", "candidate A");
+      const first = current.head = git("rev-parse", "HEAD");
+      wb.setView("changes"); await wb.review.refresh(); await wb.openFile("a.txt"); await wb.review.refresh();
+      for (const width of [80, 140]) {
+        const initial = render(width, "initial");
+        expect(initial).toContain(first); expect(initial).toContain("Diffstat: +1 −1"); expect(initial).toContain("a.txt · Modified"); expect(initial).toContain("+first");
+      }
+      if (next === "edit") writeFileSync(join(root, "a.txt"), "second\nsecond2\nsecond3\n");
+      else rmSync(join(root, "a.txt"));
+      git("add", "."); git("commit", "-qm", "candidate B");
+      const second = current.head = git("rev-parse", "HEAD");
+      if (capture) writeFileSync(join(capture, `${next}-identities.json`), JSON.stringify({ input: "isolated real Git fixture through production inspection seam", base: current.base, first, second }, null, 2));
+      wb.inspection.invalidate(); await wb.review.refresh();
+      expect(wb.review.head).toBe(second);
+      expect(wb.review.stats.get("a.txt")).toEqual({ added: next === "edit" ? 3 : 0, removed: 1 });
+      for (const width of [80, 140]) {
+        const retained = render(width, "retained");
+        expect(retained).toContain(first); expect(retained).not.toContain(second); expect(retained).toContain(current.base);
+        expect(retained).toContain("+first"); expect(retained).toContain("Diffstat: +1 −1"); expect(retained).toContain("a.txt · Modified");
+        expect(retained).toContain("New diff available"); expect(retained).not.toContain("a.txt · Deleted");
+      }
+      expect(wb.handleInput("r")).toBeTrue(); await wb.review.refresh();
+      for (const width of [80, 140]) {
+        const applied = render(width, "applied");
+        expect(applied).toContain(second); expect(applied).not.toContain(first); expect(applied).toContain(current.base);
+        expect(applied).toContain(next === "edit" ? "Diffstat: +3 −1" : "Diffstat: +0 −1");
+        expect(applied).toContain(next === "edit" ? "a.txt · Modified" : "a.txt · Deleted");
+        expect(applied).not.toContain("+first"); expect(applied).toContain(next === "edit" ? "+second3" : "-base");
+      }
+    } finally { wb.dispose(); rmSync(root, { recursive: true, force: true }); }
+  }
 });
 
 test("Evidence keyboard/pointer navigation survives narrow/wide rendering and preserves the editor transcript", async () => {

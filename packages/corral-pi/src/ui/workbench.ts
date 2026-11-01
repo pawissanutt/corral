@@ -5,7 +5,7 @@ import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { VStack, ScrollView, Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
-import { ReviewStore, COMPARISONS, comparisonLabel, fileStatus } from "./review-store.ts";
+import { ReviewStore, COMPARISONS, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
 import { activityRows } from "./activity-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
@@ -35,6 +35,7 @@ export class NativeWorkbench {
   private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
   private displayedBase: string | undefined;
+  private displayedMetadata: Pick<PatchSnapshot, "file" | "stat"> | undefined;
   private displayedAt: number | undefined; private displayedHead: string | undefined; private displayedComparison = "";
   constructor(private readonly options: WorkbenchOptions) {
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen; options.changed(); });
@@ -154,6 +155,7 @@ export class NativeWorkbench {
     const snapshot = this.review.patchSnapshot;
     if (!snapshot || snapshot.root !== this.review.root || snapshot.path !== this.review.selected || snapshot.comparison !== this.review.comparison) return;
     this.lastPatch = snapshot.text; this.displayedPath = snapshot.path; this.displayedRoot = snapshot.root;
+    this.displayedMetadata = snapshot;
     this.displayedAt = snapshot.at; this.displayedHead = snapshot.head; this.displayedBase = snapshot.base;
     this.displayedComparison = comparisonLabel(snapshot.comparison); this.hunk = 0;
     this.options.changed();
@@ -162,7 +164,7 @@ export class NativeWorkbench {
     const r = this.review;
     const label = comparisonLabel(r.comparison);
     const sameScope = this.displayedRoot === r.root && this.displayedPath === r.selected && this.displayedComparison === label;
-    const base = sameScope ? this.displayedHead : r.patchSnapshot?.comparison === r.comparison ? r.patchSnapshot.head : undefined;
+    const base = sameScope ? this.displayedHead : r.head;
     const state = r.error ? "STALE / unavailable: " + plainLabel(r.error) : r.refreshing ? "Checking Git…" : r.checkedAt ? "Updated " + new Date(r.checkedAt).toLocaleTimeString() : "Not loaded";
     const head = [PANEL_BLUE + `${plainLabel(r.name)} (${plainLabel(r.branch)})` + PANEL_TEXT,
       ...(width >= 90 ? [PANEL_MUTED + plainLabel(r.root)] : []), PANEL_MUTED + label + (width >= 90 && r.comparison !== "candidate" ? ` · base ${base?.slice(0, 10) ?? "unborn/unavailable"}` : ""),
@@ -171,9 +173,10 @@ export class NativeWorkbench {
       PANEL_MUTED + state, PANEL_MUTED + (width >= 90 ? "/ search · c compare · o repository · j/k files · n/p hunks · a ask hunk · r refresh" : "j/k files · n/p hunks · a ask · / filter"), ""];
     if (r.limitNotice) head.push(PANEL_MUTED + r.limitNotice);
     const file = r.current;
-    const stat = file ? r.stats.get(file.path) : undefined;
-    head.push(PANEL_BLUE + (file ? `${plainLabel(file.path)} · ${fileStatus(file)}` : "No selected file"),
-      ...(file ? [PANEL_MUTED + (stat ? stat.added === null ? "Diffstat: binary" : `Diffstat: +${stat.added} −${stat.removed}` : "Diffstat: unavailable")] : []), "");
+    const selected = sameScope ? this.displayedMetadata?.file : file;
+    const stat = sameScope ? this.displayedMetadata?.stat : file ? r.stats.get(file.path) : undefined;
+    head.push(PANEL_BLUE + (selected ? `${plainLabel(selected.path)} · ${fileStatus(selected)}` : "No selected file"),
+      ...(selected ? [PANEL_MUTED + (stat ? stat.added === null ? "Diffstat: binary" : `Diffstat: +${stat.added} −${stat.removed}` : "Diffstat: unavailable")] : []), "");
     if (!file) return [...head.flatMap(line => new Text(line, 0, 0).render(width)), plainLabel(r.refreshing ? "Loading comparison…" : r.error ?? (r.selected ? "Selected file is no longer in this comparison." : "No changes in this comparison."))];
     if (r.patchPath !== r.selected || r.patchComparison !== r.comparison) return [...head.map(line => pad(line, width)), "Loading selected diff…"];
     if (this.displayedPath !== r.selected || this.displayedRoot !== r.root || this.displayedComparison !== comparisonLabel(r.comparison) || !this.lastPatch) this.acceptPatch();

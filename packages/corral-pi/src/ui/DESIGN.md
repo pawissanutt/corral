@@ -74,7 +74,7 @@ F7 Changes and F8 Activity replace only the main reading area through the option
 
 ### Candidate and evidence inspection
 
-Bound task/run sessions default Changes to the committed candidate, using exact immutable comparison-base and HEAD SHAs for paths, diffstat and hunks. `c` still selects the independent working/index comparisons; `o` is an explicitly unbound repository inspection, not a session rebind. Retained diffs keep their captured identities until refreshed/applied.
+Bound task/run sessions default Changes to the committed candidate, using exact immutable comparison-base and HEAD SHAs for paths, diffstat and hunks. `c` still selects the independent working/index comparisons; `o` is an explicitly unbound repository inspection, not a session rebind. Retained diffs keep their captured identities, selected-file status and diffstat until the new patch is explicitly applied; the current file-list metadata is not substituted into an older displayed hunk.
 
 F10 (Proof on compact navigation) and `/panels evidence` show the canonical read-only evidence workbench. Wide rows use a matrix; narrow rows stack the same implemented/tested/reviewed/accepted fields. `j/k` selects a criterion; pointer selection uses the same state; paging/wheel scrolls the reading area. Implemented is self-reported progress, test observations are worker assertions with canonical admission failures, and review applies candidate-wide. No per-criterion acceptance record exists, so acceptance stays not recorded. Legacy/no-manifest, missing, failed, not-run, stale, unavailable and superseded states are explicit.
 
