@@ -100,6 +100,13 @@ fn a_new_native_decision_requires_a_fresh_handoff_without_rewriting_history() {
     let f = worker();
     f.seed_checkpoint();
     decision(&f);
+    let back = corral_ops::progress_readback(&f.ctx, &f.id).unwrap();
+    assert_eq!(back.checkpoint_status, corral_core::ResumeStatus::Stale);
+    assert!(
+        back.checkpoint_reasons
+            .iter()
+            .any(|r| r == "obligations_changed")
+    );
     let before = f.snapshot();
     let error = done(&f.ctx, &f.id, "Implemented").unwrap_err();
     assert!(error.to_string().contains("obligations_changed"));

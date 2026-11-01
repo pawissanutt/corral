@@ -96,6 +96,9 @@ pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> 
         }) {
             reasons.push("source_run_changed".into());
         }
+        if source.is_some_and(|s| s.id == run.id) && obligations_changed(run, record) {
+            reasons.push("obligations_changed".into());
+        }
         if source
             .and_then(|s| s.progress.as_ref())
             .map_or(0, |p| p.revision)
@@ -111,6 +114,15 @@ pub fn resume_packet(ctx: &Ctx, task: &Task, run: &Run) -> Result<ResumePacket> 
     }
     if let Some(source) = source {
         for record in source.checkpoints.iter().rev() {
+            // Admission requires the latest checkpoint for the current run. Older
+            // snapshots may only supply progress when resuming into a new run.
+            if source.id == run.id
+                && checkpoint
+                    .as_ref()
+                    .is_some_and(|c| c.artifact != record.artifact)
+            {
+                break;
+            }
             if !assess(record)?.is_empty() {
                 continue;
             }
@@ -194,6 +206,14 @@ pub(crate) fn is_control_reply(
             ))
 }
 
+fn obligations_changed(run: &Run, record: &CheckpointRecord) -> bool {
+    let mut current = run.obligations.clone();
+    let mut captured = record.checkpoint.run_obligations.clone();
+    current.waits.retain(|wait| wait.open());
+    captured.waits.retain(|wait| wait.open());
+    current != captured
+}
+
 /// A worker calling `done` is reachable by definition. Retry uses this only for a live pane.
 pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
     if !run.checkpoint_required {
@@ -214,11 +234,7 @@ pub(crate) fn require_checkpoint(task: &Task, run: &Run) -> Result<()> {
     {
         reasons.push("progress_changed".into());
     }
-    let mut current = run.obligations.clone();
-    let mut captured = record.checkpoint.run_obligations.clone();
-    current.waits.retain(|wait| wait.open());
-    captured.waits.retain(|wait| wait.open());
-    if current != captured {
+    if obligations_changed(run, record) {
         reasons.push("obligations_changed".into());
     }
     if !reasons.is_empty() {
