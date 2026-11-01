@@ -20,7 +20,8 @@ Plan inspection retains the canonical role-specific ledger, phases, steps and cr
 - `bun test --cwd packages/corral-pi src/ui/inspector.test.ts src/ui/panels.test.ts src/ui/todo.test.ts src/ui/workbench.test.ts test/host-session.test.ts test/guidance-session.test.ts`: 59 passed, 770 assertions.
 - `bun test --cwd packages/corral-pi test/request-host.test.ts test/request.test.ts`: 46 passed, 181 assertions.
 - Screenshot: local browser capture of escaped actual renderer output, no network requests.
-- Assigned receipted quick gate follows commit/rebase; its result is recorded separately by Corral.
+- First assigned quick gate failed only two panel-shell assertions whose fixed row index/pager position assumed the old metadata length. Updated tests locate the actual generation row and current pager coordinates; all 7 panel-shell tests pass (153 assertions). The same navigation/resize invariants remain enforced.
+- Assigned receipted quick gate follows the corrected commit/rebase; its result is recorded separately by Corral.
 
 ## Boundaries and limitations
 
