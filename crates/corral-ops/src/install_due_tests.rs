@@ -24,8 +24,7 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().into()
 }
 
-#[test]
-fn older_installed_build_gets_one_install_event_per_landing() {
+fn fixture() -> (tempfile::TempDir, Ctx, PostLandOperation, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
     store.config.projects.insert(
@@ -63,9 +62,15 @@ fn older_installed_build_gets_one_install_event_per_landing() {
         "base":"main", "base_sha":old, "started":"2026-10-30T00:00:00Z"
     }))
     .unwrap();
-    let mut op = crate::hooks::prepare(&ctx, &task, &run, tmp.path(), &old, &landed)
+    let op = crate::hooks::prepare(&ctx, &task, &run, tmp.path(), &old, &landed)
         .unwrap()
         .unwrap();
+    (tmp, ctx, op, old, landed)
+}
+
+#[test]
+fn older_installed_build_gets_one_install_event_per_landing() {
+    let (tmp, ctx, mut op, old, landed) = fixture();
     assert!(!op.ready());
     check_with(&ctx, &op, || panic!("not landed yet")).unwrap();
     op.landed = true;
@@ -109,34 +114,44 @@ fn older_installed_build_gets_one_install_event_per_landing() {
             .count(),
         1
     );
+}
 
-    // Neither half of the notice may escape a refused enclosing atomic unit.
-    let mut refused = op.clone();
-    refused.key = "refused".into();
-    let result: anyhow::Result<()> = ctx.store.records_transaction(|| {
-        check_with(&ctx, &refused, || "unknown".into())?;
-        anyhow::bail!("refuse after staging both halves")
-    });
-    assert!(result.is_err());
-    assert!(
-        ctx.store
-            .record_row("install-notices", &refused.key)
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        !ctx.store
-            .events_shared()
-            .unwrap()
-            .iter()
-            .any(|event| event.kind == "install_due" && event.detail["operation"] == refused.key)
-    );
-
-    // Reach the same automatic landing completion used by production, with 1x/10x
-    // unrelated exported history. Every cell, including byte remainders, stays equal.
+#[test]
+fn automatic_install_notice_is_atomic_and_history_independent() {
     use corral_core::work::{self, Counter, HotScope};
+    struct Clock;
+    impl Drop for Clock {
+        fn drop(&mut self) {
+            corral_core::clock::pin_thread(None);
+        }
+    }
+    corral_core::clock::pin_thread(Some("2026-10-30T00:00:00Z".parse().unwrap()));
+    let _clock = Clock;
     let mut baseline: Option<(work::WorkSnapshot, work::WorkSnapshot)> = None;
     for scale in [1, 10] {
+        // Independent, identical lifecycle state; only historical event volume differs.
+        let (tmp, ctx, mut op, _old, _landed) = fixture();
+        op.landed = true;
+        // Neither half of the notice may escape a refused enclosing atomic unit.
+        let mut refused = op.clone();
+        refused.key = "refused".into();
+        let result: anyhow::Result<()> = ctx.store.records_transaction(|| {
+            check_with(&ctx, &refused, || "unknown".into())?;
+            anyhow::bail!("refuse after staging both halves")
+        });
+        assert!(result.is_err());
+        assert!(
+            ctx.store
+                .record_row("install-notices", &refused.key)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !ctx.store.events_shared().unwrap().iter().any(
+                |event| event.kind == "install_due" && event.detail["operation"] == refused.key
+            )
+        );
+
         for n in 0..100 * scale {
             ctx.store
                 .log_event(
