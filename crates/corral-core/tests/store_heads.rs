@@ -24,11 +24,14 @@ fn variant(
     nested: usize,
 ) -> (tempfile::TempDir, Store) {
     let (dir, store) = store();
+    // Creation also stamps status_since; pin the mutation clock before any derived rows.
+    store.fixture_pin_now(at(0)).unwrap();
     let mut task = store
         .create("Grown", Some("app"), Status::Running, "Spec body\n")
         .unwrap();
     grow(&mut task, runs, children, history, nested);
     (task.created, task.updated) = (at(0), at(0));
+    assert_eq!(task.status_since, Some(at(0)));
     store.fixture_put_task(&task).unwrap();
     (dir, store)
 }
