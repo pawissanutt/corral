@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativePanels } from "./panels.ts";
-import { box, panelLines, type PanelSnapshot } from "./panels-view.ts";
+import { box, panelLines, diffLine, type PanelSnapshot } from "./panels-view.ts";
 import { composerBar, contextLabel, overviewLines, panelFooter, panelHeader } from "./panels-chrome.ts";
 import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
@@ -158,6 +158,21 @@ test("narrow metadata is one row at rest; focused and expanded details are bound
   for (const line of native.renderInline(52, 24)) expect(visibleWidth(line)).toBe(52);
   expect(native.tab).toBe("Context");
   native.dispose();
+});
+test("overview file rows carry literal file actions rather than generic Context inspection", () => {
+  const rows = overviewLines(snapshot, { kind: "ready", files: [{ status: " M", path: "a  file.ts" }] });
+  expect(rows.find(row => row.text === "M a file.ts")).toEqual({ text: "M a file.ts", action: { kind: "diff", path: "a  file.ts" } });
+});
+test("diff syntax distinguishes additions/removals from headers and sanitizes controls", () => {
+  const theme = { fg: (color: string, text: string) => `${color}:${text}` };
+  expect(diffLine("+new line", theme)).toBe("toolDiffAdded:+new line");
+  expect(diffLine("-old line", theme)).toBe("toolDiffRemoved:-old line");
+  expect(diffLine("+++ b/file.ts", theme)).toBe("muted:+++ b/file.ts");
+  expect(diffLine("--- a/file.ts", theme)).toBe("muted:--- a/file.ts");
+  expect(diffLine("@@ -1 +1 @@", theme)).toBe("accent:@@ -1 +1 @@");
+  expect(diffLine("+unsafe\x1b[2J", theme)).not.toContain("\x1b");
+  const rows = overviewLines(snapshot, { kind: "ready", files: Array.from({ length: 5 }, (_, i) => ({ status: " M", path: `${i}.ts` })) });
+  expect(rows.find(row => row.text === "1 more in Files")).toEqual({ text: "1 more in Files", action: { kind: "files" } });
 });
 test("Git porcelain parsing handles real NUL separators, rename source fields, spaces and Unicode", () => {
   expect(parseStatus(" M a file.ts\0R  新.ts\0old.ts\0?? --flag.ts\0")).toEqual([

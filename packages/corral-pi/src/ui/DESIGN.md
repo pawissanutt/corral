@@ -70,7 +70,7 @@ The Message field has a filled graphite body, inset native input and model/effor
 Branded header: binding, role, generation and repository. Composer: model and effort. Wide Context overview: measured usage, changed files, agents/jobs and plan; when that overview is not visible, usage moves to the compact footer. The stock multi-row footer is replaced, not stacked. Refusals and extension statuses are retained.
 
 ### Read-only details
-Bounded native overlays show Git diff or full metadata, with visible scroll/close controls. Foreground SDK prompts disable background panel interception.
+Bounded native overlays show Git diff or full metadata, with visible scroll/close controls. Filename rows in the overview and full/inline Files list open the actual selected-path diff. Additions/removals retain +/− signs as well as semantic green/red; file headers are muted and hunk markers use focus blue. Foreground SDK prompts disable background panel interception.
 
 ## Do's and Don'ts
 

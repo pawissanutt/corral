@@ -63,9 +63,9 @@ export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState)
     case "loading": rows.push({ text: "Reading Git status…" }); break;
     case "error": rows.push({ text: files.reason }); break;
     case "ready":
-      for (const file of files.files.slice(0, 4)) rows.push({ text: plainLabel(`${file.status} ${file.path}`) });
+      for (const file of files.files.slice(0, 4)) rows.push({ text: plainLabel(`${file.status} ${file.path}`), action: { kind: "diff", path: file.path } });
       if (!files.files.length) rows.push({ text: "Working tree clean" });
-      if (files.files.length > 4) rows.push({ text: `${files.files.length - 4} more in Files` });
+      if (files.files.length > 4) rows.push({ text: `${files.files.length - 4} more in Files`, action: { kind: "files" } });
       break;
   }
   rows.push({ text: "" }, { text: "Agents & jobs", heading: true });

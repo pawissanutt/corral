@@ -1,6 +1,6 @@
 // Native presentation only. All values come from the bound host or an explicit Git read.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { ContextUsage } from "@earendil-works/pi-coding-agent";
+import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { HostIdentity } from "../roles/types.ts";
 import type { TodoProgress } from "./todo-widget.ts";
 
@@ -28,7 +28,11 @@ export interface PanelFile { readonly path: string; readonly status: string }
 export type FilesState = { readonly kind: "unread" | "loading" } |
   { readonly kind: "ready"; readonly files: readonly PanelFile[] } |
   { readonly kind: "error"; readonly reason: string };
-export interface PanelLine { readonly text: string; readonly heading?: boolean }
+export interface PanelLine {
+  readonly text: string;
+  readonly heading?: boolean;
+  readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" };
+}
 export const PANEL_BG = "\x1b[48;2;25;27;32m";
 export const PANEL_TEXT = "\x1b[38;2;224;227;233m";
 export const PANEL_MUTED = "\x1b[38;2;155;162;176m";
@@ -53,6 +57,14 @@ export function box(title: string, lines: readonly string[], width: number, heig
   }
   result.push(`${PANEL_BG}${rule}└${"─".repeat(width - 2)}┘${RESET}`);
   return result;
+}
+export function diffLine(text: string, theme: Pick<Theme, "fg">): string {
+  const safe = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  if (/^(diff |index |---|\+\+\+)/.test(safe)) return theme.fg("muted", safe);
+  if (safe.startsWith("@@")) return theme.fg("accent", safe);
+  if (safe.startsWith("+")) return theme.fg("toolDiffAdded", safe);
+  if (safe.startsWith("-")) return theme.fg("toolDiffRemoved", safe);
+  return safe;
 }
 export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: PanelSnapshot | null, files: FilesState): PanelLine[] {
   if (!snapshot) return [{ text: "Session state unavailable" }];
