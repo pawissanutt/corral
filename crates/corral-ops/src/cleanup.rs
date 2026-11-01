@@ -106,7 +106,11 @@ fn reap_with_events(ctx: &Ctx, task: &Task, events: &[corral_core::Event]) {
                         && event.kind == "verdict"
                         && event.detail["run"].as_str() == Some(&run.id)
                         && event.detail["reviewer"].as_str() == Some(&review.reviewer)
-                        && event.ts >= review.at
+                        && match event.detail["review_at"].as_str() {
+                            Some(at) => at == review.at.to_string(),
+                            // Legacy events did not carry a review identity.
+                            None => event.ts >= review.at,
+                        }
                 })
             {
                 continue;
