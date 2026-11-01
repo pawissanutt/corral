@@ -237,6 +237,31 @@ for (const path of ["job_kill", "runtime limit", "leader exit", "shutdown"] as c
   });
 }
 
+test("shutdown awaits process-group closure without waiting on remote exit receipts", async () => {
+  // Given a ready descendant and an exit-report call held at the remote boundary.
+  let release!: (receipt: JobReceipt) => void;
+  const held = new Promise<JobReceipt>((resolve) => { release = resolve; });
+  const fx = fixture({ answer: async (sent) => sent.payload.action === "exited"
+    ? held : { state: "committed", result: {} } });
+  const ready = fx.fifo("ready");
+  const up = readFile(ready, "utf8");
+  const { job } = await fx.runtime.start(stubborn(ready, "wait"), "shutdown-boundary");
+  expect(await up).toBe("up\n");
+  const { pid, start } = fx.identity(job as string);
+  // When shutdown is awaited, it must be a process-completion boundary, not just a signal.
+  const shutdown = fx.runtime.shutdown();
+  try {
+    expect(shutdown instanceof Promise).toBeTrue();
+    await shutdown;
+    // Then cleanup has completed independently of the deliberately blocked remote receipt.
+    expect(startTimeOf(pid)).toBeUndefined();
+    expect(processGroup(pid, start).members).toBe(0);
+  } finally {
+    release({ state: "committed", result: {} });
+    await fx.runtime.settled(job as string);
+  }
+});
+
 const PIDFD_WAIT = "import os, select, sys\nfd = os.pidfd_open(int(sys.argv[1]))\nprint('ARMED', flush=True)\n"
   + "ready, _, _ = select.select([fd], [], [], 30)\nprint('EXITED' if ready else 'TIMEOUT', flush=True)\n";
 

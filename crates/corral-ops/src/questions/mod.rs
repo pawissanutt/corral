@@ -37,6 +37,7 @@ pub use ask::{
     validate_ask, wake_route, withdraw,
 };
 pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
+pub(crate) use events::{pending_keys, pending_keys_ref};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
 pub use triage::{
     Actor, AnswerInput, Applied, Outcome, PmRequest, answer, cancel, deadline, escalate,

@@ -17,6 +17,7 @@ mod codec;
 mod fixture;
 pub mod fs;
 pub mod guard;
+mod install_notices;
 mod lesson_approvals;
 mod lesson_artifacts;
 mod load;
@@ -218,6 +219,7 @@ impl SqliteBackend {
         accepted_proof::init(&mut writer)?;
         lesson_artifacts::init(&mut writer)?;
         lesson_approvals::init(&mut writer)?;
+        install_notices::init(&mut writer)?;
         Ok(Self {
             path: path.to_owned(),
             options,

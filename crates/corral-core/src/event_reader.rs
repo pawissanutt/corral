@@ -373,8 +373,7 @@ impl EventReader {
 pub fn actionable_kind(event: &Event) -> Option<&str> {
     let kind = match event.kind.as_str() {
         "autopilot" => event.detail.get("to")?.as_str()?,
-        "plan_awaiting_owner" => "needs_me",
-        "plan_escalated" | "plan_failed" => "escalated",
+        "review_escalated" | "plan_escalated" | "plan_failed" => "escalated",
         "plan_decomposed" => "done",
         kind => kind,
     };
@@ -386,6 +385,19 @@ pub fn actionable_kind(event: &Event) -> Option<&str> {
             .contains(&kind)
             .then_some(kind),
     }
+}
+
+/// Whether this event requires a default PM wake. Question-derived status changes
+/// carry their canonical keys so cursor rearming cannot deliver the same cause twice.
+pub fn default_pm_event(event: &Event) -> bool {
+    if event.kind == "needs_me"
+        && event.detail["question_keys"]
+            .as_array()
+            .is_some_and(|keys| !keys.is_empty())
+    {
+        return false;
+    }
+    actionable_kind(event).is_some_and(|kind| crate::config::PM_DEFAULT_KINDS.contains(&kind))
 }
 
 /// Shared single-line notification, suitable for wait and persistent push.

@@ -11,6 +11,54 @@ use corral_core::migrate::JournalState;
 use support::{FENCE, Legacy, kill_at, killed};
 
 #[test]
+fn imported_install_notices_keep_verbatim_history_and_replay_keys_through_rollback() {
+    let legacy = Legacy::new();
+    let path = legacy.corral.join("events.jsonl");
+    let mut text = fs::read_to_string(&path).unwrap();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    let event = serde_json::json!({"ts":"2026-10-30T00:00:00Z", "task":"T-001",
+        "kind":"install_due", "detail":{"operation":"legacy-landing", "reason":"unchanged"}});
+    text.push_str(&format!("{event}\n{event}\n"));
+    fs::write(&path, &text).unwrap();
+    let before = legacy.legacy_bytes();
+    legacy.migrate().apply().unwrap();
+    // Inspect the imported database without publishing a separate config-observation write.
+    let store = corral_core::Store::open_unobserved(&legacy.root).unwrap();
+    assert_eq!(
+        store
+            .record::<bool>("install-notices", "legacy-landing")
+            .unwrap(),
+        Some(true)
+    );
+    let events = store.events_shared().unwrap();
+    let notices: Vec<_> = events
+        .iter()
+        .filter(|event| event.kind == "install_due")
+        .collect();
+    assert_eq!(notices.len(), 2);
+    assert!(
+        notices
+            .iter()
+            .all(|notice| notice.detail == event["detail"])
+    );
+    drop(store);
+    let reopened = corral_core::Store::open_unobserved(&legacy.root).unwrap();
+    assert_eq!(
+        reopened
+            .record::<bool>("install-notices", "legacy-landing")
+            .unwrap(),
+        Some(true)
+    );
+    assert_eq!(reopened.events_shared().unwrap().len(), events.len());
+    drop(reopened);
+    legacy.migrate().rollback(None).unwrap();
+    assert_eq!(legacy.legacy_bytes(), before);
+    assert_eq!(fs::read_to_string(path).unwrap(), text);
+}
+
+#[test]
 fn dry_run_classifies_every_file_and_reports_lost_gates_as_history() {
     // Given a drained legacy board with a process-lost gate on a Done task.
     let legacy = Legacy::new();

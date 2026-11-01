@@ -175,7 +175,7 @@ fn autopilot_actionable_kinds_and_single_line_format_are_shared() {
 fn plan_events_reuse_owner_attention_and_completion_subscriptions() {
     // Given durable plan outcomes on the same board event stream.
     for (source, expected) in [
-        ("plan_awaiting_owner", "needs_me"),
+        ("plan_awaiting_owner", "plan_awaiting_owner"),
         ("plan_escalated", "escalated"),
         ("plan_failed", "escalated"),
         ("plan_decomposed", "done"),
@@ -254,15 +254,10 @@ fn every_pm_actionable_kind_is_classified_and_is_exactly_what_push_kinds_accepts
         "{problems:?}"
     );
     // While a kind outside the list is neither accepted nor actionable:
-    for kind in [
-        "question_answered",
-        "config_invalid",
-        "pm_event_delivery",
-        "working",
-    ] {
+    for kind in ["question_answered", "pm_event_delivery", "working"] {
         config.pm.push_kinds = vec![kind.into()];
         let problems = config.validate(dir.path()).unwrap_err().0;
-        let prefix = format!("pm.push_kinds: unknown actionable kind {kind:?}; use done, ");
+        let prefix = format!("pm.push_kinds: unknown actionable kind {kind:?}; use ");
         assert!(
             problems.iter().any(|p| p.starts_with(&prefix)),
             "{problems:?}"

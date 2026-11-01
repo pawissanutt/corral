@@ -408,3 +408,25 @@ fn pm_prompt(ctx: &Ctx, policy: &crate::pm_policy::PolicySnapshot) -> Result<Str
     out.push_str(&crate::pm_policy::instructions(policy)?);
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn pm_prompt_and_installed_skill_share_the_complete_watch_runbook() {
+        let root = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let ctx = crate::Ctx::from_store(corral_core::Store::init(root.path()).unwrap());
+        let policy = crate::pm_policy::snapshot(&ctx).unwrap();
+        let prompt_path = super::save_prompt(&ctx, &policy).unwrap();
+        let prompt = std::fs::read_to_string(prompt_path).unwrap();
+        let bin = crate::prompt::corral_bin().unwrap().display().to_string();
+        let runbook = crate::skill::pm_runbook("corral");
+        assert!(prompt.contains(crate::skill::pm_runbook(&bin).trim()));
+        std::fs::create_dir(home.path().join(".agents")).unwrap();
+        crate::ensure_skills(home.path(), "agents").unwrap();
+        let installed =
+            std::fs::read_to_string(home.path().join(".agents/skills/corral/SKILL.md")).unwrap();
+        assert!(installed.contains(runbook.trim()));
+        assert_eq!(installed, crate::role_skill_markdown("corral").unwrap());
+    }
+}
