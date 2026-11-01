@@ -26,6 +26,23 @@ use jiff::Timestamp;
 use super::{consulted, run_is_pi_native};
 use crate::Ctx;
 
+/// The watchdog needs the current native generation, which compatibility shells omit.
+/// Read only that keyed row on the head's view, never the accumulated generation tail.
+pub(crate) fn watchdog_run(head: &corral_core::TaskHead, run: &Run) -> Result<Run> {
+    let mut projected = run.clone();
+    if let Some(host) = projected.agent_host.as_mut() {
+        let container = ContainerRef::Worker {
+            task: head.id.clone(),
+            run: run.id.clone(),
+        };
+        host.generations = head
+            .agent_generation(&container, host.binding.generation)?
+            .into_iter()
+            .collect();
+    }
+    Ok(projected)
+}
+
 /// One open pi-native container and whether its host binding is healthy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerSync {
