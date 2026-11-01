@@ -67,6 +67,13 @@ operation tests: 64 passed, five pre-existing ignored tests. `cargo check -p cor
 Baseline scratch reproductions: new subprocess tests fail in four cases; separate list/inbox/conditional
 and structured-output probes fail in all four cases. Raw red/green logs are attached to the run.
 
+The first quick gate found stale worker/reviewer/PM/assistant loadout expectations after exposing
+receipt lookup, and assistant tool identity instability from constructing a fresh lookup spec on each
+call. Updated those explicit allowlist assertions (including PM lookup wire cases) and retained one
+assistant lookup spec. All 75 tests in the four affected role test files pass after the correction.
+The reviewer turn-number failure was a consequence of its earlier loadout assertion aborting that
+sequence; the complete reviewer file now passes unchanged turn/effect assertions.
+
 ## Limits
 
 No live owner-configured herdr session or real model/provider was contacted. Host tests use disposable

@@ -24,6 +24,7 @@ import pm, { CONTEXT_ASSET, pmRole } from "./index.ts";
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "pm" as const, generation: 1 };
 const context = { identity, cwd: "/tmp", model: "m" };
 const cases = [
+  { name: "receipt_lookup", op: "receipt_lookup", payload: { request_id: `rq-${"a".repeat(32)}`, task: "T-007" } },
   { name: "brief", op: "read_brief", payload: {} },
   { name: "next", op: "read_next", payload: {} },
   { name: "show", op: "read_show", payload: { task: "T-007" } },
@@ -211,7 +212,7 @@ test("the PM exposes only its scoped operations and requires the installed conte
   // Then neither lifecycle-only operations nor owner authority become model tools.
   expect(pm.upstreamTools).toEqual(["read", "edit", "write", "grep", "find", "ls", "bash"]);
   expect(tools.map((item) => item.name)).toEqual(names);
-  expect([...pm.corralOps].sort()).toEqual(["hello", "event", "receipt_lookup", ...cases.map(({ op }) => op), "todo"].sort());
+  expect([...pm.corralOps].sort()).toEqual(["hello", "event", ...cases.map(({ op }) => op), "todo"].sort());
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-pm-noassets-"));
   try {
     expect(() => pmRole(empty).contract(context)).toThrow(`role_asset_missing: ${CONTEXT_ASSET}`);
