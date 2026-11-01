@@ -1,0 +1,234 @@
+import { createHash } from "node:crypto";
+import type { HostIdentity } from "../roles/types.ts";
+import { target } from "./chrome.ts";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { VStack, ScrollView, Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { NativeImageViewer } from "./image-viewer.ts";
+import { ReviewStore, COMPARISONS, comparisonLabel, fileStatus } from "./review-store.ts";
+import { activityRows } from "./activity-view.ts";
+import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
+export function plainClick(event: TuiMouseEvent): boolean {
+  return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
+}
+export type MainView = "conversation" | "changes" | "activity";
+export interface WorkbenchOptions {
+  readonly identity: HostIdentity;
+  readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
+  readonly changed: () => void; readonly canInteract: () => boolean;
+}
+/** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
+export class NativeWorkbench {
+  view: MainView = "conversation"; focused = false;
+  readonly review: ReviewStore;
+  readonly images: NativeImageViewer;
+  private ui: ExtensionUIContext | undefined;
+  private changesScroll: ScrollView | undefined; private activityScroll: ScrollView | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private debounce: ReturnType<typeof setTimeout> | undefined;
+  private jobIndex = 0; private jobHits = new Map<number, number>(); private hunk = 0; private hunkRows: number[] = [];
+  private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
+  private displayedRoot: string | undefined;
+  private displayedAt: number | undefined; private displayedHead: string | undefined; private displayedComparison = "";
+  constructor(private readonly options: WorkbenchOptions) {
+    this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen; options.changed(); });
+    this.review = new ReviewStore(options.cwd, () => options.changed());
+  }
+  bind(ui: ExtensionUIContext): void { this.ui = ui; this.images.bind(); }
+  invalidateFiles(): void {
+    if (this.debounce) clearTimeout(this.debounce);
+    this.debounce = setTimeout(() => { this.debounce = undefined; void this.review.refresh(); }, 300);
+    this.debounce.unref();
+  }
+  setView(view: MainView): void {
+    this.images.close();
+    this.view = view; this.focused = view !== "conversation";
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    if (view !== "conversation") {
+      if (view === "changes") void this.review.refresh();
+      let ticks = 0;
+      this.timer = setInterval(() => {
+        if (this.view === "changes" && ++ticks % 2 === 0) void this.review.refresh();
+        this.options.changed();
+      }, 1000); this.timer.unref();
+    }
+    this.options.changed();
+  }
+  async openFile(path: string): Promise<void> {
+    this.setView("changes"); await this.review.select(path); this.acceptPatch();
+  }
+  private nav(): Component {
+    return {
+      render: width => [PANEL_BG + pad(
+        (this.view === "conversation" ? PANEL_BLUE : PANEL_MUTED) + " Conversation F9 " +
+        (this.view === "changes" ? PANEL_BLUE : PANEL_MUTED) + " Changes F7 " +
+        (this.view === "activity" ? PANEL_BLUE : PANEL_MUTED) + " Activity F8 " + PANEL_MUTED +
+        (this.focused ? "· Esc chat · Enter compose" : ""), width) + RESET,
+        PANEL_BG + PANEL_MUTED + pad(`${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET],
+      handleMouse: event => {
+        if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
+        this.setView(event.x < 17 ? "conversation" : event.x < 29 ? "changes" : "activity");
+        return { handled: true };
+      }, invalidate() {},
+    };
+  }
+  mount(transcript: Component): Component {
+    this.changesScroll = new ScrollView({ render: width => this.renderChanges(width), handleMouse: event => this.diffMouse(event), invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
+      if (this.options.canInteract() && plainClick(event)) { this.focused = true; const job = this.jobHits.get(event.y); if (job !== undefined) this.jobIndex = job; this.options.changed(); return { handled: true }; } return undefined;
+    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    return new VStack([
+      { component: this.nav(), basis: 2, shrink: 0 },
+      { component: transcript, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "conversation" && !this.images.isOpen },
+      { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => { this.images.setViewportHeight(Math.max(0, viewport.height - 2)); return this.images.isOpen; } },
+      { component: this.changesScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
+      { component: this.activityScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "activity" },
+    ]);
+  }
+  private renderActivity(width: number): string[] {
+    this.jobHits.clear(); const rows: string[] = [];
+    for (const row of activityRows(this.options.snapshot(), this.jobIndex)) {
+      const line = row.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+      const wrapped = new Text(this.ui ? this.ui.theme.fg(row.color ?? "muted", line) : line, 0, 0).render(width);
+      if (row.job !== undefined) { for (let i = 0; i < wrapped.length; i++) this.jobHits.set(rows.length + i, row.job); }
+      rows.push(...wrapped);
+    }
+    return rows;
+  }
+  private acceptPatch(): void {
+    const snapshot = this.review.patchSnapshot;
+    if (!snapshot || snapshot.root !== this.review.root || snapshot.path !== this.review.selected || snapshot.comparison !== this.review.comparison) return;
+    this.lastPatch = snapshot.text; this.displayedPath = snapshot.path; this.displayedRoot = snapshot.root;
+    this.displayedAt = snapshot.at; this.displayedHead = snapshot.head;
+    this.displayedComparison = comparisonLabel(snapshot.comparison); this.hunk = 0;
+    this.options.changed();
+  }
+  private renderChanges(width: number): string[] {
+    const r = this.review;
+    const label = comparisonLabel(r.comparison);
+    const sameScope = this.displayedRoot === r.root && this.displayedPath === r.selected && this.displayedComparison === label;
+    const base = sameScope ? this.displayedHead : r.patchSnapshot?.comparison === r.comparison ? r.patchSnapshot.head : undefined;
+    const state = r.error ? "STALE / unavailable: " + plainLabel(r.error) : r.refreshing ? "Checking Git…" : r.checkedAt ? "Updated " + new Date(r.checkedAt).toLocaleTimeString() : "Not loaded";
+    const head = [PANEL_BLUE + `${plainLabel(r.name)} (${plainLabel(r.branch)})` + PANEL_TEXT,
+      ...(width >= 90 ? [PANEL_MUTED + plainLabel(r.root)] : []), PANEL_MUTED + label + (width >= 90 ? ` · base ${base?.slice(0, 10) ?? "unborn/unavailable"}` : ""),
+      PANEL_MUTED + state, PANEL_MUTED + (width >= 90 ? "/ search · c compare · o repository · j/k files · n/p hunks · a ask hunk · r refresh" : "j/k files · n/p hunks · a ask · / filter"), ""];
+    if (r.limitNotice) head.push(PANEL_MUTED + r.limitNotice);
+    const file = r.current;
+    head.push(PANEL_BLUE + (file ? `${plainLabel(file.path)} · ${fileStatus(file)}` : "No selected file"), "");
+    if (!file) return [...head.flatMap(line => new Text(line, 0, 0).render(width)), plainLabel(r.refreshing ? "Loading comparison…" : r.error ?? (r.selected ? "Selected file is no longer in this comparison." : "No changes in this comparison."))];
+    if (r.patchPath !== r.selected || r.patchComparison !== r.comparison) return [...head.map(line => pad(line, width)), "Loading selected diff…"];
+    if (this.displayedPath !== r.selected || this.displayedRoot !== r.root || this.displayedComparison !== comparisonLabel(r.comparison) || !this.lastPatch) this.acceptPatch();
+    if (this.displayedRoot !== r.root || this.displayedPath !== r.selected || this.displayedComparison !== label) {
+      return [...head.flatMap(line => new Text(line, 0, 0).render(width)), r.patch.startsWith("Diff unavailable:") ? plainLabel(r.patch) : "Waiting for a captured diff matching this scope…"];
+    }
+    if (r.patch !== this.lastPatch) head.push(PANEL_BLUE + "New diff available · r to apply; current hunk/scroll preserved");
+    const result = head.flatMap(line => new Text(line, 0, 0).render(width));
+    this.hunkRows = []; this.hunkSources = [];
+    const source = this.lastPatch.split("\n");
+    let oldLine: number | undefined, newLine: number | undefined;
+    source.forEach((line, index) => {
+      if (line.startsWith("@@")) { this.hunkRows.push(result.length); this.hunkSources.push(index); }
+      if (line.startsWith("diff ")) { oldLine = undefined; newLine = undefined; }
+      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line);
+      if (hunk) { oldLine = Number(hunk[1]); newLine = Number(hunk[2]); }
+      let gutter = "";
+      const inHunk = oldLine !== undefined && newLine !== undefined && !hunk && /^[ +\-]/.test(line);
+      if (inHunk && oldLine !== undefined && newLine !== undefined) {
+        const before = line.startsWith("+") ? "" : String(oldLine++);
+        const after = line.startsWith("-") ? "" : String(newLine++);
+        gutter = PANEL_MUTED + before.padStart(4) + " " + after.padStart(4) + " │ " + PANEL_TEXT;
+      }
+      const colored = this.ui ? diffLine(line, this.ui.theme, inHunk) : plainLabel(line);
+      result.push(...new Text(gutter + colored, 0, 0).render(width));
+    });
+    return result;
+  }
+  private diffMouse(event: TuiMouseEvent) {
+    if (!this.options.canInteract() || !plainClick(event)) return undefined;
+    this.focused = true;
+    for (let i = 0; i < this.hunkRows.length; i++) if ((this.hunkRows[i] ?? Infinity) <= event.y) this.hunk = i;
+    this.options.changed(); return { handled: true };
+  }
+  files(): PanelLine[] {
+    const r = this.review;
+    const rows: PanelLine[] = [{ text: `${r.name} · ${r.branch}`, heading: true },
+      { text: `${r.checkedAt ? r.visible.length + " matching" : "Loading / unavailable"} · ${r.comparison}${r.query ? " · /" + r.query : ""}` }];
+    if (r.error) rows.push({ text: "STALE: " + plainLabel(r.error) });
+    for (const file of r.visible) {
+      const stat = r.stats.get(file.path);
+      const delta = stat ? stat.added === null ? " · binary" : ` +${stat.added} −${stat.removed}` : "";
+      rows.push({ text: `${file.path === r.selected ? ">" : " "} ${file.path}${delta} · ${fileStatus(file)}`, action: { kind: "diff", path: file.path } });
+    }
+    if (!r.visible.length) rows.push({ text: r.error ? "Git unavailable · r to retry" : r.refreshing ? "Reading Git…" : r.files.length ? "No matching files · / to search" : "Working tree clean" });
+    if (r.limitNotice) rows.push({ text: r.limitNotice });
+    return rows;
+  }
+  async selectRelative(delta: number): Promise<void> {
+    const rows = this.review.visible, from = rows.findIndex(file => file.path === this.review.selected);
+    const file = rows[Math.max(0, Math.min(rows.length - 1, from + delta))];
+    if (file) { await this.review.select(file.path); this.acceptPatch(); this.changesScroll?.scrollToStart(); }
+  }
+  private async search(): Promise<void> {
+    const value = await this.ui?.input("Filter changed paths", this.review.query);
+    if (value === undefined) return;
+    this.review.query = value;
+    if (!this.review.visible.some(file => file.path === this.review.selected)) {
+      const file = this.review.visible[0]; if (file) await this.review.select(file.path);
+    }
+    this.options.changed();
+  }
+  private async repository(): Promise<void> {
+    const value = await this.ui?.input("Read-only repository scope (does not rebind this session)", this.review.root);
+    if (value) { this.lastPatch = ""; this.displayedPath = undefined; await this.review.setRepository(value); this.changesScroll?.scrollToStart(); }
+  }
+  private moveHunk(delta: number): void {
+    this.hunk = Math.max(0, Math.min(this.hunkRows.length - 1, this.hunk + delta));
+    const row = this.hunkRows[this.hunk]; if (row !== undefined) this.changesScroll?.scrollTo(row, { disableFollow: true });
+    this.options.changed();
+  }
+  askHunk(): void {
+    const ui = this.ui, file = this.review.current, start = this.hunkSources[this.hunk];
+    if (!ui || !file) return;
+    if (this.displayedPath !== file.path || this.displayedRoot !== this.review.root || this.review.patchComparison !== this.review.comparison || this.displayedComparison !== comparisonLabel(this.review.comparison)) {
+      ui.notify("Wait for the selected comparison to load before attaching its hunk.", "warning"); return;
+    }
+    const source = this.lastPatch.split("\n");
+    const end = this.hunkSources[this.hunk + 1] ?? source.length;
+    const excerpt = start === undefined ? source.slice(0, 18) : source.slice(start, Math.min(end, start + 24));
+    const reference = `Please review ${JSON.stringify(file.path)} in ${this.review.root}\nComparison: ${this.displayedComparison} · HEAD ${this.displayedHead ?? "unborn/unavailable"}\nDiff SHA256: ${createHash("sha256").update(this.lastPatch).digest("hex")}\nSelected Git excerpt (observed ${this.displayedAt ? new Date(this.displayedAt).toISOString() : "time unavailable"}):\n` + excerpt.map(line => "> " + line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")).join("\n").slice(0, 3000);
+    const draft = ui.getEditorText(); ui.setEditorText(draft + (draft ? "\n\n" : "") + reference + "\n");
+    this.focused = false; this.options.changed(); // Never submit or overwrite the existing draft.
+  }
+  handleInput(data: string): boolean {
+    if (matchesKey(data, "f9")) { this.setView("conversation"); this.focused = false; return true; }
+    if (matchesKey(data, "f7")) { this.setView("changes"); return true; }
+    if (matchesKey(data, "f8")) { this.setView("activity"); return true; }
+    if (this.images.isOpen && matchesKey(data, "escape")) { this.images.close(); return true; }
+    if (!this.focused || this.view === "conversation") return false;
+    if (matchesKey(data, "escape")) { this.setView("conversation"); this.focused = false; return true; }
+    if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
+    const scroll = this.view === "changes" ? this.changesScroll : this.activityScroll;
+    if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {
+      scroll?.scrollBy(matchesKey(data, "up") ? -3 : matchesKey(data, "down") ? 3 : matchesKey(data, "pageUp") ? -12 : 12); this.options.changed(); return true;
+    }
+    if (data === "j" || data === "k") {
+      if (this.view === "changes") void this.selectRelative(data === "j" ? 1 : -1);
+      else this.jobIndex = Math.max(0, Math.min((this.options.snapshot()?.jobs?.length ?? 1) - 1, this.jobIndex + (data === "j" ? 1 : -1)));
+      this.options.changed(); return true;
+    }
+    if (this.view === "changes") {
+      if (data === "/") { void this.search(); return true; }
+      if (data === "o") { void this.repository(); return true; }
+      if (data === "c") { const next = COMPARISONS[(COMPARISONS.indexOf(this.review.comparison) + 1) % COMPARISONS.length]; if (next) { this.lastPatch = ""; void this.review.setComparison(next); } return true; }
+      if (data === "r") { void this.review.refresh().then(() => this.acceptPatch()); return true; }
+      if (data === "n" || data === "p") { this.moveHunk(data === "n" ? 1 : -1); return true; }
+      if (data === "a") { this.askHunk(); return true; }
+    }
+    if (data.startsWith("\x1b")) return false; // Terminal replies/focus events are not typing.
+    this.focused = false; return false;
+  }
+  dispose(): void {
+    if (this.timer) clearInterval(this.timer); if (this.debounce) clearTimeout(this.debounce);
+    this.images.dispose(); this.review.dispose(); this.ui = undefined;
+  }
+}

@@ -1,0 +1,59 @@
+diff --git a/dist/modes/interactive/chat-viewport.d.ts b/dist/modes/interactive/chat-viewport.d.ts
+index 65638e7fc46589141ca4b0d37e7032f553d6f573..b94d7375521752f911de63a0cd0dff5827b3e819 100644
+--- a/dist/modes/interactive/chat-viewport.d.ts
++++ b/dist/modes/interactive/chat-viewport.d.ts
+@@ -1,6 +1,7 @@
+ import { type Component, ScrollView, type ScrollViewScrollbar } from "@earendil-works/pi-tui";
+ export interface ChatViewportOptions {
+     readonly document: Component;
++    readonly mainView?: (transcript: Component) => Component;
+     readonly pendingMessages: Component;
+     readonly status: Component;
+     readonly editor: Component;
+diff --git a/dist/modes/interactive/chat-viewport.js b/dist/modes/interactive/chat-viewport.js
+index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623ba0deaf39 100644
+--- a/dist/modes/interactive/chat-viewport.js
++++ b/dist/modes/interactive/chat-viewport.js
+@@ -20,7 +20,7 @@ export function createChatViewport(options) {
+     return {
+         transcript,
+         root: new VStack([
+-            { component: transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
++            { component: options.mainView?.(transcript) ?? transcript, basis: 0, grow: 1, shrink: 1, minSize: 1 },
+             { component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
+         ]),
+     };
+diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
+index 6142005e6e816123e73e68c568f53f4a6c3697bc..a68093f3a759fe613790f0e4ef1ea7f280b3365c 100644
+--- a/dist/modes/interactive/interactive-mode.d.ts
++++ b/dist/modes/interactive/interactive-mode.d.ts
+@@ -3,7 +3,7 @@
+  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
+  */
+ import { type ImageContent } from "@earendil-works/pi-ai/compat";
+-import { type Terminal } from "@earendil-works/pi-tui";
++import { type Component, type Terminal } from "@earendil-works/pi-tui";
+ import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
+ import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
+ import { SessionManager } from "../../core/session-manager.ts";
+@@ -38,6 +38,8 @@ export interface InteractiveModeOptions {
+     initialThemeSetting?: string;
+     /** Terminal implementation. Defaults to the current process terminal. */
+     terminal?: Terminal;
++    /** Optional body composition; retains the original transcript and fixed input dock. */
++    mainView?: (transcript: Component) => Component;
+ }
+ export declare class InteractiveMode {
+     private runtimeHost;
+diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
+index d2343a5bb53c9d9ab8060e0a242f561da2cbfd3a..d68c58be3f9630f3620b367b9252b6622bb1757b 100644
+--- a/dist/modes/interactive/interactive-mode.js
++++ b/dist/modes/interactive/interactive-mode.js
+@@ -676,6 +676,7 @@ export class InteractiveMode {
+         this.renderWidgets(); // Initialize with default spacer
+         const viewport = createChatViewport({
+             document: this.documentContainer,
++            mainView: this.options.mainView,
+             pendingMessages: this.pendingMessagesContainer,
+             status: this.statusContainer,
+             widgetsAbove: this.widgetContainerAbove,

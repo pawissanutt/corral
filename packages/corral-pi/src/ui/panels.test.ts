@@ -176,7 +176,7 @@ test("diff syntax distinguishes additions/removals from headers and sanitizes co
 });
 test("Git porcelain parsing handles real NUL separators, rename source fields, spaces and Unicode", () => {
   expect(parseStatus(" M a file.ts\0R  新.ts\0old.ts\0?? --flag.ts\0")).toEqual([
-    { status: " M", path: "a file.ts" }, { status: "R ", path: "新.ts" }, { status: "??", path: "--flag.ts" },
+    { status: " M", path: "a file.ts" }, { status: "R ", path: "新.ts", originalPath: "old.ts" }, { status: "??", path: "--flag.ts" },
   ]);
 });
 test("cancelled native reads reject instead of leaving an owned Git request alive", async () => {

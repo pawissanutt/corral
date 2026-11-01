@@ -6,7 +6,7 @@ import type { TodoProgress } from "./todo-widget.ts";
 
 export const PANEL_TABS = ["Context", "Files", "Agents", "Plan"] as const;
 export type PanelTab = typeof PANEL_TABS[number];
-export interface PanelJob { readonly job: string; readonly state: string }
+export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
 export interface PanelSnapshot {
   readonly bound: boolean;
   readonly model: string | null;
@@ -24,7 +24,7 @@ export interface PanelSnapshot {
   readonly steering: number;
   readonly followUps: number;
 }
-export interface PanelFile { readonly path: string; readonly status: string }
+export interface PanelFile { readonly path: string; readonly status: string; readonly originalPath?: string }
 export type FilesState = { readonly kind: "unread" | "loading" } |
   { readonly kind: "ready"; readonly files: readonly PanelFile[] } |
   { readonly kind: "error"; readonly reason: string };
@@ -58,9 +58,9 @@ export function box(title: string, lines: readonly string[], width: number, heig
   result.push(`${PANEL_BG}${rule}└${"─".repeat(width - 2)}┘${RESET}`);
   return result;
 }
-export function diffLine(text: string, theme: Pick<Theme, "fg">): string {
+export function diffLine(text: string, theme: Pick<Theme, "fg">, inHunk = false): string {
   const safe = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
-  if (/^(diff |index |---|\+\+\+)/.test(safe)) return theme.fg("muted", safe);
+  if (!inHunk && /^(diff |index |---|\+\+\+)/.test(safe)) return theme.fg("muted", safe);
   if (safe.startsWith("@@")) return theme.fg("accent", safe);
   if (safe.startsWith("+")) return theme.fg("toolDiffAdded", safe);
   if (safe.startsWith("-")) return theme.fg("toolDiffRemoved", safe);
@@ -93,7 +93,7 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
         case "ready":
           for (const file of files.files) add(`${file.status} ${file.path}`);
           if (!files.files.length) add("Working tree clean");
-          if (files.files.length === 100) add("Showing the first 100 changes");
+          if (files.files.length === 500) add("Showing the first 500 changes");
           add("Enter opens a read-only diff");
           break;
       }
@@ -105,8 +105,8 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       add("Read-only auxiliary activity", true);
       if (!snapshot.auxiliary) add("Auxiliary telemetry unavailable");
       else {
-        add(`Research: ${snapshot.auxiliary.explore.running} running · ${snapshot.auxiliary.explore.queued} queued`);
-        add(`Oracle: ${snapshot.auxiliary.oracle.running} running · ${snapshot.auxiliary.oracle.queued} queued`);
+        add(`Research: ${snapshot.auxiliary.explore.running} slots occupied · ${snapshot.auxiliary.explore.queued} queued`);
+        add(`Oracle: ${snapshot.auxiliary.oracle.running} slots occupied · ${snapshot.auxiliary.oracle.queued} queued`);
       }
       add("Inspection does not resume agents");
       break;

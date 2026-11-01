@@ -69,7 +69,7 @@ export function overviewLines(snapshot: PanelSnapshot | null, files: FilesState)
       break;
   }
   rows.push({ text: "" }, { text: "Agents & jobs", heading: true });
-  if (snapshot.auxiliary) rows.push({ text: `${snapshot.auxiliary.explore.running} research · ${snapshot.auxiliary.oracle.running} oracle running` });
+  if (snapshot.auxiliary) rows.push({ text: `Helper slots: research ${snapshot.auxiliary.explore.running} · oracle ${snapshot.auxiliary.oracle.running} occupied` });
   if (snapshot.jobs === null) rows.push({ text: "Background jobs unavailable" });
   else if (!snapshot.jobs.length) rows.push({ text: "No background jobs" });
   else for (const job of snapshot.jobs.slice(0, 3)) rows.push({ text: plainLabel(`${job.job} · ${job.state}`) });

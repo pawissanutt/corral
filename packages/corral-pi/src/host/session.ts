@@ -1074,11 +1074,7 @@ export class HostSession {
     const session = this.session;
     const leaf = session.sessionManager.getLeafId();
     if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelTokens = undefined; }
-    let jobs: PanelJob[] | null = this.jobs ? [] : null;
-    for (const row of this.jobs?.state() ?? []) {
-      if (typeof row.job !== "string" || typeof row.state !== "string") { jobs = null; break; }
-      jobs?.push({ job: row.job, state: row.state });
-    }
+    const jobs: PanelJob[] | null = this.jobs ? this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })) : null;
     return {
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       effort: session.thinkingLevel, streaming: session.isStreaming, context: session.getContextUsage(),
