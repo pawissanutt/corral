@@ -139,7 +139,8 @@ test("nested calls pass the role check and corral operations stay top-level acro
       const denied = events.since(from, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
         .filter((event) => event.kind === "tool_denied")
         .map((event) => ({ tool: event.tool, nested: event.nested === true }));
-      expect(denied).toEqual([{ tool: "corral_todo", nested: true }]);
+      // model-only exposure rejects nested todo before reaching the host tool_call hook.
+      expect(denied).toEqual([]);
       const call = host.session.messages.flatMap((message) =>
         message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : [])
         .filter((part) => part.name === "fixture_hidden").at(-1);

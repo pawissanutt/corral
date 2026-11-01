@@ -84,18 +84,22 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
         prompt_bytes_delta: enabledPrompt - Buffer.byteLength(host.session.systemPrompt),
       })}`);
       host.session.setActiveToolsByName([...host.loadout]);
-      // PM's full loadout has no filesystem tools; its matrix/disable behavior is covered here.
-      for (const stage of role === "pm" ? [] : ["startup", "reload"]) {
+      for (const stage of ["startup", "reload"]) {
         if (stage === "reload") await host.session.reload();
         const code = `
           // Discovery forces the complete callable tool catalog, including the forbidden fixture.
           const catalog = ALL_TOOLS;
+          text("catalog: " + catalog.filter(t => t.name.startsWith("corral_")).map(t => t.name).join(","));
+          ${role === "pm" ? `
+          const reads = await Promise.all(["corral_brief", "corral_next", "corral_inbox_read"].map(name => tools[name]({})));
+          text(reads);
+          ` : `
           const results = await Promise.all(["one.txt", "two.txt"].map(path => tools.read({path})));
           text(results.map(s => s.split("\\n").filter(line => line.startsWith("keep:")).join("\\n")));
-          for (const name of ["fixture_forbidden_write", "corral_done"]) {
-            try { await tools[name]({summary: "nested must not complete"}); text("UNEXPECTED execution"); }
-            catch (error) { text(name + ": denied: " + error.message); }
-          }
+          `}
+          const denied = await Promise.allSettled(["fixture_forbidden_write", "${role === "pm" ? "corral_comment" : role === "reviewer" ? "corral_verdict" : "corral_done"}"].map(async name => await tools[name]({})));
+          text("raw rejection: " + JSON.stringify(denied[0].reason));
+          text(denied.map(r => r.status === "rejected" ? {status: r.status, error: String(r.reason?.message ?? r.reason)} : "UNEXPECTED execution"));
           text("models: " + typeof models);
           for (const name of ["classify", "generateImages"]) {
             try { await models[name]({provider: "openai", id: "fake"}, {}); text("UNEXPECTED model"); }
@@ -115,22 +119,41 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
         expect(result.isError).not.toBeTrue();
         const output = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
         expect(output).toContain("Script completed");
-        expect(output).toContain("keep: one");
-        expect(output).not.toContain("discard this line");
-        expect(output.length < source.length).toBeTrue();
-        expect(output).toContain("fixture_forbidden_write: denied:");
-        expect(output).toContain("corral_done: denied:");
+        if (role === "pm") {
+          expect(output).toContain("read_brief");
+          expect(output).toContain("read_next");
+          expect(output).toContain("inbox_read");
+          const reads = corral.calls().filter(({ envelope }) => ["read_brief", "read_next", "inbox_read"].includes(envelope.op));
+          expect(reads).toHaveLength(stage === "startup" ? 3 : 6);
+          for (const { envelope } of reads) {
+            expect(envelope.identity).toMatchObject({ ...identity, session_id: host.sessionId() });
+            expect(envelope.auth.host_cap).toBe("h".repeat(64));
+            expect(envelope.payload).toEqual({});
+          }
+        } else {
+          expect(output).toContain("keep: one");
+          expect(output).not.toContain("discard this line");
+          expect(output.length < source.length).toBeTrue();
+          expect(result.nestedCalls?.calls.filter(call => call.name === "read")).toHaveLength(2);
+        }
+        expect(output).toContain("fixture_forbidden_write");
+        expect(output).toContain("not in this session's loadout");
+        expect(output).toContain("raw rejection: {}");
+        expect(output).toContain('"status":"rejected"');
+        const catalog = output.split("\\n").find(line => line.startsWith("catalog:")) ?? "";
+        expect(catalog).not.toMatch(/corral_(done|verdict|comment|todo|inbox_resolve|ask|gate)/);
+        if (role !== "pm") expect(catalog).not.toContain("corral_brief");
         expect(output).toContain("models: undefined");
         expect(output).toContain("classify: disabled");
         expect(output).toContain("generateImages: disabled");
         expect(output).not.toContain("UNEXPECTED");
-        expect(result.nestedCalls?.calls.filter(call => call.name === "read")).toHaveLength(2);
         expect(forbiddenRuns).toBe(0);
-        expect(corral.calls().some(({ envelope }) => envelope.op === "done")).toBeFalse();
+        expect(corral.calls().some(({ envelope }) => ["done", "verdict", "comment"].includes(envelope.op))).toBeFalse();
         const denials = events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
           .filter(event => event.kind === "tool_denied" && event.nested === true);
         expect(denials.some(event => event.tool === forbidden.name)).toBeTrue();
-        if (role === "worker") expect(denials.some(event => event.tool === "corral_done")).toBeTrue();
+        // model-only operations are absent from discovery and refused by upstream before execution.
+        expect(output).not.toContain('"error":{}');
       }
       await host.close();
       host = await HostSession.create({ ...options, capabilities: { ...capabilities, preset: "strict", enabled: [] },

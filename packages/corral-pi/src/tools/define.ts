@@ -3,6 +3,7 @@
 import type { ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import type { CorralOp, CorralToolSpec } from "../roles/types.ts";
+import { nestedCorralRead } from "../roles/common/execution.ts";
 import { type CorralClient, type CorralReceipt, toolRequestId } from "./corral.ts";
 
 /** The pane UI a confirmation is shown in; absent when the host has no dialog-capable UI. */
@@ -41,7 +42,9 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
   return {
     name: spec.name,
     label: spec.label,
-    description: spec.description,
+    description: spec.description + (nestedCorralRead(spec.op) ? ""
+      : " Call directly at top level, not from Code Mode or another tool: receipt replay/recovery requires a transcript call."),
+    exposure: nestedCorralRead(spec.op) ? "direct" : "model-only",
     parameters: spec.parameters,
     async execute(toolCallId, params, _signal, _update, context) {
       const requestId = toolRequestId(host.sessionId(), toolCallId);
