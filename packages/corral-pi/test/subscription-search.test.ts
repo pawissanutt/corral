@@ -292,6 +292,8 @@ test("bound host search stays subscription-backed for direct and nested calls ac
       expect(result?.role === "toolResult" && result.isError).toBeFalse();
       const content = result?.role === "toolResult" ? result.content.find((part) => part.type === "text") : undefined;
       expect(JSON.parse(content?.type === "text" ? content.text : "null").provider).toBe("openai-codex");
+      expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 }, oracle: { running: 0, queued: 0 },
+        web_search: { running: 0, queued: 0 }, stopped: false });
     }
     expect(searches).toBe(4);
     const records = corral.calls().map((call) => call.envelope.payload);
