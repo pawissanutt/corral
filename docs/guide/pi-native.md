@@ -285,9 +285,14 @@ child identity, request ID, error code and message, and recorded effect (a recei
 once and the cell settles in the background. Its settlement is reported exactly once: by the
 `cancel` call that stopped it, or by one notice that enters the session through the host's bridge
 delivery, journaled as `corral_delivery` with key `code:g<generation>:<cell>` and its own
-bridge-origin turn. Do not poll. Continue independent work; when a plan step needs the result,
+bridge-origin turn. The notice is bounded at 32 KiB, but its status, nested-call counts, failure list
+(failures past the eighth still named by tool) and return value always stay whole; only printed
+output yields, with a note saying how many bytes it shows. Keep a large result in a top-level
+variable to read it in a later cell. Do not poll. Continue independent work; when a plan step needs the result,
 record that step as waiting on event `code cell <cell>` with `corral_todo` so request
-continuation (T-679) does not wake you meanwhile. A reload settles running cells `closed` and
+continuation (T-679) does not wake you meanwhile: with only waiting steps open, corral decides
+`waiting_event` and continues nothing, while an actionable independent step is still continued. A
+reload settles running cells `closed` and
 reports them after the reload; a host shutdown reports nothing, and resume's recovery notice
 classifies their children instead.
 
