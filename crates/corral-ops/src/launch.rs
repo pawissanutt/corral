@@ -248,12 +248,12 @@ fn advance(
             shell.current_run().context("launch run missing")?,
             false,
         )?;
-        task = Box::new(ctx.store.update_head(&task.id, |head| {
+        *task = ctx.store.update_head(&task.id, |head| {
             head.current_run_mut()
                 .context("launch run missing")?
                 .session = Some(session);
             Ok(())
-        })?);
+        })?;
     }
     let shell = task.shell_task()?;
     let run = shell.current_run().context("launch has no run")?.clone();

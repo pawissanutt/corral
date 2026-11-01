@@ -120,10 +120,8 @@ fn sync_passes(
     let mut rebuild = false;
     let changes = hot_passes(ctx, now, processes, source, &mut rebuild, attention)?;
     // Rebuildable state recovers outside the measured hot path (plan T-253 section 4).
-    if rebuild {
-        if let Err(error) = crate::content_refresh::refresh_search_index(ctx) {
-            crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?;
-        }
+    if rebuild && let Err(error) = crate::content_refresh::refresh_search_index(ctx) {
+        crate::content_refresh::defer_corrupt_blob_cache_refresh(error)?;
     }
     Ok(changes)
 }

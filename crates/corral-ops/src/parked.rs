@@ -186,8 +186,8 @@ pub(crate) fn reacquire_woken(ctx: &Ctx, tasks: &[TaskHead]) -> Result<Vec<Chang
         if reacquire(ctx, &task.id)? {
             changes.push(Change {
                 task: task.id.clone(),
-                from: task.status.clone(),
-                to: task.status.clone(),
+                from: task.status,
+                to: task.status,
                 note: "woken parked run re-acquired a coding slot".into(),
                 stage: None,
             });
