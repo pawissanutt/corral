@@ -78,7 +78,7 @@ fn asset_dir(root: &Path, name: &str, modules: &[&str], fixture: bool) -> PathBu
     let dir = root.join(name);
     write(&dir.join("package.json"), "{\"name\":\"corral-pi\"}\n");
     write(&dir.join("bun.lock"), "{}\n");
-    let compat = json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}});
+    let compat = json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}, "memory_projection": 1});
     write(&dir.join("compat.json"), &compat.to_string());
     write(&dir.join(HOST_ENTRY), "// host\n");
     for module in modules {
