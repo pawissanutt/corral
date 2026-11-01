@@ -20,6 +20,7 @@ mod inbox_cmd;
 mod lessons_cmd;
 mod list_cols;
 mod log_cmd;
+mod memory_cmd;
 mod mode_cmd;
 mod pi_cmd;
 mod pins;
@@ -105,6 +106,8 @@ pub enum Cmd {
     Idea(idea_cmd::IdeaArgs),
     /// Inspect project lessons, distill history, pin rules or delete them
     Lessons(lessons_cmd::LessonsArgs),
+    /// Read and explicitly edit scoped workspace memory; JSON output
+    Memory(memory_cmd::MemoryArgs),
     /// Submit, review and approve implementation plans independently of code review
     Plan {
         #[command(subcommand)]
