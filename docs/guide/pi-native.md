@@ -190,7 +190,7 @@ Corral tools also refuse to run from inside another tool. See
 
 ### Curated Pi-native skill pack
 
-`corral agent install` also installs five lean, Pi-compatible Agent Skills. To install or refresh
+`corral agent install` also installs six lean, Pi-compatible Agent Skills. To install or refresh
 just the pack, run `corral skill install --harness pi-native`. Worker dispatch also ensures the
 pack is current. A fresh standard/full session lists these skills and can load them by reading
 its listed `SKILL.md` or with `/skill:name`:
@@ -202,6 +202,13 @@ its listed `SKILL.md` or with `/skill:name`:
 | `programming` | Typed boundaries/errors, exhaustive variants and tests that can fail |
 | `debugging` | Competing hypotheses, discriminating probes and a reproduced fix |
 | `git-master` | Atomic commits, safe rebases and evidence-led history search |
+| `simplify-and-cleanup` | Bounded code, comment and docs cleanup with behavior/meaning preservation and proportional verification |
+
+Ask for cleanup naturally or invoke `/skill:simplify-and-cleanup` with explicit files or a diff/base
+and an audit/apply request. Review requests remain read-only; cleanup requests follow the role's
+existing edit permissions. The skill prefers existing checks, adds tests only for concrete uncovered
+behavioral risks, and skips changes that need substantial new testing to establish safety. It does
+not waive required gates or review, and making no edits is a valid outcome.
 
 The pack lives only in `~/.corral/skills/pi-native/<name>/SKILL.md`, outside OmO's bundled,
 `.omo` and shared `.agents` discovery roots, so it does not duplicate OmO's own skills. Do not

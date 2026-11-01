@@ -197,10 +197,10 @@ test("every role loads home skills, trusted project text and templates, never am
   }
 }, 120_000);
 
-test("Pi pack lists and loads all five skills in a standard worker without OmO roots", async () => {
+test("Pi pack lists and loads all six skills in a standard worker without OmO roots", async () => {
   const packHome = join(work, "pack-home");
   const pack = join(packHome, ".corral/skills/pi-native");
-  const names = ["frontend", "visual-qa", "programming", "debugging", "git-master"];
+  const names = ["frontend", "visual-qa", "programming", "debugging", "git-master", "simplify-and-cleanup"];
   cpSync(join(PACKAGE_ROOT, "../../crates/corral-ops/assets/skills/pi-native"), pack, { recursive: true });
   const started = await start("worker", STANDARD, {
     settings: { skills: { user_dirs: ["~/.agents/skills", "~/.corral/skills/pi-native"] } },

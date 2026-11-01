@@ -305,12 +305,13 @@ pub const SUBMIT_SKILL: &str = "corral-submit";
 pub const ROLE_SKILLS: [&str; 4] = [PM_SKILL, WORKER_SKILL, PLANNER_SKILL, SUBMIT_SKILL];
 
 /// Pi-only pack: never install into the Agent Skills roots OmO also discovers.
-pub const PI_SKILLS: [&str; 5] = [
+pub const PI_SKILLS: [&str; 6] = [
     "frontend",
     "visual-qa",
     "programming",
     "debugging",
     "git-master",
+    "simplify-and-cleanup",
 ];
 
 /// What installing one role skill did.
@@ -534,6 +535,9 @@ pub fn role_skill_markdown(role: &str) -> Option<String> {
         }
         "debugging" => include_str!("../assets/skills/pi-native/debugging/SKILL.md").to_string(),
         "git-master" => include_str!("../assets/skills/pi-native/git-master/SKILL.md").to_string(),
+        "simplify-and-cleanup" => {
+            include_str!("../assets/skills/pi-native/simplify-and-cleanup/SKILL.md").to_string()
+        }
         _ => return None,
     };
     let unstamped = body.replace("{{marker}}", SKILL_MARKER);
