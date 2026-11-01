@@ -168,6 +168,24 @@ fn memory_dispatch_writes_private_generation_file_and_launch_reference() {
 }
 
 #[test]
+fn memory_empty_registered_project_succeeds_and_unknown_project_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.projects.insert(
+        "demo".into(),
+        serde_json::from_value(json!({"path":tmp.path()})).unwrap(),
+    );
+    let text = projection(&store, AgentRole::Worker, "demo")
+        .unwrap()
+        .unwrap();
+    assert!(text.contains("# Retained memory"));
+    assert!(text.contains("# Bound project memory: demo"));
+    assert!(text.len() <= 12288);
+    let error = projection(&store, AgentRole::Worker, "unknown").unwrap_err();
+    assert!(error.to_string().contains("unknown project"));
+}
+
+#[test]
 fn memory_host_compatibility_fails_closed() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("compat.json"), "{}").unwrap();
