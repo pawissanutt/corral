@@ -81,6 +81,8 @@ elif op == ['pane', 'get']:
         fail('pane_not_found', a[2])
     finish({'pane': s['panes'][a[2]]})
 elif op == ['pane', 'process-info']:
+    if s.get('process_info'):
+        finish({'process_info': s['process_info']})
     pid = s.get('shells', {}).get(a[a.index('--pane') + 1])
     if not pid: fail('pane_not_found', 'no shell')
     finish({'process_info': {'shell_pid': pid, 'foreground_processes': []}})
@@ -102,7 +104,8 @@ elif op == ['workspace', 'close']:
     finish()
 elif op == ['pane', 'run']:
     subprocess.run(['bash', '-c', a[3]], stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+                   cwd=s['panes'][a[2]]['cwd'])
     # A live agent never returns to its shell, so it never leaves a launch receipt.
     receipt = a[3].split("> '", 1)[-1].split("'", 1)[0]
     if '/launch-exits/' in receipt:
@@ -145,6 +148,10 @@ fn git(dir: &Path, args: &[&str]) -> String {
 
 impl Fx {
     fn new() -> Self {
+        Self::with_agent(None)
+    }
+
+    fn with_agent(agent: Option<&str>) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let bin = tmp.path().join("herdr");
         std::fs::write(&bin, FAKE_HERDR).unwrap();
@@ -169,7 +176,12 @@ impl Fx {
             store.config.agents.insert(
                 name.into(),
                 AgentCmd {
-                    command: "true".into(),
+                    command: if name == "fake" {
+                        agent.unwrap_or("true")
+                    } else {
+                        "true"
+                    }
+                    .into(),
                 },
             );
         }

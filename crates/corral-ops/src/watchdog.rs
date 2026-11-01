@@ -236,22 +236,7 @@ fn worker_language_server(
     process: &ProcessSnapshot,
     processes: &dyn ProcessControl,
 ) -> Result<bool> {
-    let Some(name) = process.argv.first().map(|arg| basename(arg)) else {
-        return Ok(false);
-    };
-    if !matches!(
-        name,
-        "rust-analyzer"
-            | "rust-analyzer-proc-macro-srv"
-            | "typescript-language-server"
-            | "vscode-css-language-server"
-            | "vscode-html-language-server"
-            | "pyright-langserver"
-            | "pylsp"
-            | "gopls"
-            | "clangd"
-            | "svelte-language-server"
-    ) {
+    if !language_server_command(&process.argv) {
         return Ok(false);
     }
     let mut pid = process.parent_pid;
@@ -271,6 +256,48 @@ fn worker_language_server(
         pid = parent.parent_pid;
     }
     Ok(false)
+}
+
+// For interpreter launches inspect only the script argument, not arbitrary later arguments:
+// a command mentioning a language server must not gain an exemption.
+fn language_server_command(argv: &[String]) -> bool {
+    let Some(exe) = argv.first().map(|s| basename(s)) else {
+        return false;
+    };
+    let server_name = |name: &str| {
+        let name = name.to_ascii_lowercase();
+        name == "rust-analyzer"
+            || name == "rust-analyzer-proc-macro-srv"
+            || name == "clangd"
+            || name == "gopls"
+            || name == "pylsp"
+            || name.contains("language-server")
+            || name.contains("languageserver")
+            || name.contains("langserver")
+            || name.contains("language_server")
+    };
+    if server_name(exe) {
+        return true;
+    }
+    if !matches!(
+        exe.to_ascii_lowercase().trim_end_matches(".exe"),
+        "node" | "nodejs" | "bun" | "python" | "python3"
+    ) {
+        return false;
+    }
+    let Some(script) = argv.iter().skip(1).find(|arg| !arg.starts_with('-')) else {
+        return false;
+    };
+    // Inline code is an arbitrary command, not a script path.
+    if argv
+        .iter()
+        .skip(1)
+        .take_while(|arg| *arg != script)
+        .any(|arg| matches!(arg.as_str(), "-c" | "-e" | "--eval" | "-m"))
+    {
+        return false;
+    }
+    script.split(['/', '\\']).any(server_name)
 }
 
 /// Capability entries belong to the current bound host, not to a process name. A stale or

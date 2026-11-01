@@ -53,8 +53,21 @@ pub(crate) fn require(store: &Store, task: &Task, kind: OperatingActionKind) -> 
         reasons.join("; ")
     );
     if let Some(run) = task.current_run() {
+        let stuck_unresolved = run.stuck.as_ref().is_some_and(|stuck| {
+            if run.outcome.is_none() {
+                return true;
+            }
+            let key = format!(
+                "{}/stuck_process/{}:{}:{}",
+                task.id, run.id, stuck.pid, stuck.started
+            );
+            task.attention
+                .records
+                .iter()
+                .any(|(record_key, record)| record_key.0 == key && record.resolved_at.is_none())
+        });
         ensure!(
-            run.pending_reply.is_none() && (run.outcome.is_some() || run.stuck.is_none()),
+            run.pending_reply.is_none() && !stuck_unresolved,
             "unresolved delivery or process recovery requires owner disposition"
         );
         if crate::omo::is_omo(run) {

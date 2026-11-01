@@ -152,6 +152,159 @@ fn owned_orphan_daemon_is_removed_after_landing() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn worker_language_server_survives_watchdog_then_is_reaped_at_landing() {
+    use corral_ops::{ProcessControl, SystemProcesses};
+    struct Aged;
+    impl ProcessControl for Aged {
+        fn inspect(&self, pid: u32) -> anyhow::Result<Option<corral_ops::ProcessSnapshot>> {
+            Ok(SystemProcesses.inspect(pid)?.map(|mut p| {
+                p.elapsed_secs = 10_000;
+                p
+            }))
+        }
+        fn terminate(&self, p: &corral_core::StuckProcess) -> anyhow::Result<()> {
+            SystemProcesses.terminate(p)
+        }
+    }
+    let fixture = tempfile::tempdir().unwrap();
+    let script = fixture.path().join("worker.py");
+    let fifo = fixture.path().join("ready");
+    let pidfile = fixture.path().join("pid");
+    std::fs::write(&script, "import os,signal,sys\np=os.fork()\nif p == 0:\n os.execv('/usr/bin/python3', ['rust-analyzer-proc-macro-srv','-c', \"import os,signal; print(os.getpid(),flush=True); signal.pause()\"])\nsignal.pause()\n").unwrap();
+    let worker = fixture.path().join("fake");
+    std::os::unix::fs::symlink("/usr/bin/python3", &worker).unwrap();
+    let command = format!(
+        "mkfifo '{0}'; '{3}' '{1}' > '{0}' & read -r pid < '{0}'; printf '%s' \"$pid\" > '{2}'; rm '{0}'",
+        fifo.display(),
+        script.display(),
+        pidfile.display(),
+        worker.display()
+    );
+    let fx = Fx::with_agent(Some(&command));
+    let pid: u32 = std::fs::read_to_string(pidfile).unwrap().parse().unwrap();
+    struct Guard(corral_core::StuckProcess);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = SystemProcesses.terminate(&self.0);
+        }
+    }
+    let process = SystemProcesses.inspect(pid).unwrap().unwrap();
+    let _guard = Guard(corral_core::StuckProcess {
+        pid,
+        argv: process.argv.clone(),
+        started: process.started.clone(),
+    });
+    let parent = process.parent_pid;
+    let parent_snapshot = SystemProcesses.inspect(parent).unwrap().unwrap();
+    let _parent = Guard(corral_core::StuckProcess {
+        pid: parent,
+        argv: parent_snapshot.argv,
+        started: parent_snapshot.started,
+    });
+    assert!(
+        std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .unwrap()
+            .starts_with(&fx.run().worktree)
+    );
+    fx.edit(|s| {
+        s["process_info"] =
+            json!({"shell_pid":10,"foreground_processes":[{"pid":pid,"argv":process.argv}]})
+    });
+    let start = jiff::Timestamp::now();
+    corral_ops::sync_at_with_processes(&fx.ctx, start, &Aged).unwrap();
+    corral_ops::sync_at_with_processes(
+        &fx.ctx,
+        start + jiff::SignedDuration::from_secs(10_000),
+        &Aged,
+    )
+    .unwrap();
+    assert!(fx.run().stuck.is_none());
+    let board = corral_ops::attention::board(&fx.ctx, start).unwrap();
+    assert!(
+        !board
+            .tasks
+            .iter()
+            .flat_map(|t| &t.assessment.conditions)
+            .any(|c| c.kind == "stuck_process")
+    );
+    assert!(SystemProcesses.inspect(pid).unwrap().is_some());
+    fx.owner_ready();
+    let result =
+        corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
+    assert!(result.contains("worktree removed"), "{result}");
+    assert!(std::fs::read_link(format!("/proc/{pid}/cwd")).is_err());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn resolved_stuck_attention_restarts_automatic_review_after_done() {
+    use corral_ops::{ProcessControl, SystemProcesses};
+    struct Aged;
+    impl ProcessControl for Aged {
+        fn inspect(&self, pid: u32) -> anyhow::Result<Option<corral_ops::ProcessSnapshot>> {
+            Ok(SystemProcesses.inspect(pid)?.map(|mut p| {
+                p.elapsed_secs = 10_000;
+                p
+            }))
+        }
+        fn terminate(&self, p: &corral_core::StuckProcess) -> anyhow::Result<()> {
+            SystemProcesses.terminate(p)
+        }
+    }
+    let fx = Fx::new();
+    let resident = Resident::start(&fx.run().worktree, None, None);
+    let pid = resident.0.id();
+    let process = SystemProcesses.inspect(pid).unwrap().unwrap();
+    fx.edit(|s| {
+        s["process_info"] =
+            json!({"shell_pid":10,"foreground_processes":[{"pid":pid,"argv":process.argv}]})
+    });
+    let now = jiff::Timestamp::now();
+    corral_ops::sync_at_with_processes(&fx.ctx, now, &Aged).unwrap();
+    let later = now + jiff::SignedDuration::from_secs(10_000);
+    corral_ops::sync_at_with_processes(&fx.ctx, later, &Aged).unwrap();
+    let task = fx.ctx.store.get(&fx.id).unwrap();
+    assert_eq!(task.current_run().unwrap().stuck.as_ref().unwrap().pid, pid);
+    assert!(
+        task.attention
+            .records
+            .values()
+            .any(|r| r.kind == "stuck_process" && r.resolved_at.is_none())
+    );
+    fx.done();
+    // The first review pass sees the still-open record, reports a real refusal,
+    // then attention reconciliation closes it at the end of the pass.
+    corral_ops::sync_at_with_processes(&fx.ctx, later, &Aged).unwrap();
+    let events = fx.ctx.store.events().unwrap();
+    assert!(events.iter().any(|e| {
+        e.kind == "automation_blocked"
+            && e.detail["reason"]
+                .as_str()
+                .unwrap_or("")
+                .contains("process recovery")
+    }));
+    assert!(
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "attention_resolved" && e.detail["kind"] == "stuck_process")
+    );
+    corral_ops::sync_at_with_processes(&fx.ctx, later, &Aged).unwrap();
+    assert!(
+        fx.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .any(|e| e.kind == "automation_resumed")
+    );
+    assert_eq!(fx.run().autopilot.unwrap().stage, AutoStage::Reviewing);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn gate_commands_inherit_run_ownership_marker() {
     let mut fx = Fx::new();
     let observed = fx.app.join("gate-marker");
