@@ -261,6 +261,8 @@ impl Target {
             }
             ctx.store.log_event(Some(&task.id), "approved", detail)?;
         }
+        // Also retry this after a crash following the approval event; clearing is idempotent.
+        ctx.store.clear_condition(Some(&task.id), "landing_stale")?;
         self.receipts[index].published = true;
         self.save()
     }
