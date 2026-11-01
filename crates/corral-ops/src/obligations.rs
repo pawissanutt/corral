@@ -443,7 +443,7 @@ pub(crate) fn transition_with_notice(
                     task,
                     "obligation_transition",
                     &source,
-                    Timestamp::now(),
+                    ctx.store.now(),
                     Vec::new(),
                 )?))
             })?

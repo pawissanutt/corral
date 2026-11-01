@@ -111,6 +111,9 @@ fn store(root: &std::path::Path, finals: usize, normalized: bool) -> (Ctx, Strin
     task.created = at(0);
     task.updated = at(0);
     ctx.store.fixture_put_task(&task).unwrap();
+    assert_eq!(corral_core::clock::now(), at(0));
+    assert_eq!(ctx.store.now(), at(0));
+    assert_eq!(ctx.store.head(&task.id).unwrap().status_since, Some(at(0)));
     (ctx, task.id)
 }
 
@@ -228,6 +231,13 @@ fn unattributed(ctx: &Ctx, id: &str, now: Timestamp) -> Vec<(&'static str, u64)>
     let before = work::snapshot();
     reconcile_one(ctx, id, now, None).unwrap();
     let delta = work::snapshot().since(&before);
+    // Notice claims are decoded again during this same pass. They must use the
+    // fixture's clock too, rather than a raw wall-clock timestamp of variable width.
+    let head = ctx.store.head(id).unwrap();
+    assert!(!head.attention.notice_outbox.is_empty());
+    for claim in &head.attention.notice_outbox {
+        assert_eq!(claim.claimed_at, at(0));
+    }
     Counter::ALL
         .iter()
         .map(|c| (c.name(), delta.cells(*c).unattributed))

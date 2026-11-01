@@ -349,7 +349,11 @@ fn counters(before: &work::WorkSnapshot, after: &work::WorkSnapshot) -> Counted 
 type Counted = Vec<(Counter, u64)>;
 
 fn keyed_work(grow: usize) -> (Counted, Counted, u64, Vec<String>) {
-    let f = Fixture::new(|_| {});
+    let f = Fixture::new(|store| {
+        store
+            .fixture_pin_now("2026-01-01T00:00:00Z".parse().unwrap())
+            .unwrap();
+    });
     let active = f.task(Status::Ready);
     let report = f.add(
         &active,
