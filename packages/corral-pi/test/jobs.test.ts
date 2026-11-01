@@ -170,7 +170,11 @@ test("shutdown waits for all jobs, including a SIGTERM-ignoring process", async 
 test("job_kill stops the whole process group and its exit carries the signal", async () => {
   // Given a job whose shell started a child process.
   const fx = fixture();
-  const { job, pid } = await fx.runtime.start("sleep 30 & wait", "c1");
+  const ready = fx.fifo("kill-ready");
+  const up = readFile(ready, "utf8");
+  const { job, pid } = await fx.runtime.start(`sleep 30 & echo ready > ${ready}; wait`, "c1");
+  // The command shell must have launched its child before the group is signalled.
+  expect(await up).toBe("ready\n");
   // When it is killed.
   const killed = await fx.runtime.kill(job as string);
   // Then the group is gone and corral was told how it ended.

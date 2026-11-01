@@ -179,11 +179,24 @@ fn verdict_reaps_reviewer_resident_before_landing() {
         .join(format!("{}-{}-{}.owner", fx.id, run.id, reviewer.id));
     let marker = std::fs::read_to_string(marker_path).unwrap();
     let mut resident = Resident::start(&run.worktree, None, Some(&marker));
+    let pid = rustix::process::Pid::from_raw(resident.0.id().try_into().unwrap()).unwrap();
+    let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
     corral_ops::verdict(&fx.ctx, &fx.id, Verdict::Approve, "Checked.").unwrap();
-    assert!(
-        resident.0.try_wait().unwrap().is_some(),
+    // Signal delivery precedes actual exit; wait for the kernel event before reaping.
+    let mut fds = [rustix::event::PollFd::new(
+        &pidfd,
+        rustix::event::PollFlags::IN,
+    )];
+    let timeout = rustix::event::Timespec {
+        tv_sec: 10,
+        tv_nsec: 0,
+    };
+    assert_eq!(
+        rustix::event::poll(&mut fds, Some(&timeout)).unwrap(),
+        1,
         "reviewer survived verdict"
     );
+    assert!(resident.0.try_wait().unwrap().is_some());
     fx.sync();
     let result =
         corral_ops::approve(&fx.ctx, &fx.id, ApproveStrategy::FastForward, true, false).unwrap();
@@ -234,7 +247,9 @@ fn sync_waits_for_verdict_event_before_reaping_reviewer() {
         .store
         .update(&fx.id, |task| {
             let run = task.current_run_mut().unwrap();
-            let now = jiff::Timestamp::now();
+            // Simulate a backward wall-clock step before the event is written.
+            let now =
+                jiff::Timestamp::from_second(jiff::Timestamp::now().as_second() + 3600).unwrap();
             let review = run.review.as_mut().unwrap();
             review.verdict = Some(Verdict::Approve);
             review.at = now;
@@ -254,7 +269,7 @@ fn sync_waits_for_verdict_event_before_reaping_reviewer() {
         .log_event(
             Some(&fx.id),
             "verdict",
-            json!({"run":run.id,"reviewer":"rev"}),
+            json!({"run":run.id,"reviewer":"rev", "review_at": fx.run().review.unwrap().at.to_string()}),
         )
         .unwrap();
     fx.sync();

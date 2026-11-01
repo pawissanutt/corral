@@ -115,7 +115,7 @@ pub(super) fn record_verdict(
     record.verdict = Some(verdict);
     record.notes = Some(notes);
     record.at = ended;
-    let detail = json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha });
+    let detail = json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "review_at": record.at.to_string() });
     let mut receipt = None;
     if report.is_some() {
         effects::failpoint("swept_before_commit");
@@ -189,7 +189,7 @@ pub(super) fn record_verdict(
     ctx.store.log_event(
         Some(&task.id),
         "verdict",
-        json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes }),
+        json!({ "run": run.id, "verdict": verdict.as_str(), "reviewer": record.reviewer, "sha": record.sha, "notes": record.notes, "review_at": record.at.to_string() }),
     )?;
     // Only signal after both verdict state and event are durable. The caller and its
     // ancestors remain protected; a subsequent sync reaps any surviving reviewer.
