@@ -14,6 +14,7 @@ fn pm_receipt_effect_clear_is_keyed_and_history_independent() {
     for scale in [1, 10] {
         let root = tempfile::tempdir().unwrap();
         let store = Store::init(root.path()).unwrap();
+        store.fixture_pin_now(at(0)).unwrap();
         let mut task = store_support::rich(&store, 1, 0, 0, 0);
         task.created = at(0);
         task.updated = at(0);
@@ -233,6 +234,7 @@ fn unfinished_native_index_skips_settled_terminal_tasks_and_retains_owed_receipt
     for scale in [1, 10] {
         let root = tempfile::tempdir().unwrap();
         let store = Store::init(root.path()).unwrap();
+        store.fixture_pin_now(at(0)).unwrap();
         let mut task = store
             .create("Owed receipt", None, corral_core::Status::Done, "")
             .unwrap();
@@ -319,6 +321,7 @@ fn native_receipt_mutation_has_equal_work_with_grown_completed_history() {
     for scale in [1, 10] {
         let root = tempfile::tempdir().unwrap();
         let store = Store::init(root.path()).unwrap();
+        store.fixture_pin_now(at(0)).unwrap();
         let mut task = store_support::rich(&store, 1, 0, 0, 0);
         task.created = at(0);
         task.updated = at(0);
