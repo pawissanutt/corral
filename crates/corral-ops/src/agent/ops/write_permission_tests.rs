@@ -453,7 +453,7 @@ fn a_drain_crashed_between_log_and_clear_repeats_the_line_with_the_same_key() {
 }
 
 #[test]
-fn an_hour_grant_allows_at_10_59_and_not_at_11_00_or_09_59() {
+fn an_hour_grant_allows_after_backward_clock_jump_but_not_at_expiry() {
     let s = session();
     CLOCK.set(Some(at("10:00")));
     let made = decide(&s, 1, "hour", &s.proj.join("a.txt"), Some(&s.proj));
@@ -463,7 +463,7 @@ fn an_hour_grant_allows_at_10_59_and_not_at_11_00_or_09_59() {
     for (time, expected) in [
         ("10:59", Some("G-1".to_owned())),
         ("11:00", None),
-        ("09:59", None),
+        ("09:59", Some("G-1".to_owned())),
     ] {
         CLOCK.set(Some(at(time)));
         assert_eq!(granted(&s.fx, &s.host, &target), Ok(expected), "{time}");
