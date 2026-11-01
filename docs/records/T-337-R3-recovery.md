@@ -1,5 +1,9 @@
 # T-337 R3 guarded delivery recovery
 
+## Superseding changes round 1
+
+Review2 found retained completion setters lost all ten native append positions and receipt edits left cleared work pending. `docs/records/T-337-R3-round1-native-mutators.md` records both fixes, baseline and real-completion negative controls, four new lifecycle/growth regressions20/20 each, and the **new complete5068/5068 no-fail-fast sandbox PASS** (zero OOM). Replacement uses the typed host projection; receipt editing shares the canonical keyed upsert writer. No budgets, effect semantics, signatures or guards are relaxed. The previous55bf9813 gate/completion report is superseded; only the next post-rebase quick receipt can accept the changed candidate.
+
 Recovered R2 checkpoint 47 exactly: fast-forwarded this run's branch to `7355ca98f9039a8c9ef05cefab641792907745a1`, then applied all three dirty tracked files. SHA-256 comparisons prove each recovered file and all 132 R2 evidence files identical before final report edits (`.evidence/R3-recovery-identity.json`). R2's branch, worktree and logs remain untouched. All R1/R2 implementation and integration merge history is preserved.
 
 The pending final R2 command did not commit. Its completed validation was not replayed: terminal j1-23 reports focused wait PASS and 226/226 affected Rust tests PASS; j1-22 reports board/read/sync budgets PASS, typecheck PASS and 508/508 Pi tests PASS. Reports now record j1-23's terminal result rather than describing it as running. These are recovered R2 results on identical sources, not newly executed R3 tests. R2's earlier full five-budget result and negative controls retain their explicitly documented source provenance. No historical gate receipt is reused.
