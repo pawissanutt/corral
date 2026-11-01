@@ -24,7 +24,7 @@ index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623b
          ]),
      };
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index 6142005e6e816123e73e68c568f53f4a6c3697bc..a68093f3a759fe613790f0e4ef1ea7f280b3365c 100644
+index 6142005e6e816123e73e68c568f53f4a6c3697bc..35d553d03e5da7bb6dee4527e52fdbdf3fc89620 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts
 +++ b/dist/modes/interactive/interactive-mode.d.ts
 @@ -3,7 +3,7 @@
@@ -36,17 +36,19 @@ index 6142005e6e816123e73e68c568f53f4a6c3697bc..a68093f3a759fe613790f0e4ef1ea7f2
  import { type AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
  import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
  import { SessionManager } from "../../core/session-manager.ts";
-@@ -38,6 +38,8 @@ export interface InteractiveModeOptions {
+@@ -38,6 +38,10 @@ export interface InteractiveModeOptions {
      initialThemeSetting?: string;
      /** Terminal implementation. Defaults to the current process terminal. */
      terminal?: Terminal;
 +    /** Optional body composition; retains the original transcript and fixed input dock. */
 +    mainView?: (transcript: Component) => Component;
++    /** Count-only pending input; never restore external notices into the owner's editor. */
++    readOnlyQueue?: boolean;
  }
  export declare class InteractiveMode {
      private runtimeHost;
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index d2343a5bb53c9d9ab8060e0a242f561da2cbfd3a..d68c58be3f9630f3620b367b9252b6622bb1757b 100644
+index d2343a5bb53c9d9ab8060e0a242f561da2cbfd3a..1777baf920fffcc9a538661ab23e91a6f4f5524c 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
 @@ -676,6 +676,7 @@ export class InteractiveMode {
@@ -57,3 +59,60 @@ index d2343a5bb53c9d9ab8060e0a242f561da2cbfd3a..d68c58be3f9630f3620b367b9252b662
              pendingMessages: this.pendingMessagesContainer,
              status: this.statusContainer,
              widgetsAbove: this.widgetContainerAbove,
+@@ -743,7 +744,7 @@ export class InteractiveMode {
+                 rawKeyHint("!", "to run bash"),
+                 rawKeyHint("!!", "to run bash (no context)"),
+                 hint("app.message.followUp", "to queue follow-up"),
+-                hint("app.message.dequeue", "to edit all queued messages"),
++                ...(this.options.readOnlyQueue ? [] : [hint("app.message.dequeue", "to edit all queued messages")]),
+                 hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
+                 rawKeyHint("drop files", "to attach"),
+             ].join("\n");
+@@ -3684,6 +3685,10 @@ export class InteractiveMode {
+         }
+     }
+     handleDequeue() {
++        if (this.options.readOnlyQueue) {
++            this.showStatus("Queued input is read-only in this bound session.");
++            return;
++        }
+         const restored = this.restoreQueuedMessagesToEditor();
+         if (restored === 0) {
+             this.showStatus("No queued messages to restore");
+@@ -3875,6 +3880,13 @@ export class InteractiveMode {
+     updatePendingMessagesDisplay() {
+         this.pendingMessagesContainer.clear();
+         const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
++        if (this.options.readOnlyQueue) {
++            if (steeringMessages.length || followUpMessages.length) {
++                this.pendingMessagesContainer.addChild(new TruncatedText(theme.fg("dim",
++                    `${steeringMessages.length} steering · ${followUpMessages.length} follow-ups · queued, not execution`), 1, 0));
++            }
++            return;
++        }
+         if (steeringMessages.length > 0 || followUpMessages.length > 0) {
+             this.pendingMessagesContainer.addChild(new Spacer(1));
+             for (const message of steeringMessages) {
+@@ -3891,6 +3903,13 @@ export class InteractiveMode {
+         }
+     }
+     restoreQueuedMessagesToEditor(options) {
++        if (this.options.readOnlyQueue) {
++            // Abort retains its native meaning, but neither abort nor dequeue can turn
++            // structured external input into editable owner instructions or discard the draft.
++            if (options?.abort) void this.session.abort();
++            else this.showStatus("Queued input is read-only in this bound session.");
++            return 0;
++        }
+         const { steering, followUp } = this.clearAllQueues();
+         const allQueued = [...steering, ...followUp];
+         if (allQueued.length === 0) {
+@@ -5783,7 +5802,7 @@ export class InteractiveMode {
+ | \`${externalEditor}\` | Edit message in external editor |
+ | \`${copyMessage}\` | Copy selection or last assistant message |
+ | \`${followUp}\` | Queue follow-up message |
+-| \`${dequeue}\` | Restore queued messages |
++${this.options.readOnlyQueue ? "| Queue | Read-only counts; no edit, cancel or reorder |" : `| \`${dequeue}\` | Restore queued messages |`}
+ | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
+ | \`/\` | Slash commands |
+ | \`!\` | Run bash command |

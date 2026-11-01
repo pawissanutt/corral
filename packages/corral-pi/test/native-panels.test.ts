@@ -50,7 +50,7 @@ test("native panels retain real streaming, composing, binding, modal isolation a
     const bound = host.sessionId(), panels = host.panels;
     if (!panels) throw new Error("rich host did not install native panels");
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical);
-    mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", verbose: false, mainView: transcript => panels.mainView(transcript) });
+    mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false, mainView: transcript => panels.mainView(transcript) });
     await mode.init(); host.markAttached("interactive");
     const running = mode.run();
     // Stop is explicit below; no Ctrl+D/process.exit is sent to the test runner.

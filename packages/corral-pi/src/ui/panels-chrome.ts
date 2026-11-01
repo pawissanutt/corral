@@ -29,22 +29,39 @@ export function panelHeader(identity: HostIdentity, cwd: string, branch: string 
       plainLabel(basename(cwd)) + (branch ? ` (${plainLabel(branch)})` : ""), width) + RESET,
   ];
 }
-export function composerBar(snapshot: PanelSnapshot | null, width: number, hidden = 0): string {
+interface ComposerHit { readonly from: number; readonly to: number }
+export function composerLayout(snapshot: PanelSnapshot | null, width: number, hidden = 0, sendHint?: string): {
+  readonly line: string; readonly model?: ComposerHit; readonly effort?: ComposerHit;
+} {
   const full = snapshot?.model;
-  const model = full ? full.slice(full.indexOf("/") + 1) : "Model unavailable";
-  const effort = snapshot ? ` · ${plainLabel(snapshot.effort)}` : "";
-  const hint = hidden > 0 ? `↓ ${hidden} more` : "Enter send";
-  const room = Math.max(0, width - 6 - hint.length - effort.length - 2);
-  return PANEL_MUTED + "└ " + PANEL_TEXT + splitRow(
-    pad(plainLabel(model), Math.min(room, visibleWidth(model))).trimEnd() + PANEL_MUTED + effort,
-    PANEL_MUTED + hint, Math.max(0, width - 4)) + PANEL_MUTED + " ┘";
+  const model = full ? plainLabel(full.slice(full.indexOf("/") + 1)) + " ▾" : "Model unavailable";
+  const effort = snapshot ? ` · ${plainLabel(snapshot.effort)}${snapshot.effortAvailable ? " ↻" : ""}` : "";
+  const hint = hidden > 0 ? `↓ ${hidden} more` : sendHint ?? (snapshot?.streaming ? "Enter steer" : "Enter send");
+  const room = Math.max(0, width - 6 - visibleWidth(hint) - visibleWidth(effort));
+  const label = pad(model, Math.min(room, visibleWidth(model))).trimEnd();
+  const modelEnd = 2 + visibleWidth(label), effortEnd = modelEnd + visibleWidth(effort);
+  return {
+    line: PANEL_MUTED + "└ " + PANEL_TEXT + splitRow(label + PANEL_MUTED + effort,
+      PANEL_MUTED + hint, Math.max(0, width - 4)) + PANEL_MUTED + " ┘",
+    ...(full && label ? { model: { from: 2, to: modelEnd } } : {}),
+    ...(snapshot?.effortAvailable && effortEnd < width - 2 ? { effort: { from: modelEnd, to: effortEnd } } : {}),
+  };
+}
+export function composerBar(snapshot: PanelSnapshot | null, width: number, hidden = 0): string {
+  return composerLayout(snapshot, width, hidden).line;
+}
+export function composerTitle(snapshot: PanelSnapshot | null): string {
+  const input = snapshot?.input;
+  if (!input) return "Message";
+  const meaning = input.disposition === "pending" ? "admission unknown"
+    : input.disposition === "queued" ? `${input.policy ?? "input"}; not execution`
+    : input.disposition === "started" ? "not completion"
+    : input.disposition === "handled" ? "consumed; not execution" : input.reason ?? "not admitted";
+  return `Last typed input: ${input.disposition} · ${plainLabel(meaning)}`;
 }
 export function panelFooter(snapshot: PanelSnapshot | null, contextInRail: boolean,
   statuses: ReadonlyMap<string, string>, width: number): string[] {
-  const queue = snapshot && snapshot.steering + snapshot.followUps > 0
-    ? `${snapshot.steering} steering · ${snapshot.followUps} follow-ups` : "";
-  const lines = contextInRail && !queue ? []
-    : [PANEL_MUTED + splitRow(contextInRail ? "" : contextLabel(snapshot), queue, width) + RESET];
+  const lines = contextInRail ? [] : [PANEL_MUTED + pad(contextLabel(snapshot), width) + RESET];
   // Binding already lives in the header. Never lose refusals or other extension statuses.
   const alerts = [...statuses].filter(([key]) => key !== STATUS_BINDING)
     .sort(([a], [b]) => Number(b === STATUS_ALERTS) - Number(a === STATUS_ALERTS));

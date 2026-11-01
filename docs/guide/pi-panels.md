@@ -21,6 +21,14 @@ Use a new owner pane/session; existing processes do not hot-reload. Explicit `[a
 - **F6:** sidebar/inline inspector focus; arrows navigate. **Ctrl+B:** wide rail/inline layout or explicit compact-detail expansion.
 - 105+ terminal columns reserve a 34-column rail; narrower layouts use one navigation row at rest. Draft and binding survive relocation.
 
+## Input delivery and model controls
+
+The composer is Pi's real editor. **Enter** sends while idle and steers while busy. The follow-up shortcut shown on its top border queues after the current work (normally Alt+Enter; Ctrl+Q on Windows/WSL). Editing, paste, history and configured shortcuts stay native. View changes, inspection and resize keep the same draft; they do not submit it.
+
+**Last typed input** reports upstream preflight: pending means admission is unknown, queued is not execution, started is admission rather than completion, handled means a command/extension consumed it, and rejected retains the refusal reason. The pending-input row shows known steering/follow-up counts only. Inbox observation/delivery journals are not proof of execution or completion. Structured notices are never restored into the owner editor by dequeue or Esc; queued input has no edit, cancel or reorder controls. Esc retains native current-operation abort behavior without replacing the draft.
+
+Click the **model ▾** label to open Pi's existing model picker (keyboard: Ctrl+L). It offers the host's available catalog and commits through the existing provider/credential preflight. Busy or missing-credential refusals keep the current model/session and show the recovery action. Click **effort ↻** to cycle supported levels (keyboard: Shift+Tab); models without thinking have no effort action. `/thinking` remains the native level picker. These controls do not replace the native session. The bound worker/assistant/PM/reviewer role is a label, never a Build/Plan/Review switch.
+
 ## Stable reading, focus and compact paging
 
 - **Follow pauses while you read.** Scrolling the conversation back (PgUp, wheel, Ctrl+Home) stops it following streamed output. New output then arrives below without moving your reading position, and Pi shows **↓ Jump to latest message · Ctrl+End**. Only Ctrl+End or a click on that control returns to live output.
@@ -64,7 +72,7 @@ Workspace board task/run monitoring is separate. This view does not start, cance
 
 ## Native integration seam
 
-`patches/@earendil-works%2Fpi-coding-agent@1.3.0.patch` adds an optional typed `InteractiveModeOptions.mainView(transcript)` hook to the pinned SDK's fullscreen layout factory. The original transcript instance is supplied to the host's public-component composition; the original fixed input dock remains outside it. Defaults are unchanged when the hook is absent. The patch is tracked through Bun patchedDependencies/frozen lock and compat lock digest. The additional pi-tui@1.3.0 patch supplies removable image activation registration; unregistered images retain stock behavior. No runtime private-field casts, root discovery/reparenting, replacement editor loop or second agent runtime.
+`patches/@earendil-works%2Fpi-coding-agent@1.3.0.patch` adds an optional typed `InteractiveModeOptions.mainView(transcript)` hook to the pinned SDK's fullscreen layout factory. The original transcript instance is supplied to the host's public-component composition; the original fixed input dock remains outside it. An optional `readOnlyQueue` mode renders pending counts and prevents raw queued input being restored into the owner editor; the rich host enables it. Defaults are unchanged when these options are absent. The patch is tracked through Bun patchedDependencies/frozen lock and compat lock digest. The additional pi-tui@1.3.0 patch supplies removable image activation registration; unregistered images retain stock behavior. No runtime private-field casts, root discovery/reparenting, replacement editor loop or second agent runtime.
 
 The Terminal adapter supplies default cell colors only in the alternate screen, without OSC palette/default-color setters. Explicit widget/selection colors and opaque clipboard/image protocols are retained. Foreground prompts and active selection suppress background interactions.
 
@@ -73,7 +81,7 @@ The Terminal adapter supplies default cell colors only in the alternate screen, 
 ```sh
 cd packages/corral-pi
 bun run typecheck
-bun test src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-shell.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/panel-shell.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
+bun test test/panel-composer.test.ts test/host-session.test.ts test/bridge.test.ts test/subscriptions-host.test.ts src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-shell.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/panel-shell.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
 cd ../..
 python3 scripts/qa-pi-workbench.py /tmp/corral-native-workbench-evidence
 python3 scripts/qa-pi-image-viewer.py /tmp/corral-native-image-evidence
@@ -82,6 +90,8 @@ python3 scripts/qa-pi-panel-shell.py /tmp/corral-panel-shell-evidence
 ```
 
 `test/panel-shell.test.ts` and `qa-pi-panel-shell.py` (T-688) drive the real host with a long streamed reply that contains wide graphemes. They read back during the held stream, then check four things. First, the same paragraph stays at the top through stream completion, 140→80→52→140 resizes and Ctrl+B. Second, Ctrl+End and a click on the jump control return to live output without taking inspector focus. Third, at 80×14 the pager moves identically by ↓ and by `‹`/`›` clicks. Fourth, a dialog isolates the inspector. The PTY script uses real key sequences and SGR mouse reports against `src/host/main.ts`, and writes ANSI and screen-text captures for each step. The plain host still creates no panels.
+
+`panel-composer.test.ts` drives real keyboard editing, held preflight, started/queued/handled/refused input, native pointer/keyboard model and effort controls, busy/credential model refusals, notice-count compaction and draft retention. The bridge/host-session suites retain pending/idempotent delivery coverage. `qa-pi-panel-proof.py` also opens the native picker and cycles effort with real SGR pointer reports while retaining a draft.
 
 `panel-host-proof.test.ts` and `qa-pi-panel-proof.py` are the layout-seam proof from T-687 (`docs/records/T-687-pi-panel-host-proof-report.md`). A reply is held after its first streamed delta while a real `read` result, inspection and 140→80→52→140 resizes are exercised. The bound session and generation are read back over the generation's own bridge, one composer submission is counted end to end, and a tool outside the loadout and a session replacement stay refused. Re-run both after any Pi SDK pin bump.
 

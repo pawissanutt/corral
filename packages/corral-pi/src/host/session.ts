@@ -50,6 +50,7 @@ import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
+import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
@@ -250,6 +251,8 @@ export class HostSession {
   runtime!: AgentSessionRuntime;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
+  private terminalInput: InputObservation | undefined;
+  private terminalInputSequence = 0;
   private readonly baseLoadout: readonly string[];
   private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
@@ -303,7 +306,15 @@ export class HostSession {
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
     });
-    this.unsubscribePanels = this.panels ? options.events.on(() => this.panels?.refresh()) : undefined;
+    this.unsubscribePanels = this.panels ? options.events.on(event => {
+      if (event.kind === "terminal_input" && typeof event.input_sequence === "number" && event.input_sequence >= this.terminalInputSequence) {
+        this.terminalInputSequence = event.input_sequence;
+        this.terminalInput = { key: String(event.key), disposition: event.disposition as InputObservation["disposition"],
+          ...(typeof event.reason === "string" ? { reason: event.reason } : {}),
+          ...(typeof event.policy === "string" ? { policy: event.policy } : {}) };
+      }
+      this.panels?.refresh();
+    }) : undefined;
     this.budget = new RunBudget({
       unbounded: PROVIDERS[this.provider].lane !== undefined,
       record: async (payload) => {
@@ -800,6 +811,9 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
+    this.terminalInputSequence = 0;
+    this.terminalInput = undefined;
+    observeTerminalInput(session, this.options.events);
     this.panelTokens = undefined;
     this.unsubscribe = session.subscribe((event) => {
       if (event.type === "message_end") this.panelTokens = undefined;
@@ -1110,7 +1124,9 @@ export class HostSession {
     const jobs: PanelJob[] | null = this.jobs ? this.jobs.inspection().map(detail => ({ job: detail.job, state: detail.state, detail })) : null;
     return {
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
-      effort: session.thinkingLevel, streaming: session.isStreaming, context: session.getContextUsage(),
+      effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
+      ...(this.terminalInput ? { input: this.terminalInput } : {}),
+      streaming: session.isStreaming, context: session.getContextUsage(),
       tokens: this.panelTokens ??= session.getSessionStats().tokens.total, tools: session.getActiveToolNames(),
       contextFiles: this.guidance.contextFiles.map(file => file.path),
       skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),

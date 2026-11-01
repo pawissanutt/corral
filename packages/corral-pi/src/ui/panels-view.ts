@@ -13,6 +13,8 @@ export interface PanelSnapshot {
   readonly bound: boolean;
   readonly model: string | null;
   readonly effort: string;
+  readonly effortAvailable?: boolean;
+  readonly input?: import("../host/input-observation.ts").InputObservation;
   readonly streaming: boolean;
   readonly context: ContextUsage | undefined;
   readonly tokens: number;

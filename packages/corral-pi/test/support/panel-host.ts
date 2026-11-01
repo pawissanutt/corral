@@ -61,7 +61,7 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
     if (!panels) throw new Error("rich host did not install native panels");
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical);
     let transcript: Component | undefined;
-    mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", verbose: false,
+    mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false,
       mainView: view => { transcript = view; return panels.mainView(view); } });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });

@@ -8,7 +8,7 @@ import type { HostIdentity } from "../roles/types.ts";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativeWorkbench } from "./workbench.ts";
 import { panelTheme } from "./panels-theme.ts";
-import { composerBar, overviewLines, panelFooter, splitRow } from "./panels-chrome.ts";
+import { composerLayout, composerTitle, overviewLines, panelFooter, splitRow } from "./panels-chrome.ts";
 import { pagerLabel, scrollWindow, selectionWindow, type PageWindow } from "./panels-pager.ts";
 import {
   box, pad, panelLines, plainLabel, diffLine, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
@@ -326,21 +326,41 @@ export class NativePanels implements PanelSurface {
       const owner = this;
       ctx.ui.setEditorComponent((tui, theme, keys) => {
         const editor = new class extends sdk.CustomEditor {
+          private composer: ReturnType<typeof composerLayout> | undefined;
+          private bottomRow = -1;
           setPaddingX(padding: number): void { super.setPaddingX(Math.max(2, padding)); }
           protected renderTopBorder(width: number, hidden: number): string {
             if (hidden) return super.renderTopBorder(width, hidden);
-            return PANEL_MUTED + "┌─ Message " + "─".repeat(Math.max(0, width - 12)) + "┐";
+            const followUp = keys.getKeys("app.message.followUp")[0];
+            const title = composerTitle(owner.options.snapshot());
+            const hint = followUp ? `${followUp} follow-up` : "";
+            const label = pad(` ${title}${hint && visibleWidth(title) + visibleWidth(hint) + 7 <= width ? ` · ${hint}` : ""} `,
+              Math.max(0, width - 3)).trimEnd();
+            return PANEL_MUTED + "┌─" + label + "─".repeat(Math.max(0, width - visibleWidth(label) - 3)) + "┐";
           }
           protected renderBottomBorder(width: number, hidden: number): string {
-            return composerBar(owner.options.snapshot(), width, hidden);
+            const snapshot = owner.options.snapshot();
+            const submit = keys.getKeys("tui.input.submit")[0] ?? "Enter";
+            this.composer = composerLayout(snapshot, width, hidden, `${submit} ${snapshot?.streaming ? "steer" : "send"}`);
+            return this.composer.line;
           }
           handleMouse(event: TuiMouseEvent) {
-            if (event.type === "click" && event.button === "left") { owner.focused = false; owner.workbench.focused = false; owner.refresh(); }
+            if (event.type === "click" && event.button === "left") {
+              owner.focused = false; owner.workbench.focused = false; owner.refresh();
+              if (owner.canInteract && event.y === this.bottomRow) {
+                const hit = (range: { from: number; to: number } | undefined) => range && event.x >= range.from && event.x < range.to;
+                // Use the same native actions as Ctrl+L / Shift+Tab; selection still commits through host preflight.
+                if (hit(this.composer?.model)) { this.actionHandlers.get("app.model.select")?.(); return { handled: true }; }
+                if (hit(this.composer?.effort)) { this.actionHandlers.get("app.thinking.cycle")?.(); return { handled: true }; }
+              }
+            }
             return super.handleMouse(event);
           }
           render(width: number): string[] {
             this.borderColor = text => ctx.ui.theme.fg("borderAccent", text);
-            return super.render(width).map(line => {
+            const lines = super.render(width);
+            this.bottomRow = this.composer ? lines.indexOf(this.composer.line) : -1;
+            return lines.map(line => {
               const framed = line.startsWith(" ") && line.endsWith(" ")
                 ? PANEL_MUTED + "│" + PANEL_TEXT + line.slice(1, -1) + PANEL_MUTED + "│" : line;
               return ctx.ui.theme.bg("userMessageBg", pad(framed, width));
@@ -378,6 +398,7 @@ export class NativePanels implements PanelSurface {
     pi.on("agent_end", () => { this.refresh(); });
     pi.on("turn_end", () => { this.refresh(); });
     pi.on("model_select", () => { this.refresh(); });
+    pi.on("thinking_level_select", () => { this.refresh(); });
     pi.on("tool_result", () => { this.workbench.invalidateFiles(); this.refresh(); });
     pi.registerCommand("panels", {
       description: "Native session inspector: context, files, agents, plan, refresh or toggle",
