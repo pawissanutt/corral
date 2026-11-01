@@ -164,6 +164,7 @@ impl Fx {
             session_id: "s-w".into(),
             generation: grant.generation,
             turn: None,
+            parent: None,
         };
         let host_cap = paths::sha256_hex(b"s-w-host");
         let send = |op: &str, request_id: String, payload: Value, nonce: Option<&str>| {

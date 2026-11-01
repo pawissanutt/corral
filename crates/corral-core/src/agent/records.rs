@@ -256,6 +256,28 @@ pub struct RequestIdentity {
     pub generation: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<u64>,
+    /// Code Mode only (T-683): the model-issued call and kernel cell that made this nested call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<CallParent>,
+}
+
+/// The parent of a nested Code Mode call. Its request ID is the tool request ID of the session
+/// and `<tool_call_id>/<call>`, so a replayed child names the same receipt and a new one never does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallParent {
+    /// The transcript `codemode` call that submitted the cell.
+    pub tool_call_id: String,
+    pub cell: String,
+    /// The kernel's call ID, `<cell>.<n>`.
+    pub call: String,
+}
+
+impl CallParent {
+    /// The nested call's own tool call ID, from which its request ID is derived.
+    pub fn child_key(&self) -> String {
+        format!("{}/{}", self.tool_call_id, self.call)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

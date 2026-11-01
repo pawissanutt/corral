@@ -319,6 +319,7 @@ fn records_round_trip_through_the_task_file_and_default_to_absent() {
             session_id: "s".into(),
             generation: 1,
             turn: Some(1),
+            parent: None,
         },
         state: ReceiptState::Committed,
         result: json!({"kind": "turn_started"}),
