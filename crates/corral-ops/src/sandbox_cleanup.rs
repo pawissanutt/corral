@@ -93,10 +93,6 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
 
 fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
     let fresh = ctx.clone();
-    fresh.store.begin_session_view()?;
-    if !crate::session_scope::owns_inventory(&fresh)? {
-        return Ok(BTreeSet::new());
-    }
     let tasks = fresh.store.list()?;
     let mut runs = BTreeMap::new();
     for task in &tasks {
@@ -135,6 +131,14 @@ fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
         }
     }
     eligible.retain(|marker| !protected.contains(marker));
+    if !eligible.is_empty() {
+        // A no-op sweep must not add binding reads/scans to ordinary sync. Only
+        // refresh ownership when these markers could authorize external cleanup.
+        fresh.store.begin_session_view()?;
+        if !crate::session_scope::owns_tasks(&fresh, &fresh.store, &tasks)? {
+            eligible.clear();
+        }
+    }
     Ok(eligible)
 }
 
