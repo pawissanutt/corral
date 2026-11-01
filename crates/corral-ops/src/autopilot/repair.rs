@@ -116,10 +116,6 @@ impl Pilot<'_> {
 
     pub(super) fn rebase(&self) -> Result<Step> {
         let mut key = RepairKey::new(self.task, self.run, "rebase_conflict")?;
-        if self.policy.merge == MergeMode::Ff {
-            key.reason = "base_moved".into();
-            return self.integration_changes(key, Vec::new(), None);
-        }
         // The real replay is authoritative even when merge-tree was clean.
         let rebased = self
             .ctx
@@ -144,20 +140,29 @@ impl Pilot<'_> {
                     }
                     _ => false,
                 };
+                // Preserve worker integration for unapproved fast-forward candidates.
+                // An approved clean replay is re-gated before the eventual ff landing.
+                if self.policy.merge == MergeMode::Ff && !approved {
+                    return Ok(None);
+                }
                 let action = if approved {
                     OperatingActionKind::Gate
                 } else {
                     OperatingActionKind::Repair
                 };
                 crate::operating::require(store, current, action)?;
-                crate::verdict_carry::rebase(self.ctx, current, run, &key.base)
+                crate::verdict_carry::rebase(self.ctx, current, run, &key.base).map(Some)
             })
             .map(|(_, outcome)| outcome);
         match rebased {
-            Ok(RebaseOutcome::Conflict { message, paths }) => {
+            Ok(None) => {
+                key.reason = "base_moved".into();
+                self.integration_changes(key, Vec::new(), None)
+            }
+            Ok(Some(RebaseOutcome::Conflict { message, paths })) => {
                 self.integration_changes(key, paths, Some(message))
             }
-            Ok(RebaseOutcome::Rebased) => {
+            Ok(Some(RebaseOutcome::Rebased)) => {
                 let head = corral_git::rev_sha(&self.run.worktree, "HEAD")?;
                 let note = format!(
                     "rebased onto {} at {}; gate required on the integrated candidate",
