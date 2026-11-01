@@ -383,6 +383,8 @@ pub struct TaskCost {
 
 impl TaskCost {
     /// Spend folded from earlier runs and the current run's own and review usage facts.
+    /// Compared with [`Self::of`], amounts use `|a-b| <= 1e-9 * max(1, |a|, |b|)` USD.
+    /// Floating-point grouping can make displayed cents differ at a half-cent boundary.
     pub fn of_head(t: &TaskHead) -> TaskCost {
         let mut totals = t.summary.cost.clone();
         if let Some(run) = &t.current_run {

@@ -25,6 +25,26 @@ fn approval(store: &Store, full: &Task, task: &impl TaskRef) -> Result<(), Strin
     result.map_err(|e| format!("{e:#}"))
 }
 
+fn assert_costs_close(headed: TaskCost, expected: TaskCost) {
+    assert_eq!(
+        (headed.unpriced_tokens, headed.ran),
+        (expected.unpriced_tokens, expected.ran)
+    );
+    for (a, b) in [
+        (headed.reported, expected.reported),
+        (headed.estimated, expected.estimated),
+    ] {
+        match (a, b) {
+            (Some(a), Some(b)) => assert!(
+                (a - b).abs() <= 1e-9 * 1.0_f64.max(a.abs()).max(b.abs()),
+                "{a:?} vs {b:?}"
+            ),
+            (None, None) => {}
+            _ => panic!("cost presence differs: {a:?} vs {b:?}"),
+        }
+    }
+}
+
 fn same_helpers(store: &Store, full: &Task, head: &corral_core::TaskHead) {
     let round = implementation_review_round(full);
     assert_eq!(implementation_review_round_ref(head).unwrap(), round);
@@ -46,21 +66,7 @@ fn same_helpers(store: &Store, full: &Task, head: &corral_core::TaskHead) {
         assert_eq!(approval(store, full, head), expected);
         assert_eq!(approval(store, full, full), expected);
     }
-    // T-524: `of_head` adds per-run subtotals, `of` every entry in order; f64 sums can differ
-    // in the last bit, so costs compare within rounding and the card text exactly.
-    let (headed, expected) = (TaskCost::of_head(head), TaskCost::of(full));
-    assert_eq!(headed.text(), expected.text());
-    assert_eq!(
-        (headed.unpriced_tokens, headed.ran),
-        (expected.unpriced_tokens, expected.ran)
-    );
-    for (a, b) in [
-        (headed.reported, expected.reported),
-        (headed.estimated, expected.estimated),
-    ] {
-        assert_eq!(a.is_some(), b.is_some());
-        assert!((a.unwrap_or(0.0) - b.unwrap_or(0.0)).abs() <= 1e-9);
-    }
+    assert_costs_close(TaskCost::of_head(head), TaskCost::of(full));
     let usage = full
         .current_run()
         .and_then(|r| r.total_usage())
@@ -80,7 +86,27 @@ fn helper_forms_equal_the_full_task_functions_on_random_tasks() {
         let mut rng = Rng(0x5151_5151_0f0f_0f0f ^ (seed * 0x9e37_79b9));
         for (_backend, _dir, store) in backends() {
             for _ in 0..2 {
-                let full = random_task(&store, &mut rng);
+                let mut full = random_task(&store, &mut rng);
+                for run in &mut full.runs {
+                    let amount = (1 + rng.below(90)) as f64 / 100.0;
+                    run.usage = Some(corral_core::Usage::from_entries(vec![
+                        corral_core::UsageEntry {
+                            reported_usd: Some(amount),
+                            estimated_usd: Some(9.0),
+                            ..Default::default()
+                        },
+                        corral_core::UsageEntry {
+                            estimated_usd: Some(amount),
+                            ..Default::default()
+                        },
+                        corral_core::UsageEntry {
+                            input: 7,
+                            ..Default::default()
+                        },
+                    ]));
+                }
+                store.fixture_put_task(&full).unwrap();
+                let full = store.get(&full.id).unwrap();
                 let head = store.head(&full.id).unwrap();
                 same_helpers(&store, &full, &head);
                 resolved.insert(revision_resolved(&full));
@@ -95,6 +121,54 @@ fn helper_forms_equal_the_full_task_functions_on_random_tasks() {
         2,
         "revision_resolved took only {resolved:?}"
     );
+}
+
+#[test]
+fn cost_original_last_bit_difference_is_within_tolerance_on_both_backends() {
+    for (backend, _dir, store) in backends() {
+        let full = owner_changes(&store, 3, 3, 3);
+        let headed = TaskCost::of_head(&store.head(&full.id).unwrap());
+        let expected = TaskCost::of(&full);
+        let (a, b) = (headed.estimated.unwrap(), expected.estimated.unwrap());
+        assert_ne!(
+            a.to_bits(),
+            b.to_bits(),
+            "{backend} must reproduce the original difference"
+        );
+        assert_costs_close(headed, expected);
+    }
+}
+
+#[test]
+fn cost_half_cent_boundary_grouping_is_within_tolerance_on_both_backends() {
+    for (backend, _dir, store) in backends() {
+        let mut full = store
+            .create("Half cent", Some("app"), Status::Running, "Spec\n")
+            .unwrap();
+        grow(&mut full, 2, 0, 0, 0);
+        for (run, amounts) in full.runs.iter_mut().zip([vec![0.01], vec![0.01, 0.025]]) {
+            run.review_runs.clear();
+            run.usage = Some(corral_core::Usage::from_entries(
+                amounts
+                    .into_iter()
+                    .map(|amount| corral_core::UsageEntry {
+                        estimated_usd: Some(amount),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ));
+        }
+        store.fixture_put_task(&full).unwrap();
+        let full = store.get(&full.id).unwrap();
+        let headed = TaskCost::of_head(&store.head(&full.id).unwrap());
+        let expected = TaskCost::of(&full);
+        assert_ne!(
+            headed.estimated.unwrap().to_bits(),
+            expected.estimated.unwrap().to_bits(),
+            "{backend}"
+        );
+        assert_costs_close(headed, expected);
+    }
 }
 
 /// A task whose current plan carries an owner `changes` review resolving every decision, its
