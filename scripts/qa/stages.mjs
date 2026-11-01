@@ -161,7 +161,7 @@ try {
   await cli("config", "set", "profiles.sonnet.model", "sonnet");
   await cli("config", "set", "review.reviewer", "sonnet");
   await cli("config", "set", "review.accept", "owner");
-  await cli("config", "set", "review.autopilot", "false");
+  // Fresh fixtures default to Assist; no legacy policy write is needed.
   const middle = `if [ -f ${quote(join(root, "pass"))} ]; then printf 'CLIPPY-PASS\\n'; else printf 'GATE-LIVE-STEP\\n'; printf ready > ${quote(join(root, "gate.ready"))}; cat ${quote(join(root, "gate.release"))} >/dev/null; printf 'error: original gate failure\\n'; exit 7; fi`;
   await cli("config", "set", "review.gate", JSON.stringify(["printf 'FMT-PASS\\n'", middle, "printf 'TESTS-PASS\\n'"]));
   await command("mkfifo", [join(root, "gate.release"), join(root, "review.release")]);

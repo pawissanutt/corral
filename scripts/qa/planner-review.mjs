@@ -47,7 +47,7 @@ try {
   await mkdir(repo);
   await run("git", ["init", "-q", "-b", "main", repo]);
   await cli(["init"]);
-  await set("review.autopilot", "false");
+  // Fresh fixtures default to Assist; no legacy policy write is needed.
   await set("resources.max_load_per_core", "1000000");
   await set("resources.min_mem_available", '"1B"');
   await set("resources.min_disk_free", '"1B"');
@@ -112,7 +112,10 @@ try {
   check("late review changes remain available without overwriting cancellation",
     observed.cancelledAfterVerdict.plans[0].reviews.at(-1).verdict === "changes"
     && observed.cancelledAfterVerdict.plan_runs[0].state === "cancelled");
-  await set("review.autopilot", "true");
+  const grantArgs = ["mode", "autopilot", "--task", cancelled, "--dispatch", "--json"];
+  const preview = await json(grantArgs);
+  observed.grantPreview = preview;
+  observed.grant = await json([...grantArgs, "--confirm", preview.id]);
   await cli(["sync"]);
   observed.cancelledAfterSync = await show(cancelled);
   assert.deepEqual(observed.cancelledAfterSync.plan_runs, observed.cancelledBefore.plan_runs);

@@ -164,7 +164,7 @@ try {
   }
   cli(["config", "set", "review.reviewer", "fake-reviewer"]);
   cli(["config", "set", "review.accept", "owner"]);
-  cli(["config", "set", "review.autopilot", "false"]);
+  // Fresh fixtures default to Assist; no legacy policy write is needed.
   cli(["config", "set", "limits.running", "1"]);
   assert.equal(newTask("Plan gated widget"), "T-001");
   assert.equal(newTask("Default direct widget"), "T-002");
@@ -178,7 +178,7 @@ try {
   const offBindings = [...offPrompt.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]));
   assert(!offBindings.some((binding) => binding.target === "plan"));
   results.push({ name: "default_off_direct_dispatch", pass: true, task: off });
-  cli(["move", "T-002", "dropped", "--force"]);
+  cli(["move", "T-002", "dropped", "--owner-ok"]);
   cli(["plan", "policy", "T-001", "required"]);
   writeFileSync(notesFile, "Reviewed exact plan and task; no unresolved decisions.\n");
   denied("missing", /plan required/, "T-001", ["--queue"]);
@@ -242,7 +242,7 @@ try {
   cli(["dispatch", "T-003", "--profile", "fake-worker"]);
   own(task("T-003"));
   denied("approved_still_obeys_wip", /no free slot/);
-  cli(["move", "T-003", "dropped", "--force"]);
+  cli(["move", "T-003", "dropped", "--owner-ok"]);
   const workerLaunch = await promptFromHarness(join(root, "T-001-worker.seen"),
     () => cli(["dispatch", "T-001", "--profile", "fake-worker"]));
   const running = task();
@@ -274,7 +274,7 @@ try {
   const planning = task("T-004");
   const planningWorkspace = planning.plans.at(-1).reviews.at(-1).herdr.workspace_id;
   assert.equal((planning.runs ?? []).length, 0);
-  cli(["move", "T-004", "dropped", "--force"]);
+  cli(["move", "T-004", "dropped", "--owner-ok"]);
   cli(["sync"]);
   assert(!herdr(["workspace", "list"]).workspaces.some((w) => w.workspace_id === planningWorkspace));
   assert(!herdr(["pane", "list"]).panes.some((p) => p.workspace_id === planningWorkspace));

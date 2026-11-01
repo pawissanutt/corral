@@ -293,7 +293,7 @@ async function scenario() {
     await command("git", ["clone", "--shared", "--no-checkout", "--quiet", repo, join(root, "app")]);
     await command("git", ["checkout", "--quiet", "-B", "main", "HEAD"], true, join(root, "app"));
     await cli(["init"]);
-    await set("review.autopilot", "false");
+    // Fresh fixtures default to Assist; no legacy policy write is needed.
     await set("sync.omo_agent_dir", JSON.stringify(agentDir));
     await set("resources.max_load_per_core", "1000000");
     await set("resources.min_mem_available", '"1B"');

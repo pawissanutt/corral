@@ -185,9 +185,13 @@ try {
     ["resources.max_load_per_core", "1.7976931348623157e308"], ["resources.min_mem_available", "1B"],
     ["resources.min_disk_free", "1B"], ["agents.gallery-worker.command", "printf 'GALLERY-WORKER\\n'"],
     ["defaults.profile", "gallery-worker"], ["review.reviewer", "none"], ["review.accept", "owner"],
-    ["review.autopilot", "false"], ["review.gate", '["true"]'],
+    ["review.gate", '["true"]'], // Fresh fixtures default to Assist.
   ]) await cli("config", "set", key, value);
   await cli("new", "Build health dashboard", "-p", "app", "--body", "Regenerate dashboard-report.html with title Build health.");
+  // Recurrence is automatic dispatch: confirm only this exact disposable task.
+  const grantArgs = ["mode", "autopilot", "--task", "T-001", "--dispatch", "--json"];
+  const preview = await json(...grantArgs);
+  await cli(...grantArgs, "--confirm", preview.id);
   const due = "2026-01-01T00:00:00Z";
   await cli("dashboard", "set", "T-001", "--interval-secs", "3600", "--next-due", due, "--authorize-dispatch");
   await cli("sync");
