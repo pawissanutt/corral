@@ -34,14 +34,17 @@ export const pmTools: readonly CorralToolSpec[] = [
   tool("brief", "read_brief", "Read the approved projects' PM brief without running sync.", {}),
   tool("next", "read_next", "Read the approved projects' next actions without executing them or running sync.", {}),
   tool("show", "read_show", "Read one task's canonical sections. content_json is a JSON text chunk; "
-    + "follow next_offset with the same section to read the rest. Offsets and limits count characters.", {
+    + "follow next_offset with the same section and key to read the rest. Offsets and limits count characters. "
+    + "Default 1024; opt into up to 4096 (wire-byte bounds may shorten a page). Use questions + key for exact triage; "
+    + "automation diagnoses the task without advancing or repairing it.", {
     task: Task,
     section: Type.Optional(Type.Union([
       Type.Literal("overview"), Type.Literal("spec"), Type.Literal("questions"),
-      Type.Literal("comments"), Type.Literal("plans"),
+      Type.Literal("comments"), Type.Literal("plans"), Type.Literal("automation"),
     ])),
+    key: Type.Optional(Type.String({ description: "Exact canonical question key; requires section=questions" })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
-    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1024 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 4096 })),
   }),
   tool("list", "read_list", "Read a bounded page of tasks across approved projects.", {
     offset: Type.Optional(Type.Integer()),

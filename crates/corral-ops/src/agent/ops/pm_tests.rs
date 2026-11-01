@@ -361,6 +361,185 @@ fn codemode_allowlisted_reads_leave_no_receipts_or_request_id_obligations() {
 }
 
 #[test]
+fn exact_question_and_automation_reads_preserve_identity_and_state() {
+    let (fx, host) = fixture();
+    let id = ts::worker_task(&fx, "worker");
+    let worker = ts::bind(
+        &fx,
+        &BindTarget::Worker {
+            task: id.clone(),
+            run: "R1".into(),
+        },
+        "worker",
+        "worker-session",
+    );
+    ts::committed(&ts::hello(&fx, &worker));
+    let asked = send(
+        &fx,
+        &worker,
+        "ask",
+        "ask",
+        json!({"kind":"clarification","text":"Which bounded read?","blocking":false}),
+    );
+    let key = asked.receipt().unwrap().result["key"].as_str().unwrap();
+    fx.ctx
+        .store
+        .update(&id, |task| {
+            let run = &mut task.runs[0];
+            run.autopilot = Some(corral_core::AutopilotState {
+                stage: corral_core::AutoStage::Blocked,
+                reason: Some("landing refused: dirty destination".into()),
+                sha: Some("abc123".into()),
+                at: Timestamp::now(),
+            });
+            let state = run.agent_host.as_mut().unwrap();
+            state.questions[0].revision = 3;
+            for n in 2..18 {
+                let mut historical = state.questions[0].clone();
+                historical.key = format!("{id}/R1/Q{n}");
+                historical.text = "unrelated historical question".repeat(100);
+                state.questions.push(historical);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let op: crate::PostLandOperation = serde_json::from_value(json!({
+        "version":1,"key":"pending-exact-operation","project":"corral",
+        "repo":"/tmp/repo","task":id,"run":"R1","base":"main",
+        "base_before":"old","landed_sha":"abc123","policy_digest":"policy",
+        "created":"2026-10-23T00:00:00Z","landed":false,"abandoned":false,
+        "notified":false,"hooks":[]
+    }))
+    .unwrap();
+    crate::hooks::save(&fx.ctx, &op).unwrap();
+    let operations_before =
+        serde_json::to_value(crate::post_land_operations(&fx.ctx, Some("corral")).unwrap())
+            .unwrap();
+    let before = ts::task_bytes(&fx, &id);
+    let shown = send(
+        &fx,
+        &host,
+        "read_show",
+        "exact",
+        json!({"task":id,"section":"questions","key":key,"limit":4096}),
+    );
+    let result = &shown.receipt().unwrap().result;
+    let view: Value = serde_json::from_str(result["content_json"].as_str().unwrap()).unwrap();
+    assert_eq!(view["question"]["key"], key);
+    assert_eq!(result["revision"], view["question"]["revision"]);
+    assert_eq!(result["next_offset"], Value::Null);
+    assert_eq!(result["revision"], 3);
+    assert!(
+        !result["content_json"]
+            .as_str()
+            .unwrap()
+            .contains("unrelated historical")
+    );
+    assert!(view.get("pending").is_some());
+    let missing = send(
+        &fx,
+        &host,
+        "read_show",
+        "missing",
+        json!({"task":id,"section":"questions","key":"T-999/R1/Q1"}),
+    );
+    assert_eq!(ts::code(&missing), Some("bad_request"));
+    let invalid = send(
+        &fx,
+        &host,
+        "read_show",
+        "invalid-key",
+        json!({"task":id,"key":key}),
+    );
+    assert_eq!(ts::code(&invalid), Some("bad_request"));
+    let automation = send(
+        &fx,
+        &host,
+        "read_show",
+        "automation",
+        json!({"task":id,"section":"automation","limit":4096}),
+    );
+    let content: Value = serde_json::from_str(
+        automation.receipt().unwrap().result["content_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(content["run"], "R1");
+    assert_eq!(content["autopilot"]["stage"], "blocked");
+    assert_eq!(
+        content["autopilot"]["reason"],
+        "landing refused: dirty destination"
+    );
+    assert!(
+        automation.receipt().unwrap().result["diagnostic"]
+            .as_str()
+            .unwrap()
+            .contains("dirty destination")
+    );
+    assert_eq!(content["operations"][0]["key"], "pending-exact-operation");
+    assert_eq!(content["operations"][0]["landed"], false);
+    assert_eq!(content["operations"][0]["ready"], false);
+    assert_eq!(
+        operations_before,
+        serde_json::to_value(crate::post_land_operations(&fx.ctx, Some("corral")).unwrap())
+            .unwrap()
+    );
+    assert_eq!(before, ts::task_bytes(&fx, &id));
+}
+
+#[test]
+fn show_pages_reassemble_escaped_unicode_within_wire_bound() {
+    let (fx, host) = fixture();
+    let task = task(&fx, "corral", &"\"\\\n😀".repeat(3000));
+    let before = ts::task_bytes(&fx, &task.id);
+    let mut offset = 0;
+    let mut content = String::new();
+    loop {
+        let response = send(
+            &fx,
+            &host,
+            "read_show",
+            &format!("page-{offset}"),
+            json!({"task":task.id,"section":"spec","offset":offset,"limit":4096}),
+        );
+        let result = &response.receipt().unwrap().result;
+        assert!(serde_json::to_vec(result).unwrap().len() <= RESULT_MAX_BYTES);
+        assert_eq!(result["offset"], offset);
+        content.push_str(result["content_json"].as_str().unwrap());
+        match result["next_offset"].as_u64() {
+            Some(next) => {
+                assert!(next > offset);
+                offset = next;
+                assert_eq!(result["truncated"], true);
+            }
+            None => break,
+        }
+    }
+    assert_eq!(
+        serde_json::from_str::<String>(&content).unwrap(),
+        fx.ctx.store.get(&task.id).unwrap().body
+    );
+    let default = send(
+        &fx,
+        &host,
+        "read_show",
+        "default",
+        json!({"task":task.id,"section":"spec"}),
+    );
+    assert_eq!(default.receipt().unwrap().result["end_offset"], 1024);
+    let bad = send(
+        &fx,
+        &host,
+        "read_show",
+        "too-large",
+        json!({"task":task.id,"section":"spec","limit":4097}),
+    );
+    assert_eq!(ts::code(&bad), Some("bad_request"));
+    assert_eq!(before, ts::task_bytes(&fx, &task.id));
+}
+
+#[test]
 fn typed_reads_are_scoped_bounded_and_do_not_write_receipts() {
     // Given tasks in two projects, and a bound PM with one hello receipt.
     let (fx, host) = fixture();

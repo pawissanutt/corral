@@ -49,9 +49,18 @@ export function callSummary(args: Args): string | undefined {
 export function renderCallText(name: string, args: Args, theme: Style): string {
   const summary = name === "corral_todo" && typeof args.op === "string"
     ? oneLine([args.op, args.step ?? args.phase].filter((value) => typeof value === "string").join(" "))
-    : callSummary(args ?? {});
+    : name === "corral_show" ? showSummary(args ?? {}) : callSummary(args ?? {});
   const head = theme.fg("toolTitle", theme.bold(`corral ${shortName(name)}`));
   return summary ? `${head} ${theme.fg("muted", summary)}` : head;
+}
+
+function showSummary(args: Args): string {
+  const section = typeof args.section === "string" ? args.section : "overview";
+  const label = typeof args.key === "string" ? `Question ${args.key}`
+    : section.charAt(0).toUpperCase() + section.slice(1);
+  const range = args.offset !== undefined || args.limit !== undefined
+    ? ` · from ${args.offset ?? 0}${args.limit !== undefined ? `, ≤${args.limit} chars` : ""}` : "";
+  return `${args.task ?? "task"} · ${label}${range}`;
 }
 
 function scalar(value: unknown): string | undefined {
@@ -64,6 +73,12 @@ export function resultFields(result: unknown, limit = 3): string | undefined {
   if (typeof result === "string") return oneLine(result);
   if (!result || typeof result !== "object" || Array.isArray(result)) return undefined;
   const record = result as Record<string, unknown>;
+  if (typeof record.content_json === "string" && typeof record.total_chars === "number") {
+    const range = `${record.offset ?? 0}–${record.end_offset ?? record.content_json.length}/${record.total_chars} chars`;
+    return `${record.section ?? "read"} · ${range} · ${record.next_offset == null ? "complete" : `next=${record.next_offset}`}`
+      + (record.revision != null ? ` · rev=${record.revision}` : "")
+      + (typeof record.diagnostic === "string" ? ` · ${oneLine(record.diagnostic)}` : "");
+  }
   const parts: string[] = [];
   for (const key of RESULT_FIELDS) {
     const value = scalar(record[key]);
@@ -89,7 +104,8 @@ function textOf(result: AgentToolResult<unknown>): string {
 
 function expandedBody(receipt: CorralReceipt): string {
   const lines = JSON.stringify(receipt.result ?? null, null, 2).split("\n");
-  const shown = lines.slice(0, EXPANDED_MAX_LINES);
+  const shown = typeof (receipt.result as Args | null)?.content_json === "string"
+    ? lines : lines.slice(0, EXPANDED_MAX_LINES);
   if (lines.length > shown.length) shown.push(`… ${lines.length - shown.length} more lines`);
   return shown.join("\n");
 }

@@ -73,7 +73,7 @@ struct Target {
     task: String,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Section {
     #[default]
@@ -82,12 +82,15 @@ enum Section {
     Questions,
     Comments,
     Plans,
+    Automation,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Show {
     task: String,
+    #[serde(default)]
+    key: Option<String>,
     #[serde(default)]
     section: Section,
     #[serde(default)]
@@ -537,6 +540,55 @@ pub(super) fn page(values: Vec<Value>, offset: usize, limit: usize) -> Result<Va
     Ok(json!({"items":items,"total":total,"next_offset":(next < total).then_some(next)}))
 }
 
+// The final wire JSON, not just source characters, must fit the existing 8 KiB contract.
+// Opt-in 4K pages fit ordinary prose; escapes and Unicode can reduce the actual page.
+fn show_page(
+    task: &Task,
+    p: &Show,
+    content: &str,
+    limit: usize,
+    revision: Option<u32>,
+) -> Result<Value> {
+    let diagnostic = if matches!(p.section, Section::Automation) {
+        let value: Value = serde_json::from_str(content)?;
+        let stage = value["autopilot"]["stage"]
+            .as_str()
+            .unwrap_or("not_started");
+        let reason = value["blocker"]
+            .as_str()
+            .or(value["autopilot"]["reason"].as_str());
+        Some(
+            format!(
+                "{stage}{}",
+                reason.map(|r| format!(": {r}")).unwrap_or_default()
+            )
+            .chars()
+            .take(160)
+            .collect::<String>(),
+        )
+    } else {
+        None
+    };
+    let total = content.chars().count();
+    let mut chunk: String = content.chars().skip(p.offset).take(limit).collect();
+    loop {
+        let next = p.offset.saturating_add(chunk.chars().count());
+        let result = json!({"task":summary(task),"section":p.section,"key":p.key,
+            "revision":revision,"diagnostic":diagnostic,"offset":p.offset,"end_offset":next,
+            "content_json":chunk,"total_chars":total,"truncated":next < total,
+            "next_offset":(next < total).then_some(next)});
+        if chunk.is_empty() && p.offset < total {
+            return Err(bad("task metadata leaves no room for content"));
+        }
+        if serde_json::to_vec(&result)?.len() <= RESULT_MAX_BYTES {
+            return Ok(result);
+        }
+        if chunk.pop().is_none() {
+            return Err(bad("task metadata exceeds read bound"));
+        }
+    }
+}
+
 fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Value> {
     let projects = if project == super::super::hooks::pm::WORKSPACE {
         super::super::hooks::pm::projects(&ctx.store)?
@@ -549,10 +601,14 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
             super::pm_inbox::read(ctx, super::payload(envelope, super::pm_inbox::READ_FIELDS)?)
         }
         AgentOp::ReadShow => {
-            let p: Show = super::payload(envelope, "task, section?, offset?, limit?")?;
+            let p: Show = super::payload(envelope, "task, section?, key?, offset?, limit?")?;
             let task = target(ctx, &p.task, project)?;
             // A run carries many receipts and a specification may exceed a frame. Keep every
             // canonical section reachable without exposing filesystem or shell tools to the PM.
+            if p.key.is_some() && !matches!(p.section, Section::Questions) {
+                return Err(bad("key requires section=questions"));
+            }
+            let mut revision = None;
             let content = match p.section {
                 Section::Overview => json!({
                     "spec_revision":crate::progress_spec_revision(&task)?,
@@ -561,22 +617,54 @@ fn read(ctx: &Ctx, envelope: &Envelope, op: AgentOp, project: &str) -> Result<Va
                         "gate":r.gate,"review":r.review,"blocked_excerpt":r.blocked_excerpt})),
                 }),
                 Section::Spec => json!(task.body),
-                Section::Questions => serde_json::to_value(crate::questions::views(&task))?,
+                Section::Questions => {
+                    let views = crate::questions::views(&task);
+                    if let Some(key) = &p.key {
+                        let view = views
+                            .into_iter()
+                            .find(|v| &v.question.key == key)
+                            .ok_or_else(|| {
+                                bad("question key not found in this task; use its canonical key")
+                            })?;
+                        revision = Some(view.question.revision);
+                        serde_json::to_value(view)?
+                    } else {
+                        serde_json::to_value(views)?
+                    }
+                }
+                Section::Automation => json!({
+                    "run":task.current_run().map(|r| &r.id),
+                    "autopilot":task.current_run().and_then(|r| r.autopilot.as_ref()),
+                    "infra_wait":task.infra_wait,"park":task.park,"landed":task.landed,
+                    "retry":task.current_run().and_then(|r| r.retry.as_ref()),
+                    "operations":crate::post_land_operations(ctx, task.project.as_deref())?
+                        .into_iter().filter(|op| op.task == task.id &&
+                            task.current_run().is_some_and(|r| r.id == op.run))
+                        .map(|op| json!({"key":op.key,"run":op.run,"landed_sha":op.landed_sha,
+                            "landed":op.landed,"abandoned":op.abandoned,"ready":op.ready(),
+                            "blocker":op.blocker(),"hooks":op.hooks.iter().map(|h|
+                                json!({"name":h.hook.name,"state":h.state,"reason":h.reason,
+                                    "attempts":h.attempts.len(),"latest":h.attempts.last().map(|a|
+                                        json!({"number":a.number,"started":a.started,"finished":a.finished,
+                                            "exit_code":a.exit_code,"timed_out":a.timed_out,
+                                            "error":a.error,"log":a.log}))})).collect::<Vec<_>>() }))
+                        .collect::<Vec<_>>(),
+                    "blocker":crate::automation_blocker(ctx, &task)?,
+                    "events":ctx.store.events_shared()?.iter().rev().filter(|e|
+                        e.task.as_deref() == Some(task.id.as_str()) &&
+                        matches!(e.kind.as_str(), "autopilot_error" | "automation_blocked" |
+                            "automation_resumed" | "landing_blocked" | "autopilot"))
+                        .take(8).collect::<Vec<_>>(),
+                }),
                 Section::Comments => serde_json::to_value(&task.comments)?,
                 Section::Plans => serde_json::to_value(&task.plans)?,
             };
             let content = serde_json::to_string(&content)?;
             let limit = p.limit.unwrap_or(1024);
-            if limit == 0 || limit > 1024 {
-                return Err(bad("show limit must be 1..1024 characters"));
+            if limit == 0 || limit > 4096 {
+                return Err(bad("show limit must be 1..4096 characters"));
             }
-            let total = content.chars().count();
-            let chunk: String = content.chars().skip(p.offset).take(limit).collect();
-            let next = p.offset.saturating_add(chunk.chars().count());
-            Ok(
-                json!({"task":summary(&task),"content_json":chunk,"total_chars":total,
-                "next_offset":(next < total).then_some(next)}),
-            )
+            show_page(&task, &p, &content, limit, revision)
         }
         AgentOp::ReadRoute | AgentOp::ReadArtifacts => {
             let p: Target = super::payload(envelope, "task")?;
