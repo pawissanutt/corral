@@ -47,4 +47,8 @@ Attempt `ag-55582a1d746c64dd` reaches3017 passes/one failure (2044/5062 unrun). 
 
 Focused `questions::heads_tests`: **2 PASS**. Complete `questions::` unit suite: **43 PASS**,0 failures (`.evidence/R3-question-head-port-green.log`). These include exact native/history costs, full order/closure oracle, single notice/notification publication and replay. The suite's missing-host-credential diagnostics belong to deliberately incomplete fixture hosts and are not claimed as live transport success. Only the contracted next gate can establish complete package acceptance.
 
+## Sixth R3 quick attempt: preserve full correlation oracle as test-only
+
+Attempt `ag-92632eade08f131f` stops at Clippy: the now-ported final production call leaves pending_keys and its re-export unused in shipped code. Existing questions tests still call that full-Task oracle. Q4 authorizes `questions/mod.rs`; the function and its re-export are now `#[cfg(test)]`, while pending_keys_ref remains production-exported. No allow attributes or test changes. Owner-requested `cargo clippy --workspace --all-targets -- -D warnings` PASS (`.evidence/R3-test-oracle-clippy.log`). The next contracted quick gate is still required; the failed attempt ran no regression tests.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
