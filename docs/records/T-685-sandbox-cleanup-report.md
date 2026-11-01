@@ -70,7 +70,20 @@ Green command: `cargo test -p corral-ops --lib sandbox -- --nocapture`: **8 pass
 including all four new regressions and the existing direct cleanup test
 (`sandbox-green.log`). `cargo fmt --all` and `git diff --check` passed. Changed-file
 rust-analyzer diagnostics reported no errors/warnings (one expected cfg inactive-code hint).
-The receipted quick gate supplies final rebased-tree verification separately.
+The first receipted quick gate (`ag-1a75d3d8d66f7890`) exposed an added no-op
+binding read: `sync_binding_reads_and_scans_do_not_grow_with_reconciliation_writes`
+reported 4 reads versus its existing budget of 3 (773 other tests passed). Sandbox
+cleanup refreshed ownership before discovering that there were no eligible markers.
+The refresh now occurs only for nonempty eligible marker sets. It still happens before
+external listing and again after a blocked listing when removal is possible. No test
+budgets/assertions were changed.
+
+`cargo test -p corral-ops --test session_ownership
+sync_binding_reads_and_scans_do_not_grow_with_reconciliation_writes -- --nocapture`
+now passes with **3 binding reads and 4 ownership scans** for both one and sixteen
+reconciliation writes (`binding-budget-green.log`). All eight sandbox tests passed again
+after this correction. The next receipted quick gate supplies final rebased-tree
+verification separately.
 
 ## Limits
 
