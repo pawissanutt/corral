@@ -65,10 +65,13 @@ The Terminal adapter supplies default cell colors only in the alternate screen, 
 ```sh
 cd packages/corral-pi
 bun run typecheck
-bun test src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
+bun test src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
 cd ../..
 python3 scripts/qa-pi-workbench.py /tmp/corral-native-workbench-evidence
 python3 scripts/qa-pi-image-viewer.py /tmp/corral-native-image-evidence
+python3 scripts/qa-pi-panel-proof.py /tmp/corral-panel-proof-evidence
 ```
+
+`panel-host-proof.test.ts` and `qa-pi-panel-proof.py` are the layout-seam proof from T-687 (`docs/records/T-687-pi-panel-host-proof-report.md`). A reply is held after its first streamed delta while a real `read` result, inspection and 140→80→52→140 resizes are exercised. The bound session and generation are read back over the generation's own bridge, one composer submission is counted end to end, and a tool outside the loadout and a session replacement stay refused. Re-run both after any Pi SDK pin bump.
 
 The owned production-main PTY fixture uses an offline provider/control plane, real isolated Git repository and real FIFO-held background process. It verifies main view switching, hunk-to-draft/no autosend, external edits, comparison/search, 140→80→52→140 resize, monitor arm/match, process exit 7, native confirmation and clean terminal restoration. No live owner/worker/PM panes or paid model calls are used. Screenshot replay is evidence only, not the product runtime.
