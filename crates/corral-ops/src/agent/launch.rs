@@ -235,16 +235,7 @@ pub struct HostSpec {
     pub adopt: bool,
 }
 
-/// The Pi provider a host bound to `vendor` (else the model's inferred vendor) runs on.
-pub fn host_provider(vendor: Option<&str>, model: &str) -> Option<String> {
-    if vendor == Some("llama.cpp") {
-        return Some("llama.cpp".to_owned());
-    }
-    let vendor = vendor
-        .map(str::to_owned)
-        .or_else(|| corral_core::infer_vendor(model))?;
-    super::credentials::provider_for_vendor(&vendor).map(|p| p.id.to_owned())
-}
+pub use super::hooks::launch::host_provider;
 
 /// A written one-shot bootstrap and the explicit asset directory its launch names, if any.
 #[derive(Debug, Clone, PartialEq, Eq)]

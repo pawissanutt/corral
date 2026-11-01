@@ -8,7 +8,18 @@ use std::path::Path;
 use super::consulted;
 use crate::Ctx;
 use crate::agent::BindTarget;
-use crate::agent::launch::{HostSpec, host_provider, prepare};
+use crate::agent::launch::{HostSpec, prepare};
+
+/// The Pi provider a host bound to `vendor` (else the model's inferred vendor) runs on.
+pub fn host_provider(vendor: Option<&str>, model: &str) -> Option<String> {
+    if vendor == Some("llama.cpp") {
+        return Some("llama.cpp".to_owned());
+    }
+    let vendor = vendor
+        .map(str::to_owned)
+        .or_else(|| corral_core::infer_vendor(model))?;
+    crate::agent::credentials::provider_for_vendor(&vendor).map(|p| p.id.to_owned())
+}
 
 pub fn worker_command(ctx: &Ctx, task: &Task, run: &Run) -> Result<String> {
     consulted("launch");
