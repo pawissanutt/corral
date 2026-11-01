@@ -68,6 +68,53 @@ fn records(task: &str, n: u32) -> [NativeRecord; 10] {
 }
 
 #[test]
+fn current_agent_reader_roundtrip_preserves_all_ten_families_including_nested_budget() {
+    for count in [0, 1, 10] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::init(root.path()).unwrap();
+        let mut expected = store_support::rich(&store, 1, 0, 0, 0);
+        let id = expected.id.clone();
+        let owner = ContainerRef::Worker {
+            task: id.clone(),
+            run: expected.runs[0].id.clone(),
+        };
+        expected
+            .init_agent_head(&owner, AgentHostHead::of(&state()))
+            .unwrap();
+        for n in 1..=count {
+            for record in records(&id, n) {
+                expected.put_agent_record(&owner, record).unwrap();
+            }
+        }
+        store.fixture_put_task(&expected).unwrap();
+        let original = agent::container_state(&expected, &owner).unwrap();
+        // Unlike the replacement test below, read through the exact completion
+        // reader, not through the full Task facade that already maps budget.requests.
+        let reconstructed = store
+            .head(&id)
+            .unwrap()
+            .current_agent_state()
+            .unwrap()
+            .unwrap();
+        assert_eq!(reconstructed.as_ref(), original);
+        store
+            .update_head(&id, |head| head.set_current_agent_state(reconstructed))
+            .unwrap();
+        let full = store.get(&id).unwrap();
+        assert_eq!(agent::container_state(&full, &owner), Some(original));
+        let projected = store
+            .head(&id)
+            .unwrap()
+            .agent_head(&owner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(projected.records.counts, [u64::from(count); 10]);
+        assert_eq!(projected.records.pending, 3 * u64::from(count));
+        assert_eq!(projected, AgentHostHead::of(original));
+    }
+}
+
+#[test]
 fn replacement_rebuilds_all_ten_positions_and_pending_before_same_worker_appends() {
     for replace in [false, true] {
         let root = tempfile::tempdir().unwrap();
