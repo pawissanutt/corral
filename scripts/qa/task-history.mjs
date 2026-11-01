@@ -170,7 +170,7 @@ try {
     ["resources.min_mem_available", "1B"],
     ["resources.min_disk_free", "1B"],
     ["dispatch.paused", "true"],
-    ["review.autopilot", "false"],
+    // Fresh fixtures default to Assist; no legacy policy write is needed.
     ["review.accept", "owner"],
     ["review.gate", JSON.stringify(["git diff --exit-code", "test -f answer.txt"])],
     // A shell function is a deterministic stand-in for a model receiving a prompt.

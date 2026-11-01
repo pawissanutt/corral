@@ -43,7 +43,7 @@ try {
   await run("git", ["init", "-q", "-b", "main", repo]);
   await run("git", ["commit", "-q", "--allow-empty", "-m", "Initial fixture"], true, repo);
   await cli(["init"]);
-  await set("review.autopilot", "false");
+  // Fresh fixtures default to Assist; no legacy policy write is needed.
   await set("review.gate", '["true"]');
   await set("resources.max_load_per_core", "1000000");
   await set("resources.min_mem_available", '"1B"');

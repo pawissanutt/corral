@@ -64,7 +64,7 @@ try {
   await run("git", ["init", "-q", "-b", "main", join(root, "app")]);
   await writeFile(join(root, "app", "protected.txt"), "original");
   await cli(["init"]);
-  await set("review.autopilot", "false");
+  // Fresh fixtures default to Assist; no legacy policy write is needed.
   await set("sync.startup_grace_secs", "1");
   await set("resources.max_load_per_core", "1000000");
   await set("resources.min_mem_available", '"1B"');

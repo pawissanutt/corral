@@ -29,7 +29,7 @@ let pass = false;
 try {
   await cli("init");
   await cli("config", "set", "dispatch.paused", "true");
-  await cli("config", "set", "review.autopilot", "false");
+  // Fresh fixtures default to Assist; no legacy policy write is needed.
   await cli("new", "Understand task planning results", "--idea", "--body",
     `# Context\nA task can have many runs.\n\n## Goal\nKeep the original purpose visible after retries.\n\n## Acceptance\n${fullWidth}`);
   await capture.start({ boardReady: s => s.includes("T-001") && s.includes("q leave") });
