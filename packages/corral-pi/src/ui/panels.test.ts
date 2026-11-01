@@ -46,12 +46,13 @@ test("public terminal adapter reserves only a wide native rail and preserves nor
   terminal.write("\x1b[?1049l"); expect(terminal.columns).toBe(105);
   terminal.stop();
 });
-test("main bytes are preserved, rail is synchronized, and drawing stops before leaving alternate screen", () => {
+test("main content/cursor bytes are preserved, rail is synchronized, and drawing stops before leaving alternate screen", () => {
   const { physical, terminal } = fixture();
   const frame = "\x1b[?1049h\x1b[?7l\x1b[?2026h\x1b[1;1HREAL STREAM\x1b[?2026l";
   terminal.write(frame);
   const output = physical.writes.at(-1) ?? "";
-  expect(output.startsWith(frame.slice(0, -8))).toBeTrue();
+  // Only SGR default colors may be decorated; content, cursor and framing stay byte-identical.
+  expect(output.replace(/\x1b\[[\d;:]*m/g, "").startsWith(frame.slice(0, -8))).toBeTrue();
   expect(output).toContain("REAL STREAM");
   expect(output).toContain("\x1b[1;107H");
   expect(output).toContain("Real inspector");
@@ -60,6 +61,32 @@ test("main bytes are preserved, rail is synchronized, and drawing stops before l
   expect(physical.writes.at(-1)).toBe("\x1b[?1049lSHELL");
   terminal.stop(); const mark = physical.writes.length; terminal.redrawSidebar();
   expect(physical.writes.length).toBe(mark);
+});
+test("native viewport paints an explicit canvas instead of inheriting the owner's terminal background", () => {
+  const { physical, terminal } = fixture(); physical.resize(80, 34);
+  terminal.write("\x1b[?1049h\x1b[2J\x1b[0mconversation\x1b[49m");
+  const output = physical.writes.at(-1) ?? "";
+  expect(output).toContain("\x1b[48;2;15;16;18m\x1b[2J");
+  expect(output).toContain("\x1b[0m\x1b[38;2;224;227;233m\x1b[48;2;15;16;18mconversation");
+  terminal.write("\x1b[?1049l"); terminal.stop();
+});
+test("rail painting never interrupts split clipboard/image protocol payloads", () => {
+  const { physical, terminal } = fixture();
+  terminal.write("\x1b[?1049h");
+  terminal.write("\x1b]52;c;partial");
+  expect(physical.writes.at(-1)).toBe("\x1b]52;c;partial");
+  const count = physical.writes.length; terminal.redrawSidebar();
+  expect(physical.writes.length).toBe(count);
+  terminal.write("payload\x07");
+  expect(physical.writes.at(-1)?.startsWith("payload\x07")).toBeTrue();
+  expect(physical.writes.at(-1)).toContain("Real inspector");
+  terminal.write("\x1b(");
+  expect(physical.writes.at(-1)).toBe("\x1b(");
+  const pending = physical.writes.length; terminal.redrawSidebar();
+  expect(physical.writes.length).toBe(pending);
+  terminal.write("B"); expect(physical.writes.at(-1)?.startsWith("B")).toBeTrue();
+  expect(physical.writes.at(-1)).toContain("Real inspector");
+  terminal.write("\x1b[?1049l"); terminal.stop();
 });
 test("main input and resize stay on the original terminal while consumed inspector keys never submit", () => {
   const f = fixture();

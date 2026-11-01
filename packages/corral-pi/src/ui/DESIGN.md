@@ -2,6 +2,7 @@
 name: Corral Pi native workbench
 description: Native panel presentation over the real bound Pi session
 colors:
+  canvas: "#0f1012"
   panel: "#191b20"
   text: "#e0e3e9"
   muted: "#9ba2b0"
@@ -35,7 +36,7 @@ A real native coding session stays primary. Filled graphite inspection regions a
 
 ## Colors
 
-The normative palette above comes from panels-view.ts and panels-theme.ts. Focus blue marks selection and native editor borders; neutral graphite owns inspection surfaces. Success, attention and error retain explicit words/signs alongside color. Existing syntax colors remain inherited where not overridden.
+The normative palette above comes from panel-canvas.ts, panels-view.ts and panels-theme.ts. Focus blue marks selection and native editor borders; neutral graphite owns inspection surfaces. Success, attention and error retain explicit words/signs alongside color. Existing syntax colors remain inherited where not overridden.
 
 **The State Rule.** Displaying progress, a tool result or a diff does not imply a passing gate, review or owner acceptance.
 
@@ -51,7 +52,7 @@ Fullscreen main width reserves a 34-column rail plus one separator at 105 physic
 
 ## Elevation & Depth
 
-Tonal surfaces and one-cell rules create depth, without CSS effects or terminal background mutation. Read-only details and existing prompts are native Pi overlays/selectors, not extra browser windows.
+Explicit canvas and raised panel cell backgrounds plus one-cell rules create depth. The alternate-screen adapter supplies default foreground/background through SGR, not terminal-palette/default-color setters; the surrounding terminal and normal screen retain their theme. Read-only details and existing prompts are native Pi overlays/selectors, not extra browser windows.
 
 ## Shapes
 

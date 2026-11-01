@@ -45,7 +45,7 @@ This is the first live panel foundation, **not completion of every later rollout
 
 ## Implementation boundary
 
-`PanelTerminal` implements Pi's public Terminal interface. Fullscreen Pi receives the main-pane width; the remaining physical cells are painted as a rail in the same synchronized terminal frame, preserving cursor and wrap state. The existing InteractiveMode root, transcript, editor and dialogs are not reparented or accessed through private fields. Normal-screen/exit output is not decorated.
+`PanelTerminal` implements Pi's public Terminal interface. Fullscreen Pi receives the main-pane width; the remaining physical cells are painted as a rail in the same synchronized terminal frame, preserving cursor and wrap state. The existing InteractiveMode root, transcript, editor and dialogs are not reparented or accessed through private fields. Normal-screen/exit output is not decorated. The alternate-screen canvas has explicit graphite foreground/background, independent of the terminal's default palette. A bounded streaming ANSI lexer reapplies only default-color resets; explicit widget/selection colors, attributes, OSC hyperlinks/clipboard and image payloads are preserved. Rail painting waits for complete control sequences. No OSC palette/default-color setters are emitted.
 
 The narrow inspector uses `setWidget`; the editor is a `CustomEditor` subclass retaining core app handlers. UI-prompt events, overlay state and editor focus prevent background interception. The same HostSession, runtime, source=`interactive` input hooks, owner-input journal, generation and tool guards remain authoritative. Git children are bounded and cancelled on disposal. Plain/headless/bare do not acquire another agent runtime.
 
@@ -54,7 +54,7 @@ The narrow inspector uses `setWidget`; the editor is a `CustomEditor` subclass r
 ```sh
 cd packages/corral-pi
 bun run typecheck
-bun test src/ui/panels.test.ts test/native-panels.test.ts
+bun test src/ui/panel-canvas.test.ts src/ui/panels.test.ts test/native-panels.test.ts
 ```
 
 From repository root on Linux:
