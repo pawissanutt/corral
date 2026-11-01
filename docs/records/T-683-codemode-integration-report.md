@@ -67,7 +67,7 @@ routing change was added.
 - **T-679.** No continuation logic was added. The detached handle tells the model to record a
   waiting plan step (`code cell <id>`) with `corral_todo`, which leaves T-679's disposition in charge
   of waking. The notice turn carries a bridge origin, so continuation accounting treats it like any
-  other input.
+  other input. Review round 1 proved this against the real ledger (below).
 
 ## Acceptance evidence
 
@@ -85,6 +85,29 @@ routing change was added.
 
 Logs (red against the base where meaningful, green, the cross-lane run and the gate) are attached to
 T-683 R1.
+
+## Review round 1 (R1-review1)
+
+- **F1, detached notice could hide the failure summary.** `noticeText` used to clip the whole report
+  to its first 7 KiB, so printed output could push out the nested summary and the return value (the
+  reviewer reproduced a caught denial and a selected result both missing). `reportText` now takes a
+  byte budget. The status, error, counts and failure list are bounded by construction and always kept
+  whole. The return value is fitted next. Printed output gets the remaining room, and each shortened
+  part names its shown and total bytes. The notice budget is 32 KiB, which fits the kernel's 16 KiB
+  return value beside the mandatory sections. Failures past the eighth are counted by tool, not
+  only by number. Inline results are unchanged. Regressions in `test/codemode-notice.test.ts` cover
+  ordinary and reload-deferred delivery: a 40,000-byte print, ten caught failures (nine denials and a
+  rejected receipt) and a 15,003-byte return value give a notice within budget that keeps everything
+  except the clipped print. An inline 40,000-byte print is kept whole. Both tests fail against the
+  round-1 `report.ts` (red log attached).
+- **F2, T-679 integration unproven.** `test/codemode-continuation.cross-lane.test.ts` runs the
+  production PM host in process against the real corral binary and an isolated store (the PM lane
+  probe), so corral's own T-679 ledger decides continuations. The PM opens a two-step plan, detaches
+  a cell and records the cell step's wait on event `code cell cell-1`. Corral continues the independent
+  step exactly once, then decides `waiting_event` with `not_due` while the cell runs; no continuation
+  or no-progress stop occurs. Releasing the cell delivers exactly one bridge-origin turn
+  (`code:g<n>:cell-1`) whose notice carries the return value, and after it corral decides the request
+  `complete` with `not_due`. No continuation code changed: this proves the documented mechanism.
 
 ## Limitations
 
