@@ -39,7 +39,8 @@ fn fixture(capabilities: Option<&[&str]>) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::init(tmp.path()).unwrap();
     let assets = tmp.path().join("assets");
-    let mut compat = json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}});
+    let mut compat =
+        json!({"version": 1, "verdict": "GO", "bun": {"range": "1.4.2"}, "memory_projection": 1});
     if let Some(keys) = capabilities {
         compat["capabilities"] = json!(keys);
     }
