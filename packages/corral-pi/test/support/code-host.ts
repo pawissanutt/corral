@@ -94,6 +94,7 @@ export interface CodeFixture {
 export interface CodeFixtureOptions {
   readonly enabled?: readonly string[];
   readonly bigBytes?: number;
+  readonly ui?: "plain" | "rich";
 }
 
 export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {}): Promise<CodeFixture> {
@@ -163,7 +164,7 @@ export async function codeHost(role: CodeRole, options: CodeFixtureOptions = {})
     // A late/foreign extension makes the forbidden tool callable upstream; only host policy refuses it.
     sdk: { ...sdk, createAgentSessionFromServices(opts) {
       return sdk.createAgentSessionFromServices({ ...opts, tools: [...opts.tools ?? [], forbidden.name] });
-    } }, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", capabilities, ui: "plain",
+    } }, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", capabilities, ui: options.ui ?? "plain",
     guidance: { projectText: false, settings: {} as never }, modules: wrapped, events, network, client,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });

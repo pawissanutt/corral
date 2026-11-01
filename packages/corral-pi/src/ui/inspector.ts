@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { EventLog, EventPage } from "../bridge/events.ts";
 import type { CapabilitySet } from "../roles/types.ts";
 import { renderResultText } from "./render.ts";
+import { observedCorralResult } from "./receipt-source.ts";
 
 export interface InspectorSnapshot {
   readonly session: string;
@@ -33,9 +34,12 @@ export class InspectorActivity {
 
   extend(pi: ExtensionAPI, allowed: ReadonlySet<string>): void {
     pi.on("tool_result", event => {
-      if (event.parentToolCallId !== undefined || !allowed.has(event.toolName)) return;
+      if (!allowed.has(event.toolName) || !observedCorralResult(event)) return;
       const summary = renderResultText({ content: event.content, details: event.details }, false, event.isError, plainTheme);
-      this.receipts.push(`${event.toolName} · ${summary}`);
+      const details = event.details as { state?: unknown } | undefined;
+      const state = typeof details?.state === "string"
+        && ["committed", "rejected", "reserved", "queued", "uncertain", "abandoned"].includes(details.state) ? details.state : "no receipt";
+      this.receipts.push(`${event.toolName}${event.parentToolCallId ? " (Code Mode child)" : ""} · ${state} · ${summary}`);
       if (this.receipts.length > 24) { this.receipts.shift(); this.omitted++; }
       this.changed();
     });
