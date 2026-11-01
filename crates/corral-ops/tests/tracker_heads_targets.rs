@@ -20,6 +20,9 @@ fn authorized_plan_member_target_checks_never_hydrate_its_parent() {
             .unwrap();
         assert!(output.status.success(), "{output:?}");
         let mut store = Store::init(root.path()).unwrap();
+        store
+            .fixture_pin_now("2026-10-27T00:00:00Z".parse().unwrap())
+            .unwrap();
         store.config.dispatch.paused = false;
         store.save_config().unwrap();
         let mut plan = store

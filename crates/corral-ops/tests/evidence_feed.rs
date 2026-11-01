@@ -52,6 +52,9 @@ fn single_lookups(grow: usize) -> (Counted, u64, Vec<String>) {
     let tmp = tempfile::tempdir().unwrap();
     Store::init(tmp.path()).unwrap();
     let ctx = ctx(tmp.path());
+    ctx.store
+        .fixture_pin_now("2026-01-01T00:00:00Z".parse().unwrap())
+        .unwrap();
     let active = ctx
         .store
         .create("Active", None, Status::Ready, "")
@@ -353,6 +356,9 @@ fn feed_steps(grow: usize) -> (Vec<Counted>, bool) {
     let tmp = tempfile::tempdir().unwrap();
     Store::init(tmp.path()).unwrap();
     let ctx = ctx(tmp.path());
+    ctx.store
+        .fixture_pin_now("2026-01-01T00:00:00Z".parse().unwrap())
+        .unwrap();
     let active = ctx
         .store
         .create("Active", None, Status::Running, "body")

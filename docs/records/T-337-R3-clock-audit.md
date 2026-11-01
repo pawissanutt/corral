@@ -2,7 +2,7 @@
 
 ## Scope and method
 
-Compared added/modified Rust paths against storage-v2 `83dcc33e`, including integrated main tests, not just R3's edits. The candidate inventory (`.evidence/R3-exact-byte-budget-clock-inventory.json`) contains 92 paths selected by decoded-byte/all-counter/remainder/variant assertion markers. Inspected fixture construction, measurement boundaries and common helpers, including Core store_support/native records, native root/task/action budgets, TUI budget_seeded/hot_budget_fixture, and the Ops delivery/attention/lesson/question fixtures. Clock markers alone are not a safety proof: a pin after creation can retain live status_since, and a raw Jiff call bypasses both pins.
+Compared added/modified Rust paths against storage-v2 `83dcc33e`, including integrated main tests, not just R3's edits. The initial candidate inventory (`.evidence/R3-exact-byte-budget-clock-inventory.json`) contains 92 paths selected by decoded-byte/all-counter/remainder/variant assertion markers. Its diff-relative selection missed pre-existing Plan-target tests; the expanded 120-path manifest below corrects that limitation. Inspected fixture construction, measurement boundaries and common helpers, including Core store_support/native records, native root/task/action budgets, TUI budget_seeded/hot_budget_fixture, and the Ops delivery/attention/lesson/question fixtures. Clock markers alone are not a safety proof: a pin after creation can retain live status_since, and a raw Jiff call bypasses both pins.
 
 ## Consolidated findings and changes
 
@@ -10,7 +10,7 @@ Compared added/modified Rust paths against storage-v2 `83dcc33e`, including inte
 - `native_head_mutations.rs`: its three growth fixtures now pin Store time before creating rich task/index state, including the multi-mutation case that reads a just-written head. Existing manually fixed created/updated/status_since values alone did not bound subsequent mutation timestamps.
 - `evidence_artifacts.rs::keyed_work`: pin Store time through its existing fixture configuration callback, before creation/attachments/pins. Fixing Artifact.added alone did not fix other canonical metadata inputs. Existing exact read counters and existing write-counter selection are unchanged.
 
-These are the only additional actionable input holes identified in the sweep. Earlier R3 proven fixes remain in artifact_facts, store_heads, list_cols, owner_growth and lesson_rows_preparation. There is no blanket clock rewrite, budget change, sleep, retry, threshold change or special attribution exemption.
+These were the additional holes identified at Q8, not a final completeness claim. The later gate and repetition findings below supersede that inventory's scope. Earlier R3 proven fixes remain in artifact_facts, store_heads, list_cols, owner_growth and lesson_rows_preparation. There is no blanket clock rewrite, budget change, sleep, retry, threshold change or special attribution exemption.
 
 ## Why other apparent unpinned cases did not require edits
 

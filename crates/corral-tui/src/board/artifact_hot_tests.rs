@@ -4,7 +4,7 @@ use std::sync::Arc;
 use corral_core::work::{self, Counter, HotScope};
 use corral_core::{Artifact, ArtifactKind, CardField, Status};
 
-use super::tests::{run, seeded};
+use super::tests::{budget_seeded as seeded, run};
 use super::*;
 
 fn artifact(run: &str, kind: ArtifactKind, path: String) -> Artifact {

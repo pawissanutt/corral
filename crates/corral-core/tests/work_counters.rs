@@ -159,6 +159,7 @@ fn nested_class_scopes_send_each_event_to_the_innermost_claiming_scope() {
 
 fn combined(comments: usize, nested: usize) -> WorkSnapshot {
     let (_dir, store) = store();
+    store.fixture_pin_now(at(0)).unwrap();
     let mut task = store
         .create("Combined", Some("app"), Status::Running, "")
         .unwrap();
