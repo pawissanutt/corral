@@ -10,7 +10,9 @@ use crate::{
     },
 };
 use anyhow::Result;
-use corral_core::agent::{AuxiliaryOutcome, ReceiptEffect, UsageSession, UsageSessionKind, paths};
+use corral_core::agent::{
+    AuxiliaryOutcome, ReceiptEffect, UsageSession, UsageSessionKind, WebSearchProvider, paths,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -63,11 +65,26 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
     let feature = match payload.usage_kind {
         Some(UsageSessionKind::Explore) => "subagents",
         Some(UsageSessionKind::Oracle) => "oracle",
-        _ => return Err(bad("auxiliary supports only explore and oracle")),
+        Some(UsageSessionKind::WebSearch) => "web.enabled",
+        _ => {
+            return Err(bad(
+                "auxiliary supports only explore, oracle and web_search",
+            ));
+        }
     };
     if !snapshot.is_some_and(|g| g.capability(feature)) {
         return Err(
             Rejection::new(RejectCode::OpNotAllowed, "auxiliary capability is disabled").into(),
+        );
+    }
+    if payload.usage_kind == Some(UsageSessionKind::WebSearch)
+        && !snapshot
+            .and_then(|g| g.capabilities.as_ref())
+            .and_then(|s| s.web.as_ref())
+            .is_some_and(|web| web.search_provider == Some(WebSearchProvider::Subscription))
+    {
+        return Err(
+            Rejection::new(RejectCode::OpNotAllowed, "subscription search is disabled").into(),
         );
     }
     let max = snapshot

@@ -10,7 +10,11 @@ export const ExploreSettingsSchema = z.object({
 export const OracleSettingsSchema = z.object({ model, timeout_secs }).strict();
 export type ExploreSettings = z.infer<typeof ExploreSettingsSchema>;
 export type OracleSettings = z.infer<typeof OracleSettingsSchema>;
-export interface AuxiliarySettings { readonly explore?: ExploreSettings; readonly oracle?: OracleSettings }
+export interface AuxiliarySettings {
+  readonly explore?: ExploreSettings;
+  readonly oracle?: OracleSettings;
+  readonly web_search?: { readonly model: null; readonly timeout_secs: number };
+}
 
 export function auxiliarySettings(role: Role, enabled: readonly string[], settings?: Readonly<Record<string, unknown>>): AuxiliarySettings {
   void role;

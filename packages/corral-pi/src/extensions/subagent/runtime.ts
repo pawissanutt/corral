@@ -3,11 +3,12 @@
 import { createHash } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
 
-export type AuxiliaryKind = "explore" | "oracle";
+export type AuxiliaryKind = "explore" | "oracle" | "web_search";
 export type Outcome = "completed" | "uncertain" | "not_started";
 export interface Invocation {
   readonly request: string;
   readonly kind: AuxiliaryKind;
+  readonly provider: string;
   readonly model: string;
   readonly prompt: string;
   readonly sessionFile: string;
@@ -21,6 +22,8 @@ export interface AuxiliaryOptions {
   readonly provider: string;
   readonly model: string;
   sessionId(): string;
+  /** Search follows the current approved route, including an owner model switch. */
+  searchModel?(): { provider: string; model: string } | undefined;
   record(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   execute(invocation: Invocation, signal: AbortSignal): Promise<AuxiliaryResult>;
 }
@@ -55,6 +58,7 @@ class Slots {
 export class AuxiliaryRuntime {
   private readonly explore: Slots;
   private readonly oracle = new Slots(1);
+  private readonly webSearch = new Slots(1);
   private readonly controllers = new Set<AbortController>();
   private readonly requests = new Map<string, Promise<AuxiliaryResult & { request: string; generation: number }>>();
   private stopped = false;
@@ -69,17 +73,27 @@ export class AuxiliaryRuntime {
     this.requests.set(key, request);
     return request;
   }
+  private slots(kind: AuxiliaryKind): Slots {
+    switch (kind) {
+      case "explore": return this.explore;
+      case "oracle": return this.oracle;
+      case "web_search": return this.webSearch;
+    }
+  }
   private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal) {
     const { options } = this;
     const settings = options.settings[kind];
     if (!settings) throw new Error(`${kind} is disabled`);
     if (this.stopped) throw new Error("auxiliary session is fenced/closed");
     if (!prompt.trim() || prompt.length > 32768) throw new Error("auxiliary prompt must be 1-32768 characters");
-    const configured = settings.model ?? (kind === "explore" ? options.model : undefined);
+    const binding = kind === "web_search" ? options.searchModel?.() : undefined;
+    if (kind === "web_search" && !binding) throw new Error("web_search_unavailable: select an approved Codex or Claude subscription model");
+    const provider = binding?.provider ?? options.provider;
+    const configured = binding?.model ?? settings.model ?? (kind === "explore" ? options.model : undefined);
     if (!configured) throw new Error("Oracle is not configured: set agent.capabilities.<role>.oracle.model to a model in the bound provider");
     // A second provider would need another explicit credential/transport binding. Never borrow
     // ambient auth or create a fresh unrestricted ModelRuntime for an auxiliary request.
-    const prefix = `${options.provider}/`;
+    const prefix = `${provider}/`;
     const model = configured.startsWith(prefix) ? configured.slice(prefix.length) : configured;
     const controller = new AbortController();
     this.controllers.add(controller);
@@ -93,16 +107,16 @@ export class AuxiliaryRuntime {
     let result: AuxiliaryResult | undefined;
     try {
       signal.throwIfAborted();
-      const reference = await options.record({ ...common, action: "prepare", model: `${options.provider}/${model}` });
+      const reference = await options.record({ ...common, action: "prepare", model: `${provider}/${model}` });
       prepared = true;
       if (typeof reference.session_file !== "string" || reference.session_id !== request) throw new Error("invalid auxiliary reference");
-      release = await (kind === "explore" ? this.explore : this.oracle).take(signal);
+      release = await this.slots(kind).take(signal);
       signal.throwIfAborted();
       await options.record({ ...common, action: "started" });
       started = true;
       outcome = "uncertain";
       signal.throwIfAborted();
-      result = await options.execute({ request, kind, model, prompt,
+      result = await options.execute({ request, kind, provider, model, prompt,
         sessionFile: reference.session_file, sessionId: request,
         maxTurns: kind === "explore" ? options.settings.explore?.max_turns ?? 1 : 1 }, signal);
       outcome = result.outcome;
@@ -114,7 +128,7 @@ export class AuxiliaryRuntime {
       } finally { release?.(); this.controllers.delete(controller); }
     }
     if (!result) throw new Error("auxiliary request did not finish");
-    return { ...result, text: result.text.slice(0, 32768), request, generation: options.generation };
+    return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768), request, generation: options.generation };
   }
   /** Fence/close is permanent. Ordinary turn cancellation uses each tool's operation signal. */
   async close(): Promise<void> {
@@ -125,5 +139,5 @@ export class AuxiliaryRuntime {
     for (const controller of this.controllers) controller.abort(new Error("parent cancelled/reloaded/fenced"));
     await Promise.allSettled(this.requests.values());
   }
-  state() { return { explore: this.explore.state(), oracle: this.oracle.state(), stopped: this.stopped }; }
+  state() { return { explore: this.explore.state(), oracle: this.oracle.state(), web_search: this.webSearch.state(), stopped: this.stopped }; }
 }

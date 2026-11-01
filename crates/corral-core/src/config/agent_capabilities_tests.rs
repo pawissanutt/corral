@@ -302,6 +302,7 @@ fn host_and_endpoint_settings_each_change_the_snapshot_digest() {
     for setting in [
         "hosts = ['docs.example.org']",
         "searxng_url = 'http://localhost:8080'",
+        "search_provider = 'subscription'",
     ] {
         let config: AgentCapabilities =
             toml::from_str(&format!("[worker.web]\n{setting}")).unwrap();

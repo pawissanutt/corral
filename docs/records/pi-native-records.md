@@ -31,7 +31,7 @@ directory. Envelopes name the store by this ID.
 
 `AgentRunState.usage_sessions` is a serde-default, omitted-when-empty canonical list, shared
 by implementation, PM and planning containers. Each `UsageSession` records initiating
-`generation`, `kind` (`explore`, `oracle`, `summary`), `session_id`, `session_file`, and optional
+`generation`, `kind` (`explore`, `oracle`, `summary`, `web_search`), `session_id`, `session_file`, and optional
 fallback `model`. Producers persist the reference before launching a billable request and
 retain it through resume/rewind. This is an accounting seam, not a shipped child launcher or
 an alternative authoritative transcript. There is no model-callable operation to register it.
@@ -441,7 +441,7 @@ Host-only `event` payloads with `kind=budget` support `reserve`, `settle` and `s
 request IDs. Existing authentication, liveness, fencing, atomic container transactions and receipt
 replay apply; there is no model-callable amendment operation. The current generation's immutable
 `budget` settings determine limits on every admission. `reserve` commits either an admission or a
-refusal; parallel main/summary/explore/oracle requests share the same balance. `settle` reconciles one
+refusal; parallel main/summary/explore/oracle/search requests share the same balance. `settle` reconciles one
 request once and deduplicates known provider/model/response identities across generations. Unknown
 spend keeps its reservation. USD rates are captured in the request charge rather than repriced on
 resume. A ledger with unpriced history cannot claim USD enforcement; a new unbounded request or
