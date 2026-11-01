@@ -339,6 +339,11 @@ fn sync_scoped(
     crate::pm_events::push_events(ctx, true)?;
     crate::desktop_notifications::reconcile(ctx)?;
     crate::content_refresh::refresh_after_sync(ctx, &tasks, &search_stamp)?;
+    // External container IPC must never retain the inventory lease or delay this pass's
+    // admission work. Sweep once, after launches, with a nonblocking single-flight lock.
+    if let Err(error) = crate::sandbox_cleanup::sweep(ctx) {
+        crate::messages::report(None, "sandbox-cleanup", format!("{error:#}"));
+    }
     Ok(changes)
 }
 
