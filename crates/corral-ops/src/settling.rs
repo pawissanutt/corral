@@ -158,6 +158,10 @@ pub(crate) fn recover(ctx: &Ctx) -> Result<()> {
 /// Terminal heads that still owe settlement: the persisted set plus every task changed after
 /// the cursor. The set and cursor are saved for the next pass when they change.
 pub(crate) fn terminal_heads(ctx: &Ctx) -> Result<Vec<TaskHead>> {
+    // Hooks in separate processes share this cursor. Hold the derivation lease from
+    // the first read through the version-checked save, not just around publication.
+    // It is released before callers reconcile recipients or make external calls.
+    let _lease = crate::approvals::lock(&ctx.store, AREA)?;
     let saved: State = ctx.store.record(AREA, "state")?.unwrap_or_default();
     let mut candidates = saved.tasks.clone();
     let view = ctx.store.view()?;
