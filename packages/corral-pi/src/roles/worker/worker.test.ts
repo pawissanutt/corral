@@ -23,7 +23,7 @@ import worker, { CONTRACT_ASSET, SKILL_ASSET, kickoff, workerRole } from "./inde
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-007", run: "R2", generation: 1 };
 const UPSTREAM = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 const CORRAL_TOOLS = [
-  "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
+  "corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
   "corral_artifact", "corral_gate", "corral_done",
 ];
 const LSP_TOOLS = ["lsp_diagnostics", "lsp_definition", "lsp_references"];

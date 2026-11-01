@@ -13,6 +13,7 @@ import { installWriteGuard } from "./paths.ts";
 
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
+const LOOKUP = receiptLookupTool();
 const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission"];
 
 export function assistantRole(root: string): RoleModule {
@@ -20,7 +21,7 @@ export function assistantRole(root: string): RoleModule {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => context.todo === true ? [receiptLookupTool(), ownerActionTool, sessionTodoTool] : [receiptLookupTool(), ownerActionTool],
+    tools: (context) => context.todo === true ? [LOOKUP, ownerActionTool, sessionTodoTool] : [LOOKUP, ownerActionTool],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
         + requestContract(root, context.todo);

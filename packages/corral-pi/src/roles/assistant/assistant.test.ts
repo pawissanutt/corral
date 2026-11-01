@@ -33,8 +33,8 @@ test("the assistant loadout reads, shells and writes behind its path guard, and 
   expect(assistant.upstreamTools).toContain("write");
   expect(typeof assistant.extend).toBe("function");
   expect(assistant.corralOps).toEqual(["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission"]);
-  expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_owner_action"]);
-  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_owner_action", "corral_todo"]);
+  expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action"]);
+  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_receipt_lookup", "corral_owner_action", "corral_todo"]);
 });
 
 test("the contract names the bound session and leaves no placeholder", () => {
