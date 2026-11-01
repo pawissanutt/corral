@@ -55,8 +55,10 @@ fn reviewer_reuses_exact_native_conversation_over_decoy_and_retained_history() {
             .unwrap(),
         );
         previous.agent_host = Some(Box::new(native));
+        // Each retained review is a sibling, not a recursive copy of all earlier siblings.
+        let template = parent.clone();
         for n in 0..2 * scale {
-            let mut old = parent.clone();
+            let mut old = template.clone();
             old.id = format!("old-review-{n}");
             old.session = None;
             old.outcome = Some(RunOutcome::Done);
