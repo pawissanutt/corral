@@ -34,6 +34,16 @@ writeFileSync(path, source.replace(marker, `${marker}
           ]);
         }
       });
+      pi.registerCommand("fixture-panel-stream", {
+        description: "Owned offline read tool call, then a reply held after its first delta",
+        handler: async () => {
+          const { readFile } = await import("node:fs/promises");
+          transport().script([
+            { toolCalls: [{ callId: "panel-read", name: "read", arguments: { path: "${work}/tool-output.txt" } }] },
+            { chunks: ["STREAM_PART_ONE", " STREAM_PART_TWO"], afterFirstChunk: () => readFile("${work}/stream-gate").then(() => undefined) }
+          ]);
+        }
+      });
       pi.registerCommand("fixture-native-confirm", {
         description: "Owned native UI cancellation test",
         handler: async (_args, ctx) => {
