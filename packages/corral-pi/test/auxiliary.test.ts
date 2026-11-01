@@ -109,9 +109,10 @@ test("child ceiling denies writes, shell, MCP, hooks, recursive spawn and Corral
   const allowed = new Set(exploreLoadout(parent));
   expect([...allowed]).toEqual(parent.slice(0, 6));
   for (const nested of [false, true]) {
-    expect(executionRefusal("read", nested, allowed, new Set())).toBeUndefined();
-    for (const tool of parent.slice(6)) expect(executionRefusal(tool, nested, allowed, new Set())).toBeDefined();
+    expect(executionRefusal("read", nested, allowed)).toBeUndefined();
+    for (const tool of parent.slice(6)) expect(executionRefusal(tool, nested, allowed)).toBeDefined();
   }
   expect(exploreLoadout(["read"])).toEqual(["read"]);
-  expect(executionRefusal("corral_done", true, new Set(parent), new Set(["corral_done"]))).toContain("directly");
+  // The child ceiling, not a nesting rule, keeps Corral out of every auxiliary depth.
+  expect(executionRefusal("corral_done", true, allowed)).toContain("loadout");
 });

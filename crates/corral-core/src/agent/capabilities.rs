@@ -140,7 +140,7 @@ pub const CATALOG: &[CapabilityDef] = &[
     },
     CapabilityDef {
         key: "codemode",
-        summary: "QuickJS parallel tool calls and result filtering (no non-LLM models)",
+        summary: "persistent Bun kernel: batched, chained and filtered tool calls",
         defaults: |_| Some([false, true, true]),
         host: true,
         settings: None,

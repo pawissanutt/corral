@@ -1,6 +1,7 @@
 // The capability framework's nested guard smoke (T-563): model-issued and nested
 // (`ctx.executeTool`) calls pass the host's one execution check, before and after a reload and
-// after every refused session replacement. A corral operation runs only at top level.
+// after every refused session replacement. A receipted corral operation runs at top level or from
+// a Code Mode cell (which journals it, T-683), never from another nesting tool.
 import { expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +26,7 @@ type Outcome = { readonly name: string; readonly isError: boolean };
 
 const capabilities: CapabilitySet = { catalog: 1, digest: "a".repeat(64), preset: "standard", enabled: ["todo"] };
 
-test("nested calls pass the role check and corral operations stay top-level across reload and replacement", async () => {
+test("nested calls pass the role check and another tool cannot nest receipted corral operations across reload and replacement", async () => {
   // Given the production worker with todo, an orchestrating local tool in its loadout, and a
   // foreign callable tool outside it:
   const assets = buildFixtureInstall();
@@ -139,8 +140,8 @@ test("nested calls pass the role check and corral operations stay top-level acro
       const denied = events.since(from, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
         .filter((event) => event.kind === "tool_denied")
         .map((event) => ({ tool: event.tool, nested: event.nested === true }));
-      // model-only exposure rejects nested todo before reaching the host tool_call hook.
-      expect(denied).toEqual([]);
+      // The host's check refuses the unjournaled nested todo; exposure no longer hides it.
+      expect(denied).toEqual([{ tool: "corral_todo", nested: true }]);
       const call = host.session.messages.flatMap((message) =>
         message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : [])
         .filter((part) => part.name === "fixture_hidden").at(-1);

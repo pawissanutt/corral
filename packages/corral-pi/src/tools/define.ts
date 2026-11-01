@@ -1,11 +1,13 @@
 // Turns a role's CorralToolSpec into an upstream tool whose every call is one corral
-// request with a request ID derived from the session and the model's tool call ID.
+// request with a request ID derived from the session and the model's tool call ID, or, for a
+// call a Code Mode cell made, from the child's parent-bound key (T-683).
 import type { ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Errors } from "typebox/value";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import { corralOutput } from "./results.ts";
 
 import type { CorralOp, CorralToolSpec } from "../roles/types.ts";
+import { nestedChild } from "../extensions/codemode/child.ts";
 import { nestedCorralRead } from "../roles/common/execution.ts";
 import { CorralCallError, type CorralClient, type CorralReceipt, toolRequestId } from "./corral.ts";
 
@@ -45,13 +47,13 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
   return {
     name: spec.name,
     label: spec.label,
-    description: spec.description + (nestedCorralRead(spec.op) ? ""
-      : " Call directly at top level, not from Code Mode or another tool: receipt replay/recovery requires a transcript call."),
-    exposure: nestedCorralRead(spec.op) ? "direct" : "model-only",
+    description: spec.description,
+    exposure: "direct",
     parameters: spec.parameters,
     outputSchema: corralOutput(spec.resultSchema),
     async execute(toolCallId, params, _signal, _update, context) {
-      const requestId = toolRequestId(host.sessionId(), toolCallId);
+      const child = nestedChild(spec.name, toolCallId);
+      const requestId = toolRequestId(host.sessionId(), child?.key ?? toolCallId);
       const failure = (error: Record<string, unknown>) => {
         const value = { request_id: requestId, op: spec.op, error };
         return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value,
@@ -71,7 +73,7 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
           reason: error instanceof Error ? error.message : "Invalid payload" });
       }
       const send = (body: Record<string, unknown>) => host.client.call(spec.op, {
-        requestId, payload: body, turn: host.currentTurn(),
+        requestId, payload: body, turn: host.currentTurn(), ...(child ? { parent: child.parent } : {}),
         ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
       });
       let receipt: CorralReceipt;

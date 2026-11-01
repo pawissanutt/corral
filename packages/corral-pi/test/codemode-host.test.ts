@@ -1,178 +1,145 @@
-// Real QuickJS scripts, deterministic provider fixtures, no inference or host load.
+// Code Mode on the Corral kernel through the real HostSession, per role (T-683): the callable list
+// and nested execution follow one loadout check; parallel reads and a dependent read -> mutation ->
+// read pipeline run through the real host bridge with parent-bound receipts and a session journal;
+// refusals and rejected receipts in a caught batch still reach the model-visible summary; direct
+// calls keep working; persistence survives cells but not a reload. Fixture provider, fake corral.
 import { expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { HostSessionOptions } from "../src/host/session.ts";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
 
-import { EventLog } from "../src/bridge/events.ts";
-import { loadModules } from "../src/host/modules.ts";
-import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
-import { HostSession, authContext } from "../src/host/session.ts";
-import type { CapabilitySet } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
-import { fixtureTransport } from "./fixtures/auth/index.ts";
-import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
-import { nextEvent } from "./support/wait.ts";
+import { toolRequestId } from "../src/tools/corral.ts";
+import { type CodeRole, codeHost } from "./support/code-host.ts";
 
-for (const role of ["worker", "reviewer", "pm"] as const) {
-  test(`${role} codemode loadout, static cost and guarded scripts across reload`, async () => {
-    const assets = buildFixtureInstall();
-    const work = mkdtempSync(join(tmpdir(), "corral-codemode-"));
-    const originalFetch = globalThis.fetch;
-    let host: HostSession | undefined;
-    try {
-      for (const tree of [`src/roles/${role}`, "src/roles/common", "src/extensions", "assets"]) {
-        cpSync(join(PACKAGE_ROOT, tree), join(assets.dir, tree), { recursive: true });
-      }
-      const cwd = join(work, "cwd");
-      mkdirSync(cwd);
-      const source = `${"discard this line\n".repeat(100)}keep: one\nkeep: two\n`;
-      writeFileSync(join(cwd, "one.txt"), source);
-      writeFileSync(join(cwd, "two.txt"), source);
-      restrictEnvironment(process.env);
-      const identity = { store: "st-demo", project: "demo", role, generation: 1, task: "T-566", run: "R1" };
-      const modules = await loadModules(assets.dir, role);
-      const transport = modules.auth.transport?.(authContext());
-      if (!transport) throw new Error("fixture transport missing");
-      const network = guardedFetch(transport);
-      globalThis.fetch = network.fetch;
-      const sdk = await import("@earendil-works/pi-coding-agent");
-      const events = new EventLog(1);
-      const corral = writeFakeCorral(work);
-      let forbiddenRuns = 0;
-      // Callable upstream but NOT in this role's loadout: the common check must reject it.
-      const forbidden: ToolDefinition = {
-        name: "fixture_forbidden_write", label: "Forbidden", description: "Outside the role loadout",
-        exposure: "codemode", parameters: Type.Object({}),
-        async execute() {
-          forbiddenRuns++;
-          return { content: [{ type: "text", text: "must never run" }], details: undefined };
-        },
-      };
-      const wrapped = { ...modules, role: { ...modules.role,
-        extend(pi: Parameters<NonNullable<typeof modules.role.extend>>[0]) { pi.registerTool(forbidden); },
-      } };
-      const capabilities: CapabilitySet = { catalog: 4, digest: "a".repeat(64), preset: role === "pm" ? "full" : "standard", enabled: ["codemode"] };
-      const options: HostSessionOptions = {
-        // Simulate a late/foreign extension making a tool callable upstream. Host policy
-        // still excludes it, so the common execution check (not discovery) must refuse it.
-        sdk: { ...sdk, createAgentSessionFromServices(options) {
-          return sdk.createAgentSessionFromServices({ ...options, tools: [...options.tools ?? [], forbidden.name] });
-        } }, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", capabilities,
-        modules: wrapped, events, network,
-        client: new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64),
-          sessionId: () => host?.sessionId() ?? "" }),
-        sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
-      };
-      host = await HostSession.create(options);
-      await host.session.bindExtensions({});
-      await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
-      expect(host.loadout).toContain("codemode");
-      const metadata = () => JSON.stringify(host?.session.agent.state.tools.map(({ name, description, parameters }) =>
-        ({ name, description, parameters })));
-      const enabledBytes = Buffer.byteLength(metadata());
-      const enabledPrompt = Buffer.byteLength(host.session.systemPrompt);
-      host.session.setActiveToolsByName(host.loadout.filter(name => name !== "codemode"));
-      const toolDelta = enabledBytes - Buffer.byteLength(metadata());
-      console.log(`CODEMODE_STATIC_COST ${JSON.stringify({
-        estimator: "utf8-json-bytes/4-v1", role, tool_bytes_delta: toolDelta,
-        tool_tokens_estimate_delta: Math.ceil(toolDelta / 4),
-        prompt_bytes_delta: enabledPrompt - Buffer.byteLength(host.session.systemPrompt),
-      })}`);
-      host.session.setActiveToolsByName([...host.loadout]);
-      for (const stage of ["startup", "reload"]) {
-        if (stage === "reload") await host.session.reload();
-        const code = `
-          // Discovery forces the complete callable tool catalog, including the forbidden fixture.
-          const catalog = ALL_TOOLS;
-          text("catalog: " + catalog.filter(t => t.name.startsWith("corral_")).map(t => t.name).join(","));
-          ${role === "pm" ? `
-          const reads = await Promise.all(["corral_brief", "corral_next", "corral_inbox_read"].map(name => tools[name]({})));
-          // No JSON.parse: QuickJS receives canonical structured responses.
-          text(reads.map(r => ({op:r.op, state:r.state, request_id:r.request_id, result:r.result})));
-          if (reads.some(r => r.state !== "committed" || !r.request_id || !r.result.op)) throw new Error("lost structured receipt");
-          text("structured-corral-ok");
-          ` : `
-          const results = await Promise.all(["one.txt", "two.txt"].map(path => tools.read({path})));
-          text(results.map(s => s.split("\\n").filter(line => line.startsWith("keep:")).join("\\n")));
-          `}
-          const denied = await Promise.allSettled(["fixture_forbidden_write", "${role === "pm" ? "corral_comment" : role === "reviewer" ? "corral_verdict" : "corral_done"}"].map(async name => await tools[name]({})));
-          text("raw rejection: " + JSON.stringify(denied[0].reason));
-          text(denied.map(r => r.status === "rejected" ? {status: r.status, error: String(r.reason?.message ?? r.reason)} : "UNEXPECTED execution"));
-          text("models: " + typeof models);
-          for (const name of ["classify", "generateImages"]) {
-            try { await models[name]({provider: "openai", id: "fake"}, {}); text("UNEXPECTED model"); }
-            catch { text(name + ": disabled"); }
-          }
-        `;
-        fixtureTransport().script([
-          { toolCalls: [{ callId: `${stage}-script`, name: "codemode", arguments: { code } }] },
-          { text: "Finished" },
-        ]);
-        const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-        await host.submit({ text: stage, busyPolicy: "prompt", idempotencyKey: stage, origin: "test" }, `rq-${stage}`);
-        await ended;
-        await host.drained();
-        const result = host.session.messages.find(message => message.role === "toolResult" && message.toolCallId.startsWith(`${stage}-script|`));
-        if (result?.role !== "toolResult") throw new Error("missing codemode result");
-        expect(result.isError).not.toBeTrue();
-        const output = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
-        expect(output).toContain("Script completed");
-        if (role === "pm") {
-          expect(output).toContain("structured-corral-ok");
-          expect(output).toContain("read_brief");
-          expect(output).toContain("read_next");
-          expect(output).toContain("inbox_read");
-          const reads = corral.calls().filter(({ envelope }) => ["read_brief", "read_next", "inbox_read"].includes(envelope.op));
-          expect(reads).toHaveLength(stage === "startup" ? 3 : 6);
-          for (const { envelope } of reads) {
-            expect(envelope.identity).toMatchObject({ ...identity, session_id: host.sessionId() });
-            expect(envelope.auth.host_cap).toBe("h".repeat(64));
-            expect(envelope.payload).toEqual({});
-          }
-        } else {
-          expect(output).toContain("keep: one");
-          expect(output).not.toContain("discard this line");
-          expect(output.length < source.length).toBeTrue();
-          expect(result.nestedCalls?.calls.filter(call => call.name === "read")).toHaveLength(2);
-        }
-        expect(output).toContain("fixture_forbidden_write");
-        expect(output).toContain("not in this session's loadout");
-        expect(output).toContain("raw rejection: {}");
-        expect(output).toContain('"status":"rejected"');
-        const catalog = output.split("\\n").find(line => line.startsWith("catalog:")) ?? "";
-        expect(catalog).not.toMatch(/corral_(done|verdict|comment|todo|inbox_resolve|ask|gate)/);
-        if (role !== "pm") expect(catalog).not.toContain("corral_brief");
-        expect(output).toContain("models: undefined");
-        expect(output).toContain("classify: disabled");
-        expect(output).toContain("generateImages: disabled");
-        expect(output).not.toContain("UNEXPECTED");
-        expect(forbiddenRuns).toBe(0);
-        expect(corral.calls().some(({ envelope }) => ["done", "verdict", "comment"].includes(envelope.op))).toBeFalse();
-        const denials = events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
-          .filter(event => event.kind === "tool_denied" && event.nested === true);
-        expect(denials.some(event => event.tool === forbidden.name)).toBeTrue();
-        // model-only operations are absent from discovery and refused by upstream before execution.
-        expect(output).not.toContain('"error":{}');
-      }
-      await host.close();
-      host = await HostSession.create({ ...options, capabilities: { ...capabilities, preset: "strict", enabled: [] },
-        sessionManager: sdk.SessionManager.inMemory(cwd) });
-      await host.session.bindExtensions({});
-      for (const stage of ["disabled", "disabled reload"]) {
-        if (stage === "disabled reload") await host.session.reload();
-        expect(host.loadout).not.toContain("codemode");
-        expect(host.session.getAllTools().some(tool => tool.name === "codemode")).toBeFalse();
-      }
-    } finally {
-      await host?.close();
-      globalThis.fetch = originalFetch;
-      assets.cleanup();
-      rmSync(work, { recursive: true, force: true });
-    }
-  }, 60_000);
+interface Case {
+  readonly reads: string;
+  readonly readCount: number;
+  readonly mutation: { readonly tool: string; readonly op: string; readonly args: Record<string, unknown> };
+  readonly rejected: { readonly tool: string; readonly op: string; readonly args: Record<string, unknown> };
+  readonly lookup: Record<string, unknown>;
+  /** A Corral tool another role has: it is not in this loadout, so code cannot reach it either. */
+  readonly foreign: string;
 }
+
+const FILE_READS = `Promise.all(["one.txt", "two.txt"].map(path => tools.read({ path })))`;
+const CASES: Record<CodeRole, Case> = {
+  worker: {
+    reads: FILE_READS, readCount: 2, lookup: {}, foreign: "corral_comment",
+    mutation: { tool: "corral_ask", op: "ask", args: { kind: "clarification", text: "Which input?" } },
+    rejected: { tool: "corral_withdraw", op: "withdraw", args: { key: "T-683/R1/Q9", reason: "obsolete" } },
+  },
+  pm: {
+    reads: `Promise.all([tools.corral_brief({}), tools.corral_next({}), tools.corral_inbox_read({})])`, readCount: 3,
+    lookup: { task: "T-9" }, foreign: "corral_done",
+    mutation: { tool: "corral_comment", op: "comment", args: { task: "T-9", text: "noted from code" } },
+    rejected: { tool: "corral_capture", op: "capture", args: { project: "demo", title: "Idea", body: "Body" } },
+  },
+  assistant: {
+    reads: FILE_READS, readCount: 2, lookup: {}, foreign: "corral_done",
+    mutation: { tool: "corral_owner_action", op: "owner_action", args: { kind: "approve", target: "T-5", input: "A-1/g1/i1" } },
+    rejected: { tool: "corral_owner_action", op: "owner_action", args: { kind: "retry", target: "T-6", input: "A-1/g1/i1" } },
+  },
+};
+
+for (const role of ["worker", "pm", "assistant"] as const) {
+  test(`${role}: code composes reads and receipted mutations under direct authority, across a reload`, async () => {
+    const spec = CASES[role];
+    const fx = await codeHost(role);
+    try {
+      fx.corral.rules({ [spec.rejected.op]: [{ match: { target: "T-6" }, reject: { code: "stale_revision", reason: "the item moved" } },
+        ...(spec.rejected.op === spec.mutation.op ? [] : [{ reject: { code: "stale_revision", reason: "the item moved" } }])] });
+      const lookupArgs = JSON.stringify(spec.lookup);
+      const code = `
+        const reads = await ${spec.reads};
+        let kept = { reads: reads.length };
+        const made = await tools.${spec.mutation.tool}(${JSON.stringify(spec.mutation.args)});
+        const back = await tools.corral_receipt_lookup({ request_id: made.request_id, ...${lookupArgs} });
+        const batch = await Promise.allSettled([
+          tools.${spec.rejected.tool}(${JSON.stringify(spec.rejected.args)}),
+          tools.fixture_forbidden({}),
+          tools.${spec.foreign}({}),
+        ]);
+        print("batch " + JSON.stringify(batch.map(r => r.status === "rejected" ? r.reason : r.value.state)));
+        return { made: made.state, back: back.lookup.found, call: back.identity.parent.call };
+      `;
+      // When the model runs one cell, a second cell, then the mutation tool directly:
+      await fx.turn([
+        { toolCalls: [{ callId: "c1", name: "codemode", arguments: { code } }] },
+        { toolCalls: [{ callId: "c2", name: "codemode", arguments: { code: "return kept.reads;" } }] },
+        { toolCalls: [{ callId: "direct", name: spec.mutation.tool, arguments: spec.mutation.args }] },
+        { text: "Finished" },
+      ]);
+
+      // Then discovery lists exactly what the loadout permits:
+      const callable = (fx.description().split("Callable as tools.<name>: ")[1] ?? "").replace(/\.$/, "").split(", ");
+      for (const name of [spec.mutation.tool, spec.rejected.tool, "corral_receipt_lookup", "fixture_hold"]) {
+        expect(callable).toContain(name);
+      }
+      for (const name of ["fixture_forbidden", "codemode", spec.foreign]) expect(callable).not.toContain(name);
+
+      // And the cell succeeded while its nested failures stay separately visible and bounded:
+      const first = fx.result("c1");
+      expect(first.isError).toBe(false);
+      expect(first.text).toContain(`Return value: {\n  "made": "committed",\n  "back": true,\n  "call": "cell-1.`);
+      expect(first.text).toContain(`Nested calls: ${spec.readCount + 5} (${spec.readCount + 2} ok, 3 failed; 1 committed receipts stand).`);
+      expect(first.text).toMatch(new RegExp(`- ${spec.rejected.tool} \\S+/cell-1\\.\\d+ rq-[0-9a-f]{32}: stale_revision: the item moved \\[effect: rejected\\]`));
+      expect(first.text).toMatch(/- fixture_forbidden \S+\/cell-1\.\d+: denied: fixture_forbidden is not in this session's loadout \[effect: not_started\]/);
+      expect(first.text).toMatch(new RegExp(`- ${spec.foreign} \\S+/cell-1\\.\\d+: not_run: .* \\[effect: not_started\\]`));
+      // A caught refusal still carries its name, message and code through JSON.stringify:
+      expect(first.text).toContain(`{"name":"CodeCallError","message":"fixture_forbidden is not in this session's loadout","code":"denied"}`);
+      expect(first.text).not.toContain("{}");
+      expect(fx.result("c2").text).toContain(`Return value: ${spec.readCount}`);
+
+      // And the nested mutation is one receipt bound to its parent cell and transcript call:
+      const sessionId = fx.host.sessionId();
+      const calls = fx.corral.calls().filter((envelope) => envelope.op === spec.mutation.op
+        && envelope.payload.target !== "T-6");
+      expect(calls).toHaveLength(2);
+      const [nested, direct] = calls;
+      const parent = nested?.identity.parent;
+      expect(parent?.tool_call_id.startsWith("c1|")).toBe(true);
+      expect(parent?.cell).toBe("cell-1");
+      expect(nested?.request_id).toBe(toolRequestId(sessionId, `${parent?.tool_call_id}/${parent?.call}`));
+      expect(direct?.identity.parent).toBeUndefined();
+      expect(direct?.request_id).toMatch(/^rq-[0-9a-f]{32}$/);
+      expect(direct?.request_id).not.toBe(nested?.request_id);
+      expect(fx.corral.effects().filter((effect) => effect.op === spec.mutation.op && effect.payload.target !== "T-6")
+        .map((effect) => effect.parent?.call ?? null)).toEqual([parent?.call ?? "", null]);
+      expect(fx.forbiddenRuns()).toBe(0);
+      expect(fx.corral.calls().some((envelope) => envelope.op === "done")).toBe(false);
+
+      // And every child was journaled before it ran and when it settled, under its parent:
+      const journal = fx.journal().filter((entry) => (entry.parent as { cell?: string }).cell === "cell-1");
+      const started = journal.filter((entry) => entry.phase === "started");
+      expect(started).toHaveLength(spec.readCount + 5);
+      expect(journal.filter((entry) => entry.phase === "settled")).toHaveLength(spec.readCount + 5);
+      expect(journal.find((entry) => entry.phase === "settled" && entry.tool === spec.mutation.tool))
+        .toMatchObject({ ok: true, effect: "committed", request_id: nested?.request_id, generation: 1 });
+
+      // When the session reloads, the replacement kernel starts empty:
+      await fx.host.session.reload();
+      await fx.turn([{ toolCalls: [{ callId: "c3", name: "codemode", arguments: { code: "return typeof kept;" } }] },
+        { text: "Finished" }]);
+      expect(fx.result("c3").text).toContain("Return value: undefined");
+      expect(fx.description()).toContain(spec.mutation.tool);
+    } finally {
+      await fx.close();
+    }
+  }, 120_000);
+}
+
+test("a disabled capability leaves no code tool while direct Corral tools still work, across reload", async () => {
+  const fx = await codeHost("worker", { enabled: [] });
+  try {
+    for (const stage of ["startup", "reload"]) {
+      if (stage === "reload") await fx.host.session.reload();
+      expect(fx.host.loadout).not.toContain("codemode");
+      expect(fx.host.session.getAllTools().some((tool) => tool.name === "codemode")).toBe(false);
+      await fx.turn([{ toolCalls: [{ callId: `ask-${stage}`, name: "corral_ask",
+        arguments: { kind: "clarification", text: stage } }] }, { text: "Finished" }]);
+    }
+    expect(fx.corral.effects().map((effect) => [effect.op, effect.payload.text, effect.parent])).toEqual([
+      ["ask", "startup", null], ["ask", "reload", null],
+    ]);
+    expect(fx.host.state().codemode).toBeNull();
+  } finally {
+    await fx.close();
+  }
+}, 60_000);
