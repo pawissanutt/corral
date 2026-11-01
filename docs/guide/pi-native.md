@@ -320,6 +320,7 @@ max_bytes = 1048576        # default: response body byte limit
 timeout_ms = 15000        # default: whole request, including DNS, redirects and body
 max_redirects = 5         # default; supported range 0..10
 # searxng_url = "http://127.0.0.1:8888/" # optional base URL or /search endpoint
+# search_provider = "subscription"     # opt in to the current Codex/Claude login; default: searxng
 ```
 
 The same table works under `reviewer`, `planner` and `plan_reviewer`. Omitting
@@ -348,10 +349,34 @@ instructions while public fetch remains usable. A configured SearXNG endpoint ma
 be local, independently of `hosts`; search does not follow redirects. This exception
 never authorizes private `web_fetch` or broadens the provider's global fetch policy.
 
-Both tools share the host network ledger and execution check, including nested calls
-and reloads. Interrupted calls are `interrupted_no_effect` for this GET-only contract;
-network activity is still counted. Subprocess networking remains outside the
-in-process guard.
+Set `search_provider = "subscription"` to use the **current selected model** on a
+corral-owned OpenAI Codex or Claude subscription instead. Codex uses the hosted
+Responses `web_search` tool; Claude uses a separate Claude Agent SDK query whose only
+executable tool is native `WebSearch` (no shell, files, MCP or `WebFetch`). No ambient
+credentials, separately billed API route, SearXNG fallback, or alternate model is
+selected on failure. Availability depends on the subscription, model and region;
+unsupported providers, quota/auth failures and answers without completed search
+evidence fail explicitly. This does not guarantee the account has extra usage disabled.
+
+Subscription results include `provider`, `model`, `request`, a synthesized `answer`,
+and source `results` (titles/URLs, capped by `num_results`). The valid JSON envelope
+is bounded by the smaller of `max_bytes` and 32768 bytes, with `truncated` set when
+sources or answer are shortened. `timeout_ms` covers queueing and execution. Fetch
+host restrictions still apply to `web_fetch`, not provider-side search sources.
+
+Each search is serialized per host and registered as auxiliary `web_search` usage
+before execution, with its own transcript and model usage. Interrupted/failed work
+retains uncertain accounting; the host does not replay the invocation. Hosted service work
+has no reliable finite priced reservation, so a **hard token or USD budget refuses
+subscription search before model execution**; unlimited budgets still record usage. Provider
+model-token pricing is API-equivalent accounting, not a subscription invoice or a
+complete search-service fee estimate. Existing SearXNG behavior is unchanged.
+
+Both tools share the execution check, including nested calls and reloads. Public
+fetch and SearXNG use the host network ledger; Codex search uses its guarded provider
+transport. Claude subprocess networking remains outside the in-process guard.
+Interrupted fetch is `interrupted_no_effect`; interrupted search is conservatively
+`outcome_unknown` because subscription quota may have been consumed.
 
 ### Workspace MCP and tool search
 

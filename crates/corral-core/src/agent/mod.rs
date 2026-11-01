@@ -22,6 +22,7 @@ mod rewind;
 mod tests;
 mod todo;
 mod usage;
+mod web;
 pub mod write_permissions;
 
 pub use auxiliary::{ExploreSettings, OracleSettings};
@@ -37,3 +38,4 @@ pub use records::*;
 pub use rewind::*;
 pub use todo::*;
 pub use usage::*;
+pub use web::{WebSearchProvider, WebSettings};

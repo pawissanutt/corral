@@ -48,6 +48,8 @@ import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { createLocalModels } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
+import { runSubscriptionSearch } from "../extensions/web/subscription.ts";
+import { streamClaudeSearch } from "../claude/search.ts";
 import { configuredServers, lspToolkit, type LspToolkit } from "../extensions/lsp/index.ts";
 import { capabilityRegistry } from "../extensions/registry.ts";
 import { McpAccess } from "../capabilities/mcp.ts";
@@ -192,11 +194,15 @@ export function restrictProvider(
   let streamSimple = provider.streamSimple.bind(provider) as StreamFunction;
   if (route.lane !== undefined) {
     if (!lane) throw new Error(`model_unavailable: ${route.id} runs through the ${route.lane} lane, which has no configuration`);
-    registerClaudeSdkApi(lane);
-    const api = getApiProvider(CLAUDE_SDK_API);
-    if (!api) throw new Error(`model_unavailable: the ${route.lane} lane is not registered`);
-    stream = (current, context, options) => api.stream({ ...current, api: CLAUDE_SDK_API }, context, options);
-    streamSimple = (current, context, options) => api.streamSimple({ ...current, api: CLAUDE_SDK_API }, context, options);
+    if (lane.searchOnly) {
+      stream = streamSimple = (current, context, options) => streamClaudeSearch(lane, current, context, options);
+    } else {
+      registerClaudeSdkApi(lane);
+      const api = getApiProvider(CLAUDE_SDK_API);
+      if (!api) throw new Error(`model_unavailable: the ${route.lane} lane is not registered`);
+      stream = (current, context, options) => api.stream({ ...current, api: CLAUDE_SDK_API }, context, options);
+      streamSimple = (current, context, options) => api.streamSimple({ ...current, api: CLAUDE_SDK_API }, context, options);
+    }
   }
   const checked = (current: { api: string }, streamOptions: unknown) => {
     if (current.api !== route.modelApi) throw new Error("provider_api_not_allowed");
@@ -269,6 +275,7 @@ export class HostSession {
   private readonly checkpoints: Checkpoints | undefined;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
   private auxiliaryModels: Models | undefined;
+  private searchModels: Models | undefined;
   private readonly budget: RunBudget;
   private ledger: TodoLedger | undefined;
   /** PM and assistant with todo on: the request summary and continuation (T-679). */
@@ -345,11 +352,19 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
     this.jobs = this.jobRuntime(registerCapability);
-    const auxiliary = auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings);
-    if (auxiliary.explore || auxiliary.oracle) {
+    const subscriptionSearch = webEnabled && options.capabilities?.web?.search_provider === "subscription";
+    const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
+      ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
+    };
+    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
         sessionId: () => this.sessionId(),
+        searchModel: () => {
+          const model = this.runtime?.session.model;
+          return model && ["openai-codex", "anthropic"].includes(model.provider) && this.searchModels?.getModel(model.provider, model.id)
+            ? { provider: model.provider, model: model.id } : undefined;
+        },
         record: async (payload) => {
           if (!this.bound) throw new Error("host_not_bound");
           await this.drained();
@@ -361,6 +376,11 @@ export class HostSession {
           return receipt.result as Record<string, unknown>;
         },
         execute: (invocation, signal) => {
+          if (invocation.kind === "web_search") {
+            if (!this.searchModels || !options.capabilities?.web) throw new Error("subscription search runtime is not ready");
+            return runSubscriptionSearch({ sdk: options.sdk, models: this.searchModels, cwd: options.cwd,
+              settings: options.capabilities.web }, invocation, signal);
+          }
           if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
           return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
             cwd: options.cwd, agentDir: options.agentDir, parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
@@ -376,7 +396,11 @@ export class HostSession {
         this.dialogPi.sendUserMessage(message, { deliverAs: "followUp" });
         return message;
       })] : []),
-      ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web) : []),
+      ...(this.additionalLsp?.tools ?? []), ...(webEnabled && options.network.web ? webTools(options.network.web,
+        subscriptionSearch ? async (id, query, count, signal) => {
+          if (!this.auxiliary) throw new Error("subscription search is disabled");
+          return (await this.auxiliary.run("web_search", id, JSON.stringify({ query, count }), signal)).text;
+        } : undefined) : []),
       ...(this.jobs ? jobTools(this.jobs, options.identity.role === "worker") : []),
       ...(this.auxiliary && auxiliary.explore ? [exploreTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
@@ -495,6 +519,24 @@ export class HostSession {
       }
     }
     host.auxiliaryModels = models;
+    if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
+      const providers = subscriptions.providers.filter((id) => id === "openai-codex" || id === "anthropic");
+      const search = await createModelCatalog(subscriptions.credentials, { providers });
+      for (const id of providers) {
+        const fetch = guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch;
+        restrictProvider(search, id, fetch as typeof globalThis.fetch,
+          { configDir: join(options.agentDir, "claude-search"), cwd: options.cwd, searchOnly: true });
+        const restricted = search.getProvider(id);
+        if (!restricted) throw new Error("subscription search provider is unavailable");
+        // Hosted searches/subprocess loops have no priced finite reservation. Hard budgets
+        // fail closed rather than pretending a model-token bound covers service charges.
+        search.registerNativeProvider({ ...restricted,
+          stream: host.budget.wrap(restricted.stream.bind(restricted), true),
+          streamSimple: host.budget.wrap(restricted.streamSimple.bind(restricted), true),
+        });
+      }
+      host.searchModels = search;
+    }
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
     const contract = options.modules.role.contract(host.roleContext);

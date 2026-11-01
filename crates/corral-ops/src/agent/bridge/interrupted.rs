@@ -29,15 +29,14 @@ const TWO_PHASE: [&str; 6] = [
     "plan_verdict",
     "owner_action",
 ];
-// Web tools are GET-only; tool_search reads only the host's local cached catalog; job_output
-// reads the host's output cache.
-const NO_EFFECT: [&str; 8] = [
+// Public fetch is GET-only; tool_search and job_output read local caches. Search may
+// spend subscription quota, so a missing result is not proof of no effect.
+const NO_EFFECT: [&str; 7] = [
     "read",
     "grep",
     "find",
     "ls",
     "web_fetch",
-    "web_search",
     "tool_search",
     "job_output",
 ];
@@ -406,6 +405,11 @@ pub fn classify_upstream(tool: &str, snapshot: Option<&str>) -> (ResumeClass, Op
     }
     if NO_EFFECT.contains(&tool) {
         (ResumeClass::InterruptedNoEffect, None)
+    } else if tool == "web_search" {
+        (
+            ResumeClass::OutcomeUnknown,
+            Some("subscription quota may have been consumed; inspect auxiliary usage before retrying".into()),
+        )
     } else if tool == "codemode" {
         (
             ResumeClass::OutcomeUnknown,
@@ -570,17 +574,17 @@ mod tests {
 
     #[test]
     fn get_only_web_tools_are_interrupted_without_local_effects() {
-        // Given known GET-only, no-credential web tools and an unknown tool.
-        for tool in ["web_fetch", "web_search"] {
-            // When classifying their unmatched calls, then retry needs no effect reconciliation.
-            assert_eq!(
-                classify_upstream(tool, Some("saved.diff")),
-                (ResumeClass::InterruptedNoEffect, None)
-            );
-        }
+        // Public GET has no local effect; search may have consumed subscription quota.
+        assert_eq!(
+            classify_upstream("web_fetch", Some("saved.diff")),
+            (ResumeClass::InterruptedNoEffect, None)
+        );
         assert_eq!(
             classify_upstream("web_post", None).0,
             ResumeClass::OutcomeUnknown
         );
+        let (class, detail) = classify_upstream("web_search", None);
+        assert_eq!(class, ResumeClass::OutcomeUnknown);
+        assert!(detail.unwrap().contains("quota"));
     }
 }

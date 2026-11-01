@@ -80,6 +80,8 @@ process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_i
   payload_sha256: envelope.payload_sha256, identity: envelope.identity, state: "committed",
   result: { op: envelope.op, ...ended, ...(progress ? { revision: progress.revision, progress } : {}),
     ...(envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : {}),
+    ...(envelope.payload.kind === "auxiliary" ? { session_id: envelope.payload.request,
+      session_file: join(dir, "auxiliary-" + envelope.payload.request + ".jsonl") } : {}),
     ...(envelope.op === "hello" ? { herdr_seq_epoch_ms: Date.now(), questions: [] } : {}), ...(envelope.op === "ask"
     ? { key: envelope.identity.task + "/" + envelope.identity.run + "/Q" + asked, revision: 1 } : {}) },
   at: new Date().toISOString() }) + "\\n");

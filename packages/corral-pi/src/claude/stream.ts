@@ -27,6 +27,8 @@ export interface ClaudeLaneConfig {
   readonly env?: NodeJS.ProcessEnv;
   readonly cwd?: string;
   readonly executable?: () => string;
+  /** Host-created search runtime only; never enabled for the coding lane. */
+  readonly searchOnly?: boolean;
 }
 
 const ADAPTIVE_MARKERS = ["opus-4-6", "opus-4-7", "opus-4-8", "opus-5", "sonnet-4-6", "sonnet-5", "fable-5", "mythos-5"];
