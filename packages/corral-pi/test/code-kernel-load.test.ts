@@ -26,7 +26,7 @@ for (const [name, code] of Object.entries(SPINS)) {
     const events: KernelEvent[] = [];
     let onEvent: ((event: KernelEvent) => void) | undefined;
     const kernel = new CodeKernel({
-      session: "load", tools: async ({ input }) => input, limits: { cancelGraceMs: 200, exitWaitMs: 10_000 },
+      session: "load", tools: async ({ input }) => input, limits: { exitWaitMs: 10_000 },
       onEvent: (event) => { events.push(event); onEvent?.(event); },
     });
     try {
@@ -41,7 +41,7 @@ for (const [name, code] of Object.entries(SPINS)) {
       expect(kernel.status().running).toBe("spin");
       kernel.cancel("spin");
       expect(await spinning.result).toMatchObject({ status: "cancelled", stateLost: true, generation: 1 });
-      expect(events.some((event) => event.kind === "state_lost" && event.reason === "unresponsive")).toBeTrue();
+      expect(events.some((event) => event.kind === "state_lost" && event.reason === "cancelled")).toBeTrue();
       await kernel.reset();
       expect(kernel.status().retiring).toBe(0);
       expect(await kernel.submit(code, { timeoutMs: 100 }).result).toMatchObject({ status: "timeout", stateLost: true });

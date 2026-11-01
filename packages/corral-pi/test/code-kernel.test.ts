@@ -2,12 +2,17 @@
 // or a deferred the test resolves; the only deadlines are the kernel limits under test, applied
 // to cells blocked in Atomics.wait (no CPU use) so they cannot acknowledge in time.
 import { expect, test } from "bun:test";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
   type CellResult, CodeKernel, type CodeKernelOptions, CodeKernels, type KernelEvent, type ToolBridge,
 } from "../src/extensions/codemode/kernel.ts";
+import { PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { within } from "./support/wait.ts";
 
+const exec = promisify(execFile);
 const BLOCK = "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);";
 const echo: ToolBridge = async ({ input }) => input;
 
@@ -175,35 +180,37 @@ test("a queued cell is cancelled without ever running", async () => {
   }
 });
 
-test("cancelling an active cell aborts its call, discards the late result and keeps the kernel state", async () => {
+test("cancelling an active cell aborts its call and replaces the generation, so its suspended code never resumes", async () => {
   let signal: AbortSignal | undefined;
   const late = deferred<unknown>();
   const { kernel, next } = harness({
     tools: async (request) => {
-      if (request.tool !== "hold") return request.input;
       signal = request.signal;
       return late.promise;
     },
   });
   try {
-    await kernel.submit("let kept = 41;").result;
     const holding = next((event) => event.kind === "call_started");
-    const active = kernel.submit("await tools.hold({}); kept = 0;");
+    const active = kernel.submit("let count = 1; let resume; await new Promise((r) => { resume = r; tools.hold({}); }); count = 99;");
     await holding;
+    const lost = next((event) => event.kind === "state_lost");
     expect(kernel.cancel(active.cell)).toBeTrue();
-    expect(await active.result).toMatchObject({ status: "cancelled", stateLost: false, generation: 1 });
+    expect(await lost).toMatchObject({ reason: "cancelled", generation: 1, cells: 1 });
+    expect(await active.result).toMatchObject({ status: "cancelled", stateLost: true, generation: 1 });
     expect(signal?.aborted).toBeTrue();
     const discarded = next((event) => event.kind === "call_discarded" && cellOf(event) === active.cell);
     late.resolve("too late");
     await discarded;
-    expect(await kernel.submit("return kept + 1").result).toMatchObject({ status: "ok", value: "42", generation: 1 });
+    const after = await kernel.submit("return [typeof resume, typeof count];").result;
+    expect(after).toMatchObject({ status: "ok", generation: 2, stateLost: false });
+    expect(json(after)).toEqual(["undefined", "undefined"]);
   } finally {
     await kernel.close();
   }
 });
 
-test("a cell that cannot be interrupted is replaced by a fresh kernel and the state loss is reported", async () => {
-  const { kernel, next } = harness({ limits: { cancelGraceMs: 50 } });
+test("a blocked cell is cancelled by replacing its worker and the queue continues on a fresh generation", async () => {
+  const { kernel, next } = harness();
   try {
     await kernel.submit("let before = 1;").result;
     const started = next((event) => event.kind === "cell_started" && cellOf(event) === "stuck");
@@ -212,30 +219,142 @@ test("a cell that cannot be interrupted is replaced by a fresh kernel and the st
     await started;
     const lost = next((event) => event.kind === "state_lost");
     kernel.cancel("stuck");
-    expect(await lost).toMatchObject({ kind: "state_lost", reason: "unresponsive", generation: 1, cells: 2 });
-    expect(await stuck.result).toMatchObject({
-      status: "cancelled", stateLost: true, generation: 1, error: { code: "kernel_restarted" },
-    });
+    expect(await lost).toMatchObject({ kind: "state_lost", reason: "cancelled", generation: 1, cells: 2 });
+    expect(await stuck.result).toMatchObject({ status: "cancelled", stateLost: true, generation: 1 });
     expect(await queued.result).toMatchObject({ status: "ok", value: "undefined", generation: 2, stateLost: false });
   } finally {
     await kernel.close();
   }
 });
 
-test("execution is bounded: a deadline stops a waiting cell in place and replaces a blocked one", async () => {
-  const { kernel, next } = harness({ tools: () => new Promise(() => undefined), limits: { cancelGraceMs: 50 } });
+test("a deadline replaces the generation whether the cell waits or blocks", async () => {
+  const { kernel, next } = harness({ tools: () => new Promise(() => undefined) });
   try {
-    await kernel.submit("let kept = 'yes';").result;
-    const waiting = await kernel.submit("await tools.never({});", { timeoutMs: 50 }).result;
-    expect(waiting).toMatchObject({ status: "timeout", stateLost: false, generation: 1 });
-    expect((await kernel.submit("return kept").result).value).toBe("yes");
-    const lost = next((event) => event.kind === "state_lost");
-    const blocked = await kernel.submit(BLOCK, { timeoutMs: 50 }).result;
-    expect(blocked).toMatchObject({ status: "timeout", stateLost: true, generation: 1 });
-    expect(await lost).toMatchObject({ reason: "unresponsive" });
-    expect(await kernel.submit("return typeof kept").result).toMatchObject({ value: "undefined", generation: 2 });
+    const waitingLost = next((event) => event.kind === "state_lost");
+    const waiting = await kernel.submit(
+      "let count = 1; let resume; await new Promise((r) => { resume = r; tools.never({}); }); count = 99;", { timeoutMs: 50 },
+    ).result;
+    expect(waiting).toMatchObject({ status: "timeout", stateLost: true, generation: 1 });
+    expect(await waitingLost).toMatchObject({ reason: "timeout", generation: 1 });
+    expect(json(await kernel.submit("return [typeof resume, typeof count];").result)).toEqual(["undefined", "undefined"]);
+    const blockedLost = next((event) => event.kind === "state_lost");
+    expect(await kernel.submit(BLOCK, { timeoutMs: 50 }).result).toMatchObject({ status: "timeout", stateLost: true, generation: 2 });
+    expect(await blockedLost).toMatchObject({ reason: "timeout", generation: 2 });
+    expect(await kernel.submit("return 1").result).toMatchObject({ status: "ok", generation: 3 });
   } finally {
     await kernel.close();
+  }
+});
+
+test("a finished cell's leftover code never runs on its own; resumed by a later cell it cannot print or get a tool answer", async () => {
+  const late = deferred<unknown>();
+  let echoes = 0;
+  const { kernel, next } = harness({
+    tools: async ({ tool, input }) => {
+      if (tool === "slow") return late.promise;
+      echoes++;
+      return input;
+    },
+  });
+  try {
+    const first = await kernel.submit(`
+      let count = 1; let resume; let refused;
+      (async () => { await tools.slow({}); count = 50; })();
+      (async () => {
+        await new Promise((r) => { resume = r; });
+        count = 99;
+        try { await tools.echo({}); } catch (error) { refused = error.code; }
+        print("leftover output");
+      })();
+      return count;`).result;
+    expect(first).toMatchObject({ status: "ok", value: "1", stateLost: false });
+    const discarded = next((event) => event.kind === "call_discarded" && "tool" in event && event.tool === "slow");
+    late.resolve("late");
+    await discarded;
+    expect((await kernel.submit("await new Promise((r) => setTimeout(r, 0)); return count;").result).value).toBe("1");
+    const resumed = await kernel.submit("resume(); await new Promise((r) => setTimeout(r, 0)); return [count, refused];").result;
+    expect(json(resumed)).toEqual([99, null]);
+    expect(resumed.outputs).toEqual([]);
+    expect(echoes).toBe(0);
+    const sources = await kernel.submit("return [typeof FinalizationRegistry, typeof WebAssembly, typeof Atomics.waitAsync];").result;
+    expect(json(sources)).toEqual(["undefined", "undefined", "undefined"]);
+  } finally {
+    await kernel.close();
+  }
+});
+
+test("unhandled rejections are discarded, never shown in a later cell (standalone runtime)", async () => {
+  const { stdout } = await exec(process.execPath, [fileURLToPath(new URL("./fixtures/kernel-rejections.ts", import.meta.url))], {
+    cwd: PACKAGE_ROOT, timeout: 30_000,
+  });
+  const { results, lost } = JSON.parse(stdout) as { results: CellResult[]; lost: KernelEvent[] };
+  expect(results.map(({ status, value, outputs, generation }) => ({ status, value, outputs, generation }))).toEqual([
+    { status: "ok", value: "1", outputs: [], generation: 1 },
+    { status: "ok", value: "2", outputs: [], generation: 1 },
+    { status: "ok", value: "function", outputs: [], generation: 1 },
+  ]);
+  expect(lost).toEqual([]);
+});
+
+test("top-level return beside top-level await follows JavaScript grammar", async () => {
+  const { kernel } = harness();
+  const cases: readonly (readonly [string, unknown])[] = [
+    ["await null; return /* line\n break */ 3;", undefined],
+    ["await null; return /* comment */;", undefined],
+    ["await null; return\n(1)", undefined],
+    ["await null; return {return() {return 2}}.return();", "2"],
+    ['await null; return {"return": 2};', { return: 2 }],
+    ['await null; const o = { return: 1 }; const { return: r } = o; return r', "1"],
+    ['await null; return /return/.test("return");', "true"],
+    ["await null; return `x ${(() => {return 3})()}`;", "x 3"],
+    ["await null; const t = `a\nreturn x;\n  return;`; if (t) return t; else return 0", "a\nreturn x;\n  return;"],
+    ["await null; class K { return() { return 7 } static get return() { return 8 } }; return [new K().return(), K.return]", [7, 8]],
+    ["await null; out: { return 5 }", "5"],
+    ['await null; switch (1) { case 1: return "one" }', "one"],
+  ];
+  try {
+    for (const [code, expected] of cases) {
+      const result = await kernel.submit(code).result;
+      expect([code, result.status]).toEqual([code, "ok"]);
+      const value = typeof expected === "object" && expected !== null ? json(result) : result.value;
+      expect([code, value]).toEqual([code, expected]);
+    }
+  } finally {
+    await kernel.close();
+  }
+});
+
+test("error fields are bounded on runtime, timer, syntax, bridge and worker-failure paths", async () => {
+  const fieldBytes = (error: CellResult["error"]) =>
+    [error?.name ?? "", error?.message ?? "", error?.code ?? ""].map((field) => Buffer.byteLength(field));
+  const { kernel } = harness({
+    tools: async () => { throw new Error("b".repeat(10_000)); },
+    limits: { output: { maxErrorBytes: 64 } },
+  });
+  try {
+    const runtime = await kernel.submit(
+      'throw Object.assign(new Error("x".repeat(10000)), { name: "N".repeat(500), code: "C".repeat(500) });',
+    ).result;
+    expect(runtime).toMatchObject({ status: "error", truncated: true });
+    expect(fieldBytes(runtime.error)).toEqual([128, 64, 128]);
+    const timer = await kernel.submit('setTimeout(() => { throw new Error("t".repeat(10000)); }, 0); await new Promise(() => undefined);').result;
+    expect(timer).toMatchObject({ status: "error", truncated: true, error: { message: "t".repeat(64) } });
+    const name = "a".repeat(5000);
+    const syntax = await kernel.submit(`let ${name} = 1;\nlet ${name} = 2;`).result;
+    expect(syntax).toMatchObject({ status: "error", error: { name: "SyntaxError" } });
+    expect(Buffer.byteLength(syntax.error?.message ?? "") <= 64).toBeTrue();
+    const bridge = await kernel.submit("try { await tools.fail({}); } catch (error) { return error.message.length; }").result;
+    expect(bridge.value).toBe("64");
+  } finally {
+    await kernel.close();
+  }
+  const failed = harness({ worker: new URL("./fixtures/missing-kernel-worker.ts", import.meta.url), limits: { output: { maxErrorBytes: 16 } } });
+  try {
+    const result = await failed.kernel.submit("return 1").result;
+    expect(result).toMatchObject({ status: "error", stateLost: true, truncated: true, error: { code: "worker_failed" } });
+    expect(Buffer.byteLength(result.error?.message ?? "") <= 16).toBeTrue();
+  } finally {
+    await failed.kernel.close();
   }
 });
 

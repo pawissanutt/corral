@@ -7,14 +7,17 @@
 // worker generation. They do not survive reset, recovery, close or a host/process restart, and
 // nothing is snapshotted or replayed: a new generation starts empty, `state_lost` reports every
 // discarded generation, and each CellResult names the generation that ran it. Canonical state
-// (todos, receipts) never lives in the heap. Cancelling a queued cell removes it. Cancelling an
-// active cell (or reaching its deadline) asks the worker to stop it; a worker that does not
-// answer within the grace period is terminated and replaced, which loses its state. Results of a
-// settled cell or a replaced worker are discarded and never reach another cell.
+// (todos, receipts) never lives in the heap. Cancelling a queued cell removes it. An active cell
+// cannot be stopped in place, because code it left suspended in the shared heap could resume
+// later, so cancelling it or reaching its deadline terminates and replaces the worker: the cell
+// settles with `stateLost` and `state_lost` names the reason. A cell that finished leaves no code
+// that runs on its own (see kernel-worker.ts). Results of a settled cell or a replaced worker are
+// discarded and never reach another cell.
 import { Worker } from "node:worker_threads";
 
 import {
-  type HostMessage, type KernelOutput, OutputBudget, type OutputLimits, type WireError, type WorkerMessage, clipUtf8,
+  ERROR_FIELD_BYTES, type HostMessage, type KernelOutput, OutputBudget, type OutputLimits, type WireError, type WorkerMessage,
+  clipUtf8,
 } from "./kernel-protocol.ts";
 
 export type { KernelOutput, OutputLimits, WireError } from "./kernel-protocol.ts";
@@ -26,12 +29,9 @@ export const KERNEL_WORKER: string | URL = COMPILED
 
 const CELL_ID = /^[\w.:-]{1,128}$/;
 const MAX_DELAY = 2_147_483_647;
-const ERROR_MESSAGE_BYTES = 4096;
 
 export interface KernelLimits {
   readonly cellTimeoutMs: number;
-  /** How long an active cell may take to acknowledge cancellation before its worker is replaced. */
-  readonly cancelGraceMs: number;
   /** How long close and reset wait for a terminated worker to exit before releasing it. */
   readonly exitWaitMs: number;
   readonly maxQueuedCells: number;
@@ -40,8 +40,8 @@ export interface KernelLimits {
 }
 
 export const DEFAULT_KERNEL_LIMITS: KernelLimits = {
-  cellTimeoutMs: 15 * 60_000, cancelGraceMs: 2_000, exitWaitMs: 2_000, maxQueuedCells: 16, maxCodeBytes: 256 * 1024,
-  output: { maxTextBytes: 64 * 1024, maxValueBytes: 16 * 1024, maxImages: 4, maxImageBytes: 4 * 1024 * 1024 },
+  cellTimeoutMs: 15 * 60_000, exitWaitMs: 2_000, maxQueuedCells: 16, maxCodeBytes: 256 * 1024,
+  output: { maxTextBytes: 64 * 1024, maxValueBytes: 16 * 1024, maxImages: 4, maxImageBytes: 4 * 1024 * 1024, maxErrorBytes: 4096 },
 };
 
 export interface ToolRequest {
@@ -59,7 +59,7 @@ export interface ToolRequest {
 export type ToolBridge = (request: ToolRequest) => Promise<unknown>;
 
 export type CellStatus = "ok" | "error" | "cancelled" | "timeout" | "reset" | "closed";
-export type StateLossReason = "reset" | "unresponsive" | "worker_failed";
+export type StateLossReason = "reset" | "cancelled" | "timeout" | "worker_failed";
 
 export interface CellResult {
   readonly cell: string;
@@ -133,17 +133,17 @@ interface Running extends Queued {
   readonly outputs: KernelOutput[];
   readonly calls: Map<string, AbortController>;
   readonly deadline: ReturnType<typeof setTimeout>;
-  stopping?: "cancelled" | "timeout";
-  grace?: ReturnType<typeof setTimeout>;
 }
 
 type Outcome = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: unknown };
 
-function wireError(error: unknown): WireError {
-  if (!(error instanceof Error)) return { name: "Error", message: clipUtf8(String(error), ERROR_MESSAGE_BYTES) };
-  const code = (error as { code?: unknown }).code;
+function wireError(error: unknown, maxBytes: number): WireError {
+  const isError = error instanceof Error;
+  const code = isError ? (error as { code?: unknown }).code : undefined;
   return {
-    name: error.name, message: clipUtf8(error.message, ERROR_MESSAGE_BYTES), ...(typeof code === "string" ? { code } : {}),
+    name: clipUtf8(isError ? error.name : "Error", ERROR_FIELD_BYTES),
+    message: clipUtf8(isError ? error.message : String(error), maxBytes),
+    ...(typeof code === "string" ? { code: clipUtf8(code, ERROR_FIELD_BYTES) } : {}),
   };
 }
 
@@ -211,7 +211,7 @@ export class CodeKernel {
       return true;
     }
     if (this.running?.cell !== cell) return false;
-    this.stop(this.running, "cancelled");
+    this.lose("cancelled");
     return true;
   }
 
@@ -271,7 +271,7 @@ export class CodeKernel {
     const worker = this.worker ?? this.spawn();
     const running: Running = {
       ...next, generation: this.generation, budget: new OutputBudget(this.limits.output), outputs: [], calls: new Map(),
-      deadline: setTimeout(() => this.stop(running, "timeout"), next.timeoutMs),
+      deadline: setTimeout(() => { if (this.running === running) this.lose("timeout"); }, next.timeoutMs),
     };
     this.running = running;
     this.cells++;
@@ -295,9 +295,10 @@ export class CodeKernel {
       }
       case "done":
         if (running?.cell !== message.cell) return;
-        this.settle(running, message.status === "cancelled" ? running.stopping ?? "cancelled" : message.status, {
+        this.settle(running, message.status, {
           stateLost: false, truncated: message.truncated,
-          ...(message.value === undefined ? {} : { value: message.value }), ...(message.error ? { error: message.error } : {}),
+          ...(message.value === undefined ? {} : { value: message.value }),
+          ...(message.error ? { error: running.budget.error(message.error) } : {}),
         });
         return;
     }
@@ -306,7 +307,7 @@ export class CodeKernel {
   private call(worker: Worker, message: Extract<WorkerMessage, { op: "call" }>): void {
     const { cell, call, tool } = message;
     const running = this.running;
-    if (running?.cell !== cell || running.stopping || running.calls.has(call)) {
+    if (running?.cell !== cell || running.calls.has(call)) {
       this.emit({ kind: "call_discarded", cell, call, tool });
       return;
     }
@@ -330,18 +331,19 @@ export class CodeKernel {
   }
 
   private answer(worker: Worker, running: Running, call: string, tool: string, outcome: Outcome): void {
-    const live = this.worker === worker && this.running === running && !running.stopping && running.calls.delete(call);
+    const live = this.worker === worker && this.running === running && running.calls.delete(call);
     if (!live) {
       this.emit({ kind: "call_discarded", cell: running.cell, call, tool });
       return;
     }
     let value: string | undefined;
-    let error = outcome.ok ? undefined : wireError(outcome.error);
+    const maxBytes = this.limits.output.maxErrorBytes;
+    let error = outcome.ok ? undefined : wireError(outcome.error, maxBytes);
     if (outcome.ok) {
       try {
         value = outcome.value === undefined ? undefined : JSON.stringify(outcome.value);
       } catch (cause) {
-        error = { name: "TypeError", message: `${tool} returned a value that is not JSON-serializable: ${wireError(cause).message}` };
+        error = wireError(new TypeError(`${tool} returned a value that is not JSON-serializable: ${wireError(cause, maxBytes).message}`), maxBytes);
       }
     }
     this.send(worker, error
@@ -350,29 +352,12 @@ export class CodeKernel {
     this.emit({ kind: "call_finished", cell: running.cell, call, tool, ok: error === undefined });
   }
 
-  private stop(running: Running, status: "cancelled" | "timeout"): void {
-    if (this.running !== running || running.stopping) return;
-    running.stopping = status;
-    clearTimeout(running.deadline);
-    for (const controller of running.calls.values()) controller.abort();
-    if (this.worker) this.send(this.worker, { op: "cancel", cell: running.cell });
-    running.grace = setTimeout(() => {
-      if (this.running === running) {
-        this.lose("unresponsive", {
-          name: "KernelError", code: "kernel_restarted",
-          message: `the cell did not stop within ${this.limits.cancelGraceMs} ms; its kernel was replaced and all variables are lost`,
-        });
-      }
-    }, this.limits.cancelGraceMs);
-  }
-
   private settle(running: Running, status: CellStatus, result: {
     readonly stateLost: boolean; readonly truncated?: boolean; readonly value?: string; readonly error?: WireError;
   }): void {
     if (this.running !== running) return;
     this.running = undefined;
     clearTimeout(running.deadline);
-    clearTimeout(running.grace);
     for (const controller of running.calls.values()) controller.abort();
     running.calls.clear();
     running.resolve({
@@ -397,8 +382,9 @@ export class CodeKernel {
     this.emit({ kind: "state_lost", reason, cells: this.cells });
     const running = this.running;
     if (!running) return;
-    const status = reason === "reset" ? "reset" : running.stopping ?? "error";
-    this.settle(running, status, { stateLost: true, ...(error ? { error } : {}) });
+    this.settle(running, reason === "worker_failed" ? "error" : reason, {
+      stateLost: true, ...(error ? { error: running.budget.error(error) } : {}),
+    });
   }
 
   // A retired worker never keeps the host alive and its late messages are ignored; a worker
