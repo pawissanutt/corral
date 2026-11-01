@@ -17,7 +17,7 @@ test("release build runs nested codemode and the persistent kernel, and installs
     const kernel = execFileSync(binary, ["--check-code-kernel"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     expect(kernel).toMatch(/code kernel worker: file:\/\/\/\$bunfs\/root\/src\/extensions\/codemode\/kernel-worker\.js/);
     for (const proof of ["second cell", "queued cancel", "active cancel", "after cancel", "after reset", "blocked cancel",
-      "after blocked cancel"]) {
+      "after blocked cancel", "detached block", "after detached block"]) {
       expect(kernel).toContain(`code kernel ${proof}:`);
     }
     expect(kernel).toContain("code kernel check passed");

@@ -7,11 +7,14 @@
 //
 // Top-level declarations persist because Bun's REPL transform hoists them to globals of the
 // realm. A tool call, output or timer belongs to the cell whose async context made it. When a
-// cell finishes, its timers are cleared and its pending calls are dropped unanswered (they never
-// settle, so they create no rejections), and the realm has no engine-scheduled callbacks
-// (FinalizationRegistry, async WebAssembly, Atomics.waitAsync): none of its code runs again on
-// its own. Code it left suspended runs only if a later cell resumes it, inside that cell's turn;
-// it cannot print, and a tool call it makes is never answered. An interrupted cell never resumes:
+// cell's code completes, its timers are cleared and its pending calls are dropped unanswered (they
+// never settle, so they create no rejections). Promise jobs it left queued keep running, without
+// output or tool answers, and `done` is posted only from a macrotask, which cannot run before that
+// queue drains: detached work that never drains keeps the cell running until the host's deadline
+// replaces the worker. After `done` nothing of the cell is queued, and the realm has no
+// engine-scheduled callbacks (FinalizationRegistry, async WebAssembly, Atomics.waitAsync), so none
+// of its code runs again on its own. Code it left suspended runs only if a later cell resumes it,
+// inside that cell's turn, under the same restrictions. An interrupted cell never resumes:
 // kernel.ts replaces the whole worker instead.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
@@ -321,10 +324,12 @@ function finish(cell: Cell, status: WorkerStatus, result: { value?: string; erro
   if (cell.settled) return;
   settle(cell);
   const error = result.error ? cell.budget.error(result.error) : undefined;
-  post({
+  const done: WorkerMessage = {
     op: "done", cell: cell.id, status, truncated: cell.budget.truncated,
     ...(result.value === undefined ? {} : { value: result.value }), ...(error ? { error } : {}),
-  });
+  };
+  // Quiescence boundary: a macrotask runs only after every queued Promise job has run.
+  setImmediate(() => post(done));
 }
 
 async function run(message: Extract<HostMessage, { op: "run" }>): Promise<void> {

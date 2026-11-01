@@ -246,6 +246,34 @@ test("a deadline replaces the generation whether the cell waits or blocks", asyn
   }
 });
 
+test("detached Promise jobs keep a cell running until they drain, so its deadline bounds them on every completion path", async () => {
+  const detached = `(async () => { await null; await null; ${BLOCK} })();`;
+  const { kernel, next } = harness({ limits: { exitWaitMs: 30_000 } });
+  try {
+    const drained = await kernel.submit(
+      "let finite = []; (async () => { for (let i = 0; i < 100; i++) await null; finite.push('drained'); })(); return 1;",
+    ).result;
+    expect(drained).toMatchObject({ status: "ok", value: "1", stateLost: false, generation: 1 });
+    expect(json(await kernel.submit("return finite").result)).toEqual(["drained"]);
+    const paths = [
+      `${detached} return 1;`,
+      `${detached} throw new Error("boom");`,
+      `setTimeout(() => { ${detached} throw new Error("timer"); }, 0); await new Promise(() => undefined);`,
+    ];
+    for (const [index, code] of paths.entries()) {
+      const generation = index + 1;
+      const lost = next((event) => event.kind === "state_lost");
+      expect([code, await kernel.submit(code, { timeoutMs: 100 }).result]).toMatchObject(
+        [code, { status: "timeout", stateLost: true, generation }],
+      );
+      expect(await lost).toMatchObject({ reason: "timeout", generation });
+      expect(await kernel.submit("return 2").result).toMatchObject({ status: "ok", value: "2", generation: generation + 1 });
+    }
+  } finally {
+    await kernel.close();
+  }
+});
+
 test("a finished cell's leftover code never runs on its own; resumed by a later cell it cannot print or get a tool answer", async () => {
   const late = deferred<unknown>();
   let echoes = 0;
