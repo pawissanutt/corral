@@ -103,4 +103,12 @@ The r action correctly requests OpenReview, but the shared seeded fixture suppli
 
 UX check: existing App::push already emits a visible bad-status toast on failure. A new rendered-text regression proves an unreadable diff makes r show **Could not open review T-006** and retains Detail. No production UI change needed. Both the original interaction and the new error case complete **20/20 capped sandbox PASS**; all **7 board mouse tests PASS**. Logs: `.evidence/R3-mouse-review-green-20.log`, `R3-mouse-review-error-green-20.log`, `R3-mouse-module-green.log`; original failure `R3-mouse-review-red.log`. Fake /tmp/wt Git diagnostics remain fixture diagnostics, not a live Git checkout claim.
 
+## Complete no-fail-fast set before next gate
+
+After attempt `ag-e23f96915ad735c9` (3048 passes/one unattended-question fail,2015/5064 unrun), owner requests a complete no-fail-fast sandbox run. Initial terminal result:5058 PASS/6 FAIL. `docs/records/T-337-R3-nofail-matrix.md` records every finding, private harness correction and Q11's sole source change: the reviewer-session test now clones one immutable sibling template instead of recursively cloning its growing parent. Exact budgets/oracles/native/decoy data remain. The role regression passes20/20 under2GiB; no production role-session change.
+
+The unchanged live dispatch/sync/reply/jump/retry fixture passes20/20 with visible actual steps after matching the private engine's shell to Fish. The unchanged unattended test passes20/20 and the complete set; its isolated gate failure is not reproduced or claimed fixed. Private Git mirror/URL rewrite and scratch Fish/herdr make all sandbox dependencies available without exposing owner Git admin or panes.
+
+**Final complete no-fail-fast diagnostic:5064/5064 PASS,0 FAIL,38 ignored;6349.928s; zero cgroup OOM events**, same four-package selection/ignore policy, serial inside2 CPUs/2GiB/256PIDs/two burners. `.evidence/R3-quick-set-no-fail-fast-final.log` is terminal proof. This is owner-requested diagnostics, not an extra gate receipt. Commit, preserve-merges rebase and the next official quick remain required.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
