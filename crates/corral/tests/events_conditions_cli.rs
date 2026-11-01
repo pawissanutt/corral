@@ -278,7 +278,16 @@ fn log_orders_equal_timestamps_by_seq_and_wait_never_wakes_on_a_suppressed_repea
         fx.observe(&task.id, a());
     }
     // When a wait resumes from that cursor.
-    let timeout = fx.run(&["wait", "--after", &cursor.to_string(), "--timeout", "0ms"]);
+    // Routine lifecycle kinds are opt-in under the integrated actionable-default policy.
+    let timeout = fx.run(&[
+        "wait",
+        "--for",
+        "done",
+        "--after",
+        &cursor.to_string(),
+        "--timeout",
+        "0ms",
+    ]);
     // Then the repeats wrote no event, so nothing wakes it.
     assert_eq!(timeout.status.code(), Some(124), "{timeout:?}");
     assert_eq!(fx.store.event_tail().unwrap(), cursor);
@@ -288,6 +297,8 @@ fn log_orders_equal_timestamps_by_seq_and_wait_never_wakes_on_a_suppressed_repea
         .unwrap();
     let woke = fx.ok(&[
         "wait",
+        "--for",
+        "done",
         "--after",
         &cursor.to_string(),
         "--json",
