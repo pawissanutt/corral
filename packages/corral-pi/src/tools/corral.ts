@@ -123,6 +123,23 @@ export class CorralClient {
     });
   }
 
+  /** Bounded canonical read, deliberately not read_show/full task hydration or a mutation. */
+  inspectionSnapshot(): Promise<unknown> {
+    const { identity, corral, root } = this.options;
+    const { task, run } = identity;
+    if (!task || !run) return Promise.reject(new CorralCallError("inspection_unbound", "No task/run bound to this session"));
+    return new Promise((resolve, reject) => {
+      const child = execFile(corral, ["run", "inspect", task, "--run", run], {
+        cwd: root, timeout: 30_000, maxBuffer: 128 * 1024,
+      }, (error, stdout) => {
+        if (error) { reject(new CorralCallError("inspection_read", error.message)); return; }
+        try { resolve(JSON.parse(stdout)); }
+        catch { reject(new CorralCallError("inspection_read", "Invalid inspection response")); }
+      });
+      child.stdin?.end();
+    });
+  }
+
   envelope(op: CorralOp, call: CorralCall): string {
     const { identity } = this.options;
     const text = JSON.stringify({

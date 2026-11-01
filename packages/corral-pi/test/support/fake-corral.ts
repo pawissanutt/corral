@@ -27,6 +27,11 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs
 import { dirname, join } from "node:path";
 const dir = dirname(process.argv[1]);
 const stdin = readFileSync(0, "utf8");
+if (process.argv[2] === "run" && process.argv[3] === "inspect") {
+  const inspection = join(dir, "inspection.json");
+  if (!existsSync(inspection)) { process.stderr.write("No inspection supplied in this fixture\\n"); process.exit(1); }
+  process.stdout.write(readFileSync(inspection, "utf8")); process.exit(0);
+}
 const reading = process.argv[2] === "show" || process.argv[3] === "state"
   || (process.argv[2] === "assistant" && process.argv[3] === "show");
 if (!reading) appendFileSync(join(dir, "calls.jsonl"), JSON.stringify({ argv: process.argv.slice(2), stdin,

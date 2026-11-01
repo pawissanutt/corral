@@ -1,9 +1,12 @@
 import { resolve, basename } from "node:path";
+import type { Inspection } from "./inspection.ts";
+import { parseChangedPaths, readCandidateDiff } from "./candidate-git.ts";
 import { gitFailure, panelGit, repositoryRoot, parseStatus, parseNumstat, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
 import type { PanelFile } from "./panels-view.ts";
-export const COMPARISONS: readonly Comparison[] = ["all", "unstaged", "staged"];
+export const COMPARISONS: readonly Comparison[] = ["candidate", "all", "unstaged", "staged"];
 export function comparisonLabel(value: Comparison): string {
   switch (value) {
+    case "candidate": return "Committed candidate · comparison base → HEAD";
     case "all": return "All uncommitted · HEAD → working tree";
     case "unstaged": return "Unstaged · index → working tree";
     case "staged": return "Staged · HEAD → index";
@@ -17,9 +20,10 @@ export function fileStatus(file: PanelFile): string {
   if (file.status.includes("A")) return "Added";
   return "Modified";
 }
-export interface PatchSnapshot { readonly root: string; readonly path: string; readonly comparison: Comparison; readonly head: string | undefined; readonly at: number; readonly text: string }
+export interface PatchSnapshot { readonly root: string; readonly path: string; readonly comparison: Comparison; readonly head: string | undefined; readonly base?: string; readonly at: number; readonly text: string }
 export class ReviewStore {
   patchSnapshot: PatchSnapshot | undefined;
+  candidateBase: string | undefined;
   root: string; branch = "unknown"; head: string | undefined; patchPath: string | undefined; patchComparison: Comparison = "all"; patchAt: number | undefined; comparison: Comparison = "all"; query = "";
   files: readonly PanelFile[] = []; selected: string | undefined;
   patch = "Select a file to inspect its diff."; error: string | undefined;
@@ -28,7 +32,9 @@ export class ReviewStore {
   private epoch = 0; private patchEpoch = 0; private disposed = false;
   private readonly abort = new AbortController();
   private active: Promise<void> | undefined;
-  constructor(cwd: string, private readonly changed: () => void) { this.root = resolve(cwd); }
+  constructor(cwd: string, private readonly changed: () => void, private readonly candidate?: () => Promise<Inspection>) {
+    this.root = resolve(cwd); if (candidate) this.comparison = "candidate";
+  }
   get name(): string { return basename(this.root); }
   get visible(): readonly PanelFile[] {
     const words = this.query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -36,7 +42,7 @@ export class ReviewStore {
   }
   get current(): PanelFile | undefined { return this.visible.find(file => file.path === this.selected); }
   async setRepository(path: string): Promise<void> {
-    this.epoch++; this.patchEpoch++; this.root = resolve(this.root, path);
+    this.epoch++; this.patchEpoch++; this.root = resolve(this.root, path); this.comparison = "all"; this.candidateBase = undefined;
     this.files = []; this.selected = undefined; this.patchPath = undefined; this.checkedAt = undefined; this.patch = "Loading repository…";
     // Wait for an old read before refreshing the newly selected scope.
     await this.active; await this.refresh();
@@ -55,6 +61,7 @@ export class ReviewStore {
     const epoch = this.epoch, cwd = this.root, comparison = this.comparison;
     this.refreshing = true; this.changed();
     try {
+      if (comparison === "candidate") { await this.readCandidate(epoch); return; }
       const root = await repositoryRoot(cwd, this.abort.signal);
       const [status, branch, head] = await Promise.all([
         panelGit(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], this.abort.signal),
@@ -72,15 +79,32 @@ export class ReviewStore {
       if (!this.disposed && epoch === this.epoch) this.error = gitFailure(error);
     } finally { this.refreshing = false; if (!this.disposed) this.changed(); }
   }
+  private async readCandidate(epoch: number): Promise<void> {
+    if (!this.candidate) throw new Error("No task/run candidate bound to this session; c selects working changes");
+    const data = await this.candidate();
+    const root = await repositoryRoot(data.root, this.abort.signal);
+    const [paths, stats] = await Promise.all([
+      panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--name-status", "-z", data.base, data.head], this.abort.signal),
+      panelGit(root, ["diff", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", data.base, data.head], this.abort.signal),
+    ]);
+    if (this.disposed || epoch !== this.epoch) return;
+    this.root = root; this.head = data.head; this.candidateBase = data.base; this.branch = data.task + "/" + data.run;
+    this.files = parseChangedPaths(paths); this.stats = parseNumstat(stats); this.error = undefined;
+    this.checkedAt = Date.now(); this.revision++;
+    if (this.selected === undefined) this.selected = this.visible[0]?.path;
+    await this.loadSelected();
+  }
   async select(path: string): Promise<void> { this.selected = path; this.changed(); await this.loadSelected(); }
   private async loadSelected(): Promise<void> {
     const file = this.current, epoch = ++this.patchEpoch, root = this.root, comparison = this.comparison, head = this.head;
-    if (!file) { this.patchSnapshot = undefined; this.patchPath = this.selected; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = this.error ?? (this.selected ? "Selected path is no longer in this comparison. Choose another file with j/k." : this.files.length ? "No files match the current filter." : "Working tree clean."); this.changed(); return; }
+    if (!file) { this.patchSnapshot = undefined; this.patchPath = this.selected; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = this.error ?? (this.selected ? "Selected path is no longer in this comparison. Choose another file with j/k." : this.files.length ? "No files match the current filter." : comparison === "candidate" ? "No committed candidate changes." : "Working tree clean."); this.changed(); return; }
     try {
-      const patch = await readPanelDiff(root, file, this.abort.signal, comparison, head);
+      const base = this.candidateBase;
+      const patch = comparison === "candidate" ? await readCandidateDiff(root, file, base, head, this.abort.signal)
+        : await readPanelDiff(root, file, this.abort.signal, comparison, head);
       if (!this.disposed && epoch === this.patchEpoch && root === this.root && comparison === this.comparison && file.path === this.selected) {
         this.patch = patch; this.patchComparison = comparison; this.patchPath = file.path; this.patchAt = Date.now();
-        this.patchSnapshot = { root, path: file.path, comparison, head, at: this.patchAt, text: patch }; this.changed();
+        this.patchSnapshot = { root, path: file.path, comparison, head, ...(comparison === "candidate" && base ? { base } : {}), at: this.patchAt, text: patch }; this.changed();
       }
     } catch (error) {
       if (!this.disposed && epoch === this.patchEpoch) { this.patchSnapshot = undefined; this.patchPath = file.path; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = "Diff unavailable: " + gitFailure(error); this.changed(); }

@@ -235,6 +235,7 @@ const ROWS: &[(&str, &[&str], Class)] = &[
     ),
     ("run transcript", &["T-001", "R1", "--lines", "1-200"], Read),
     ("run transcript", &["T-001", "R1", "--review", "1"], Read),
+    ("run inspect", &["T-001", "--run", "R1"], Read),
     ("run progress", &["T-001"], Read),
     ("run progress", &["T-001", "--file", "p.json"], Refused),
     ("run checkpoint", &["T-001"], Read),

@@ -307,6 +307,7 @@ export class HostSession {
     this.provider = options.provider ?? "openai-codex";
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+      inspection: () => options.client.inspectionSnapshot(),
     });
     this.unsubscribePanels = this.panels ? options.events.on(event => {
       if (event.kind === "terminal_input" && typeof event.input_sequence === "number" && event.input_sequence >= this.terminalInputSequence) {
