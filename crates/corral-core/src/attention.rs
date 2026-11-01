@@ -194,11 +194,11 @@ pub fn blocked<'a>(task: &crate::Task, assessment: &'a Assessment) -> Option<&'a
     })
 }
 
-fn select_blocked<'a>(
+fn select_blocked(
     status: crate::Status,
-    assessment: &'a Assessment,
+    assessment: &Assessment,
     nonblocking: impl Fn(&Condition) -> bool,
-) -> Option<&'a Condition> {
+) -> Option<&Condition> {
     let stopping = |condition: &&Condition| {
         if nonblocking(condition) {
             return false;

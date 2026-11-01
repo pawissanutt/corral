@@ -731,7 +731,7 @@ pub fn fence_generation(
                     reason: reason.into(),
                     at: store.now(),
                 });
-                task.put_agent_record(container, agent::NativeRecord::Generation(entry))?;
+                task.put_agent_record(container, agent::NativeRecord::Generation(Box::new(entry)))?;
                 if host.binding.generation == generation {
                     task.edit_agent_head(container, |host| {
                         host.binding.health = HostHealth::Fenced;

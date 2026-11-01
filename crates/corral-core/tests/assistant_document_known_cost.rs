@@ -69,7 +69,10 @@ fn actual_assistant_documents_roundtrip_growth_with_exact_load_save_and_enumerat
             let cb = bytes(&store, "assistant-containers", &session.id);
             let hot = HotScope::enter();
             let before = work::snapshot();
-            assert_eq!(store.active_assistant_ids().unwrap(), [session.id.clone()]);
+            assert_eq!(
+                store.active_assistant_ids().unwrap().as_slice(),
+                std::slice::from_ref(&session.id)
+            );
             assert_eq!(
                 store.get_assistant(&session.id).unwrap().body,
                 "retained body\n".repeat(20 * scale)

@@ -211,7 +211,7 @@ pub fn nudge(ctx: &Ctx, task_id: &str) -> Result<bool> {
             .agent_generation(&container, generation)?
             .context("the nudged generation disappeared")?;
         entry.nudged_at = Some(ended);
-        task.put_agent_record(&container, agent::NativeRecord::Generation(entry))?;
+        task.put_agent_record(&container, agent::NativeRecord::Generation(Box::new(entry)))?;
         posted = Some(message);
         Ok(true)
     })?;

@@ -323,7 +323,10 @@ pub fn record(store: &Store, container: &ContainerRef, probe: &Probe) -> Result<
                         return Ok(false);
                     }
                     stored.event_seq = *seq;
-                    task.put_agent_record(container, agent::NativeRecord::Generation(stored))?;
+                    task.put_agent_record(
+                        container,
+                        agent::NativeRecord::Generation(Box::new(stored)),
+                    )?;
                     Ok(true)
                 }
                 Probe::Busy | Probe::Skip => Ok(false),
