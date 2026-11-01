@@ -95,4 +95,12 @@ Attempt `ag-9a5ba58f399056e1` stops at the unchanged800-SLOC limit: sync.rs802 c
 
 Added a direct1x/10x native/history-growth regression for bound, fenced and missing current generations: exact current-generation value, zero hydration, exactly one decoded nested row when present/zero when missing, and equality of every unattributed counter. Focused test PASS and **20/20 sandbox repetitions PASS** (`.evidence/R3-watchdog-projection-budget-20.log`). The original registered-capability test again completes **20/20 sandbox PASS** after helper extraction (`R3-watchdog-refactored-green-20.log`). This supplements, not rewrites, the earlier6460-test ledger; the final gate still owes the whole current-tree package result.
 
+## Mouse review fixture and visible error check
+
+Attempt `ag-3a5d8313711a24ae` passes format/size/Clippy and reaches4595 passes/one failure (467/5063 unrun), including watchdog and both action budgets. Mouse click/r/Esc fails indexing stack[2]. Capped reproduction fails immediately at iteration1, not a presumed controlled-clock flake.
+
+The r action correctly requests OpenReview, but the shared seeded fixture supplies placeholder Diff metadata (zero hash/one byte) without a canonical body. With no /tmp/wt checkout, review_info invokes strict snapshot_diff reading and refuses it, so review cannot push; Esc then pops Detail. Q10 authorizes only this test file: publish real diff bytes through add_artifact, drop the placeholder Diff metadata, preserve the two-artifact count/title and every original click/key/clock/stack/hint assertion. Strict production reading remains unchanged.
+
+UX check: existing App::push already emits a visible bad-status toast on failure. A new rendered-text regression proves an unreadable diff makes r show **Could not open review T-006** and retains Detail. No production UI change needed. Both the original interaction and the new error case complete **20/20 capped sandbox PASS**; all **7 board mouse tests PASS**. Logs: `.evidence/R3-mouse-review-green-20.log`, `R3-mouse-review-error-green-20.log`, `R3-mouse-module-green.log`; original failure `R3-mouse-review-red.log`. Fake /tmp/wt Git diagnostics remain fixture diagnostics, not a live Git checkout claim.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
