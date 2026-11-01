@@ -36,6 +36,12 @@ A new production HostSession regression runs the actual SDK/Code Mode kernel and
 - `.evidence/T-689-nested-host-render.txt` records actual wide/inline Plan and Agents rendering plus Background activity from these real host adapters. All backend outcomes are isolated fixture responses, not production board mutations.
 - The original review reproductions are the red evidence: `c6b9e3c4-T-689-review-nested.log` (F1) and `737634ec-T-689-review-ledger.log` (F2).
 
+## Review round 2 — F2 overlapping read continuation
+
+An uncertain/reserved/queued/unknown-effect mutation outcome now advances the ledger observation version before marking it stale. A canonical read that began before that outcome is superseded and cannot clear stale, even when it returns the same revision. A new canonical read begun after the uncertainty can reconcile it normally. This preserves the existing committed-receipt/read ordering without sleeps, retries or revision fabrication.
+
+Four barrier-driven production TodoLedger regressions seed r1, block a canonical read, receive each uncertainty form, release the earlier read, and assert it returns false with r1 still stale. Actual native wide and inline Plan renders show stale after the older read completes. A subsequent fresh read clears stale in both layouts. The four tests failed before the fix (`T-689-race-red.log`) and pass after it. The combined targeted run passed 72 tests with 476 assertions; package typecheck also passed. Render traces are `T-689-race-{uncertain,reserved,queued,unknown-effect}-render.txt`.
+
 ## Boundaries and limitations
 
 No paid calls, owner panes, uploads, load generation or live herdr resources were used. SDK integration tests use isolated fixture transports/executables, not production mutations. Tool receipt history is bounded to 24 observations in this host; earlier sessions/lifecycle receipts and omitted outcomes are explicit. Host event history is bounded by EventLog; gaps demand canonical reconciliation, not inferred completion. Full gate/landing assurance remains Corral's responsibility. `cxm context` failed with a Corral output-size limit, so exact local source reads were used.
