@@ -44,6 +44,15 @@ writeFileSync(path, source.replace(marker, `${marker}
           ]);
         }
       });
+      pi.registerCommand("fixture-panel-reading", {
+        description: "Owned offline long reply with wide graphemes, held after its first delta",
+        handler: async () => {
+          const { readFile } = await import("node:fs/promises");
+          const paragraph = (i) => { const id = "P" + String(i).padStart(2, "0"); return id + " " + "reading anchor text ".repeat(9).trim() + (i % 6 === 3 ? " 界面 👩‍💻 café ｗｉｄｅ" : "") + " " + id + "E"; };
+          const range = (from, count) => Array.from({ length: count }, (_, i) => paragraph(from + i)).join("\\n\\n");
+          transport().script([{ chunks: [range(1, 40), "\\n\\n" + range(41, 8) + "\\n\\nLIVE_TAIL"], afterFirstChunk: () => readFile("${work}/reading-gate").then(() => undefined) }]);
+        }
+      });
       pi.registerCommand("fixture-native-confirm", {
         description: "Owned native UI cancellation test",
         handler: async (_args, ctx) => {

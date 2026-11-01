@@ -21,6 +21,14 @@ Use a new owner pane/session; existing processes do not hot-reload. Explicit `[a
 - **F6:** sidebar/inline inspector focus; arrows navigate. **Ctrl+B:** wide rail/inline layout or explicit compact-detail expansion.
 - 105+ terminal columns reserve a 34-column rail; narrower layouts use one navigation row at rest. Draft and binding survive relocation.
 
+## Stable reading, focus and compact paging
+
+- **Follow pauses while you read.** Scrolling the conversation back (PgUp, wheel, Ctrl+Home) stops it following streamed output. New output then arrives below without moving your reading position, and Pi shows **↓ Jump to latest message · Ctrl+End**. Only Ctrl+End or a click on that control returns to live output.
+- **Jumping never steals focus.** Pi's viewport keys (PgUp/PgDn, Ctrl+Home/Ctrl+End, prompt jumps) scroll the conversation even while the inspector has focus, and the inspector keeps it. Clicking the jump control does not move focus either. Ordinary typing still returns to the composer.
+- **Relocation keeps your place.** While follow is paused, the 105-column relocation, Ctrl+B and terminal resizes keep the same transcript passage at the top of the view, even though Pi re-wraps it at the new width. The draft, the inspector tab, its current item and the inspector focus are kept too.
+- **Short terminals page metadata.** When the inspector or rail has more items than rows, it shows a pager such as `‹ 2/7 ›`. ↑/↓ and clicks on `‹`/`›` move the same item, and the wheel scrolls the same list. A foreground dialog owns input: pager clicks, F6 and Ctrl+B do nothing underneath it.
+- **The minimum width stays legible.** Below 70 columns the view bar reads `Chat F9  Changes F7  Activity F8`, and its click targets follow the labels. A launch directory outside Git reads `Not a Git repository` rather than a raw Git command error.
+
 ## Practical change review
 
 The default is all uncommitted changes in the Git worktree containing the launch directory. The actual Git root is resolved once per scope, so repository-relative paths also work when launched in a subdirectory. A bound worker's launch worktree remains its initial review scope; browsing another repository does not rebind the host or change the model's cwd.
@@ -65,12 +73,15 @@ The Terminal adapter supplies default cell colors only in the alternate screen, 
 ```sh
 cd packages/corral-pi
 bun run typecheck
-bun test src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
+bun test src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-shell.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/panel-shell.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
 cd ../..
 python3 scripts/qa-pi-workbench.py /tmp/corral-native-workbench-evidence
 python3 scripts/qa-pi-image-viewer.py /tmp/corral-native-image-evidence
 python3 scripts/qa-pi-panel-proof.py /tmp/corral-panel-proof-evidence
+python3 scripts/qa-pi-panel-shell.py /tmp/corral-panel-shell-evidence
 ```
+
+`test/panel-shell.test.ts` and `qa-pi-panel-shell.py` (T-688) drive the real host with a long streamed reply that contains wide graphemes. They read back during the held stream, then check four things. First, the same paragraph stays at the top through stream completion, 140→80→52→140 resizes and Ctrl+B. Second, Ctrl+End and a click on the jump control return to live output without taking inspector focus. Third, at 80×14 the pager moves identically by ↓ and by `‹`/`›` clicks. Fourth, a dialog isolates the inspector. The PTY script uses real key sequences and SGR mouse reports against `src/host/main.ts`, and writes ANSI and screen-text captures for each step. The plain host still creates no panels.
 
 `panel-host-proof.test.ts` and `qa-pi-panel-proof.py` are the layout-seam proof from T-687 (`docs/records/T-687-pi-panel-host-proof-report.md`). A reply is held after its first streamed delta while a real `read` result, inspection and 140→80→52→140 resizes are exercised. The bound session and generation are read back over the generation's own bridge, one composer submission is counted end to end, and a tool outside the loadout and a session replacement stay refused. Re-run both after any Pi SDK pin bump.
 

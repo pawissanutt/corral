@@ -3,6 +3,7 @@ import type { HostIdentity } from "../roles/types.ts";
 import { target } from "./chrome.ts";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { VStack, ScrollView, Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, COMPARISONS, comparisonLabel, fileStatus } from "./review-store.ts";
 import { activityRows } from "./activity-view.ts";
@@ -23,6 +24,7 @@ export class NativeWorkbench {
   readonly images: NativeImageViewer;
   private ui: ExtensionUIContext | undefined;
   private changesScroll: ScrollView | undefined; private activityScroll: ScrollView | undefined;
+  private transcript: ScrollView | undefined; private transcriptWidth = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
   private jobIndex = 0; private jobHits = new Map<number, number>(); private hunk = 0; private hunkRows: number[] = [];
@@ -58,21 +60,43 @@ export class NativeWorkbench {
     this.setView("changes"); await this.review.select(path); this.acceptPatch();
   }
   private nav(): Component {
+    let hits: { readonly to: number; readonly view: MainView }[] = [];
     return {
-      render: width => [PANEL_BG + pad(
-        (this.view === "conversation" ? PANEL_BLUE : PANEL_MUTED) + " Conversation F9 " +
-        (this.view === "changes" ? PANEL_BLUE : PANEL_MUTED) + " Changes F7 " +
-        (this.view === "activity" ? PANEL_BLUE : PANEL_MUTED) + " Activity F8 " + PANEL_MUTED +
-        (this.focused ? "· Esc chat · Enter compose" : ""), width) + RESET,
-        PANEL_BG + PANEL_MUTED + pad(`${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET],
+      render: width => {
+        this.anchorTranscript(width);
+        const compact = width < 70;
+        const labels: readonly [MainView, string][] = [["conversation", compact ? " Chat F9 " : " Conversation F9 "],
+          ["changes", " Changes F7 "], ["activity", " Activity F8 "]];
+        let x = 0;
+        hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
+        return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
+          (this.focused ? compact ? "· Esc chat · Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
+        PANEL_BG + PANEL_MUTED + pad(`${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
+      },
       handleMouse: event => {
         if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
-        this.setView(event.x < 17 ? "conversation" : event.x < 29 ? "changes" : "activity");
+        this.setView(hits.find(hit => event.x < hit.to)?.view ?? "activity");
         return { handled: true };
       }, invalidate() {},
     };
   }
+  /**
+   * Runs in the main-view bar's render, before Pi lays out the transcript at a new width. A reader
+   * who paused follow keeps the same passage; following readers stay live through Pi itself.
+   */
+  private anchorTranscript(width: number): void {
+    const transcript = this.transcript;
+    if (!transcript || this.view !== "conversation" || this.images.isOpen) return;
+    const previous = this.transcriptWidth;
+    this.transcriptWidth = width;
+    if (!previous || previous === width || transcript.isFollowingEnd || transcript.scrollTop === 0) return;
+    const before = transcript.render(previous), after = transcript.render(width);
+    const top = anchoredRow(before, transcript.scrollTop, after);
+    transcript.updateLayout(after.length, transcript.viewportHeight, () => {});
+    transcript.scrollTo(top, { disableFollow: true });
+  }
   mount(transcript: Component): Component {
+    if (transcript instanceof ScrollView) this.transcript = transcript;
     this.changesScroll = new ScrollView({ render: width => this.renderChanges(width), handleMouse: event => this.diffMouse(event), invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
       if (this.options.canInteract() && plainClick(event)) { this.focused = true; const job = this.jobHits.get(event.y); if (job !== undefined) this.jobIndex = job; this.options.changed(); return { handled: true }; } return undefined;

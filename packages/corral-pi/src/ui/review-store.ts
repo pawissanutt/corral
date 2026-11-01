@@ -1,5 +1,5 @@
 import { resolve, basename } from "node:path";
-import { panelGit, repositoryRoot, parseStatus, parseNumstat, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
+import { gitFailure, panelGit, repositoryRoot, parseStatus, parseNumstat, comparisonArgs, relevantFile, readPanelDiff, FILE_LIMIT, type Comparison } from "./panels-git.ts";
 import type { PanelFile } from "./panels-view.ts";
 export const COMPARISONS: readonly Comparison[] = ["all", "unstaged", "staged"];
 export function comparisonLabel(value: Comparison): string {
@@ -69,7 +69,7 @@ export class ReviewStore {
       if (this.selected === undefined) this.selected = this.visible[0]?.path;
       await this.loadSelected();
     } catch (error) {
-      if (!this.disposed && epoch === this.epoch) this.error = error instanceof Error ? error.message : String(error);
+      if (!this.disposed && epoch === this.epoch) this.error = gitFailure(error);
     } finally { this.refreshing = false; if (!this.disposed) this.changed(); }
   }
   async select(path: string): Promise<void> { this.selected = path; this.changed(); await this.loadSelected(); }
@@ -83,7 +83,7 @@ export class ReviewStore {
         this.patchSnapshot = { root, path: file.path, comparison, head, at: this.patchAt, text: patch }; this.changed();
       }
     } catch (error) {
-      if (!this.disposed && epoch === this.patchEpoch) { this.patchSnapshot = undefined; this.patchPath = file.path; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = "Diff unavailable: " + (error instanceof Error ? error.message : String(error)); this.changed(); }
+      if (!this.disposed && epoch === this.patchEpoch) { this.patchSnapshot = undefined; this.patchPath = file.path; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = "Diff unavailable: " + gitFailure(error); this.changed(); }
     }
   }
   get limitNotice(): string { return this.files.length === FILE_LIMIT ? `First ${FILE_LIMIT} paths; narrow repository scope to inspect more.` : ""; }
