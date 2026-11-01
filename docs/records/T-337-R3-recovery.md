@@ -65,4 +65,8 @@ The ensuing unchanged-candidate attempt `ag-6bc9fbbbba99b66e` reaches4278 passes
 
 Owner-requested full suites: **rev_ops21/21 PASS**, terminal42.52s (`.evidence/R3-recorded-removal-rev-cleanup-green.log`); **cleanup_ops57/57 PASS**, terminal519.89s (`.evidence/R3-recorded-removal-cleanup-complete.log`), inside private plugin-free test-herdr environments. The combined first command hit its300s tool bound after rev_ops finished and only part of cleanup_ops ran; it is not counted as a complete cleanup result. No test process remained; cleanup_ops alone was rerun to the terminal result above. No timeout/assertion was changed in source.
 
+## Lesson-preparation fixture clock
+
+Attempt `ag-ac1391b81d79fd1d` reaches2654 passes/one failure (2407/5062 unrun): lesson incremental preparation decoded bytes76768/76766. Q7 authorizes only `lesson_rows_preparation_tests.rs`. Controlled status_since-only nine/eight fractional digits reproduce **exactly76768/76766** (`.evidence/R3-lesson-status-width-negative.log`). The negative input is removed. The fixture now pins its Store clock before creation and asserts status_since is that instant, keeping all history sizes, counter/oracle/recomputation assertions and the same_cells helper untouched. Both preparation tests PASS (`.evidence/R3-lesson-preparation-clock-green.log`). No production change.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.

@@ -33,12 +33,15 @@ fn append(ctx: &Ctx, task: Option<&str>, kind: &str, detail: serde_json::Value) 
 
 fn history_fixture(scale: usize) -> (tempfile::TempDir, Ctx, Task) {
     let (dir, ctx) = fixture();
+    // Creation stamps status_since too; later created/updated resets do not replace it.
+    ctx.store.fixture_pin_now(ts(0)).unwrap();
     let mut task = ctx
         .store
         .create("Current", Some("app"), Status::Running, "")
         .unwrap();
     task.created = ts(0);
     task.updated = ts(100);
+    assert_eq!(task.status_since, Some(ts(0)));
     task.runs
         .extend((0..32 * scale).map(|i| zero_usage_run(i + 1000)));
     task.runs.extend((0..31).map(|i| zero_usage_run(i + 3000)));
