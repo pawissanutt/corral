@@ -56,7 +56,7 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     const type = (text: string) => { for (const char of text) physical.send(char); };
 
     const physical = new RecordingTerminal(), terminal = panels.wrap(physical);
-    mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", verbose: false, mainView: transcript => panels.mainView(transcript) });
+    mode = new sdk.InteractiveMode(host.runtime, { terminal, tuiMode: "fullscreen", readOnlyQueue: true, verbose: false, mainView: transcript => panels.mainView(transcript) });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
     await physical.until("Bound to Corral");

@@ -134,6 +134,23 @@ try:
     first = bridge('get_state', 'ready')['result']
     states.append(dict(label='ready', generation=first['generation'], session=first['session'], turn=first['turn']))
     assert first['turn'] == {'current': 0, 'open': False} and first['session']['bound_id'], first
+    # T-690: real SGR pointer controls use the native picker/cycle and keep the editor's draft.
+    mark = len(log); send(b'Pointer draft')
+    until(lambda: text('Pointer draft', mark), 'pointer-control draft')
+    save_frame('controls-draft', mark)
+    mark = len(log); send(b'\x1b[<0;5;46M\x1b[<0;5;46m')
+    until(lambda: text('Only showing models from configured providers', mark), 'native model picker by pointer')
+    save_frame('model-picker-pointer', mark)
+    mark = len(log); send(b'\x1b')
+    until(lambda: text('Pointer draft', mark), 'native model picker cancellation preserves draft')
+    mark = len(log); send(b'\x1b[<0;23;46M\x1b[<0;23;46m')
+    save_frame('effort-cycle-pointer', mark)
+    mark = len(log); resize(80, 34)
+    until(lambda: text('Pointer draft', mark), 'effort cycle and narrow relocation retain draft')
+    save_frame('controls-narrow', mark)
+    mark = len(log); resize(140, 46)
+    until(lambda: text('Pointer draft', mark), 'control draft returns wide')
+    send(b'\x15')
     stale = bridge('get_state', 'stale', generation=2)
     assert not stale['ok'] and stale['error']['code'] == 'stale_generation', stale
     send(b'/fixture-panel-stream\r')
@@ -146,6 +163,9 @@ try:
     save_frame('stream-partial-wide', mark)
     assert not text('STREAM_PART_TWO') and len(kinds('turn_started')) == 1 and kinds('turn_ended') == []
     binding('streaming', True, {'current': 1, 'open': True})
+    session_files = sorted((work / 'sessions').rglob('*.jsonl'))
+    entries = [json.loads(line) for line in session_files[0].read_text().splitlines()]
+    assert len([entry for entry in entries if entry.get('type') == 'thinking_level_change']) >= 2, entries
     mark = len(log); send(b'\x0f')  # Stock app.tools.expand through the panel terminal.
     until(lambda: text('TOOL_OUTPUT_SENTINEL', mark), 'expanded real tool output')
     save_frame('tool-output', mark)
@@ -196,7 +216,8 @@ try:
     (args.output / 'pty-session.ansi').write_bytes(log)
     (args.output / 'bridge-states.json').write_text(json.dumps(states, indent=2))
     result = dict(status='PASS', production_entrypoint='src/host/main.ts', provider='offline fixture transport and fake control plane',
-                  checks=['read tool call and held first delta render in the 140-column panel layout', 'stock Ctrl+O expands real tool output',
+                  checks=['SGR pointer opens native model picker; Escape retains draft', 'SGR pointer cycles supported effort in the same session',
+                          'read tool call and held first delta render in the 140-column panel layout', 'stock Ctrl+O expands real tool output',
                           'bridge get_state: same generation and bound/current session while streaming, inspecting and at 80/52/140 columns',
                           'stale generation refused by the bridge', 'Agents inspector and detail overlay during the held stream',
                           'unsent draft retained through inspection and resize', 'one composer submission: one owner_terminal turn and one user entry',
