@@ -1,6 +1,6 @@
 // Host-to-corral calls: one fresh `corral agent call --op <op>` process per request, with
 // envelope v1 on stdin and one JSON receipt on stdout. Secrets travel only on stdin.
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 
 import type { CorralOp, HostIdentity } from "../roles/types.ts";
@@ -149,13 +149,22 @@ export class CorralClient {
     return text;
   }
 
+  /** Narrow lifecycle seams let tests drive exit/deadline ordering without sleeps. */
+  protected spawnCall(op: CorralOp): ChildProcessWithoutNullStreams {
+    return spawn(this.options.corral, ["agent", "call", "--op", op], {
+      cwd: this.options.root, stdio: ["pipe", "pipe", "pipe"],
+    });
+  }
+
+  protected deadline(expire: () => void, ms: number): () => void {
+    const timer = setTimeout(expire, ms);
+    return () => clearTimeout(timer);
+  }
+
   call(op: CorralOp, call: CorralCall): Promise<CorralReceipt> {
     const input = this.envelope(op, call);
     return new Promise((resolve, reject) => {
-      const child = spawn(this.options.corral, ["agent", "call", "--op", op], {
-        cwd: this.options.root,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const child = this.spawnCall(op);
       const out: Buffer[] = [];
       const err: Buffer[] = [];
       let size = 0;
@@ -164,21 +173,26 @@ export class CorralClient {
       const finish = (error: Error | undefined, receipt?: CorralReceipt) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        cancelDeadline();
         if (error) reject(error);
         else if (receipt) resolve(receipt);
       };
-      const timer = setTimeout(() => {
-        failure = "call_timeout";
+      const destroyPipes = () => { child.stdout.destroy(); child.stderr.destroy(); };
+      const stop = (reason: "call_timeout" | "call_output") => {
+        failure ??= reason;
         child.kill("SIGKILL");
-      }, call.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS);
+        // Exit may have happened before this bound was reached. No second exit event
+        // will arrive in that ordering, so release descendant-held pipes here as well.
+        if (child.exitCode !== null || child.signalCode !== null) destroyPipes();
+      };
+      const cancelDeadline = this.deadline(() => stop("call_timeout"),
+        call.timeoutMs ?? this.options.timeoutMs ?? CALL_TIMEOUT_MS);
       const collect = (into: Buffer[]) => (chunk: Buffer) => {
         const remaining = Math.max(0, RESPONSE_MAX_BYTES - size);
         size += chunk.length;
         if (remaining > 0) into.push(chunk.subarray(0, remaining));
         if (size > RESPONSE_MAX_BYTES) {
-          failure ??= "call_output";
-          child.kill("SIGKILL");
+          stop("call_output");
         }
       };
       child.stdout.on("data", collect(out));
@@ -193,7 +207,7 @@ export class CorralClient {
       child.on("exit", () => {
         // A descendant can retain the executor's pipe descriptors. Once a bounded call
         // was killed, do not let those descriptors turn its deadline into an infinite wait.
-        if (failure) { child.stdout.destroy(); child.stderr.destroy(); }
+        if (failure) destroyPipes();
       });
       // EPIPE may race a process exit; the close event retains the actual status and diagnostics.
       child.stdin.on("error", () => {});
