@@ -108,6 +108,8 @@ export class TodoLedger {
     else if (z.object({ state: z.literal("committed") }).safeParse(details).success) await this.restore().catch(() => false);
     else if (z.object({ state: z.enum(["uncertain", "reserved", "queued"]) }).safeParse(details).success
       || z.object({ error: z.object({ effect: z.literal("unknown") }) }).safeParse(details).success) {
+      // A read started before this outcome cannot establish post-mutation freshness.
+      this.version++;
       this.stale = true;
       for (const listener of this.listeners) listener("Todo outcome unconfirmed; refresh canonical ledger");
     }
