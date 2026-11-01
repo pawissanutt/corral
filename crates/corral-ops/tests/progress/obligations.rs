@@ -127,6 +127,66 @@ fn a_new_native_decision_requires_a_fresh_handoff_without_rewriting_history() {
 
 #[test]
 #[cfg(unix)]
+fn done_with_large_history_and_evidence_scratch() {
+    let f = worker();
+    std::fs::write(f.repo.join(".gitignore"), ".evidence/\n").unwrap();
+    super::fixture::git(&f.repo, &["add", ".gitignore"]);
+    super::fixture::git(&f.repo, &["commit", "-qm", "ignore scratch"]);
+    let scratch = f.repo.join(".evidence");
+    std::fs::create_dir(&scratch).unwrap();
+    for n in 0..1637 {
+        use std::io::Write;
+        let mut file = std::fs::File::create(scratch.join(format!("{n}.bin"))).unwrap();
+        file.write_all(format!("{n:08}").as_bytes()).unwrap();
+        file.set_len(76_000).unwrap();
+    }
+    f.seed_checkpoint();
+    f.ctx
+        .store
+        .update(&f.id, |task| {
+            let artifact = task.artifacts[0].clone();
+            for n in 0..439 {
+                let mut a = artifact.clone();
+                a.path = format!("artifacts/synthetic-{n}");
+                a.sha256 = format!("{n:064x}");
+                task.artifacts.push(a);
+            }
+            let mut older = task.current_run().unwrap().clone();
+            older.checkpoints.clear();
+            older.progress = None;
+            older.id = "older-1".into();
+            task.runs.insert(0, older.clone());
+            older.id = "older-2".into();
+            task.runs.insert(0, older);
+            let run = task.current_run_mut().unwrap();
+            let latest = run.checkpoints[0].clone();
+            for n in 0..50 {
+                let mut c = latest.clone();
+                c.artifact = format!("synthetic-{n}");
+                c.checkpoint.input.next_action = "x".repeat(150_000);
+                run.checkpoints.insert(0, c);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let start = std::time::Instant::now();
+    done(&f.ctx, &f.id, "Implemented").unwrap();
+    let elapsed = start.elapsed();
+    eprintln!("large-history done: {elapsed:?}");
+    assert!(elapsed < std::time::Duration::from_secs(60));
+    assert_eq!(f.task().status, Status::Review);
+    assert_eq!(
+        f.task()
+            .artifacts
+            .iter()
+            .filter(|a| a.title.ends_with(".bin"))
+            .count(),
+        1637
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn resending_a_checkpoint_request_does_not_answer_an_owner_decision() {
     let f = worker();
     decision(&f);

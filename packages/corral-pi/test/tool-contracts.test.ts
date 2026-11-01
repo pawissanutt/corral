@@ -114,6 +114,16 @@ test("malformed raw calls name field and accepted shape, cause no subprocess and
   expect(missing.structuredContent).toMatchObject({ error: { fields: [{ keyword: "required", accepted: { requiredProperties: ["query"] } }] } });
 });
 
+test("a timed-out done explains receipt reconciliation before retry", async () => {
+  const { client, tool, run } = fixture(doneTool);
+  client.error = new CorralCallError("call_timeout", "deadline", { effect: "unknown", signal: "SIGKILL", timed_out: true });
+  const result = await run({ summary: "Implemented\nVerified: test\nNot verified: none" });
+  expect(Check(tool.outputSchema!, result.structuredContent)).toBeTrue();
+  expect(result.structuredContent).toMatchObject({ error: { category: "uncertain_effect",
+    lookup: { tool: "corral_receipt_lookup", arguments: { request_id: toolRequestId("s", "c") } } } });
+  expect(JSON.stringify(result.structuredContent)).toContain("If committed, completion succeeded; if no receipt exists, retry done");
+});
+
 test("transport errors distinguish no spawn from uncertain mutation and expose receipt reconciliation", async () => {
   const { client, tool, run } = fixture(spec("comment"));
   client.error = new CorralCallError("call_timeout", "deadline", { effect: "unknown", exit_code: null, signal: "SIGKILL", timed_out: true });
