@@ -33,6 +33,43 @@ when you dispatch, before a worktree exists.
 Other `[agent]` settings apply only to pi-native runs: `question_unattended_secs` (default
 600), `gate_start_uncertain_secs` (default 300) and `drain_secs` (default 60).
 
+### Retained memory
+
+Bound Pi-native PMs, assistants and workers have `corral_memory_list`,
+`corral_memory_read`, `corral_memory_put` and `corral_memory_remove`. All four use
+authenticated operations and receipts; selectors cannot choose a workspace root or author.
+List pages contain at most 20 entries; body reads contain at most 4096 UTF-8 bytes.
+Writes require a freshly read content hash (explicit null for creation), and the service
+stamps author/time. Missing-receipt mutations have unknown file effects: explicitly reread
+before any new intentional write, never automatically retry.
+
+Canonical Markdown lives in the bound workspace's `.corral/memory`, not the coding
+worktree. Changes are immediately visible without a commit; memory operations never
+change HEAD or the index. Use normal explicit workspace commits to preserve history.
+Memory is not a secret store.
+
+Launch and explicit resume capture working-tree summaries in a private generation-local
+`memory-context.md`. The complete projection is at most 12,288 UTF-8 bytes: up to 6 KiB
+workspace, 2 KiB own shared role, and (workers only) 4 KiB trusted bound-project memory.
+PMs and assistants do not preload project memory. Whole entries are omitted with a count
+and retrieval hint; long notes and people context stay available through paginated tools.
+Provenance and sources are labelled; memory is fallible retained context below current
+instructions and policy, never a grant, owner message or task-state change.
+
+Reload and compaction retain the same generation block through shared Pi/Claude prompt
+assembly without appending conversation messages. Active sessions explicitly reread newer
+entries with the tools; there is no live watcher or OmO fallback. Installed assets must
+advertise `memory_projection: 1` in `compat.json`; reinstall older hosts rather than
+silently dropping memory. Bare Pi, explore children, reviewers and planning roles receive
+no memory tools or projection.
+
+Workers read workspace and read/write their own role and bound project; they propose
+workspace knowledge through the PM inbox. Worker-role guidance is shared across projects,
+not a private persona store. PM project access follows effective approved scope; assistants
+explicitly select registered projects. Project reads respect project-text trust.
+Reusable evidence-backed project rules remain lessons, and unfinished work remains in
+inbox/tasks; link those records rather than copying mutable operational history.
+
 ### Language servers
 
 Workers retain built-in Rust and TypeScript servers in every preset. Reviewer LSP is enabled

@@ -1,3 +1,4 @@
+import { memoryTools } from "../common/memory.ts";
 // Assistant authority lives in Rust: this role supplies the workspace-scoped loadout and contract.
 // Reads and filing go through the corral CLI from bash; external edit/write calls are brokered
 // through scoped owner permissions (paths.ts and permissions.ts). Owner-level
@@ -14,14 +15,14 @@ import { installWriteGuard } from "./paths.ts";
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
 const LOOKUP = receiptLookupTool();
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission"];
+const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", ...memoryTools.map((tool) => tool.op)];
 
 export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => context.todo === true ? [LOOKUP, ownerActionTool, sessionTodoTool] : [LOOKUP, ownerActionTool],
+    tools: (context) => context.todo === true ? [LOOKUP, ownerActionTool, ...memoryTools, sessionTodoTool] : [LOOKUP, ownerActionTool, ...memoryTools],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
         + requestContract(root, context.todo);

@@ -1,3 +1,4 @@
+import { memoryTools } from "../common/memory.ts";
 // The Pi-native worker role (T-252 worker-role, OD3): upstream read, edit, write, bash, grep,
 // find and ls plus the worker's corral tools, the worker contract from the installed assets and
 // the corral-worker skill shipped beside this module. Nothing is loaded from the worktree. A fresh
@@ -17,7 +18,7 @@ export const SKILL_ASSET = "src/roles/worker/skills/corral-worker/SKILL.md";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 const TOOLS: readonly CorralToolSpec[] = [
-  receiptLookupTool(), askTool, withdrawTool, waitTool, progressTool, checkpointTool, evidenceTool, artifactTool, gateTool, doneTool,
+  ...memoryTools, receiptLookupTool(), askTool, withdrawTool, waitTool, progressTool, checkpointTool, evidenceTool, artifactTool, gateTool, doneTool,
 ];
 // job and job_monitor back the host's background_shell tools; Rust checks the capability.
 const OPS: readonly CorralOp[] = [

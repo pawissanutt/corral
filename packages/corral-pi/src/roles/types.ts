@@ -28,6 +28,7 @@ export type CorralOp =
   | "question_answer" | "question_escalate" | "question_cancel" | "reply" | "comment"
   | "capture" | "read_brief" | "read_next" | "read_show" | "read_list" | "read_search"
   | "read_route" | "read_artifacts" | "read_lessons" | "inbox_read" | "inbox_resolve"
+  | "memory_list" | "memory_read" | "memory_put" | "memory_remove"
   | "job" | "job_monitor"
   | "plan_write" | "plan_submit" | "plan_verdict" | "owner_action" | "write_permission";
 
@@ -36,7 +37,7 @@ export const CORRAL_OPS: readonly CorralOp[] = [
   "evidence", "artifact", "gate", "done", "verdict", "question_answer", "question_escalate",
   "question_cancel", "reply", "comment", "capture", "read_brief", "read_next", "read_show",
   "read_list", "read_search", "read_route", "read_artifacts", "read_lessons", "inbox_read", "inbox_resolve",
-  "todo", "job", "job_monitor",
+  "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove",
   "plan_write", "plan_submit", "plan_verdict", "owner_action", "write_permission",
 ];
 

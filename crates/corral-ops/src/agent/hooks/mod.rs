@@ -7,6 +7,7 @@ pub mod cleanup;
 pub mod delivery;
 pub mod doctor;
 pub mod launch;
+pub mod memory;
 pub mod pm;
 pub mod preflight;
 pub mod review;

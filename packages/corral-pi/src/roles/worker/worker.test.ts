@@ -23,6 +23,7 @@ import worker, { CONTRACT_ASSET, SKILL_ASSET, kickoff, workerRole } from "./inde
 const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-007", run: "R2", generation: 1 };
 const UPSTREAM = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 const CORRAL_TOOLS = [
+  "corral_memory_list", "corral_memory_read", "corral_memory_put", "corral_memory_remove",
   "corral_receipt_lookup", "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
   "corral_artifact", "corral_gate", "corral_done",
 ];
@@ -85,7 +86,7 @@ test("the package's worker role is the OD3 loadout and allows only the worker's 
   expect(tools.map((tool) => tool.name)).toEqual(CORRAL_TOOLS);
   expect([...worker.corralOps].sort()).toEqual(
     ["hello", "event", "receipt_lookup", "ask", "withdraw", "wait", "progress", "checkpoint", "evidence", "artifact",
-      "gate", "done", "todo", "job", "job_monitor"].sort(),
+      "gate", "done", "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove"].sort(),
   );
   expect(tools.every((tool) => worker.corralOps.includes(tool.op))).toBeTrue();
 });

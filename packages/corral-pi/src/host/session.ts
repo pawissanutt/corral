@@ -73,6 +73,7 @@ import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { executionRefusal, nestedCorralRead } from "../roles/common/execution.ts";
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { ConfirmUi } from "../tools/define.ts";
+import { memoryContext } from "./memory.ts";
 
 export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
@@ -86,6 +87,7 @@ export interface HostSessionOptions {
   readonly aws?: AwsRoute;
   readonly effort?: string;
   readonly promptFile?: string;
+  readonly memoryFile?: string;
   readonly todo?: boolean;
   /** The generation's recorded snapshot; when present it decides todo. */
   readonly capabilities?: HostCapabilities;
@@ -576,7 +578,8 @@ export class HostSession {
     }
     const thinkingLevel = options.effort && THINKING.has(options.effort)
       ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
-    const contract = options.modules.role.contract(host.roleContext);
+    const contract = [options.modules.role.contract(host.roleContext),
+      memoryContext(options.identity.role, options.memoryFile, options.runtimeDir)].filter(Boolean).join("\n\n");
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const settingsManager = sdk.SettingsManager.inMemory(host.settings);
       const guidance = selectGuidance({

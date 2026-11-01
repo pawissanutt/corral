@@ -53,7 +53,8 @@ const cases = [
     project: "demo", title: "Follow-up", body: "Investigate the adapter.", status: "backlog",
   } },
 ] as const;
-const names = cases.map(({ name }) => `corral_${name}`);
+const memoryOps = ["memory_list", "memory_read", "memory_put", "memory_remove"];
+const names = [...cases.map(({ name }) => `corral_${name}`), ...memoryOps.map((op) => `corral_${op}`)];
 const originalFetch = globalThis.fetch;
 let assets: FixtureInstall;
 let work: string;
@@ -212,7 +213,7 @@ test("the PM exposes only its scoped operations and requires the installed conte
   // Then neither lifecycle-only operations nor owner authority become model tools.
   expect(pm.upstreamTools).toEqual(["read", "edit", "write", "grep", "find", "ls", "bash"]);
   expect(tools.map((item) => item.name)).toEqual(names);
-  expect([...pm.corralOps].sort()).toEqual(["hello", "event", ...cases.map(({ op }) => op), "todo"].sort());
+  expect([...pm.corralOps].sort()).toEqual(["hello", "event", ...cases.map(({ op }) => op), ...memoryOps, "todo"].sort());
   const empty = mkdtempSync(join(tmpdir(), "corral-pi-pm-noassets-"));
   try {
     expect(() => pmRole(empty).contract(context)).toThrow(`role_asset_missing: ${CONTEXT_ASSET}`);

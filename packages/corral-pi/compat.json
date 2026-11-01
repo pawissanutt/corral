@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "memory_projection": 1,
   "verdict": "GO",
   "source": {
     "file": "tools/pi-probe/bun-go.json",
