@@ -647,7 +647,9 @@ pub fn verdict_bound(
     notes: &str,
     expected_attempt: Option<&str>,
 ) -> Result<ReviewRecord> {
-    let now = Timestamp::now;
+    // Changes-round boundaries use the process clock too; a wall-clock step must not
+    // make a later approval sort before the round it resolves.
+    let now = corral_core::clock::now;
     verdict_with_clock(ctx, id, verdict, notes, expected_attempt, None, now).map(|(r, _)| r)
 }
 
@@ -663,7 +665,7 @@ pub fn verdict_request(
 ) -> Result<crate::agent::effects::Receipted> {
     let home = crate::agent::effects::Home::of(report.origin);
     crate::agent::effects::swept(ctx, report.origin, home, || {
-        let now = Timestamp::now;
+        let now = corral_core::clock::now;
         verdict_with_clock(ctx, id, verdict, notes, expected_attempt, Some(report), now)
             .map(|(_, receipt)| receipt)
     })

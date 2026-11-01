@@ -393,8 +393,22 @@ fn owner_gc_keeps_a_scratch_its_own_calling_shell_still_uses() {
         ],
     );
     let path = fx.root.join(".worktrees/A-1-resident");
+    // GC compares both the end time and HEAD's commit time with its clock. Set both
+    // explicitly in the past: an immediately preceding wall-clock step backwards would
+    // otherwise make even a zero-day idle interval negative, before the cwd guard runs.
+    let old = "2000-01-01T00:00:00Z";
+    std::fs::write(path.join("resident.txt"), "resident\n").unwrap();
+    git(&path, &["add", "resident.txt"], None);
+    git(&path, &["commit", "-q", "-m", "old resident"], Some(old));
     fx.ok(None, &["config", "set", "assistant.scratch_idle_days", "0"]);
     fx.ok(None, &["assistant", "end", "A-1"]);
+    corral_core::Store::open(&fx.root)
+        .unwrap()
+        .update_assistant("A-1", |session| {
+            session.ended = Some(old.parse().unwrap());
+            Ok(())
+        })
+        .unwrap();
     // When that shell runs owner GC from a subshell that has left the scratch, so only an
     // ancestor of the GC process remains there.
     let script = r#"(cd "$WS" && exec "$CORRAL" --root "$WS" assistant scratch gc --yes --json)"#;
