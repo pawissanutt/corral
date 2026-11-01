@@ -68,7 +68,10 @@ test("short narrow inspector pages every item; keyboard and pointer move it iden
     }
     expect(seen.size).toBe(start.total);
     expect([...seen].join("\n")).toContain("界面");
-    expect(native.inlineMouse(click(start.from, 0))).toEqual({ handled: true });
+    // The pager grows when its current position crosses a digit boundary.
+    const end = pagerOf(native.renderInline(columns, rows)[0] ?? "");
+    if (!end) throw new Error("pager missing at end");
+    expect(native.inlineMouse(click(end.from, 0))).toEqual({ handled: true });
     expect(pagerOf(native.renderInline(columns, rows)[0] ?? "")?.first).toBe(start.total - 1);
     native.dispose();
   }
@@ -78,8 +81,14 @@ test("relocation keeps the first visible inspector item, whether headings are sh
   const { native, physical } = panels(80, 9);
   native.handleInput(KEY.f6); native.handleInput("\x1b[C"); native.handleInput("\x1b[C");
   expect(native.tab).toBe("Agents");
-  native.handleInput(KEY.down);
-  const item = plain(native.renderInline(80, 9))[1]?.trim() ?? "";
+  // Find the bound generation row rather than assuming its ordinal among live metadata.
+  let item = "";
+  const total = pagerOf(native.renderInline(80, 9)[0] ?? "")?.total ?? 0;
+  for (let row = 0; row < total; row++) {
+    item = plain(native.renderInline(80, 9))[1]?.trim() ?? "";
+    if (item.includes("g3")) break;
+    native.handleInput(KEY.down);
+  }
   expect(item).toContain("g3");
   physical.resize(140, 9);
   const rail = plain(native.renderSidebar(34, 9)).map(line => line.replace(/^│\s?|\s?│$/g, "").trim());
