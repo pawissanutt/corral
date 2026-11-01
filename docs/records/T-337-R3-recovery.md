@@ -41,4 +41,10 @@ Observation-only timestamp tracing finds `Task.status_since` unpinned after repl
 
 The fixture now pins the thread clock as well as Store::now before OmoWorld construction, and checks the prepared status_since is the pinned instant. Every original counter/outcome assertion and 1x/10x history size remains. The focused fake-engine regression PASS (`.evidence/R3-owner-growth-clock-green.log`); actual timestamp evidence and the exact39-byte negative result are retained in `R3-owner-growth-input-stamps.log` and `R3-owner-growth-status-width-negative.log`. No runtime behavior, decoded-byte budget or external sync-repair scope changed. One earlier compilation command hit its120s tool bound before running tests; the subsequently completed commands above are the reported results.
 
+## Fifth R3 quick attempt: question-attention hot read
+
+Attempt `ag-55582a1d746c64dd` reaches3017 passes/one failure (2044/5062 unrun). The unchanged owner-attention growth regression detects one full hydration instead of zero. Read-only diagnosis finds incoming-main's postcommit `pending_keys(&store.get(task_id)?)` in `questions/triage.rs`. Q3 authorizes exactly that call-site conversion to the existing `pending_keys_ref(&store.head(task_id)?)?`. Event ordering, notice/notification behavior, postcommit read timing and every guard remain. No exemption or test changes.
+
+Focused `questions::heads_tests`: **2 PASS**. Complete `questions::` unit suite: **43 PASS**,0 failures (`.evidence/R3-question-head-port-green.log`). These include exact native/history costs, full order/closure oracle, single notice/notification publication and replay. The suite's missing-host-credential diagnostics belong to deliberately incomplete fixture hosts and are not claimed as live transport success. Only the contracted next gate can establish complete package acceptance.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
