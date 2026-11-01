@@ -72,6 +72,14 @@ Branded header: binding, role, generation and repository. Composer: model and ef
 ### Read-only main views
 F7 Changes and F8 Activity replace only the main reading area through the optional typed SDK mainView hook; F9 restores the same transcript instance. The real input dock remains SDK-owned. Changes retains scope, selection and captured hunk provenance, exposes meaningful comparison/search/refresh controls, and appends references without submission. Activity distinguishes local job/monitor observations from canonical settlement. Additions/removals retain +/− signs as well as semantic colors. Foreground prompts and active selection suppress background interception.
 
+### Candidate and evidence inspection
+
+Bound task/run sessions default Changes to the committed candidate, using exact immutable comparison-base and HEAD SHAs for paths, diffstat and hunks. `c` still selects the independent working/index comparisons; `o` is an explicitly unbound repository inspection, not a session rebind. Retained diffs keep their captured identities until refreshed/applied.
+
+F10 (Proof on compact navigation) and `/panels evidence` show the canonical read-only evidence workbench. Wide rows use a matrix; narrow rows stack the same implemented/tested/reviewed/accepted fields. `j/k` selects a criterion; pointer selection uses the same state; paging/wheel scrolls the reading area. Implemented is self-reported progress, test observations are worker assertions with canonical admission failures, and review applies candidate-wide. No per-criterion acceptance record exists, so acceptance stays not recorded. Legacy/no-manifest, missing, failed, not-run, stale, unavailable and superseded states are explicit.
+
+The adapter returns a versioned projection, not full task/history JSON. Refreshes coalesce and cache for five seconds, never run from render, and fail closed at input/output bounds. A tool outcome invalidates the cache but does not grant freshness; only a new canonical read reconciles it. Failed/overlapping reads cannot relabel retained proof as current. No annotation editing, receipt mutations or acceptance toggles are exposed.
+
 ### Images
 Click an inline terminal image to fit its existing bytes into the main reading area. Click again (including a quick second click), Esc or F9 restores Conversation. Draft and transcript instance remain intact. Image placement is bounded by the actual main viewport, not guessed composer height. This uses the optional packaged SDK image activation hook; no fetch, external viewer or model call. Native rendering still requires a supported graphics terminal. Do not layer expanded images in SDK overlays: captions over existing inline graphics are not reliably composited.
 

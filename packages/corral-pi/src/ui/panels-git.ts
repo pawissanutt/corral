@@ -5,7 +5,7 @@ import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import type { PanelFile } from "./panels-view.ts";
 const execute = promisify(execFile);
-export type Comparison = "all" | "unstaged" | "staged";
+export type Comparison = "candidate" | "all" | "unstaged" | "staged";
 export const FILE_LIMIT = 500;
 export async function panelGit(cwd: string, args: readonly string[], signal?: AbortSignal, different = false): Promise<string> {
   try {
@@ -43,6 +43,7 @@ export function parseStatus(output: string): PanelFile[] {
 }
 export function comparisonArgs(comparison: Comparison): string[] {
   switch (comparison) {
+    case "candidate": throw new Error("Candidate comparison requires captured base and HEAD");
     case "all": return ["HEAD"];
     case "unstaged": return [];
     case "staged": return ["--cached"];
@@ -50,6 +51,7 @@ export function comparisonArgs(comparison: Comparison): string[] {
 }
 export function relevantFile(file: PanelFile, comparison: Comparison): boolean {
   switch (comparison) {
+    case "candidate":
     case "all": return true;
     case "unstaged": return file.status === "??" || file.status[1] !== " ";
     case "staged": return file.status !== "??" && file.status[0] !== " ";
