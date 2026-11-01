@@ -59,7 +59,7 @@ struct Remove {
 enum Input {
     List(List),
     Read(Read),
-    Put(Put),
+    Put(Box<Put>),
     Remove(Remove),
 }
 impl Input {
@@ -84,7 +84,10 @@ pub(crate) fn call(ctx: &Ctx, envelope: &Envelope, op: AgentOp) -> Result<CallRe
             if envelope.payload.get("expected_hash").is_none() {
                 return Err(bad("expected_hash is required (null for explicit absence)"));
             }
-            Input::Put(super::payload(envelope, "selector, entry, expected_hash")?)
+            Input::Put(Box::new(super::payload(
+                envelope,
+                "selector, entry, expected_hash",
+            )?))
         }
         AgentOp::MemoryRemove => {
             Input::Remove(super::payload(envelope, "selector, expected_hash")?)
