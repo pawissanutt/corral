@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -174,6 +174,53 @@ test("diff syntax distinguishes additions/removals from headers and sanitizes co
   const rows = overviewLines(snapshot, { kind: "ready", files: Array.from({ length: 5 }, (_, i) => ({ status: " M", path: `${i}.ts` })) });
   expect(rows.find(row => row.text === "1 more in Files")).toEqual({ text: "1 more in Files", action: { kind: "files" } });
 });
+for (const [kind, payload] of Object.entries({
+  OSC: "\x1b]52;c;SU5KRUNURUQ=\x07", CSI: "\x1b[2J", C0: "\x01\x08\x09\x0d\x7f", C1: "\x85\x90\x9b\x9d\x9f", newline: "\n",
+})) test(`Files ${kind} metadata is safe in wide/narrow output and retains literal path actions`, async () => {
+  const parent = mkdtempSync(join(tmpdir(), "corral-files-metadata-"));
+  const root = join(parent, `repo${payload}x`), path = `e${payload}.ts`;
+  mkdirSync(root);
+  execFileSync("git", ["init", "-q", root]);
+  writeFileSync(join(root, path), "literal path content\n");
+  const native = new NativePanels({ identity, cwd: root, snapshot: () => snapshot });
+  const physical = new RecordingTerminal(), terminal = native.wrap(physical);
+  terminal.start(() => {}, () => {});
+  try {
+    native.tab = "Files";
+    await native.loadFiles();
+    const review = native.workbench.review;
+    expect(review.files.map(file => file.path)).toEqual([path]);
+    review.query = payload;
+    expect(review.visible.map(file => file.path)).toEqual([path]);
+    const rows = native.workbench.files();
+    const action = rows.find(row => row.action?.kind === "diff")?.action;
+    expect(action).toEqual({ kind: "diff", path });
+    // Strip only presentation SGR, not arbitrary sequences (which could hide an injection).
+    const safe = (lines: readonly string[]) => {
+      for (const line of lines) expect(line.replace(/\x1b\[[\d;]*m/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    };
+    safe(rows.map(row => row.text));
+    safe(native.renderSidebar(34, 20));
+    terminal.write("\x1b[?1049h");
+    expect(physical.writes.join("")).not.toContain(payload);
+    // Click the rendered rail file row through the public terminal input boundary.
+    const fileRow = rows.findIndex(row => row.action === action);
+    review.selected = undefined;
+    physical.send(`\x1b[<0;109;${fileRow + 4}M`);
+    expect(review.selected).toBe(path);
+    physical.send(`\x1b[<0;109;${fileRow + 4}m`);
+    // Narrow output uses the same actions and never passes controls to the SDK renderer.
+    physical.resize(80, 24); native.focused = true;
+    safe(native.renderInline(80, 24));
+    expect(action?.kind).toBe("diff");
+    if (action?.kind !== "diff") throw new Error("missing literal file action");
+    await native.workbench.openFile(action.path);
+    expect(review.selected).toBe(path);
+    expect(review.patchSnapshot?.path).toBe(path);
+    expect(review.patch).toContain("literal path content");
+  } finally { terminal.stop(); native.dispose(); rmSync(parent, { recursive: true, force: true }); }
+});
+
 test("Git porcelain parsing handles real NUL separators, rename source fields, spaces and Unicode", () => {
   expect(parseStatus(" M a file.ts\0R  新.ts\0old.ts\0?? --flag.ts\0")).toEqual([
     { status: " M", path: "a file.ts" }, { status: "R ", path: "新.ts", originalPath: "old.ts" }, { status: "??", path: "--flag.ts" },
