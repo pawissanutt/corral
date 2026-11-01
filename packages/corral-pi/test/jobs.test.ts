@@ -181,7 +181,21 @@ test("job_kill stops the whole process group and its exit carries the signal", a
   expect(fields(killed, ["state", "signal"])).toEqual({ state: "exited", signal: "SIGTERM" });
   expect(startTimeOf(pid as number)).toBeUndefined();
   expect(fx.sent.at(-1)?.payload).toEqual({ action: "exited", job: "j3-1", signal: "SIGTERM", group_clear: true });
-});
+}, 30_000); // Includes the runtime's 5s sweep, grace, startup and report handling.
+
+test("job_kill waits for a TERM-ignoring command and reports the forced exit", async () => {
+  const fx = fixture();
+  const ready = fx.fifo("slow-kill-ready");
+  const up = readFile(ready, "utf8");
+  const { job, pid } = await fx.runtime.start(`trap '' TERM; echo ready > ${ready}; exec sleep 300`, "slow-kill");
+  expect(await up).toBe("ready\n");
+  const killed = await fx.runtime.kill(job as string);
+  expect(fields(killed, ["state", "signal", "group_clear"])).toEqual({
+    state: "exited", signal: "SIGKILL", group_clear: true,
+  });
+  expect(startTimeOf(pid as number)).toBeUndefined();
+  expect(fx.sent.at(-1)?.payload).toEqual({ action: "exited", job: "j3-1", signal: "SIGKILL", group_clear: true });
+}, 30_000);
 
 test("losing the runtime output file falls back to the in-memory tail", async () => {
   // Given a finished job.
