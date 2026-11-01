@@ -99,6 +99,7 @@ async function main(): Promise<void> {
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
     ...(config.effort ? { effort: config.effort } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
+    ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),
     ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),

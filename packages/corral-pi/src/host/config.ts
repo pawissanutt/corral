@@ -61,6 +61,7 @@ export interface HostConfig {
   readonly aws?: AwsBinding;
   readonly effort?: string;
   readonly promptFile?: string;
+  readonly memoryFile?: string;
   readonly ui?: UiMode;
 }
 
@@ -267,6 +268,7 @@ export function parseLaunchMessage(text: string): HostConfig {
     ...(provider ? { provider } : {}),
     ...(aws ? { aws } : {}),
     effort: optional(message, "effort", TOKEN),
+    ...(message.memory_file != null ? { memoryFile: path(message, "memory_file") } : {}),
     promptFile: message.prompt_file === undefined || message.prompt_file === null ? undefined : path(message, "prompt_file"),
     ...(ui ? { ui } : {}),
   };
