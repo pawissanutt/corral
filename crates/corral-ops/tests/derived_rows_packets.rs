@@ -63,6 +63,9 @@ fn fixture() -> (tempfile::TempDir, Ctx, String, Run) {
     let base = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["checkout", "-q", "candidate"]);
     let mut store = Store::init(dir.path()).unwrap();
+    store
+        .fixture_pin_now("2026-10-01T00:00:00Z".parse().unwrap())
+        .unwrap();
     store.config.projects.insert(
         "app".into(),
         Project {

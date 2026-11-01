@@ -299,6 +299,9 @@ fn history_budget(automation: bool) {
     for multiplier in [1, 10] {
         // Given identical current inputs with ten times the terminal tasks and history.
         let (_root, mut ctx) = fixture();
+        ctx.store
+            .fixture_pin_now("2026-10-18T00:00:00Z".parse().unwrap())
+            .unwrap();
         ctx.resource_probe = std::sync::Arc::new(PinnedReadings);
         let active = ctx
             .store

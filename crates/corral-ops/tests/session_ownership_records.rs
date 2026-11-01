@@ -314,6 +314,7 @@ fn singleton_ownership_uses_bounded_nested_container_facts() {
         // Given one consumed task whose current plan has different amounts of nested history.
         let temp = tempfile::tempdir().unwrap();
         let ctx = context(temp.path());
+        ctx.store.fixture_pin_now(store_support::at(0)).unwrap();
         let socket = ctx.herdr.socket_path().unwrap();
         let mut task = fixture(&ctx, "plan-review", Some(&socket), copies);
         task.created = store_support::at(0);

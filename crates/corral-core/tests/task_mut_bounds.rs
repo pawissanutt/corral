@@ -38,10 +38,12 @@ fn measure<T>(f: impl FnOnce() -> T) -> (T, WorkSnapshot) {
 /// A current run whose first review child and first plan review carry `nested` of every
 /// nested collection.
 fn nested_task(store: &Store, nested: usize) -> Task {
+    store.fixture_pin_now(at(0)).unwrap();
     let mut task = store
         .create("Bounds", Some("app"), Status::Running, "Spec\n")
         .unwrap();
     (task.created, task.updated) = (at(0), at(0));
+    assert_eq!(task.status_since, Some(at(0)));
     let mut run = run_value("T-001", "R0001", 10, 1, false);
     run["review_runs"] = json!([
         review_child("T-001", "R0001", 1, nested, true, "approve"),
