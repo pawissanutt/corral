@@ -117,7 +117,11 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "receipt_lookup",
                 "todo",
                 "owner_action",
-                "write_permission"
+                "write_permission",
+                "memory_list",
+                "memory_read",
+                "memory_put",
+                "memory_remove"
             ]),
             BindTarget::Pm { .. } => json!([
                 "hello",
@@ -139,7 +143,11 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "read_artifacts",
                 "read_lessons",
                 "inbox_read",
-                "inbox_resolve"
+                "inbox_resolve",
+                "memory_list",
+                "memory_read",
+                "memory_put",
+                "memory_remove"
             ]),
             BindTarget::Worker { .. } => json!([
                 "hello",
@@ -156,7 +164,11 @@ fn worker_reviewer_and_pm_requests_commit_their_receipt_with_the_mutation() {
                 "gate",
                 "done",
                 "job",
-                "job_monitor"
+                "job_monitor",
+                "memory_list",
+                "memory_read",
+                "memory_put",
+                "memory_remove"
             ]),
             BindTarget::Reviewer { .. } => {
                 json!([

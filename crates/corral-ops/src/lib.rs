@@ -52,6 +52,7 @@ mod launch_exit;
 mod lesson_distill;
 mod lesson_signals;
 mod lessons;
+pub mod memory;
 mod movement;
 #[cfg(not(target_os = "linux"))]
 mod native_process;

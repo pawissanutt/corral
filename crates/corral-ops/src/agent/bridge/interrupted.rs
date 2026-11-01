@@ -382,7 +382,13 @@ pub fn classify_corral(
     running: bool,
 ) -> (ResumeClass, String) {
     let Some(receipt) = receipt else {
-        return if TWO_PHASE.contains(&op) {
+        return if matches!(op, "memory_put" | "memory_remove") {
+            (
+                ResumeClass::OutcomeUnknown,
+                "file effect unknown: re-read the entry; recovery did not reapply this mutation"
+                    .into(),
+            )
+        } else if TWO_PHASE.contains(&op) {
             (
                 ResumeClass::NotExecuted,
                 "no reservation was committed, so nothing ran".into(),

@@ -58,6 +58,10 @@ pub enum AgentOp {
     PlanVerdict,
     OwnerAction,
     WritePermission,
+    MemoryList,
+    MemoryRead,
+    MemoryPut,
+    MemoryRemove,
 }
 
 const ALL_ROLES: &[AgentRole] = &[
@@ -85,7 +89,7 @@ const ASSISTANT: &[AgentRole] = &[AgentRole::Assistant];
 const TODO: &[AgentRole] = &[AgentRole::Worker, AgentRole::Pm, AgentRole::Assistant];
 
 impl AgentOp {
-    pub const ALL: [AgentOp; 37] = [
+    pub const ALL: [AgentOp; 41] = [
         AgentOp::Hello,
         AgentOp::Event,
         AgentOp::ReceiptLookup,
@@ -123,6 +127,10 @@ impl AgentOp {
         AgentOp::PlanVerdict,
         AgentOp::OwnerAction,
         AgentOp::WritePermission,
+        AgentOp::MemoryList,
+        AgentOp::MemoryRead,
+        AgentOp::MemoryPut,
+        AgentOp::MemoryRemove,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -164,6 +172,10 @@ impl AgentOp {
             AgentOp::PlanVerdict => "plan_verdict",
             AgentOp::OwnerAction => "owner_action",
             AgentOp::WritePermission => "write_permission",
+            AgentOp::MemoryList => "memory_list",
+            AgentOp::MemoryRead => "memory_read",
+            AgentOp::MemoryPut => "memory_put",
+            AgentOp::MemoryRemove => "memory_remove",
         }
     }
 
@@ -175,7 +187,11 @@ impl AgentOp {
     pub fn roles(self) -> &'static [AgentRole] {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => ALL_ROLES,
-            AgentOp::Todo => TODO,
+            AgentOp::Todo
+            | AgentOp::MemoryList
+            | AgentOp::MemoryRead
+            | AgentOp::MemoryPut
+            | AgentOp::MemoryRemove => TODO,
             AgentOp::Ask | AgentOp::Withdraw => ASKERS,
             AgentOp::Evidence | AgentOp::Artifact => AGENTS,
             AgentOp::Wait | AgentOp::Progress | AgentOp::Checkpoint => WORKER,
@@ -206,6 +222,10 @@ impl AgentOp {
     fn route(self, role: AgentRole) -> Option<Route> {
         match self {
             AgentOp::Hello | AgentOp::Event | AgentOp::ReceiptLookup => None,
+            AgentOp::MemoryList
+            | AgentOp::MemoryRead
+            | AgentOp::MemoryPut
+            | AgentOp::MemoryRemove => None,
             AgentOp::Todo | AgentOp::Job | AgentOp::JobMonitor | AgentOp::OwnerAction => None,
             AgentOp::Ask | AgentOp::Withdraw | AgentOp::WritePermission => None,
             AgentOp::QuestionAnswer | AgentOp::QuestionEscalate | AgentOp::QuestionCancel => None,
@@ -530,6 +550,10 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
             AgentOp::Event => super::ops::event(ctx, &envelope),
             AgentOp::ReceiptLookup => super::ops::receipt_lookup(ctx, &envelope),
             AgentOp::Todo => super::ops::todo::call(ctx, &envelope),
+            AgentOp::MemoryList
+            | AgentOp::MemoryRead
+            | AgentOp::MemoryPut
+            | AgentOp::MemoryRemove => super::ops::memory::call(ctx, &envelope, op),
             AgentOp::Job | AgentOp::JobMonitor => super::ops::jobs::call(ctx, &envelope, op),
             AgentOp::OwnerAction => super::ops::owner_action::call(ctx, &envelope),
             AgentOp::WritePermission => super::ops::write_permission::call(ctx, &envelope),
