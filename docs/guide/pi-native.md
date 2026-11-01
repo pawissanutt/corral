@@ -231,45 +231,99 @@ The pack's tests check tool references against the standard worker's actual tool
 
 ### Codemode
 
-`codemode` runs JavaScript in the pinned upstream QuickJS VM. It can batch independent tool
-calls with `Promise.all`/`Promise.allSettled` and filter their results before returning context:
+`codemode` runs JavaScript cells on Corral's own persistent Bun kernel (T-682): one kernel per
+host session, started on the first cell, with no QuickJS or other engine behind it. Use it
+to batch independent tool calls, chain dependent ones and filter large results before anything
+reaches the model. Standard enables it for worker, reviewer and planning roles; PM requires full
+or an explicit `codemode = true` in its role table. Strict and `codemode = false` leave the tool
+absent, and every direct tool keeps working. MCP and tool search are independent: neither
+enables codemode, and codemode needs neither.
+
+Arguments: `code` (raw JavaScript, not a JSON string or fence), `wait_ms` (foreground window,
+default 60000, at most 600000), `cancel` (`"cell-N"`, stops that live cell) and `reset` (discard
+every variable, then run `code` if given).
+
+**Globals.** `tools.<name>(args)` returns a Promise of that tool's result. `print(...)` and
+`console.log/info/warn/error/debug` emit text, `display(value)` emits text or an image
+(`{type: "image", data: <base64 or bytes>, mimeType}`), and `setTimeout`/`clearTimeout` schedule
+work inside the cell. There is no `Bun`, `process`, `require`, `fetch` or `import`: every
+capability is a tool call. Only printed or displayed output and an explicit `return` value reach
+the model, so keep large intermediate results in variables.
+
+**Persistence and reset.** Top-level `const`/`let`/`function`/`class` declarations persist from
+cell to cell. They are discarded, and the result says so, by `reset`, by cancelling a running
+cell, at its deadline, on a reload, and when the host restarts. Nothing is snapshotted or
+re-run. Cells of one session run one at a time in submission order; calls inside a cell overlap.
+
+**Authority.** A tool usable directly is usable from a cell and nothing else is: the callable
+list in the tool's description and every nested execution derive from the same loadout check,
+and Pi's validation, the host's `tool_call` controls, shell rules, hooks and owner confirmations
+apply exactly as to a direct call. Corral mutations are allowed; another tool that nests calls
+through `ctx.executeTool` may still nest only the receipt-free board reads, because only a cell
+journals its children. Each nested call has its own
+identity, `<codemode call id>/<cell>.<n>`: receipted tools derive their request ID from it and
+send it as `identity.parent`, which corral checks against the request ID and stores on the
+receipt, so a replayed child returns its one receipt and a new child never reuses one. Before a
+child starts and when it settles the host appends a `corral_code_call` entry to the session; if
+the host is lost, resume classifies every child without a settled entry from its own receipt,
+including children of a detached cell. A confirm-class owner action shows the owner its command
+and waits for the actual answer; other calls in the cell keep running meanwhile, and code never
+supplies an answer or authority.
+
+**Result shapes.** Corral tools resolve to their canonical response object: a receipt
+(`request_id`, `op`, `state`, `result`, `identity`, `replayed`), refusals included, or a host
+failure `{request_id, op, error: {code, category, reason, effect, lookup?}}`. Other tools resolve
+to their text. A call refused or failed without a structured result rejects with an `Error`
+whose `name`, `message` and `code` (`denied`, `not_run`, `tool_error`, `stale_binding`) survive
+`JSON.stringify`. The model-visible result keeps the cell's own status (`ok`, `error`,
+`cancelled`, `timeout`, `reset`, `closed`) apart from its nested calls: counts of ok, failed and
+still-running children and committed receipts, then a bounded list of every failure with tool,
+child identity, request ID, error code and message, and recorded effect (a receipt state, `read`,
+`not_started` or `unknown`). The list appears even when the script caught the failure.
+
+**Detached cells.** A cell still running after `wait_ms` detaches: the call returns its handle at
+once and the cell settles in the background. Its settlement is reported exactly once: by the
+`cancel` call that stopped it, or by one notice that enters the session through the host's bridge
+delivery, journaled as `corral_delivery` with key `code:g<generation>:<cell>` and its own
+bridge-origin turn. Do not poll. Continue independent work; when a plan step needs the result,
+record that step as waiting on event `code cell <cell>` with `corral_todo` so request
+continuation (T-679) does not wake you meanwhile. A reload settles running cells `closed` and
+reports them after the reload; a host shutdown reports nothing, and resume's recovery notice
+classifies their children instead.
+
+**Failures.** A failed or interrupted cell is never re-run, and committed nested effects stand.
+Reconcile an uncertain mutation with `corral_receipt_lookup` (its failure names the lookup)
+instead of re-running the cell. Tool subprocesses keep their ordinary OS and network access; the
+kernel is not an OS sandbox.
 
 ```javascript
+// Independent reads in parallel; only the filtered lines reach the model.
 const files = await Promise.all(["README.md", "AGENTS.md"].map(path => tools.read({ path })));
-text(files.map(source => source.split("\n").filter(line => line.startsWith("#"))));
+print(files.map(source => source.split("\n").filter(line => line.startsWith("#"))));
 ```
-
-The input is raw JavaScript, not a JSON string or code fence. Only script output and its return
-value reach the model; nested tool names/statuses remain attributed to the outer call in the
-session. Standard enables it for worker, reviewer and planning roles; PM requires full or an
-explicit `codemode = true` in its role table. Strict and `codemode = false` leave it absent.
-MCP and tool search are independent: neither enables codemode, and codemode needs neither.
-
-Scripts have no Node APIs, filesystem, network or timers of their own. Nested tools use the
-same execution check as direct calls: denied role tools cannot run. A fixed receipt-free
-Corral board-read allowlist is callable when already in the role's loadout: `corral_brief`,
-`corral_next`, `corral_show`, `corral_list`, `corral_search`, `corral_route`, `corral_artifacts`,
-`corral_lessons`, and `corral_inbox_read`. These use the same session-bound authorization and
-approved project scope, without storing mutation receipts. Other Corral operations **must be
-called directly**, never from a script: their transcript call IDs anchor receipt replay,
-confirmation and recovery. They remain directly declared but absent from Code Mode's callable
-catalog. Classifier/image model execution and the
-`models` global are disabled; showing an existing image is still possible. Tool subprocesses
-retain their ordinary OS/network access; this is not an OS sandbox. A failed or interrupted
-script does not undo tools already run. Recovery classifies an unfinished `codemode` call as
-`outcome_unknown`, even if its source appears read-only, and preserves a worktree snapshot for
-reconciliation. Reload rebuilds the extension from the same generation snapshot.
-
-Blocked/failed nested calls reject with an `Error` carrying the reason in `message`. Plain JSON
-serialization of `Promise.allSettled` rejection reasons hides non-enumerable Error properties
-as `{}`; preserve them explicitly rather than treating this as a timeout or retry signal:
 
 ```javascript
-const results = await Promise.allSettled(calls);
-text(results.map(r => r.status === "rejected"
-  ? { status: r.status, error: String(r.reason?.message ?? r.reason) }
-  : r));
+// A dependent read -> mutation -> read chain (PM): each step uses the previous result.
+const shown = await tools.corral_show({ task: "T-9", section: "overview" });
+if (shown.state !== "committed") throw new Error(shown.result.code);
+const made = await tools.corral_comment({ task: "T-9", text: "Checked the overview." });
+if (made.state !== "committed") throw new Error(made.result.code);
+const back = await tools.corral_receipt_lookup({ request_id: made.request_id, task: "T-9" });
+return { comment: back.state, request: made.request_id };
 ```
+
+```javascript
+// An uncertain mutation is reconciled, never retried blindly.
+const asked = await tools.corral_ask({ kind: "clarification", text: "Which input?" });
+if (asked.error?.lookup) {
+  const found = await tools[asked.error.lookup.tool](asked.error.lookup.arguments);
+  return found.lookup.found ? found.state : "not committed yet";
+}
+```
+
+A fixture pipeline that reads a 819,232-byte tool result and returns one selected line emitted
+112 bytes to model context; calling the same tool directly emitted 819,227 bytes
+(`test/codemode-compose.test.ts`, `CODEMODE_EMITTED_BYTES`).
 
 ### Local inference (llama.cpp)
 
