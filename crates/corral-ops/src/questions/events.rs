@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use corral_core::agent::{AgentQuestion, QuestionActor, QuestionTriage};
-use corral_core::{Store, Task};
+use corral_core::{Store, Task, TaskRef};
 use serde_json::{Value, json};
 
 use super::QuestionKey;
@@ -154,6 +154,44 @@ pub(super) fn drain(
     let logged = logged(store, parsed.task())?;
     let owed = entries.iter().filter_map(owed_entry);
     append_missing(store, parsed.task(), &question.key, owed, &logged).map(|_| ())
+}
+
+/// Correlate derived status notices with canonical, still-pending questions.
+pub(crate) fn pending_keys(task: &Task) -> Vec<String> {
+    super::containers(task)
+        .iter()
+        .filter(|c| !super::settled(task, c))
+        .filter_map(|c| corral_core::agent::container_state(task, c))
+        .flat_map(|state| &state.questions)
+        .filter(|q| q.blocking && q.recorded_pending())
+        .map(|q| q.key.clone())
+        .collect()
+}
+
+/// Same planning-before-coding order as the full view, restricted to unfinished containers
+/// and their pending index. Settled and historical rows cannot affect the notification.
+pub(crate) fn pending_keys_ref<T: TaskRef + ?Sized>(task: &T) -> Result<Vec<String>> {
+    let mut containers = task.unfinished_native_containers()?;
+    containers.sort_by_key(|container| {
+        !matches!(
+            container,
+            corral_core::agent::ContainerRef::Planner { .. }
+                | corral_core::agent::ContainerRef::PlanReviewer { .. }
+        )
+    });
+    let mut keys = Vec::new();
+    for container in containers {
+        if super::settled_ref(task, &container)? || task.agent_head(&container)?.is_none() {
+            continue;
+        }
+        keys.extend(
+            task.pending_agent_questions(&container)?
+                .into_iter()
+                .filter(|question| question.blocking && question.recorded_pending())
+                .map(|question| question.key),
+        );
+    }
+    Ok(keys)
 }
 
 /// Recovers every owed question event of one task; the sync hook calls it with the sweeps.

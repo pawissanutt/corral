@@ -175,6 +175,16 @@ pub(crate) fn run(
         &mut report,
     )?;
     records::import(corral, &classified, &mut collected, &mut report)?;
+    // Derive replay keys at the existing import boundary, never in a landing action.
+    for event in lines.iter().filter_map(|line| line.event.as_ref()) {
+        if event.kind == "install_due"
+            && let Some(key) = event.detail["operation"]
+                .as_str()
+                .filter(|key| !key.is_empty())
+        {
+            collected.raw("install-notices", key, serde_json::Value::Bool(true));
+        }
+    }
     inbox::import(corral, &board, &classified, &mut collected)?;
     report.gate_rows = gates::import(corral, &board, &lines, &mut blobs, &collected)?;
     report.gate_attempts = report

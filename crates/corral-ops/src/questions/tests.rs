@@ -49,6 +49,82 @@ fn ask_opens_keyed_question_at_revision_one_and_logs_it_once() {
 }
 
 #[test]
+fn worker_question_and_derived_status_have_one_default_wake_per_cause() {
+    let fx = fx();
+    let (id, worker) = worker(&fx);
+    let key = ask_ok(&fx, &worker, "wake", true);
+    let task = fx.ctx.store.get(&id).unwrap();
+    assert_eq!(super::pending_keys(&task), std::slice::from_ref(&key));
+    // Sync's blocked-state projection carries these canonical keys, not just prose.
+    fx.ctx
+        .store
+        .log_event(
+            Some(&id),
+            "needs_me",
+            json!({
+                "agent_state":"blocked", "question_keys": super::pending_keys(&task)
+            }),
+        )
+        .unwrap();
+    fx.ctx
+        .store
+        .log_event(
+            Some(&id),
+            "attention_due",
+            json!({"reason":"question_open"}),
+        )
+        .unwrap();
+    let events = fx.ctx.store.events_shared().unwrap();
+    let wakes: Vec<_> = events
+        .iter()
+        .filter(|event| corral_core::default_pm_event(event))
+        .collect();
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].kind, "question_opened");
+}
+
+#[test]
+fn bounded_status_question_keys_ignore_terminal_history_at_one_and_ten_times_growth() {
+    use corral_core::work::{self, Counter, HotScope, WorkSnapshot};
+    let fx = fx();
+    let (id, worker) = worker(&fx);
+    let key = ask_ok(&fx, &worker, "live-key", true);
+    let closed_key = ask_ok(&fx, &worker, "closed-key", false);
+    pm_answer(&fx, &closed_key, 1).unwrap();
+    let closed = question(&fx, &closed_key);
+    let original = fx.ctx.store.get(&id).unwrap();
+    let mut baseline: Option<WorkSnapshot> = None;
+    for scale in [1, 10] {
+        let mut task = original.clone();
+        let host = task.runs[0].agent_host.as_mut().unwrap();
+        for n in 0..100 * scale {
+            let mut old = closed.clone();
+            old.key = format!("{id}/R1/Q{:04}", n + 100);
+            host.questions.push(old);
+        }
+        fx.ctx.store.fixture_put_task(&task).unwrap();
+        let expected = super::pending_keys(&task);
+        assert_eq!(expected, std::slice::from_ref(&key));
+        let hot = HotScope::enter();
+        let before = work::snapshot();
+        let head = fx.ctx.store.head(&id).unwrap();
+        assert_eq!(super::pending_keys_ref(&head).unwrap(), expected);
+        let delta = work::snapshot().since(&before);
+        drop(hot);
+        delta.check_identity().unwrap();
+        assert_eq!(delta.unattributed_hydrations(), 0);
+        assert!(delta.followup_calls.is_empty());
+        if let Some(previous) = &baseline {
+            for counter in Counter::ALL {
+                assert_eq!(delta.cells(counter), previous.cells(counter), "{counter:?}");
+            }
+        } else {
+            baseline = Some(delta);
+        }
+    }
+}
+
+#[test]
 fn concurrent_first_questions_get_distinct_keys_and_answers_reach_only_their_recipient() {
     let fx = fx();
     let (a, worker_a) = worker(&fx);
@@ -440,7 +516,7 @@ fn bounds_refuse_overflow_without_truncation() {
 }
 
 #[test]
-fn config_accepts_the_question_push_kinds_without_defaulting_them_and_agent_defaults() {
+fn config_defaults_to_question_push_kinds_and_preserves_agent_defaults() {
     let fx = fx();
     let root = fx.ctx.store.root().to_path_buf();
     let mut config = corral_core::Config::default_for(&root);
@@ -452,7 +528,7 @@ fn config_accepts_the_question_push_kinds_without_defaulting_them_and_agent_defa
     assert!(
         added
             .iter()
-            .all(|k| !config.pm.push_kinds.iter().any(|d| d == k))
+            .all(|k| config.pm.push_kinds.iter().any(|d| d == k))
     );
     let agent = &config.agent;
     assert_eq!(
@@ -464,7 +540,7 @@ fn config_accepts_the_question_push_kinds_without_defaulting_them_and_agent_defa
         (600, 300, 60)
     );
     assert!(!config.to_toml().contains("[agent]"));
-    config.pm.push_kinds.extend(added.map(String::from));
+    config.pm.push_kinds = added.map(String::from).to_vec();
     let problems = config
         .validate(&root)
         .err()

@@ -104,7 +104,9 @@ pub use config_doc::ConfigDoc;
 pub use config_events::ConfigSource;
 pub use config_layers::{ConfigLayer, ConfigLayers, ConfigSources};
 pub use container_facts::{CheckpointMeta, ContainerFacts, CostTotals, PaneRef};
-pub use event_reader::{EventCursor, EventReader, actionable_kind, format_event_line};
+pub use event_reader::{
+    EventCursor, EventReader, actionable_kind, default_pm_event, format_event_line,
+};
 pub use gate_presets::{GatePreset, detect_gate_presets};
 pub use gate_tier::*;
 pub use hints::*;

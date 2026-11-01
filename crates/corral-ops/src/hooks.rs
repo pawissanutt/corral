@@ -78,11 +78,19 @@ pub struct PostLandOperation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<corral_core::NoticeClaim>,
     pub hooks: Vec<HookReceipt>,
+    #[serde(default = "already_checked")]
+    pub install_checked: bool,
+}
+
+fn already_checked() -> bool {
+    true
 }
 
 impl PostLandOperation {
     pub fn ready(&self) -> bool {
-        self.landed && self.hooks.iter().all(|h| h.state == HookState::Succeeded)
+        self.landed
+            && self.install_checked
+            && self.hooks.iter().all(|h| h.state == HookState::Succeeded)
     }
 
     pub fn blocker(&self) -> Option<String> {
@@ -147,7 +155,8 @@ pub(crate) fn prepare<T: TaskRef + ?Sized>(
         return Ok(None);
     };
     let hooks = &ctx.store.config.projects[project].post_land;
-    if hooks.is_empty() || sha == base_before {
+    if (hooks.is_empty() && !repo.join("crates/corral/Cargo.toml").is_file()) || sha == base_before
+    {
         return Ok(None);
     }
     let policy_digest = digest(&(1, "no-coalescing", hooks))?;
@@ -168,6 +177,7 @@ pub(crate) fn prepare<T: TaskRef + ?Sized>(
         abandoned: false,
         notified: false,
         notice: None,
+        install_checked: false,
         hooks: hooks
             .iter()
             .map(|hook| HookReceipt {
@@ -276,6 +286,11 @@ fn reconcile_running(ctx: &Ctx, op: &mut PostLandOperation, i: usize) -> Result<
 }
 
 fn run_locked(ctx: &Ctx, op: &mut PostLandOperation) -> Result<()> {
+    if !op.install_checked {
+        super::install_due::check(ctx, op)?;
+        op.install_checked = true;
+        save(ctx, op)?;
+    }
     for i in 0..op.hooks.len() {
         reconcile_running(ctx, op, i)?;
         match op.hooks[i].state {

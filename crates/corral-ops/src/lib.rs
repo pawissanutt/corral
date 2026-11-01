@@ -46,6 +46,7 @@ mod hooks;
 mod ideas;
 mod import;
 mod importance;
+mod install_due;
 mod integration;
 mod launch;
 mod launch_exit;

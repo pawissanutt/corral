@@ -38,8 +38,17 @@ pub(crate) fn push_events(ctx: &Ctx, herdr_available: bool) -> Result<()> {
             }
             continue;
         };
-        if actionable_kind(&event)
-            .is_some_and(|kind| ctx.store.config.pm.push_kinds.iter().any(|k| k == kind))
+        let defaults = ctx
+            .store
+            .config
+            .pm
+            .push_kinds
+            .iter()
+            .map(String::as_str)
+            .eq(corral_core::PM_DEFAULT_KINDS.iter().copied());
+        if (!defaults || corral_core::default_pm_event(&event))
+            && actionable_kind(&event)
+                .is_some_and(|kind| ctx.store.config.pm.push_kinds.iter().any(|k| k == kind))
         {
             let text = format!("[corral] {}", format_event_line(&event));
             let delivery = ctx

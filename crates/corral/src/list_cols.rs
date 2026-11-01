@@ -237,6 +237,21 @@ fn head_cell(
     }
 }
 
+fn blocked_text(condition: &corral_core::attention::Condition) -> String {
+    format!(
+        "{}; unblocks: {}; {}",
+        condition
+            .age_secs
+            .map_or_else(|| "age unknown".into(), corral_core::age_text),
+        condition.unblocker(),
+        condition
+            .reason
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
 #[cfg(test)]
 mod artifact_facts_list {
     use super::*;
@@ -339,19 +354,4 @@ mod artifact_facts_list {
             );
         }
     }
-}
-
-fn blocked_text(condition: &corral_core::attention::Condition) -> String {
-    format!(
-        "{}; unblocks: {}; {}",
-        condition
-            .age_secs
-            .map_or_else(|| "age unknown".into(), corral_core::age_text),
-        condition.unblocker(),
-        condition
-            .reason
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    )
 }

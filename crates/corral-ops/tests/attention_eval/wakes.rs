@@ -49,7 +49,9 @@ fn isolated_single_question_gets_one_raw_push_and_two_attention_levels() {
         3
     );
     assert_eq!(stats.wakes.attention_due, 2);
-    assert_eq!(stats.wakes.raw_push.by_kind.get("attention_due"), Some(&2));
+    // Attention ladder delivery is independent; its digest must not also be raw-pushed
+    // by the default watch, which would duplicate the same question cause.
+    assert_eq!(stats.wakes.raw_push.by_kind.get("attention_due"), None);
     invariants(&stats);
 }
 

@@ -772,7 +772,10 @@ fn reconcile(
             ctx.store.log_event(
                 Some(&task.id),
                 kind,
-                json!({ "from": from.as_str(), "agent_state": state, "note": note }),
+                json!({ "from": from.as_str(), "agent_state": state, "note": note,
+                    "question_keys": if note == "agent is blocked" {
+                        crate::questions::pending_keys_ref(t)?
+                    } else { Vec::new() } }),
             )?;
         }
         if entering_needs_me {
