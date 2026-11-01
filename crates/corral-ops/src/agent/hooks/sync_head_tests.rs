@@ -89,3 +89,62 @@ fn worker_attention_and_hold_release_match_full_evidence_with_exact_history_grow
         );
     }
 }
+
+#[test]
+fn watchdog_generation_projection_is_keyed_and_exact_with_grown_native_history() {
+    for case in ["bound", "fenced", "missing"] {
+        let mut costs = Vec::new();
+        for scale in [1, 10] {
+            let (_dir, store) = data::store();
+            store.fixture_pin_now(data::at(100_000)).unwrap();
+            let mut task = data::rich(
+                &store,
+                2 * scale + 1,
+                2 * scale + 1,
+                2 * scale + 1,
+                2 * scale,
+            );
+            let run = task.runs.last_mut().unwrap();
+            let mut host = native::host(AgentRole::Worker, 2 * scale);
+            if case == "missing" {
+                host.generations
+                    .retain(|generation| generation.n != host.binding.generation);
+            } else if case == "fenced" {
+                host.generations.last_mut().unwrap().fenced = Some(
+                    serde_json::from_value(json!({
+                        "reason":"replaced", "at":data::at(0)
+                    }))
+                    .unwrap(),
+                );
+            }
+            let expected = host.current_generation().cloned();
+            run.agent_host = Some(Box::new(host));
+            store.fixture_put_task(&task).unwrap();
+            let head = store.head(&task.id).unwrap();
+            let shell = head.to_shell_task().unwrap();
+            let run = shell.current_run().unwrap();
+            assert!(run.agent_host.as_ref().unwrap().generations.is_empty());
+            let before = work::snapshot();
+            let hot = HotScope::enter();
+            let projected = watchdog_run(&head, run).unwrap();
+            let delta = work::snapshot().since(&before);
+            drop(hot);
+            delta.check_identity().unwrap();
+            assert_eq!(delta.unattributed_hydrations(), 0);
+            assert_eq!(
+                delta.get(Counter::NestedRowDecodes),
+                u64::from(expected.is_some())
+            );
+            assert_eq!(
+                projected.agent_host.as_ref().unwrap().current_generation(),
+                expected.as_ref()
+            );
+            assert_eq!(
+                projected.agent_host.as_ref().unwrap().generations.len(),
+                usize::from(expected.is_some())
+            );
+            costs.push(Counter::ALL.map(|counter| delta.cells(counter).unattributed));
+        }
+        assert_eq!(costs[0], costs[1], "{case}");
+    }
+}

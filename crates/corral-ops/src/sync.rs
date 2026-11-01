@@ -556,19 +556,7 @@ fn reconcile(
         && herdr_idle_since.is_some_and(|since| now.duration_since(since) > stuck_after)
     {
         match ctx.herdr.pane_process_info(&pane_id).and_then(|info| {
-            // Shell runs omit nested native history. The watchdog's capability
-            // registry belongs to exactly the current generation, not that empty tail.
-            let mut watchdog_run = run.clone();
-            if let Some(host) = watchdog_run.agent_host.as_mut() {
-                let container = corral_core::agent::ContainerRef::Worker {
-                    task: head.id.clone(),
-                    run: run.id.clone(),
-                };
-                host.generations = head
-                    .agent_generation(&container, host.binding.generation)?
-                    .into_iter()
-                    .collect();
-            }
+            let watchdog_run = crate::agent::hooks::sync::watchdog_run(head, run)?;
             crate::watchdog::foreign_process(ctx, &watchdog_run, &info, processes)
         }) {
             Ok(process) => process,

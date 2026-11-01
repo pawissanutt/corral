@@ -89,4 +89,10 @@ Source path: sync::reconcile passes a shell Run to watchdog::foreign_process. Sh
 
 The original unchanged regression now completes **20/20 PASS** inside the2-CPU/2-GiB/256-PID/two-burner sandbox (`.evidence/R3-watchdog-registered-green-20.log`); all **13 watchdog tests PASS** in the private helper environment (`R3-watchdog-all-green.log`). The old-source repetition1 failure is retained in `R3-watchdog-registered-red.log`. The earlier6460 fixture repetitions retain their honest pre-watchdog-port provenance; final package/action/hot-budget acceptance still requires the next current-tree quick gate.
 
+## Watchdog helper size and direct bounded-history proof
+
+Attempt `ag-9a5ba58f399056e1` stops at the unchanged800-SLOC limit: sync.rs802 code lines; no regression tests run. The identical new native projection logic moves to existing scoped `agent/hooks/sync.rs::watchdog_run`, leaving the original error-handled call boundary in sync.rs. No protection predicate or read timing changes.
+
+Added a direct1x/10x native/history-growth regression for bound, fenced and missing current generations: exact current-generation value, zero hydration, exactly one decoded nested row when present/zero when missing, and equality of every unattributed counter. Focused test PASS and **20/20 sandbox repetitions PASS** (`.evidence/R3-watchdog-projection-budget-20.log`). The original registered-capability test again completes **20/20 sandbox PASS** after helper extraction (`R3-watchdog-refactored-green-20.log`). This supplements, not rewrites, the earlier6460-test ledger; the final gate still owes the whole current-tree package result.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
