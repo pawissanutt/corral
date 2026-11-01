@@ -7,7 +7,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum NativeRecord {
-    Generation(AgentGeneration),
+    Generation(Box<AgentGeneration>),
     Receipt(RequestReceipt),
     Question(AgentQuestion),
     Turn(AgentTurn),
@@ -113,7 +113,7 @@ impl NativeRecord {
             true
         }
         match self {
-            Self::Generation(r) => put(&mut state.generations, r, |a, b| a.n == b.n),
+            Self::Generation(r) => put(&mut state.generations, *r, |a, b| a.n == b.n),
             Self::Receipt(r) => put(&mut state.receipts, r, |a, b| a.request_id == b.request_id),
             Self::Question(r) => put(&mut state.questions, r, |a, b| a.key == b.key),
             Self::Turn(r) => put(&mut state.turns, r, |a, b| {
@@ -147,5 +147,44 @@ impl NativeRecord {
             _ => bail!("unknown native record family {kind}"),
         };
         parsed.with_context(|| format!("decoding native {kind} record"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn boxed_generation_preserves_bytes_keys_roundtrip_and_folding() {
+        let generation: AgentGeneration = serde_json::from_value(json!({
+            "n": 3, "bind_nonce_sha256": "00".repeat(32), "pane": "p1",
+            "created": "2026-10-23T00:00:00Z", "event_seq": 42,
+            "todo": true, "assets_sha256": "11".repeat(32)
+        }))
+        .unwrap();
+        let record = NativeRecord::Generation(Box::new(generation.clone()));
+        let bytes = serde_json::to_vec(&generation).unwrap();
+        assert_eq!(serde_json::to_vec(&record).unwrap(), bytes);
+        assert_eq!(record.kind(), "generations");
+        assert_eq!(record.token(), "gen:3");
+        assert_eq!(record.metadata(), (false, vec!["gen:3".into()]));
+        assert!(!record.pending());
+        let decoded =
+            NativeRecord::from_doc("generations", serde_json::from_slice(&bytes).unwrap()).unwrap();
+        assert_eq!(decoded, record);
+        let binding = serde_json::from_value(json!({
+            "role": "worker", "store": "store", "project": "p", "generation": 3
+        }))
+        .unwrap();
+        let mut state = AgentRunState::new(binding);
+        assert!(decoded.clone().put(&mut state));
+        assert_eq!(state.generations, vec![generation.clone()]);
+        assert!(!decoded.put(&mut state));
+        let mut updated = generation;
+        updated.event_seq = 43;
+        assert!(NativeRecord::Generation(Box::new(updated.clone())).put(&mut state));
+        assert_eq!(state.generations, vec![updated.clone()]);
+        assert!(!NativeRecord::Generation(Box::new(updated)).put(&mut state));
     }
 }

@@ -140,7 +140,7 @@ pub(crate) fn hello(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
             }
             generation.bound = Some(bound);
             let todo = generation.todo;
-            task.put_agent_record(&container, NativeRecord::Generation(generation))?;
+            task.put_agent_record(&container, NativeRecord::Generation(Box::new(generation)))?;
             task.edit_agent_head(&container, |head| {
                 head.binding.health = HostHealth::Healthy;
                 Ok(())
