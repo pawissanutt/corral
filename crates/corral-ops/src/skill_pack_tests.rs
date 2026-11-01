@@ -6,7 +6,7 @@ fn pi_pack_is_isolated_refreshable_and_preserves_owner_files() {
     std::fs::create_dir_all(home.path().join(".agents")).unwrap();
     std::fs::create_dir_all(home.path().join(".omo")).unwrap();
     let writes = install_harness_skills(home.path(), "pi-native", false).unwrap();
-    assert_eq!(writes.len(), 5);
+    assert_eq!(writes.len(), 6);
     let root = home.path().join(".corral/skills/pi-native");
     for name in PI_SKILLS {
         let text = std::fs::read_to_string(root.join(name).join("SKILL.md")).unwrap();
