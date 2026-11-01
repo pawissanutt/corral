@@ -139,5 +139,8 @@ export class AuxiliaryRuntime {
     for (const controller of this.controllers) controller.abort(new Error("parent cancelled/reloaded/fenced"));
     await Promise.allSettled(this.requests.values());
   }
-  state() { return { explore: this.explore.state(), oracle: this.oracle.state(), web_search: this.webSearch.state(), stopped: this.stopped }; }
+  state() {
+    return { explore: this.explore.state(), oracle: this.oracle.state(),
+      ...(this.options.settings.web_search ? { web_search: this.webSearch.state() } : {}), stopped: this.stopped };
+  }
 }
