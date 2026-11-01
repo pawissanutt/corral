@@ -2,6 +2,8 @@
 // It restricts the environment before any Pi module loads, then:
 //   --version                 prints the pinned Pi and the embedded Bun versions;
 //   --write-install <dir>     writes compat.json and the role assets beside the installed binary;
+//   --check-codemode          runs the embedded QuickJS Code Mode worker offline;
+//   --check-code-kernel       runs the embedded persistent kernel worker offline (T-682);
 //   login ...                 runs `corral agent login`'s OAuth flow (src/auth/login.ts);
 //   models --provider <id>... prints Pi's offline model catalog for harness detection
 //                             (src/auth/models.ts);
@@ -84,6 +86,8 @@ if (command === "--version") {
   process.stdout.write(`corral-pi-host pi ${compat.pi.version} bun ${process.versions.bun}\n`);
 } else if (command === "--check-codemode") {
   await (await import("./codemode-check.ts")).checkCodemode();
+} else if (command === "--check-code-kernel") {
+  await (await import("./code-kernel-check.ts")).checkCodeKernel();
 } else if (command === "--write-install") {
   if (!operand) {
     process.stderr.write("corral-pi-host: --write-install needs a directory\n");
