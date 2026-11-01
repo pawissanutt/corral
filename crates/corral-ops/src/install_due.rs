@@ -37,7 +37,7 @@ fn emit(ctx: &Ctx, op: &PostLandOperation, installed: &str) -> Result<()> {
     // A later installed build also satisfies this landing. Unknown identities (older builds
     // without build-identity support) conservatively require an install.
     if installed != "unknown"
-        && corral_git::rev_sha(&op.repo, installed).is_ok()
+        && corral_git::rev_sha(&op.repo, &format!("{installed}^{{commit}}")).is_ok()
         && corral_git::is_ancestor(&op.repo, &op.landed_sha, installed)?
     {
         return Ok(());

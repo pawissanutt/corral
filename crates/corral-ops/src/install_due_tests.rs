@@ -25,6 +25,54 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
 }
 
 #[test]
+fn absent_installed_commit_requires_install() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut store = Store::init(tmp.path()).unwrap();
+    store.config.projects.insert(
+        "app".into(),
+        serde_json::from_value(json!({"path":"."})).unwrap(),
+    );
+    let ctx = Ctx {
+        store,
+        resource_probe: crate::resources::FixedResourceProbe::arc(),
+        herdr: corral_herdr::Herdr::with_bin("missing".into(), Some("corral-test".into())),
+    };
+    std::fs::create_dir_all(tmp.path().join("crates/corral")).unwrap();
+    std::fs::write(tmp.path().join("crates/corral/Cargo.toml"), "fixture").unwrap();
+    git(tmp.path(), &["init", "-q", "-b", "main"]);
+    git(tmp.path(), &["commit", "--allow-empty", "-qm", "landing"]);
+    let old = git(tmp.path(), &["rev-parse", "HEAD"]);
+    git(tmp.path(), &["commit", "--allow-empty", "-qm", "next"]);
+    let landed = git(tmp.path(), &["rev-parse", "HEAD"]);
+    let task = ctx
+        .store
+        .create("Landing", Some("app"), corral_core::Status::Review, "")
+        .unwrap();
+    let run = serde_json::from_value(json!({
+        "id":"R1", "agent":"generic", "worktree":tmp.path(), "branch":"corral/T-001",
+        "base":"main", "base_sha":landed, "started":"2026-10-30T00:00:00Z"
+    }))
+    .unwrap();
+    let mut op = crate::hooks::prepare(&ctx, &task, &run, tmp.path(), &old, &landed)
+        .unwrap()
+        .unwrap();
+    op.landed = true;
+    let missing = "0123456789012345678901234567890123456789";
+    check_with(&ctx, &op, || missing.into()).unwrap();
+    let events = ctx.store.events_shared().unwrap();
+    let notice = events
+        .iter()
+        .find(|event| event.kind == "install_due")
+        .unwrap();
+    assert_eq!(notice.detail["installed_sha"], missing);
+    op.key = "unknown-build".into();
+    check_with(&ctx, &op, || "unknown".into()).unwrap();
+    assert!(ctx.store.events_shared().unwrap().iter().any(|event| {
+        event.kind == "install_due" && event.detail["operation"] == "unknown-build"
+    }));
+}
+
+#[test]
 fn older_installed_build_gets_one_install_event_per_landing() {
     let tmp = tempfile::tempdir().unwrap();
     let mut store = Store::init(tmp.path()).unwrap();
