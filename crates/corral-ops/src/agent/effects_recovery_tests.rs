@@ -52,6 +52,35 @@ fn start(fx: &Fx, id: &str) {
 }
 
 #[test]
+fn agent_verdict_blob_notes_reach_lesson_signals() {
+    let fx = fixture(false);
+    let o = fx.reviewer();
+    let notes = format!("[P1] Distinctive review finding\n{}", "x".repeat(20 * 1024));
+    let report = Report {
+        origin: &o,
+        gate_ref: None,
+        contract_sha256: None,
+    };
+    crate::reviewer::verdict_request(&fx.ctx, &fx.id, Verdict::Approve, &notes, None, &report)
+        .unwrap();
+    let events = fx
+        .ctx
+        .store
+        .events_of_run(Some(&fx.id), &["verdict"], Some("R1"), 0, 100)
+        .unwrap();
+    let value = &events.last().unwrap().detail["notes"];
+    assert!(value.as_str().unwrap().starts_with("blob:sha256:"));
+    assert_eq!(
+        fx.ctx.store.resolve_text(value).unwrap().as_deref(),
+        Some(notes.as_str())
+    );
+    let signals = crate::lesson_signals::lesson_signals(&fx.ctx, "app").unwrap();
+    assert!(signals.iter().any(|s| s.category == "reviewer_note"
+        && s.text.contains("Distinctive review finding")
+        && s.evidence.iter().any(|e| e.source == "event:verdict")));
+}
+
+#[test]
 fn sync_completes_reviewer_and_pm_receipts_on_their_named_child() {
     // Given a reviewer-only binding whose verdict committed just before its effects ran, and a
     // newer review child started before recovery.

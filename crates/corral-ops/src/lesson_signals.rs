@@ -733,7 +733,8 @@ pub(crate) fn collect(
             );
         }
         for event in related {
-            let Some(category) = event_category(event) else {
+            let event = crate::timeline::with_blob_notes(&ctx.store, event)?;
+            let Some(category) = event_category(&event) else {
                 continue;
             };
             let source = evidence(task, event.ts, format!("event:{}", event.kind));
