@@ -8,8 +8,8 @@ import { readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { panelTheme } from "./panels-theme.ts";
 import { composerBar, overviewLines, panelFooter, panelHeader, splitRow } from "./panels-chrome.ts";
 import {
-  box, pad, panelLines, plainLabel, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
-  type FilesState, type PanelSnapshot, type PanelTab,
+  box, pad, panelLines, plainLabel, diffLine, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
+  type FilesState, type PanelSnapshot, type PanelTab, type PanelLine,
 } from "./panels-view.ts";
 
 export interface NativePanelsOptions {
@@ -38,7 +38,7 @@ export class NativePanels implements PanelSurface {
   private readonly abort = new AbortController();
   private fileIndex = 0;
   private files: FilesState = { kind: "unread" };
-  private sidebarStart = 0;
+  private contentRows: readonly PanelLine[] = [];
   private tabHits: TabHit[] = [];
 
   constructor(private readonly options: NativePanelsOptions) {}
@@ -109,14 +109,14 @@ export class NativePanels implements PanelSurface {
     if (this.tab === "Files" && this.files.kind === "ready" && this.files.files.length) {
       const files = this.files.files;
       const start = Math.max(0, Math.min(this.fileIndex, files.length - capacity));
-      this.sidebarStart = start;
+      this.contentRows = files.slice(start, start + capacity).map(file => ({ text: file.path, action: { kind: "diff", path: file.path } }));
       return files.slice(start, start + capacity).map((file, i) =>
         (start + i === this.fileIndex ? PANEL_BLUE + "› " : PANEL_MUTED + "  ") +
         plainLabel(file.status + " " + file.path) + PANEL_TEXT);
     }
     const start = Math.max(0, Math.min(this.offset, lines.length - capacity));
-    this.sidebarStart = start;
-    return lines.slice(start, start + capacity).map(row =>
+    this.contentRows = lines.slice(start, start + capacity);
+    return this.contentRows.map(row =>
       (row.heading ? PANEL_BLUE : PANEL_MUTED) + row.text + PANEL_TEXT);
   }
   renderSidebar(width: number, height: number): readonly string[] {
@@ -152,7 +152,7 @@ export class NativePanels implements PanelSurface {
             const diff = await readPanelDiff(this.options.cwd, file, this.abort.signal);
             if (this.canInteract && this.tab === "Files" && this.files.kind === "ready"
               && this.files.files[this.fileIndex]?.path === file.path) {
-              await this.detail(file.path + " · HEAD → working tree", diff.split("\n"));
+              await this.detail(file.path + " · HEAD → working tree", diff.split("\n"), "diff");
             }
           }
           catch (error) { ui.notify(error instanceof Error ? error.message : String(error), "error"); }
@@ -165,7 +165,7 @@ export class NativePanels implements PanelSurface {
       if (!this.disposed) this.ui?.notify(error instanceof Error ? error.message : String(error), "error");
     } finally { this.inspecting = false; }
   }
-  private async detail(title: string, source: readonly string[]): Promise<void> {
+  private async detail(title: string, source: readonly string[], kind: "text" | "diff" = "text"): Promise<void> {
     const ui = this.ui;
     if (!ui) return;
     this.focused = false;
@@ -174,7 +174,8 @@ export class NativePanels implements PanelSurface {
       return {
         render(width) {
           const height = Math.max(4, Math.floor(tui.terminal.rows * 0.8));
-          const lines = source.flatMap(line => new Text(line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "), 0, 0).render(Math.max(1, width - 4)));
+          const lines = source.flatMap(line => new Text(kind === "diff" ? diffLine(line, _theme)
+            : line.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "), 0, 0).render(Math.max(1, width - 4)));
           max = Math.max(0, lines.length - height + 3); offset = Math.min(offset, max);
           return box(title + " · Esc close", [...lines.slice(offset, offset + height - 3), "↑/↓ scroll · Esc close"], width, height, true);
         },
@@ -201,10 +202,25 @@ export class NativePanels implements PanelSurface {
     if (y === (inline ? 0 : 1)) {
       const tab = this.tabHits.find(hit => x >= hit.from && x < hit.to)?.tab;
       if (tab) { if (inline) this.focused = true; this.choose(tab); }
-    } else if (this.tab === "Files" && this.files.kind === "ready") {
-      const index = this.sidebarStart + y - (inline ? 1 : 3);
-      if (index >= 0 && index < this.files.files.length) { this.fileIndex = index; void this.inspect(); }
-    } else if (y >= (inline ? 1 : 3)) void this.inspect();
+      return;
+    }
+    const row = this.contentRows[y - (inline ? 1 : 3)];
+    if (!row) return;
+    const action = row.action;
+    if (!action) { if (this.tab !== "Files") void this.inspect(); return; }
+    switch (action.kind) {
+      case "diff": {
+        if (this.files.kind !== "ready") return;
+        const index = this.files.files.findIndex(file => file.path === action.path);
+        if (index < 0) return; // A refresh may have removed the displayed path.
+        this.choose("Files"); this.fileIndex = index; this.refresh(); void this.inspect(); return;
+      }
+      case "files": this.focused = true; this.choose("Files"); return;
+      default: {
+        const unreachable: never = action;
+        throw new Error(`Unknown native panel action: ${String(unreachable)}`);
+      }
+    }
   }
   handleInput(data: string): boolean {
     if (isKeyRelease(data)) return false;
