@@ -399,6 +399,7 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
             };
             artifact.compressed_bytes =
                 crate::artifact_storage::snapshot(ctx, &dir.join(&snap_name), &bytes, &artifact)?;
+            effects::failpoint("artifact_scan_snapshot");
             if artifact.kind == ArtifactKind::Diff {
                 for previous in t.artifacts.iter_mut().filter(|a| {
                     a.run == run.id && a.kind == ArtifactKind::Diff && a.tier_override.is_none()

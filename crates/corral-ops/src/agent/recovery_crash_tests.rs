@@ -14,6 +14,121 @@ use super::tests::{
 use super::*;
 use crate::agent::bridge::fixture::{self as f, Exec, Fx, HostProc};
 
+#[test]
+fn killed_done_reconciles_before_and_after_completion_commit() {
+    use crate::agent::call::CallResponse;
+    use crate::agent::effects::Report;
+    use crate::agent::test_support as ts;
+    use corral_core::Status;
+
+    for point in ["artifact_scan_snapshot", "swept_after_commit"] {
+        let fx = f::fixture(false, 5);
+        let host = HostProc::spawn(true);
+        let bound = fx.bind(&fx.worker_target(), "w0:p1", &host);
+        std::fs::write(fx.app().join(".git/info/exclude"), ".evidence/\n").unwrap();
+        let scratch = fx.app().join(".evidence");
+        std::fs::create_dir(&scratch).unwrap();
+        for (name, bytes) in [
+            ("a.log", b"first evidence\n".as_slice()),
+            ("b.log", b"second evidence\n".as_slice()),
+        ] {
+            std::fs::write(scratch.join(name), bytes).unwrap();
+        }
+        let origin = fx.origin(&bound, "done-crash", "done");
+        let exec = Exec::spawn(&fx, &origin, point);
+        exec.reached(point);
+        exec.kill(); // Same SIGKILL used by the worker tool deadline.
+
+        let lookup_id = crate::agent::tool_request_id(f::SESSION, "lookup-crash");
+        let input = ts::envelope(
+            &bound,
+            "receipt_lookup",
+            &lookup_id,
+            json!({"request_id": origin.request_id}),
+            false,
+        );
+        let found = match crate::agent::call(&fx.ctx, "receipt_lookup", &input).unwrap() {
+            CallResponse::Lookup { found, .. } => found,
+            other => panic!("expected lookup, got {other:?}"),
+        };
+        let committed = point == "swept_after_commit";
+        assert_eq!(found.is_some(), committed, "{point}");
+        assert_eq!(
+            fx.task().status,
+            if committed {
+                Status::Review
+            } else {
+                Status::Running
+            }
+        );
+        if !committed {
+            assert!(
+                fx.task()
+                    .artifacts
+                    .iter()
+                    .all(|a| a.title != "a.log" && a.title != "b.log")
+            );
+            let snapshots = fx.ctx.store.artifacts_dir(&fx.id, "R1");
+            assert!(std::fs::read_dir(snapshots).unwrap().flatten().any(|entry| {
+                matches!(entry.file_name().to_str(), Some(name) if name.ends_with("-a.log") || name.ends_with("-b.log"))
+            }), "the killed scan had already published a snapshot");
+        }
+
+        // A new tool call has a new request ID. A committed call instead replays its
+        // original ID so its owed effects settle without a second transition.
+        let retry = if committed {
+            origin.clone()
+        } else {
+            fx.origin(&bound, "done-retry", "done")
+        };
+        let report = Report {
+            origin: &retry,
+            gate_ref: None,
+            contract_sha256: None,
+        };
+        let result = crate::review::done_request(
+            &fx.ctx,
+            &fx.id,
+            "Verified: fixture\nNot verified: none\n",
+            None,
+            &report,
+        )
+        .unwrap();
+        assert_eq!(result.replayed, committed);
+        let task = fx.task();
+        assert_eq!(task.status, Status::Review);
+        assert_eq!(
+            task.current_run()
+                .unwrap()
+                .agent_host
+                .as_ref()
+                .unwrap()
+                .reports
+                .len(),
+            1
+        );
+        for (name, bytes) in [
+            ("a.log", b"first evidence\n".as_slice()),
+            ("b.log", b"second evidence\n".as_slice()),
+        ] {
+            let matches: Vec<_> = task.artifacts.iter().filter(|a| a.title == name).collect();
+            assert_eq!(matches.len(), 1, "{point} {name}");
+            assert_eq!(crate::artifact_read(&fx.ctx, matches[0]).unwrap(), bytes);
+        }
+        assert_eq!(fx.events("done").len(), 1);
+        let again = crate::review::done_request(
+            &fx.ctx,
+            &fx.id,
+            "Verified: fixture\nNot verified: none\n",
+            None,
+            &report,
+        )
+        .unwrap();
+        assert!(again.replayed);
+        assert_eq!(fx.events("done").len(), 1);
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Way {
     Fresh,
