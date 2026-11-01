@@ -103,6 +103,43 @@ fn an_approval_given_while_main_moved_is_recorded_and_carried_without_a_second_r
 }
 
 #[test]
+fn exhausted_repairs_do_not_block_approved_clean_replay() {
+    let (fx, _) = reviewing_then_main_moves("unrelated.txt", "other task\n");
+    fx.verdict(Verdict::Approve, "Looks right.");
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.rounds = 2;
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(fx.sync().status, Status::Done, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 2);
+    assert_eq!(fx.events("candidate_rebased"), 1);
+    assert_eq!(fx.events("gate_started"), 2);
+    assert_eq!(fx.events("verdict_carried"), 1);
+}
+
+#[test]
+fn exhausted_repairs_escalate_a_conflicting_replay() {
+    let (fx, _) = reviewing_then_main_moves("widget.txt", "conflicting main\n");
+    fx.verdict(Verdict::Approve, "Looks right.");
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.rounds = 2;
+            Ok(())
+        })
+        .unwrap();
+
+    assert_eq!(fx.sync().status, Status::NeedsMe, "{}", fx.reason());
+    assert_eq!(fx.task().rounds, 2);
+    assert_eq!(fx.events("candidate_rebased"), 0);
+    assert_eq!(fx.events("verdict_carried"), 0);
+}
+
+#[test]
 fn changes_given_while_main_moved_reach_the_worker_without_a_pm_relay() {
     let (fx, reviewed) = reviewing_then_main_moves("unrelated.txt", "other task\n");
 
