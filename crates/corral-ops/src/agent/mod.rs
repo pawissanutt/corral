@@ -37,6 +37,8 @@ pub mod jobs;
 #[cfg(all(test, target_os = "linux"))]
 mod jobs_tests;
 pub mod launch;
+#[cfg(test)]
+mod nested_tests;
 pub(crate) mod ops;
 pub mod pi;
 pub mod pm_wake;

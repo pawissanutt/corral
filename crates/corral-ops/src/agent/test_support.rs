@@ -200,6 +200,7 @@ pub(crate) fn bind(fx: &Fx, target: &BindTarget, pane: &str, session: &str) -> H
             session_id: session.into(),
             generation: grant.generation,
             turn: None,
+            parent: None,
         },
         host_cap: secret(&format!("{session}-host"), grant.generation),
         ctl_cap: secret(&format!("{session}-ctl"), grant.generation),
