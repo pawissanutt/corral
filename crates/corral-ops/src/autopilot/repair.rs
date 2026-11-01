@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use corral_git::MergePreflight;
 
 impl Pilot<'_> {
@@ -124,9 +125,32 @@ impl Pilot<'_> {
             .ctx
             .store
             .dispatch_update(self.id(), |store, current| {
-                crate::operating::require(store, current, OperatingActionKind::Repair)?;
                 key.check(current)?;
-                crate::verdict_carry::rebase(self.ctx, current, self.run, &key.base)
+                // Replaying an approved candidate is verification preparation, not a
+                // worker repair. Keep all Gate authority and recovery checks in force;
+                // only an approval bound to this head (or our own clean replay) qualifies.
+                let run = current.current_run().context("missing current run")?;
+                let head = corral_git::rev_sha(&run.worktree, "HEAD")?;
+                let approved = match run.review.as_ref() {
+                    Some(review) if review.verdict == Some(Verdict::Approve) => {
+                        review.sha == head
+                            || crate::verdict_carry::clean_replay(
+                                self.ctx,
+                                current,
+                                run,
+                                &review.sha,
+                                &head,
+                            )?
+                    }
+                    _ => false,
+                };
+                let action = if approved {
+                    OperatingActionKind::Gate
+                } else {
+                    OperatingActionKind::Repair
+                };
+                crate::operating::require(store, current, action)?;
+                crate::verdict_carry::rebase(self.ctx, current, run, &key.base)
             })
             .map(|(_, outcome)| outcome);
         match rebased {
