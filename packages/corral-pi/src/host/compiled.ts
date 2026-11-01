@@ -2,8 +2,7 @@
 // It restricts the environment before any Pi module loads, then:
 //   --version                 prints the pinned Pi and the embedded Bun versions;
 //   --write-install <dir>     writes compat.json and the role assets beside the installed binary;
-//   --check-codemode          runs the embedded QuickJS Code Mode worker offline;
-//   --check-code-kernel       runs the embedded persistent kernel worker offline (T-682);
+//   --check-code-kernel       runs the embedded persistent Code Mode kernel worker offline (T-682);
 //   login ...                 runs `corral agent login`'s OAuth flow (src/auth/login.ts);
 //   models --provider <id>... prints Pi's offline model catalog for harness detection
 //                             (src/auth/models.ts);
@@ -25,12 +24,6 @@ import workerContract from "../../assets/worker-contract.md" with { type: "text"
 import workerSkill from "../roles/worker/skills/corral-worker/SKILL.md" with { type: "text" };
 import { restrictEnvironment } from "./restrict.ts";
 import { piDocs } from "./pi-docs-macro.ts" with { type: "macro" };
-// Bun embeds .wasm imports as readable files. Use the pinned SDK's asset setter only:
-// importing its whole Bun runtime setup would also change provider registration.
-import quickjsWasmPath from "quickjs-wasi/quickjs.wasm";
-import { setEmbeddedQuickJSWasmPath } from "../../node_modules/@earendil-works/pi-coding-agent/dist/config.js";
-
-setEmbeddedQuickJSWasmPath(quickjsWasmPath);
 
 export const INSTALL_FILES: Readonly<Record<string, string>> = {
   "compat.json": `${JSON.stringify(compat, null, 2)}\n`,
@@ -84,8 +77,6 @@ registerBunOAuthFlows();
 const [command, operand] = process.argv.slice(2);
 if (command === "--version") {
   process.stdout.write(`corral-pi-host pi ${compat.pi.version} bun ${process.versions.bun}\n`);
-} else if (command === "--check-codemode") {
-  await (await import("./codemode-check.ts")).checkCodemode();
 } else if (command === "--check-code-kernel") {
   await (await import("./code-kernel-check.ts")).checkCodeKernel();
 } else if (command === "--write-install") {

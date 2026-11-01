@@ -1,6 +1,7 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+import { callKey } from "../codemode/child.ts";
 import { JobError, type JobRuntime, OUTPUT_READ_MAX } from "./runtime.ts";
 
 export const JOB_TOOL_NAMES = ["job_start", "job_output", "job_kill", "corral_job_monitor"] as const;
@@ -29,7 +30,7 @@ export function jobTools(jobs: JobRuntime, monitor = true): readonly ToolDefinit
         + "and bounded; the job is killed at its runtime limit, when you call job_kill, or when this run ends.",
       parameters: Type.Object({ command: Type.String({ minLength: 1, maxLength: 4096 }) }),
       async execute(id, params: { command: string }) {
-        return guarded(() => jobs.start(params.command, id));
+        return guarded(() => jobs.start(params.command, callKey("job_start", id)));
       },
     },
     {
@@ -58,13 +59,11 @@ export function jobTools(jobs: JobRuntime, monitor = true): readonly ToolDefinit
     },
     {
       name: JOB_MONITOR_TOOL,
-      exposure: "model-only",
       label: "Wake when a job exits or prints a line",
       description: "Ask corral to wake you once when a job exits (on: exit) or prints a line matching a "
         + "JavaScript regular expression (on: line). The wake arrives as a message even if it already happened; "
         + "end your turn after this call instead of polling job_output. Without a match before timeout_secs, "
-        + "the wake reports that the deadline expired. Call directly at top level, not from Code Mode: "
-        + "this operation needs a transcript call for receipt replay/recovery.",
+        + "the wake reports that the deadline expired.",
       parameters: Type.Object({
         job: Type.String(),
         on: Type.Union([Type.Literal("exit"), Type.Literal("line")]),
@@ -73,7 +72,8 @@ export function jobTools(jobs: JobRuntime, monitor = true): readonly ToolDefinit
       }),
       async execute(id, params: { job: string; on: "exit" | "line"; pattern?: string; timeout_secs?: number }) {
         return guarded(async () => {
-          const receipt = await jobs.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600, id);
+          const receipt = await jobs.monitor(params.job, params.on, params.pattern, params.timeout_secs ?? 3600,
+            callKey(JOB_MONITOR_TOOL, id));
           return { state: receipt.state, result: receipt.result };
         });
       },

@@ -29,7 +29,7 @@ const guidance = {
   settings: { background_shell: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 } }, projectText: false,
 };
 
-test("background_shell gives only the worker job tools, and the monitor runs only at top level", async () => {
+test("background_shell gives only the worker job tools, and another tool cannot nest the receipted monitor", async () => {
   // Given a worker host with background_shell and a nested tool that tries the monitor.
   const assets = buildFixtureInstall();
   const cwd = mkdtempSync(join(tmpdir(), "corral-pi-jobs-host-"));
@@ -102,8 +102,11 @@ test("background_shell gives only the worker job tools, and the monitor runs onl
         .find((part) => part.name === name)?.id ?? "";
       expect(jobCalls[2]?.request_id).toBe(toolRequestId(sessionId, callId("corral_job_monitor")));
       expect(jobCalls[0]?.request_id).toBe(toolRequestId(sessionId, `${callId("job_start")}/prepare`));
-      // model-only tools are refused by upstream before the host tool_call hook.
-      expect(host.session.getAllTools().find(tool => tool.name === "corral_job_monitor")?.exposure).toBe("model-only");
+      // Callable from Code Mode (journaled), so the host's check, not exposure, refuses other nesting.
+      expect(host.session.getAllTools().find(tool => tool.name === "corral_job_monitor")?.exposure).toBe("direct");
+      expect(events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
+        .filter((event) => event.kind === "tool_denied").map((event) => [event.tool, event.nested]))
+        .toEqual([["corral_job_monitor", true]]);
       expect((host.state().jobs as { job: string; state: string }[]).map((job) => [job.job, job.state]))
         .toEqual([["j1-1", "exited"]]);
     } finally {

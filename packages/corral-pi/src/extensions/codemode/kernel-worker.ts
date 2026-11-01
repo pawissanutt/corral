@@ -96,6 +96,12 @@ const BOOTSTRAP = `"use strict";
     defineProperty(globalThis, name, { value: globals[name], writable: false, enumerable: false, configurable: false });
   }
   defineProperty(E, "prepareStackTrace", { value: undefined, writable: false, configurable: false });
+  // JSON.stringify of an Error (an allSettled reason, a caught failure) keeps its details, not {}.
+  defineProperty(E.prototype, "toJSON", { value: function toJSON() {
+    const out = { name: this.name, message: this.message };
+    for (const key of keys(this)) out[key] = this[key];
+    return out;
+  }, writable: false, enumerable: false, configurable: false });
   // Engine-scheduled callbacks could resume a finished cell's code while no cell runs.
   delete globalThis.FinalizationRegistry;
   delete globalThis.WebAssembly;

@@ -3,6 +3,7 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 
+import type { CodeParent } from "../extensions/codemode/child.ts";
 import type { CorralOp, HostIdentity } from "../roles/types.ts";
 
 export const ENVELOPE_VERSION = 1;
@@ -78,6 +79,8 @@ export interface CorralCall {
   readonly bindNonce?: string;
   /** Overrides the client's deadline for this one call. */
   readonly timeoutMs?: number;
+  /** A nested Code Mode call: corral checks that `requestId` is derived from it (T-683). */
+  readonly parent?: CodeParent;
 }
 
 export interface CorralClientOptions {
@@ -139,6 +142,7 @@ export class CorralClient {
         session_id: this.options.sessionId(),
         generation: identity.generation,
         turn: call.turn,
+        parent: call.parent,
       },
       auth: { host_cap: this.options.hostCap, bind_nonce: call.bindNonce },
       payload: call.payload,

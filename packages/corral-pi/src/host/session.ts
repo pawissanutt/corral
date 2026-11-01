@@ -18,7 +18,9 @@ import type { AwsBinding, AwsCredentialResolver } from "../auth/aws.ts";
 import { RunBudget } from "../capabilities/budget.ts";
 import { BashPermissions } from "../capabilities/bash-rules.ts";
 import { compactionSettings } from "../capabilities/compaction.ts";
-import { codemode } from "../capabilities/codemode.ts";
+import { codemodeTool } from "../capabilities/codemode.ts";
+import { nestedChild } from "../extensions/codemode/child.ts";
+import { CODE_CALL_ENTRY, CodeRuntime } from "../extensions/codemode/runtime.ts";
 import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
 import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
@@ -253,6 +255,8 @@ export class HostSession {
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
   private readonly jobs: JobRuntime | undefined;
+  /** The generation's Code Mode kernel and its nested-call bridge (T-683); absent when disabled. */
+  private readonly code: CodeRuntime | undefined;
   private writePermissionNotice: (() => Promise<void>) | undefined;
   private writeAbort = new AbortController();
   private turn = 0;
@@ -362,6 +366,16 @@ export class HostSession {
       this.additionalLsp = lspToolkit({ root: options.cwd, servers: configuredServers(options.guidance?.settings.lsp), registerCapability });
     }
     this.jobs = this.jobRuntime(registerCapability);
+    this.code = options.capabilities?.enabled.includes("codemode") ? new CodeRuntime({
+      generation: options.identity.generation,
+      emit: (kind, data) => { options.events.emit(kind, data); },
+      journal: (data) => { this.session.sessionManager.appendCustomEntry(CODE_CALL_ENTRY, data); },
+      // A detached cell's one notice enters like bridge input: journaled delivery, its own turn origin.
+      notify: async (key, text) => {
+        const sent = await this.submit({ text, busyPolicy: "follow_up", idempotencyKey: key, origin: "code-cell" }, key);
+        return sent.reason === undefined ? sent.disposition : `${sent.disposition}: ${sent.reason}`;
+      },
+    }) : undefined;
     const subscriptionSearch = webEnabled && options.capabilities?.web?.search_provider === "subscription";
     const auxiliary = { ...auxiliarySettings(options.identity.role, options.capabilities?.enabled ?? [], options.guidance?.settings),
       ...(subscriptionSearch ? { web_search: { model: null, timeout_secs: (options.capabilities?.web?.timeout_ms ?? 15000) / 1000 } } : {}),
@@ -601,8 +615,15 @@ export class HostSession {
 
   private async extension(pi: ExtensionAPI): Promise<void> {
     this.dialogPi = pi;
-    if (this.options.capabilities?.enabled.includes("codemode")) {
-      await codemode(this.options.sdk.createCodemodeExtension)(pi);
+    const code = this.code;
+    if (code) {
+      pi.registerTool(codemodeTool(code, (names) =>
+        names.filter((name) => executionRefusal(name, true, new Set(this.loadout)) === undefined)));
+      pi.on("session_start", () => { code.bound(); });
+      pi.on("session_shutdown", async (event) => {
+        if (event.reason === "reload") await code.rebind();
+        else await code.close();
+      });
     }
     if (this.additionalLsp) pi.on("session_shutdown", async () => { await this.additionalLsp?.shutdown(); });
     const settings = this.options.capabilities?.mcp;
@@ -618,7 +639,7 @@ export class HostSession {
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
     const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
-    const reads = new Set(specs.filter(spec => nestedCorralRead(spec.op)).map(spec => spec.name));
+    const reads = new Set(specs.filter((spec) => nestedCorralRead(spec.op)).map((spec) => spec.name));
     const rich = this.options.ui !== "plain";
     const role = this.options.identity.role;
     this.ledger = this.loadout.includes("corral_todo")
@@ -650,13 +671,16 @@ export class HostSession {
       });
     }
     for (const tool of this.localTools) pi.registerTool(tool);
-    // One execution check for model-issued and nested calls. Only the explicit receipt-free
-    // board reads may nest; all receipt-bearing operations need a transcript tool call.
+    // One execution check for model-issued and nested calls; a Code Mode child it refuses is
+    // reported as denied with no effect.
     pi.on("tool_call", (event) => {
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
-      const reason = executionRefusal(event.toolName, nested, allowed, corral, reads);
+      const child = nested ? nestedChild(event.toolName, event.toolCallId) : undefined;
+      const unjournaled = corral.has(event.toolName) && !reads.has(event.toolName) && child === undefined;
+      const reason = executionRefusal(event.toolName, nested, allowed, unjournaled);
       if (!reason) return undefined;
+      if (child) child.denied = reason;
       this.deniedTools++;
       this.options.events.emit("tool_denied", { tool: event.toolName, ...(nested ? { nested: true } : {}) });
       return {
@@ -707,9 +731,7 @@ export class HostSession {
         },
       });
     }
-    pi.on("tool_result", (event) => {
-      if (event.parentToolCallId === undefined) this.observeQuestion(event.toolName, event.input, event.details);
-    });
+    pi.on("tool_result", (event) => this.observeQuestion(event.toolName, event.input, event.details));
     pi.on("input", async (event) => {
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
@@ -960,6 +982,11 @@ export class HostSession {
     return this.continuations;
   }
 
+  /** Every detached Code Mode cell's notice started so far has been delivered or refused. */
+  async codeNoticed(): Promise<void> {
+    await this.code?.notified();
+  }
+
   async close(): Promise<void> {
     this.closing = true;
     this.unsubscribePanels?.();
@@ -967,6 +994,7 @@ export class HostSession {
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
     this.writeAbort.abort();
+    await this.code?.close();
     const aborted = this.session.abort();
     await this.auxiliary?.close();
     await this.jobs?.shutdown();
@@ -1118,6 +1146,7 @@ export class HostSession {
         context_files: resources.getAgentsFiles().agentsFiles.length,
       },
       jobs: this.jobs?.state() ?? null,
+      codemode: this.code?.state() ?? null,
       checkpoints: this.checkpoints !== undefined,
       auxiliary: this.auxiliary?.state() ?? null,
       budget: (this.options.capabilities?.catalog ?? 0) >= 7 ? this.budget.state() : { unavailable: "legacy generation predates budget accounting" },
