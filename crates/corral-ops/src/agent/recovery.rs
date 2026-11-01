@@ -830,6 +830,9 @@ mod cancel_tests;
 #[path = "recovery_clock_tests.rs"]
 mod clock_tests;
 #[cfg(all(test, target_os = "linux"))]
+#[path = "recovery_code_tests.rs"]
+mod code_tests;
+#[cfg(all(test, target_os = "linux"))]
 #[path = "recovery_crash_tests.rs"]
 mod crash_tests;
 #[cfg(all(test, target_os = "linux"))]
