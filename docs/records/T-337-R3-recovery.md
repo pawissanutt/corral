@@ -1,5 +1,9 @@
 # T-337 R3 guarded delivery recovery
 
+## Latest changes round 2
+
+Review3 confirms F1/F2 fixed but finds completion's retained reader flattened physical budget_requests instead of restoring budget.requests. `docs/records/T-337-R3-round2-budget-reader.md` records the minimal head_agent.rs-only production fix, new all-ten-family reader round-trip, actual completion with uncertain/settled nonempty budget through same-worker reopen/appends, red reproductions and **11 new/affected tests x20 =220/220 sandbox PASS**. PM explicitly waives another full no-fail-fast run for this scope; fresh quick receipt still required. Earlier completion reports/receipts are superseded, not reused.
+
 ## Superseding changes round 1
 
 Review2 found retained completion setters lost all ten native append positions and receipt edits left cleared work pending. `docs/records/T-337-R3-round1-native-mutators.md` records both fixes, baseline and real-completion negative controls, four new lifecycle/growth regressions20/20 each, and the **new complete5068/5068 no-fail-fast sandbox PASS** (zero OOM). Replacement uses the typed host projection; receipt editing shares the canonical keyed upsert writer. No budgets, effect semantics, signatures or guards are relaxed. The previous55bf9813 gate/completion report is superseded; only the next post-rebase quick receipt can accept the changed candidate.

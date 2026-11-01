@@ -28,7 +28,13 @@ impl TaskHead {
                 u32::MAX,
                 Counter::NestedRowDecodes,
             )?;
-            doc[kind] = rows.into_iter().map(|row| row.doc).collect();
+            let records: Vec<_> = rows.into_iter().map(|row| row.doc).collect();
+            if kind == "budget_requests" {
+                // The physical family is flat, but the cumulative public ledger is nested.
+                doc["budget"] = serde_json::json!({"requests": records});
+            } else {
+                doc[kind] = records.into();
+            }
         }
         Ok(Some(Box::new(serde_json::from_value(doc)?)))
     }

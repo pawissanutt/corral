@@ -36,15 +36,45 @@ fn committed(origin: &RequestOrigin) -> RequestReceipt {
     .unwrap()
 }
 
+fn budget(
+    request: &str,
+    generation: u32,
+    tokens: u64,
+    response: Option<&str>,
+) -> core_agent::BudgetRequest {
+    core_agent::BudgetRequest {
+        request: request.into(),
+        generation,
+        tokens,
+        usd_nanos: tokens * 1000,
+        priced: true,
+        unbounded: false,
+        response: response.map(str::to_owned),
+    }
+}
+
 #[test]
 fn completion_then_same_worker_reopen_appends_without_overwriting_prior_native_records() {
     let fx = fixture(false);
     let generation = fx.bind();
     let old = committed(&fx.call(generation, "before-done", "event"));
+    let reserved = budget("uncertain-before-done", generation, 25, None);
+    let settled = budget(
+        "settled-before-done",
+        generation,
+        75,
+        Some("response-before"),
+    );
     fx.ctx
         .store
         .update_head(&fx.id, |head| {
             head.put_agent_record(&fx.worker(), core_agent::NativeRecord::Receipt(old.clone()))?;
+            for entry in [&reserved, &settled] {
+                head.put_agent_record(
+                    &fx.worker(),
+                    core_agent::NativeRecord::BudgetRequest(entry.clone()),
+                )?;
+            }
             head.settle_native_inbox(&fx.worker(), "2026-01-01T00:00:00Z".parse()?)?;
             Ok(())
         })
@@ -55,7 +85,11 @@ fn completion_then_same_worker_reopen_appends_without_overwriting_prior_native_r
     assert!(finished.receipt.post_pending.is_empty());
     let head = fx.ctx.store.head(&fx.id).unwrap();
     let host = head.agent_head(&fx.worker()).unwrap().unwrap();
-    assert_eq!(host.records.counts, [1, 2, 0, 0, 0, 1, 0, 0, 0, 0]);
+    assert_eq!(host.records.counts, [1, 2, 0, 0, 0, 1, 0, 0, 0, 2]);
+    let completed = fx.task();
+    let ledger = &completed.runs[0].agent_host.as_ref().unwrap().budget;
+    assert_eq!(ledger.requests, vec![reserved.clone(), settled.clone()]);
+    assert_eq!(ledger.totals(), (100, 100_000));
     assert_eq!(host.records.pending, 0);
     assert!(
         head.pending_agent_receipts(&fx.worker())
@@ -79,12 +113,17 @@ fn completion_then_same_worker_reopen_appends_without_overwriting_prior_native_r
     let next_generation = fx.bind();
     assert_eq!(next_generation, generation + 1);
     let next = committed(&fx.call(next_generation, "after-done", "event"));
+    let next_budget = budget("after-done", next_generation, 15, None);
     fx.ctx
         .store
         .update_head(&fx.id, |head| {
             head.put_agent_record(
                 &fx.worker(),
                 core_agent::NativeRecord::Receipt(next.clone()),
+            )?;
+            head.put_agent_record(
+                &fx.worker(),
+                core_agent::NativeRecord::BudgetRequest(next_budget.clone()),
             )
             .map(drop)
         })
@@ -92,21 +131,27 @@ fn completion_then_same_worker_reopen_appends_without_overwriting_prior_native_r
     let full = fx.task();
     let native = full.runs[0].agent_host.as_ref().unwrap();
     assert_eq!(native.receipts, vec![old, finished.receipt, next]);
+    assert_eq!(native.budget.requests, vec![reserved, settled, next_budget]);
+    assert_eq!(native.budget.totals(), (115, 115_000));
+    assert!(native.budget.exhausted(core_agent::BudgetLimits {
+        max_tokens: Some(100),
+        max_usd_nanos: None,
+    }));
     assert_eq!(native.reports.len(), 1);
     assert_eq!(
         native.generations.iter().map(|g| g.n).collect::<Vec<_>>(),
         vec![generation, next_generation]
     );
-    assert_eq!(
-        fx.ctx
-            .store
-            .head(&fx.id)
-            .unwrap()
-            .agent_head(&fx.worker())
-            .unwrap()
-            .unwrap(),
-        corral_core::AgentHostHead::of(native)
-    );
+    let projected = fx
+        .ctx
+        .store
+        .head(&fx.id)
+        .unwrap()
+        .agent_head(&fx.worker())
+        .unwrap()
+        .unwrap();
+    assert_eq!(projected.records.counts, [2, 3, 0, 0, 0, 1, 0, 0, 0, 3]);
+    assert_eq!(projected, corral_core::AgentHostHead::of(native));
 }
 
 #[test]
