@@ -84,8 +84,7 @@ fn default_watch_coalesces_question_mirrors_across_cursor_rearms() {
     ] {
         store.log_event(Some("T-001"), kind, detail).unwrap();
     }
-    let path = store.dir().join("events.jsonl");
-    let mut reader = EventReader::from_offset(&path, 0).unwrap();
+    let mut reader = store.events_since(Some(EventCursor::default())).unwrap();
     for expected in [
         "question_opened",
         "pm_inbox_posted",
@@ -99,10 +98,10 @@ fn default_watch_coalesces_question_mirrors_across_cursor_rearms() {
         .unwrap()
         .unwrap();
         assert_eq!(event.kind, expected);
-        reader = EventReader::open(&path, Some(cursor)).unwrap();
+        reader = store.events_since(Some(cursor)).unwrap();
     }
     assert!(reader.next_event().unwrap().is_none());
-    let mut reader = EventReader::from_offset(&path, 0).unwrap();
+    let mut reader = store.events_since(Some(EventCursor::default())).unwrap();
     let (mirror, _) = follow(&store, &args(&["--for", "needs_me"]), &mut reader, |_| {
         panic!("explicit mirror missing")
     })
