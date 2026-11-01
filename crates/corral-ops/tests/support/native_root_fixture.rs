@@ -251,8 +251,8 @@ pub(super) fn roots(scale: usize) -> Roots {
         scale,
     );
     assert_eq!(
-        fx.ctx.store.active_assistant_ids().unwrap(),
-        [assistant.clone()]
+        fx.ctx.store.active_assistant_ids().unwrap().as_slice(),
+        std::slice::from_ref(&assistant)
     );
     assert!(fx.ctx.store.board(None).unwrap().heads.is_empty());
     let pm = bridge::bridge(

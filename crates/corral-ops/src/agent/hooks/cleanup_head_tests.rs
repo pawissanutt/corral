@@ -29,7 +29,7 @@ fn runtime_cleanup_is_indexed_ordered_and_stops_after_settlement_without_touchin
         let run = &mut task.runs[0];
         run.inbox.settled = None;
         run.review_runs[0].inbox.settled = None;
-        let recipients = vec![
+        let recipients = [
             Recipient::Run {
                 task: task.id.clone(),
                 run: run.id.clone(),

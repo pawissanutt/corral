@@ -69,7 +69,7 @@ pub(crate) fn start_queued(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
                 if let DispatchOutcome::Started { run_id, .. } = outcome {
                     changes.push(Change {
                         task: task.id.clone(),
-                        from: task.status.clone(),
+                        from: task.status,
                         to: Status::Running,
                         note: format!("dispatched queued task as {run_id}"),
                         stage: None,

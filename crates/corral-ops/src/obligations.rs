@@ -404,7 +404,7 @@ pub(crate) fn answer_reply_with(ctx: &Ctx, id: &str, receipt: &ResumeReceipt) ->
         ctx,
         id,
         ResumeTarget::Decision(&receipt.id),
-        &receipt,
+        receipt,
         corral_core::clock::now(),
     )
     .map(|(task, _)| task)

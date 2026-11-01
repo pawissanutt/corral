@@ -436,9 +436,8 @@ pub(crate) fn build<T: TaskRef + ?Sized>(
     ctx: &Ctx,
     task: &T,
     run: &RunHead,
-    attempt: &str,
+    (attempt, route): (&str, &ReviewRoute),
     record: &ReviewRecord,
-    route: &ReviewRoute,
     previous: Vec<Finding>,
     moved: Option<&IdentityChange>,
 ) -> Result<(ReviewPacket, String)> {
@@ -559,7 +558,7 @@ pub(crate) fn write_with<T: TaskRef + ?Sized>(
     route: &ReviewRoute,
     previous: Vec<Finding>,
 ) -> Result<(String, String)> {
-    let (packet, diff) = build(ctx, task, run, attempt, record, route, previous, None)?;
+    let (packet, diff) = build(ctx, task, run, (attempt, route), record, previous, None)?;
     let (packet_file, diff_file) = paths(ctx, task, run, (attempt, route))?;
     std::fs::write(&diff_file, diff).with_context(|| format!("writing {}", diff_file.display()))?;
     let json = serde_json::to_string_pretty(&packet)?;
@@ -632,7 +631,15 @@ pub(crate) fn route_changes_at<T: TaskRef + ?Sized>(
     )?;
     if packet {
         let previous = findings_of(task, &attempt)?;
-        let built = build(ctx, task, run, &attempt, record, &current, previous, moved)?;
+        let built = build(
+            ctx,
+            task,
+            run,
+            (&attempt, &current),
+            record,
+            previous,
+            moved,
+        )?;
         current.packet_digest = Some(built.0.digest);
     }
     if route.same_assessment(&current) && route.profile == current.profile {
