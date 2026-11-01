@@ -10,7 +10,11 @@ export interface OutputLimits {
   readonly maxImages: number;
   /** Decoded bytes per image. */
   readonly maxImageBytes: number;
+  /** UTF-8 bytes of an error message; error names and codes are capped at ERROR_FIELD_BYTES. */
+  readonly maxErrorBytes: number;
 }
+
+export const ERROR_FIELD_BYTES = 128;
 
 export const IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -27,11 +31,10 @@ export interface WireError {
 
 export type HostMessage =
   | { readonly op: "run"; readonly cell: string; readonly code: string; readonly limits: OutputLimits }
-  | { readonly op: "cancel"; readonly cell: string }
   | { readonly op: "result"; readonly cell: string; readonly call: string; readonly value?: string }
   | { readonly op: "failure"; readonly cell: string; readonly call: string; readonly error: WireError };
 
-export type WorkerStatus = "ok" | "error" | "cancelled";
+export type WorkerStatus = "ok" | "error";
 
 export type WorkerMessage =
   | { readonly op: "ready"; readonly module: string }
@@ -85,6 +88,14 @@ export class OutputBudget {
     }
     this.images++;
     return true;
+  }
+
+  error(error: WireError): WireError {
+    const name = clipUtf8(error.name, ERROR_FIELD_BYTES);
+    const message = clipUtf8(error.message, this.limits.maxErrorBytes);
+    const code = error.code === undefined ? undefined : clipUtf8(error.code, ERROR_FIELD_BYTES);
+    if (name !== error.name || message !== error.message || code !== error.code) this.truncated = true;
+    return { name, message, ...(code === undefined ? {} : { code }) };
   }
 
   value(text: string | undefined): string | undefined {
