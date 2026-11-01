@@ -266,8 +266,10 @@ mod artifact_facts_list {
             // Given a current run's growing artifacts and reviewed terminal history.
             let root = tempfile::tempdir().unwrap();
             let store = Store::init(root.path()).unwrap();
-            let mut task = store.create("Active", None, Status::Running, "").unwrap();
             let now: Timestamp = "2026-01-01T00:00:00Z".parse().unwrap();
+            // Derived rows retain mutation timestamps as well as the Task fields below.
+            store.fixture_pin_now(now).unwrap();
+            let mut task = store.create("Active", None, Status::Running, "").unwrap();
             task.created = now;
             task.updated = now;
             let run: corral_core::Run = serde_json::from_value(serde_json::json!({
