@@ -20,7 +20,8 @@ export function fileStatus(file: PanelFile): string {
   if (file.status.includes("A")) return "Added";
   return "Modified";
 }
-export interface PatchSnapshot { readonly root: string; readonly path: string; readonly comparison: Comparison; readonly head: string | undefined; readonly base?: string; readonly at: number; readonly text: string }
+export interface FileStat { readonly added: number | null; readonly removed: number | null }
+export interface PatchSnapshot { readonly root: string; readonly path: string; readonly comparison: Comparison; readonly head: string | undefined; readonly base?: string; readonly at: number; readonly text: string; readonly file: PanelFile; readonly stat: FileStat | undefined }
 export class ReviewStore {
   patchSnapshot: PatchSnapshot | undefined;
   candidateBase: string | undefined;
@@ -28,7 +29,7 @@ export class ReviewStore {
   files: readonly PanelFile[] = []; selected: string | undefined;
   patch = "Select a file to inspect its diff."; error: string | undefined;
   checkedAt: number | undefined; refreshing = false; revision = 0;
-  stats: ReadonlyMap<string, { added: number | null; removed: number | null }> = new Map();
+  stats: ReadonlyMap<string, FileStat> = new Map();
   private epoch = 0; private patchEpoch = 0; private disposed = false;
   private readonly abort = new AbortController();
   private active: Promise<void> | undefined;
@@ -99,12 +100,13 @@ export class ReviewStore {
     const file = this.current, epoch = ++this.patchEpoch, root = this.root, comparison = this.comparison, head = this.head;
     if (!file) { this.patchSnapshot = undefined; this.patchPath = this.selected; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = this.error ?? (this.selected ? "Selected path is no longer in this comparison. Choose another file with j/k." : this.files.length ? "No files match the current filter." : comparison === "candidate" ? "No committed candidate changes." : "Working tree clean."); this.changed(); return; }
     try {
-      const base = this.candidateBase;
+      const base = this.candidateBase, stat = this.stats.get(file.path);
+      const metadata = { file: { ...file }, stat: stat ? { ...stat } : undefined };
       const patch = comparison === "candidate" ? await readCandidateDiff(root, file, base, head, this.abort.signal)
         : await readPanelDiff(root, file, this.abort.signal, comparison, head);
       if (!this.disposed && epoch === this.patchEpoch && root === this.root && comparison === this.comparison && file.path === this.selected) {
         this.patch = patch; this.patchComparison = comparison; this.patchPath = file.path; this.patchAt = Date.now();
-        this.patchSnapshot = { root, path: file.path, comparison, head, ...(comparison === "candidate" && base ? { base } : {}), at: this.patchAt, text: patch }; this.changed();
+        this.patchSnapshot = { ...metadata, root, path: file.path, comparison, head, ...(comparison === "candidate" && base ? { base } : {}), at: this.patchAt, text: patch }; this.changed();
       }
     } catch (error) {
       if (!this.disposed && epoch === this.patchEpoch) { this.patchSnapshot = undefined; this.patchPath = file.path; this.patchComparison = comparison; this.patchAt = Date.now(); this.patch = "Diff unavailable: " + gitFailure(error); this.changed(); }

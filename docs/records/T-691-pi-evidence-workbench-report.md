@@ -2,7 +2,7 @@
 
 ## Delivered
 
-Pi's existing native workbench now defaults task/run sessions to the **committed candidate** comparison. The canonical reader resolves the integration merge base and candidate HEAD; bounded Git reads use those immutable SHAs for the changed-path list, rename/binary-aware diffstat and selected hunks. Both identities are displayed in full in the main reading area. Keyboard and pointer file selection use the same store. Working/index comparisons remain independently available through `c`; changing repository scope does not rebind the host or its evidence.
+Pi's existing native workbench now defaults task/run sessions to the **committed candidate** comparison. The canonical reader resolves the integration merge base and candidate HEAD; bounded Git reads use those immutable SHAs for the changed-path list, rename/binary-aware diffstat and selected hunks. Both identities are displayed in full in the main reading area. Selected-file status and diffstat are captured with the retained patch, so refreshes cannot attribute a newer candidate’s metadata to an older displayed hunk. Keyboard and pointer file selection use the same store. Working/index comparisons remain independently available through `c`; changing repository scope does not rebind the host or its evidence.
 
 F10 and `/panels evidence` open an integrated read-only criterion/evidence view. Wide matrices and narrow stacked rows keep implemented, tested, reviewed and accepted separate:
 
@@ -31,8 +31,14 @@ Checks run:
 - `cargo test -p corral-ops workbench::tests --lib` — **5 passed**.
 - `cargo build -p corral` — **passed**.
 - Package `bun run typecheck` — **passed** after frozen dependency installation.
-- Package `bun test src/ui/ src/roles/worker/worker.test.ts src/roles/reviewer/reviewer.test.ts` — **91 passed**. These include bound-role restrictions and the unchanged real host lifecycle with offline providers.
+- Package `bun test src/ui/ src/roles/worker/worker.test.ts src/roles/reviewer/reviewer.test.ts` — **92 passed** after the F1 rendering regression. These include bound-role restrictions and the unchanged real host lifecycle with offline providers.
 - The assigned post-rebase quick gate has its own canonical receipt/log; that receipt, not this report, determines its result.
+
+## Review round 1 — F1: retained diff metadata
+
+Reproduced the reviewer’s A→B mismatch before the fix: the main pane retained A’s SHA and `+first` hunk while displaying B’s `+3 −1` diffstat. The new rendering regression fails on that exact mismatch in the red log. `PatchSnapshot` now captures a copy of selected-file status and diffstat before the asynchronous diff read; applying the patch installs that metadata together with the retained text and identities. The refreshed sidebar remains independently bound to its current candidate.
+
+The green regression covers both an edit (+1/−1 → +3/−1) and a deletion (Modified → Deleted, +0/−1), at 80 and 140 columns. It checks initial A, retained A after canonical/Git refresh to B, and explicit `r` application of B. All 82 assertions pass. Attached ANSI/screenshot proof uses disposable real Git repositories through the production inspection/rendering seam, explicitly not a live bound host. The original canonical adapter/authority scope is unchanged.
 
 ## Capture method and boundaries
 
