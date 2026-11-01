@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-01T04:35:33.003Z",
+  "generatedAt": "2026-11-01T05:02:34.065Z",
   "title": "Design System: Corral Pi native workbench",
   "extensions": {
     "shadows": [],
@@ -16,7 +16,7 @@
       },
       {
         "name": "inline-height",
-        "value": "4–7 terminal rows"
+        "value": "1 row at rest; 2 detail rows focused; up to 4 explicitly expanded"
       }
     ]
   },

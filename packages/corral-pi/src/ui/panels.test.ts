@@ -6,7 +6,9 @@ import { execFileSync } from "node:child_process";
 import { visibleWidth, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { NativePanels } from "./panels.ts";
-import { box, panelLines, summary, type PanelSnapshot } from "./panels-view.ts";
+import { box, panelLines, type PanelSnapshot } from "./panels-view.ts";
+import { composerBar, contextLabel, overviewLines, panelFooter, panelHeader } from "./panels-chrome.ts";
+import { STATUS_BINDING, STATUS_ALERTS } from "./chrome.ts";
 import { parseStatus, readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
@@ -87,12 +89,48 @@ test("native panel boxes are bounded at supported widths, sanitize controls and 
 });
 test("view data uses measured values and explicit unavailable/empty states, never fixture quotas or progress", () => {
   const context = panelLines("Context", identity, snapshot, { kind: "unread" }).map(line => line.text).join("\n");
-  expect(context).toContain("1,234 / 10,000"); expect(context).toContain("1 steering · 2 follow-ups");
+  expect(context).toContain("1 active tools · 0 skills"); expect(context).toContain("5,678 recorded session tokens");
   expect(context).toContain("job-1 · running");
   expect(panelLines("Plan", identity, snapshot, { kind: "unread" }).map(line => line.text)).toContain("No canonical plan recorded");
-  expect(summary(null, { kind: "unread" })).toBe("Waiting for bound session state");
-  expect(summary(snapshot, { kind: "ready", files: [] })).toBe("12% context · 0 files · 0/0 steps");
+  expect(contextLabel(null)).toBe("Context unavailable");
+  expect(contextLabel(snapshot)).toBe("1.2k/10k · 12% context");
+  expect(overviewLines(snapshot, { kind: "ready", files: [] }).map(row => row.text)).toContain("Working tree clean");
   expect(stripTerminalSequences(context)).not.toContain("42%");
+});
+test("ambient context inspection does not repeat composer model or context-usage chrome", () => {
+  const context = panelLines("Context", identity, snapshot, { kind: "unread" }).map(line => line.text).join("\n");
+  expect(context).not.toContain("openai-codex/example");
+  expect(context).not.toContain("1,234 / 10,000");
+});
+test("model and measured context have one ambient owner, with binding and refusals retained", () => {
+  for (const width of [52, 80, 105, 140]) for (const inRail of [false, true]) {
+    const statuses = new Map([[STATUS_BINDING, "● corral g3"], [STATUS_ALERTS, "2 tool denied"]]);
+    const header = panelHeader(identity, "/repo/demo", "main", snapshot, width);
+    const footer = panelFooter(snapshot, inRail, statuses, width);
+    const inspector = (inRail ? overviewLines(snapshot, { kind: "ready", files: [] })
+      : panelLines("Context", identity, snapshot, { kind: "unread" })).map(row => row.text);
+    const screen = stripTerminalSequences([...header, composerBar(snapshot, width), ...footer, ...inspector].join("\n"));
+    expect(screen.match(/example/g)).toHaveLength(1);
+    expect(screen.match(/12% context/g)).toHaveLength(1);
+    expect(screen).toContain("Bound to Corral");
+    expect(screen).toContain("2 tool denied");
+    expect(screen).not.toContain("● corral g3");
+    for (const line of [...header, composerBar(snapshot, width), ...footer]) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  }
+});
+test("narrow metadata is one row at rest; focused and expanded details are bounded and retain selection", () => {
+  const native = new NativePanels({ identity, cwd: work, snapshot: () => snapshot });
+  const physical = new RecordingTerminal(); physical.resize(80, 34);
+  native.wrap(physical);
+  expect(native.renderInline(80, 34)).toHaveLength(1);
+  expect(native.handleInput("\x1b[17~")).toBeTrue();
+  expect(native.renderInline(80, 34)).toHaveLength(3);
+  native.handleInput("\x1b"); expect(native.renderInline(80, 34)).toHaveLength(1);
+  native.handleInput("\x02"); expect(native.renderInline(80, 34)).toHaveLength(5);
+  physical.resize(52, 24);
+  for (const line of native.renderInline(52, 24)) expect(visibleWidth(line)).toBe(52);
+  expect(native.tab).toBe("Context");
+  native.dispose();
 });
 test("Git porcelain parsing handles real NUL separators, rename source fields, spaces and Unicode", () => {
   expect(parseStatus(" M a file.ts\0R  新.ts\0old.ts\0?? --flag.ts\0")).toEqual([

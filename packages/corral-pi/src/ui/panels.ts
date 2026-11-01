@@ -6,8 +6,9 @@ import type { HostIdentity } from "../roles/types.ts";
 import { PanelTerminal, type PanelSurface } from "./panel-terminal.ts";
 import { readPanelDiff, readPanelFiles } from "./panels-git.ts";
 import { panelTheme } from "./panels-theme.ts";
+import { composerBar, overviewLines, panelFooter, panelHeader, splitRow } from "./panels-chrome.ts";
 import {
-  box, pad, panelLines, plainLabel, summary, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED,
+  box, pad, panelLines, plainLabel, PANEL_TABS, PANEL_BG, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, RESET,
   type FilesState, type PanelSnapshot, type PanelTab,
 } from "./panels-view.ts";
 
@@ -22,7 +23,7 @@ export class NativePanels implements PanelSurface {
   sidebarEnabled = true;
   tab: PanelTab = "Context";
   focused = false;
-  expanded = true;
+  expanded = false;
   offset = 0;
   private terminal: PanelTerminal | undefined;
   private ui: ExtensionUIContext | undefined;
@@ -102,7 +103,9 @@ export class NativePanels implements PanelSurface {
     this.refresh();
   }
   private content(capacity: number): string[] {
-    const lines = this.lines();
+    const lines = this.wide && this.tab === "Context" && !this.focused
+      ? overviewLines(this.options.snapshot(), this.files)
+      : this.lines().filter(line => this.wide || !line.heading);
     if (this.tab === "Files" && this.files.kind === "ready" && this.files.files.length) {
       const files = this.files.files;
       const start = Math.max(0, Math.min(this.fileIndex, files.length - capacity));
@@ -117,21 +120,17 @@ export class NativePanels implements PanelSurface {
       (row.heading ? PANEL_BLUE : PANEL_MUTED) + row.text + PANEL_TEXT);
   }
   renderSidebar(width: number, height: number): readonly string[] {
-    const identity = this.options.identity;
-    const head = `${identity.task ?? identity.assistant ?? identity.project} · ${identity.role}`;
-    const snapshot = this.options.snapshot();
-    const lines = [this.tabs(), PANEL_MUTED + plainLabel(head) + PANEL_TEXT,
-      PANEL_MUTED + summary(snapshot, this.files) + PANEL_TEXT, "", ...this.content(Math.max(0, height - 8))];
+    const lines = [this.tabs(), "", ...this.content(Math.max(0, height - 5))];
     while (lines.length < height - 3) lines.push("");
     lines.push(PANEL_MUTED + (this.focused ? "←/→ tabs · ↑/↓ · Enter · Esc" : "F6 inspect · Ctrl+B inline") + PANEL_TEXT);
     return box("Session", lines, width, height, this.focused);
   }
-  private inline(width: number, rows: number): string[] {
+  renderInline(width: number, rows: number): string[] {
     if (this.wide) return [];
-    const height = this.expanded ? Math.max(5, Math.min(7, Math.floor(rows / 4))) : 4;
-    const lines = [this.tabs(), PANEL_MUTED + summary(this.options.snapshot(), this.files) + PANEL_TEXT,
-      ...this.content(Math.max(0, height - 4))];
-    return box("Session · F6 inspect · Ctrl+B details", lines, width, height, this.focused);
+    const capacity = this.focused || this.expanded ? Math.min(this.expanded ? 4 : 2, Math.max(1, Math.floor(rows / 8))) : 0;
+    const navigation = splitRow(PANEL_TEXT + " " + this.tabs(), PANEL_MUTED + (this.focused ? "↑↓ Enter · Esc" : "F6 inspect"), width);
+    return [PANEL_BG + navigation + RESET,
+      ...this.content(capacity).map(line => PANEL_BG + pad("  " + line, width) + RESET)];
   }
   private move(delta: number): void {
     if (this.tab === "Files" && this.files.kind === "ready") {
@@ -199,13 +198,13 @@ export class NativePanels implements PanelSurface {
   }
   private click(x: number, y: number, inline: boolean): void {
     if (!this.canInteract) return;
-    if (y === 1) {
+    if (y === (inline ? 0 : 1)) {
       const tab = this.tabHits.find(hit => x >= hit.from && x < hit.to)?.tab;
-      if (tab) this.choose(tab);
+      if (tab) { if (inline) this.focused = true; this.choose(tab); }
     } else if (this.tab === "Files" && this.files.kind === "ready") {
-      const index = this.sidebarStart + y - (inline ? 3 : 5);
+      const index = this.sidebarStart + y - (inline ? 1 : 3);
       if (index >= 0 && index < this.files.files.length) { this.fileIndex = index; void this.inspect(); }
-    } else if (y >= (inline ? 3 : 5)) void this.inspect();
+    } else if (y >= (inline ? 1 : 3)) void this.inspect();
   }
   handleInput(data: string): boolean {
     if (isKeyRelease(data)) return false;
@@ -228,7 +227,7 @@ export class NativePanels implements PanelSurface {
         return true; // Physical rail cells must not enter Pi's smaller main viewport.
       }
     }
-    if (!this.canInteract) return false;
+    if (!this.canInteract || mouse) return false;
     if (matchesKey(data, "ctrl+b")) {
       if ((this.terminal?.physical.columns ?? 0) >= 105) this.sidebarEnabled = !this.sidebarEnabled;
       else this.expanded = !this.expanded;
@@ -258,23 +257,53 @@ export class NativePanels implements PanelSurface {
       const owner = this;
       ctx.ui.setEditorComponent((tui, theme, keys) => {
         const editor = new class extends sdk.CustomEditor {
+          setPaddingX(padding: number): void { super.setPaddingX(Math.max(2, padding)); }
+          protected renderTopBorder(width: number, hidden: number): string {
+            if (hidden) return super.renderTopBorder(width, hidden);
+            return PANEL_MUTED + "┌─ Message " + "─".repeat(Math.max(0, width - 12)) + "┐";
+          }
+          protected renderBottomBorder(width: number, hidden: number): string {
+            return composerBar(owner.options.snapshot(), width, hidden);
+          }
+          handleMouse(event: TuiMouseEvent) {
+            if (event.type === "click" && event.button === "left") { owner.focused = false; owner.refresh(); }
+            return super.handleMouse(event);
+          }
           render(width: number): string[] {
             this.borderColor = text => ctx.ui.theme.fg("borderAccent", text);
-            return super.render(width).map(line => ctx.ui.theme.bg("userMessageBg", pad(line, width)));
+            return super.render(width).map(line => {
+              const framed = line.startsWith(" ") && line.endsWith(" ")
+                ? PANEL_MUTED + "│" + PANEL_TEXT + line.slice(1, -1) + PANEL_MUTED + "│" : line;
+              return ctx.ui.theme.bg("userMessageBg", pad(framed, width));
+            });
           }
         }(tui, theme, keys);
+        editor.setPaddingX(2);
         owner.editorFocused = () => editor.focused;
         owner.requestRender = () => tui.requestRender();
         owner.hasOverlay = () => tui.hasOverlay();
         return editor;
       });
+      ctx.ui.setFooter((tui, _theme, data) => {
+        const unsubscribe = data.onBranchChange(() => tui.requestRender());
+        ctx.ui.setHeader(() => ({
+          render: width => panelHeader(this.options.identity, this.options.cwd, data.getGitBranch(), this.options.snapshot(), width),
+          invalidate() {},
+        }));
+        return {
+          render: width => panelFooter(this.options.snapshot(), this.wide && this.tab === "Context" && !this.focused,
+            data.getExtensionStatuses(), width),
+          invalidate() {}, dispose: unsubscribe,
+        };
+      });
+      void this.loadFiles();
       ctx.ui.setWidget("corral-session-inspector", (tui): Component => ({
-        render: width => this.inline(width, tui.terminal.rows),
+        render: width => this.renderInline(width, tui.terminal.rows),
         handleMouse: (event: TuiMouseEvent) => {
           if (!this.canInteract) return undefined;
           if (event.type === "wheel") { this.move(event.wheelDelta ?? 0); return { handled: true }; }
           if (event.type === "click" && event.button === "left") {
-            this.click(event.x - 2, event.y, true); return { handled: true };
+            this.click(event.x - 1, event.y, true); return { handled: true };
           }
           return undefined;
         },

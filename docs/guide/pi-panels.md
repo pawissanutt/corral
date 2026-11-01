@@ -22,9 +22,11 @@ Do not use `--bare` to test Corral integration, `--pm` just to preview UI, or re
 ## Layout and controls
 
 - **105+ columns:** real conversation/composer on the left, a 34-column session rail on the right.
-- **Narrow:** Context / Files / Agents / Plan inspector above the actual composer, without replacing the transcript. Resize retains draft, binding, selected tab and file.
+- **Narrow:** one Context / Files / Agents / Plan navigation row above the real Message composer. Details stay collapsed until focused/expanded. Resize retains draft, binding, selected tab and file.
+- **Single status ownership:** model/effort appear only in the composer. Context usage appears in the wide overview or the compact footer, never both. Binding/path live in the branded header; refusals and other extension statuses remain visible. Full SDK statistics remain available through `/session`.
+- **Wide overview:** Context, Changed files, Agents & jobs and Plan are grouped like the approved mock. No placeholder `? files` or empty `0/0 steps` strip.
 - **F6:** focus/leave inspector; left/right switches tabs, up/down scrolls/selects, Enter inspects, Escape returns to the composer. Typing returns to the actual editor instead of losing text.
-- **Ctrl+B:** wide sidebar/inline mode; narrow expanded/compact details.
+- **Ctrl+B:** wide sidebar/inline mode; narrow explicit expanded/collapsed details. At rest the 80-column dock uses five rows total (navigation, three-row composer, one-row footer), down from thirteen. F6 adds two detail rows; Escape collapses them. Clicking the actual editor returns focus without losing the draft.
 - **Mouse:** native tab and file selection; scroll inspector content. Selecting a Git file opens a read-only diff overlay; Escape closes it.
 - **`/panels context|files|agents|plan`:** select/focus a section. `/panels refresh` rereads Git; `/panels toggle` changes layout preference.
 
