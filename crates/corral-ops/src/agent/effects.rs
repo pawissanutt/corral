@@ -491,7 +491,17 @@ fn run_effect(
                     _ => None,
                 };
                 let review = child.or_else(|| named.as_ref().and_then(|r| r.review.clone()));
-                detail["notes"] = json!(review.and_then(|r| r.notes));
+                let notes = review.and_then(|r| r.notes);
+                ctx.store.try_update_head(task_id, |_| {
+                    detail["notes"] = notes
+                        .as_deref()
+                        .map(|s| ctx.store.event_text(s))
+                        .transpose()?
+                        .unwrap_or(serde_json::Value::Null);
+                    ctx.store.log_event(Some(task_id), kind, detail)?;
+                    Ok(true)
+                })?;
+                return Ok(true);
             }
             ctx.store.log_event(Some(task_id), kind, detail)?;
             Ok(true)
