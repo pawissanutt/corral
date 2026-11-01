@@ -321,28 +321,105 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
     let known: HashSet<String> = task.artifacts.iter().map(|a| a.path.clone()).collect();
     let stat = corral_git::diff_stat(&run.worktree, &run.base_sha)?;
     let cfg = &ctx.store.config.artifacts;
-    let mut added = Vec::new();
-    let paths = stat
+    let paths: Vec<_> = stat
         .files
         .iter()
         .map(|file| file.path.clone())
-        .chain(corral_git::ignored_artifact_scratch(&run.worktree)?);
-    for path in paths {
-        if !cfg.globs.iter().any(|g| glob_match(g, &path)) {
-            continue;
-        }
-        let full = run.worktree.join(&path);
-        match std::fs::metadata(&full) {
-            Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
-            _ => continue,
-        }
-        let artifact = add_artifact(ctx, &task.id, &full, None, None)?;
-        if !known.contains(&artifact.path)
-            && !added.iter().any(|a: &Artifact| a.path == artifact.path)
-        {
-            added.push(artifact);
-        }
+        .chain(corral_git::ignored_artifact_scratch(&run.worktree)?)
+        .filter(|path| cfg.globs.iter().any(|g| glob_match(g, path)))
+        .collect();
+    if paths.is_empty() {
+        return Ok(Vec::new());
     }
+    crate::assistant_artifacts::check_owner(None)?;
+    let mut added = Vec::new();
+    let mut published = Vec::new();
+    let storage = crate::artifact_storage::storage_lock(ctx)?;
+    ctx.store.update(id, |t| {
+        let current = t
+            .current_run()
+            .context("missing run during artifact scan")?;
+        anyhow::ensure!(
+            current.id == run.id,
+            "stale_retry: run changed during artifact scan"
+        );
+        for path in &paths {
+            let full = run.worktree.join(path);
+            match std::fs::metadata(&full) {
+                Ok(m) if m.is_file() && m.len() <= cfg.max_bytes => {}
+                _ => continue,
+            }
+            let bytes =
+                std::fs::read(&full).with_context(|| format!("reading {}", full.display()))?;
+            // Recheck after reading: the source can grow between metadata and read.
+            anyhow::ensure!(
+                bytes.len() as u64 <= cfg.max_bytes,
+                "artifact {} exceeds max_bytes",
+                full.display()
+            );
+            let sha = sha256_hex(&bytes);
+            if let Some(existing) = t
+                .artifacts
+                .iter_mut()
+                .find(|a| a.run == run.id && a.sha256 == sha)
+            {
+                if existing.purged_at.is_some() {
+                    existing.compressed_bytes = crate::artifact_storage::snapshot(
+                        ctx,
+                        &ctx.store.dir().join(&existing.path),
+                        &bytes,
+                        existing,
+                    )?;
+                    existing.purged_at = None;
+                    published.push(existing.clone());
+                }
+                continue;
+            }
+            let file_name = full
+                .file_name()
+                .context("artifact has no file name")?
+                .to_string_lossy()
+                .into_owned();
+            let snap_name = format!("{}-{file_name}", &sha[..8]);
+            let dir = ctx.store.artifacts_dir(&t.id, &run.id);
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+            let source = std::fs::canonicalize(&full).unwrap_or_else(|_| full.clone());
+            let mut artifact = Artifact {
+                run: run.id.clone(),
+                kind: ArtifactKind::guess(&file_name),
+                title: file_name,
+                path: format!("artifacts/{}/{}/{snap_name}", t.id, run.id),
+                source: source.to_string_lossy().into_owned(),
+                sha256: sha,
+                bytes: bytes.len() as u64,
+                added: corral_core::clock::now(),
+                tier_override: None,
+                compressed_bytes: None,
+                purged_at: None,
+            };
+            artifact.compressed_bytes =
+                crate::artifact_storage::snapshot(ctx, &dir.join(&snap_name), &bytes, &artifact)?;
+            if artifact.kind == ArtifactKind::Diff {
+                for previous in t.artifacts.iter_mut().filter(|a| {
+                    a.run == run.id && a.kind == ArtifactKind::Diff && a.tier_override.is_none()
+                }) {
+                    previous.tier_override = Some(corral_core::ArtifactTier::Transient);
+                }
+            }
+            if !known.contains(&artifact.path) {
+                added.push(artifact.clone());
+            }
+            published.push(artifact.clone());
+            t.artifacts.push(artifact);
+        }
+        Ok(())
+    })?;
+    drop(storage);
+    for artifact in &published {
+        ctx.store
+            .log_event(Some(id), "artifact", artifact_detail(artifact))?;
+    }
+    crate::content_index::snapshot_if_idle(ctx)?;
     Ok(added)
 }
 

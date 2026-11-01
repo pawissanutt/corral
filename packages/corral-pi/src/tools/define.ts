@@ -88,7 +88,9 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
         return failure({ code: error.code,
           category: error.code === "bad_payload" ? "invalid_arguments"
             : effect === "unknown" && !nestedCorralRead(spec.op) ? "uncertain_effect" : "runtime_failure",
-          reason: error.message, ...error.diagnostics, effect,
+          reason: error.code === "call_timeout" && spec.op === "done"
+            ? `${error.message}. The executor was stopped; look up this request's receipt. If committed, completion succeeded; if no receipt exists, retry done. Check task status before retrying.`
+            : error.message, ...error.diagnostics, effect,
           ...(effect === "unknown" && !nestedCorralRead(spec.op) ? { lookup: { tool: "corral_receipt_lookup", arguments: {
             request_id: requestId,
             ...(["comment", "reply"].includes(spec.op) && typeof payload.task === "string" ? { task: payload.task } : {}),
