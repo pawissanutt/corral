@@ -54,3 +54,37 @@ for (const [name, code] of Object.entries(SPINS)) {
     expect(kernel.status()).toMatchObject({ worker: false, retiring: 0 });
   }, 60_000);
 }
+
+const DETACHED_SPIN = "(async () => { await null; await null; for (;;) await null; })();";
+const DETACHED = {
+  "a normal return": `${DETACHED_SPIN} return 1;`,
+  "a runtime error": `${DETACHED_SPIN} throw new Error("boom");`,
+  "a timer-callback error": `setTimeout(() => { ${DETACHED_SPIN} throw new Error("timer"); }, 0); await new Promise(() => undefined);`,
+} as const;
+
+for (const [name, code] of Object.entries(DETACHED)) {
+  test(`a detached microtask loop left by ${name} stays under the cell deadline`, async () => {
+    if (!SANDBOXED) {
+      console.log(`skipped: non-yielding cells run only inside scripts/load-sandbox.sh with CORRAL_LOAD_SANDBOX=1`);
+      return;
+    }
+    const events: KernelEvent[] = [];
+    const kernel = new CodeKernel({
+      session: "detached", tools: async ({ input }) => input, limits: { exitWaitMs: 10_000 },
+      onEvent: (event) => { events.push(event); },
+    });
+    try {
+      await kernel.submit("let kept = 1;").result;
+      const result = kernel.submit(code, { timeoutMs: 300 }).result;
+      // The host's event loop still turns while the worker spins past the cell's completion.
+      await within(new Promise((resolve) => setTimeout(resolve, 0)), 10_000, "a host timer during the spin");
+      expect(await result).toMatchObject({ status: "timeout", stateLost: true, generation: 1 });
+      expect(events.some((event) => event.kind === "state_lost" && event.reason === "timeout")).toBeTrue();
+      await kernel.reset();
+      expect(kernel.status().retiring).toBe(0);
+      expect(await kernel.submit("return typeof kept").result).toMatchObject({ status: "ok", value: "undefined", generation: 2 });
+    } finally {
+      await kernel.close();
+    }
+  }, 60_000);
+}

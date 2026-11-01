@@ -10,14 +10,14 @@
 // (todos, receipts) never lives in the heap. Cancelling a queued cell removes it. An active cell
 // cannot be stopped in place, because code it left suspended in the shared heap could resume
 // later, so cancelling it or reaching its deadline terminates and replaces the worker: the cell
-// settles with `stateLost` and `state_lost` names the reason. A cell that finished leaves no code
-// that runs on its own (see kernel-worker.ts). Results of a settled cell or a replaced worker are
-// discarded and never reach another cell.
+// settles with `stateLost` and `state_lost` names the reason. A cell is reported finished only
+// once the Promise jobs it queued have drained, so its deadline also bounds detached work it left
+// running; after that none of its code runs on its own (see kernel-worker.ts). Results of a
+// settled cell or a replaced worker are discarded and never reach another cell.
 import { Worker } from "node:worker_threads";
 
 import {
-  ERROR_FIELD_BYTES, type HostMessage, type KernelOutput, OutputBudget, type OutputLimits, type WireError, type WorkerMessage,
-  clipUtf8,
+  type HostMessage, type KernelOutput, OutputBudget, type OutputLimits, type WireError, type WorkerMessage,
 } from "./kernel-protocol.ts";
 
 export type { KernelOutput, OutputLimits, WireError } from "./kernel-protocol.ts";
@@ -137,14 +137,11 @@ interface Running extends Queued {
 
 type Outcome = { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: unknown };
 
-function wireError(error: unknown, maxBytes: number): WireError {
-  const isError = error instanceof Error;
-  const code = isError ? (error as { code?: unknown }).code : undefined;
-  return {
-    name: clipUtf8(isError ? error.name : "Error", ERROR_FIELD_BYTES),
-    message: clipUtf8(isError ? error.message : String(error), maxBytes),
-    ...(typeof code === "string" ? { code: clipUtf8(code, ERROR_FIELD_BYTES) } : {}),
-  };
+/** Unbounded error fields; OutputBudget.error clips them and records the truncation. */
+function errorFields(error: unknown): WireError {
+  if (!(error instanceof Error)) return { name: "Error", message: String(error) };
+  const code = (error as { code?: unknown }).code;
+  return { name: error.name, message: error.message, ...(typeof code === "string" ? { code } : {}) };
 }
 
 export class CodeKernel {
@@ -337,13 +334,13 @@ export class CodeKernel {
       return;
     }
     let value: string | undefined;
-    const maxBytes = this.limits.output.maxErrorBytes;
-    let error = outcome.ok ? undefined : wireError(outcome.error, maxBytes);
+    let error = outcome.ok ? undefined : running.budget.error(errorFields(outcome.error));
     if (outcome.ok) {
       try {
         value = outcome.value === undefined ? undefined : JSON.stringify(outcome.value);
       } catch (cause) {
-        error = wireError(new TypeError(`${tool} returned a value that is not JSON-serializable: ${wireError(cause, maxBytes).message}`), maxBytes);
+        const message = `${tool} returned a value that is not JSON-serializable: ${errorFields(cause).message}`;
+        error = running.budget.error({ name: "TypeError", message });
       }
     }
     this.send(worker, error

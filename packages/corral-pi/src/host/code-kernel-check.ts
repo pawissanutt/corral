@@ -1,7 +1,7 @@
 // Offline diagnostic for the persistent Code Mode kernel (T-682), independent of model
 // credentials: a fixture bridge drives one kernel through persistence, overlapping bridge calls,
-// queued and active cancellation, reset, a blocked cell, and close. It prints one line per proof
-// and throws on the first mismatch.
+// queued and active cancellation, reset, a blocked cell, detached work left by a finished cell,
+// and close. It prints one line per proof and throws on the first mismatch.
 import { type CellResult, CodeKernel, type KernelEvent, type ToolBridge } from "../extensions/codemode/kernel.ts";
 
 type Expectation = (result: CellResult) => boolean;
@@ -80,6 +80,12 @@ export async function checkCodeKernel(): Promise<void> {
     await expect("blocked cancel", stuck.result, (r) => r.status === "cancelled" && r.stateLost);
     await expect("after blocked cancel", kernel.submit("return typeof kept;").result,
       (r) => r.value === "undefined" && r.generation === 4);
+
+    await lostFor("timeout", () => expect("detached block", kernel.submit(
+      "(async () => { await null; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0); })(); return 1;",
+      { timeoutMs: 300 },
+    ).result, (r) => r.status === "timeout" && r.stateLost));
+    await expect("after detached block", kernel.submit("return 2;").result, (r) => r.value === "2" && r.generation === 5);
   } finally {
     await kernel.close();
   }
