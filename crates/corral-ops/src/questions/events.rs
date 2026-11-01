@@ -156,7 +156,8 @@ pub(super) fn drain(
     append_missing(store, parsed.task(), &question.key, owed, &logged).map(|_| ())
 }
 
-/// Correlate derived status notices with canonical, still-pending questions.
+/// Full-task oracle for canonical, still-pending question correlation.
+#[cfg(test)]
 pub(crate) fn pending_keys(task: &Task) -> Vec<String> {
     super::containers(task)
         .iter()
