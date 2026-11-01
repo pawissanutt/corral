@@ -17,21 +17,23 @@ thread_local! {
 
 /// One listing regardless of historical run count. Never call under an inventory lease.
 /// Contending hook passes skip rather than queue behind an external container runtime.
-pub(crate) fn sweep(ctx: &Ctx) -> Result<()> {
+pub(crate) fn sweep(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<()> {
     #[cfg(test)]
     let bin = PODMAN
         .with(|slot| slot.borrow().clone())
         .unwrap_or_else(|| "podman".into());
     #[cfg(not(test))]
     let bin = "podman".to_owned();
-    sweep_with(ctx, &bin)
+    sweep_with(ctx, tasks, &bin)
 }
 
-fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
+fn sweep_with(ctx: &Ctx, tasks: &[corral_core::Task], podman: &str) -> Result<()> {
     let Some(_flight) = ctx.store.try_lock("sandbox-sweep")? else {
         return Ok(());
     };
-    let owners = terminal_owners(ctx)?;
+    // Reuse sync's snapshot for candidate discovery, not a full metadata pass per tick.
+    // Stale terminal candidates cannot authorize deletion without the fresh check below.
+    let owners = terminal_owners(ctx, tasks)?;
     if owners.is_empty() {
         return Ok(());
     }
@@ -67,7 +69,7 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
         serde_json::from_slice(&output.stdout).context("parsing sandbox containers")?;
     // Podman may have blocked while a task was resumed. Refresh from disk, not the
     // inventory snapshot. Markers belong to launches, never titles or task labels.
-    let current = terminal_owners(ctx)?;
+    let current = terminal_owners(ctx, &ctx.store.list()?)?;
     let mut errors = Vec::new();
     for container in containers {
         let Some(marker) = container.labels.get("corral.run-owner") else {
@@ -91,11 +93,10 @@ fn sweep_with(ctx: &Ctx, podman: &str) -> Result<()> {
     Ok(())
 }
 
-fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
+fn terminal_owners(ctx: &Ctx, tasks: &[corral_core::Task]) -> Result<BTreeSet<String>> {
     let fresh = ctx.clone();
-    let tasks = fresh.store.list()?;
     let mut runs = BTreeMap::new();
-    for task in &tasks {
+    for task in tasks {
         let terminal = matches!(
             task.status,
             corral_core::Status::Done | corral_core::Status::Dropped
@@ -135,7 +136,7 @@ fn terminal_owners(ctx: &Ctx) -> Result<BTreeSet<String>> {
         // A no-op sweep must not add binding reads/scans to ordinary sync. Only
         // refresh ownership when these markers could authorize external cleanup.
         fresh.store.begin_session_view()?;
-        if !crate::session_scope::owns_tasks(&fresh, &fresh.store, &tasks)? {
+        if !crate::session_scope::owns_tasks(&fresh, &fresh.store, tasks)? {
             eligible.clear();
         }
     }

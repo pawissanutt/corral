@@ -85,6 +85,32 @@ reconciliation writes (`binding-budget-green.log`). All eight sandbox tests pass
 after this correction. The next receipted quick gate supplies final rebased-tree
 verification separately.
 
+## Changes round 1: preserve the board work budget
+
+The landing gate's only failure was the existing board work-budget test. The new
+sandbox sweep's initial task listing added one listing and 263 metadata stats on each
+large-board tick. A competing explanation (extra binding refresh) was ruled out by the
+unchanged three binding reads in the failing work-counter rows. Reproducing with
+`scripts/work-budget.sh` on candidate `64f4f01c` failed deterministically:
+normal tick task_stats 12699 > 12624; severe tick task_lists 45 > 44 and task_stats
+13241 > 13150 (`work-budget-red.log`). No budget or test assertion was changed.
+
+Candidate discovery now accepts sync's existing task snapshot. It performs no additional
+task listing/stat pass. After the external listing it still re-reads the current tasks,
+owner markers and session ownership before authorizing any removal. A stale candidate
+can at most trigger an unnecessary query, not authorize removal of a resumed live run.
+Newly terminal tasks not present in the candidate snapshot are picked up by a later pass.
+
+`scripts/work-budget.sh` and `WORK_BUDGET_REPORT=1 scripts/work-budget.sh` pass unchanged:
+large normal tick task_stats **12436**, severe tick task_lists **44**, task_stats **12978**
+(`work-budget-green.log`). `cargo test -p corral-ops --lib sandbox -- --nocapture` now
+passes **9 tests**, including the original blocked-Podman admission, live/foreign and
+resume revalidation checks, plus a new no-op sweep counter regression that asserts zero
+additional task listings, task stats or binding reads for absent, empty and receipt-only
+owner directories (`sandbox-round1-green.log`). Formatting and diff whitespace checks
+pass. Changed-file LSP returned no diagnostics but did not finish within its deadline;
+the compiled targeted tests provide the complete compiler check.
+
 ## Limits
 
 No installed live board/hooks observation was performed; that is the PM's post-landing
