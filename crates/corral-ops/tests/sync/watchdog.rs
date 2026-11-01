@@ -210,7 +210,14 @@ fn pi_native_launch_wrapper_under_a_nested_shell_is_never_stuck() {
 fn registered_pi_capability_does_not_raise_stuck() {
     let fx = Fx::new("pi-native");
     let processes = Processes::default();
-    pi_native_pane(&fx, &processes, &[(46, 44, &["rust-analyzer"])]);
+    pi_native_pane(
+        &fx,
+        &processes,
+        &[
+            (46, 44, &["rust-analyzer"]),
+            (47, 46, &["rust-analyzer-proc-macro-srv"]),
+        ],
+    );
     let session = fx.bin_dir.join("session.jsonl");
     let registry = format!("{}.capabilities-44.json", session.display());
     std::fs::write(

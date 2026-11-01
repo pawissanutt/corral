@@ -125,7 +125,7 @@ fn owned_orphan_daemon_is_removed_after_landing() {
     let run = fx.run();
     let marker = fx.marker();
     let mut parent = crate::support::command("python3", &run.worktree);
-    let output = parent.current_dir(&run.worktree).env("CORRAL_PROCESS_OWNER", marker)
+    let output = parent.arg0("rust-analyzer-proc-macro-srv").current_dir(&run.worktree).env("CORRAL_PROCESS_OWNER", marker)
         .args(["-c", "import os,signal; p=os.fork(); os._exit(0) if p else None; print(os.getpid(),flush=True); signal.pause()"])
         .stdin(Stdio::null()).stdout(Stdio::piped()).spawn().unwrap();
     let mut parent = output;

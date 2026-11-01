@@ -54,7 +54,7 @@ pub(crate) fn require(store: &Store, task: &Task, kind: OperatingActionKind) -> 
     );
     if let Some(run) = task.current_run() {
         ensure!(
-            run.pending_reply.is_none() && run.stuck.is_none(),
+            run.pending_reply.is_none() && (run.outcome.is_some() || run.stuck.is_none()),
             "unresolved delivery or process recovery requires owner disposition"
         );
         if crate::omo::is_omo(run) {
