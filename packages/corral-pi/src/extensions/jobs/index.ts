@@ -58,11 +58,13 @@ export function jobTools(jobs: JobRuntime, monitor = true): readonly ToolDefinit
     },
     {
       name: JOB_MONITOR_TOOL,
+      exposure: "model-only",
       label: "Wake when a job exits or prints a line",
       description: "Ask corral to wake you once when a job exits (on: exit) or prints a line matching a "
         + "JavaScript regular expression (on: line). The wake arrives as a message even if it already happened; "
         + "end your turn after this call instead of polling job_output. Without a match before timeout_secs, "
-        + "the wake reports that the deadline expired.",
+        + "the wake reports that the deadline expired. Call directly at top level, not from Code Mode: "
+        + "this operation needs a transcript call for receipt replay/recovery.",
       parameters: Type.Object({
         job: Type.String(),
         on: Type.Union([Type.Literal("exit"), Type.Literal("line")]),

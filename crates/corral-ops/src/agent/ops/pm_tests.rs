@@ -304,6 +304,63 @@ fn comment_rechecks_generation_in_its_commit_transaction() {
 }
 
 #[test]
+fn codemode_allowlisted_reads_leave_no_receipts_or_request_id_obligations() {
+    let (fx, host) = fixture();
+    let task = task(&fx, "corral", "finite spec");
+    fx.ctx
+        .store
+        .pm_inbox_post(corral_core::pm_inbox::NewPmItem {
+            from: "owner".into(),
+            kind: corral_core::pm_inbox::ItemKind::Question,
+            subject: "Read only".into(),
+            body: "No claim or resolution".into(),
+            refs: vec![],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let before = pm_state::load(&fx.ctx.store).unwrap().unwrap();
+    let bytes = ts::task_bytes(&fx, &task.id);
+    let inbox = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    // Mirrors NESTED_CORRAL_READ_OPS in the Pi host. Reuse one request ID for different
+    // operations/payloads: reads must not reserve it, replay a result, or store a digest.
+    for (op, payload) in [
+        ("read_brief", json!({})),
+        ("read_next", json!({})),
+        ("read_show", json!({"task":task.id})),
+        ("read_list", json!({"limit":1})),
+        ("read_search", json!({"query":"finite", "limit":1})),
+        ("read_route", json!({"task":task.id})),
+        ("read_artifacts", json!({"task":task.id})),
+        ("read_lessons", json!({})),
+        ("inbox_read", json!({"id":"PMI-1"})),
+    ] {
+        for _ in 0..2 {
+            let response = send(&fx, &host, op, "shared-read-id", payload.clone());
+            assert_eq!(ts::committed(&response).op, op, "{op}");
+            assert!(
+                matches!(
+                    response,
+                    CallResponse::Receipt {
+                        replayed: false,
+                        ..
+                    }
+                ),
+                "{op}"
+            );
+            assert_eq!(
+                before,
+                pm_state::load(&fx.ctx.store).unwrap().unwrap(),
+                "{op}"
+            );
+            assert_eq!(bytes, ts::task_bytes(&fx, &task.id), "{op}");
+            assert_eq!(inbox, fx.ctx.store.pm_inbox_item("PMI-1").unwrap(), "{op}");
+        }
+    }
+}
+
+#[test]
 fn typed_reads_are_scoped_bounded_and_do_not_write_receipts() {
     // Given tasks in two projects, and a bound PM with one hello receipt.
     let (fx, host) = fixture();

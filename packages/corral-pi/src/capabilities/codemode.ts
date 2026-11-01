@@ -4,5 +4,13 @@
 import type { createCodemodeExtension, ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 export function codemode(factory: typeof createCodemodeExtension): ExtensionFactory {
-  return factory({ mode: "on", models: false });
+  return async (pi) => {
+    await factory({ mode: "on", models: false })(pi);
+    pi.on("before_agent_start", (event) => ({
+      systemPrompt: event.systemPrompt + "\nCode Mode: only explicitly allowed receipt-free Corral board reads "
+        + "are callable in scripts; call other Corral operations directly at top level. "
+        + "A denied/failed nested call rejects with Error.message. When printing Promise.allSettled results, "
+        + "map rejected reasons to String(reason?.message ?? reason); JSON.stringify(Error) otherwise hides details as {}.",
+    }));
+  };
 }

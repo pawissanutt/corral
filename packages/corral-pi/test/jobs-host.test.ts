@@ -45,7 +45,9 @@ test("background_shell gives only the worker job tools, and the monitor runs onl
       name: "fixture_nested", label: "Nested monitor", description: "Exercises nested execution",
       parameters: Type.Object({}),
       async execute(_id, _params, signal, _update, ctx) {
-        return (await ctx.executeTool("corral_job_monitor", { job: "j1-1", on: "exit" }, { signal })).result;
+        const outcome = await ctx.executeTool("corral_job_monitor", { job: "j1-1", on: "exit" }, { signal });
+        expect(outcome.isError).toBeTrue();
+        return outcome.result;
       },
     };
     const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-565", run: "R1" };
@@ -100,9 +102,8 @@ test("background_shell gives only the worker job tools, and the monitor runs onl
         .find((part) => part.name === name)?.id ?? "";
       expect(jobCalls[2]?.request_id).toBe(toolRequestId(sessionId, callId("corral_job_monitor")));
       expect(jobCalls[0]?.request_id).toBe(toolRequestId(sessionId, `${callId("job_start")}/prepare`));
-      expect(events.since(0, 64 * 1024).events
-        .some((event) => event.kind === "tool_denied" && event.tool === "corral_job_monitor" && event.nested === true))
-        .toBeTrue();
+      // model-only tools are refused by upstream before the host tool_call hook.
+      expect(host.session.getAllTools().find(tool => tool.name === "corral_job_monitor")?.exposure).toBe("model-only");
       expect((host.state().jobs as { job: string; state: string }[]).map((job) => [job.job, job.state]))
         .toEqual([["j1-1", "exited"]]);
     } finally {

@@ -246,13 +246,30 @@ explicit `codemode = true` in its role table. Strict and `codemode = false` leav
 MCP and tool search are independent: neither enables codemode, and codemode needs neither.
 
 Scripts have no Node APIs, filesystem, network or timers of their own. Nested tools use the
-same execution check as direct calls: denied role tools cannot run, and **all Corral operations
-must be called directly**, never from a script. Classifier/image model execution and the
+same execution check as direct calls: denied role tools cannot run. A fixed receipt-free
+Corral board-read allowlist is callable when already in the role's loadout: `corral_brief`,
+`corral_next`, `corral_show`, `corral_list`, `corral_search`, `corral_route`, `corral_artifacts`,
+`corral_lessons`, and `corral_inbox_read`. These use the same session-bound authorization and
+approved project scope, without storing mutation receipts. Other Corral operations **must be
+called directly**, never from a script: their transcript call IDs anchor receipt replay,
+confirmation and recovery. They remain directly declared but absent from Code Mode's callable
+catalog. Classifier/image model execution and the
 `models` global are disabled; showing an existing image is still possible. Tool subprocesses
 retain their ordinary OS/network access; this is not an OS sandbox. A failed or interrupted
 script does not undo tools already run. Recovery classifies an unfinished `codemode` call as
 `outcome_unknown`, even if its source appears read-only, and preserves a worktree snapshot for
 reconciliation. Reload rebuilds the extension from the same generation snapshot.
+
+Blocked/failed nested calls reject with an `Error` carrying the reason in `message`. Plain JSON
+serialization of `Promise.allSettled` rejection reasons hides non-enumerable Error properties
+as `{}`; preserve them explicitly rather than treating this as a timeout or retry signal:
+
+```javascript
+const results = await Promise.allSettled(calls);
+text(results.map(r => r.status === "rejected"
+  ? { status: r.status, error: String(r.reason?.message ?? r.reason) }
+  : r));
+```
 
 ### Local inference (llama.cpp)
 

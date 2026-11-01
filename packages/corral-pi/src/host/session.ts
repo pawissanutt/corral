@@ -66,7 +66,7 @@ import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { exploreTool } from "../extensions/subagent/index.ts";
 import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
-import { executionRefusal } from "../roles/common/execution.ts";
+import { executionRefusal, nestedCorralRead } from "../roles/common/execution.ts";
 import { OWNER_INPUT_TEXT_MAX, ownerInputText, utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { ConfirmUi } from "../tools/define.ts";
 
@@ -618,6 +618,7 @@ export class HostSession {
     if (search) pi.registerTool(toolSearch(pi, (name) => this.loadout.includes(name)));
     const specs = this.options.modules.role.tools(this.roleContext);
     const corral = new Set([...corralToolNames(specs), ...(this.jobs && this.options.identity.role === "worker" ? [JOB_MONITOR_TOOL] : [])]);
+    const reads = new Set(specs.filter(spec => nestedCorralRead(spec.op)).map(spec => spec.name));
     const rich = this.options.ui !== "plain";
     const role = this.options.identity.role;
     this.ledger = this.loadout.includes("corral_todo")
@@ -649,12 +650,12 @@ export class HostSession {
       });
     }
     for (const tool of this.localTools) pi.registerTool(tool);
-    // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
-    // runs only at top level, where its request ID is bound to a transcript tool call.
+    // One execution check for model-issued and nested calls. Only the explicit receipt-free
+    // board reads may nest; all receipt-bearing operations need a transcript tool call.
     pi.on("tool_call", (event) => {
       const allowed = new Set(this.loadout);
       const nested = event.parentToolCallId !== undefined;
-      const reason = executionRefusal(event.toolName, nested, allowed, corral);
+      const reason = executionRefusal(event.toolName, nested, allowed, corral, reads);
       if (!reason) return undefined;
       this.deniedTools++;
       this.options.events.emit("tool_denied", { tool: event.toolName, ...(nested ? { nested: true } : {}) });
