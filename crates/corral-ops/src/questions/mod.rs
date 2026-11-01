@@ -36,10 +36,10 @@ pub use ask::{
     AskPayload, NOTE_MAX_BYTES, OPTION_MAX_BYTES, Opened, REF_MAX_BYTES, WithdrawPayload, open,
     validate_ask, wake_route, withdraw,
 };
-pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
 #[cfg(test)]
 pub(crate) use events::pending_keys;
 pub(crate) use events::pending_keys_ref;
+pub use events::{QUESTION_EVENT_KINDS, reconcile_events, reconcile_question};
 pub use lifecycle::{expire_deadlines, terminalize, unattended};
 pub use triage::{
     Actor, AnswerInput, Applied, Outcome, PmRequest, answer, cancel, deadline, escalate,
