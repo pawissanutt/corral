@@ -365,6 +365,9 @@ fn bound(fx: &Fx, call: &str, op: &str) -> RequestOrigin {
     fx.call(generation, call, op)
 }
 
+#[path = "effects_clock_tests.rs"]
+mod clock_tests;
+
 #[test]
 fn wait_artifact_checkpoint_done_and_verdict_survive_every_crash_point() {
     let wait: &SweptOp = &|ctx, o| {
