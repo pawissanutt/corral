@@ -34,6 +34,8 @@ import type { HostIdentity, RoleContext } from "../roles/types.ts";
 import { type CorralClient, type CorralReceipt, eventRequestId, sha256Hex } from "../tools/corral.ts";
 import { corralToolNames, defineCorralTool } from "../tools/define.ts";
 import { installChrome } from "../ui/chrome.ts";
+import { NativePanels } from "../ui/panels.ts";
+import type { PanelJob, PanelSnapshot } from "../ui/panels-view.ts";
 import { corralRenderers } from "../ui/render.ts";
 import { TodoLedger, installTodo } from "../ui/todo.ts";
 import { type DueContinuation, RequestContext, continuationText } from "./request.ts";
@@ -243,6 +245,8 @@ export function providerErrorClass(message: string): string {
 
 export class HostSession {
   runtime!: AgentSessionRuntime;
+  readonly panels: NativePanels | undefined;
+  private readonly unsubscribePanels: (() => void) | undefined;
   private readonly baseLoadout: readonly string[];
   private mcp: McpAccess | undefined;
   private readonly roleContext: RoleContext;
@@ -263,6 +267,8 @@ export class HostSession {
   private calls: Promise<unknown> = Promise.resolve();
   private readonly stats = { sent: 0, committed: 0, rejected: 0, failed: 0, lastError: undefined as string | undefined };
   private deniedTools = 0;
+  private panelTokens: number | undefined;
+  private panelTokenLeaf: string | null | undefined;
   private sessionsCreated = 0;
   /** How the bound host is attached: InteractiveMode in its pane, or headless (T-577). */
   private attached: "interactive" | "headless" | undefined;
@@ -288,6 +294,10 @@ export class HostSession {
 
   private constructor(private readonly options: HostSessionOptions) {
     this.provider = options.provider ?? "openai-codex";
+    this.panels = options.ui === "plain" ? undefined : new NativePanels({
+      identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
+    });
+    this.unsubscribePanels = this.panels ? options.events.on(() => this.panels?.refresh()) : undefined;
     this.budget = new RunBudget({
       unbounded: PROVIDERS[this.provider].lane !== undefined,
       record: async (payload) => {
@@ -631,6 +641,12 @@ export class HostSession {
         cwd: this.options.cwd, ...(this.options.effort ? { effort: this.options.effort } : {}),
       }, this.options.events, () => this.bound, this.options.sdk.Theme);
       if (this.ledger) installTodo(pi, this.ledger, this.request === undefined);
+      this.panels?.install(pi, this.options.sdk);
+      const unsubscribe = this.ledger?.onChange(() => this.panels?.refresh());
+      pi.on("session_shutdown", (event) => {
+        unsubscribe?.();
+        if (event.reason !== "reload") { this.unsubscribePanels?.(); this.panels?.dispose(); }
+      });
     }
     for (const tool of this.localTools) pi.registerTool(tool);
     // One execution check for model-issued and nested (`ctx.executeTool`) calls. A corral tool
@@ -757,7 +773,9 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
+    this.panelTokens = undefined;
     this.unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_end") this.panelTokens = undefined;
       if (event.type === "agent_start") this.turnStarted();
       else if (event.type === "agent_settled") this.turnEnded(event.aborted);
       else if (event.type === "queue_update") {
@@ -943,6 +961,8 @@ export class HostSession {
 
   async close(): Promise<void> {
     this.closing = true;
+    this.unsubscribePanels?.();
+    this.panels?.dispose();
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
     this.writeAbort.abort();
@@ -1047,6 +1067,28 @@ export class HostSession {
     this.writeAbort.abort();
     await this.session.abort();
     return { cancelled: true, turn: cancelled };
+  }
+
+  private panelSnapshot(): PanelSnapshot | null {
+    if (!this.runtime) return null;
+    const session = this.session;
+    const leaf = session.sessionManager.getLeafId();
+    if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelTokens = undefined; }
+    let jobs: PanelJob[] | null = this.jobs ? [] : null;
+    for (const row of this.jobs?.state() ?? []) {
+      if (typeof row.job !== "string" || typeof row.state !== "string") { jobs = null; break; }
+      jobs?.push({ job: row.job, state: row.state });
+    }
+    return {
+      bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
+      effort: session.thinkingLevel, streaming: session.isStreaming, context: session.getContextUsage(),
+      tokens: this.panelTokens ??= session.getSessionStats().tokens.total, tools: session.getActiveToolNames(),
+      contextFiles: this.guidance.contextFiles.map(file => file.path),
+      skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
+      ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? false,
+      jobs, auxiliary: this.auxiliary?.state() ?? null,
+      steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
+    };
   }
 
   state(): Record<string, unknown> {

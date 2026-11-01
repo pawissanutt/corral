@@ -5,6 +5,7 @@
 // A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
 // tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
+import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -139,7 +140,10 @@ async function main(): Promise<void> {
     await attachHeadless(session, events, (line) => process.stdout.write(line));
     return;
   }
-  terminal = new sdk.InteractiveMode(session.runtime, { verbose: false });
+  terminal = new sdk.InteractiveMode(session.runtime, {
+    verbose: false,
+    ...(session.panels ? { tuiMode: "fullscreen" as const, terminal: session.panels.wrap(new ProcessTerminal()) } : {}),
+  });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
   session.markAttached("interactive");
