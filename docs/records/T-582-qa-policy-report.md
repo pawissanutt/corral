@@ -1,4 +1,4 @@
-# T-582 isolated QA policy repair — interim findings
+# T-582 isolated QA policy repair
 
 ## Changes
 
@@ -58,8 +58,15 @@ folders. The policy-red probe independently reproduced the refused legacy write.
   initialization passes; deadline waiting for real terminal user message.
   Private server, HOME and native-process teardown pass.
 
-A clarification is pending on setup/selector adaptation versus reporting these
-pre-existing contract incompatibilities. Gate has not been started pending that
-decision. Static TOML-only latency/route fixtures also contain legacy
+Owner answer to Q1 authorizes the supported fixture changes, requires every
+substantive assertion to remain unchanged, and explicitly directs leaving the
+known-drift journeys failing rather than chasing UI timeouts or changing
+assertions to match new behavior. The PM will file follow-ups from this list.
+No skips have been added. In particular, gallery still fails after its exact
+finite dispatch grant because dashboard setup puts the task on dispatch hold;
+without that grant, Assist independently refuses automatic dispatch.
+
+Static TOML-only latency/route fixtures also contain legacy
 `autopilot = false`; they do not call the refused setter or grant authority and
-have not been changed or run as part of these ten journey repairs.
+have not been changed or run as part of these ten journey repairs. These
+compatibility values do not override the fresh Assist operating policy.
