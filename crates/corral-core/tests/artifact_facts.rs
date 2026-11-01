@@ -156,6 +156,9 @@ fn current_run_and_unrelated_reviewed_growth_leave_scalar_and_keyed_reads_consta
     for factor in [1, 10] {
         // Given tenfold artifacts appended to the active run and reviewed terminal artifacts.
         let (_dir, store) = store();
+        // Pin mutation timestamps too: derived artifact rows retain their update time,
+        // whose fractional-second width must not vary between the growth variants.
+        store.fixture_pin_now(at(0)).unwrap();
         let mut task = store.create("Active", None, Status::Review, "").unwrap();
         task.runs.push(coding_run(&task.id, "R1", 0, 0, 0, false));
         task.created = at(0);
