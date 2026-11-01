@@ -4,6 +4,7 @@ import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
 import { pick } from "../common/tools.ts";
+import { ProgressUpdate, CheckpointUpdate } from "../common/records.ts";
 
 type Params = Record<string, unknown>;
 
@@ -15,10 +16,10 @@ export const waitTool: CorralToolSpec = {
     + "your turn after declaring it. Gate results need no wait: corral_gate arms its own wake.",
   op: "wait",
   parameters: Type.Object({
-    id: Type.String({ description: "A wait ID unique within this run, [A-Za-z0-9._-]" }),
+    id: Type.String({ pattern: "^[A-Za-z0-9._-]+$", description: "A wait ID unique within this run, [A-Za-z0-9._-]" }),
     condition: Type.String({ description: "What must become true" }),
     channel_id: Type.String({ description: "Where the event is observed, for example a task ID or CI run" }),
-    deadline: Type.String({ description: "RFC 3339 time after which the wait expires and wakes you" }),
+    deadline: Type.String({ format: "date-time", description: "RFC 3339 time after which the wait expires and wakes you" }),
     owner: Type.Optional(Type.String({ description: "Who resolves the wait (default worker)" })),
   }),
   payload: (params: Params) => ({
@@ -34,7 +35,7 @@ export const progressTool: CorralToolSpec = {
     + "<task> --file` takes). Read the identity strings with `corral run progress <task> --json` first.",
   op: "progress",
   parameters: Type.Object({
-    update: Type.Record(Type.String(), Type.Unknown(), { description: "The ProgressUpdate v1 object" }),
+    update: ProgressUpdate,
   }),
   payload: (params: Params) => params.update as Params,
 };
@@ -46,7 +47,7 @@ export const checkpointTool: CorralToolSpec = {
     + "a fresh `corral run progress <task> --json` readback after you committed.",
   op: "checkpoint",
   parameters: Type.Object({
-    checkpoint: Type.Record(Type.String(), Type.Unknown(), { description: "The CheckpointUpdate v1 object" }),
+    checkpoint: CheckpointUpdate,
   }),
   payload: (params: Params) => params.checkpoint as Params,
 };

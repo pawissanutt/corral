@@ -4,6 +4,7 @@
 // commands the owner asks for go through corral_owner_action (owner-action.ts).
 import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
+import { receiptLookupTool } from "../common/tools.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
@@ -19,7 +20,7 @@ export function assistantRole(root: string): RoleModule {
     role: "assistant",
     upstreamTools: UPSTREAM,
     corralOps: OPS,
-    tools: (context) => context.todo === true ? [ownerActionTool, sessionTodoTool] : [ownerActionTool],
+    tools: (context) => context.todo === true ? [receiptLookupTool(), ownerActionTool, sessionTodoTool] : [receiptLookupTool(), ownerActionTool],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
         + requestContract(root, context.todo);

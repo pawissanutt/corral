@@ -5,14 +5,14 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
-import { askTool, withdrawTool } from "../common/tools.ts";
+import { receiptLookupTool, askTool, withdrawTool } from "../common/tools.ts";
 import { renderContract } from "../common/assets.ts";
 import { requestMarker, sendOnce } from "./kickoff.ts";
 import { CHUNK_MAX_BYTES, planSubmitTool, planWriteTool } from "./tools.ts";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls"];
-const TOOLS: readonly CorralToolSpec[] = [askTool, withdrawTool, planWriteTool("plan"), planSubmitTool];
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op)];
+const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, planWriteTool("plan"), planSubmitTool];
+const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
 export const CONTRACT = `# corral planner contract (Pi-native)
 

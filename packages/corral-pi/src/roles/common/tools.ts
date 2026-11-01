@@ -4,6 +4,7 @@
 import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
+import { EvidenceObservation } from "./records.ts";
 
 type Params = Record<string, unknown>;
 
@@ -15,7 +16,22 @@ export function pick(params: Params, keys: readonly string[]): Params {
 }
 
 const Text = (description: string) => Type.String({ description });
-const Strings = (description: string) => Type.Optional(Type.Array(Type.String(), { description }));
+const Strings = (description: string, maxItems: number) => Type.Optional(Type.Array(Type.String(), { description, maxItems }));
+
+/** Read an existing receipt; this never re-executes the original operation. */
+export function receiptLookupTool(pm = false): CorralToolSpec {
+  return {
+    name: "corral_receipt_lookup", label: "Look up a request receipt", op: "receipt_lookup",
+    description: "Reconcile a lost acknowledgement using its request_id. This reads the canonical receipt, "
+      + "not a retry of the mutation. Missing is not proof that an in-flight request cannot still commit."
+      + (pm ? " For task-local PM comment, reply or question receipts, also supply the task ID." : ""),
+    parameters: Type.Object({
+      request_id: Type.String({ pattern: "^(rq-[a-f0-9]{32}|ev-[0-9]+-[0-9]+)$" }),
+      ...(pm ? { task: Type.Optional(Type.String({ pattern: "^T-[0-9]+$" })) } : {}),
+    }, { additionalProperties: false }),
+    payload: (params: Params) => pick(params, pm ? ["request_id", "task"] : ["request_id"]),
+  };
+}
 
 export const askTool: CorralToolSpec = {
   name: "corral_ask",
@@ -31,9 +47,9 @@ export const askTool: CorralToolSpec = {
     ], { description: "clarification or technical_choice the PM may answer; owner_only and permission always go to the owner" }),
     text: Text("The question, at most 4 KiB"),
     blocking: Type.Optional(Type.Boolean({ description: "Whether your next step depends on the answer" })),
-    options: Strings("Up to six concrete options"),
+    options: Strings("Up to six concrete options", 6),
     recommendation: Type.Optional(Text("The option you recommend and why")),
-    context_refs: Strings("Up to sixteen refs (artifact refs, files, task IDs) that support the question"),
+    context_refs: Strings("Up to sixteen refs (artifact refs, files, task IDs) that support the question", 16),
     needed_by: Type.Optional(Text("An RFC 3339 time the answer is needed by (a hint only)")),
   }),
   payload: (params: Params) =>
@@ -56,7 +72,7 @@ export const evidenceTool: CorralToolSpec = {
     + "`corral evidence record --file` takes; read `corral criteria list <task> --json` first).",
   op: "evidence",
   parameters: Type.Object({
-    observation: Type.Record(Type.String(), Type.Unknown(), { description: "The EvidenceObservation v1 object" }),
+    observation: EvidenceObservation,
   }),
   payload: (params: Params) => params.observation as Params,
 };

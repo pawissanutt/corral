@@ -7,7 +7,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { assetPath, assetRoot, readAsset, renderContract } from "../common/assets.ts";
-import { artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
+import { receiptLookupTool, artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
 import { todoTool } from "../common/todo.ts";
 import { checkpointTool, doneTool, gateTool, progressTool, waitTool } from "./tools.ts";
 import { LSP_TOOL_NAMES, type LspToolkit, type LspToolkitOptions, configuredServers, lspToolkit } from "../../extensions/lsp/index.ts";
@@ -17,11 +17,11 @@ export const SKILL_ASSET = "src/roles/worker/skills/corral-worker/SKILL.md";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "bash", "grep", "find", "ls"];
 const TOOLS: readonly CorralToolSpec[] = [
-  askTool, withdrawTool, waitTool, progressTool, checkpointTool, evidenceTool, artifactTool, gateTool, doneTool,
+  receiptLookupTool(), askTool, withdrawTool, waitTool, progressTool, checkpointTool, evidenceTool, artifactTool, gateTool, doneTool,
 ];
 // job and job_monitor back the host's background_shell tools; Rust checks the capability.
 const OPS: readonly CorralOp[] = [
-  "hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op), "todo", "job", "job_monitor",
+  "hello", "event", ...TOOLS.map((tool) => tool.op), "todo", "job", "job_monitor",
 ];
 
 /** The first user message of a fresh worker session: the run prompt and how its commands map. */

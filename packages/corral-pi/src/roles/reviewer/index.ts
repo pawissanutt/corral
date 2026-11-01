@@ -7,14 +7,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type { CorralOp, CorralToolSpec, RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
-import { artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
+import { receiptLookupTool, artifactTool, askTool, evidenceTool, withdrawTool } from "../common/tools.ts";
 import { verdictTool } from "./tools.ts";
 
 export const CONTRACT_ASSET = "assets/reviewer-contract.md";
 
 const UPSTREAM: readonly UpstreamTool[] = ["read", "grep", "find", "ls", "bash"];
-const TOOLS: readonly CorralToolSpec[] = [askTool, withdrawTool, evidenceTool, artifactTool, verdictTool];
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...TOOLS.map((tool) => tool.op)];
+const TOOLS: readonly CorralToolSpec[] = [receiptLookupTool(), askTool, withdrawTool, evidenceTool, artifactTool, verdictTool];
+const OPS: readonly CorralOp[] = ["hello", "event", ...TOOLS.map((tool) => tool.op)];
 
 /** The current review request: its prompt and how the commands map. */
 export function kickoff(context: RoleContext): string | undefined {

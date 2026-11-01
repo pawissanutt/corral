@@ -18,6 +18,9 @@ pub(crate) mod todo;
 pub(crate) mod worker;
 pub(crate) mod write_permission;
 
+#[cfg(test)]
+mod payload_tests;
+
 use anyhow::Result;
 use serde::de::DeserializeOwned;
 
@@ -40,18 +43,35 @@ pub(crate) fn unavailable(op: AgentOp, owner: &'static str) -> anyhow::Error {
     .into()
 }
 
-/// The reason names the op, serde's error category and the fixed field list, never serde's
-/// message: unknown fields and variants would echo input bytes, possibly a secret.
-fn payload<T: DeserializeOwned>(envelope: &Envelope, expected: &str) -> Result<T> {
-    serde_json::from_value(envelope.payload.clone()).map_err(|error| {
-        Rejection::new(
+/// Keep serde's input-echoing message private. Only schema-owned field names and the
+/// accepted shape are returned; the native tool schema supplies detailed type constraints.
+pub(super) fn payload<T: DeserializeOwned>(envelope: &Envelope, expected: &str) -> Result<T> {
+    serde_path_to_error::deserialize(envelope.payload.clone()).map_err(|error| {
+        let message = error.inner().to_string();
+        let path = error.path().to_string();
+        let missing = message
+            .strip_prefix("missing field `")
+            .and_then(|s| s.split('`').next());
+        let candidate = missing.unwrap_or_else(|| path.split('.').next().unwrap_or(""));
+        // Unknown/map keys may contain secrets, so never return a path not in the fixed
+        // operation field list. Nested record errors still name their safe outer field.
+        let field = expected
+            .split(',')
+            .map(str::trim)
+            .map(|s| s.trim_end_matches('?'))
+            .find(|name| *name == candidate);
+        let category = error_category(error.inner());
+        let mut rejection = Rejection::new(
             RejectCode::BadRequest,
             format!(
-                "malformed {} payload ({} error); expected fields: {expected}",
+                "malformed {} payload ({category} error) at {}; expected fields: {expected}",
                 envelope.op,
-                error_category(&error)
+                field.unwrap_or("payload")
             ),
-        )
-        .into()
+        );
+        rejection.detail = Some(serde_json::json!({
+            "field": field, "category": category, "expected_fields": expected,
+        }));
+        rejection.into()
     })
 }
