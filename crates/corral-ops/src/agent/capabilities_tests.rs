@@ -59,8 +59,9 @@ fn fixture(capabilities: Option<&[&str]>) -> Fixture {
     write(&assets.join("fixture.json"), "{\"fixture\": true}\n");
     let mut config = std::fs::read_to_string(store.config_path()).unwrap();
     config.push_str(&format!(
-        "\n[agent]\nassets_dir = {:?}\n",
-        assets.display().to_string()
+        "\n[agent]\nassets_dir = {:?}\n\n[projects.corral]\npath = {:?}\n",
+        assets.display().to_string(),
+        tmp.path().display().to_string()
     ));
     std::fs::write(store.config_path(), config).unwrap();
     let ctx = Ctx::from_store(Store::open(tmp.path()).unwrap());
