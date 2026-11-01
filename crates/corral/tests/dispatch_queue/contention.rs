@@ -10,6 +10,10 @@ use serde_json::json;
 
 use crate::queue_support::Fixture;
 
+#[cfg(target_os = "linux")]
+#[path = "settlement.rs"]
+mod settlement;
+
 struct ProtocolBarrier {
     socket: UnixDatagram,
     point: String,
