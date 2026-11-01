@@ -215,6 +215,7 @@ pub(crate) fn foreign_process(
             // differs from the configured harness name (shebangs, symlinks, wrappers).
             && !launched(&local, info, processes)?
             && !registered_capability(run, process.pid, &local)
+            && !worker_language_server(ctx, run, &local, processes)?
             && local.elapsed_secs > ctx.store.config.sync.stuck_after_secs
         {
             return Ok(Some(StuckProcess {
@@ -225,6 +226,51 @@ pub(crate) fn foreign_process(
         }
     }
     Ok(None)
+}
+
+// Only exempt recognized language-server processes with a verifiable worker ancestor.
+// Executables with the same name in unrelated process trees remain actionable.
+fn worker_language_server(
+    ctx: &Ctx,
+    run: &Run,
+    process: &ProcessSnapshot,
+    processes: &dyn ProcessControl,
+) -> Result<bool> {
+    let Some(name) = process.argv.first().map(|arg| basename(arg)) else {
+        return Ok(false);
+    };
+    if !matches!(
+        name,
+        "rust-analyzer"
+            | "rust-analyzer-proc-macro-srv"
+            | "typescript-language-server"
+            | "vscode-css-language-server"
+            | "vscode-html-language-server"
+            | "pyright-langserver"
+            | "pylsp"
+            | "gopls"
+            | "clangd"
+            | "svelte-language-server"
+    ) {
+        return Ok(false);
+    }
+    let mut pid = process.parent_pid;
+    for _ in 0..32 {
+        if pid <= 1 {
+            break;
+        }
+        let Some(parent) = processes.inspect(pid)? else {
+            break;
+        };
+        if registered_capability(run, pid, &parent) || protected(ctx, run, &parent.argv) {
+            return Ok(true);
+        }
+        if parent.parent_pid == pid {
+            break;
+        }
+        pid = parent.parent_pid;
+    }
+    Ok(false)
 }
 
 /// Capability entries belong to the current bound host, not to a process name. A stale or
@@ -342,6 +388,7 @@ pub fn unstick_with(
         .context("stuck process exited")?;
     if launched(&current, &info, processes)?
         || registered_capability(run, expected.pid, &current)
+        || worker_language_server(ctx, run, &current, processes)?
         || current.started != expected.started
         || current.argv != expected.argv
     {

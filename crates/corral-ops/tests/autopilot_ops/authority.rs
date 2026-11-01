@@ -154,6 +154,41 @@ fn assist_reports_blocked_review_once_and_confirmation_resumes_it() {
 }
 
 #[test]
+fn completed_run_does_not_keep_resolved_stuck_observation_blocking_autopilot() {
+    let fx = Fx::new(|review| {
+        review.gate = gate(&["true"]);
+        review.reviewer = Some("rev".into());
+    });
+    fx.done();
+    fx.ctx
+        .store
+        .update(&fx.id, |task| {
+            task.current_run_mut().unwrap().stuck = Some(corral_core::StuckProcess {
+                pid: 12345,
+                argv: vec!["old-command".into()],
+                started: "old".into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+    fx.ctx
+        .store
+        .log_event(
+            Some(&fx.id),
+            "automation_blocked",
+            serde_json::json!({
+                "run": fx.run().id,
+                "reason": "unresolved delivery or process recovery requires owner disposition"
+            }),
+        )
+        .unwrap();
+    fx.sync();
+    assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
+    assert_eq!(fx.events("gate_started"), 1);
+    assert_eq!(fx.events("automation_resumed"), 1);
+}
+
+#[test]
 fn assist_collects_completed_gate_without_launching_another_process() {
     // Given an explicitly started gate that completed before authority was revoked.
     let mut fx = Fx::new(|review| {
