@@ -159,7 +159,7 @@ pub fn hold_owner_attention(ctx: &Ctx, task_id: &str) -> Result<bool> {
             ctx,
             task_id,
             "needs_me",
-            json!({"reason": "question_attention", "question_keys": super::pending_keys(&ctx.store.get(task_id)?) }),
+            json!({"reason": "question_attention", "question_keys": super::pending_keys_ref(&ctx.store.head(task_id)?)? }),
             notice,
         )?;
     }
