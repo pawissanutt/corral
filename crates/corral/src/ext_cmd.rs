@@ -37,6 +37,7 @@ pub const RESERVED: &[&str] = &[
     "review-sprint",
     "idea",
     "lessons",
+    "memory",
     "plan",
     "build-identity",
     "hooks",
