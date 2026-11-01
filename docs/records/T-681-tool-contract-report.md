@@ -74,6 +74,29 @@ assistant lookup spec. All 75 tests in the four affected role test files pass af
 The reviewer turn-number failure was a consequence of its earlier loadout assertion aborting that
 sequence; the complete reviewer file now passes unchanged turn/effect assertions.
 
+## Review round 1 — F1 inherited pipe ordering
+
+The reviewer reproduced executor exit **before** deadline while a descendant still held a pipe.
+Two hypotheses were considered: missing executor kill/status reporting, versus an already-fired exit
+listener leaving descendant pipes open. IPC/socket-barrier tests proved exit_code=0 before triggering
+the deadline or output bound; the latter hypothesis reproduced all six initial regression cases.
+The same tests failed before the fix (no settlement until test cleanup released the descendant).
+
+Both bounds now share a stop operation: kill an executing child, or immediately destroy retained
+pipes when its actual exit/signal status is already available. The exit listener covers the opposite
+ordering (bound first, exit second). Close still performs canonical receipt parsing and status/error
+reporting; no synthetic receipt or definite not-applied claim is introduced. Deadlines are unchanged.
+
+`test/corral-pipes.test.ts` uses real disposable executor/descendant processes, IPC readiness and a
+socket command barrier. Narrow protected spawn/deadline methods permit triggering the deadline only
+**after** the executor's real exit event, without synchronization sleeps or load. It separately checks
+retained stdout and stderr, timeout and output bounds, actual exit_code=0/signal=null, unknown effect,
+bounded diagnostics, and preservation of matching receipts (including stderr output overflow).
+Owned descendants receive SIGKILL in finally cleanup and temporary fixture paths are removed.
+
+Review correction checks: TypeScript typecheck passed; 23 focused tests passed across client, pipe,
+contract and real QuickJS host suites. The six-case pre-fix failure log and final green log are attached.
+
 ## Limits
 
 No live owner-configured herdr session or real model/provider was contacted. Host tests use disposable
