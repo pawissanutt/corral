@@ -50,7 +50,7 @@ export function snapshotProgress(value: unknown, identity: HostIdentity): TodoPr
 export class TodoLedger {
   private progress: TodoProgress | null = null;
   private continuedState: ContinuedState | null = null;
-  private stale = false;
+  private stale = true;
   // A receipt arriving during a read is newer than that read's snapshot.
   private version = 0;
   private readonly listeners = new Set<(failure?: string) => void>();
@@ -87,7 +87,9 @@ export class TodoLedger {
     try {
       const snapshot = snapshotLedger(await this.load(), this.identity);
       if (this.version !== started) return false;
-      this.apply(snapshot.progress, snapshot.continued);
+      if (!this.apply(snapshot.progress, snapshot.continued)) {
+        throw new Error("todo_read: older ledger revision; retained newer progress");
+      }
       return true;
     } catch (error) {
       if (this.version !== started) return false;

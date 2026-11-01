@@ -3,11 +3,13 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { ContextUsage, Theme } from "@earendil-works/pi-coding-agent";
 import type { HostIdentity } from "../roles/types.ts";
 import type { TodoProgress } from "./todo-widget.ts";
+import { inspectorActivity, inspectorContext, type InspectorSnapshot } from "./inspector.ts";
 
 export const PANEL_TABS = ["Context", "Files", "Agents", "Plan"] as const;
 export type PanelTab = typeof PANEL_TABS[number];
 export interface PanelJob { readonly job: string; readonly state: string; readonly detail?: import("../extensions/jobs/runtime.ts").JobInspection }
 export interface PanelSnapshot {
+  readonly inspector?: InspectorSnapshot;
   readonly bound: boolean;
   readonly model: string | null;
   readonly effort: string;
@@ -73,11 +75,15 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
   switch (tab) {
     case "Context": {
       add("Loaded context", true);
+      if (!snapshot.bound) add("Disconnected/unbound · observations may be stale");
+      if (!snapshot.inspector) add("Host inspector unavailable · legacy snapshot");
       add(`${snapshot.tools.length} active tools · ${snapshot.skills.length} skills`);
+      add(`Active tools: ${snapshot.tools.join(", ") || "none"}`);
       for (const path of snapshot.contextFiles) add(path);
       if (!snapshot.contextFiles.length) add("No context files loaded");
       if (snapshot.skills.length) add(`Skills: ${snapshot.skills.join(", ")}`);
       add(`${snapshot.tokens.toLocaleString()} recorded session tokens`);
+      if (snapshot.inspector) for (const line of inspectorContext(snapshot.inspector)) add(line);
       add("Jobs", true);
       if (snapshot.jobs === null) add("Background jobs unavailable");
       else if (!snapshot.jobs.length) add("No background jobs");
@@ -100,8 +106,16 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       break;
     case "Agents": {
       add("Current bound session", true);
+      add(`${snapshot.model ?? "Model unavailable"} · ${snapshot.effort}`);
       add(`${identity.role} · ${identity.task ?? identity.assistant ?? identity.project}`);
-      add(`${identity.run ?? ""} · g${identity.generation} · ${snapshot.streaming ? "Working" : "Idle"}`);
+      add(`${identity.review ?? identity.run ?? ""} · g${identity.generation} · ${snapshot.streaming ? "Working" : "Idle"}`);
+      add(snapshot.bound ? "Bound" : "Disconnected/unbound · observations may be stale");
+      if (snapshot.inspector) {
+        add(`Session ${snapshot.inspector.session} · bound ${snapshot.inspector.boundSession ?? "unavailable"}`);
+        add(`Turn ${snapshot.inspector.turn} · ${snapshot.inspector.turnOpen ? "open" : "settled"} · ${snapshot.streaming ? "streaming" : "not streaming"}`);
+        for (const line of inspectorActivity(snapshot.inspector)) add(line);
+      }
+      else add("Receipt/event history unavailable · legacy snapshot");
       add("Read-only auxiliary activity", true);
       if (!snapshot.auxiliary) add("Auxiliary telemetry unavailable");
       else {
@@ -114,7 +128,8 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
     case "Plan": {
       const ledger = snapshot.ledger;
       add(snapshot.ledgerStale ? "Canonical plan · stale" : "Canonical plan", true);
-      if (!ledger) { add("No canonical plan recorded"); break; }
+      if (!snapshot.bound) add("Disconnected/unbound · retained ledger may be stale");
+      if (!ledger) { add(snapshot.ledgerStale ? "Canonical plan unavailable" : "No canonical plan recorded"); break; }
       add(`${ledger.plan ?? "Progress"} · revision ${ledger.revision}`);
       for (const phase of ledger.phases) {
         add(phase.label, true);
@@ -124,6 +139,9 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
           add(`${mark} ${step.label}`);
           if (state.state === "dropped") add(`Reason: ${state.reason}`);
           for (const criterion of step.criteria) add(`  Criterion: ${criterion}`);
+          for (const wait of ledger.waits?.filter(wait => wait.step === step.id) ?? []) {
+            add(wait.on.kind === "owner" ? `Waits on owner: ${wait.on.question}` : `Waits on event: ${wait.on.event}`);
+          }
         }
       }
       add("Self-reported progress, not gate evidence");

@@ -1,5 +1,6 @@
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { PanelSnapshot } from "./panels-view.ts";
+import { inspectorActivity } from "./inspector.ts";
 export interface ActivityRow { readonly text: string; readonly job?: number; readonly color?: "accent" | "success" | "error" | "warning" }
 export function activityRows(snapshot: PanelSnapshot | null, selected: number, now = Date.now()): ActivityRow[] {
   if (!snapshot) return [{ text: "Activity unavailable: session snapshot disconnected." }];
@@ -7,6 +8,8 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
   const add = (...texts: string[]) => rows.push(...texts.map(text => ({ text })));
   add("Background activity · read-only", "j/k or click selects job · PgUp/PgDn scroll · Enter compose · F9 conversation",
     snapshot.bound ? "Bound host observations · not canonical task/run settlement" : "Disconnected/unbound · observations may be stale", "");
+  if (snapshot.inspector) add(...inspectorActivity(snapshot.inspector), "");
+  else add("Receipt/event history unavailable · legacy snapshot", "");
   const auxiliary = snapshot.auxiliary;
   add(auxiliary ? `Helper slots occupied / queued: research ${auxiliary.explore.running}/${auxiliary.explore.queued} · oracle ${auxiliary.oracle.running}/${auxiliary.oracle.queued}` : "Helper telemetry unavailable");
   add("Board task/run monitoring is separate; no task completion inferred here.", "");
