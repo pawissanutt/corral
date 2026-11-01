@@ -355,7 +355,7 @@ pub(crate) fn save_native_context(ctx: &Ctx) -> Result<std::path::PathBuf> {
         "version": 1,
         "workspace": ctx.store.root(),
         "projects": projects,
-        "policy": crate::pm_policy::snapshot(ctx)?,
+        "policy": crate::pm_policy::native_summary(&crate::pm_policy::snapshot(ctx)?),
     }))?;
     ensure!(
         bytes.len() <= 64 * 1024,

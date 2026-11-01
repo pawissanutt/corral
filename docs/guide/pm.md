@@ -6,7 +6,11 @@ Keep PM handoffs and notes in workspace machine state under `.corral/pm/`. Use
 ## Pi-native operating procedure
 
 Pi's Rust launcher writes `.corral/prompts/pm-pi.json` on every launch/resume with the
-workspace, approved project paths and effective policy. The installed PM role consumes
+workspace, approved project paths and a compact effective-policy summary (mode, pause,
+revision, authorization, configured authority and scope counts). Per-task scope members,
+permissions and refusals are deliberately omitted: read them freshly through typed tools,
+not a startup cache. Launch size therefore does not grow with the task population.
+The installed PM role consumes
 that file as bounded data (64 KiB, regular file, no symlinks), assembling it with
 `assets/pm-context.md` and the shared request/todo contract. Invalid supplied input fails
 launch rather than being ignored. The legacy `.corral/prompts/pm.md` and its generic

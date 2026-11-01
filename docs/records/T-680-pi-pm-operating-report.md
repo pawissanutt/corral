@@ -3,7 +3,7 @@
 ## Delivered
 
 One native assembly path: Rust PM launch/resume writes `pm-pi.json` (workspace,
-approved project paths, effective policy); the installed Pi PM role consumes it as
+approved project paths, compact effective-policy summary); the installed Pi PM role consumes it as
 bounded regular-file data alongside the native operational instructions and the
 existing shared request/todo continuation contract. Legacy `pm.md` is not consumed
 by Pi. Supplied malformed/oversized/nonregular/symlink input fails instead of being
@@ -42,9 +42,27 @@ but cannot expand native tool authority. Routine execution remains in Corral.
   1 matching test passed (shared target directory).
 - `cargo test -p corral-ops --lib agent::hooks::pm -- --nocapture`: 5 passed,
   2 subprocess-only fixtures intentionally ignored. Fake-engine tests; no live owner panes.
-- `cd packages/corral-pi && bun test src/roles/pm`: 47 passed, 0 failed.
+- `cd packages/corral-pi && bun test src/roles/pm`: 48 passed, 0 failed (after F1).
 - `cd packages/corral-pi && bun run typecheck`: passed.
 - Receipted quick gate: recorded separately by Corral after commit/rebase.
+
+## Review round 1 — F1
+
+The first candidate serialized the complete task policy into a bounded launch file.
+The review's normal 155-task workspace exceeded that bound. Reproduced deterministically
+with 200 scoped tasks: the unchanged writer failed `Pi PM operating context exceeds
+64 KiB` (`f1-red.log`). Fixed the representation rather than raising the I/O bound:
+launch policy now contains mode, pause, revision, authorization, configured authority
+and scope counts, with an explicit instruction to fetch task details via fresh typed reads.
+Per-task permissions, refusals, diagnostic reasons and explicit task membership are not
+embedded. The legacy full policy and policy-replacement machinery are unchanged.
+
+The same 200-task regression asserts the full source policy exceeds 64 KiB, the launch
+summary fits under 8 KiB, membership/permission/refusal maps are absent, and actual
+resume (both workspace and legacy project bindings) preserves the session and injects
+the identical current summary. The reader remains capped at 64 KiB and has a matching
+200-task summary test. Rust launch tests: 5 passed, 2 subprocess fixtures ignored;
+Pi PM tests: 48 passed. Red and green logs are attached separately.
 
 ## Limits
 

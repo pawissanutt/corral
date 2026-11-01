@@ -76,6 +76,24 @@ pub(crate) fn snapshot(ctx: &Ctx) -> Result<PolicySnapshot> {
     })
 }
 
+/// Launch context is orientation, not a task permission cache. Keep its size independent
+/// of task count; fresh typed reads supply task permissions, refusals and scope members.
+pub(crate) fn native_summary(policy: &PolicySnapshot) -> Value {
+    json!({
+        "mode": policy.mode,
+        "paused": policy.paused,
+        "revision": policy.revision,
+        "authorization": policy.authorization,
+        "authority": policy.authority,
+        "scope_counts": {
+            "projects": policy.scope.projects.len(),
+            "tasks": policy.scope.tasks.len(),
+            "observed_tasks": policy.permissions.len(),
+        },
+        "task_details": "Read fresh corral_brief, corral_next and corral_show; launch summary omits per-task permissions, refusals and scope members.",
+    })
+}
+
 pub(crate) fn instructions(policy: &PolicySnapshot) -> Result<String> {
     Ok(format!(
         "[corral-policy]\n\n## Effective operating policy replacement\n\n\
