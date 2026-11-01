@@ -51,4 +51,10 @@ Focused `questions::heads_tests`: **2 PASS**. Complete `questions::` unit suite:
 
 Attempt `ag-92632eade08f131f` stops at Clippy: the now-ported final production call leaves pending_keys and its re-export unused in shipped code. Existing questions tests still call that full-Task oracle. Q4 authorizes `questions/mod.rs`; the function and its re-export are now `#[cfg(test)]`, while pending_keys_ref remains production-exported. No allow attributes or test changes. Owner-requested `cargo clippy --workspace --all-targets -- -D warnings` PASS (`.evidence/R3-test-oracle-clippy.log`). The next contracted quick gate is still required; the failed attempt ran no regression tests.
 
+## Formatting and projection clock follow-up attempts
+
+Attempt `ag-955d00482edc9520` stops only at rustfmt import ordering after cfg gating. Commit3d6560c8 applies that import ordering without semantic changes. Attempt `ag-b12b45b1f862aa84` then passes format/size/Clippy and reaches1695 passes/one failure (3366/5062 unrun): store_heads projection decoded bytes13907/13908. These are failed receipts, not cumulative package passes.
+
+The local variant helper reset created/updated but left creation's status_since on wall time. Store clock is now pinned before creation and the fixture checks status_since equals that instant. A controlled status_since-only eight/nine fractional-digit input reproduces the exact13907/13908 mismatch (`.evidence/R3-head-projection-status-width-negative.log`); it is removed. All four unchanged store_heads tests PASS afterward, including actual fresh-process24/240-run mutations, projection-size/counter equality and keyed nested reads (`.evidence/R3-head-projection-clock-green.log`). Production logic and exact budget assertions are unchanged.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
