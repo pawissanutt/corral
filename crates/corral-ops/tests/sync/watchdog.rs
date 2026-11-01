@@ -279,6 +279,66 @@ fn registered_pi_capability_does_not_raise_stuck() {
 }
 
 #[test]
+fn worker_interpreter_language_servers_are_exempt_but_unrelated_commands_are_not() {
+    for argv in [
+        &[
+            "node",
+            "/opt/typescript-language-server/lib/cli.js",
+            "--stdio",
+        ][..],
+        &[
+            "node",
+            "/opt/pyright-internal/langserver.index.js",
+            "--stdio",
+        ][..],
+        &[
+            "node",
+            "/opt/svelte-language-server/bin/server.js",
+            "--stdio",
+        ][..],
+    ] {
+        let fx = Fx::new("pi-native");
+        let processes = Processes::default();
+        pi_native_pane(&fx, &processes, &[(46, 45, argv)]);
+        fx.herdr_says("idle");
+        sync(&fx, &processes, 0);
+        assert!(
+            sync(&fx, &processes, 301)
+                .current_run()
+                .unwrap()
+                .stuck
+                .is_none()
+        );
+    }
+    for (parent, argv) in [
+        (
+            45,
+            &["node", "/opt/build.js", "typescript-language-server"][..],
+        ),
+        (
+            20,
+            &["node", "/opt/typescript-language-server/lib/cli.js"][..],
+        ),
+    ] {
+        let fx = Fx::new("pi-native");
+        let processes = Processes::default();
+        pi_native_pane(&fx, &processes, &[(46, parent, argv)]);
+        fx.herdr_says("idle");
+        sync(&fx, &processes, 0);
+        assert_eq!(
+            sync(&fx, &processes, 301)
+                .current_run()
+                .unwrap()
+                .stuck
+                .as_ref()
+                .unwrap()
+                .pid,
+            46
+        );
+    }
+}
+
+#[test]
 fn foreign_processes_in_a_pi_native_pane_are_still_stuck() {
     // Given a command the host spawned, and one typed into the nested shell.
     for (pid, parent) in [(46, 44), (47, 20)] {

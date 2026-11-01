@@ -154,7 +154,7 @@ fn assist_reports_blocked_review_once_and_confirmation_resumes_it() {
 }
 
 #[test]
-fn completed_run_does_not_keep_resolved_stuck_observation_blocking_autopilot() {
+fn completed_run_with_pending_reply_still_blocks_automatic_review() {
     let fx = Fx::new(|review| {
         review.gate = gate(&["true"]);
         review.reviewer = Some("rev".into());
@@ -163,29 +163,18 @@ fn completed_run_does_not_keep_resolved_stuck_observation_blocking_autopilot() {
     fx.ctx
         .store
         .update(&fx.id, |task| {
-            task.current_run_mut().unwrap().stuck = Some(corral_core::StuckProcess {
-                pid: 12345,
-                argv: vec!["old-command".into()],
-                started: "old".into(),
-            });
+            task.current_run_mut().unwrap().pending_reply = Some("undelivered".into());
             Ok(())
         })
         .unwrap();
-    fx.ctx
-        .store
-        .log_event(
-            Some(&fx.id),
-            "automation_blocked",
-            serde_json::json!({
-                "run": fx.run().id,
-                "reason": "unresolved delivery or process recovery requires owner disposition"
-            }),
-        )
-        .unwrap();
     fx.sync();
-    assert_eq!(fx.stage(), Some(AutoStage::Reviewing));
-    assert_eq!(fx.events("gate_started"), 1);
-    assert_eq!(fx.events("automation_resumed"), 1);
+    assert_eq!(fx.events("gate_started"), 0);
+    assert!(
+        corral_ops::automation_blocker(&fx.ctx, &fx.task())
+            .unwrap()
+            .unwrap()
+            .contains("unresolved delivery")
+    );
 }
 
 #[test]
