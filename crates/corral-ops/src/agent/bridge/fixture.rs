@@ -509,7 +509,7 @@ pub(crate) struct Exec {
 impl Exec {
     pub(crate) fn spawn(fx: &Fx, origin: &RequestOrigin, points: &str) -> Exec {
         let spec = json!({"root": fx.root(), "identity": origin.identity,
-            "request": origin.request_id, "payload": origin.payload_sha256});
+            "request": origin.request_id, "payload": origin.payload_sha256, "op": origin.op});
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",

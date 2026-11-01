@@ -122,11 +122,27 @@ fn gate_executor_child() {
     };
     let o = RequestOrigin {
         request_id: spec["request"].as_str().unwrap().into(),
-        op: "gate".into(),
+        op: spec["op"].as_str().unwrap_or("gate").into(),
         payload_sha256: spec["payload"].as_str().unwrap().into(),
         identity,
         binding,
     };
+    if o.op == "done" {
+        let report = Report {
+            origin: &o,
+            gate_ref: None,
+            contract_sha256: None,
+        };
+        crate::review::done_request(
+            &ctx,
+            o.identity.task.as_deref().unwrap(),
+            SUMMARY,
+            None,
+            &report,
+        )
+        .unwrap();
+        return;
+    }
     if spec["queue"] == true {
         super::super::gate_queue::advance(&ctx).unwrap();
     }
