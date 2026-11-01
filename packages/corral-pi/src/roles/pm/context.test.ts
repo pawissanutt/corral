@@ -27,3 +27,20 @@ test("native launch input is consumed as data, bounded and never silently ignore
     expect(operationalContext(undefined)).toBe("");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("ordinary large-workspace task counts fit the unchanged reader bound as summary data", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-summary-"));
+  const path = join(dir, "input.json");
+  try {
+    // Mirrors the Rust launch/resume regression's 200-task scope, without a task cache.
+    const input = { ...snapshot, policy: { ...snapshot.policy, mode: "autopilot",
+      authority: {}, scope_counts: { projects: 0, tasks: 200, observed_tasks: 200 },
+      task_details: "Read fresh corral_brief, corral_next and corral_show" } };
+    const bytes = JSON.stringify(input);
+    expect(Buffer.byteLength(bytes) < CONTEXT_MAX_BYTES).toBeTrue();
+    writeFileSync(path, bytes);
+    const rendered = operationalContext(path);
+    expect(JSON.parse(rendered.slice(rendered.indexOf('{\n  "version"')))).toEqual(input);
+    expect(CONTEXT_MAX_BYTES).toBe(64 * 1024);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

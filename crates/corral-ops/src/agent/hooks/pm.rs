@@ -423,8 +423,25 @@ case "$1 $2" in"#;
                     "fixture",
                 )
                 .unwrap();
+            let mut tasks = std::collections::BTreeSet::from([task.id]);
+            // Realistic workspace: per-task refusals and explicit scope members used to
+            // overflow the 64 KiB launch bound (the review reproduction had 155 tasks).
+            for index in 0..199 {
+                tasks.insert(
+                    fx.ctx
+                        .store
+                        .create(
+                            &format!("other-{index}"),
+                            Some("other"),
+                            corral_core::Status::Ready,
+                            "fixture",
+                        )
+                        .unwrap()
+                        .id,
+                );
+            }
             let selection = OperatingSelection {
-                tasks: [task.id].into(),
+                tasks,
                 ..Default::default()
             };
             let preview = fx.ctx.store.preview_operating_policy(&selection).unwrap();
@@ -432,7 +449,17 @@ case "$1 $2" in"#;
                 .store
                 .confirm_operating_policy(&preview, "fixture owner", jiff::Timestamp::now())
                 .unwrap();
-            // When resume attempts to use the changed scope.
+            let policy = crate::pm_policy::snapshot(&fx.ctx).unwrap();
+            assert!(serde_json::to_vec_pretty(&policy).unwrap().len() > 64 * 1024);
+            // The launch writer and resume use the same compact representation.
+            let launch = std::fs::read(crate::pm::save_native_context(&fx.ctx).unwrap()).unwrap();
+            assert!(launch.len() < 8 * 1024);
+            let launch_input: serde_json::Value = serde_json::from_slice(&launch).unwrap();
+            assert_eq!(launch_input["policy"]["scope_counts"]["tasks"], 200);
+            assert!(launch_input["policy"].get("permissions").is_none());
+            assert!(launch_input["policy"].get("refusals").is_none());
+            assert!(launch_input["policy"].get("scope").is_none());
+            // When resume attempts to use the changed, realistically sized scope.
             let outcome = crate::agent::recovery::resume_container(
                 &f::ctx_at(fx.root()),
                 &ContainerRef::Pm,
@@ -470,6 +497,7 @@ case "$1 $2" in"#;
                 &std::fs::read(bootstrap.prompt_file.as_ref().unwrap()).unwrap(),
             )
             .unwrap();
+            assert_eq!(input, launch_input);
             assert_eq!(input["projects"].as_object().unwrap().len(), 1);
             assert!(input["projects"].get("other").is_some());
             assert!(input["projects"].get("corral").is_none());
