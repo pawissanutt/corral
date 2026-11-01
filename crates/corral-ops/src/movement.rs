@@ -62,6 +62,8 @@ enum DeliveryState {
     Pending,
     Deferred,
     Sending,
+    /// Ownership transferred to the structured inbox; consult its transport receipts.
+    Queued,
     Delivered,
     Failed,
     Uncertain,
@@ -71,8 +73,10 @@ enum DeliveryState {
 impl DeliveryState {
     fn terminal(&self) -> bool {
         match self {
-            Self::Delivered | Self::Uncertain | Self::Cancelled => true,
-            Self::Pending | Self::Deferred | Self::Sending | Self::Failed => false,
+            Self::Queued | Self::Delivered | Self::Failed | Self::Uncertain | Self::Cancelled => {
+                true
+            }
+            Self::Pending | Self::Deferred | Self::Sending => false,
         }
     }
 }
