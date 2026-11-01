@@ -161,7 +161,8 @@ export class NativeWorkbench {
     }
     if (!r.visible.length) rows.push({ text: r.error ? "Git unavailable · r to retry" : r.refreshing ? "Reading Git…" : r.files.length ? "No matching files · / to search" : "Working tree clean" });
     if (r.limitNotice) rows.push({ text: r.limitNotice });
-    return rows;
+    // PanelLine text is data, not terminal markup. Keep action paths literal for Git.
+    return rows.map(row => ({ ...row, text: plainLabel(row.text) }));
   }
   async selectRelative(delta: number): Promise<void> {
     const rows = this.review.visible, from = rows.findIndex(file => file.path === this.review.selected);
