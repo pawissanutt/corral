@@ -312,13 +312,24 @@ impl TaskHeadMut {
         container: &ContainerRef,
         record: NativeRecord,
     ) -> Result<bool> {
+        let before = self
+            .overlaid()?
+            .agent_rows(container, record.kind(), Some(record.token()), false)?
+            .pop();
+        self.write_agent_record(container, record, before)
+    }
+
+    /// One canonical write path for keyed upserts and retained receipt edits.
+    pub(super) fn write_agent_record(
+        &mut self,
+        container: &ContainerRef,
+        record: NativeRecord,
+        before: Option<HistoryRow>,
+    ) -> Result<bool> {
         let view = self.overlaid()?;
         let owner = view
             .agent_owner(container)?
             .context("native container missing")?;
-        let before = view
-            .agent_rows(container, record.kind(), Some(record.token()), false)?
-            .pop();
         let doc = serde_json::to_value(&record)?;
         if before.as_ref().is_some_and(|row| row.doc == doc) {
             return Ok(false);

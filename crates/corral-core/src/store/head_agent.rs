@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use super::codec::{AGENT_KINDS, Rows, SELF, child_key, split_run};
 use super::head::TaskHead;
 use super::head_mut::TaskHeadMut;
-use crate::agent::AgentRunState;
+use crate::agent::{AgentRunState, ContainerRef, NativeRecord};
 use crate::backend::{RowQuery, TaskPart};
 use crate::work::Counter;
 
@@ -48,16 +48,22 @@ impl TaskHeadMut {
             .context("receipt run missing")?;
         let q = RowQuery::under(TaskPart::AgentRecord, format!("{owner}/receipts/"))
             .with_index(format!("request:{request}"));
-        let mut row = self
+        let row = self
             .rows_now(&q, Counter::NestedRowDecodes)?
             .into_iter()
             .next()
             .context("receipt missing")?;
-        let mut receipt = serde_json::from_value(row.doc)?;
+        let mut receipt = serde_json::from_value(row.doc.clone())?;
         edit(&mut receipt)?;
-        row.doc = serde_json::to_value(receipt)?;
-        self.put(row);
-        Ok(())
+        self.write_agent_record(
+            &ContainerRef::Worker {
+                task: self.head.id.clone(),
+                run: run.into(),
+            },
+            NativeRecord::Receipt(receipt),
+            Some(row),
+        )
+        .map(drop)
     }
 
     /// Replaces the current worker's native-agent records, leaving every other run family intact.
@@ -107,7 +113,11 @@ impl TaskHeadMut {
             .current_run
             .as_mut()
             .context("missing_run")?
-            .agent_host = serde_json::from_value(serde_json::to_value(run.agent_host)?)?;
+            .agent_host = run
+            .agent_host
+            .as_deref()
+            .map(crate::AgentHostHead::of)
+            .map(Box::new);
         Ok(())
     }
 }
