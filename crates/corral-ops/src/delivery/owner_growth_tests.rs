@@ -13,9 +13,11 @@ use crate::delivery::omo_fixture::OmoWorld;
 /// An inbox run whose `earlier` messages' effects were applied and whose earlier bindings left
 /// cursors, with one owner reply waiting for delivery.
 fn world(earlier: u64) -> OmoWorld {
-    let world = OmoWorld::new(Status::NeedsMe);
-    // Every stamp written from here on, including the pass's own receipts, is this instant.
+    // Pin both sources before construction: status transitions stamp through clock::now,
+    // not just Store::now, including the reply posted during fixture preparation.
     let now: jiff::Timestamp = "2026-10-20T00:00:00Z".parse().unwrap();
+    corral_core::clock::pin_thread(Some(now));
+    let world = OmoWorld::new(Status::NeedsMe);
     world.ctx.store.fixture_pin_now(now).unwrap();
     world
         .ctx
@@ -56,6 +58,10 @@ fn world(earlier: u64) -> OmoWorld {
     std::fs::rename(&registry, &hidden).unwrap();
     crate::reply(&world.ctx, &world.task.id, "use the second option").unwrap();
     std::fs::rename(&hidden, &registry).unwrap();
+    assert_eq!(
+        world.ctx.store.head(&world.task.id).unwrap().status_since,
+        Some(now)
+    );
     world
 }
 
