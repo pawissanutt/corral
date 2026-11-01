@@ -141,6 +141,6 @@ export class AuxiliaryRuntime {
   }
   state() {
     return { explore: this.explore.state(), oracle: this.oracle.state(),
-      ...(this.options.settings.web_search ? { web_search: this.webSearch.state() } : {}), stopped: this.stopped };
+      web_search: this.webSearch.state(), stopped: this.stopped };
   }
 }

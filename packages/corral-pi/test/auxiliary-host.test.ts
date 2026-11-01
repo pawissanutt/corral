@@ -86,7 +86,8 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     await held;
     await host.close();
     expect(requestCount - before).toBe(2);
-    expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 }, oracle: { running: 0, queued: 0 }, stopped: true });
+    expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 }, oracle: { running: 0, queued: 0 },
+      web_search: { running: 0, queued: 0 }, stopped: true });
     const terminal = corral.calls().filter((c) => c.envelope.payload.kind === "auxiliary" && c.envelope.payload.action === "finish");
     expect(terminal.at(-1)?.envelope.payload.outcome).toBe("uncertain");
     const budget = corral.calls().filter((c) => c.envelope.payload.kind === "budget");
