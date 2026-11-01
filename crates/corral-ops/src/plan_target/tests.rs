@@ -150,12 +150,38 @@ fn crash_after_git_before_receipt_recovers_exactly_once_without_an_engine() {
     }
     assert_eq!(f.approvals(), 0);
     assert_eq!(f.ctx.store.get(&f.task.id).unwrap().status, Status::Review);
+    f.ctx
+        .store
+        .observe_condition(
+            Some(&f.task.id),
+            "landing_stale",
+            json!({"reason": "stale"}),
+        )
+        .unwrap();
     // When a fresh controller reconciles the same repository twice.
     let reopened = f.reopen();
     reconcile_all(&reopened).unwrap();
     reconcile_all(&reopened).unwrap();
     // Then exactly one target-qualified acceptance is published, with no repeated merge.
     assert_eq!(f.approvals(), 1);
+    let runs = f.ctx.store.condition_runs(Some(&f.task.id)).unwrap();
+    let stale: Vec<_> = runs
+        .iter()
+        .filter(|run| run.kind == "landing_stale")
+        .collect();
+    assert_eq!(stale.len(), 1);
+    assert!(stale[0].closed_seq.is_some());
+    assert_eq!(
+        f.ctx
+            .store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|event| event.task.as_deref() == Some(&f.task.id)
+                && event.kind == "landing_stale_cleared")
+            .count(),
+        1
+    );
     let target = Target::load(&f.repo, "feature/plan").unwrap().unwrap();
     assert!(target.pending.is_none());
     assert_eq!(target.receipts.len(), 1);

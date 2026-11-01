@@ -32,6 +32,8 @@ const MAX_STEPS: usize = 16;
 mod infra;
 mod output;
 mod repair;
+#[cfg(test)]
+mod tests;
 mod tiers;
 use output::{LOG_TAIL_LINES, first_line, log_tail, short};
 
@@ -79,10 +81,8 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
             return Err(error);
         }
         match advance(&ctx, &task.id, now) {
-            Ok(c) => {
-                output::record_clean(&ctx, &task)?;
-                changes.extend(c);
-            }
+            Ok(Some(c)) => changes.extend(c),
+            Ok(None) => {}
             Err(e) => {
                 let error = format!("{e:#}");
                 crate::messages::report(
@@ -98,10 +98,10 @@ pub(crate) fn advance_all(ctx: &Ctx, now: Timestamp) -> Result<Vec<Change>> {
     Ok(changes)
 }
 
-fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
+fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Option<Vec<Change>>> {
     // The board worker, the herdr hook and `sync --watch` may sync at once; one of them advances a task.
     let Some(_lock) = ctx.store.try_lock(&format!("autopilot-{id}"))? else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let mut changes = Vec::new();
     for _ in 0..MAX_STEPS {
@@ -121,7 +121,9 @@ fn advance(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Vec<Change>> {
             Step::Moved(c) => changes.push(c),
         }
     }
-    Ok(changes)
+    // Clear while still holding the lease so a later evaluation cannot race this pass.
+    output::record_clean(ctx, &ctx.store.head(id)?)?;
+    Ok(Some(changes))
 }
 
 fn step(ctx: &Ctx, id: &str, now: Timestamp) -> Result<Step> {
