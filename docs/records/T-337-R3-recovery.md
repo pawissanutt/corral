@@ -29,4 +29,8 @@ Both corrections are test-only, within scope; no assertion, budget, timeout or r
 
 Private isolated focused result: both artifact-facts tests PASS and all four events-conditions CLI tests PASS (`.evidence/R3-clock-explicit-wait-green.log`); restored-clock regression also PASS (`R3-artifact-clock-restored-green.log`). The deliberate timestamp-width negative control FAIL is retained as `R3-artifact-clock-width-negative.log`, not counted as a passing test. Complete package acceptance still depends on the next receipted quick gate.
 
+## Third R3 quick attempt: list fixture clock
+
+Attempt `ag-50a528540272d241` passed format/size/Clippy, then stopped after729 passes with one list-columns exact byte-budget failure (2979/2978 decoded bytes), leaving4332/5062 selected cases unrun. This is another fixture clock input, not permission to relax the counter comparison: the actual list fixture now pins its Store mutation clock before creating Tasks and derived rows. No production list logic or assertions changed. Focused actual CLI-command budget test PASS (`.evidence/R3-list-artifact-clock-green.log`), including the same full-task column oracle and all-counter equality. The next contracted gate remains required.
+
 Discovery: `cxm context` failed because the control-plane listing exceeded its 128 MiB output limit; the required read-only Corral search timed out. Guarded checkpoint 47 and retained evidence provided the bounded recovery context instead. Neither discovery failure is a validation result.
