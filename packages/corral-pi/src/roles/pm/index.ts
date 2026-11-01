@@ -7,7 +7,7 @@ import { requestContract, sessionTodoTool } from "../common/todo.ts";
 
 export const CONTEXT_ASSET = "assets/pm-context.md";
 export const SKILL_ASSET = "src/roles/pm/skills/corral-pm/SKILL.md";
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", ...pmTools.map((tool) => tool.op), "todo"];
+const OPS: readonly CorralOp[] = ["hello", "event", ...pmTools.map((tool) => tool.op), "todo"];
 
 export function pmRole(root: string): RoleModule {
   return {

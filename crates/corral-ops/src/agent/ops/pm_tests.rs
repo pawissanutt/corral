@@ -37,6 +37,76 @@ fn task(fx: &ts::Fx, project: &str, body: &str) -> Task {
 }
 
 #[test]
+fn inbox_limits_distinguish_items_from_body_characters_without_mutating() {
+    let (fx, host) = fixture();
+    fx.ctx
+        .store
+        .pm_inbox_post(corral_core::pm_inbox::NewPmItem {
+            from: "owner".into(),
+            kind: corral_core::pm_inbox::ItemKind::Question,
+            subject: "Bounds".into(),
+            body: "x".repeat(2048),
+            refs: vec![],
+            requested_action: None,
+            owner_words: None,
+            key: None,
+        })
+        .unwrap();
+    let before = fx.ctx.store.pm_inbox_item("PMI-1").unwrap();
+    for limit in [1, 100, 101, 1024] {
+        let response = send(
+            &fx,
+            &host,
+            "inbox_read",
+            &format!("body-{limit}"),
+            json!({"id":"PMI-1", "limit":limit}),
+        );
+        let receipt = response.receipt().unwrap();
+        assert_eq!(receipt.state, ReceiptState::Committed);
+        assert_eq!(
+            receipt.result["content_json"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            limit
+        );
+        assert_eq!(receipt.result["next_offset"], limit);
+    }
+    for limit in [1, 100] {
+        let response = send(
+            &fx,
+            &host,
+            "inbox_read",
+            &format!("list-{limit}"),
+            json!({"limit":limit}),
+        );
+        assert_eq!(response.receipt().unwrap().state, ReceiptState::Committed);
+    }
+    for input in [
+        json!({"limit":0}),
+        json!({"limit":101}),
+        json!({"id":"PMI-1", "limit":0}),
+        json!({"id":"PMI-1", "limit":1025}),
+        json!({"offset":-1}),
+    ] {
+        let response = send(&fx, &host, "inbox_read", "invalid-bounds", input);
+        assert_eq!(ts::code(&response), Some("bad_request"));
+    }
+    let response = send(
+        &fx,
+        &host,
+        "inbox_resolve",
+        "missing-outcome",
+        json!({"id":"PMI-1", "action":"resolve", "expected_revision":0}),
+    );
+    let receipt = response.receipt().unwrap();
+    assert_eq!(receipt.state, ReceiptState::Rejected);
+    assert_eq!(receipt.result["code"], "bad_request");
+    assert_eq!(before, fx.ctx.store.pm_inbox_item("PMI-1").unwrap());
+}
+
+#[test]
 fn inbox_tools_claim_and_resolve_at_revisions_and_refuse_a_stale_claim() {
     // Given a bound Pi-native PM and owner item PMI-1 at revision 0.
     let (fx, host) = fixture();

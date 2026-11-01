@@ -102,6 +102,8 @@ export interface CorralToolSpec<P = Record<string, unknown>> {
   readonly description: string;
   readonly op: CorralOp;
   readonly parameters: TSchema;
+  /** Machine shape of operation results; the canonical receipt envelope is supplied centrally. */
+  readonly resultSchema?: TSchema;
   /** The canonical payload sent for validated tool parameters. */
   payload(params: P): Record<string, unknown>;
   /** A deadline longer than the client's default, for an op that runs a whole corral command. */

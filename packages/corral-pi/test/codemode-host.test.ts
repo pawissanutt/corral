@@ -92,7 +92,10 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
           text("catalog: " + catalog.filter(t => t.name.startsWith("corral_")).map(t => t.name).join(","));
           ${role === "pm" ? `
           const reads = await Promise.all(["corral_brief", "corral_next", "corral_inbox_read"].map(name => tools[name]({})));
-          text(reads);
+          // No JSON.parse: QuickJS receives canonical structured responses.
+          text(reads.map(r => ({op:r.op, state:r.state, request_id:r.request_id, result:r.result})));
+          if (reads.some(r => r.state !== "committed" || !r.request_id || !r.result.op)) throw new Error("lost structured receipt");
+          text("structured-corral-ok");
           ` : `
           const results = await Promise.all(["one.txt", "two.txt"].map(path => tools.read({path})));
           text(results.map(s => s.split("\\n").filter(line => line.startsWith("keep:")).join("\\n")));
@@ -120,6 +123,7 @@ for (const role of ["worker", "reviewer", "pm"] as const) {
         const output = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");
         expect(output).toContain("Script completed");
         if (role === "pm") {
+          expect(output).toContain("structured-corral-ok");
           expect(output).toContain("read_brief");
           expect(output).toContain("read_next");
           expect(output).toContain("inbox_read");

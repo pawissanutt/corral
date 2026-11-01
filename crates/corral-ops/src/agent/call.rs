@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::admission::{self, Admission, Mode};
-use super::envelope::{Envelope, error_category};
+use super::envelope::Envelope;
 use super::receipts::{self, Commit};
 use crate::Ctx;
 use crate::questions::{
@@ -576,17 +576,7 @@ pub fn call(ctx: &Ctx, op_flag: &str, input: &[u8]) -> Result<CallResponse> {
 }
 
 fn parse<T: DeserializeOwned>(envelope: &Envelope, expected: &str) -> Result<T> {
-    serde_json::from_value(envelope.payload.clone()).map_err(|error| {
-        Rejection::new(
-            RejectCode::BadRequest,
-            format!(
-                "malformed {} payload ({} error); expected fields: {expected}",
-                envelope.op,
-                error_category(&error)
-            ),
-        )
-        .into()
-    })
+    super::ops::payload(envelope, expected)
 }
 
 fn question_effect(key: &str) -> Option<ReceiptEffect> {
