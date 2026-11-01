@@ -3,6 +3,10 @@ use super::*;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
 
+fn sweep(ctx: &Ctx) -> anyhow::Result<()> {
+    crate::sandbox_cleanup::sweep(ctx, &ctx.store.list()?)
+}
+
 fn marker(ctx: &Ctx, task: &str, run: &str, value: &str) {
     let path = crate::launch_exit::receipt(ctx, task, run).with_extension("owner");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -120,7 +124,7 @@ fn historical_cleanup_does_not_hold_inventory_or_starve_gate_admission() {
     drop(guard);
     let launched = crate::gate::gate_start(&fx.ctx, &gate);
     // A concurrent hook must not queue another Podman query behind this one.
-    let concurrent = crate::sandbox_cleanup::sweep(&fx.ctx);
+    let concurrent = sweep(&fx.ctx);
     release.write_all(b"R").unwrap();
     acceptor.join().unwrap();
     worker.join().unwrap().unwrap();
@@ -154,7 +158,7 @@ fn hundreds_of_terminal_owners_need_only_one_podman_query() {
     containers(&fx, &[]);
     crate::sandbox_cleanup::PODMAN
         .with(|slot| *slot.borrow_mut() = Some(podman.to_string_lossy().into()));
-    crate::sandbox_cleanup::sweep(&fx.ctx).unwrap();
+    sweep(&fx.ctx).unwrap();
     crate::sandbox_cleanup::PODMAN.with(|slot| slot.borrow_mut().take());
     let calls = std::fs::read_to_string(fx.tmp.path().join("podman-calls")).unwrap();
     assert_eq!(
@@ -175,7 +179,7 @@ fn resumed_task_is_revalidated_after_blocked_container_listing() {
     let worker = std::thread::spawn(move || {
         crate::sandbox_cleanup::PODMAN
             .with(|slot| *slot.borrow_mut() = Some(podman.to_string_lossy().into()));
-        crate::sandbox_cleanup::sweep(&ctx)
+        sweep(&ctx)
     });
     let (tx, rx) = mpsc::channel();
     let acceptor = std::thread::spawn(move || {
@@ -213,7 +217,7 @@ fn foreign_session_and_live_runs_are_not_sandbox_cleanup_authority() {
     foreign.herdr.set_session(Some("foreign".into()));
     crate::sandbox_cleanup::PODMAN
         .with(|slot| *slot.borrow_mut() = Some(podman.to_string_lossy().into()));
-    crate::sandbox_cleanup::sweep(&foreign).unwrap();
+    sweep(&foreign).unwrap();
     assert!(!fx.tmp.path().join("podman-calls").exists());
     fx.ctx
         .store
@@ -222,7 +226,7 @@ fn foreign_session_and_live_runs_are_not_sandbox_cleanup_authority() {
             Ok(())
         })
         .unwrap();
-    crate::sandbox_cleanup::sweep(&fx.ctx).unwrap();
+    sweep(&fx.ctx).unwrap();
     crate::sandbox_cleanup::PODMAN.with(|slot| slot.borrow_mut().take());
     assert!(!fx.tmp.path().join("podman-calls").exists());
 }
