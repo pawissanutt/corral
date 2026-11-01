@@ -60,6 +60,27 @@ fn status(fx: &crate::board::tests::Fixture, id: &str) -> Status {
 #[test]
 fn click_selects_and_double_click_or_second_click_opens() {
     let fx = seeded();
+    // Opening Review reads the canonical snapshot; seeded cards alone use placeholder metadata.
+    let diff = fx.ctx.store.root().join("review.diff");
+    std::fs::write(&diff, "diff --git a/example.rs b/example.rs\n--- a/example.rs\n+++ b/example.rs\n@@ -1 +1 @@\n-old\n+new\n").unwrap();
+    fx.ctx
+        .store
+        .update("T-006", |task| {
+            task.artifacts
+                .retain(|artifact| artifact.kind != corral_core::ArtifactKind::Diff);
+            Ok(())
+        })
+        .unwrap();
+    corral_ops::add_artifact(
+        &fx.ctx,
+        "T-006",
+        &diff,
+        Some(corral_core::ArtifactKind::Diff),
+        Some("Final diff +412 −88"),
+    )
+    .unwrap();
+    assert_eq!(fx.ctx.store.get("T-006").unwrap().artifacts.len(), 2);
+    assert!(corral_ops::review_info(&fx.ctx, "T-006").is_ok());
     let (mut app, now) = board_app(&fx);
     let text = render(&mut app);
     let t3 = find_any(&text, "T-003");
@@ -95,6 +116,29 @@ fn click_selects_and_double_click_or_second_click_opens() {
         "Review cards open the review screen: {:?}",
         app.stack[2].hints()
     );
+}
+
+#[test]
+fn unreadable_review_diff_shows_a_visible_error_and_keeps_detail_open() {
+    let fx = seeded();
+    let task = fx.ctx.store.get("T-006").unwrap();
+    let diff = task
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.kind == corral_core::ArtifactKind::Diff)
+        .unwrap();
+    assert!(corral_ops::artifact_reader(&fx.ctx, diff).is_err());
+    let (mut app, _) = board_app(&fx);
+    app.apply(crate::Action::OpenDetail("T-006".into()));
+    assert_eq!(app.stack.len(), 2);
+    app.handle_key(code(KeyCode::Char('r')));
+    assert_eq!(
+        app.stack.len(),
+        2,
+        "failed review retains the current detail"
+    );
+    let text = render(&mut app);
+    assert!(text.contains("Could not open review T-006"), "{text}");
 }
 
 #[test]
