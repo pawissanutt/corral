@@ -716,8 +716,15 @@ stays headless while the setting is on; turning it off makes the next generation
 and records the change. The setting is read at dispatch and resume, so it applies to hosts
 launched after the change.
 
-`[agent] ui` sets how the run pane looks (default `"rich"`). In rich mode the pane uses the
-Dracula palette (a dark theme; on a light terminal background use `plain`) and shows a
+`[agent] ui` sets how the run pane looks (default `"rich"`). Rich mode now starts the real
+Pi interactive host in fullscreen with a graphite session sidebar and filled composer.
+At fewer than 105 columns the sidebar relocates into a native inspector above the composer;
+the real transcript, editor, bindings, model controls and permission dialogs remain Pi-owned.
+`F6` focuses the inspector, arrows navigate, Enter inspects, Escape returns to composing, and
+`Ctrl+B` switches wide sidebar/inline modes or compacts narrow details. `/panels context`,
+`/panels files`, `/panels agents`, `/panels plan` and `/panels refresh` expose the same real
+state and bounded read-only Git inspection. See [native panels](pi-panels.md) for scope and checks.
+There is no browser or local web server in the production UI. The pane retains its
 two-line header (role, task and run, generation, model, effort and worktree), names the
 terminal tab after the task and role (`T-503 worker`), and adds footer status for the corral
 binding (a filled dot with the generation, such as `● g2`, or the footer text “○ corral unbound”

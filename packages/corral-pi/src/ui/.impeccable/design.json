@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-01T04:35:33.003Z",
+  "title": "Design System: Corral Pi native workbench",
+  "extensions": {
+    "shadows": [],
+    "motion": [],
+    "breakpoints": [
+      {
+        "name": "sidebar",
+        "value": "105 terminal columns"
+      },
+      {
+        "name": "rail-width",
+        "value": "34 columns plus one separator"
+      },
+      {
+        "name": "inline-height",
+        "value": "4–7 terminal rows"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Native session panel",
+      "kind": "custom",
+      "description": "Documentation-only character-cell example; actual rendering is box() in panels-view.ts.",
+      "html": "<pre class=\"ds-native-panel\" tabindex=\"0\">┌─ Session ─────────────────┐\n│ Context Files Agents Plan │\n│ Bound to Corral           │\n└───────────────────────────┘</pre>",
+      "css": ".ds-native-panel{margin:0;background:#191b20;color:#9ba2b0;font-family:monospace;white-space:pre}.ds-native-panel:focus-visible{color:#83a8ef;outline:none}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The panel workbench",
+    "overview": "A real native coding session stays primary. Filled graphite inspection regions and restrained blue focus make related state accessible without replacing Pi's transcript, editor or authorization lifecycle.",
+    "keyCharacteristics": [
+      "Native character-cell panels, not a web dashboard.",
+      "Persistent context with a separate filled composer.",
+      "Shared keyboard/pointer inspection without a second conversation runtime."
+    ],
+    "rules": [
+      {
+        "name": "The State Rule",
+        "body": "Displaying progress, a tool result or a diff does not imply a passing gate, review or owner acceptance.",
+        "section": "colors"
+      },
+      {
+        "name": "The Continuity Rule",
+        "body": "Resize and inspection preserve draft, selected tab/file and bound session.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Do preserve the real editor, transcript and bound identity.",
+      "Do show unknown, stale and unavailable state explicitly.",
+      "Do relocate metadata instead of hiding it on narrow terminals."
+    ],
+    "donts": [
+      "Don't introduce a browser runtime or another agent loop.",
+      "Don't make local UI state look like canonical progress, evidence or authority.",
+      "Don't change native fonts or promise full terminal/accessibility certification."
+    ]
+  }
+}
