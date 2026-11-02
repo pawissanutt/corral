@@ -26,13 +26,15 @@ pub(super) fn launch_refusal(task: &Task, now: Timestamp, conditions: &mut Vec<C
             text.contains("corral agent launch refused: memory_contract_unavailable:")
         })
     {
-        let mut condition = keyed_status(
-            task,
-            now,
-            "launch_failed",
-            WaitClass::OwnerDecision,
-            reason.clone(),
-        );
+        let reason = if reason.contains("corral agent install") {
+            reason.clone()
+        } else {
+            format!(
+                "{reason}\nFix: run `corral agent install` or update the configured Pi assets, then retry."
+            )
+        };
+        let mut condition =
+            keyed_status(task, now, "launch_failed", WaitClass::OwnerDecision, reason);
         condition
             .resume
             .push(check("launch_repaired", &task.id, None, false));
