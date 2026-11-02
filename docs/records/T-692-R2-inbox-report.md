@@ -50,6 +50,11 @@ flow; assistant inspection cannot become an authenticated owner answer.
   5.5.0, not mock UI state. Raw ANSI, screen text, result and hash proof are kept
   with the run artifacts. The rendering helper used an owned local browser only.
 - `cargo fmt --all` and `git diff --check`: clean.
+- First assigned quick gate: formatting, 800-SLOC ceiling and Clippy passed;
+  nextest stopped on the CLI command-class coverage manifest missing the new
+  `attention inbox` row. The actual production command was already classified
+  read-only. Adding that explicit Read row fixed the same targeted reproducer
+  (red before, green after); no assertion or authority guard was weakened.
 - The assigned receipted quick gate is the final completion check; its canonical
   log/result is attached separately by corral after the final commit/rebase.
 
@@ -66,3 +71,7 @@ fail explicitly rather than truncating into an apparently complete/empty inbox.
 
 No paid/provider calls, production owner answer, owner pane, synthetic host load,
 Windows/IME/accessibility certification, or extra/full gate were exercised.
+PNG signatures/dimensions and actual terminal cell text were inspected; opening
+PNG attachments (including a reduced preview) was blocked by this session's
+inline image limit. The screenshots are attached for review, but no independent
+pixel-level visual PASS is claimed.
