@@ -6,6 +6,9 @@ use serde::Serialize;
 
 use crate::{Ctx, completion, verification};
 
+#[path = "workbench_usage.rs"]
+mod usage_panel;
+
 pub const MAX_CRITERIA: usize = 100;
 pub const MAX_EVIDENCE: usize = 2000;
 pub const MAX_ARTIFACTS: usize = 500;
@@ -31,6 +34,7 @@ pub struct Inspection {
     pub artifacts: Vec<ArtifactRow>,
     pub artifacts_omitted: usize,
     pub worker_summary: Option<String>,
+    pub usage: usage_panel::UsagePanel,
     /// A task lifecycle label, deliberately not a criterion acceptance boolean.
     pub task_status: corral_core::Status,
 }
@@ -239,6 +243,7 @@ pub fn inspect(ctx: &Ctx, id: &str, run_id: &str) -> Result<Inspection> {
             .collect(),
         artifacts_omitted: artifacts.saturating_sub(100),
         worker_summary: run.summary.as_deref().map(excerpt),
+        usage: usage_panel::panel(&task, run),
         task_status: task.status,
     };
     if serde_json::to_vec(&inspection)?.len() > MAX_RESPONSE_BYTES {
