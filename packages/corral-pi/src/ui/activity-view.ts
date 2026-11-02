@@ -10,7 +10,7 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
   const rows: ActivityRow[] = [{ text: "Job output · read-only", color: "accent" },
     { text: "F8 agents & jobs · PgUp/PgDn scroll · F9 conversation", color: "muted" }];
   const add = (...texts: string[]) => rows.push(...texts.map(text => ({ text })));
-  add("Background activity · read-only", "g dependencies · l lifecycle · a scoped agents · j/k select · PgUp/PgDn scroll · Enter compose · F9 conversation",
+  add("Background activity · read-only", "g dependencies · l lifecycle · a scoped agents · j/k scroll · PgUp/PgDn scroll · Enter compose · F9 conversation",
     snapshot.bound ? "Bound host observations · not canonical task/run settlement" : "Disconnected/unbound · observations may be stale", "");
   // Keep jobs inspectable before potentially long receipt/event history.
   const finish = () => {
