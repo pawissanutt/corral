@@ -120,6 +120,54 @@ class PolicyTests(unittest.TestCase):
         self.assertRegex(output, r"TIMEOUT\s+\[[^]]+\].*ordinary")
         self.assertRegex(output, r"PASS\s+\[[^]]+\].*exception")
 
+    def test_prebuilt_nextest_runs_without_compiler_or_source(self):
+        self.write("Cargo.toml", '[package]\nname="reuse-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
+        self.write("src.rs", "#[test] fn cached() {}\n")
+        self.write(".config/nextest.toml", "[profile.default]\ntest-threads=1\n")
+        env = {**os.environ, "RUSTC_WRAPPER": "", "CARGO_TARGET_DIR": str(Path("target").resolve())}
+        def run(*args):
+            result = subprocess.run(["cargo", *args], stdin=subprocess.DEVNULL, capture_output=True,
+                                    text=True, env=env, check=False, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result
+        self.write("cargo.json", run("metadata", "--format-version", "1").stdout)
+        self.write("binaries.json", run("nextest", "list", "--lib", "--list-type", "binaries-only",
+                                        "--message-format", "json").stdout)
+        Path("src.rs").unlink()
+        result = run("nextest", "run", "--cargo-metadata", "cargo.json",
+                     "--binaries-metadata", "binaries.json")
+        self.assertIn("1 passed", result.stderr)
+        self.assertNotIn("Compiling", result.stderr)
+
+    def test_budget_excludes_compilation_and_busy_host_runtime(self):
+        state = Path("budget.json")
+        quiet = {"quiet": True, "load_per_core": 0.5, "load1": 1.0, "cores": 2}
+        busy = {"quiet": False, "load_per_core": 2.0, "load1": 4.0, "cores": 2}
+        with patch.object(gate_timer, "load_snapshot", return_value=quiet), \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            gate_timer.initialize(state, "quick")
+            data = json.loads(state.read_text())
+            data["limit"] = 0.05
+            state.write_text(json.dumps(data))
+            self.assertEqual(gate_timer.phase(state, "cold-compile",
+                             [sys.executable, "-c", "import time; time.sleep(.1)"], compile_only=True), 0)
+            self.assertEqual(json.loads(state.read_text())["budgeted"], 0)
+            with patch.object(gate_timer, "load_snapshot", side_effect=[quiet, quiet, busy]):
+                self.assertEqual(gate_timer.phase(state, "quiet-tests",
+                                 [sys.executable, "-c", "import time; time.sleep(10)"]), 124)
+            ended = json.loads(state.read_text())["phases"][-1]
+            self.assertFalse(ended["busy_exempt"])
+            self.assertEqual(ended["enforcement_load"], quiet)
+        with patch.object(gate_timer, "load_snapshot", return_value=busy), contextlib.redirect_stdout(io.StringIO()):
+            before = json.loads(state.read_text())["budgeted"]
+            self.assertEqual(gate_timer.phase(state, "busy-tests",
+                             [sys.executable, "-c", "import time; time.sleep(.1)"]), 0)
+            data = json.loads(state.read_text())
+            self.assertEqual(data["budgeted"], before)
+            self.assertTrue(data["phases"][-1]["busy_exempt"])
+        with patch.object(gate_timer.os, "getloadavg", side_effect=OSError("unavailable")):
+            self.assertFalse(gate_timer.load_snapshot()["quiet"])
+
     def test_added_suite_cost_requires_candidate_justification(self):
         self.write("src.rs", "#[test]\nfn catches_named_defect() {}\n")
         self.commit()

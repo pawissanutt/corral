@@ -6,25 +6,40 @@ worker/reviewer contracts. Test-cost justification belongs in the candidate's ch
 
 ## Fixed tiers and limits
 
-| Tier | Membership | When | Wall budget |
+| Tier | Membership | When | Test budget / guard |
 |---|---|---|---:|
-| quick | Touched modules/consumers, crate-wide fallback; declared tests replace selection | Each review round / Plan member | 180s |
-| full | Workspace except the fixed torture catalog; restore affected torture suites when an owning module changes | Main landing | 600s |
-| slow | Fixed race/crash/torture/restart catalog in `profile.slow` | Nightly and owning-module changes | 1800s nightly |
+| quick | Touched modules/consumers, crate-wide fallback; declared tests replace selection | Each review round / Plan member | 180s test execution |
+| full | Workspace except the fixed torture catalog; restore affected torture suites when an owning module changes | Main landing | 600s test execution |
+| slow | Fixed race/crash/torture/restart catalog in `profile.slow` | Nightly and owning-module changes | 1800s nightly maintenance wall guard |
 
 Plan verification keeps every suite and both optional lanes. Missing/older context is also
 conservative. `gate_lanes.py` maps the slow catalog to owning paths; unmapped catalog entries
 run, never silently disappear. Shared dependency/store/Git/herdr changes restore all torture
 coverage. Quick's explicit declared tests can opt into slow tests.
 
-`.config/gate.toml` enforces the complete recipe's wall budget, including compilation. The
-timer sends TERM then KILL to its owned process group and exits nonzero on expiry.
-Linked worktrees use the primary checkout's shared `target/` unless the caller explicitly
-sets `CARGO_TARGET_DIR`; the docs checker uses that same candidate binary, never a stale
-worktree-local path. Work budgets keep the workspace's `corral-core/test-clock` feature union
+`.config/gate.toml` enforces cumulative **test execution**, not compilation: nextest, the
+three work budgets, and Bun tests share one per-attempt ledger. Build/preparation and
+whole-recipe wall time are reported separately. The timer logs load/core before/after and
+monitors it during tests; a phase that observes load/core >1.0 or an unavailable reading
+is reported as busy-exempt, not charged to the quiet-host cap. Tests still run, and assertion
+failures still fail. This owner-approved policy prevents cold-cache or host-contention
+budget flakes; a busy-exempt run is not proof of meeting the quiet-host timing target.
+
+Nextest compiles candidate binaries once, then lists/runs them using fresh cargo/binaries
+metadata. The measured run cannot compile source again. Pi cross-lane Rust helpers are
+prebuilt before Bun timing; dependency install and typecheck are reported as preparation.
+Quick Clippy checks touched production targets; nextest still compiles/runs selected tests.
+Full retains all-target Clippy, so test-body lint coverage moves to landing, not deletion.
+Doctest/build/docs-check step walls remain separately visible in the log. On budget expiry
+the timer terminates its owned process group and exits nonzero.
+Linked worktrees keep Cargo's local target by default. Forced primary-target sharing was
+tried and reverted: it did not solve the cold build and concurrent candidates can overwrite
+the stable top-level CLI path after the build lock is released. Explicit `CARGO_TARGET_DIR`
+is respected; callers sharing executable targets must serialize through execution. The
+docs checker always uses the candidate binary from the actual target, not another path. Work budgets keep the workspace's `corral-core/test-clock` feature union
 to avoid recompiling core/ops/TUI merely to toggle a test-only feature. An experimental
 Clippy `--profile test` alignment made the cold check slower and was reverted; the time
-budget, lint set, debug assertions and overflow checks were not relaxed. It never
+test assertions and overflow checks were not relaxed. It never
 changes a test's result to PASS. Nextest caps ordinary tests at 10s with no retries. Explicit
 measured integration exceptions retain their original 30s report-only guards, each with a
 one-line defect/fixture reason in `.config/nextest.toml`; this does not exclude them from
@@ -64,7 +79,7 @@ additions; the line alone is not semantic approval.
    Busy hosts defer with exit 75 before starting herdr, tests, or board writes.
 3. Takes a nonblocking local lock and refuses a dirty worktree.
 4. Starts a fresh plugin-free private HOME/XDG/server through `test-herdr.sh`, runs only the
-   explicit nextest slow profile under its wall timer, and lets the helper clean up its own
+   explicit nextest slow profile under a quiet-load-only maintenance wall guard, and lets the helper clean up its own
    server/directories. It never reuses or stops an owner's server.
 5. Retains raw logs locally and as `log` artifacts with tier `keep` on a monitoring task.
    Each distinct failing test gets one open task keyed by binary+test; subsequent failures

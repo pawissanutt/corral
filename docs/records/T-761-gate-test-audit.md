@@ -30,12 +30,18 @@ Second quick attempt `ag-b19e871f1d73e960` also failed at **180.006s** before te
 Clippy with the experimental test profile took122.960s, then nextest was compiling. The
 profile experiment was reverted, not retried to hide the result. T-729 main movement has
 been cleanly integrated, retaining its corral-pi naming and this task's cost guidance.
-A further quick attempt is pending a technical choice about test-body lint placement.
-Full <600s: **not yet measured**. Owner Q1 explicitly
+Owner Q5 approved production-target quick Clippy (full keeps all targets) and changed the
+cap to measured test execution, excluding compilation/preparation. Load/core is logged;
+busy phases are reported rather than failing a budget. The two old compile-included
+failures stay in the evidence; they are not relabeled as passes. A fresh quick receipt is
+pending. Original full-wall <600s and the new full test budget are **not yet measured**. Owner Q1 explicitly
 approved using the landing full gate as the after measurement; PM extracts/posts its table.
 Estimates above are planning ranges, not a promise that their sum is under 600s. The old
 per-test times were measured under substantially more simultaneous history-fixture work;
-the landing gate's <=600s cap makes an optimistic estimate a real failure, never a PASS.
+the landing gate measures both full wall and test time. Its <=600s quiet-host **test**
+cap is enforceable; cold compilation is reported separately, not turned into a test flake.
+The original full-wall target remains an observation for PM's after-table, not a claim
+that a test-only budget guarantees end-to-end wall time.
 
 ## Baseline 15 slowest tests
 
@@ -73,7 +79,19 @@ All names below originally begin `submission_paths_tests::action_budget::`.
   Assertions, cold subprocesses, real entries, emitted/output comparisons and exact work cells
   are unchanged. This is scheduling, not 40 new scenarios.
 - Removed the two shell re-invocations of those matrices from `scripts/work-budget.sh`: nextest
-  already runs them. The three ignored TUI budgets remain in that script.
+  already runs them. The three ignored TUI budgets remain in that script, using prebuilt
+  nextest in a gate (standalone still supports cargo test):
+  `app::work_budget::board_work_stays_within_budget_and_independent_of_history`,
+  `app::hot_budget::hot_reads_work_stays_independent_of_history`, and
+  `app::sync_budget::sync_tick_work_stays_independent_of_history`. Same assertions, isolated
+  processes, no extra rebuild inside the measured phase.
+- Deleted Python `GateTests.test_first_command_failure_preserves_status_and_stops`: its
+  failure matrix is already covered more strongly by the retained step-timing/receipt
+  matrix, including exact exit status, ordering, elapsed-step closure and receipts.
+- Deleted Python `GateTests.test_quick_tier_selects_touched_crates_and_exact_exclusions`:
+  its fake-argv matrix overlaps the seven selector regressions and the retained real-nextest
+  matrix, which actually checks exclusions/empty runs. The new tiny prebuilt-nextest test
+  additionally proves a measured run cannot compile even after its source file is removed.
 
 Test-cost justification: the 40 scheduled cases replace two giant tests and three exact
 duplicates, adding no scenario coverage or repeated work. They preserve real-entry history
@@ -125,24 +143,27 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
 
 ## Quick timeout investigation and corrections
 
-- Hypothesis 1: a per-worktree cold Cargo cache, contrary to the shared-cache guidance.
-  `cargo metadata --no-deps` confirms the default target was `.worktrees/T-761/target`,
-  not the primary `corral/target`. Linked gates now derive the shared target from Git;
-  explicit overrides remain intact and docs check the binary from that same target.
-  Workspace candidate fingerprints still apply; no compiled result is assumed reusable.
+- Hypothesis 1: forcing the primary Cargo target might avoid cold compilation. It did not
+  solve the second attempt. That experiment is now reverted: Cargo fingerprints test
+  artifacts, but concurrent worktrees can still overwrite the stable top-level CLI path
+  after the build lock is released. Keep the local candidate target by default, preserve
+  explicit overrides, and check docs against that actual target. The linked-worktree
+  regression now pins isolation/override behavior rather than forced cache sharing.
 - Hypothesis 2: unnecessary feature-union changes. `cargo tree` shows zero `test-clock`
   entries for TUI-only tests versus one for the gate scope. Work budgets now explicitly
   keep `corral-core/test-clock`, avoiding a second core/ops/TUI build just to toggle it.
 - Clippy test-profile alignment was tested and reverted after the second receipt showed
   a slower cold check (122.960s). Keeping a failed performance hypothesis would not be an
   optimization. No timeout, assertion or lint was relaxed. Quick test-body lint placement
-  versus full all-target lint coverage is now an explicit PM technical question (Q5).
+  versus full all-target lint coverage was explicitly approved by PM in Q5. The same answer
+  moved enforcement to test runtime, with compilation reported separately to prevent flakes.
 - Separate selection defect: a known private library fixture with no own tests fell back
   to every test of its crate. A minimal red fixture selects 17 instead of 1. The fix selects
   its nearest enclosing test module plus any existing integration/caller terms, not unrelated
   crate tests. Unknown paths still fall back conservatively. No assertion or cap was loosened.
 - The cold first gate and incomplete timings remain evidence, not a successful benchmark.
-  The next authorized attempt determines whether these corrections fit the 180s budget.
+  The next authorized attempt measures the corrected execution-only 180s budget. It logs
+  prepared-binary compile time, nextest/work-budget/Bun execution and observed load/core.
 
 ## Checks so far
 
@@ -156,17 +177,18 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
   process-global; the production work-budget recipe already uses separate processes. No
   assertion was relaxed. The first shrink also exposed an unsaturated Done viewport, fixed
   by keeping the configured working set constant, not changing counter expectations.
-- `python3 scripts/test_gate.py`: 16/16 pass in 29.779s (temporary fake-command fixtures, no full gate),
-  including full-branch Pi/Darwin scope, plan verification, shared linked-worktree Cargo
-  cache and checking the binary from that same target directory.
-- `python3 scripts/test_gate_select.py`: 7/7 pass in 3.169s. The new private-fixture regression
+- `python3 scripts/test_gate.py`: 14/14 pass in 44.144s (temporary fake-command fixtures, no full gate),
+  including full-branch Pi/Darwin scope, plan verification, linked-worktree target
+  isolation/override and checking the binary from that same target directory.
+- `python3 scripts/test_gate_select.py`: 7/7 pass in 1.435s. The new private-fixture regression
   fails before the fix (17 tests selected instead of its one enclosing case) and passes after.
 - Targeted plan verify and checkpoint context tests each pass (4.859s / 4.195s),
   asserting that both aggregate verification paths preserve all optional lanes.
-- `python3 scripts/test_gate_policy.py`: 6/6 pass, 1.670s (path/deletion/plan/unknown-owner
-  selection, enforced wall timeout, >30s added-cost justification, transitive Pi consumer
-  selection, and a real tiny nextest fixture proving ordinary timeout + report-only exception).
-- `python3 scripts/test_slow_lane.py`: 3/3 pass, 0.002s (busy admission before any test/board
+- `python3 scripts/test_gate_policy.py`: 8/8 pass, 2.857s (path/deletion/plan/unknown-owner
+  selection, strict runtime timeout, >30s added-cost justification, transitive Pi consumer
+  selection, real nextest ordinary timeout + report-only exception, source-free prebuilt
+  execution, and deterministic compile-excluded/busy-host budget accounting).
+- `python3 scripts/test_slow_lane.py`: 3/3 pass, 0.003s (busy admission before any test/board
   work, own-process idle priority, repeated failures deduplicated per test with kept log proof).
 - `cargo nextest list -p corral-ops --profile slow --message-format json`: catalog compiles
   and parses; listing only, no unauthorized slow-tier execution.
@@ -174,7 +196,8 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
 
 ## Remaining work / not acceptance yet
 
-Long-term wall budgets (quick 180s/full 600s), added Rust/Bun/Python registration accounting and the
+Long-term quiet-host test-execution budgets (quick 180s/full 600s), separate build/wall/load
+reporting, added Rust/Bun/Python registration accounting and the
 reviewer rubric are implemented. Ordinary nextest tests are capped at 10s; 149 measured
 pre-existing >10s integration cases (some also in the torture catalog), plus the rescheduled
 action cases, explicitly retain their original report-only guards with per-case reasons.

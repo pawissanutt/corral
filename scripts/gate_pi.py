@@ -56,3 +56,31 @@ def selection(paths: list[str]) -> list[str]:
     tests = sorted('./' + str(file.relative_to(PACKAGE.resolve()))
                    for file in reached if file.name.endswith('.test.ts') and file.is_file())
     return tests  # Empty means conservative all-tests, not a silent skip.
+
+
+def needs_rust(tests: list[str]) -> bool:
+    if not tests:
+        return True
+    pending = [(PACKAGE / test).resolve() for test in tests]
+    seen = set()
+    while pending:
+        file = pending.pop()
+        if file in seen:
+            continue
+        seen.add(file)
+        if not file.is_file():
+            return True
+        text = file.read_text()
+        if re.search(r"\bcargo\b", text):
+            return True
+        for reference in LOCAL.findall(text):
+            target = (file.parent / reference).resolve()
+            for candidate in (target, target.with_suffix(".ts"), target / "index.ts"):
+                if candidate.is_file() and candidate.suffix == ".ts":
+                    pending.append(candidate)
+    return False
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(0 if needs_rust(sys.argv[1:]) else 1)

@@ -178,8 +178,11 @@ advisory, not permission to reclassify tests or weaken a failure. Catalog change
 need a defect-catching/cost reason and an owner-module trigger; remove stale terms
 when tests are renamed or deleted. Pi is path-scoped to its package/shared contracts;
 Darwin checks are path-scoped to platform code and dependencies. Both always run
-in plan verification. `.config/gate.toml` enforces 180s quick and 600s full wall
-budgets around the complete recipe, including compilation. Each gate reports
+in plan verification. `.config/gate.toml` enforces 180s quick and 600s full measured-test
+budgets (nextest, work budgets, Bun), not compilation. Candidate test binaries are built
+first and reused without recompilation. Build/preparation and whole wall time are reported
+separately, together with load/core; busy phases do not produce budget flakes. Quick lints
+production targets; every-landing full retains all-target test-body lint coverage. Each gate reports
 candidate-added Rust/Bun/Python test registrations and measured added suite seconds; over 30s needs
 a `Test-cost justification:` in the candidate report. Unselected additions are
 reported as unmeasured, not zero-cost evidence.

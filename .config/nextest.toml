@@ -411,3 +411,9 @@ filter = '''
 | (binary_id(=corral-ops) & test(submission_paths_tests::action_budget::cases::))
 '''
 slow-timeout = "30s"
+
+# Exact work-counter matrices run by work-budget.sh, warm/cold store variants.
+# Preserve their existing report-only guards; they were previously cargo-test ignored cases.
+[[profile.default.overrides]]
+filter = 'binary_id(=corral-tui) and (test(=app::work_budget::board_work_stays_within_budget_and_independent_of_history) or test(=app::hot_budget::hot_reads_work_stays_independent_of_history) or test(=app::sync_budget::sync_tick_work_stays_independent_of_history))'
+slow-timeout = "30s"

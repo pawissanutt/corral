@@ -17,6 +17,14 @@
 set -euo pipefail
 exec </dev/null
 cd "$(dirname "$0")/.."
+if [[ -n ${CORRAL_GATE_BINARIES_METADATA:-} ]]; then
+  filter='binary_id(=corral-tui) and (test(=app::work_budget::board_work_stays_within_budget_and_independent_of_history) or test(=app::hot_budget::hot_reads_work_stays_independent_of_history) or test(=app::sync_budget::sync_tick_work_stays_independent_of_history))'
+  CORRAL_HERDR_SESSION=corral-test python3 scripts/gate_timer.py run \
+    "${CORRAL_TEST_BUDGET_STATE:?gate budget state is required}" work-budget -- \
+    cargo nextest run --cargo-metadata "$CORRAL_GATE_CARGO_METADATA" \
+      --binaries-metadata "$CORRAL_GATE_BINARIES_METADATA" --run-ignored only -E "$filter"
+  exit
+fi
 for test in \
   app::work_budget::board_work_stays_within_budget_and_independent_of_history \
   app::hot_budget::hot_reads_work_stays_independent_of_history \
