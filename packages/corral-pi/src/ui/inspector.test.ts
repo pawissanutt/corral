@@ -104,7 +104,7 @@ test("disconnected/legacy inspectors and activity never present unknown as succe
   expect(panelLines("Agents", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("Disconnected/unbound");
   const plan = panelLines("Plan", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n");
   expect(plan).toContain("stale"); expect(plan).toContain("Criterion: C1"); expect(plan).toContain("not gate evidence");
-  expect(activityLines(snapshot, 0).join("\n")).toContain("No tool receipt observed");
+  expect(panelLines("Context", identity, snapshot, { kind: "unread" }).map(row => row.text).join("\n")).toContain("No tool receipt observed");
   expect(panelLines("Context", identity, null, { kind: "unread" })[0]?.text).toContain("unavailable");
   const panels = new NativePanels({ identity, cwd: ".", snapshot: () => snapshot });
   panels.focused = true; panels.tab = "Plan";

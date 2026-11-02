@@ -92,14 +92,14 @@ test("panel layout streams a held reply and tool output, keeps one binding throu
     expect(count("turn_ended")).toBe(0);
     expect(binding().turn).toEqual({ current: 1, open: true });
 
-    // Inspection while the reply is held: rail focus, Agents tab, its detail overlay and Conversation again.
+    // Inspection while the reply is held: Context metadata overlay and Conversation again.
     mark = physical.writes.length;
-    physical.send("\x1b[17~"); physical.send("\x1b[D"); physical.send("\x1b[D");
-    expect(panels.tab).toBe("Agents");
+    physical.send("\x1b[17~");
+    expect(panels.tab).toBe("Context");
     await physical.until("generation 1", mark);
     await physical.until("Working · Bound to Corral", mark);
     physical.send("\r");
-    await physical.until("Agents · Esc close", mark);
+    await physical.until("Context · Esc close", mark);
     physical.send("\x1b");
     await physical.whenWritten(() => panels.canInteract, "the detail overlay to release input");
     mark = physical.writes.length;

@@ -65,7 +65,11 @@ test("short narrow inspector pages every item; keyboard and pointer move it iden
       expect(pagerOf(lines[0] ?? "")?.first).toBe(item);
       seen.add(plain(lines)[1]?.trim() ?? "");
       if (item % 2) native.handleInput(KEY.down);
-      else expect(native.inlineMouse(click(start.to - 1, 0))).toEqual({ handled: true });
+      else {
+        const current = pagerOf(lines[0] ?? "");
+        if (!current) throw new Error("pager missing while navigating");
+        expect(native.inlineMouse(click(current.to - 1, 0))).toEqual({ handled: true });
+      }
     }
     expect(seen.size).toBe(start.total);
     expect([...seen].join("\n")).toContain("界面");
@@ -78,24 +82,18 @@ test("short narrow inspector pages every item; keyboard and pointer move it iden
   }
 });
 
-test("relocation keeps the first visible inspector item, whether headings are shown or not", () => {
-  const { native, physical } = panels(80, 9);
-  native.handleInput(KEY.f6); native.handleInput("\x1b[C"); native.handleInput("\x1b[C");
+test("relocation preserves the selected activity through narrow drawer and wide rail", () => {
+  const { native, physical } = panels(80, 14);
+  native.handleInput("\x1b[19~");
   expect(native.tab).toBe("Agents");
-  // Find the bound generation row rather than assuming its ordinal among live metadata.
-  let item = "";
-  const total = pagerOf(native.renderInline(80, 9)[0] ?? "")?.total ?? 0;
-  for (let row = 0; row < total; row++) {
-    item = plain(native.renderInline(80, 9))[1]?.trim() ?? "";
-    if (item.includes("generation 3")) break;
-    native.handleInput(KEY.down);
-  }
-  expect(item).toContain("generation 3");
-  physical.resize(140, 9);
-  const rail = plain(native.renderSidebar(34, 9)).map(line => line.replace(/^│\s?|\s?│$/g, "").trim());
-  expect(rail[3]).toBe(item);
-  physical.resize(80, 9);
-  expect(plain(native.renderInline(80, 9))[1]?.trim()).toBe(item);
+  native.handleInput(KEY.down);
+  expect(plain(native.renderInline(80, 14)).join("\n")).toContain("› job-2");
+  physical.resize(140, 14);
+  expect(plain(native.renderSidebar(34, 14)).join("\n")).toContain("› job-2");
+  physical.resize(80, 14);
+  expect(plain(native.renderInline(80, 14)).join("\n")).toContain("› job-2");
+  native.handleInput("\r");
+  expect(native.workbench.selectedActivity).toEqual({ kind: "job", job: "job-2" });
   native.dispose();
 });
 

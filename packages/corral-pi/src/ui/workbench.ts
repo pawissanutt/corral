@@ -12,6 +12,7 @@ import { LifecycleView } from "./lifecycle-view.ts";
 import { activityRows, type ActivityMode } from "./activity-view.ts";
 import { agentRows } from "./agent-view.ts";
 import { HelperChat } from "./helper-chat.ts";
+import { activityKey, activityTitle, type ActivityTarget } from "./activity-sidebar.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { usageLines } from "./usage-view.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
@@ -32,6 +33,7 @@ export interface WorkbenchOptions {
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
   readonly canRenderTool?: (name: string) => boolean;
+  readonly browseActivity?: () => void;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -52,9 +54,10 @@ export class NativeWorkbench {
   private transcript: ScrollView | undefined; private transcriptWidth = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
-  private jobId: string | undefined; private jobHits = new Map<number, string>();
+  private jobId: string | undefined;
   private activityMode: ActivityMode = "jobs"; private helperRequest: string | undefined;
-  private helperHits = new Map<number, string>(); private activityModes = new Map<number, ActivityMode>();
+  private readonly activityPositions = new Map<string, number>();
+  private activityRestore: number | undefined;
   private chatPresentation: (() => InteractiveChatPresentation) | undefined;
   private chatStart = -1; private readonly helperChat: HelperChat;
   private toolsExpanded = false;
@@ -95,6 +98,7 @@ export class NativeWorkbench {
     this.debounce.unref();
   }
   setView(view: MainView): void {
+    if (this.view === "activity" && view !== "activity") this.rememberActivity();
     this.images.close();
     this.view = view; this.focused = view !== "conversation";
     if (this.timer) clearInterval(this.timer);
@@ -115,13 +119,28 @@ export class NativeWorkbench {
     }
     this.options.changed();
   }
-  openHelpers(request?: string): void {
-    this.activityMode = "helpers";
-    if (request !== undefined) this.helperRequest = request;
-    this.setView("activity");
+  get selectedActivity(): ActivityTarget | undefined {
+    return this.activityMode === "helpers" ? this.helperRequest === undefined ? undefined : { kind: "helper", request: this.helperRequest }
+      : this.jobId === undefined ? undefined : { kind: "job", job: this.jobId };
   }
-  private switchActivity(mode: ActivityMode): void {
-    this.activityMode = mode; this.activityScroll?.scrollToStart(); this.focused = true; this.options.changed();
+  private rememberActivity(): void {
+    const selected = this.selectedActivity;
+    if (selected && this.activityScroll) this.activityPositions.set(activityKey(selected), this.activityScroll.scrollTop);
+  }
+  openHelpers(request?: string): void {
+    if (this.view === "activity") this.rememberActivity();
+    this.activityMode = "helpers";
+    this.helperRequest = request ?? this.helperRequest ?? this.options.snapshot()?.helpers?.[0]?.request;
+    this.openActivity();
+  }
+  openJob(job: string): void {
+    if (this.view === "activity") this.rememberActivity();
+    this.activityMode = "jobs"; this.jobId = job; this.openActivity();
+  }
+  private openActivity(): void {
+    const selected = this.selectedActivity;
+    this.activityRestore = selected ? this.activityPositions.get(activityKey(selected)) ?? 0 : 0;
+    this.setView("activity");
   }
   async openFile(path: string): Promise<void> {
     this.setView("changes"); await this.review.select(path); this.acceptPatch();
@@ -133,20 +152,24 @@ export class NativeWorkbench {
         this.anchorTranscript(width);
         const compact = width < 110, minimum = width < 52;
         const labels: readonly [MainView, string][] = [["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
-          ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "], ["activity", minimum ? " J " : compact ? " Jobs " : " Activity F8 "],
+          ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "], ["activity", minimum ? " J " : this.view === "activity" ? this.activityMode === "helpers" ? " Agent " : " Job " : compact ? " Agents " : " Agents F8 "],
           ["evidence", minimum ? " E " : compact ? " Proof " : " Evidence F10 "], ["inbox", minimum ? " I " : compact ? " Inbox " : " Inbox F11 "],
           ["usage", width < 64 ? " U " : " Usage "], ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "]];
         let x = 0;
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
           (this.focused ? compact ? "Esc Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
-        PANEL_BG + PANEL_TEXT + pad(`Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
+        PANEL_BG + PANEL_TEXT + pad(this.view === "activity" && this.selectedActivity
+          ? activityTitle(this.options.snapshot(), this.selectedActivity)
+          : `Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
       },
       handleMouse: event => {
         if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
         const hit = hits.find(hit => event.x < hit.to);
         if (!hit) return undefined;
-        this.setView(hit.view); return { handled: true };
+        if (hit.view === "activity" && this.options.browseActivity) this.options.browseActivity();
+        else this.setView(hit.view);
+        return { handled: true };
       }, invalidate() {},
     };
   }
@@ -172,14 +195,10 @@ export class NativeWorkbench {
     this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
       if (this.options.canInteract() && plainClick(event)) {
         this.focused = true;
-        const mode = this.activityModes.get(event.y), helper = this.helperHits.get(event.y), job = this.jobHits.get(event.y);
-        if (mode === undefined && helper === undefined && job === undefined && this.chatStart >= 0 && event.y >= this.chatStart) {
+        if (this.chatStart >= 0 && event.y >= this.chatStart) {
           const handled = this.helperChat.handleMouse({ ...event, y: event.y - this.chatStart });
           if (handled) { this.options.changed(); return handled; }
         }
-        if (mode !== undefined) this.switchActivity(mode);
-        if (helper !== undefined) this.helperRequest = helper;
-        if (job !== undefined) this.jobId = job;
         this.options.changed(); return { handled: true };
       } return undefined;
     }, invalidate: () => this.helperChat.invalidate() }, { primary: true, follow: "none", scrollbar: "auto" });
@@ -268,20 +287,12 @@ export class NativeWorkbench {
     } finally { this.readingTranscript = false; this.options.changed(); }
   }
   private renderActivity(width: number): string[] {
-    this.jobHits.clear(); this.helperHits.clear(); this.activityModes.clear(); this.chatStart = -1; const rows: string[] = [];
+    this.chatStart = -1; const rows: string[] = [];
     const snapshot = this.options.snapshot();
-    this.jobId ??= snapshot?.jobs?.[0]?.job;
-    const selected = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
-    if (this.activityMode === "helpers" && this.helperRequest === undefined) this.helperRequest = snapshot?.helpers?.[0]?.request;
-    for (const row of activityRows(snapshot, selected, Date.now(), this.activityMode, this.helperRequest)) {
+    const jobIndex = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
+    for (const row of activityRows(snapshot, jobIndex, Date.now(), this.activityMode, this.helperRequest)) {
       const line = row.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
       const wrapped = line === "" ? [""] : new Text(this.ui ? this.ui.theme.fg(row.color ?? "text", line) : line, 0, 0).render(width);
-      for (let i = 0; i < wrapped.length; i++) {
-        const id = row.job === undefined ? undefined : snapshot?.jobs?.[row.job]?.job;
-        if (id) this.jobHits.set(rows.length + i, id);
-        if (row.helper !== undefined) this.helperHits.set(rows.length + i, row.helper);
-        if (row.mode !== undefined) this.activityModes.set(rows.length + i, row.mode);
-      }
       rows.push(...wrapped);
     }
     const helper = this.activityMode === "helpers" ? snapshot?.helpers?.find(helper => helper.request === this.helperRequest) : undefined;
@@ -289,6 +300,11 @@ export class NativeWorkbench {
       this.chatStart = rows.length;
       // Preserve ANSI/OSC emitted by Pi itself; untrusted data is sanitized before native rendering.
       rows.push(...this.helperChat.renderHelper(helper, width));
+    }
+    if (this.activityRestore !== undefined && this.activityScroll) {
+      this.activityScroll.updateLayout(rows.length, this.activityScroll.viewportHeight, () => {});
+      this.activityScroll.scrollTo(this.activityRestore, { disableFollow: true });
+      this.activityRestore = undefined;
     }
     return rows;
   }
@@ -453,7 +469,6 @@ export class NativeWorkbench {
     if (this.view === "activity" && this.activityMode === "helpers" && getKeybindings().matches(data, "app.tools.expand")) {
       this.toolsExpanded = !this.toolsExpanded; this.helperChat.expandTools(this.toolsExpanded); this.options.changed(); return true;
     }
-    if (this.view === "activity" && data === "h") { this.switchActivity(this.activityMode === "jobs" ? "helpers" : "jobs"); return true; }
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
@@ -476,15 +491,7 @@ export class NativeWorkbench {
         const agents = this.options.snapshot()?.agents ?? [], index = agents.findIndex(agent => agent.id === this.agentId);
         this.agentId = agents[Math.max(0, Math.min(agents.length - 1, index + (data === "j" ? 1 : -1)))]?.id;
       }
-      else if (this.activityMode === "helpers") {
-        const helpers = this.options.snapshot()?.helpers ?? [];
-        const from = helpers.findIndex(helper => helper.request === this.helperRequest);
-        this.helperRequest = helpers[Math.max(0, Math.min(helpers.length - 1, from + (data === "j" ? 1 : -1)))]?.request;
-      }
-      else {
-        const jobs = this.options.snapshot()?.jobs ?? [], index = jobs.findIndex(job => job.job === this.jobId);
-        this.jobId = jobs[Math.max(0, Math.min(jobs.length - 1, index + (data === "j" ? 1 : -1)))]?.job;
-      }
+      else if (this.view === "activity") this.activityScroll?.scrollBy(data === "j" ? 1 : -1);
       this.options.changed(); return true;
     }
     if ((this.view === "evidence" || this.view === "usage") && data === "r") { void this.inspection.refresh(true); return true; }

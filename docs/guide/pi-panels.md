@@ -15,7 +15,7 @@ Use a new owner pane/session; existing processes do not hot-reload. Explicit `[a
 ## Main views and real composer
 
 - **F7 / Changes:** persistent diff main area, not modal hopping. The real composer stays available below.
-- **F8 / Activity:** live, read-only background jobs and monitor observations.
+- **F8 / Agents:** focus the sidebar's separate Agents and Jobs lists. ↑/↓ or j/k selects; Enter opens that agent's native conversation or that job's output directly. Below 105 columns the same list opens as a compact drawer above the composer.
 - **F9 / Conversation:** returns to the same transcript/scroll-view instance, independently of review/composer focus.
 - Click the main view labels. Enter while reviewing returns keyboard input to the composer; clicking it also releases review focus. Ordinary typing returns to the actual editor. Esc returns to Conversation when the review body has focus; it retains stock behavior while composing or inside a prompt.
 - **F6:** sidebar/inline inspector focus; arrows navigate. **Ctrl+B:** wide rail/inline layout or explicit compact-detail expansion.
@@ -35,7 +35,7 @@ Click the **model ▾** label to open Pi's existing model picker (keyboard: Ctrl
 - **Jumping never steals focus.** Pi's viewport keys (PgUp/PgDn, Ctrl+Home/Ctrl+End, prompt jumps) scroll the conversation even while the inspector has focus, and the inspector keeps it. Clicking the jump control does not move focus either. Ordinary typing still returns to the composer.
 - **Relocation keeps your place.** While follow is paused, the 105-column relocation, Ctrl+B and terminal resizes keep the same transcript passage at the top of the view, even though Pi re-wraps it at the new width. The draft, the inspector tab, its current item and the inspector focus are kept too.
 - **Short terminals page metadata.** When the inspector or rail has more items than rows, it shows a pager such as `‹ 2/7 ›`. ↑/↓ and clicks on `‹`/`›` move the same item, and the wheel scrolls the same list. A foreground dialog owns input: pager clicks, F6 and Ctrl+B do nothing underneath it.
-- **The minimum width stays legible.** Below 70 columns the view bar reads `Chat F9  Changes F7  Activity F8`, and its click targets follow the labels. A launch directory outside Git reads `Not a Git repository` rather than a raw Git command error.
+- **The minimum width stays legible.** Compact view labels read Chat, Diff and Agents (Agent/Job when inspecting an entry), and their click targets follow the labels. A launch directory outside Git reads `Not a Git repository` rather than a raw Git command error.
 
 ## Practical change review
 
@@ -43,7 +43,7 @@ Bound task/run sessions retain their canonical committed-candidate comparison. O
 
 Use **o** in Changes or a focused inspector, click the Files project row, or run **/panels project** to choose a configured project or one of this assistant's scratch worktrees. The chosen scope is visible in the main view bar and rail title. A selected directory that is not a repository root is refused rather than widened to its parent workspace. Project selection clears the previous file/filter/diff metadata; an explicit Files scope offers only working/staged/unstaged comparisons, not a different task's canonical candidate. Browsing never rebinds the session, changes its tools, model cwd, inbox scope or canonical plan.
 
-Files emphasizes the filename first, then status, known line deltas and directory on separate rows. Agents separates the bound session, activity and helpers; a workspace session explicitly says it has no bound project. Plan identifies its session, reports done/open/dropped counts, separates phases and wraps long steps, criteria and waits. Waiting steps use warning color; completed steps recede. The plan remains the session ledger, not a project-wide progress claim.
+Files emphasizes the filename first, then status, known line deltas and directory on separate rows. The Context overview shows separate actionable Agents and Jobs groups, not helper-slot counters or a Plan summary. Agents lists this parent's actual retained calls and background commands; it does not represent board-wide sessions. Successful completions are collapsed under Completed; interrupted calls and failed jobs stay visible. Plan remains available in its dedicated tab: it identifies its session, reports done/open/dropped counts, separates phases and wraps long steps, criteria and waits. Waiting steps use warning color; completed steps recede. The plan remains the session ledger, not a project-wide progress claim.
 
 While review has keyboard focus:
 
@@ -68,15 +68,15 @@ Click an inline image to fit it into the main work area. Click again, press Esc 
 
 ## Background activity and monitoring
 
-Activity refreshes local host snapshots once per second while visible—no model/control-plane polling loop. It shows locally observed job state, real elapsed time, command, exit code/signal, process-group cleanup state, output byte count and bounded recent output. Click or j/k selects a job.
+A selected job refreshes local host snapshots once per second while visible—no model/control-plane polling loop. It shows locally observed job state, real elapsed time, command, exit code/signal, process-group cleanup state, output byte count and bounded recent output. Click its sidebar row, or use F8 then ↑/↓ and Enter, to open it. Selection uses stable job IDs even when newer jobs arrive.
 
-Existing line-monitor observations show their pattern, recorded deadline, local arm/match and report-queued states. Monitor attempts are **not** active-wait counts. Deadline elapsed is labeled outcome unknown; queued reports and local exit are **not canonical settlement, task completion or gate PASS**. Exit-only waits do not currently expose retained canonical outcomes here. Auxiliary research/oracle figures are occupied/queued semaphore slots, not invented worker execution history. Missing runtimes/telemetry are unavailable, not zero.
+Existing line-monitor observations show their pattern, recorded deadline, local arm/match and report-queued states. Monitor attempts are **not** active-wait counts. Deadline elapsed is labeled outcome unknown; queued reports and local exit are **not canonical settlement, task completion or gate PASS**. Exit-only waits do not currently expose retained canonical outcomes here. Agent rows show actual retained calls, not occupied/queued semaphore slots or invented worker execution history. Missing runtimes/telemetry are unavailable, not zero.
 
 Workspace board task/run monitoring is separate. This view does not start, cancel or kill jobs, create monitors, dispatch workers or change authority.
 
 ## Helper conversations
 
-Open **F8**, then **h** to switch between Jobs and Helper conversations, click those choices, or run **/panels helpers**. The Agents inspector also links to recent helpers. Select a helper with **j/k** or a click; arrows and PgUp/PgDn scroll its conversation. Enter returns to the unchanged parent composer, and F9 returns to Conversation.
+Click an agent in the Context overview or focus **F8** and choose one with **↑/↓ (j/k), Enter**. **/panels agents**, **/panels helpers** and **/panels jobs** open this same sidebar selector. No intermediate Activity screen or Jobs/Helpers mode switch is needed. On narrow terminals the list opens above the composer and closes when an item opens. The selected agent replaces the main reading area; arrows and PgUp/PgDn scroll its native conversation. F9 returns to the same parent conversation. Returning to an agent restores its reading position; new activity never switches your view automatically. The composer remains the parent's editor and is explicitly labeled Message main conversation while inspecting agents or jobs.
 
 The inspector shows the supplied prompt, live visible response text, requested/running tools, finalized text tool results, returned result, model, generation and locally observed outcome. Queued/not-started calls are distinct from running calls; interruptions and failed terminal accounting remain uncertain. Inspecting never calls a model, resumes/cancels a child, changes its loadout, or alters the parent identity. Private reasoning, signatures, image bytes and tool-specific details are excluded.
 
@@ -106,7 +106,7 @@ The Terminal adapter supplies default cell colors only in the alternate screen, 
 ```sh
 cd packages/corral-pi
 bun run typecheck
-bun test test/helper-history.test.ts test/helper-chat-host.test.ts test/auxiliary.test.ts test/auxiliary-host.test.ts test/budget.test.ts src/ui/helper-view.test.ts src/ui/helper-chat.test.ts
+bun test test/helper-history.test.ts test/helper-chat-host.test.ts test/auxiliary.test.ts test/auxiliary-host.test.ts test/budget.test.ts src/ui/helper-view.test.ts src/ui/helper-chat.test.ts src/ui/activity-sidebar.test.ts
 bun test test/panel-composer.test.ts test/host-session.test.ts test/bridge.test.ts test/subscriptions-host.test.ts src/ui/image-viewer.test.ts src/ui/workbench.test.ts src/ui/panels.test.ts src/ui/panel-shell.test.ts src/ui/panel-canvas.test.ts test/native-panels.test.ts test/panel-host-proof.test.ts test/panel-shell.test.ts test/jobs.test.ts test/jobs-host.test.ts test/package.test.ts
 cd ../..
 python3 scripts/qa-pi-workbench.py /tmp/corral-native-workbench-evidence
