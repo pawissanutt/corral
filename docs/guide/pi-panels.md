@@ -35,7 +35,7 @@ Click the **model ▾** label to open Pi's existing model picker (keyboard: Ctrl
 - **Jumping never steals focus.** Pi's viewport keys (PgUp/PgDn, Ctrl+Home/Ctrl+End, prompt jumps) scroll the conversation even while the inspector has focus, and the inspector keeps it. Clicking the jump control does not move focus either. Ordinary typing still returns to the composer.
 - **Relocation keeps your place.** While follow is paused, the 105-column relocation, Ctrl+B and terminal resizes keep the same transcript passage at the top of the view, even though Pi re-wraps it at the new width. The draft, the inspector tab, its current item and the inspector focus are kept too.
 - **Short terminals page metadata.** When the inspector or rail has more items than rows, it shows a pager such as `‹ 2/7 ›`. ↑/↓ and clicks on `‹`/`›` move the same item, and the wheel scrolls the same list. A foreground dialog owns input: pager clicks, F6 and Ctrl+B do nothing underneath it.
-- **The minimum width stays legible.** Compact view labels read Chat, Diff and Agents (Agent/Job when inspecting an entry), and their click targets follow the labels. A launch directory outside Git reads `Not a Git repository` rather than a raw Git command error.
+- **The minimum width stays legible.** The main view bar contains only Chat, Diff, Proof and Inbox (Conversation, Changes and Evidence at wide widths). Agent/job selection lives in the sidebar or F8 drawer, not a duplicate main tab; the selected entry's title appears below the main view bar. A launch directory outside Git reads `Not a Git repository` rather than a raw Git command error.
 
 ## Practical change review
 

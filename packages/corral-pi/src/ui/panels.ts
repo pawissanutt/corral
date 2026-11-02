@@ -65,7 +65,7 @@ export class NativePanels implements PanelSurface {
   private inlinePager: PagerHit | undefined;
 
   constructor(private readonly options: NativePanelsOptions) {
-    this.workbench = new NativeWorkbench({ ...options, browseActivity: () => this.browseActivity(), canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => {
+    this.workbench = new NativeWorkbench({ ...options, canInteract: () => this.canInteract && !this.activeSelection?.(), changed: () => {
       const review = this.workbench.review;
       this.files = review.error && !review.checkedAt ? { kind: "error", reason: plainLabel(review.error) }
         : review.refreshing && !review.checkedAt ? { kind: "loading" } : { kind: "ready", files: review.files };

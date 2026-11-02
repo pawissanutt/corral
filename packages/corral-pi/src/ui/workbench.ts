@@ -33,7 +33,6 @@ export interface WorkbenchOptions {
   readonly projectDir?: string;
   readonly readProjects?: (signal: AbortSignal) => Promise<unknown>;
   readonly canRenderTool?: (name: string) => boolean;
-  readonly browseActivity?: () => void;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -152,7 +151,7 @@ export class NativeWorkbench {
         this.anchorTranscript(width);
         const compact = width < 110, minimum = width < 52;
         const labels: readonly [MainView, string][] = [["conversation", minimum ? " C " : compact ? " Chat " : " Conversation F9 "],
-          ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "], ["activity", minimum ? " J " : this.view === "activity" ? this.activityMode === "helpers" ? " Agent " : " Job " : compact ? " Agents " : " Agents F8 "],
+          ["changes", minimum ? " D " : compact ? " Diff " : " Changes F7 "],
           ["evidence", minimum ? " E " : compact ? " Proof " : " Evidence F10 "], ["inbox", minimum ? " I " : compact ? " Inbox " : " Inbox F11 "],
           ["usage", width < 64 ? " U " : " Usage "], ["graph", width < 64 ? " G " : " Graph "], ["timeline", width < 64 ? " L " : " Timeline "]];
         let x = 0;
@@ -167,8 +166,7 @@ export class NativeWorkbench {
         if (!this.options.canInteract() || !plainClick(event) || event.y !== 0) return undefined;
         const hit = hits.find(hit => event.x < hit.to);
         if (!hit) return undefined;
-        if (hit.view === "activity" && this.options.browseActivity) this.options.browseActivity();
-        else this.setView(hit.view);
+        this.setView(hit.view);
         return { handled: true };
       }, invalidate() {},
     };
