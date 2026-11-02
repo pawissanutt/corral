@@ -71,9 +71,10 @@ grep -q bun_unavailable "$tmp/error"
 # A replacement failure must not publish the staged installation.
 rm "$tmp/bin/corral-pi-host"
 mkdir "$tmp/bin/corral-pi-host"
+record_before=$(sha256sum "$record")
 if "$cli" agent install </dev/null >"$tmp/error" 2>&1; then echo 'replacement failure accepted' >&2; exit 1; fi
 grep -q 'replacing ' "$tmp/error"
-[ "$(digest)" = "$fresh" ]
+[ "$(sha256sum "$record")" = "$record_before" ]
 rmdir "$tmp/bin/corral-pi-host"
 # A new checkout commit must be refused before modifying either sibling or record.
 cp "$CARGO_TARGET_DIR/debug/corral" "$tmp/bin/corral-pi-host"
