@@ -66,10 +66,13 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
     let record = match &args.from {
         Some(host) if host.is_file() => install_compiled(host, &root)?,
         Some(dir) => install_into(dir, &root, find_bun())?,
-        None => match sibling_host() {
-            Some(host) => install_compiled(&host, &root)?,
-            None => install_into(&default_source()?, &root, find_bun())?,
-        },
+        None => install_default(
+            &root,
+            default_source().ok().as_deref(),
+            &sibling_path()?,
+            args.no_build,
+            option_env!("CORRAL_SOURCE_SHA"),
+        )?,
     };
     let home = std::env::var_os("HOME").context("HOME is unset; cannot install Pi skills")?;
     crate::skill::install_harness_skills(Path::new(&home), "pi-native", false)?;
@@ -87,11 +90,33 @@ pub fn install(_start: &Path, args: &InstallArgs) -> Result<()> {
     Ok(())
 }
 
-/// The compiled host a release archive installs beside the `corral` executable.
-fn sibling_host() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let host = exe.parent()?.join(HOST_BINARY);
-    host.is_file().then_some(host)
+fn install_default(
+    root: &Path,
+    source: Option<&Path>,
+    sibling: &Path,
+    no_build: bool,
+    built: Option<&str>,
+) -> Result<InstallRecord> {
+    if !no_build && let Some(source) = source {
+        return super::install_source::rebuild(source, sibling, root, built);
+    }
+    if sibling.is_file() {
+        install_compiled(sibling, root)
+    } else {
+        install_into(
+            source.context("no corral-pi checkout or sibling host; pass `--from`")?,
+            root,
+            find_bun(),
+        )
+    }
+}
+
+fn sibling_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe().context("locating corral executable")?;
+    Ok(exe
+        .parent()
+        .context("corral executable has no parent")?
+        .join(HOST_BINARY))
 }
 
 fn default_source() -> Result<PathBuf> {
@@ -180,14 +205,14 @@ pub fn install_compiled(host: &Path, root: &Path) -> Result<InstallRecord> {
 }
 
 /// `corral-pi-host pi <pi> bun <bun>` -> `(pi, bun)`.
-fn parse_host_version(text: &str) -> Option<(String, String)> {
+pub(super) fn parse_host_version(text: &str) -> Option<(String, String)> {
     match text.split_whitespace().collect::<Vec<_>>()[..] {
         ["corral-pi-host", "pi", pi, "bun", bun] => Some((pi.to_owned(), bun.to_owned())),
         _ => None,
     }
 }
 
-fn run_host(host: &Path, args: &[&std::ffi::OsStr]) -> Result<String> {
+pub(super) fn run_host(host: &Path, args: &[&std::ffi::OsStr]) -> Result<String> {
     let output = std::process::Command::new(host)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -542,275 +567,5 @@ fn summary(state: &AgentRunState) -> serde_json::Map<String, Value> {
 }
 
 #[cfg(all(test, unix))]
-pub(crate) mod tests {
-    use corral_core::agent::AgentRole;
-
-    use super::*;
-    use crate::agent::hooks::preflight;
-
-    pub(crate) fn package() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/corral-pi")
-    }
-
-    /// A stand-in `bun` that reports `version` and, for `install`, records its argv in
-    /// `node_modules/` and exits with `install_exit`. A child process writes the executable,
-    /// so no write descriptor of this multi-threaded test process can make its exec fail
-    /// with ETXTBSY.
-    pub(crate) fn fake_bun(dir: &Path, version: &str, install_exit: i32) -> PathBuf {
-        std::fs::create_dir_all(dir).unwrap();
-        let bun = dir.join("bun");
-        let source = dir.join("bun.sh");
-        std::fs::write(
-            &source,
-            format!(
-                "#!/bin/sh\ncase \"$1\" in\n--version) echo {version} ;;\ninstall) mkdir -p \
-                 node_modules && echo \"$*\" > node_modules/.fake-install; exit {install_exit} ;;\n\
-                 *) exit 9 ;;\nesac\n"
-            ),
-        )
-        .unwrap();
-        let installed = std::process::Command::new("install")
-            .arg("-m")
-            .arg("0755")
-            .arg(&source)
-            .arg(&bun)
-            .status()
-            .unwrap();
-        assert!(installed.success());
-        bun
-    }
-
-    fn digests(root: &Path) -> Vec<String> {
-        std::fs::read_dir(root.join("assets"))
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok()?.file_name().into_string().ok())
-                    .filter(|name| !name.starts_with('.'))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    #[test]
-    fn the_data_root_follows_xdg_then_home() {
-        let root = |xdg: Option<&str>, home: Option<&str>| {
-            data_root_from(xdg.map(Into::into), home.map(Into::into))
-        };
-        assert_eq!(
-            root(Some("/data"), Some("/home/u")).unwrap(),
-            Path::new("/data/corral/pi-native")
-        );
-        assert_eq!(
-            root(Some("rel"), Some("/home/u")).unwrap(),
-            Path::new("/home/u/.local/share/corral/pi-native")
-        );
-        assert!(root(None, None).is_err());
-    }
-
-    #[test]
-    fn staging_includes_declared_dependency_patches() {
-        let source = package();
-        let staging = tempfile::tempdir().unwrap();
-        copy_shipped(&source, staging.path()).unwrap();
-        let manifest: Value =
-            serde_json::from_slice(&std::fs::read(source.join("package.json")).unwrap()).unwrap();
-        let patches = manifest["patchedDependencies"].as_object().unwrap();
-        assert!(!patches.is_empty());
-        let digest = asset_digest(staging.path()).unwrap();
-        for patch in patches.values() {
-            let path = patch.as_str().unwrap();
-            assert_eq!(
-                std::fs::read(staging.path().join(path))
-                    .unwrap_or_else(|error| panic!("staged patch {path}: {error}")),
-                std::fs::read(source.join(path)).unwrap(),
-                "staged patch {path} differs from source"
-            );
-        }
-        let patch = patches.values().next().unwrap().as_str().unwrap();
-        std::fs::write(staging.path().join(patch), "changed patch").unwrap();
-        assert_ne!(asset_digest(staging.path()).unwrap(), digest);
-    }
-
-    #[test]
-    fn install_ships_only_host_files_and_dispatch_refuses_until_each_role_lands() {
-        // Given the real package and a Bun inside its GO range:
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("data");
-        let bun = fake_bun(tmp.path(), "1.4.2", 0);
-
-        // When it is installed:
-        let record = install_into(&package(), &root, Some(bun.clone())).unwrap();
-
-        // Then the copy is named by its digest and holds only what a host runs:
-        let dir = root.join("assets").join(&record.digest);
-        assert_eq!(record.path, dir);
-        assert_eq!(asset_digest(&dir).unwrap(), record.digest);
-        for shipped in [
-            "package.json",
-            "bun.lock",
-            "compat.json",
-            "src/host/main.ts",
-            "src/auth/index.ts",
-            "src/auth/login.ts",
-        ] {
-            assert!(dir.join(shipped).is_file(), "{shipped} missing");
-        }
-        for absent in ["test", "fixture.json", "src/auth/auth.test.ts"] {
-            assert!(!dir.join(absent).exists(), "{absent} was installed");
-        }
-        assert_eq!(
-            std::fs::read_to_string(dir.join("node_modules/.fake-install")).unwrap(),
-            "install --frozen-lockfile\n"
-        );
-        let recorded = std::fs::read_to_string(root.join(RECORD_FILE)).unwrap();
-        let checkout = package().canonicalize().unwrap();
-        assert!(!recorded.contains(checkout.to_str().unwrap()), "{recorded}");
-        assert_eq!(
-            (record.bun.as_str(), record.pi.as_str()),
-            ("1.4.2", "1.3.0")
-        );
-
-        // And dispatch resolves all three landed production roles:
-        assert_eq!(installed_in(&root).unwrap(), Some(dir.clone()));
-        preflight::assets(&dir, AgentRole::Worker, false).unwrap();
-        preflight::assets(&dir, AgentRole::Reviewer, false).unwrap();
-        preflight::assets(&dir, AgentRole::Pm, false).unwrap();
-
-        // And a reinstall of the same package is the same installation:
-        let again = install_into(&package(), &root, Some(bun)).unwrap();
-        assert_eq!(again.digest, record.digest);
-        assert_eq!(digests(&root), vec![record.digest.clone()]);
-
-        // A genuinely missing PM role still names its owner and is refused.
-        std::fs::remove_file(dir.join("src/roles/pm/index.ts")).unwrap();
-        let refusal = preflight::assets(&dir, AgentRole::Pm, false).unwrap_err();
-        assert_eq!(refusal.code, "role_unavailable");
-        assert!(refusal.detail.starts_with("pm, owner pm-role"), "{refusal}");
-    }
-
-    #[test]
-    fn a_changed_installation_is_refused_rather_than_dispatched() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("data");
-        let record =
-            install_into(&package(), &root, Some(fake_bun(tmp.path(), "1.4.2", 0))).unwrap();
-        std::fs::write(
-            record.path.join("src/auth/index.ts"),
-            "export default {};\n",
-        )
-        .unwrap();
-        let error = installed_in(&root).unwrap_err().to_string();
-        assert!(error.starts_with("installed_assets_changed"), "{error}");
-    }
-
-    #[test]
-    fn install_refuses_fixtures_unsupported_bun_and_a_failed_bun_install_leaving_nothing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("data");
-        let refused = |source: &Path, bun: Option<PathBuf>| {
-            install_into(source, &root, bun).unwrap_err().to_string()
-        };
-        let fixture = tmp.path().join("fixture");
-        std::fs::create_dir_all(&fixture).unwrap();
-        std::fs::write(fixture.join("fixture.json"), "{}").unwrap();
-        assert!(refused(&fixture, None).starts_with("fixture_assets_not_allowed"));
-        assert!(refused(&package(), None).starts_with("bun_unavailable"));
-        let old = fake_bun(&tmp.path().join("old"), "1.3.0", 0);
-        assert!(refused(&package(), Some(old)).starts_with("bun_version_unsupported"));
-        let failing = fake_bun(&tmp.path().join("failing"), "1.4.2", 3);
-        assert!(refused(&package(), Some(failing)).contains("bun install --frozen-lockfile"));
-        assert!(digests(&root).is_empty());
-        assert!(read_record(&root).unwrap().is_none());
-    }
-
-    /// A stand-in compiled host: `--version` and `--write-install <dir>` as src/host/compiled.ts
-    /// answers them, writing the package's real compat.json.
-    fn fake_host(dir: &Path, version: &str) -> PathBuf {
-        std::fs::create_dir_all(dir).unwrap();
-        let source = dir.join("host.sh");
-        let compat = package().join("compat.json");
-        std::fs::write(
-            &source,
-            format!(
-                "#!/bin/sh\ncase \"$1\" in\n--version) echo '{version}' ;;\n--write-install) mkdir -p \
-                 \"$2/assets\" && cp '{}' \"$2/compat.json\" && echo contract > \"$2/assets/worker-contract.md\" ;;\n\
-                 *) exit 9 ;;\nesac\n",
-                compat.display()
-            ),
-        )
-        .unwrap();
-        let host = dir.join(HOST_BINARY);
-        let installed = std::process::Command::new("install")
-            .args(["-m", "0755"])
-            .arg(&source)
-            .arg(&host)
-            .status()
-            .unwrap();
-        assert!(installed.success());
-        host
-    }
-
-    #[test]
-    fn a_compiled_host_installs_without_bun_and_serves_every_role() {
-        // Given a compiled host and no Bun anywhere:
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("data");
-        let host = fake_host(
-            &tmp.path().join("release"),
-            "corral-pi-host pi 1.3.0 bun 1.4.2",
-        );
-
-        // When it is installed:
-        let record = install_compiled(&host, &root).unwrap();
-
-        // Then the installation is the executable plus what it wrote, named by its digest:
-        let dir = root.join("assets").join(&record.digest);
-        assert_eq!(record.path, dir);
-        assert_eq!(
-            (record.bun.as_str(), record.pi.as_str()),
-            ("1.4.2", "1.3.0")
-        );
-        assert!(dir.join(HOST_BINARY).is_file() && dir.join("compat.json").is_file());
-        assert!(!dir.join("src/host/main.ts").exists() && !dir.join("node_modules").exists());
-        assert_eq!(installed_in(&root).unwrap(), Some(dir.clone()));
-
-        // And every role is served by the bundle, with no source modules on disk:
-        for role in [AgentRole::Worker, AgentRole::Reviewer, AgentRole::Pm] {
-            preflight::assets(&dir, role, false).unwrap();
-        }
-
-        // And reinstalling the same executable is the same installation:
-        assert_eq!(
-            install_compiled(&host, &root).unwrap().digest,
-            record.digest
-        );
-        assert_eq!(digests(&root), vec![record.digest.clone()]);
-
-        // And a replaced executable is refused rather than launched:
-        std::fs::write(dir.join(HOST_BINARY), "#!/bin/sh\nexit 0\n").unwrap();
-        assert!(
-            installed_in(&root)
-                .unwrap_err()
-                .to_string()
-                .starts_with("installed_assets_changed")
-        );
-    }
-
-    #[test]
-    fn a_host_that_does_not_identify_itself_is_refused_leaving_nothing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("data");
-        let host = fake_host(&tmp.path().join("release"), "something else");
-        let error = install_compiled(&host, &root).unwrap_err().to_string();
-        assert!(
-            error.contains("not `corral-pi-host pi <v> bun <v>`"),
-            "{error}"
-        );
-        assert!(digests(&root).is_empty());
-        assert!(read_record(&root).unwrap().is_none());
-        assert_eq!(
-            parse_host_version("corral-pi-host pi 1.3.0 bun 1.4.2"),
-            Some(("1.3.0".to_owned(), "1.4.2".to_owned()))
-        );
-    }
-}
+#[path = "install_tests.rs"]
+pub(crate) mod tests;

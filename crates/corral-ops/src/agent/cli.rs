@@ -87,6 +87,7 @@ pub struct LaunchArgs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallArgs {
     pub from: Option<PathBuf>,
+    pub no_build: bool,
     pub json: bool,
 }
 
