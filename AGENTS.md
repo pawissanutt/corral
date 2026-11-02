@@ -52,8 +52,18 @@ Dependencies flow corral -> {tui, ops} -> {core, herdr, git}. core, herdr and gi
   Quick leaves slow out unless explicitly declared. Pi runs on package/shared-contract
   changes; Darwin runs on platform/dependency changes; plan verify keeps both lanes.
   Missing/legacy context is conservative: all suites and optional lanes.
-- Install cargo-nextest before running the gate. `.config/nextest.toml` caps tests at 12 slots, serializes live herdr fixtures, reports tests over 30 seconds, and disables retries. Keep new shared-server tests in its `herdr` group; fake-engine tests remain parallel.
-- The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its temporary-fixture regression checks with `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py`.
+- Install cargo-nextest before running the gate. `.config/nextest.toml` uses 12 slots,
+  serializes shared live fixtures, caps ordinary tests at 10s, and disables retries. Explicit
+  measured integration/torture exceptions retain their original 30s report-only guards,
+  with one-line reasons; they are not extra full-tier exclusions. Never bump a failing timeout.
+  `.config/gate.toml` enforces quick <=180s and full <=600s including compilation.
+  See [gate cost policy](docs/guide/gate-costs.md) for added-test cost reporting and the host
+  nightly slow lane (nice 19, idle I/O, load/core <=1.0, private herdr, deduplicated failure
+  tasks). PM installs its documented cron line after landing; workers never install it.
+  Keep new shared-server tests in `herdr`; fake-engine tests remain parallel.
+- The script uses null stdin and preserves gate identity exports; tests isolate their own subprocess environments. Run its targeted temporary-fixture regressions with `python3 scripts/test_gate.py`,
+  `python3 scripts/test_gate_select.py`, `python3 scripts/test_gate_policy.py` and
+  `python3 scripts/test_slow_lane.py`.
 - The Linux concurrent-dequeue regression requires `python3` and `strace`. It traces only disposable fixture processes and synchronizes on lock syscalls, never timing sleeps.
 
 ### Load testing: container only

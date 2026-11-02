@@ -61,6 +61,7 @@ step="repository setup"
 step_active=0
 trap on_error ERR
 cd "$(dirname "$0")/.."
+pi_tests=()
 python3 scripts/test_cost.py count
 
 finish() {
@@ -79,7 +80,7 @@ pi_lane() {
   if [[ -d packages/corral-pi ]]; then
     begin_step "scripts/pi-lane.sh"
     # Functions do not inherit the ERR trap; report the step's failure explicitly.
-    scripts/pi-lane.sh || on_error
+    scripts/pi-lane.sh "${pi_tests[@]}" || on_error
     end_step
   else
     printf '\nSkipping scripts/pi-lane.sh (packages/corral-pi/ is absent).\n'
@@ -222,11 +223,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 end_step
 
 nextest_args=(--workspace)
+nextest_label="CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace"
 if [[ $landing_filter != "all()" ]]; then
   printf '\nTorture suites: owning-module selection (see profile.slow).\n'
   nextest_args+=(-E "$landing_filter")
+  nextest_label+=" -E <owning-module selection>"
 fi
-begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run ${nextest_args[*]}"
+begin_step "$nextest_label"
 CORRAL_HERDR_SESSION=corral-test cargo nextest run "${nextest_args[@]}"
 end_step
 

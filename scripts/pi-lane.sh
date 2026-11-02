@@ -27,5 +27,6 @@ fi
 
 cd "$package"
 bun install --frozen-lockfile
-bun test
+# Quick gates pass the changed modules' test consumers; no args means the full package.
+bun test "$@"
 bun run --bun typecheck

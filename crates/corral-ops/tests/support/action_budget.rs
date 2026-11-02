@@ -757,48 +757,36 @@ fn report(m: &Measured) -> String {
 #[path = "action_budget_cases.rs"]
 mod cases;
 
-fn budget(kinds: &[Kind], cold_mode: bool) {
-    let only = std::env::var("ACTION_BUDGET_KIND").ok();
+fn budget(kind: Kind, cold_mode: bool) {
     let mut failures = Vec::new();
     let mut text = String::new();
-    for kind in kinds
-        .iter()
-        .copied()
-        .filter(|k| only.as_deref().is_none_or(|o| o == k.name()))
+    let mode = if cold_mode { "cold" } else { "warm" };
+    let measure = if cold_mode { cold } else { warm };
+    let [base, grown, emitted] =
+        [Variant::Base, Variant::Grown, Variant::Emitted].map(|v| measure(kind, v));
+    for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {
+        failures.extend(
+            m.failures
+                .iter()
+                .map(|f| format!("{kind:?} {mode}/{variant}: {f}")),
+        );
+        text.push_str(&format!("{kind:?} {mode}/{variant}: {}\n", report(m)));
+    }
+    let failed_before = failures.len();
+    for (other, variant) in [(&grown, Variant::Grown), (&emitted, Variant::Emitted)] {
+        failures.extend(
+            compare(kind, &base, other, variant)
+                .into_iter()
+                .map(|f| format!("{kind:?} {mode}: {f}")),
+        );
+    }
+    if failures.len() != failed_before
+        || [&base, &grown, &emitted]
+            .iter()
+            .any(|m| !m.failures.is_empty())
     {
-        let measurements: [(&str, fn(Kind, Variant) -> Measured); 1] = if cold_mode {
-            [("cold", cold)]
-        } else {
-            [("warm", warm)]
-        };
-        for (mode, measure) in measurements {
-            let [base, grown, emitted] =
-                [Variant::Base, Variant::Grown, Variant::Emitted].map(|v| measure(kind, v));
-            for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {
-                failures.extend(
-                    m.failures
-                        .iter()
-                        .map(|f| format!("{kind:?} {mode}/{variant}: {f}")),
-                );
-                text.push_str(&format!("{kind:?} {mode}/{variant}: {}\n", report(m)));
-            }
-            let failed_before = failures.len();
-            for (other, variant) in [(&grown, Variant::Grown), (&emitted, Variant::Emitted)] {
-                failures.extend(
-                    compare(kind, &base, other, variant)
-                        .into_iter()
-                        .map(|f| format!("{kind:?} {mode}: {f}")),
-                );
-            }
-            if failures.len() != failed_before
-                || [&base, &grown, &emitted]
-                    .iter()
-                    .any(|m| !m.failures.is_empty())
-            {
-                for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {
-                    m.inputs.print(&format!("{kind:?} {mode}/{variant}"));
-                }
-            }
+        for (m, variant) in [(&base, "base"), (&grown, "grown"), (&emitted, "emitted")] {
+            m.inputs.print(&format!("{kind:?} {mode}/{variant}"));
         }
     }
     if std::env::var_os("WORK_BUDGET_REPORT").is_some() || !failures.is_empty() {

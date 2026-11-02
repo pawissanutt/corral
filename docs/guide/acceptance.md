@@ -47,8 +47,10 @@ Run `python3 scripts/test_gate.py` and `python3 scripts/test_gate_select.py` for
 temporary-fixture regression checks.
 Install cargo-nextest before running the gate. The default nextest profile in
 `.config/nextest.toml` uses 12 test slots, serializes live fixtures sharing the
-private herdr server, and reports tests over 30 seconds without terminating them.
-Retries are disabled. Run the gate inside the private plugin-free environment:
+private herdr server, and caps ordinary tests at 10 seconds. Explicit measured
+integration/torture exceptions keep their original 30s report-only guards, not extra
+full-tier exclusions. Retries are disabled. Whole-gate caps, fixed membership, path-scoped
+lanes and nightly scheduling are detailed in [gate cost policy](gate-costs.md). Run the gate inside the private plugin-free environment:
 
 ```bash
 bash -c 'source scripts/test-herdr.sh && corral_test_herdr_start && scripts/gate.sh' </dev/null
@@ -177,7 +179,7 @@ when tests are renamed or deleted. Pi is path-scoped to its package/shared contr
 Darwin checks are path-scoped to platform code and dependencies. Both always run
 in plan verification. `.config/gate.toml` enforces 180s quick and 600s full wall
 budgets around the complete recipe, including compilation. Each gate reports
-candidate-added Rust test count and measured added suite seconds; over 30s needs
+candidate-added Rust/Bun/Python test registrations and measured added suite seconds; over 30s needs
 a `Test-cost justification:` in the candidate report. Unselected additions are
 reported as unmeasured, not zero-cost evidence.
 
