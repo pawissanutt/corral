@@ -5,8 +5,9 @@
 # in their harnesses (T-053); do not unset gate context here.
 #
 # Without --tier (or with --tier full) this is the full tier, which corral runs for every
-# landing on main and for plan verify. --tier quick reads the gate context file corral
-# exports as CORRAL_GATE_CONTEXT (schema v1) and checks only what the candidate touched.
+# landing on main and for plan verify. Full landings scope optional lanes and torture
+# suites by changed paths; plan verify keeps all lanes and suites. --tier quick reads
+# CORRAL_GATE_CONTEXT (schema v1) and checks only what the candidate touched.
 set -euo pipefail
 exec </dev/null
 
@@ -17,6 +18,9 @@ if (($#)); then
     exit 2
   fi
   tier=$2
+fi
+if [[ ${CORRAL_GATE_BUDGET_CHILD:-} != 1 ]]; then
+  exec python3 "$(dirname "$0")/gate_timer.py" "$tier" "$0" "$@"
 fi
 printf '==> tier %s\n' "$tier"
 
@@ -57,8 +61,10 @@ step="repository setup"
 step_active=0
 trap on_error ERR
 cd "$(dirname "$0")/.."
+python3 scripts/test_cost.py count
 
 finish() {
+  python3 scripts/test_cost.py "$([[ $tier == quick ]] && echo quick || echo default)" || on_error
   if [[ -s "${CORRAL_TEST_HARNESS_SHIM_LOG:-}" ]]; then
     printf 'FAILED: tests invoked a real agent harness:\n' >&2
     cat "$CORRAL_TEST_HARNESS_SHIM_LOG" >&2
@@ -67,8 +73,8 @@ finish() {
   printf '\nGate passed.\n'
 }
 
-# The Bun lane for packages/corral-pi, run only while that package exists (always in the full
-# tier; in the quick tier when the candidate touched it). Its absence is reported as a skip.
+# The Bun lane runs for Pi or shared-contract changes, and always in plan verify.
+# Its absence is reported as a skip.
 pi_lane() {
   if [[ -d packages/corral-pi ]]; then
     begin_step "scripts/pi-lane.sh"
@@ -127,7 +133,7 @@ if [[ $tier == quick ]]; then
 
   # Declared tests replace the module selection and may name any package. The 'quick'
   # nextest profile leaves out the slow group (.config/nextest.toml) unless tests are
-  # declared; the full tier runs every test.
+  # declared; full landings restore torture suites on owning-module changes.
   test_scope=("${scope[@]}")
   ((declared)) && test_scope=(--workspace)
   if ((${#test_scope[@]})); then
@@ -172,6 +178,11 @@ if [[ $tier == quick ]]; then
   exit 0
 fi
 
+lane_args=()
+[[ -z ${CORRAL_GATE_CONTEXT:-} ]] || lane_args+=("$CORRAL_GATE_CONTEXT")
+lane_plan=$(python3 scripts/gate_lanes.py "${lane_args[@]}")
+eval "$lane_plan"
+
 begin_step "cargo fmt --all -- --check"
 cargo fmt --all -- --check
 end_step
@@ -186,7 +197,9 @@ end_step
 # bindings, and zstd has checked-in bindings so Cargo can override its build script.
 # These command-local overrides must never reach a build/test command: real builds
 # still compile and link the bundled C libraries with the platform's toolchain.
-if command -v rustup >/dev/null 2>&1; then
+if ((!darwin_touched)); then
+  printf '\nSkipping Darwin checks (no platform or dependency changes).\n'
+elif command -v rustup >/dev/null 2>&1; then
   step="listing installed Rust targets"
   installed_targets=$(rustup target list --installed)
   for target in aarch64-apple-darwin x86_64-apple-darwin; do
@@ -208,8 +221,13 @@ begin_step "cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 end_step
 
-begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace"
-CORRAL_HERDR_SESSION=corral-test cargo nextest run --workspace
+nextest_args=(--workspace)
+if [[ $landing_filter != "all()" ]]; then
+  printf '\nTorture suites: owning-module selection (see profile.slow).\n'
+  nextest_args+=(-E "$landing_filter")
+fi
+begin_step "CORRAL_HERDR_SESSION=corral-test cargo nextest run ${nextest_args[*]}"
+CORRAL_HERDR_SESSION=corral-test cargo nextest run "${nextest_args[@]}"
 end_step
 
 begin_step "CORRAL_HERDR_SESSION=corral-test cargo test --workspace --doc"
@@ -220,7 +238,11 @@ begin_step "scripts/work-budget.sh"
 scripts/work-budget.sh
 end_step
 
-pi_lane
+if ((pi_touched)); then
+  pi_lane
+else
+  printf '\nSkipping scripts/pi-lane.sh (Pi package and contracts untouched).\n'
+fi
 
 begin_step "cargo build -p corral && scripts/check-docs.sh target/debug/corral"
 cargo build -p corral

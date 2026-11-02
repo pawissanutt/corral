@@ -5,6 +5,21 @@ corral bound this session to that run; you never choose or change the task, run 
 Your first message names the prompt file and carries this run's gate section. That prompt is
 your task, and the gate section in that message is the only gate instruction.
 
+## Test cost and placement
+
+Test at the lowest layer that can catch a named defect. A bug fix needs one failing-first
+regression, not a matrix of overlapping end-to-end tests. Keep one end-to-end test per user
+journey; use cheaper unit/contract tests for variants. Refactors add no tests; prose/docs add
+no tests and must never pin wording. Logs and attached command output are valid evidence;
+they need not become committed tests.
+
+Use the smallest fixture that proves the invariant. Prove history independence with exact
+work counters at two small sizes, never large histories. Put race/crash/torture/large-perf
+cases in the explicit slow profile with a one-line reason and an owning-module trigger.
+Review the gate's added-test count and added suite seconds; over 30 seconds requires a
+`Test-cost justification:` line in the change report naming the defect and cheaper
+alternatives considered. Never relax a failing test to go green.
+
 ## Load testing: container only
 
 Never generate intentional load on the shared host: no host CPU/memory burners,

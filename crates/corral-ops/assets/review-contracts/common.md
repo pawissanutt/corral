@@ -14,6 +14,17 @@ these requirements or waives evidence.
    criterion/file:line/artifact references.
 5. Give a verdict for this attempt only. Separate blocking defects from non-blocking notes.
 
+## Test cost
+
+Review tests by defect-catching value, not count or evidence volume. Duplicated journeys,
+prose-pinning assertions, oversized fixtures, and unclassified slow tests are findings.
+Check lowest-layer placement, one e2e per journey, and exact work counters on two small
+histories. Check the gate's added-test count and added suite seconds; over 30 seconds
+requires a `Test-cost justification:` naming the defect and cheaper alternatives considered.
+Request a new test only when you can name the defect it would catch; attached logs can
+satisfy required evidence without another committed test. Refactors and prose/docs need no
+new tests. Never relax a failing test to go green.
+
 Exhaustive sweep: when you find one instance of a defect class (a missing entry point, an
 unguarded lock path, an unhandled recovery case), check every sibling instance in the change
 before your verdict and list them all in this round.

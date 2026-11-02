@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from gate_lanes import pi_touched
+
 Suite = dict[str, Any]
 
 WORKSPACE_INPUTS = {"Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml",
@@ -91,7 +93,7 @@ def plan(path: str) -> None:
     selection = " or ".join(f"({test})" for test in tests) if tests else "all()"
     print(f"packages=({' '.join(map(shlex.quote, sorted(packages)))})")
     print(f"workspace={int(workspace)}")
-    pi = any(changed.startswith("packages/corral-pi/") for changed in context["changed_paths"])
+    pi = pi_touched(context["changed_paths"])
     print(f"pi_touched={int(pi)}")
     print(f"declared={len(tests)}")
     print(f"selection={shlex.quote(selection)}")
@@ -448,7 +450,7 @@ def select(context_path: str, listing_path: str, expected_ids: list[str]) -> Non
     print(f"Test selection: {kind}", file=sys.stderr)
     print(f"Tests: {len(candidates)} in scope, {len(selected)} selected, "
           f"{len(candidates) - len(selected)} skipped by selection, {slow_skipped} slow "
-          f"skipped (full tier only), {len(excluded)} expected failures excluded; "
+          f"skipped (slow tier or owning-module full gate), {len(excluded)} expected failures excluded; "
           f"{remaining} to run", file=sys.stderr)
     base = selection_filter or "all()"
     run_filter = f"({base}){''.join(terms)}" if terms else base

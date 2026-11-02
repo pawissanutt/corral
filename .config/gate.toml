@@ -1,0 +1,8 @@
+# Host wall-clock budgets, enforced around the complete recipe (including compilation).
+[seconds]
+quick = 180
+full = 600
+slow = 1800
+
+[test_cost]
+justification_threshold_seconds = 30

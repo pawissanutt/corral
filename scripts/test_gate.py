@@ -73,8 +73,10 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "gate_select.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_timer.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
+        (self.repo / ".config").mkdir()
+        _ = shutil.copy2(SCRIPTS.parent / ".config/gate.toml", self.repo / ".config/gate.toml")
         self.write("Cargo.toml", '[package]\nname = "gate-fixture"\nversion = "0.0.0"\n'
                    + 'edition = "2024"\n[workspace]\n')
         self.write("src/lib.rs", "pub fn fixture() {}\n")
@@ -242,7 +244,8 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
                 # line, and the receipt validates with exactly one result marker.
                 output = log[len(f"\n$ {RUNNER_COMMAND}\n"):end].decode()
                 self.assert_step_timing(output, steps[:announced])
-                last = output.splitlines()[-1]
+                last = next(line for line in reversed(output.splitlines())
+                            if not line.startswith("Gate wall time:"))
                 self.assertEqual(last, "Gate passed." if failure is None
                                  else f"FAILED: {failure[0]} (exit {failure[1]})")
                 self.assertTrue(receipt_valid(log, start, end, code, result))
@@ -275,13 +278,6 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
                   "app::hot_budget::hot_reads_work_stays_independent_of_history",
                   "app::sync_budget::sync_tick_work_stays_independent_of_history",
               )],
-            *[("cargo", ["test", "-p", "corral-ops", "--lib", "--", "--exact", test])
-              for test in (
-                  "submission_paths_tests::action_budget::"
-                  "action_budget_actions_launch_kinds_do_not_follow_history",
-                  "submission_paths_tests::action_budget::"
-                  "action_budget_hot_actions_kinds_do_not_follow_history",
-              )],
             ("cargo", ["build", "-p", "corral"]),
             ("check-docs.sh", ["target/debug/corral"]),
         ])
@@ -290,7 +286,7 @@ sys.exit(int(os.environ.get("RUSTUP_STATUS", "0")))
             self.assertEqual(entry["stdin"], "")
         self.assertEqual([e["session"] for e in entries],
                          ["not-the-test-session", "not-the-test-session", "corral-test", "corral-test",
-                          *(["not-the-test-session"] * 7)])
+                          *(["not-the-test-session"] * 5)])
         self.assertIn("maximum 800 (limit 800)", result.stdout)
 
     def install_bun_recorder(self) -> None:
@@ -449,8 +445,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
             ("cargo:clippy --workspace --all-targets -- -D warnings", 2),
             ("cargo:nextest run --workspace", 3),
             ("cargo:test --workspace --doc", 4),
-            ("cargo:build -p corral", 10),
-            ("check-docs.sh:target/debug/corral", 11),
+            ("cargo:build -p corral", 8),
+            ("check-docs.sh:target/debug/corral", 9),
         ):
             with self.subTest(command=command):
                 (self.repo / "commands.jsonl").unlink(missing_ok=True)
@@ -541,8 +537,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 f"{session} run -p alpha --profile quick -E (all()){excluded}"],
              ["  crates/alpha/src/lib.rs: crate-wide alpha (crate root)",
               "Test selection: crate-wide",
-              "Tests: 4 in scope, 4 selected, 0 skipped by selection, 1 slow skipped (full "
-              "tier only), 2 expected failures excluded; 1 to run"]),
+              "Tests: 4 in scope, 4 selected, 0 skipped by selection, 1 slow skipped (slow "
+              "tier or owning-module full gate), 2 expected failures excluded; 1 to run"]),
             (["crates/alpha/tests/odd.rs"], [], [], alpha, [
                 ["fmt", "-p", "alpha", "--", "--check"],
                 ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
@@ -553,8 +549,8 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 f"{session} list -p alpha --profile quick",
                 f"{session} run -p alpha --profile quick -E (binary_id(=alpha::odd))"],
              ["  crates/alpha/tests/odd.rs: test targets alpha::odd", "Test selection: module",
-              "Tests: 4 in scope, 3 selected, 1 skipped by selection, 1 slow skipped (full "
-              "tier only), 0 expected failures excluded; 2 to run"]),
+              "Tests: 4 in scope, 3 selected, 1 skipped by selection, 1 slow skipped (slow "
+              "tier or owning-module full gate), 0 expected failures excluded; 2 to run"]),
             (["crates/alpha/src/lib.rs"], ["package(alpha)", "test(=plain)"], [], declared, [
                 ["fmt", "-p", "alpha", "--", "--check"],
                 ["clippy", "-p", "alpha", "--all-targets", "--", "-D", "warnings"],
@@ -611,7 +607,7 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 self.assertEqual("gamma::odd plain" in expected,
                                  "Expected failure matches no selected test and excludes "
                                  "nothing: gamma::odd plain" in output)
-                self.assertEqual(output.splitlines()[-1], "Gate passed.")
+                self.assertIn("Gate passed.", output.splitlines())
 
     def test_quick_tier_needs_context_and_known_tier(self) -> None:
         # Given no context file, or an unknown tier argument:
@@ -637,7 +633,6 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         # Given harness-free test binaries whose names hold ',', ')' and '\', alpha's two
         # failing tests, and a passing same-named test in beta:
         _ = self.quick_workspace([], [], [])
-        (self.repo / ".config").mkdir()
         self.write(".config/nextest.toml",
                    "[profile.quick]\ndefault-filter = 'not test(=slowpoke)'\n")
         for name, binary_tests in (("alpha", '("weird,name)", true), ("back\\\\slash", true), '

@@ -30,10 +30,10 @@ use jiff::Timestamp;
 use super::work_paths::{Paths, Row, report};
 
 const START: Timestamp = Timestamp::constant(1_767_268_800, 0);
-const SMALL: (usize, usize) = (60, 6_000);
-const LARGE: (usize, usize) = (240, 24_000);
+const SMALL: (usize, usize) = (2, 10);
+const LARGE: (usize, usize) = (5, 25);
 /// Artifact snapshot files, recorded on the active tasks so they do not grow with history.
-const ARTIFACTS: usize = 2_000;
+const ARTIFACTS: usize = 24;
 
 /// Active work stays fixed while history grows: (status, count).
 const ACTIVE: [(Status, usize); 6] = [

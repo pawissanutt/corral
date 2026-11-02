@@ -33,21 +33,21 @@ pub(crate) struct Shape {
 
 pub(crate) const BASE: Shape = Shape {
     name: "base",
-    terminal: 12,
+    terminal: 2,
     history: 2,
     nested: 1,
 };
 pub(crate) const GROWN: Shape = Shape {
     name: "grown",
-    terminal: 120,
-    history: 20,
+    terminal: 5,
+    history: 5,
     nested: 1,
 };
 pub(crate) const NESTED: Shape = Shape {
     name: "nested",
-    terminal: 12,
+    terminal: 2,
     history: 2,
-    nested: 10,
+    nested: 3,
 };
 
 pub(crate) fn shape(name: &str) -> Shape {
@@ -289,6 +289,10 @@ pub(crate) fn fixture_with(shape: Shape, live: bool) -> Fixture {
     );
     store.config.dispatch.promote_ideas = corral_core::PromoteIdeas::Suggest;
     store.config.limits.running = 10;
+    // Saturate the bounded Done window at BOTH small history sizes. Otherwise the
+    // visible working set, rather than history alone, would grow between stores.
+    store.config.ui.done_max = 1;
+    assert!(shape.terminal > store.config.ui.done_max);
     store.config.storage.cache_root = Some(root.path().join("cache"));
     store.config.pm.push_events = false;
     store.config.review.autopilot = Some(false);
