@@ -69,6 +69,23 @@ left behind.
 max_live = 4     # soft: `corral pi --over-cap` exceeds it
 ```
 
+### Starting fresh with `/new`
+
+In an assistant opened by `corral pi` (including `--resume`), `/new` starts a fresh Corral
+assistant in the same pane. Wait for active work to finish first. The outgoing host shuts down,
+its generation is fenced and its conversation stays open: `corral pi --resume A-<n>` can return
+to it once the new host has stopped. The launch line shows the new `A-<n>` identity.
+
+The new assistant uses normal workspace admission and profile resolution (including this
+launch's explicit model/provider/effort overrides); it does not inherit task focus, conversation,
+todos, scratch ownership or permission grants from the previous session. If opening the new
+assistant fails, the old conversation remains resumable and the error names its resume command.
+Normal live-cap and machine-load checks still apply. No additional pane is created or typed into.
+
+This is a between-host Corral transition, not Pi's native in-process session replacement.
+`/resume`, `/fork` and import remain fenced, as does `/new` in other bound roles or hosts not
+started under the assistant supervisor. Headless hosts do not provide this interactive command.
+
 ### Ending and resuming
 
 `corral pi` runs the host as a child of itself in the pane. When the host exits cleanly
