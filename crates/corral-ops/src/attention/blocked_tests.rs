@@ -100,6 +100,26 @@ fn waiting() -> Task {
 }
 
 #[test]
+fn old_manual_wait_requires_pm_attention() {
+    let mut task = waiting();
+    let wait = &mut task.runs[0].obligations.waits[0];
+    wait.request.handle = corral_core::WaitHandle::Channel {
+        channel_id: "ci:123".into(),
+        capability: Some("wait_v1".into()),
+    };
+    wait.registered_at = "2026-10-29T07:30:00Z".parse().unwrap();
+    let a = assessment(&task, &[], &[]);
+    let condition = a
+        .conditions
+        .iter()
+        .find(|c| c.kind == "obligation_wait")
+        .unwrap();
+    assert_eq!(condition.reason_code, "manual_wait_overdue");
+    assert_eq!(condition.class, WaitClass::PmAction);
+    assert_eq!(condition.responsible, Responsible::Pm);
+}
+
+#[test]
 fn native_parked_wait_overrides_working_progress() {
     // Given a native parked run whose last agent observation still says working.
     let task = waiting();
