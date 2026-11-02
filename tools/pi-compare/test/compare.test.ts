@@ -18,6 +18,14 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true })));
 });
 
+test("legacy harness records and comparison manifests parse to canonical identifiers", () => {
+  const oldShow = JSON.stringify(show).replaceAll("corral-pi", "pi-native");
+  const oldManifest = JSON.stringify(manifest)
+    .replaceAll("corral-pi", "pi-native").replaceAll("corral_pi", "pi_native");
+  expect(showSchema.parse(JSON.parse(oldShow))).toEqual(show);
+  expect(manifestSchema.parse(JSON.parse(oldManifest))).toEqual(manifest);
+});
+
 async function sixPairs(): Promise<{ manifest: Manifest; root: string }> {
   const root = await mkdtemp(join(tmpdir(), "pi-compare-"));
   roots.push(root);
