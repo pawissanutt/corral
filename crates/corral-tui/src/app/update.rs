@@ -50,7 +50,7 @@ impl App {
                 self.operating_header = snapshot.operating_header.clone();
                 self.ctx = snapshot.ctx.clone();
                 self.load_inbox_count();
-                // Hidden screens refresh when exposed by pop(), not on every periodic sync.
+                // Refresh the visible screen; hidden screens receive a triggered sync after pop().
                 if self.stack.len() > 1
                     && let Some(top) = self.stack.last_mut()
                 {

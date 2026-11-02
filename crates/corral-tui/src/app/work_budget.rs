@@ -443,7 +443,8 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
         || path.ends_with("_redraw")
         || path.ends_with("_key_down_handle")
         || path.ends_with("_wheel_handle")
-        || path.ends_with("_select_handle");
+        || path.ends_with("_select_handle")
+        || path.ends_with("_back_handle");
     if input {
         return Some(Limit::Fixed(0));
     }
@@ -497,7 +498,7 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
             ("git_calls", Fixed(4)),
         ]
     } else {
-        // Opening a screen, or Back, which reloads the board synchronously.
+        // Opening a screen.
         &[
             ("config_reads", Fixed(16)),  // (12)
             ("config_parses", Fixed(24)), // (20)

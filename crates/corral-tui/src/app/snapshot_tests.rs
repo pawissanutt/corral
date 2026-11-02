@@ -62,6 +62,60 @@ fn worker_result_moves_card_when_store_changes_between_ticks() {
     assert_eq!((app.counts.review, app.counts.needs), (0, 3));
 }
 
+#[test]
+fn back_triggers_worker_refresh_after_detail_change() {
+    let mut fx = seeded();
+    fx.ctx.store.config.dispatch.paused = true;
+    fx.ctx.store.config.review.autopilot = Some(false);
+    fx.ctx.store.save_config().unwrap();
+    let mut app = fx.app(Mode::Board);
+    let (trigger, requests) = std::sync::mpsc::channel();
+    app.trigger = Some(trigger);
+    app.apply(Action::OpenDetail("T-002".into()));
+    assert_eq!(app.stack.len(), 2);
+    fx.ctx
+        .store
+        .update("T-002", |task| {
+            task.title = "New title".into();
+            Ok(())
+        })
+        .unwrap();
+
+    app.apply(Action::Back);
+    assert_eq!(app.stack.len(), 1);
+    requests.try_recv().expect("Back requests a worker refresh");
+    let mut terminal = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(!buffer_text(terminal.backend().buffer()).contains("New title"));
+    let update = WorkerMsg::synced_with_attention(&fx.ctx, &app.message_tx);
+    assert!(matches!(&update, WorkerMsg::Synced(Ok(_))));
+    app.on_worker(update);
+    terminal.draw(|frame| app.draw(frame)).unwrap();
+    assert!(buffer_text(terminal.backend().buffer()).contains("New title"));
+}
+
+#[test]
+fn back_with_toast_requests_refresh_and_root_back_quits() {
+    let fx = seeded();
+    let mut app = fx.app(Mode::Board);
+    let (trigger, requests) = std::sync::mpsc::channel();
+    app.trigger = Some(trigger);
+    app.apply(Action::OpenSettings);
+    app.apply(Action::BackWithToast(crate::Toast::new(
+        crate::Tone::Info,
+        "Saved",
+        "done",
+    )));
+    assert_eq!(app.stack.len(), 1);
+    assert_eq!(app.toasts.last().unwrap().0.title, "Saved");
+    requests
+        .try_recv()
+        .expect("BackWithToast requests a refresh");
+    app.apply(Action::Back);
+    assert!(app.quit);
+    assert!(requests.try_recv().is_err());
+}
+
 struct RefreshCounter(Rc<Cell<usize>>);
 
 #[test]

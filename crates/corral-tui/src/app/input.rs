@@ -110,8 +110,8 @@ impl App {
         self.stack.pop();
         if self.stack.is_empty() {
             self.quit = true;
-        } else {
-            self.reload();
+        } else if let Some(tx) = &self.trigger {
+            let _ = tx.send(());
         }
     }
 
