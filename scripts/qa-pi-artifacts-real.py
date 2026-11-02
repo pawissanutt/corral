@@ -22,6 +22,7 @@ import time
 parser = argparse.ArgumentParser()
 parser.add_argument('output', type=Path)
 parser.add_argument('--graphics', choices=('kitty', 'none'), default='none')
+parser.add_argument('--fail-after', metavar='SCENE', help='raise after this scene to exercise failure-path cleanup')
 args = parser.parse_args()
 args.output.mkdir(parents=True, exist_ok=True)
 repo = Path(__file__).resolve().parents[1]
@@ -113,42 +114,7 @@ os.execv(target, [target, *argv])
             log.extend(os.read(master, 65536))
         (args.output / (name + '.ansi')).write_bytes(log)
         scenes.append(dict(name=name, offset=mark, bytes=len(log), columns=size['columns'], rows=size['rows'], input_hex=data.hex() if data else None, resize=resize, asserted=text))
-    master, slave = pty.openpty()
-    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 46, 140, 0, 0))
-    read_fd, write_fd = os.pipe()
-    def setup():
-        os.setsid()
-        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-    proc = subprocess.Popen(['bun', '--no-env-file', str(Path(installed['assets']) / 'src/host/main.ts'), '--launch-fd', str(read_fd)], cwd=work, env=env,
-                            stdin=slave, stdout=slave, stderr=slave, pass_fds=(read_fd,), preexec_fn=setup)
-    os.close(slave); slave = None; os.close(read_fd)
-    os.write(write_fd, json.dumps(launch).encode()); os.close(write_fd)
-    selector = selectors.DefaultSelector(); selector.register(master, selectors.EVENT_READ)
-    def until(text, mark=0):
-        deadline = time.monotonic() + 20
-        while text.encode() not in log[mark:]:
-            events = selector.select(max(0, deadline - time.monotonic()))
-            if not events: raise AssertionError('Timeout waiting for ' + text)
-            try: chunk = os.read(master, 65536)
-            except OSError: chunk = b''
-            if not chunk: raise AssertionError(f'Host exited (code {proc.poll()}) before {text!r}; last output: {bytes(log[-600:])!r}')
-            log.extend(chunk)
-    def send(data): os.write(master, data)
-    def scene(name, text, data=None, resize=None):
-        mark = len(log)
-        if resize:
-            columns, rows = resize
-            resizes.append(dict(offset=mark, columns=columns, rows=rows))
-            size.update(columns=columns, rows=rows)
-            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
-            os.kill(proc.pid, signal.SIGWINCH)
-        if data: send(data)
-        until(text, mark)
-        while not log.endswith(b'\x1b[?2026l'):
-            if not selector.select(10): raise AssertionError('Incomplete terminal frame: ' + name)
-            log.extend(os.read(master, 65536))
-        (args.output / (name + '.ansi')).write_bytes(log)
-        scenes.append(dict(name=name, offset=mark, bytes=len(log), columns=size['columns'], rows=size['rows'], input_hex=data.hex() if data else None, resize=resize, asserted=text))
+        if name == args.fail_after: raise AssertionError('injected failure after ' + name)
     until('Bound to Corral')
     def routed(): return [json.loads(line) for line in (work / 'routed.jsonl').read_text().splitlines()]
     def real_calls(kind): return [c['argv'] for c in routed() if c['real'] and kind in c['argv']]
@@ -183,6 +149,7 @@ os.execv(target, [target, *argv])
     assert not [c for c in routed() if not c['real'] and 'artifact' in c['argv']]
     calls = [json.loads(json.loads(line)['stdin']) for line in (work / 'calls.jsonl').read_text().splitlines() if json.loads(line)['stdin']]
     assert not [c for c in calls if c['op'] not in ('hello', 'event')], calls
+    assert [c['op'] for c in calls].count('hello') == 1, 'exactly one host launched and bound'
     scene('return-conversation', 'Chat', b'\x1b[20~')
     send(b'\x04'); until('\x1b[?1049l'); proc.wait(timeout=10)
     assert proc.returncode == 0
@@ -208,4 +175,16 @@ finally:
         except subprocess.TimeoutExpired: os.killpg(proc.pid, signal.SIGKILL); proc.wait()
     for fd in (master, slave):
         if fd is not None: os.close(fd)
+    # Audit every process still holding the private directory (host, viewer server, helpers).
+    leftovers = []
+    for pid in filter(str.isdigit, os.listdir('/proc')):
+        try:
+            cmdline = Path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\0', b' ').decode('utf8', 'replace')
+            cwd = os.readlink(f'/proc/{pid}/cwd')
+        except OSError:
+            continue
+        if int(pid) != os.getpid() and (str(work) in cmdline or cwd.startswith(str(work))):
+            leftovers.append(dict(pid=int(pid), cmdline=cmdline[:300]))
+    (args.output / 'cleanup.json').write_text(json.dumps(dict(work=str(work), host_reaped=proc is None or proc.poll() is not None, leftovers=leftovers), indent=2))
+    print('CLEANUP: ' + ('clean' if not leftovers and (proc is None or proc.poll() is not None) else f'LEAK {leftovers}'))
     shutil.rmtree(work, ignore_errors=True)
