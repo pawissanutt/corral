@@ -191,16 +191,20 @@ pub(crate) fn reap_task(ctx: &Ctx, task: &str) -> Result<()> {
 }
 
 fn reap_scope(ctx: &Ctx, task: &str, run: Option<&str>) -> Result<()> {
+    reap_scope_with(ctx, task, run, "podman")
+}
+
+fn reap_scope_with(ctx: &Ctx, task: &str, run: Option<&str>, podman: &str) -> Result<()> {
     // Inventory actual cleanup debt, never every retained owner file or task/run history.
     // A label alone grants no authority: each opaque marker must have its canonical issuer.
-    let output = match Command::new("podman")
+    let output = match Command::new(podman)
         .args([
             "ps",
             "-a",
             "--filter",
             "label=corral.load-sandbox=true",
             "--format",
-            "{{.Label \"corral.run-owner\"}}",
+            "{{index .Labels \"corral.run-owner\"}}",
         ])
         .stdin(Stdio::null())
         .output()
@@ -245,7 +249,7 @@ fn reap_scope(ctx: &Ctx, task: &str, run: Option<&str>) -> Result<()> {
                 !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
             }),
         };
-        if selected && let Err(error) = reap_with("podman", marker) {
+        if selected && let Err(error) = reap_with(podman, marker) {
             errors.push(format!("{name}: {error:#}"));
         }
     }
