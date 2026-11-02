@@ -203,7 +203,10 @@ export interface Secrets {
 }
 
 /** Every place under `roots` (and every extra text) holding a secret or a preimage of a digest. */
-export function secretLeaks(roots: readonly string[], extra: Record<string, string>, secrets: Secrets): string[] {
+export function secretLeaks(
+  roots: readonly string[], extra: Record<string, string>, secrets: Secrets,
+  read: (path: string) => Buffer = readFileSync,
+): string[] {
   const leaks: string[] = [];
   const check = (where: string, text: string) => {
     for (const secret of secrets.plain) if (text.includes(secret)) leaks.push(`${where}: plain secret`);
@@ -211,7 +214,13 @@ export function secretLeaks(roots: readonly string[], extra: Record<string, stri
       if (secrets.digests.includes(sha256(token))) leaks.push(`${where}: preimage of a stored digest`);
     }
   };
-  for (const root of roots) for (const path of files(root)) check(path, readFileSync(path).toString("latin1"));
+  for (const root of roots) for (const path of files(root)) {
+    try { check(path, read(path).toString("latin1")); }
+    catch (error) {
+      // Live store-holder records may disappear after enumeration. Other I/O failures still fail QA.
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    }
+  }
   for (const [where, text] of Object.entries(extra)) check(where, text);
   return leaks;
 }

@@ -43,6 +43,10 @@ Visual case list (each PNG opened with the image read tool; bounded visual inspe
 
 No additional paid calls, uploads, ambient resources or gate tier were used. Only the assigned quick gate is run for this review round after commit/rebase.
 
+### Authorized gate-test correction (Q1)
+
+Quick attempt `ag-bb76fcb4d85a2283` failed with 749 Pi tests passing and one unrelated failure: `secretLeaks()` read a transient `.corral/lock/store.holders` file after it disappeared. Owner answer Q1 authorized a small test-only fix. The scanner now skips only ENOENT between enumeration and reading; secret checks and other I/O failures remain unchanged. One deterministic regression removes the enumerated file immediately before its real read, also verifies surviving plain/digest-preimage secrets and extra text remain detected, and verifies EACCES is still thrown. Red reproduction, green regression, isolated cross-lane test output and fresh typecheck are attached. Screenshots are recaptured on the final committed candidate; this helper-only correction changes no production presentation.
+
 ## Limits
 
 Preferences are intentionally session-local and explicit (not automatic terminal appearance detection). Palette discovery covers the packaged panel/presentation/model/answer-inspection actions; it is not a general-purpose CLI or upstream-command launcher. Color math checks truecolor palette values, not every terminal emulator's 256-color approximation. No paid provider request or authority-changing operation was exercised. Code discovery (`cxm context`) and historical CLI search timed out; direct source/SDK declarations and current main were inspected instead.
