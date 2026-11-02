@@ -56,6 +56,12 @@ fn canonical_store_probe() {
             );
             emit(json!({"result":paths.result,"script":paths.script,"log":paths.log}));
         }
+        "admit" => {
+            let recipient = Recipient::parse_key(spec["recipient"].as_str().unwrap()).unwrap();
+            let ctx = crate::Ctx::from_store(store);
+            let status = crate::delivery::deliver(&ctx, &recipient, &AdmissionOnly, None).unwrap();
+            emit(json!({"status":format!("{status:?}")}));
+        }
         "inbox" => {
             let recipient = Recipient::parse_key(spec["recipient"].as_str().unwrap()).unwrap();
             let inbox = Inbox::new(&store, recipient).unwrap();
@@ -129,5 +135,48 @@ fn canonical_store_probe() {
             }
         }
         mode => panic!("unknown fixture probe mode {mode}"),
+    }
+}
+
+/// Keep admission and canonical observation separate so tests can force a fast model to
+/// run before the observer, without sleeps, host load or weakening production guards.
+struct AdmissionOnly;
+
+impl crate::delivery::DeliveryAdapter for AdmissionOnly {
+    fn harness(&self) -> &'static str {
+        crate::agent::delivery::CorralPiAdapter.harness()
+    }
+    fn capabilities(&self) -> crate::delivery::Capabilities {
+        crate::agent::delivery::CorralPiAdapter.capabilities()
+    }
+    fn readiness(
+        &self,
+        ctx: &crate::Ctx,
+        recipient: &Recipient,
+    ) -> anyhow::Result<crate::delivery::Readiness> {
+        crate::agent::delivery::CorralPiAdapter.readiness(ctx, recipient)
+    }
+    fn bind(
+        &self,
+        ctx: &crate::Ctx,
+        recipient: &Recipient,
+    ) -> anyhow::Result<crate::delivery::BindOutcome> {
+        crate::agent::delivery::CorralPiAdapter.bind(ctx, recipient)
+    }
+    fn send(
+        &self,
+        ctx: &crate::Ctx,
+        binding: &corral_core::inbox::SessionBinding,
+        envelope: &corral_core::inbox::Envelope,
+    ) -> corral_core::inbox::SendOutcome {
+        crate::agent::delivery::CorralPiAdapter.send(ctx, binding, envelope)
+    }
+    fn observe(
+        &self,
+        _ctx: &crate::Ctx,
+        _binding: &corral_core::inbox::SessionBinding,
+        _cursor: &mut corral_core::inbox::ObserveCursor,
+    ) -> anyhow::Result<Vec<crate::delivery::Observation>> {
+        Ok(Vec::new())
     }
 }

@@ -16,7 +16,7 @@ import { sha256Hex } from "../src/tools/corral.ts";
 import {
   corralBinary, fileAppears, generationDir, ok, privateHerdr, privateRoot, run,
 } from "./support/workspace.ts";
-import { StoreEventFollower as EventFollower, launchExitDir, requireReceipt, inboxEnvelopes } from "./support/canonical-store.ts";
+import { StoreEventFollower as EventFollower, launchExitDir, requireReceipt, inboxEnvelopes, inboxReceipt, admitInbox, storeEvents } from "./support/canonical-store.ts";
 
 const isolated = privateHerdr();
 let corral = "";
@@ -71,13 +71,21 @@ beforeAll(async () => {
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const auth = join(assets.dir, "src/auth");
   copyFileSync(join(auth, "index.ts"), join(auth, "fixture-auth.ts"));
-  writeFileSync(join(auth, "index.ts"), `import { readFileSync, writeFileSync } from "node:fs";
+  writeFileSync(join(auth, "index.ts"), `import { existsSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import auth, { fixtureTransport } from "./fixture-auth.ts";
 const STEPS = ${JSON.stringify(steps)};
-function next() {
+async function next() {
   const steps = JSON.parse(readFileSync(STEPS, "utf8"));
   const step = steps.shift();
   writeFileSync(STEPS, JSON.stringify(steps));
+  if (step?.waitFor) await new Promise(resolve => {
+    const watcher = watch(dirname(step.waitFor), () => {
+      if (existsSync(step.waitFor)) { watcher.close(); resolve(); }
+    });
+    writeFileSync(step.waitFor + ".waiting", "");
+    if (existsSync(step.waitFor)) { watcher.close(); resolve(); }
+  });
   return step;
 }
 export default {
@@ -85,7 +93,7 @@ export default {
   transport() {
     const transport = fixtureTransport();
     return async (input, init) => {
-      const step = next();
+      const step = await next();
       if (step) transport.script([step]);
       return transport.send(input, init);
     };
@@ -281,21 +289,38 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
   cli("sync");
   await noticeEnded;
 
-  // When the owner answers and sync delivers it by bridge:
+  // A one-shot fake model must not outrun canonical answer observation: admission alone
+  // is insufficient for verdict, and a refused script step will never be requested again.
+  const release = join(workspace, "verdict-observed");
+  const waiting = fileAppears(workspace, "verdict-observed.waiting");
   writeFileSync(steps, JSON.stringify([
-    { toolCalls: [{ callId: "call_verdict", name: "corral_verdict", arguments: {
+    { waitFor: release, toolCalls: [{ callId: "call_verdict", name: "corral_verdict", arguments: {
       verdict: "approve", notes: "Approved after the owner's answer.",
     } }] },
   ]));
   const answered = JSON.parse(cli("question", "answer", question.key, "--rev", String(question.revision),
     "--text", "Yes, the inbox adapter is acceptable.", "--option", "yes", "--owner", "--json"));
   expect(answered.delivery).toBe("queued");
-  // A resume-notice turn can end before the answer turn. The verdict event is emitted only
-  // after its receipt commits; a generation-2 turn-ended event alone is not that barrier.
+  const [container, seq] = String(answered.message_id).split("#");
+  const observed = events!.next((event) => event.kind === "message_observed"
+    && event.detail?.id === answered.message_id);
+  // Force the adverse ordering: the real bridge admits the answer and the provider requests
+  // its verdict before any observer runs. No sleeps, scheduler luck or artificial load.
+  admitInbox(workspace, container ?? "");
+  await waiting;
+  expect(inboxReceipt(workspace, container ?? "", Number(seq), "admitted")?.via).toBe("corral_pi");
+  expect(inboxReceipt(workspace, container ?? "", Number(seq))).toBeUndefined();
+  expect(child().agent_host.receipts.some((r: any) => r.op === "verdict")).toBeFalse();
+
+  // Release the scripted verdict only on this answer's canonical observed event, not a
+  // timer, admission or a resume-notice turn. Then wait for the actual committed verdict.
   const verdict = events!.next((event) => event.kind === "verdict" && event.task === "T-001"
     && event.detail?.run === "R1", 120_000, "review verdict to commit");
   cli("sync");
-  await verdict;
+  const observation = await observed;
+  writeFileSync(release, "");
+  const committedEvent = await verdict;
+  expect(committedEvent.seq).toBeGreaterThan(observation.seq);
   await events!.next((event) => event.kind === "agent_turn_ended" && event.task === "T-001"
     && event.detail?.role === "reviewer" && event.detail?.generation === 2
     && child().agent_host.turns.some((turn: any) => turn.generation === 2
@@ -304,11 +329,15 @@ test("a headless reviewer asks, survives host loss through explicit resume and c
 
   // Then the answer was observed from the bound transcript and the verdict committed from
   // generation 2 under the same review child and callback, with no terminal-origin turn:
-  const [container, seq] = String(answered.message_id).split("#");
   const receipt = requireReceipt(workspace, container ?? "", Number(seq));
   expect(receipt.via).toBe("corral_pi");
   const host = child().agent_host;
-  const committed = host.receipts.find((r: any) => r.op === "verdict");
+  const verdictReceipts = host.receipts.filter((r: any) => r.op === "verdict");
+  expect(verdictReceipts).toHaveLength(1);
+  const [committed] = verdictReceipts;
+  expect(storeEvents(corral, workspace).filter((event) => event.kind === "agent_request_rejected"
+    && event.detail?.op === "verdict" && event.detail?.generation === 2)).toHaveLength(0);
+  expect(committedEvent.detail?.request_id).toBe(committed.request_id);
   expect([committed.state, committed.identity.generation, committed.identity.review, committed.identity.callback])
     .toEqual(["committed", 2, review, callback]);
   expect(host.turns.some((turn: any) => turn.generation === 2 && turn.origin.kind === "bridge"
