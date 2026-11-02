@@ -1,0 +1,34 @@
+import { expect, test } from "bun:test";
+import { startPanelHost } from "./support/panel-host.ts";
+
+// Production HostSession + InteractiveMode, offline provider/control-plane transport only.
+test("action catalog retains role restrictions and packaged preferences change rendering, not binding or draft", async () => {
+  const h = await startPanelHost();
+  try {
+    for (const char of "Keep my draft 界面") h.physical.send(char);
+    await h.physical.until("Keep my draft");
+    const bound = h.host.sessionId();
+    const actions = h.panels.actions();
+    const answer = actions.find(a => a.id === "inbox.answer-flow");
+    expect(answer?.disabled()).toContain("Role worker cannot answer");
+    expect(actions.every(a => a.scope === "worker · demo")).toBeTrue();
+    expect(actions.find(a => a.id === "app.model.select")?.shortcut).toContain("ctrl+l");
+    expect(actions.some(a => /shell|exec|permission|role\.switch/.test(a.id))).toBeFalse();
+    const before = h.panels.renderSidebar(34, 46);
+    await actions.find(a => a.id === "density.compact")?.run();
+    expect(h.panels.density).toBe("compact");
+    // Same canonical content, fewer blank rows between metadata sections.
+    const compact = h.panels.renderSidebar(34, 46);
+    const row = (lines: readonly string[], text: string) => lines.findIndex(line => line.includes(text));
+    expect(row(compact, "Plan")).toBeLessThanOrEqual(row(before, "Plan"));
+    for (const appearance of ["light", "contrast", "dark"]) {
+      const choice = h.panels.actions().find(a => a.id === `appearance.${appearance}`);
+      expect(choice?.disabled()).toBeUndefined();
+      await choice?.run();
+      expect(h.panels.appearance).toBe(appearance);
+      expect(h.panels.actions().find(a => a.id === choice?.id)?.label).toContain("(current)");
+    }
+    expect(h.host.sessionId()).toBe(bound);
+    expect(h.screen().text()).toContain("Keep my draft");
+  } finally { await h.stop(); }
+});

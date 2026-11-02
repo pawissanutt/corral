@@ -9,6 +9,10 @@ import { PanelTerminal, PANEL_WIDTH, type PanelSurface } from "./panel-terminal.
 import { NativeWorkbench, plainClick } from "./workbench.ts";
 import { activityKey, activitySidebar } from "./activity-sidebar.ts";
 import { panelTheme } from "./panels-theme.ts";
+import { type Appearance, type Density, PACKAGED } from "./appearance.ts";
+import { ActionPalette, type HostAction } from "./action-palette.ts";
+import { setPanelAppearance } from "./panels-view.ts";
+import { setCanvasAppearance } from "./panel-canvas.ts";
 import { composerLayout, composerTitle, overviewLines, panelFooter, splitRow } from "./panels-chrome.ts";
 import { pagerLabel, scrollWindow, selectionWindow, type PageWindow } from "./panels-pager.ts";
 import {
@@ -38,6 +42,10 @@ const VIEWPORT_KEYS: readonly Keybinding[] = ["tui.altScreen.pageUp", "tui.altSc
 export class NativePanels implements PanelSurface {
   readonly workbench: NativeWorkbench;
   sidebarEnabled = true;
+  appearance: Appearance = "dark";
+  density: Density = "comfortable";
+  private nativeAction: ((id: "app.model.select" | "app.thinking.cycle") => void) | undefined;
+  private nativeKeys: ((id: "app.model.select" | "app.thinking.cycle") => string) | undefined;
   tab: PanelTab = "Context";
   focused = false;
   expanded = false;
@@ -102,6 +110,7 @@ export class NativePanels implements PanelSurface {
     this.requestRender = undefined;
     this.editorFocused = undefined;
     this.hasOverlay = undefined; this.activeSelection = undefined;
+    this.nativeAction = undefined; this.nativeKeys = undefined; this.updateDensity = undefined;
   }
   private tabs(): string {
     let x = 0;
@@ -109,7 +118,7 @@ export class NativePanels implements PanelSurface {
     return PANEL_TABS.map(tab => {
       this.tabHits.push({ from: x, to: x + tab.length, tab });
       x += tab.length + 1;
-      return (tab === this.tab ? PANEL_BLUE : PANEL_MUTED) + tab + PANEL_TEXT;
+      return (tab === this.tab ? PANEL_BLUE + "\x1b[1;4m" : PANEL_MUTED) + tab + "\x1b[22;24m" + PANEL_TEXT;
     }).join(" ");
   }
   private lines() { return panelLines(this.tab, this.options.identity, this.options.snapshot(), this.files); }
@@ -152,7 +161,9 @@ export class NativePanels implements PanelSurface {
     return this.wide ? Math.max(0, rows - 5) : this.inlineCapacity(rows);
   }
   private wrapped(width: number): { readonly rows: readonly PanelLine[]; readonly overview: boolean } {
-    const { rows, overview } = this.displayed();
+    const displayed = this.displayed();
+    const { overview } = displayed;
+    const rows = this.density === "compact" ? displayed.rows.filter(row => row.text.trim() !== "") : displayed.rows;
     return { overview, rows: rows.flatMap(row => row.text.trim() === "" ? [row]
       : new Text(row.text, 0, 0).render(Math.max(1, width - (row.indent ?? 0) - (row.continuationIndent ?? 0)))
         .map((text, index) => ({ ...row, text, indent: (row.indent ?? 0) + (index ? row.continuationIndent ?? 0 : 0) }))) };
@@ -381,6 +392,7 @@ export class NativePanels implements PanelSurface {
     this.focused = false; this.refresh(); return false;
   }
   install(pi: ExtensionAPI, sdk: typeof Sdk): void {
+    this.themeCtor = sdk.Theme;
     pi.on("ui_prompt_start", () => { this.prompts++; this.focused = false; this.refresh(); });
     pi.on("ui_prompt_end", () => { this.prompts = Math.max(0, this.prompts - 1); this.refresh(); });
     pi.on("session_start", (_event, ctx) => {
@@ -389,18 +401,24 @@ export class NativePanels implements PanelSurface {
       this.workbench.bind(ctx.ui);
       this.prompts = 0;
       this.focused = false;
-      ctx.ui.setTheme(panelTheme(sdk.Theme, ctx.ui.theme.getColorMode()));
+      setPanelAppearance(this.appearance); setCanvasAppearance(this.appearance);
+      ctx.ui.setTheme(panelTheme(sdk.Theme, ctx.ui.theme.getColorMode(), this.appearance));
       const owner = this;
       ctx.ui.setEditorComponent((tui, theme, keys) => {
         const editor = new class extends sdk.CustomEditor {
           private composer: ReturnType<typeof composerLayout> | undefined;
           private bottomRow = -1;
-          setPaddingX(padding: number): void { super.setPaddingX(Math.max(2, padding)); }
+          dispatchNative(id: "app.model.select" | "app.thinking.cycle"): void { this.actionHandlers.get(id)?.(); }
+          setPaddingX(padding: number): void { super.setPaddingX(owner.density === "compact" ? 0 : Math.max(2, padding)); }
+          handleInput(data: string): void {
+            if (owner.canInteract && matchesKey(data, "f2")) { void owner.palette(); return; }
+            super.handleInput(data);
+          }
           protected renderTopBorder(width: number, hidden: number): string {
             if (hidden) return super.renderTopBorder(width, hidden);
             const followUp = keys.getKeys("app.message.followUp")[0];
             const title = owner.workbench.view === "activity" ? "Message main conversation · agent views are read-only" : composerTitle(owner.options.snapshot());
-            const hint = followUp ? `${followUp} follow-up` : "";
+            const hint = `F2 actions${followUp ? ` · ${followUp} follow-up` : ""}`;
             const label = pad(` ${title}${hint && visibleWidth(title) + visibleWidth(hint) + 7 <= width ? ` · ${hint}` : ""} `,
               Math.max(0, width - 3)).trimEnd();
             return PANEL_MUTED + "┌─" + label + "─".repeat(Math.max(0, width - visibleWidth(label) - 3)) + "┐";
@@ -435,6 +453,9 @@ export class NativePanels implements PanelSurface {
           }
         }(tui, theme, keys);
         editor.setPaddingX(2);
+        owner.nativeAction = id => editor.dispatchNative(id);
+        owner.updateDensity = () => editor.setPaddingX(2);
+        owner.nativeKeys = id => keys.getKeys(id).join(", ");
         owner.editorFocused = () => editor.focused;
         owner.requestRender = () => tui.requestRender();
         owner.hasOverlay = () => tui.hasOverlay();
@@ -471,18 +492,79 @@ export class NativePanels implements PanelSurface {
       description: "Native session inspector: context, files, plan, evidence, usage, inbox, project, refresh or toggle (agents/helpers/jobs focus Context activity)",
       handler: async (args, ctx) => {
         if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Native panels require the interactive Corral host.", "warning"); return; }
-        const value = args.trim().toLowerCase();
-        if (value === "helpers" || value === "agents" || value === "jobs") { this.browseActivity(); return; }
-        if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
-        if (value === "usage") { this.focused = false; this.workbench.setView("usage"); return; }
-        if (value === "evidence") { this.focused = false; this.workbench.setView("evidence"); return; }
-        if (value === "inbox") { this.focused = false; this.workbench.setView("inbox"); this.refresh(); return; }
-        if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
-        if (value === "toggle") { this.sidebarEnabled = !this.sidebarEnabled; this.terminal.refreshLayout(); return; }
-        const tab = PANEL_TABS.find(tab => tab.toLowerCase() === value);
-        if (tab) this.choose(tab);
-        this.focused = true; this.refresh();
+        await this.panelCommand(args);
       },
     });
+    pi.registerCommand("actions", {
+      description: "Search permitted host actions and session appearance/density (F2)",
+      handler: async (_args, ctx) => {
+        if (ctx.mode !== "tui" || !this.terminal) { ctx.ui.notify("Actions require native panels; plain UI is unchanged.", "warning"); return; }
+        await this.palette();
+      },
+    });
+  }
+  private async panelCommand(args: string): Promise<void> {
+    const value = args.trim().toLowerCase();
+    if (value === "project") { await this.workbench.repository(); this.refresh(); return; }
+    if (value === "helpers" || value === "agents" || value === "jobs") { this.browseActivity(); return; }
+    if (value === "usage") { this.focused = false; this.workbench.setView("usage"); return; }
+    if (value === "evidence") { this.focused = false; this.workbench.setView("evidence"); return; }
+    if (value === "inbox") { this.focused = false; this.workbench.setView("inbox"); this.refresh(); return; }
+    if (value === "refresh") { await this.workbench.inspection.refresh(true); await this.loadFiles(); if (this.workbench.view === "inbox") await this.workbench.inbox.refresh(); return; }
+    if (value === "toggle") { this.sidebarEnabled = !this.sidebarEnabled; this.terminal?.refreshLayout(); return; }
+    const tab = PANEL_TABS.find(tab => tab.toLowerCase() === value);
+    if (tab) this.choose(tab);
+    this.focused = true; this.refresh();
+  }
+  actions(): HostAction[] {
+    const scope = `${this.options.identity.role} · ${this.options.identity.project}`;
+    const ready = (): string | undefined => !this.ui || !this.nativeAction ? "Interactive editor unavailable" : undefined;
+    const action = (id: string, label: string, shortcut: string, run: HostAction["run"], disabled = ready): HostAction =>
+      ({ id, label, shortcut, scope, run, disabled });
+    const items = [
+      ...([ ["context", "Inspect context", "F6"], ["files", "Changed files", "F7"], ["agents", "Agent observations", ""],
+        ["jobs", "Activity and jobs", "F8"], ["usage", "Measured usage", ""], ["evidence", "Evidence", "F10"], ["inbox", "Decision inbox", "F11"],
+        ["plan", "Plan ledger", ""], ["project", "Choose project/worktree", "o (files)"], ["refresh", "Refresh observations", "r (view)"],
+        ["toggle", "Toggle inspector rail", "Ctrl+B"] ] as const).map(([id, label, key]) =>
+        action(`/panels ${id}`, label, key, () => this.panelCommand(id))),
+      action("app.model.select", "Select model", this.nativeKeys?.("app.model.select") ?? "", () => this.nativeAction?.("app.model.select")),
+      action("app.thinking.cycle", "Cycle effort", this.nativeKeys?.("app.thinking.cycle") ?? "", () => this.nativeAction?.("app.thinking.cycle"),
+        () => !this.options.snapshot()?.effortAvailable ? "Effort unavailable for current model" : ready()),
+      action("inbox.answer-flow", "Inspect established answer flow (not sent)", "a (inbox)", () => {
+        this.workbench.setView("inbox"); this.workbench.focused = true; this.workbench.handleInput("a");
+      }, () => {
+        if (ready()) return ready();
+        const role = this.options.identity.role, item = this.workbench.inbox.current;
+        if (role !== "pm" && role !== "assistant") return `Role ${role} cannot answer; trusted owner flow required`;
+        if (!item?.pending || !item.response) return "No pending selected item with an answer route";
+        if (role === "pm" && (!item.pm_eligible || item.scope !== this.options.identity.project)) return "Owner-only or outside PM scope";
+        return undefined;
+      }),
+    ];
+    for (const appearance of Object.keys(PACKAGED) as Appearance[]) items.push(action(`appearance.${appearance}`,
+      `Appearance: ${appearance}${appearance === this.appearance ? " (current)" : ""}`, "", () => {
+        this.appearance = appearance; setPanelAppearance(appearance); setCanvasAppearance(appearance);
+        if (this.ui && this.themeCtor) this.ui.setTheme(panelTheme(this.themeCtor, this.ui.theme.getColorMode(), appearance));
+        this.refresh();
+      }));
+    for (const density of ["comfortable", "compact"] as const) items.push(action(`density.${density}`,
+      `Density: ${density}${density === this.density ? " (current)" : ""}`, "", () => {
+        this.density = density; this.updateDensity?.(); this.refresh();
+      }));
+    return items;
+  }
+  private themeCtor: typeof Sdk.Theme | undefined;
+  private updateDensity: (() => void) | undefined;
+  private async palette(): Promise<void> {
+    const ui = this.ui;
+    if (!ui || !this.canInteract) return;
+    this.focused = false;
+    const action = await ui.custom<HostAction | undefined>((tui, theme, _keys, done) =>
+      new ActionPalette(this.actions(), theme, done, () => tui.requestRender(), Math.max(1, Math.min(8, Math.floor((tui.terminal.rows - 5) / 2)))));
+    if (!action || this.disposed) return;
+    const reason = action.disabled();
+    if (reason) { ui.notify(reason, "warning"); return; }
+    try { await action.run(); } catch (error) { ui.notify(plainLabel(String(error)), "error"); }
+    this.refresh();
   }
 }

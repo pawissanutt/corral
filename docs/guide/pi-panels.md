@@ -29,6 +29,12 @@ The composer is Pi's real editor. **Enter** sends while idle and steers while bu
 
 Click the **model ▾** label to open Pi's existing model picker (keyboard: Ctrl+L). It offers the host's available catalog and commits through the existing provider/credential preflight. Busy or missing-credential refusals keep the current model/session and show the recovery action. Click **effort ↻** to cycle supported levels (keyboard: Shift+Tab); models without thinking have no effort action. `/thinking` remains the native level picker. These controls do not replace the native session. The bound worker/assistant/PM/reviewer role is a label, never a Build/Plan/Review switch.
 
+## Packaged appearance and action discovery
+
+Press **F2** while composing, or run **/actions**, to search the host action palette. Type to filter, use ↑/↓ then Enter to choose, or Esc to cancel. Entries show their shortcut, bound role/project scope and any disabled reason. Model and effort entries use the same native handlers described above; answer-flow inspection retains the existing role/scope checks and never sends an answer.
+
+Search **Appearance** for packaged **dark**, **light** or **contrast** presentation; search **Density** for **comfortable** or **compact**. Compact removes blank inspector rows and reduces editor inset without changing data, permissions or input delivery. Choices are session-local, not saved to ambient Pi settings. Active tabs are underlined and bold, states retain text labels, and diffs retain +/− markers. Plain/headless modes are unchanged. The palette contains explicit host actions, not a CLI runner or ambient theme/extension loader. Native Ctrl+P model cycling is unchanged.
+
 ## Stable reading, focus and compact paging
 
 - **Follow pauses while you read.** Scrolling the conversation back (PgUp, wheel, Ctrl+Home) stops it following streamed output. New output then arrives below without moving your reading position, and Pi shows **↓ Jump to latest message · Ctrl+End**. Only Ctrl+End or a click on that control returns to live output.

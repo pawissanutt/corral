@@ -2,9 +2,14 @@
 // Streaming lexer: only complete CSI SGR/mode sequences are interpreted; OSC/DCS/APC
 // payloads (clipboard, links, images) remain opaque, even across write boundaries.
 import { PANEL_TEXT } from "./panels-view.ts";
+import { ansi, PACKAGED, type Appearance } from "./appearance.ts";
 
-export const CANVAS_BG = "\x1b[48;2;15;16;18m";
-export const CANVAS_STYLE = PANEL_TEXT + CANVAS_BG;
+export let CANVAS_BG = "\x1b[48;2;15;16;18m";
+export let CANVAS_STYLE = PANEL_TEXT + CANVAS_BG;
+export function setCanvasAppearance(appearance: Appearance): void {
+  CANVAS_BG = ansi(appearance === "dark" ? "#0f1012" : PACKAGED[appearance].background, true);
+  CANVAS_STYLE = PANEL_TEXT + CANVAS_BG;
+}
 type State = "text" | "escape" | "escape-intermediate" | "csi" | "osc" | "string";
 
 function defaultColors(body: string): string {
