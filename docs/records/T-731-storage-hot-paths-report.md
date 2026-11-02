@@ -1,6 +1,40 @@
 # T-731 R1 — storage-v2 hot paths meet cutover bounds
 
-## Outcome
+## Latest: rebased after T-727 landed
+
+Rebased cleanly onto storage-v2 `ce15569b042e8defc244e0445b526e3220850cd9`.
+The optimization files are unchanged, but upstream `operating::require` changed in the
+PM/automation read path, so the owner's conditional instruction required a fresh benchmark.
+The T-727-owned journal-scanner repair is present; both tests in
+`cargo test -p corral-ops --test submission_journal` now pass. No scanner fix was
+backported or authored in this task.
+
+Rebuilt the release binary and reran the unchanged strict protocol with
+`--after .evidence/corral-rebased --out .evidence/cutover-rebased` and the same
+`--projects /home/pawis/miti-workspace`, fixture and A pin. All 259 task ids, statuses
+and run counts remain equivalent; PASS exists, every measurement exits zero, and
+all B exec traces still count zero git/diff processes.
+
+| Command | A median | B median | B bound |
+| --- | ---: | ---: | ---: |
+| list --json | 1.018493 s | **0.114957 s** | 0.200 s |
+| pm next --json | 3.676527 s | **0.164954 s** | 0.500 s |
+| automation status | 3.877524 s | **0.164856 s** | 0.500 s |
+
+B executable SHA-256: `ac4321877625f4dad669969bc10818d5622725dd165c23bc8eab6b4270e89c60`.
+Per-run host load is retained in the new commands JSONL; timed samples' load1 values:
+
+| Command | A loads | B loads |
+| --- | --- | --- |
+| list | 21.19, 21.19, 21.19, 20.94, 20.94 | 21.19, 21.19, 20.94, 20.94, 20.94 |
+| pm next | 20.42, 20.42, 19.50, 19.22, 18.48 | 20.42, 19.50, 19.22, 18.48, 18.36 |
+| automation status | 25.76, 25.76, 24.42, 23.18, 22.37 | 25.76, 24.42, 23.18, 22.37, 21.94 |
+
+The attached rebased proof supersedes older timings for the current tree. The sections
+below retain the implementation history and earlier evidence, including failures.
+The new receipted quick gate supplies the final gate outcome separately.
+
+## Pre-rebase outcome
 
 All three unchanged bounds pass on T-338's prepared fixture and pinned A executable.
 The unchanged strict equivalence check preserves all **259 task ids, statuses and run
