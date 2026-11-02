@@ -6,7 +6,7 @@ export function activityRows(snapshot: PanelSnapshot | null, selected: number, n
   if (!snapshot) return [{ text: "Activity unavailable: session snapshot disconnected." }];
   const rows: ActivityRow[] = [];
   const add = (...texts: string[]) => rows.push(...texts.map(text => ({ text })));
-  add("Background activity · read-only", "a scoped agents · j/k or click selects job · PgUp/PgDn scroll · Enter compose · F9 conversation",
+  add("Background activity · read-only", "g dependencies · l lifecycle · a scoped agents · j/k select · PgUp/PgDn scroll · Enter compose · F9 conversation",
     snapshot.bound ? "Bound host observations · not canonical task/run settlement" : "Disconnected/unbound · observations may be stale", "");
   // Keep jobs inspectable before potentially long receipt/event history.
   const finish = () => {

@@ -17,6 +17,9 @@ pub enum RunCmd {
     /// Bounded read-only candidate, criterion evidence and review projection for Pi
     Inspect {
         id: String,
+        /// Read bounded dependency and append-order lifecycle data instead of evidence
+        #[arg(long)]
+        lifecycle: bool,
         /// Explicit bound run; never silently follows the latest run
         #[arg(long)]
         run: String,
@@ -163,7 +166,14 @@ fn payload<T: DeserializeOwned>(path: &PathBuf) -> Result<T> {
 pub fn run(ctx: &Ctx, cmd: RunCmd) -> Result<()> {
     let now = Timestamp::now();
     let task = match cmd {
-        RunCmd::Inspect { id, run } => {
+        RunCmd::Inspect { id, run, lifecycle } => {
+            if lifecycle {
+                let text =
+                    serde_json::to_string(&corral_ops::lifecycle_panel::inspect(ctx, &id, &run)?)?;
+                anyhow::ensure!(text.len() <= 128 * 1024, "lifecycle_response_limit");
+                println!("{text}");
+                return Ok(());
+            }
             println!(
                 "{}",
                 serde_json::to_string(&corral_ops::workbench::inspect(ctx, &id, &run)?)?

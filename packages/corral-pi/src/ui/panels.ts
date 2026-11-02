@@ -19,6 +19,7 @@ export interface NativePanelsOptions {
   readonly identity: HostIdentity;
   readonly cwd: string;
   readonly inspection?: () => Promise<unknown>;
+  readonly lifecycle?: () => Promise<unknown>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly snapshot: () => PanelSnapshot | null;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;

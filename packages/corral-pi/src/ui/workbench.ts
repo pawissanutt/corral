@@ -8,6 +8,7 @@ import { VStack, ScrollView, Text, matchesKey, type Component, type TuiMouseEven
 import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
+import { LifecycleView } from "./lifecycle-view.ts";
 import { activityRows } from "./activity-view.ts";
 import { agentRows } from "./agent-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
@@ -17,10 +18,11 @@ import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_B
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox";
+export type MainView = "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox" | "graph" | "timeline";
 export interface WorkbenchOptions {
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
+  readonly lifecycle?: () => Promise<unknown>;
   readonly readTranscript?: (id: string) => Promise<string>;
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
@@ -33,6 +35,8 @@ export class NativeWorkbench {
   view: MainView = "conversation"; focused = false;
   readonly review: ReviewStore;
   readonly inspection: InspectionStore;
+  readonly lifecycle: LifecycleView;
+  private lifecycleScroll: ScrollView | undefined;
   private evidenceScroll: ScrollView | undefined; private criterionIndex = 0; private criterionHits = new Map<number, number>();
   readonly images: NativeImageViewer;
   readonly inbox: DecisionInbox; private readonly inboxView: InboxView;
@@ -56,6 +60,7 @@ export class NativeWorkbench {
   get scopeLabel(): string { return this.review.scopeRequired ? "Choose project" : this.projectName ?? this.review.name; }
   constructor(private readonly options: WorkbenchOptions) {
     this.images = new NativeImageViewer(() => options.canInteract(), () => { this.focused = this.images.isOpen; options.changed(); });
+    this.lifecycle = new LifecycleView(options.identity, options.lifecycle, () => options.snapshot()?.agents, () => options.snapshot()?.bound ?? false, options.changed, options.canInteract, () => options.snapshot()?.inspector);
     this.inspection = new InspectionStore(options.identity, options.inspection, () => options.changed());
     this.projectName = options.identity.project || undefined;
     this.review = new ReviewStore(options.projectDir ?? options.cwd, () => options.changed(), options.inspection && options.identity.task && options.identity.run ? async () => {
@@ -82,6 +87,7 @@ export class NativeWorkbench {
       if (view === "changes") void this.review.refresh();
       if (view === "evidence") void this.inspection.refresh();
       if (view === "inbox") void this.inbox.refresh();
+      if (view === "graph" || view === "timeline") { this.lifecycle.mode = view; void this.lifecycle.refresh(); }
       let ticks = 0;
       this.timer = setInterval(() => {
         ticks++;
@@ -104,7 +110,7 @@ export class NativeWorkbench {
         const compact = width < 90;
         const labels: readonly [MainView, string][] = [["conversation", compact ? " Chat " : " Conversation F9 "],
           ["changes", compact ? " Diff " : " Changes F7 "], ["activity", compact ? " Jobs " : " Activity F8 "],
-          ["evidence", compact ? " Proof " : " Evidence F10 "], ["inbox", " Inbox F11 "]];
+          ["evidence", compact ? " Proof " : " Evidence F10 "], ["inbox", compact ? " Inbox " : " Inbox F11 "], ["graph", " Graph "], ["timeline", " Timeline "]];
         let x = 0;
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
         return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
@@ -150,6 +156,11 @@ export class NativeWorkbench {
       const index = this.criterionHits.get(event.y); if (index !== undefined) this.criterionIndex = index;
       this.focused = true; this.options.changed(); return { handled: true };
     }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    this.lifecycleScroll = new ScrollView({ render: width => this.lifecycle.render(width), handleMouse: event => {
+      const result = this.lifecycle.handleMouse(event);
+      if (result?.handled) { this.focused = true; this.options.changed(); }
+      return result;
+    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.inboxScroll = new ScrollView(this.inboxView, { primary: true, follow: "none", scrollbar: "auto" });
     return new VStack([
       { component: this.nav(), basis: 2, shrink: 0 },
@@ -159,6 +170,7 @@ export class NativeWorkbench {
       { component: this.activityScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "activity" },
       { component: this.agentsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
       { component: this.evidenceScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "evidence" },
+      { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "graph" || this.view === "timeline" },
       { component: this.inboxScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "inbox" },
     ]);
   }
@@ -380,12 +392,14 @@ export class NativeWorkbench {
     if (this.images.isOpen && matchesKey(data, "escape")) { this.images.close(); return true; }
     if (!this.focused || this.view === "conversation") return false;
     if (matchesKey(data, "escape")) { this.setView("conversation"); this.focused = false; return true; }
+    if (this.view === "activity" && (data === "g" || data === "l")) { this.setView(data === "g" ? "graph" : "timeline"); return true; }
+    if ((this.view === "graph" || this.view === "timeline") && this.lifecycle.handleInput(data)) { this.lifecycleScroll?.scrollTo(0, { disableFollow: true }); return true; }
     if (this.view === "inbox" && this.inboxView.handleInput(data)) return true;
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
     if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
     if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
     if (this.view === "agents" && data === "t") { void this.openAgentTranscript(); return true; }
-    const scroll = this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
+    const scroll = this.view === "graph" || this.view === "timeline" ? this.lifecycleScroll : this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
       const row = this.inbox.current && this.inboxView.rows.get(inboxIdentity(this.inbox.current));
@@ -422,6 +436,6 @@ export class NativeWorkbench {
   }
   dispose(): void {
     if (this.timer) clearInterval(this.timer); if (this.debounce) clearTimeout(this.debounce);
-    this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.inboxView.dispose(); this.ui = undefined;
+    this.scopeAbort.abort(); this.images.dispose(); this.review.dispose(); this.inspection.dispose(); this.inboxView.dispose(); this.lifecycle.dispose(); this.ui = undefined;
   }
 }
