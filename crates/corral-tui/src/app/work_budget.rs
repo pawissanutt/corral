@@ -460,6 +460,9 @@ fn budget(path: &str, counter: &str) -> Option<Limit> {
             ("config_reads", Fixed(60)), // (50) strict policy re-reads per action check
             ("config_parses", Fixed(100)), // (87)
             ("task_lists", Fixed(44)),   // (38) 24 listings + 14 read-only snapshots
+            // Sync looks up individual tasks while reconciling the board; unlike listings,
+            // this existing work grows with the number of task files, not event history.
+            ("task_gets", PerTask(6)),
             // (46) one check per file per listing or lookup; the tick that raises the resource
             // alert lists tasks twice more (escalation reads the board, then updates one task).
             (
