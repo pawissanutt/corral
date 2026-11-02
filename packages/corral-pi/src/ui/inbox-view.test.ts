@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text, stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { DecisionInbox, type InboxItem } from "./decision-inbox.ts";
+import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { NativeWorkbench } from "./workbench.ts";
 
@@ -42,7 +42,7 @@ test("literal item hit rows and details are read-only, bounded and sanitized", a
         expect(line.replace(/\x1b\[[\d;]*m/g, "")).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
       }
     }
-    const row = view.rows.get("T-2/R1/Q1"); if (row === undefined) throw new Error("missing hit");
+    const row = view.rows.get(inboxIdentity({ ...item, task: "T-2", key: "T-2/R1/Q1" })); if (row === undefined) throw new Error("missing hit");
     expect(view.handleMouse(click(row))).toEqual({ handled: true }); expect(store.current?.key).toBe("T-2/R1/Q1");
     expect(focused).toBe(1); expect(sheets).toBe(0);
     await view.inspect(false); expect(sheets).toBe(1);

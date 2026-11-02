@@ -8,7 +8,7 @@ import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, COMPARISONS, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
 import { activityRows } from "./activity-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
-import { DecisionInbox } from "./decision-inbox.ts";
+import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
 import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_BG, RESET, type PanelSnapshot, type PanelLine } from "./panels-view.ts";
 export function plainClick(event: TuiMouseEvent): boolean {
@@ -290,7 +290,7 @@ export class NativeWorkbench {
     const scroll = this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
-      const row = this.inbox.current && this.inboxView.rows.get(this.inbox.current.key);
+      const row = this.inbox.current && this.inboxView.rows.get(inboxIdentity(this.inbox.current));
       if (row !== undefined) scroll?.scrollTo(row, { disableFollow: true });
       this.options.changed(); return true;
     }

@@ -1,7 +1,7 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text, matchesKey, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Role } from "../roles/types.ts";
-import { DecisionInbox, type InboxItem } from "./decision-inbox.ts";
+import { DecisionInbox, inboxIdentity, type InboxItem } from "./decision-inbox.ts";
 import { box, PANEL_BLUE, PANEL_MUTED, plainLabel } from "./panels-view.ts";
 
 /** A read-only inspector with a separately opened, revalidated established-answer-flow sheet. */
@@ -24,12 +24,12 @@ export class InboxView implements Component {
     if (this.store.query) add("Filter: " + this.store.query);
     add("");
     for (const item of this.store.visible) {
-      const start = rows.length; this.rows.set(item.key, start);
-      add(`${item.key === this.store.selected ? ">" : " "} ${item.task} · ${item.state} · ${item.kind}`, item.key === this.store.selected);
+      const id = inboxIdentity(item), start = rows.length; this.rows.set(id, start);
+      add(`${id === this.store.selected ? ">" : " "} ${item.task} · ${item.state} · ${item.kind}`, id === this.store.selected);
       add(`  ${item.key} @${item.revision} (${item.revision_kind})`);
       add(`  ${item.container ?? "No container"} · scope ${item.scope} · ${item.responsible}`);
       add("  " + item.reason);
-      for (let row = start; row < rows.length; row++) this.hits.set(row, item.key);
+      for (let row = start; row < rows.length; row++) this.hits.set(row, id);
       add("");
     }
     if (!this.store.visible.length) add(this.store.snapshot ? this.store.error ? "Retained snapshot has no matching items; current state unavailable."
