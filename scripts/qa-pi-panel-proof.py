@@ -43,11 +43,15 @@ try:
     installed = json.loads(subprocess.check_output(['bun', '--no-env-file', str(package / 'test/support/prepare-workbench.ts'), str(work)], cwd=repo, env=env))
     (work / 'tool-output.txt').write_text('TOOL_OUTPUT_SENTINEL\n')
     os.mkfifo(work / 'stream-gate')
+    os.mkfifo(work / 'monitor-gate'); os.mkfifo(work / 'exit-gate')
     gate = os.open(work / 'stream-gate', os.O_RDWR)  # Holds a writer open: the host's read waits for our EOF.
     launch = dict(version=1, store='st-0123456789abcdef', project='demo', role='worker', task='T-001', run='R1',
                   generation=1, pane='private-pty', root=str(work), cwd=str(work), corral=installed['corral'],
                   assets=installed['assets'], runtime_dir=str(work / 'run'), session_dir=str(work / 'sessions'),
-                  model='gpt-6.1-sol', ui='rich', secrets=dict(host_cap='h' * 64, ctl_cap='c' * 64, bind_nonce='n' * 64))
+                  model='gpt-6.1-sol', ui='rich',
+                  capabilities=dict(catalog=2, digest='b'*64, preset='standard', enabled=['background_shell'], project_text=False,
+                                    settings=dict(background_shell=dict(max_jobs=2, max_output_bytes=8192, max_runtime_secs=60))),
+                  secrets=dict(host_cap='h' * 64, ctl_cap='c' * 64, bind_nonce='n' * 64))
     master, slave = pty.openpty()
     owned += [master, slave]
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 46, 140, 0, 0))
@@ -198,15 +202,56 @@ try:
     users = [json.loads(line) for line in sessions[0].read_text().splitlines()] if len(sessions) == 1 else []
     users = [entry for entry in users if entry.get('type') == 'message' and entry['message'].get('role') == 'user']
     assert len(sessions) == 1 and len(users) == 1, (sessions, users)
+    # T-693: owned real-input inspection, never resumes or rebinds the selected agent.
+    mark = len(log); send(b'\x1b[19~')  # F8 existing jobs seam
+    until(lambda: text('Background activity', mark), 'job inspector')
+    save_frame('jobs-read-only', mark)
+    mark = len(log); send(b'a')
+    until(lambda: text('Scoped agents', mark), 'scoped agent inspector')
+    save_frame('scoped-agents-wide', mark)
+    mark = len(log); send(b't')
+    until(lambda: text('Transcript · Esc close', mark), 'bounded existing transcript')
+    save_frame('existing-transcript-wide', mark)
+    binding('existing-transcript', False, {'current': 1, 'open': False})
+    mark = len(log); send(b'q')
+    save_frame('scoped-agents-return', mark)  # Diff rendering need not repaint the unchanged title.
+    mark = len(log); resize(52, 24)
+    until(lambda: text('Scoped agents', mark), 'narrow scoped inspector')
+    save_frame('scoped-agents-narrow', mark)
+    mark = len(log); send(b't')
+    until(lambda: text('Transcript · Esc close', mark), 'narrow transcript input')
+    save_frame('existing-transcript-narrow', mark)
+    binding('narrow-transcript', False, {'current': 1, 'open': False})
+    mark = len(log); send(b'q')
+    save_frame('scoped-agents-narrow-return', mark)
+    mark = len(log); send(b'\x1b[20~'); resize(140, 46)
+    until(lambda: text('STREAM_PART_TWO', mark), 'original conversation after inspection')
+    binding('inspector-return', False, {'current': 1, 'open': False})
+    send(b'/fixture-workbench-jobs\r'); send(b'Start owned job inspection.\r')
+    until(lambda: len(kinds('turn_ended')) == 2 and any(call['op'] == 'job_monitor' for call in calls()), 'owned job and line monitor started')
+    mark = len(log); send(b'\x1b[19~')
+    until(lambda: text('armed locally', mark) and text('BUILD_WAIT', mark), 'actual running job with monitor')
+    save_frame('real-job-running', mark)
+    mark = len(log)
+    with open(work / 'monitor-gate', 'w') as job_gate: job_gate.write('ready\n')
+    until(lambda: text('match observed', mark), 'observed readiness line (not service health)')
+    save_frame('real-job-line-match', mark)
+    mark = len(log)
+    with open(work / 'exit-gate', 'w') as job_gate: job_gate.write('done\n')
+    until(lambda: text('j1-1 · exited · exit 7', mark), 'actual nonzero job exit')
+    save_frame('real-job-exited', mark)
+    binding('job-exited', False, {'current': 2, 'open': False})
+    mark = len(log); send(b'\x1b[20~')
+    until(lambda: text('BACKGROUND_STARTED', mark), 'return from jobs to original conversation')
     mark = len(log); send(b'/fixture-call fixture_forbidden\r'); send(b'Call the fixture sentinel.\r')
-    until(lambda: text('Tool fixture_forbidden not found', mark) and len(kinds('turn_ended')) == 2, 'role guard refusal')
+    until(lambda: text('Tool fixture_forbidden not found', mark) and len(kinds('turn_ended')) == 3, 'role guard refusal')
     assert not text('forbidden tool ran')
     save_frame('forbidden-refused', mark)
     mark = len(log); send(b'/fixture-new-session\r')
     until(lambda: text('a new session is refused', mark), 'bound-session replacement refusal')
     save_frame('replacement-refused', mark)
-    binding('refusals', False, {'current': 2, 'open': False})
-    assert [call['payload']['origin'] for call in kinds('turn_started')] == [{'kind': 'owner_terminal'}] * 2
+    binding('refusals', False, {'current': 3, 'open': False})
+    assert [call['payload']['origin'] for call in kinds('turn_started')] == [{'kind': 'owner_terminal'}] * 3
     assert all(call['identity']['generation'] == 1 for call in calls()) and len([c for c in calls() if c['op'] == 'hello']) == 1
     assert len(sorted((work / 'sessions').rglob('*.jsonl'))) == 1
     send(b'\x15\x04')
@@ -222,6 +267,9 @@ try:
                           'stale generation refused by the bridge', 'Agents inspector and detail overlay during the held stream',
                           'unsent draft retained through inspection and resize', 'one composer submission: one owner_terminal turn and one user entry',
                           'released stream completes the same turn', 'tool outside the loadout refused', 'bound-session replacement refused',
+                          'scoped agents and jobs via real F8/a/t/q input; bounded existing transcript at 140/52 columns',
+                          'transcript inspection retains binding, generation and turn; no lifecycle controls',
+                          'real owned job: running, armed line monitor, observed match, exit 7 and bounded output',
                           'one hello, one session file, generation 1 on every control-plane call', 'clean terminal exit'])
     (args.output / 'result.json').write_text(json.dumps(result, indent=2)); print(json.dumps(result, indent=2))
 finally:

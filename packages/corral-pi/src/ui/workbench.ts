@@ -9,6 +9,7 @@ import { anchoredRow } from "./reading-anchor.ts";
 import { NativeImageViewer } from "./image-viewer.ts";
 import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot } from "./review-store.ts";
 import { activityRows } from "./activity-view.ts";
+import { agentRows } from "./agent-view.ts";
 import { InspectionStore, evidenceLines } from "./inspection.ts";
 import { DecisionInbox, inboxIdentity } from "./decision-inbox.ts";
 import { InboxView } from "./inbox-view.ts";
@@ -16,10 +17,11 @@ import { pad, plainLabel, diffLine, PANEL_BLUE, PANEL_TEXT, PANEL_MUTED, PANEL_B
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "conversation" | "changes" | "activity" | "evidence" | "inbox";
+export type MainView = "conversation" | "changes" | "activity" | "agents" | "evidence" | "inbox";
 export interface WorkbenchOptions {
   readonly identity: HostIdentity;
   readonly inspection?: () => Promise<unknown>;
+  readonly readTranscript?: (id: string) => Promise<string>;
   readonly cwd: string; readonly snapshot: () => PanelSnapshot | null;
   readonly changed: () => void; readonly canInteract: () => boolean;
   readonly readInbox?: (signal: AbortSignal) => Promise<unknown>;
@@ -37,10 +39,12 @@ export class NativeWorkbench {
   private inboxScroll: ScrollView | undefined;
   private ui: ExtensionUIContext | undefined;
   private changesScroll: ScrollView | undefined; private activityScroll: ScrollView | undefined;
+  private agentsScroll: ScrollView | undefined; private agentId: string | undefined;
+  private agentHits = new Map<number, string>(); private readingTranscript = false;
   private transcript: ScrollView | undefined; private transcriptWidth = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private debounce: ReturnType<typeof setTimeout> | undefined;
-  private jobIndex = 0; private jobHits = new Map<number, number>(); private hunk = 0; private hunkRows: number[] = [];
+  private jobId: string | undefined; private jobHits = new Map<number, string>(); private hunk = 0; private hunkRows: number[] = [];
   private hunkSources: number[] = []; private lastPatch = ""; private displayedPath: string | undefined;
   private displayedRoot: string | undefined;
   private displayedBase: string | undefined;
@@ -103,7 +107,7 @@ export class NativeWorkbench {
           ["evidence", compact ? " Proof " : " Evidence F10 "], ["inbox", " Inbox F11 "]];
         let x = 0;
         hits = labels.map(([view, label]) => ({ view, to: x += label.length }));
-        return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
+        return [PANEL_BG + pad(labels.map(([view, label]) => (this.view === view || view === "activity" && this.view === "agents" ? PANEL_BLUE : PANEL_MUTED) + label).join("") + PANEL_MUTED +
           (this.focused ? compact ? "· Esc · Enter" : "· Esc chat · Enter compose" : ""), width) + RESET,
         PANEL_BG + PANEL_TEXT + pad(`Files: ${plainLabel(this.scopeLabel)} · ` + PANEL_MUTED + `${this.options.identity.role.toUpperCase()} ${target(this.options.identity)} · g${this.options.identity.generation} · ${!this.ui ? "Initializing editor…" : this.options.snapshot()?.bound ? "Bound to Corral" : "Unbound"}`, width) + RESET];
       },
@@ -134,7 +138,12 @@ export class NativeWorkbench {
     if (transcript instanceof ScrollView) this.transcript = transcript;
     this.changesScroll = new ScrollView({ render: width => this.renderChanges(width), handleMouse: event => this.diffMouse(event), invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.activityScroll = new ScrollView({ render: width => this.renderActivity(width), handleMouse: event => {
-      if (this.options.canInteract() && plainClick(event)) { this.focused = true; const job = this.jobHits.get(event.y); if (job !== undefined) this.jobIndex = job; this.options.changed(); return { handled: true }; } return undefined;
+      if (this.options.canInteract() && plainClick(event)) { this.focused = true; const job = this.jobHits.get(event.y); if (job !== undefined) this.jobId = job; this.options.changed(); return { handled: true }; } return undefined;
+    }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
+    this.agentsScroll = new ScrollView({ render: width => this.renderAgents(width), handleMouse: event => {
+      if (!this.options.canInteract() || !plainClick(event)) return undefined;
+      const id = this.agentHits.get(event.y); if (id) this.agentId = id;
+      this.focused = true; this.options.changed(); return { handled: true };
     }, invalidate() {} }, { primary: true, follow: "none", scrollbar: "auto" });
     this.evidenceScroll = new ScrollView({ render: width => this.renderEvidence(width), handleMouse: event => {
       if (!this.options.canInteract() || !plainClick(event)) return undefined;
@@ -148,6 +157,7 @@ export class NativeWorkbench {
       { component: this.images, basis: 0, grow: 1, minSize: 1, visible: viewport => { this.images.setViewportHeight(Math.max(0, viewport.height - 2)); return this.images.isOpen; } },
       { component: this.changesScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "changes" },
       { component: this.activityScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "activity" },
+      { component: this.agentsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "agents" },
       { component: this.evidenceScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "evidence" },
       { component: this.inboxScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "inbox" },
     ]);
@@ -162,12 +172,55 @@ export class NativeWorkbench {
     }
     return rows;
   }
+  private renderAgents(width: number): string[] {
+    this.agentHits.clear(); const result: string[] = [], snapshot = this.options.snapshot();
+    this.agentId ??= snapshot?.agents?.[0]?.id;
+    for (const row of agentRows(this.options.identity, snapshot?.agents, snapshot?.bound ?? false, this.agentId)) {
+      const wrapped = new Text(row.text, 0, 0).render(width);
+      if (row.agent) for (let i = 0; i < wrapped.length; i++) this.agentHits.set(result.length + i, row.agent);
+      result.push(...wrapped);
+    }
+    return result;
+  }
+  async openAgentTranscript(): Promise<void> {
+    const ui = this.ui, id = this.agentId, snapshot = this.options.snapshot();
+    if (!ui || !this.options.canInteract() || this.readingTranscript) return;
+    if (!id || !snapshot?.bound || !snapshot.agents?.find(agent => agent.id === id)?.transcript || !this.options.readTranscript) {
+      ui.notify("Selected agent missing, stale or transcript ineligible", "warning"); return;
+    }
+    this.readingTranscript = true;
+    try {
+      const text = await this.options.readTranscript(id);
+      if (this.scopeAbort.signal.aborted) return;
+      const current = this.options.snapshot();
+      if (this.agentId !== id || !current?.bound || !current.agents?.find(agent => agent.id === id)?.transcript) throw new Error("Agent selection or binding changed during read");
+      // Read-only bounded text, never an SDK switchSession/open/resume call.
+      await ui.custom<void>((tui, _theme, _keys, done) => {
+        const content = new Text(text.slice(0, 32 * 1024).replace(/[\u0000-\u001f\u007f-\u009f]/g, char => char === "\n" ? char : " "), 0, 0);
+        let offset = 0, max = 0;
+        return { render: width => {
+          const lines = content.render(width), height = Math.max(1, Math.floor(tui.terminal.rows * 0.8) - 2);
+          max = Math.max(0, lines.length - height); offset = Math.max(0, Math.min(max, offset));
+          return [pad("Transcript · Esc close · ↑/↓ scroll", width), ...lines.slice(offset, offset + height)];
+        }, handleInput: data => {
+            if (matchesKey(data, "escape") || data === "q") { done(); return; }
+            if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) offset = Math.max(0, Math.min(max, offset + (matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -10 : 10)));
+            tui.requestRender();
+          }, invalidate() { content.invalidate(); } };
+      }, { overlay: true, overlayOptions: { width: "90%", maxHeight: "85%", anchor: "center" } });
+    } catch (error) {
+      if (!this.scopeAbort.signal.aborted) ui.notify(`Transcript unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "warning");
+    } finally { this.readingTranscript = false; this.options.changed(); }
+  }
   private renderActivity(width: number): string[] {
-    this.jobHits.clear(); const rows: string[] = [];
-    for (const row of activityRows(this.options.snapshot(), this.jobIndex)) {
+    this.jobHits.clear(); const rows: string[] = [], snapshot = this.options.snapshot();
+    this.jobId ??= snapshot?.jobs?.[0]?.job;
+    const selected = snapshot?.jobs?.findIndex(job => job.job === this.jobId) ?? -1;
+    for (const row of activityRows(snapshot, selected)) {
       const line = row.text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
       const wrapped = new Text(this.ui ? this.ui.theme.fg(row.color ?? "muted", line) : line, 0, 0).render(width);
-      if (row.job !== undefined) { for (let i = 0; i < wrapped.length; i++) this.jobHits.set(rows.length + i, row.job); }
+      const id = row.job === undefined ? undefined : snapshot?.jobs?.[row.job]?.job;
+      if (id) { for (let i = 0; i < wrapped.length; i++) this.jobHits.set(rows.length + i, id); }
       rows.push(...wrapped);
     }
     return rows;
@@ -329,7 +382,10 @@ export class NativeWorkbench {
     if (matchesKey(data, "escape")) { this.setView("conversation"); this.focused = false; return true; }
     if (this.view === "inbox" && this.inboxView.handleInput(data)) return true;
     if (matchesKey(data, "enter") || matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
-    const scroll = this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
+    if (this.view === "activity" && data === "a") { this.setView("agents"); return true; }
+    if (this.view === "agents" && data === "b") { this.setView("activity"); return true; }
+    if (this.view === "agents" && data === "t") { void this.openAgentTranscript(); return true; }
+    const scroll = this.view === "agents" ? this.agentsScroll : this.view === "changes" ? this.changesScroll : this.view === "evidence" ? this.evidenceScroll : this.view === "inbox" ? this.inboxScroll : this.activityScroll;
     if (this.view === "inbox" && (data === "j" || data === "k" || matchesKey(data, "up") || matchesKey(data, "down"))) {
       this.inbox.move(data === "j" || matchesKey(data, "down") ? 1 : -1);
       const row = this.inbox.current && this.inboxView.rows.get(inboxIdentity(this.inbox.current));
@@ -342,7 +398,14 @@ export class NativeWorkbench {
     if (data === "j" || data === "k") {
       if (this.view === "changes") void this.selectRelative(data === "j" ? 1 : -1);
       else if (this.view === "evidence") this.criterionIndex = Math.max(0, Math.min((this.inspection.current?.criteria.length ?? 1) - 1, this.criterionIndex + (data === "j" ? 1 : -1)));
-      else this.jobIndex = Math.max(0, Math.min((this.options.snapshot()?.jobs?.length ?? 1) - 1, this.jobIndex + (data === "j" ? 1 : -1)));
+      else if (this.view === "agents") {
+        const agents = this.options.snapshot()?.agents ?? [], index = agents.findIndex(agent => agent.id === this.agentId);
+        this.agentId = agents[Math.max(0, Math.min(agents.length - 1, index + (data === "j" ? 1 : -1)))]?.id;
+      }
+      else {
+        const jobs = this.options.snapshot()?.jobs ?? [], index = jobs.findIndex(job => job.job === this.jobId);
+        this.jobId = jobs[Math.max(0, Math.min(jobs.length - 1, index + (data === "j" ? 1 : -1)))]?.job;
+      }
       this.options.changed(); return true;
     }
     if (this.view === "evidence" && data === "r") { void this.inspection.refresh(true); return true; }
