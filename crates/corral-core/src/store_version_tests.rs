@@ -44,6 +44,29 @@ fn replacing_executable_refuses_mutations_and_reports_once() {
 }
 
 #[test]
+fn skew_event_survives_refused_event_unit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::init(tmp.path()).unwrap();
+    let unit = store.event_unit();
+    fs::write(store.dir().join("state").join("schema-version"), "999\n").unwrap();
+    assert_eq!(
+        store.check_runtime().unwrap_err().to_string(),
+        UPDATE_NOTICE
+    );
+    drop(unit);
+    assert!(store.check_runtime().is_err());
+    assert_eq!(
+        store
+            .events()
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "version_skew")
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn deleted_executable_is_skew_even_before_a_replacement_exists() {
     // Given
     let tmp = tempfile::tempdir().unwrap();
