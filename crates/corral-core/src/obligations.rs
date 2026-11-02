@@ -15,11 +15,23 @@ pub enum ObligationSource {
 pub enum WaitHandle {
     /// Identity of the actual `corral gate` invocation, not a worker-selected result path.
     Gate { sha: String, pane: String },
+    /// A corral task reaches a terminal status.
+    TaskStatus {
+        task: String,
+        status: TaskWaitStatus,
+    },
     /// A declared harness channel. `wait_v1` declares bounded observation support, not a wake guarantee.
     Channel {
         channel_id: String,
         capability: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskWaitStatus {
+    Done,
+    Dropped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

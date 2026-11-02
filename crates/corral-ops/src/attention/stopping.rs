@@ -209,13 +209,18 @@ fn native_waits(inputs: &Inputs, n: &Neighborhood<'_>, a: &mut Assessment) {
             let status = n
                 .task(dependency)
                 .map_or("missing", |task| task.status().as_str());
-            let done = n
-                .task(dependency)
-                .is_some_and(|task| *task.status() == Status::Done);
+            let target = match &wait.request.handle {
+                WaitHandle::TaskStatus { status: corral_core::TaskWaitStatus::Dropped, .. } => Status::Dropped,
+                _ => Status::Done,
+            };
+            let done = n.task(dependency).is_some_and(|task| *task.status() == target);
             condition.next_action.recipient = Some(format!("{dependency} ({status})"));
-            condition
-                .resume
-                .push(check("task_status", dependency, Some("done".into()), done));
+            condition.resume.push(check(
+                "task_status",
+                dependency,
+                Some(target.as_str().into()),
+                done,
+            ));
             condition.reason = format!(
                 "{}; {dependency} ({status}); {}receipt {}",
                 wait.request.condition,

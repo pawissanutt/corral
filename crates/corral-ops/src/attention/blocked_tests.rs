@@ -117,6 +117,7 @@ fn old_manual_wait_requires_pm_attention() {
     assert_eq!(condition.reason_code, "manual_wait_overdue");
     assert_eq!(condition.class, WaitClass::PmAction);
     assert_eq!(condition.responsible, Responsible::Pm);
+    assert!(condition.key.is_some());
 }
 
 #[test]

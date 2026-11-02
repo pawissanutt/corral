@@ -1276,9 +1276,11 @@ inbox. A start that stays uncertain for
 `[agent] gate_start_uncertain_secs` wakes the worker once with `gate_start_uncertain` instead.
 Wakes survive a corral restart: they are computed from the stored records on every sync.
 
-**Waits.** `corral_wait` registers the wait and its wake subscription together, as a channel wait
-the host declares `wait_v1` for. A wait without a deadline is refused `unobservable_wait`,
-because its deadline is the only wake corral can guarantee. When the wait leaves `pending`, sync posts one `wait_wake` for it.
+**Waits.** `corral_wait` registers the wait and its wake subscription together. For a task, use
+`task_id` and `task_status` (`done` or `dropped`): sync detects the status event and posts the wake.
+A free-text `channel_id` wait requires an explicit receipt; only its deadline is automatic, and a
+pending manual wait appears in PM attention after 30 minutes. The tool requires a deadline.
+When the wait leaves `pending`, sync posts one `wait_wake` for it.
 
 **Questions.** `corral_ask` returns at once, blocking or not, and the worker may keep working;
 the task reaches Blocked only when a question is escalated or becomes unattended. While any of
