@@ -1,10 +1,17 @@
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { PanelSnapshot } from "./panels-view.ts";
 import { inspectorActivity } from "./inspector.ts";
-export interface ActivityRow { readonly text: string; readonly job?: number; readonly color?: "accent" | "success" | "error" | "warning" }
-export function activityRows(snapshot: PanelSnapshot | null, selected: number, now = Date.now()): ActivityRow[] {
+import { helperRows } from "./helper-view.ts";
+export type ActivityMode = "jobs" | "helpers";
+export interface ActivityRow { readonly text: string; readonly job?: number; readonly helper?: string; readonly mode?: ActivityMode; readonly color?: "accent" | "success" | "error" | "warning" | "text" | "muted" }
+export function activityRows(snapshot: PanelSnapshot | null, selected: number, now = Date.now(), mode: ActivityMode = "jobs", helper?: string): ActivityRow[] {
   if (!snapshot) return [{ text: "Activity unavailable: session snapshot disconnected." }];
-  const rows: ActivityRow[] = [];
+  const rows: ActivityRow[] = [
+    { text: `${mode === "jobs" ? "›" : " "} Jobs · h switches jobs/helpers`, mode: "jobs", color: mode === "jobs" ? "accent" : "muted" },
+    { text: `${mode === "helpers" ? "›" : " "} Helper conversations`, mode: "helpers", color: mode === "helpers" ? "accent" : "muted" },
+    { text: "" },
+  ];
+  if (mode === "helpers") return [...rows, ...helperRows(snapshot.helpers, helper, snapshot.bound)];
   const add = (...texts: string[]) => rows.push(...texts.map(text => ({ text })));
   add("Background activity · read-only", "g dependencies · l lifecycle · a scoped agents · j/k select · PgUp/PgDn scroll · Enter compose · F9 conversation",
     snapshot.bound ? "Bound host observations · not canonical task/run settlement" : "Disconnected/unbound · observations may be stale", "");

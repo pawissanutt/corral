@@ -27,6 +27,7 @@ export interface PanelSnapshot {
   readonly ledgerStale: boolean;
   readonly jobs: readonly PanelJob[] | null;
   readonly auxiliary: { explore: { running: number; queued: number }; oracle: { running: number; queued: number } } | null;
+  readonly helpers?: readonly import("../extensions/subagent/inspection.ts").HelperInspection[] | null;
   readonly steering: number;
   readonly followUps: number;
 }
@@ -40,7 +41,7 @@ export interface PanelLine {
   readonly tone?: "text" | "muted" | "accent" | "success" | "warning";
   readonly indent?: number;
   readonly continuationIndent?: number;
-  readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" } | { readonly kind: "scope" };
+  readonly action?: { readonly kind: "diff"; readonly path: string } | { readonly kind: "files" } | { readonly kind: "scope" } | { readonly kind: "helpers" } | { readonly kind: "helper"; readonly request: string };
 }
 export const PANEL_BG = "\x1b[48;2;25;27;32m";
 export const PANEL_TEXT = "\x1b[38;2;224;227;233m";
@@ -141,6 +142,12 @@ export function panelLines(tab: PanelTab, identity: HostIdentity, snapshot: Pane
       else {
         add(`Research  ${snapshot.auxiliary.explore.running} running · ${snapshot.auxiliary.explore.queued} queued`);
         add(`Oracle    ${snapshot.auxiliary.oracle.running} running · ${snapshot.auxiliary.oracle.queued} queued`);
+      }
+      rows.push({ text: "Open helper conversations", tone: "accent", action: { kind: "helpers" } });
+      if (snapshot.helpers?.length) for (const helper of snapshot.helpers.slice(0, 5)) {
+        rows.push({ text: plainLabel(`${helper.kind === "explore" ? "Research" : helper.kind === "oracle" ? "Oracle" : "Search"} · ${helper.phase}`),
+          action: { kind: "helper", request: helper.request } },
+        { text: plainLabel(helper.prompt).slice(0, 90), tone: "muted", indent: 2, action: { kind: "helper", request: helper.request } });
       }
       add("Inspection does not resume agents");
       break;

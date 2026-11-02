@@ -7,6 +7,39 @@ import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
+import type { HelperEvent } from "./inspection.ts";
+
+/** Project only visible response text and tool activity; never forward thinking or signatures. */
+export function observeHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void): void {
+  try { projectHelperEvent(event, emit); }
+  catch (error) {
+    // A projection/UI failure is not a provider failure and cannot abort a billable child.
+    try { emit({ type: "inspection_error", text: `Activity projection unavailable: ${error instanceof Error ? error.message : String(error)}` }); }
+    catch { /* The observer itself is broken; execution and canonical accounting must continue. */ }
+  }
+}
+function projectHelperEvent(event: Sdk.AgentSessionEvent, emit: (event: HelperEvent) => void): void {
+  if (event.type === "message_start" && event.message.role === "assistant") emit({ type: "assistant_start" });
+  else if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+    emit({ type: "assistant_delta", text: event.assistantMessageEvent.delta });
+  } else if (event.type === "tool_execution_start") {
+    emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: "running" });
+  } else if (event.type === "tool_execution_end") {
+    emit({ type: "tool", id: event.toolCallId, name: event.toolName, phase: event.isError ? "error" : "completed" });
+  } else if (event.type === "message_end") {
+    const message = event.message;
+    if (message.role === "assistant") {
+      emit({ type: "assistant_end", text: message.content.filter(block => block.type === "text").map(block => block.text).join("\n") });
+      for (const block of message.content) if (block.type === "toolCall") {
+        emit({ type: "tool", id: block.id, name: block.name, phase: "requested", arguments: JSON.stringify(block.arguments) });
+      }
+      if (message.stopReason === "error" || message.stopReason === "aborted") emit({ type: "error", text: message.errorMessage ?? "Helper response interrupted." });
+    } else if (message.role === "toolResult") {
+      emit({ type: "tool", id: message.toolCallId, name: message.toolName, phase: message.isError ? "error" : "completed",
+        text: message.content.filter(block => block.type === "text").map(block => block.text).join("\n") });
+    }
+  }
+}
 
 export interface AuxiliarySessionOptions {
   readonly sdk: typeof Sdk;
@@ -55,6 +88,8 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   });
   const { session } = await sdk.createAgentSessionFromServices({ services, sessionManager: manager, model,
     tools: loadout, scopedModels: [{ model, thinkingLevel: "off" }], thinkingLevel: "off" });
+  const observe = invocation.observe;
+  const unsubscribe = observe ? session.subscribe(event => observeHelperEvent(event, observe)) : () => {};
   const abort = () => { void session.abort(); };
   signal.addEventListener("abort", abort, { once: true });
   try {
@@ -65,6 +100,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     return { text: session.getLastAssistantText() ?? "No text response", outcome: signal.aborted || failed ? "uncertain" : "completed" };
   } finally {
     signal.removeEventListener("abort", abort);
+    unsubscribe();
     session.dispose();
   }
 }

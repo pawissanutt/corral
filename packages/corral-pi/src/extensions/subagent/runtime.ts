@@ -2,6 +2,7 @@
 // billable work; an interrupted request is uncertain, never silently charged as zero.
 import { createHash } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
+import { AuxiliaryHistory, type HelperEvent } from "./inspection.ts";
 
 export type AuxiliaryKind = "explore" | "oracle" | "web_search";
 export type Outcome = "completed" | "uncertain" | "not_started";
@@ -14,6 +15,7 @@ export interface Invocation {
   readonly sessionFile: string;
   readonly sessionId: string;
   readonly maxTurns: number;
+  readonly observe?: (event: HelperEvent) => void;
 }
 export interface AuxiliaryResult { readonly text: string; readonly outcome: "completed" | "uncertain" }
 export interface AuxiliaryOptions {
@@ -26,6 +28,7 @@ export interface AuxiliaryOptions {
   searchModel?(): { provider: string; model: string } | undefined;
   record(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   execute(invocation: Invocation, signal: AbortSignal): Promise<AuxiliaryResult>;
+  changed?(): void;
 }
 
 // Abortable FIFO semaphore. Taking a released slot happens before waking a waiter, so a new
@@ -62,6 +65,8 @@ export interface AuxiliaryObservation {
 export class AuxiliaryRuntime {
   private readonly observations = new Map<string, AuxiliaryObservation>();
   inspection(): readonly AuxiliaryObservation[] { return [...this.observations.values()].slice(-100).map(item => ({ ...item })); }
+  private readonly history: AuxiliaryHistory;
+  inspections() { return this.history.snapshot(); }
   private readonly explore: Slots;
   private readonly oracle = new Slots(1);
   private readonly webSearch = new Slots(1);
@@ -70,6 +75,7 @@ export class AuxiliaryRuntime {
   private stopped = false;
   constructor(private readonly options: AuxiliaryOptions) {
     this.explore = new Slots(options.settings.explore?.max_parallel ?? 1);
+    this.history = new AuxiliaryHistory(options.changed);
   }
   run(kind: AuxiliaryKind, id: string, prompt: string, signal?: AbortSignal) {
     const key = createHash("sha256").update(JSON.stringify([this.options.sessionId(), this.options.generation, kind, id])).digest("hex");
@@ -101,6 +107,7 @@ export class AuxiliaryRuntime {
     // ambient auth or create a fresh unrestricted ModelRuntime for an auxiliary request.
     const prefix = `${provider}/`;
     const model = configured.startsWith(prefix) ? configured.slice(prefix.length) : configured;
+    this.history.begin(request, kind, `${provider}/${model}`, options.generation, prompt);
     const controller = new AbortController();
     this.controllers.add(controller);
     const timeout = AbortSignal.timeout(settings.timeout_secs * 1000);
@@ -121,23 +128,37 @@ export class AuxiliaryRuntime {
       // Search uses a different transcript format; only SDK native children are eligible.
       if (kind !== "web_search") observation.sessionFile = reference.session_file;
       observation.state = "queued";
+      this.history.phase(request, "queued");
       release = await this.slots(kind).take(signal);
       signal.throwIfAborted();
       await options.record({ ...common, action: "started" });
       started = true;
       observation.state = "running";
       outcome = "uncertain";
+      this.history.phase(request, "running");
       signal.throwIfAborted();
       result = await options.execute({ request, kind, provider, model, prompt,
         sessionFile: reference.session_file, sessionId: request,
-        maxTurns: kind === "explore" ? options.settings.explore?.max_turns ?? 1 : 1 }, signal);
+        maxTurns: kind === "explore" ? options.settings.explore?.max_turns ?? 1 : 1,
+        observe: event => { if (!signal.aborted) this.history.observe(request, event); } }, signal);
       outcome = result.outcome;
+    } catch (error) {
+      this.history.error(request, error); throw error;
     } finally {
       // Release only after the terminal record; failure to record must not re-admit work while
       // its canonical record still says running. Admission will refuse rather than double-spend.
+      let recorded = false;
       try {
         if (prepared) await options.record({ ...common, action: "finish", outcome: started ? outcome : "not_started" });
-      } finally { observation.state = outcome; release?.(); this.controllers.delete(controller); }
+        recorded = true;
+      } catch (error) {
+        this.history.error(request, error); throw error;
+      } finally {
+        const settled: Outcome = started ? recorded ? outcome : "uncertain" : "not_started";
+        observation.state = settled;
+        try { this.history.finish(request, settled, result?.text); }
+        finally { try { release?.(); } finally { this.controllers.delete(controller); } }
+      }
     }
     if (!result) throw new Error("auxiliary request did not finish");
     return { ...result, text: kind === "web_search" ? result.text : result.text.slice(0, 32768), request, generation: options.generation };

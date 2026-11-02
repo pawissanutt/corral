@@ -411,6 +411,7 @@ export class HostSession {
     if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, generation: options.identity.generation, provider: this.provider, model: options.model,
+        changed: () => this.panels?.refresh(),
         sessionId: () => this.sessionId(),
         searchModel: () => {
           const model = this.runtime?.session.model;
@@ -1187,7 +1188,7 @@ export class HostSession {
         tokens: this.panelTokens, transcript: !!session.sessionFile && session.sessionId === this.boundSessionId },
         ...(this.auxiliary?.inspection() ?? []).map(child => ({ id: child.request, session: child.request,
           parent: child.parent, kind: `native ${child.kind}`, state: child.state, model: child.model, transcript: !!child.sessionFile && child.parent === this.boundSessionId }))],
-      jobs, auxiliary: this.auxiliary?.state() ?? null,
+      jobs, auxiliary: this.auxiliary?.state() ?? null, helpers: this.auxiliary?.inspections() ?? null,
       steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
     };
   }

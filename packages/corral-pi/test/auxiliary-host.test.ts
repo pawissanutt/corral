@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
+import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
@@ -50,6 +52,11 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
     expect(host.loadout).toContain("explore");
     expect(host.loadout).toContain("oracle");
+    const workbench = host.panels?.workbench;
+    if (!workbench) throw new Error("Native workbench missing");
+    const root = workbench.mount(new Text("PARENT_TRANSCRIPT", 0, 0));
+    const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 70, () => {}).lines.join("\n"));
+    workbench.openHelpers(); expect(screen()).toContain("No helper calls yet");
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") await host.session.reload();
       fixtureTransport().script([
@@ -67,6 +74,15 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       await host.drained();
       const results = host.session.messages.filter((m) => m.role === "toolResult" && m.toolCallId.startsWith(`${stage}-`));
       expect(results.map((m) => m.role === "toolResult" && m.isError)).toEqual([false, false]);
+      const reference = corral.calls().filter(call => call.envelope.payload.usage_kind === "oracle" && call.envelope.payload.action === "prepare").at(-1)?.envelope.payload.request;
+      if (typeof reference !== "string") throw new Error("Oracle reference missing");
+      const beforeInspection = requestCount;
+      workbench.openHelpers(reference);
+      expect(screen()).toContain("oracle advice"); expect(screen()).toContain("consult only");
+      workbench.handleInput("j");
+      expect(screen()).toContain("child findings"); expect(screen()).toContain("research only");
+      expect(screen()).toContain("write"); expect(screen()).toContain("error");
+      expect(requestCount).toBe(beforeInspection); // Inspecting never invokes a model or resumes a child.
     }
     const calls = corral.calls().filter((c) => c.envelope.payload.kind === "auxiliary");
     expect(calls).toHaveLength(12);
