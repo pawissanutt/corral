@@ -121,18 +121,31 @@ changes, shared store/Git/herdr changes, and missing/old gate contexts.
   process-global; the production work-budget recipe already uses separate processes. No
   assertion was relaxed. The first shrink also exposed an unsaturated Done viewport, fixed
   by keeping the configured working set constant, not changing counter expectations.
-- `python3 scripts/test_gate.py`: 15/15 pass (temporary fake-command fixtures, no full gate).
+- `python3 scripts/test_gate.py`: 15/15 pass (temporary fake-command fixtures, no full gate),
+  most recently 24.720s, including full-branch Pi/Darwin path scope and plan-verify coverage.
 - `python3 scripts/test_gate_select.py`: 6/6 pass.
-- `python3 scripts/test_gate_policy.py`: 4/4 pass (path/deletion/plan/unknown-owner selection,
-  enforced wall timeout, and >30s added-cost justification).
+- Targeted plan verify and checkpoint context tests each pass (4.859s / 4.195s),
+  asserting that both aggregate verification paths preserve all optional lanes.
+- `python3 scripts/test_gate_policy.py`: 6/6 pass, 1.390s (path/deletion/plan/unknown-owner
+  selection, enforced wall timeout, >30s added-cost justification, transitive Pi consumer
+  selection, and a real tiny nextest fixture proving ordinary timeout + report-only exception).
+- `python3 scripts/test_slow_lane.py`: 3/3 pass, 0.002s (busy admission before any test/board
+  work, own-process idle priority, repeated failures deduplicated per test with kept log proof).
 - `cargo nextest list -p corral-ops --profile slow --message-format json`: catalog compiles
   and parses; listing only, no unauthorized slow-tier execution.
 - No load generation, owner server, live owner panes or extra gate used.
 
 ## Remaining work / not acceptance yet
 
-Long-term wall budgets (quick 180s/full 600s), measured added-test accounting and the reviewer
-rubric are implemented. Per-test cap/explicit exceptions and nightly slow scheduling/failure
-filing await PM policy answers; owner requested mutation sampling and monthly gardening as
-separate follow-ups. The full-tier after timing and remaining-suite PASS require the authorized
+Long-term wall budgets (quick 180s/full 600s), added Rust/Bun/Python registration accounting and the
+reviewer rubric are implemented. Ordinary nextest tests are capped at 10s; 149 measured
+pre-existing >10s integration cases (some also in the torture catalog), plus the rescheduled
+action cases, explicitly retain their original report-only guards with per-case reasons.
+Owner approved preserving these useful journey exceptions in Q2 instead of dropping them.
+The host slow runner enforces nice 19, idle I/O and load/core <=1.0 admission, isolates herdr,
+retains logs/artifacts and deduplicates failure tasks. Its cron line is documented only: PM
+installs it after landing. No actual nightly/slow tier was run by this worker. Quick Pi now
+selects transitive TS consumers/role contracts (full keeps all), avoiding the old 189s Bun
+package run for instruction-only changes. Mutation sampling and monthly gardening remain
+separate owner-requested follow-ups awaiting IDs from PM. The full-tier after timing and remaining-suite PASS require the authorized
 landing result. This report does not assert either before that receipt exists.

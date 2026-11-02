@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from gate_lanes import pi_touched
+from gate_pi import selection as pi_selection
 
 Suite = dict[str, Any]
 
@@ -95,6 +96,7 @@ def plan(path: str) -> None:
     print(f"workspace={int(workspace)}")
     pi = pi_touched(context["changed_paths"])
     print(f"pi_touched={int(pi)}")
+    print(f"pi_tests=({' '.join(map(shlex.quote, pi_selection(context["changed_paths"])))})")
     print(f"declared={len(tests)}")
     print(f"selection={shlex.quote(selection)}")
     ids = [failure["test"] for failure in context["expected_failures"]]

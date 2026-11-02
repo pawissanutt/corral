@@ -15,6 +15,8 @@ from unittest.mock import patch
 import gate_lanes
 import gate_timer
 import test_cost
+import gate_pi
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -89,6 +91,34 @@ class PolicyTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(gate_timer.run([sys.executable, "-c", "import time; time.sleep(10)"], 0.05), 124)
             self.assertEqual(gate_timer.run([sys.executable, "-c", "raise SystemExit(7)"], 1), 7)
+
+    def test_pi_quick_selection_follows_transitive_consumers_and_contract_roles(self):
+        self.write("packages/corral-pi/src/value.ts", "export const value = 1;\n")
+        self.write("packages/corral-pi/src/use.ts", 'import {value} from "./value.ts";\n')
+        self.write("packages/corral-pi/test/value.test.ts", 'import "../src/use.ts";\n')
+        self.write("packages/corral-pi/src/roles/worker/worker.test.ts", "// contract consumer\n")
+        self.assertEqual(gate_pi.selection(["packages/corral-pi/src/value.ts"]), ["./test/value.test.ts"])
+        self.assertEqual(gate_pi.selection(["packages/corral-pi/assets/worker-contract.md"]),
+                         ["./src/roles/worker/worker.test.ts"])
+        self.assertEqual(gate_pi.selection(["packages/corral-pi/bun.lock"]), [])
+
+    def test_nextest_cap_and_report_only_exception_do_not_inherit_termination(self):
+        config = tomllib.loads(Path(".config/nextest.toml").read_text())
+        self.assertEqual(config["profile"]["default"]["slow-timeout"],
+                         {"period": "10s", "terminate-after": 1})
+        exception = config["profile"]["default"]["overrides"][-1]["slow-timeout"]
+        self.write("Cargo.toml", '[package]\nname="cap-fixture"\nversion="0.0.0"\nedition="2024"\n[workspace]\n[lib]\npath="src.rs"\n')
+        self.write("src.rs", "#[test] fn ordinary() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n"
+                   "#[test] fn exception() { std::thread::sleep(std::time::Duration::from_millis(200)); }\n")
+        self.write("cap.toml", '[profile.default]\nslow-timeout={period="50ms", terminate-after=1}\n'
+                   '[[profile.default.overrides]]\nfilter="test(=exception)"\nslow-timeout=' + json.dumps(exception) + "\n")
+        result = subprocess.run(["cargo", "nextest", "run", "--lib", "--config-file", "cap.toml"],
+                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                env={**os.environ, "RUSTC_WRAPPER": ""}, check=False, timeout=60)
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 100, output)
+        self.assertRegex(output, r"TIMEOUT\s+\[[^]]+\].*ordinary")
+        self.assertRegex(output, r"PASS\s+\[[^]]+\].*exception")
 
     def test_added_suite_cost_requires_candidate_justification(self):
         self.write("src.rs", "#[test]\nfn catches_named_defect() {}\n")

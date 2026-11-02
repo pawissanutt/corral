@@ -73,10 +73,11 @@ class GateTests(unittest.TestCase):
         self.repo = Path(temp.name)
         (self.repo / "scripts").mkdir()
         (self.repo / "src").mkdir()
-        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_timer.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
+        for name in ("gate.sh", "gate_select.py", "gate_lanes.py", "gate_pi.py", "gate_timer.py", "test_cost.py", "check-candidate.py", "work-budget.sh"):
             _ = shutil.copy2(SCRIPTS / name, self.repo / "scripts" / name)
         (self.repo / ".config").mkdir()
-        _ = shutil.copy2(SCRIPTS.parent / ".config/gate.toml", self.repo / ".config/gate.toml")
+        for file in ("gate.toml", "nextest.toml"):
+            _ = shutil.copy2(SCRIPTS.parent / ".config" / file, self.repo / ".config" / file)
         self.write("Cargo.toml", '[package]\nname = "gate-fixture"\nversion = "0.0.0"\n'
                    + 'edition = "2024"\n[workspace]\n')
         self.write("src/lib.rs", "pub fn fixture() {}\n")
@@ -346,6 +347,20 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(skip, result.stdout)
         self.assert_pi_lane_ran(result.stdout)
+        # A context-bound full landing scopes Pi too; plan verification never does.
+        for changed, verify, runs in [("docs/guide.md", False, False),
+                                      ("packages/corral-pi/src/a.ts", False, True),
+                                      ("crates/corral-ops/assets/review-contracts/common.md", False, True),
+                                      ("docs/guide.md", True, True)]:
+            self.write("lane-context.json", json.dumps({"schema_version": 1,
+                       "plan_verify": verify, "changed_paths": [changed],
+                       "integration_base": "fixture-base"}))
+            result = self.gate(PATH=path, CORRAL_GATE_CONTEXT=str(self.repo / "lane-context.json"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if runs:
+                self.assert_pi_lane_ran(result.stdout)
+            else:
+                self.assertEqual(self.bun_calls(), [])
         # A failing bun step fails the gate by name.
         self.write("bin/bun", "#!/bin/sh\nexit 9\n")
         result = self.gate(PATH=path)
@@ -395,6 +410,20 @@ with open({str(self.repo / "bun.jsonl")!r}, "a") as log:
                 for entry in checks:
                     self.assertEqual(entry["context"], CONTEXT)
                     self.assertEqual(entry["stdin"], "")
+
+        # The full recipe honors path scope even when both targets are installed.
+        for changed, runs in [("docs/guide.md", False),
+                              ("crates/corral-ops/src/platform.rs", True),
+                              ("Cargo.lock", True)]:
+            (self.repo / "commands.jsonl").unlink(missing_ok=True)
+            self.write("lane-context.json", json.dumps({"schema_version": 1,
+                       "plan_verify": False, "changed_paths": [changed],
+                       "integration_base": "fixture-base"}))
+            result = self.gate(PATH=path, INSTALLED_TARGETS="\n".join(targets),
+                               CORRAL_GATE_CONTEXT=str(self.repo / "lane-context.json"))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            checks = [entry for entry in self.recorded() if entry["args"][0] == "check"]
+            self.assertEqual(len(checks), len(targets) if runs else 0)
 
     def test_darwin_native_c_bypass_is_check_only(self) -> None:
         # Given both targets and a caller explicitly requesting bundled SQLite:

@@ -18,7 +18,8 @@ PI_CONTRACTS = (
     "packages/corral-pi/", "scripts/pi-lane.sh", "scripts/build-pi-host.sh",
     "crates/corral-ops/src/agent/", "crates/corral-core/src/agent/",
     "crates/corral-ops/src/agent.rs", "crates/corral-core/src/agent.rs",
-    "crates/corral-ops/assets/", "crates/corral-core/src/inbox/",
+    "crates/corral-ops/assets/", "crates/corral/src/agent_cmd.rs",
+    "crates/corral-core/src/config/agent_capabilities", "crates/corral-core/src/inbox/",
     "crates/corral-core/src/inbox.rs", "crates/corral-ops/src/inbox",
 )
 # Each catalog entry names a behavior, not merely a duration. Changes to these owners
@@ -65,10 +66,14 @@ def workspace_input(path: str) -> bool:
 
 
 def darwin_touched(context: dict) -> bool:
-    paths = context["changed_paths"]
-    if any(workspace_input(path) or re.search(r"(?:darwin|macos|platform|build\.rs)", path)
-           for path in paths):
+    changed = context["changed_paths"]
+    if any(workspace_input(path) for path in changed):
         return True
+    paths = [path for path in changed if Path(path).suffix == ".rs"]
+    if any(re.search(r"(?:darwin|macos|platform|build\.rs)", path) for path in paths):
+        return True
+    if not paths:
+        return False
     # Inspect additions AND removals, so deleting a cfg branch cannot evade the lane.
     # Compare against merge-base, as the context's changed_paths does, never HEAD^.
     result = subprocess.run(
