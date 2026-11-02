@@ -21,15 +21,6 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
         return Ok(Vec::new());
     }
     crate::assistant_artifacts::check_owner(None)?;
-    let started = std::time::Instant::now();
-    let trace = |stage: &str| {
-        if std::env::var_os("CORRAL_DONE_TIMING").is_some() {
-            eprintln!(
-                "artifact scan {id}: {stage}: {:.3}s",
-                started.elapsed().as_secs_f64()
-            );
-        }
-    };
     let storage = crate::artifact_storage::storage_lock(ctx)?;
     let mut extracted = std::collections::BTreeMap::new();
     let mut extracted_bytes = 0;
@@ -40,7 +31,6 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
         .collect();
     let mut added = Vec::new();
     let mut published = Vec::new();
-    let mut blob_time = std::time::Duration::ZERO;
     ctx.store.try_update_head(id, |current| {
         anyhow::ensure!(
             current
@@ -65,14 +55,12 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
                 full.display()
             );
             let sha = sha256_hex(&bytes);
-            let blob_started = std::time::Instant::now();
             ctx.store.stage_task_evidence(
                 crate::artifact_storage::ARTIFACT_BLOBS,
                 &crate::artifact_storage::blob_key(id, &sha),
                 &bytes,
                 |blob| json!({ "task": id, "sha256": sha, "blob": blob }),
             )?;
-            blob_time += blob_started.elapsed();
             effects::failpoint("artifact_scan_snapshot");
             // Index the exact frozen bytes without reopening every blob. Prepared text
             // remains bounded by the existing total index budget.
@@ -114,13 +102,6 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
         }
         Ok(!published.is_empty())
     })?;
-    if std::env::var_os("CORRAL_DONE_TIMING").is_some() {
-        eprintln!(
-            "artifact scan {id}: blob staging total: {:.3}s",
-            blob_time.as_secs_f64()
-        );
-    }
-    trace("snapshots and registrations");
     drop(storage);
     if let Err(error) = crate::content_index::index_artifacts(ctx, id, &published, &extracted) {
         crate::messages::report(
@@ -129,6 +110,5 @@ pub fn scan_artifacts(ctx: &Ctx, id: &str) -> Result<Vec<Artifact>> {
             format!("indexing scanned artifacts: {error:#}"),
         );
     }
-    trace("index");
     Ok(added)
 }

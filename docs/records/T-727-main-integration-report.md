@@ -102,9 +102,13 @@ Relevant raw logs in the task artifacts: `final-rust-packages.log`,
 **7 pass / 1 latency fail**), `final-clippy.log`, `pi-final-green.log`,
 `pi-reconciliation.log`, `q2-focused-attempt.log` (latency and index pass; pre-adaptation
 crash check fails), `q2-crash-green.log`, and the initial red matrix/isolated-suite logs.
-The run's separate receipted quick-gate log is authoritative for gate outcome; this
-report precedes that gate and does not claim it passed. The broad Rust matrices are
-reported with their actual failures, not relabeled green based on targeted reruns.
+The first receipted quick gate, `ag-d6977189cdffb580`, passed formatting then stopped
+at the module ceiling: `review.rs` contained 815 SLOC. Its existing completion-audit
+publication helper is moved unchanged to `review/audit.rs`, retaining the same reexport
+and callers. Temporary scan profiling is removed after preserving its measurements.
+The replacement receipted quick gate is the authority for final gate outcome; this report
+does not pre-claim that result. The broad Rust matrices are reported with their actual
+failures, not relabeled green based on targeted reruns.
 
 ## Limits
 
